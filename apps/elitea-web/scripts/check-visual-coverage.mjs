@@ -160,6 +160,10 @@ const EXEMPT = new Map([
   // absolute timestamp — journey 29's frozen clock is half of that already —
   // read through a deterministic range.
   ['/admin/app/audit', 'not snapshotted — the route is wired and renders real seeded data (journey 29 covers it), but its default screen is entirely wall-clock-derived: second-resolution timestamps, two date fields showing today, and a heatmap whose bucket geometry and per-cell alpha depend on where the seeded rows fall in the range. WHICH day is no longer part of it — #214 pinned one timezone for browser and seed and froze journey 29 to the seeded day — but the rows still land at whatever minute the seed ran, so a baseline could only ever match the stack that produced it. Unblocking it needs a fixed-timestamp fixture, not a mask.'],
+  // Issue 1495 (ADR-0042 decision 4). New in the change that added it; the
+  // baseline is regenerated through the ci-web-e2e workflow_dispatch, never
+  // locally, so the page enters exempt and leaves when that run lands.
+  ['/admin/app/retention', 'not snapshotted yet — new page (issue 1495). The policy table renders the seeded defaults from shared migration 0195, so the screen is deterministic; add a spec to admin.visual.spec.ts and regenerate the baseline through ci-web-e2e workflow_dispatch to remove this entry.'],
   ['/help-center', 'not snapshotted — needs seeded resource links, NOT a missing backend. `useResourcesConfig` reads GET /admin/plugin_config_values/prompt_lib/resources, which the admin port (#200) made serve real values; the section is authored on Admin › Features and journey 36g asserts the round trip. This stack configures none, so a baseline would still pin an unconfigured screen; seed a fixed set of links and it is coverable. Measured meanwhile, its stalled and loaded renders are byte-identical, so it will need only a mount guard, not a data landmark.'],
 ]);
 

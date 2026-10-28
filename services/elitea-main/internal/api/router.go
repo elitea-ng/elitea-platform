@@ -63,6 +63,7 @@ import (
 	v2projectinfo "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
 	v2projects "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projects"
 	v2promptcontextreads "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
+	v2retention "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/retention"
 	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
 	v2skillpublish "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skillpublish"
@@ -715,6 +716,9 @@ type RouterConfig struct {
 	// 1124). Set only with the credential governance flag on; nil mounts
 	// none of its routes.
 	CredentialReferencesAdmin *v2credentialreferences.Handler
+	// RetentionAdmin serves the admin Data retention and Legal holds routes
+	// (ADR-0042 decision 4, issue 1495). nil mounts none of them.
+	RetentionAdmin *v2retention.Handler
 	// AgentAssertionWellKnown serves the Elitea-native agent assertion JWKS
 	// and issuer metadata (ADR-0039, issue 1153). The composition root sets
 	// it only with the credential governance flag on and at least one
@@ -2778,6 +2782,23 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/platform_routines/administration", adminHandler.PlatformRoutines)
 				r.With(central("configuration.scheduling.schedules.edit")).
 					Put("/platform_routines/administration/{id}", adminHandler.UpdatePlatformRoutine)
+
+				// Data retention and legal holds (ADR-0042 decision 4, issue
+				// 1495). Shared 0195 grants both permissions to super_admin
+				// and admin. Writes are audited by the /api/v2/admin/ surface
+				// and annotated by the handler.
+				if cfg.RetentionAdmin != nil {
+					retentionAdmin := cfg.RetentionAdmin
+					retentionManage := central(v2retention.PermissionRetentionManage)
+					holdManage := central(v2retention.PermissionLegalHoldManage)
+					r.With(retentionManage).Get("/retention/policies", retentionAdmin.ListPolicies)
+					r.With(retentionManage).Put("/retention/policies/{dataClass}", retentionAdmin.SetPlatformPolicy)
+					r.With(retentionManage).Put("/retention/policies/{dataClass}/projects/{projectID}", retentionAdmin.SetProjectOverride)
+					r.With(retentionManage).Delete("/retention/policies/{dataClass}/projects/{projectID}", retentionAdmin.DeleteProjectOverride)
+					r.With(holdManage).Get("/legal_holds", retentionAdmin.ListHolds)
+					r.With(holdManage).Post("/legal_holds", retentionAdmin.CreateHold)
+					r.With(holdManage).Post("/legal_holds/{id}/release", retentionAdmin.ReleaseHold)
+				}
 
 				// Agent identity bindings and mandates (ADR-0039, issue 1112).
 				// Mounted only with the governance flag on. Shared 0181 grants

@@ -1240,7 +1240,16 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 // legacy runtime wrote). A missing record is not an error: the bytes are
 // deleted by ref, and the record delete simply matches nothing.
 func (h *Handler) deleteAttachmentObjects(ctx context.Context, projectIDStr string, attachments []AttachmentRef) error {
-	if h.store == nil || h.attachments == nil {
+	return DeleteStoredAttachments(ctx, h.store, h.attachments, projectIDStr, attachments)
+}
+
+// DeleteStoredAttachments is deleteAttachmentObjects without the handler: the
+// user's delete and the conversation retention journal drain
+// (internal/application/conversationretention) remove stored attachment bytes
+// and their records through this one function. A nil store or attachment
+// store means nothing could have been stored, and nothing is done.
+func DeleteStoredAttachments(ctx context.Context, store storage.ObjectStore, attachmentStore AttachmentStore, projectIDStr string, attachments []AttachmentRef) error {
+	if store == nil || attachmentStore == nil {
 		// Nothing could have been stored in a deployment with no object store;
 		// same degradation writeAttachmentBytes and DeleteAttachments apply.
 		return nil
@@ -1289,7 +1298,7 @@ func (h *Handler) deleteAttachmentObjects(ctx context.Context, projectIDStr stri
 	sort.Strings(buckets)
 	for _, bucket := range buckets {
 		bucketRefs := refs[bucket]
-		result, err := h.store.DeleteBatch(ctx, bucketRefs)
+		result, err := store.DeleteBatch(ctx, bucketRefs)
 		if err != nil {
 			return apierr.Internal("delete attachment bytes: " + err.Error())
 		}
@@ -1297,14 +1306,14 @@ func (h *Handler) deleteAttachmentObjects(ctx context.Context, projectIDStr stri
 			return apierr.Internal(fmt.Sprintf("delete attachment bytes: %d of %d objects failed, first %q: %v",
 				len(result.Failed), len(bucketRefs), result.Failed[0].Key, result.Failed[0].Err))
 		}
-		bucketID, err := h.attachments.LookupAttachmentBucket(ctx, projectID, bucket)
+		bucketID, err := attachmentStore.LookupAttachmentBucket(ctx, projectID, bucket)
 		if errors.Is(err, storage.ErrNotFound) {
 			continue
 		}
 		if err != nil {
 			return apierr.Internal("lookup attachment bucket: " + err.Error())
 		}
-		if err := h.attachments.DeleteAttachmentObjects(ctx, bucketID, byBucket[bucket]); err != nil {
+		if err := attachmentStore.DeleteAttachmentObjects(ctx, bucketID, byBucket[bucket]); err != nil {
 			return apierr.Internal("delete attachment metadata: " + err.Error())
 		}
 	}

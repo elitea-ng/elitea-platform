@@ -541,7 +541,7 @@ func main() {
 	requestLogger := requestlog.New(requestlog.NewStore(pool), logger)
 	if requestLogger != nil {
 		logger.Info("request log ENABLED",
-			"retention", requestlog.RetentionWindow.String(),
+			"default_retention", requestlog.RetentionWindow.String(), "retention_source", "elitea_runtime.retention_policy (gateway_request_log)",
 			"buffer", requestlog.BufferSize)
 	} else {
 		logger.Warn("request log DISABLED: no database pool — the admin Logs view will be empty")

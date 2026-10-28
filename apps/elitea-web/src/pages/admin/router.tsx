@@ -73,6 +73,7 @@ function AdminRoutePending() {
  */
 const AdminUsers = lazyRouteComponent(() => import('./Users'), 'AdminUsers');
 const AdminAuditTrail = lazyRouteComponent(() => import('./AuditTrail'), 'AdminAuditTrail');
+const AdminRetention = lazyRouteComponent(() => import('./Retention'), 'AdminRetention');
 const AdminRoles = lazyRouteComponent(() => import('./Roles'), 'AdminRoles');
 const AdminProjects = lazyRouteComponent(() => import('./Projects'), 'AdminProjects');
 const AdminSecrets = lazyRouteComponent(() => import('./Secrets'), 'AdminSecrets');
@@ -120,6 +121,13 @@ const auditTrailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/audit',
   component: AdminAuditTrail,
+});
+
+// Data retention and legal holds (ADR-0042 decision 4, issue 1495).
+const retentionRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/retention',
+  component: AdminRetention,
 });
 
 const rolesRoute = createRoute({
@@ -254,6 +262,7 @@ const adminRouteTree = rootRoute.addChildren([
   indexRoute,
   usersRoute,
   auditTrailRoute,
+  retentionRoute,
   rolesRoute,
   projectsRoute,
   secretsRoute,

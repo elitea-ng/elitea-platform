@@ -99,6 +99,7 @@ import (
 	"time"
 
 	"github.com/elitea-ng/elitea-platform/libs/go/routines"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/retentionpolicy"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -186,6 +187,12 @@ type Stats struct {
 	// Cutoff is the instant the pass compared against, kept so the log line and
 	// a test agree on which window was enforced.
 	Cutoff time.Time
+	// WindowDays is the window the pass enforced: the administrator's saved
+	// retention policy when there is one, else RetentionDays.
+	WindowDays int
+	// KeptForever is true when the pass deleted nothing because the policy
+	// (or a disabled deployment value) keeps the rows forever.
+	KeptForever bool
 }
 
 // Sweeper deletes expired audit rows on a timer.
@@ -193,8 +200,56 @@ type Sweeper struct {
 	store  Store
 	gate   Gate
 	cfg    Config
+	policy retentionpolicy.Reader
 	logger *slog.Logger
 	now    func() time.Time
+}
+
+// NewWithPolicy is New for a sweeper that follows the administrator's
+// retention policy for `admin_audit` (ADR-0042 decision 4) once it is saved,
+// and RetentionDays until then. RetentionDays of zero is then not a refusal:
+// the sweeper runs and deletes nothing until a policy sets a maximum.
+func NewWithPolicy(store Store, gate Gate, cfg Config, policy retentionpolicy.Reader, logger *slog.Logger) (*Sweeper, error) {
+	if policy == nil {
+		return New(store, gate, cfg, logger)
+	}
+	envDays := cfg.RetentionDays
+	if envDays <= 0 {
+		cfg.RetentionDays = MinimumRetentionDays // passes New's checks; never used as a window
+	}
+	s, err := New(store, gate, cfg, logger)
+	if err != nil {
+		return nil, err
+	}
+	s.cfg.RetentionDays = envDays
+	s.policy = policy
+	return s, nil
+}
+
+// windowDays resolves the window of one pass. ok is false when the pass must
+// delete nothing.
+func (s *Sweeper) windowDays(ctx context.Context) (days int, ok bool, err error) {
+	days = s.cfg.RetentionDays
+	if s.policy != nil {
+		decision, err := s.policy(ctx)
+		if err != nil {
+			// A destructive pass with an unknown policy deletes nothing.
+			return 0, false, err
+		}
+		if decision.Set {
+			if decision.MaxAgeDays == nil {
+				return 0, false, nil
+			}
+			days = *decision.MaxAgeDays
+		}
+	}
+	if days <= 0 {
+		return 0, false, nil
+	}
+	if days < MinimumRetentionDays {
+		return 0, false, fmt.Errorf("%w: %d days, floor is %d", ErrWindowTooShort, days, MinimumRetentionDays)
+	}
+	return days, true, nil
 }
 
 // New builds a Sweeper, or explains why there will not be one.
@@ -253,7 +308,7 @@ func (s *Sweeper) runOnce(ctx context.Context) (string, error) {
 		// busy loop against a database that is already unwell.
 		s.logger.Error("auditretention: sweep pass failed",
 			"err", err,
-			"window_days", s.cfg.RetentionDays,
+			"window_days", stats.WindowDays,
 			"deleted_before_failure", stats.Deleted,
 			"batches", stats.Batches)
 		return routines.OutcomeError, err
@@ -263,13 +318,17 @@ func (s *Sweeper) runOnce(ctx context.Context) (string, error) {
 			"window_days", s.cfg.RetentionDays)
 		return routines.OutcomeMaintenance, nil
 	}
+	if stats.KeptForever {
+		s.logger.Info("auditretention: the retention policy keeps audit events forever; not sweeping")
+		return routines.OutcomeOK, nil
+	}
 
 	// One line per pass, always — this is the only place an operator sees that
 	// the bound is enforced and by how much. A line emitted only when rows were
 	// deleted would make "the sweeper is running and there is nothing to
 	// delete" and "the sweeper never started" identical in the log.
 	s.logger.Info("auditretention: sweep pass complete",
-		"window_days", s.cfg.RetentionDays,
+		"window_days", stats.WindowDays,
 		"cutoff", stats.Cutoff.Format(time.RFC3339),
 		"deleted", stats.Deleted,
 		"batches", stats.Batches,
@@ -320,7 +379,16 @@ func (s *Sweeper) Sweep(ctx context.Context) (Stats, error) {
 		return stats, nil
 	}
 
-	stats.Cutoff = s.now().UTC().Add(-s.Window())
+	days, ok, err := s.windowDays(ctx)
+	if err != nil {
+		return stats, err
+	}
+	if !ok {
+		stats.KeptForever = true
+		return stats, nil
+	}
+	stats.WindowDays = days
+	stats.Cutoff = s.now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
 
 	for stats.Batches < s.cfg.MaxBatchesPerPass {
 		if err := ctx.Err(); err != nil {

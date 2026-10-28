@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/elitea-ng/elitea-platform/libs/go/routines"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/retentionpolicy"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -140,6 +141,10 @@ type Stats struct {
 	Batches    int
 	Drained    bool
 	Cutoff     time.Time
+	// WindowDays is the window the pass enforced; KeptForever means the
+	// policy (or the default) deletes nothing.
+	WindowDays  int
+	KeptForever bool
 }
 
 // Sweeper deletes exported, expired outbox rows on a timer.
@@ -147,8 +152,55 @@ type Sweeper struct {
 	store  Store
 	gate   Gate
 	cfg    Config
+	policy retentionpolicy.Reader
 	logger *slog.Logger
 	now    func() time.Time
+}
+
+// NewWithPolicy is New for a sweeper that follows the administrator's
+// retention policy for `security_audit` (ADR-0042 decision 4) once it is
+// saved, and the deployment window until then. A deployment window of zero is
+// then not ErrDisabled: the sweeper runs and deletes nothing until a policy
+// sets a maximum. It still deletes only exported rows the durable store holds.
+func NewWithPolicy(store Store, gate Gate, cfg Config, policy retentionpolicy.Reader, logger *slog.Logger) (*Sweeper, error) {
+	if policy == nil {
+		return New(store, gate, cfg, logger)
+	}
+	envDays := cfg.RetentionDays
+	if envDays <= 0 {
+		cfg.RetentionDays = MinimumRetentionDays // passes New's checks; never used as a window
+	}
+	s, err := New(store, gate, cfg, logger)
+	if err != nil {
+		return nil, err
+	}
+	s.cfg.RetentionDays = envDays
+	s.policy = policy
+	return s, nil
+}
+
+// windowDays resolves the window of one pass; ok false deletes nothing.
+func (s *Sweeper) windowDays(ctx context.Context) (days int, ok bool, err error) {
+	days = s.cfg.RetentionDays
+	if s.policy != nil {
+		decision, err := s.policy(ctx)
+		if err != nil {
+			return 0, false, err
+		}
+		if decision.Set {
+			if decision.MaxAgeDays == nil {
+				return 0, false, nil
+			}
+			days = *decision.MaxAgeDays
+		}
+	}
+	if days <= 0 {
+		return 0, false, nil
+	}
+	if days < MinimumRetentionDays {
+		return 0, false, fmt.Errorf("%w: %d days, floor is %d", ErrInvalidConfig, days, MinimumRetentionDays)
+	}
+	return days, true, nil
 }
 
 // New builds a Sweeper. ErrDisabled is the default (window 0).
@@ -202,8 +254,12 @@ func (s *Sweeper) Pass(ctx context.Context) (string, error) {
 		s.logger.Info("securityauditretention: maintenance mode is active; not sweeping")
 		return routines.OutcomeMaintenance, nil
 	}
+	if stats.KeptForever {
+		s.logger.Info("securityauditretention: the retention policy keeps the outbox forever; not sweeping")
+		return routines.OutcomeOK, nil
+	}
 	s.logger.Info("securityauditretention: sweep pass complete",
-		"window_days", s.cfg.RetentionDays,
+		"window_days", stats.WindowDays,
 		"cutoff", stats.Cutoff.Format(time.RFC3339),
 		"deleted", stats.Deleted,
 		"batches", stats.Batches,
@@ -218,7 +274,16 @@ func (s *Sweeper) Sweep(ctx context.Context) (Stats, error) {
 		stats.Suppressed = true
 		return stats, nil
 	}
-	stats.Cutoff = s.now().UTC().Add(-s.Window())
+	days, ok, err := s.windowDays(ctx)
+	if err != nil {
+		return stats, err
+	}
+	if !ok {
+		stats.KeptForever = true
+		return stats, nil
+	}
+	stats.WindowDays = days
+	stats.Cutoff = s.now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
 	for stats.Batches < s.cfg.MaxBatchesPerPass {
 		if err := ctx.Err(); err != nil {
 			return stats, err

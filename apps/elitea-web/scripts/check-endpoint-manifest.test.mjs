@@ -822,7 +822,12 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // and pin/unpinAgentToolkit, the credential reference lifecycle and agent
 // toolkit binding admin API. Admin routes are not in the manifest, so its
 // count is unchanged.
-const GENERATED_OPERATION_COUNT = 397;
+// 397 -> 404 (issue 1495, ADR-0042 decision 4): listRetentionPolicies,
+// setPlatformRetentionPolicy, set/deleteProjectRetentionOverride,
+// listLegalHolds, createLegalHold and releaseLegalHold, the data retention
+// and legal hold admin API. Admin routes are not in the manifest, so its
+// count is unchanged.
+const GENERATED_OPERATION_COUNT = 404;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

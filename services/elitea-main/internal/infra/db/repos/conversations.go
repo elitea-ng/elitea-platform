@@ -1045,7 +1045,6 @@ func (r *ConversationsRepo) AttachmentReferenced(ctx context.Context, projectID,
 var _ conversations.AttachmentReferenceReader = (*ConversationsRepo)(nil)
 
 func (r *ConversationsRepo) Delete(ctx context.Context, projectID, conversationID string) ([]conversations.AttachmentRef, error) {
-	s := schema(projectID)
 	id, err := r.resolveConversationID(ctx, projectID, conversationID)
 	if err != nil {
 		return nil, err
@@ -1078,6 +1077,35 @@ func (r *ConversationsRepo) Delete(ctx context.Context, projectID, conversationI
 		return nil, fmt.Errorf("conversations: delete: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
+
+	// A legal hold (ADR-0042 decision 4, shared 0195) suspends every deletion
+	// of the conversations it covers, the owner's own included: a hold a user
+	// could clear by pressing delete would hold nothing.
+	held, err := conversationHeld(ctx, transaction, projectID, id)
+	if err != nil {
+		return nil, err
+	}
+	if held {
+		return nil, apierr.Conflict("conversation is under legal hold and cannot be deleted")
+	}
+
+	attachments, err := deleteConversationInTx(ctx, transaction, projectID, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("conversations: delete commit: %w", err)
+	}
+	return attachments, nil
+}
+
+// deleteConversationInTx is the conversation delete's statement sequence, run
+// inside the caller's transaction: the user's delete (Delete) and the
+// retention sweep (DeleteExpiredConversation) share it, so retention deletes
+// exactly what a user's delete does. It returns the stored attachments the
+// removed rows owned; the caller decides what happens to the bytes.
+func deleteConversationInTx(ctx context.Context, transaction pgx.Tx, projectID string, id int64) ([]conversations.AttachmentRef, error) {
+	s := schema(projectID)
 
 	// Sync cascade (ADR-0025 WP6, tenant 0144): the conversation's own
 	// tombstone means "drop every message", so the per-message tombstones and
@@ -1138,9 +1166,6 @@ func (r *ConversationsRepo) Delete(ctx context.Context, projectID, conversationI
 	}
 	if err := deleteConversationPin(ctx, transaction, projectID, id); err != nil {
 		return nil, err
-	}
-	if err := transaction.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("conversations: delete commit: %w", err)
 	}
 	return attachments, nil
 }
