@@ -98,8 +98,8 @@ const (
 	credentialGovernanceCommand   = "credential-governance"
 	migrateReferencesSubcommand   = "migrate-references"
 	migrateReferencesRunTimeout   = 30 * time.Minute
-	migrateReferencesCopyScope    = "credential-migration"
-	migrateReferencesOAuthLocator = "oauth_grant"
+	migrateReferencesCopyScope    = repos.CredentialReferenceStagingScope
+	migrateReferencesOAuthLocator = repos.CredentialReferenceOAuthLocator
 )
 
 // migrateAction is what happened to one unit.

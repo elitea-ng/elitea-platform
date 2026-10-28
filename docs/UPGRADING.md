@@ -6,6 +6,38 @@ newest entry is first.
 
 ## Governance follow-ups
 
+* **elitea-main: definition digest checked at admission (#1462, governance
+  flag on only).** Admission now computes the canonical digest of the
+  agent version's stored definition (the value a root run records as
+  `source_definition_sha256`) and compares it with the active binding's
+  `definition_digest`. On a mismatch the run binds **no** agent identity:
+  the broker denies every governed use, a mandate-bound schedule or trigger
+  is refused, and the security audit records `definition_digest_mismatch`.
+  Bindings proposed with any other digest stop binding after the upgrade.
+  **Before upgrading a deployment with the governance flag on, plan to
+  re-pin every active binding to its computed digest**, or governed runs
+  lose their identity. The re-pin route ships with this release, so do it
+  as the first step after the rollout, with both administrators on hand:
+  list `GET /api/v2/admin/agent_identities?state=active`; for each
+  row whose `definition_digest` differs from `computed_definition_digest`,
+  one administrator calls `POST /api/v2/admin/agent_identities/{id}:repin`
+  and a second calls `:approve`. Plan a short window: governed runs of a
+  binding are unbound between the two calls. Re-pin again after every
+  agent edit, toolkit edit and credential reference `:attach`/`:detach`,
+  because the definition embeds the toolkits' stored settings. An agent
+  from another project's catalogue cannot be bound. Deployments with the
+  flag off are unaffected.
+* **elitea-main: `POST /api/v2/admin/credential_references` (#1482).**
+  Stages a credential reference from scratch (target binding, class,
+  backend, locator) as `staged`, with the caller as `staged_by`; a second
+  administrator activates it as before. Same permission
+  (`models.agent_identity.bindings.manage`) and flag gating as the other
+  reference routes; no migration. For a static secret the locator is
+  checked through the secret store's metadata call under the
+  `credential-migration` workload scope, so on Vault/OpenBao the
+  `<role prefix>-credential-migration` role needs metadata read on
+  `elitea/projects/*/credentials/*`. The value is never read.
+
 * **elitea-main: a governed run's worker gets a run-scoped token (#1461,
   governed runs only).** With credential governance on, a run pinned to the
   governed profile no longer receives its user's personal access token.

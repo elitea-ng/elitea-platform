@@ -13,7 +13,7 @@ import (
 // reference routes and each answers 404.
 func TestCredentialReferencesAdminIsNilWithTheFlagOff(t *testing.T) {
 	for _, guard := range []bool{false, true} {
-		h, err := credentialReferencesAdmin(profile.LegacyAdmission(guard), nil, nil)
+		h, err := credentialReferencesAdmin(profile.LegacyAdmission(guard), profile.PolicyRevision{}, nil, nil, nil)
 		if err != nil || h != nil {
 			t.Fatalf("legacy(%v): handler %v, err %v; want nil, nil", guard, h, err)
 		}
@@ -21,8 +21,11 @@ func TestCredentialReferencesAdminIsNilWithTheFlagOff(t *testing.T) {
 }
 
 func TestCredentialReferencesAdminIsBuiltWithTheFlagOn(t *testing.T) {
-	governed := profile.GovernedAdmission(profile.PolicyRevision{ID: "2026-10-r1"})
-	if _, err := credentialReferencesAdmin(governed, nil, nil); err == nil {
+	revision := profile.PolicyRevision{ID: "2026-10-r1"}
+	governed := profile.GovernedAdmission(revision)
+	// No secret store variable is set: pgvault only, its key unwrapped.
+	lookup := func(string) (string, bool) { return "", false }
+	if _, err := credentialReferencesAdmin(governed, revision, lookup, nil, nil); err == nil {
 		t.Fatal("governed without a database built a handler")
 	}
 	// An undialled pool: pgxpool connects lazily.
@@ -31,7 +34,7 @@ func TestCredentialReferencesAdminIsBuiltWithTheFlagOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	h, err := credentialReferencesAdmin(governed, pool, nil)
+	h, err := credentialReferencesAdmin(governed, revision, lookup, pool, nil)
 	if err != nil || h == nil {
 		t.Fatalf("governed: handler %v, err %v", h, err)
 	}

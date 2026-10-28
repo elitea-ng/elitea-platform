@@ -223,6 +223,7 @@ export * from "./credentialConsentStartRequest.zod";
 export * from "./credentialProbeResult.zod";
 export * from "./credentialReference.zod";
 export * from "./credentialReferenceAttachment.zod";
+export * from "./credentialReferenceCreate.zod";
 export * from "./credentialReferenceListResponse.zod";
 export * from "./credentialReferenceToolkitRequest.zod";
 export * from "./credentialSearchOptionPage.zod";
