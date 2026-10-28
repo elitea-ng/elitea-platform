@@ -3,11 +3,11 @@
  * docs-shots.ts — the repeatable screenshot capture driver for the embedded
  * docs SPA (embedded-docs programme, unit W3, PREAMBLE decision 4).
  *
- * Reads `src/entries/docs/shots.manifest.ts`, signs in to a RUNNING e2e
+ * Reads `apps/elitea-docs/shots.manifest.ts`, signs in to a RUNNING e2e
  * stack (`apps/elitea-web/scripts/e2e-stack.sh up && … seed`) the same way
  * the Playwright suite does, and for every manifest entry: opens the route,
  * lets it settle deterministically, applies any masks, captures a PNG, and
- * re-encodes it to WebP under `content/img/<id>.webp` at ≤250 KB.
+ * re-encodes it to WebP under `apps/elitea-docs/src/screenshots/<id>.webp` at ≤250 KB.
  *
  * ## Why this reuses `playwright.config.ts` rather than re-implementing sign-in
  *
@@ -76,7 +76,7 @@
  *   --report            Also write a PNG copy of every attempted capture
  *                       (bad ones included) to this directory, named
  *                       `<id>.png`, for a human review pass — separate from
- *                       the committed `content/img/<id>.webp`.
+ *                       the committed `apps/elitea-docs/src/screenshots/<id>.webp`.
  *   --project-id/       Pin every captured context to this project (unit
  *   --project-name      W4b) — required together. `auth.setup.ts`'s stored
  *                       storageState always pins member/admin to "Default
@@ -90,7 +90,7 @@
  *                       `docs-seed.ts --project-name`/its resolved id
  *                       targeted.
  *   --fail-on-missing   Exit non-zero if any requested shot produced no
- *                       `content/img/<id>.webp` (capture error, a route
+ *                       `apps/elitea-docs/src/screenshots/<id>.webp` (capture error, a route
  *                       whose placeholder did not resolve, a detected bad
  *                       capture — see `detectBadCapture` — or a
  *                       conversion that could not reach the byte ceiling).
@@ -121,13 +121,13 @@ import type {
   Shot,
   ShotAction,
   ShotPersona,
-} from "../src/entries/docs/shots.manifest";
-import { shots as manifestShots } from "../src/entries/docs/shots.manifest";
+} from "../../elitea-docs/shots.manifest";
+import { shots as manifestShots } from "../../elitea-docs/shots.manifest";
 import { resolveShotRoute } from "./lib/docs-shot-route.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = resolve(SCRIPT_DIR, "..");
-const IMG_DIR = join(WEB_ROOT, "src/entries/docs/content/img");
+const IMG_DIR = join(WEB_ROOT, "../elitea-docs/src/screenshots");
 const MAX_IMAGE_BYTES = 250 * 1024;
 const MIN_WEBP_QUALITY = 30;
 const RESIZE_WIDTH = 1200;

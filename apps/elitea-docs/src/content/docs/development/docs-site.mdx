@@ -1,0 +1,56 @@
+---
+title: "Work on the documentation"
+description: "Run the Astro Starlight docs site locally, add a page or screenshot, use the page components, and pass the docs checks."
+---
+
+This site is its own app, `apps/elitea-docs`, built with [Astro Starlight](https://starlight.astro.build). It has its own `package.json` and lockfile, so a change that touches only the docs starts only the **CI — Docs** workflow, plus the repository-wide guards that run on every pull request. It does not start the web, E2E or desktop pipelines.
+
+## Run it locally
+
+```bash
+cd apps/elitea-docs
+npm ci
+npm run dev          # http://localhost:4321/docs/
+npm run build        # dist/, with the Pagefind search index
+npm run preview      # serve dist/ the way nginx will
+```
+
+`DOCS_BASE` sets the base path and defaults to `/docs/`, where the web image's nginx serves the site. The GitHub Pages workflow builds with `/elitea-platform/` instead. The search index is built from the rendered pages at build time (Pagefind), so nothing generated is committed.
+
+## Add a page
+
+<Steps>
+<Step title="Write the page">
+Add an `.mdx` file under `src/content/docs/<section>/`. Its front matter needs a `title` and a `description`; the title is the page heading, so the body starts without an `#` heading. File names are lowercase: the file name is the URL.
+</Step>
+<Step title="Put it in the navigation">
+Add the slug to the right group in `src/nav/<tab>.ts`. Each top-level tab becomes a sidebar topic. A page that is in no tab, or a tab entry with no page, fails `npm run check`.
+</Step>
+<Step title="Link to it">
+Link with root-relative paths such as `/development/frontend`. The build adds the base path, and `npm run check:dist` fails on any link or `#anchor` that does not resolve.
+</Step>
+</Steps>
+
+## Components
+
+Every `.mdx` page can use these components without importing them: `Note`, `Tip`, `Info`, `Warning`, `Check`, `Steps`/`Step`, `Tabs`/`Tab`, `Accordion`/`AccordionGroup`, `Card`/`CardGroup`, `Badge`, `Frame`, `Icon` and `Screenshot`. The list lives in `src/plugins/remark-docs-components.ts`, and the content check fails a page that uses anything else. `Icon` and `Card` take [Lucide](https://lucide.dev) icon names.
+
+A ` ```mermaid ` fence renders as a diagram in the site's colours, and redraws when the reader changes the theme.
+
+## Screenshots
+
+A `Screenshot` with an `id` shows `src/screenshots/<id>.webp`. Each id must be in `shots.manifest.ts`, which tells the capture script which route and persona to shoot (see [Documentation screenshots](/development/e2e-stack#documentation-screenshots)). Every image must be referenced by a page and be at most 250 KB.
+
+## Checks
+
+| Command | What it checks |
+|---|---|
+| `npm run check` | Navigation and files match, front matter, components, screenshot ids and sizes |
+| `npm run build` | The site builds |
+| `npm run check:dist` | Every internal link and anchor in `dist/` resolves; every inline script's hash is in the docs Content-Security-Policy |
+
+The docs CSP is `nginx/security-headers.conf`, installed in the web image as `docs-security-headers.conf`. When a Starlight upgrade or a new component changes an inline script, run `node scripts/check-dist.mjs --write-csp` after a build to rewrite the hashes, and commit the result.
+
+{/* source: apps/elitea-docs/astro.config.ts (base, Pagefind, plugins) */}
+{/* source: apps/elitea-docs/scripts/content.test.mjs, apps/elitea-docs/scripts/check-dist.mjs */}
+{/* source: .github/workflows/ci-docs.yml */}

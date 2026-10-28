@@ -4,6 +4,19 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Documentation site moved to Astro Starlight
+
+* **The docs at `/docs/` are a separate app now (`apps/elitea-docs`).** The
+  web image still serves them at `/docs/`, from a docs build stage, with a
+  docs-only Content-Security-Policy (`docs-security-headers.conf`) that
+  allows `'wasm-unsafe-eval'` for the Pagefind search. Page URLs are
+  unchanged, except `/docs/integrations/toolkits/testIO_toolkit`, which is
+  now `/docs/integrations/toolkits/testio_toolkit`. A Help Center link an
+  administrator set to the old spelling needs updating. A deployment that
+  replaces the image's nginx config must route `/docs/` the way
+  `apps/elitea-web/nginx/spa.conf` does: static files with
+  `try_files $uri $uri/ =404`, not a fallback to one HTML shell.
+
 ## Governance follow-ups
 
 * **elitea-main: definition digest checked at admission (#1462, governance

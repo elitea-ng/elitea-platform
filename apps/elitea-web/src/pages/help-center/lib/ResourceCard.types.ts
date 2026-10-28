@@ -9,7 +9,7 @@ import type { ReactNode } from 'react';
  * A card's DEFAULT link (#891/ELITEA-0972,0973,0974,0975) — shown until an
  * administrator configures the card's `linksKey` (`resolveLinks`,
  * `HelpCenterPage.tsx`). Every URL here points at REAL, shipped content
- * (the embedded docs SPA, `src/entries/docs/content/**`) — no invented
+ * (the docs site, `apps/elitea-docs/src/content/docs/**`) — no invented
  * "coming soon" links. `badge` is the one additional concept the Release
  * Notes case needs ("Latest" over historical entries); no other card uses it.
  */

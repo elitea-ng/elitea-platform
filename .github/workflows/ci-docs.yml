@@ -1,0 +1,64 @@
+name: CI — Docs
+
+# The docs site (apps/elitea-docs, Astro Starlight). It is its own app with
+# its own lockfile, so a docs-only change starts this workflow and none of
+# the web, E2E or desktop pipelines (their path filters no longer match
+# docs). It builds the site exactly as the web image's docs stage does
+# (DOCS_BASE=/docs/), so a docs change that would break the image build or
+# the served CSP fails here first.
+on:
+  pull_request:
+    paths:
+      - "apps/elitea-docs/**"
+      # The palette the diagrams are drawn in.
+      - "libs/ts/client-core/src/brand/tokens.json"
+      # The nginx locations that serve the built site.
+      - "apps/elitea-web/nginx/spa.conf"
+      - ".github/workflows/ci-docs.yml"
+      - ".github/actions/npm-cache/**"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the npm cache pull
+  # requests read (scripts/ci/check-workflow-cache-writes.mjs).
+  schedule:
+    - cron: "45 0 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    name: Content checks, build, links and CSP
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/elitea-docs
+    env:
+      ASTRO_TELEMETRY_DISABLED: "1"
+      DOCS_BASE: /docs/
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          # The npm cache is .github/actions/npm-cache below.
+          package-manager-cache: false
+      - name: Restore the npm cache (pull requests read, main writes)
+        uses: ./.github/actions/npm-cache
+        with:
+          cache-dependency-path: apps/elitea-docs/package-lock.json
+          # A small lockfile: restore its own cache only, never the web app's.
+          prefix-fallback: "false"
+      - name: Install (locked)
+        run: npm ci --no-audit --no-fund
+      - name: Content checks (nav, front matter, components, screenshots)
+        run: npm run check
+      - name: Build (Pagefind indexes the built pages)
+        run: npm run build
+      - name: Every link and anchor resolves; every inline script is in the CSP
+        run: npm run check:dist

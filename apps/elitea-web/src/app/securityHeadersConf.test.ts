@@ -26,8 +26,8 @@ const HEADERS_CONF = readFileSync(resolve(NGINX_DIR, 'security-headers.conf'), '
 const SPA_CONF = readFileSync(resolve(NGINX_DIR, 'spa.conf'), 'utf8');
 
 /** HTML documents nginx serves: the source pages and, after a build, their output. */
-const SOURCE_PAGES = ['index.html', 'src/entries/docs/index.html'] as const;
-const BUILT_PAGES = ['dist/app/index.html', 'dist/docs/index.html', 'dist/docs/404.html'] as const;
+const SOURCE_PAGES = ['index.html'] as const;
+const BUILT_PAGES = ['dist/app/index.html'] as const;
 
 function cspValue(conf: string): string {
   const match = /^add_header\s+Content-Security-Policy\s+"([^"]*)"\s+always;/m.exec(conf);
@@ -173,8 +173,14 @@ describe('nginx/spa.conf', () => {
   // every location here sets Cache-Control, so each one must include the file.
   it.each(blocks.map((block) => [block.head, block.body] as const))(
     'location %s includes security-headers.conf',
-    (_head, body) => {
-      expect(body).toContain('include /etc/nginx/snippets/security-headers.conf;');
+    (head, body) => {
+      // The docs site (apps/elitea-docs, served under /docs/) is a separate
+      // static build with its own inline scripts, so its locations carry its
+      // own header set (apps/elitea-docs/nginx/security-headers.conf, installed
+      // as docs-security-headers.conf). A head may carry a modifier (`= /docs/…`).
+      const path = head.replace(/^[=~^*]+\s*/, '');
+      const snippet = path.startsWith('/docs/') ? 'docs-security-headers.conf' : 'security-headers.conf';
+      expect(body).toContain(`include /etc/nginx/snippets/${snippet};`);
     },
   );
 
