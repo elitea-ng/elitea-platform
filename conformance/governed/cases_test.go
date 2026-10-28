@@ -217,10 +217,17 @@ func gov006(ctx context.Context, t *testing.T, w *world) {
 		paused := w.interrupt(ctx, t, w.user, agent.turnFixture, result.ResponseMessageID)
 		before := len(w.cfg.callsWith(ctx, t, "jira.governed.test", agent.Token))
 		revoke(agent)
-		if answer := w.resume(ctx, t, w.user, paused); answer.Status >= 500 {
-			t.Fatalf("the resume failed rather than being decided: %s", answer)
+		// Main re-admits a resume, so the revoked authority refuses it there
+		// with 403 governed_credential_refused and no command is sent. The
+		// pause itself stays until the user stops the turn (#1485); a
+		// resume that was admitted instead must settle without the provider.
+		switch answer := w.resume(ctx, t, w.user, paused); {
+		case answer.Status == http.StatusForbidden && strings.Contains(string(answer.Body), `"governed_credential_refused"`):
+		case answer.Status >= 200 && answer.Status < 300:
+			w.settled(ctx, t, w.user, agent.turnFixture, 4*time.Minute)
+		default:
+			t.Fatalf("the resume was neither refused nor decided: %s", answer)
 		}
-		w.settled(ctx, t, w.user, agent.turnFixture, 4*time.Minute)
 		if after := len(w.cfg.callsWith(ctx, t, "jira.governed.test", agent.Token)); after != before {
 			t.Fatalf("the provider saw the credential after the revocation (%d calls)", after-before)
 		}

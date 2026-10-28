@@ -101,7 +101,10 @@ func TestGovernedRollback(t *testing.T) {
 
 	t.Run("ROLLBACK/legacy_turn_works", func(t *testing.T) {
 		before := len(w.cfg.journal(ctx, t, "jira.governed.test"))
-		w.mustAdmit(ctx, t, w.user, *s.Legacy, callTool("list_projects", ""))
+		// The mock derives a call id from the prompt, and this conversation
+		// already holds the off phase's list_projects call: the same prompt
+		// would repeat its call id in the history.
+		w.mustAdmit(ctx, t, w.user, *s.Legacy, callTool("list_projects", "")+" after rollback")
 		last := w.settled(ctx, t, w.user, *s.Legacy, 4*time.Minute)
 		if !strings.Contains(messageRaw(last), "GOVJIRASENTINEL") {
 			t.Fatalf("the legacy turn did not reach the provider after rollback: %s", messageRaw(last))
