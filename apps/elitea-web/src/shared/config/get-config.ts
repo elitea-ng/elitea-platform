@@ -83,16 +83,23 @@ let cached: ConfigResult | undefined;
  * Resolve the runtime config (C6/C7). Pure factory: no module-scope work, no
  * side effects beyond the memo below.
  *
- * Memoization/invalidation story: the C6 sources are immutable for the life
- * of a page — /app/config.js is executed before the bundle (index.html loads
- * it first), and build-time env cannot change at runtime — so the first
- * resolution is cached and every later call returns the same frozen result.
- * There is deliberately NO production invalidation path; tests use
- * resetConfigForTests() (not re-exported from the public barrel).
+ * Memoization/invalidation story: in a browser the C6 sources are immutable
+ * for the life of a page — /app/config.js is executed before the bundle
+ * (index.html loads it first), and build-time env cannot change at runtime —
+ * so a resolved config is cached and every later call returns the same frozen
+ * result. Only an `ok` result is cached: the desktop build publishes
+ * `elitea_ui_config` at sign-in (entries/desktop/launchApp.tsx), and anything
+ * the pre-sign-in shell resolves earlier (BrandDocumentHead's basename read)
+ * must not pin a `missing` result that would show MissingEnvPage once the
+ * config exists. There is deliberately NO production invalidation of an `ok`
+ * result; tests use resetConfigForTests() (not re-exported from the public
+ * barrel).
  */
 export function getConfig(): ConfigResult {
-  cached ??= resolveConfig();
-  return cached;
+  if (cached !== undefined) return cached;
+  const result = resolveConfig();
+  if (result.status === 'ok') cached = result;
+  return result;
 }
 
 /** Test-only memo reset — kept off the public surface (see index.ts). */
