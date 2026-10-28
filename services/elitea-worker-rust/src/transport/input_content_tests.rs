@@ -620,12 +620,17 @@ mod security_context {
         digest: Vec<u8>,
     }
 
-    fn vector(index: usize) -> Vector {
+    fn vector(name: &str) -> Vector {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../testdata/proto/runtime/v1/security-context/vectors.json");
         let corpus: Value =
             serde_json::from_slice(&std::fs::read(path).expect("corpus")).expect("corpus JSON");
-        let vector = &corpus["vectors"][index];
+        let vector = corpus["vectors"]
+            .as_array()
+            .expect("vectors")
+            .iter()
+            .find(|vector| vector["name"] == name)
+            .unwrap_or_else(|| panic!("no corpus vector named {name:?}"));
         let hex = |field: &str| {
             let text = vector[field].as_str().expect("hex");
             (0..text.len())
@@ -673,7 +678,7 @@ mod security_context {
 
     #[tokio::test(flavor = "current_thread")]
     async fn a_governed_execution_fetches_and_verifies_its_context_under_claim() {
-        let accepted = vector(0);
+        let accepted = vector("valid governed context");
         let reference = reference("execution-1", &accepted.digest);
         let version = reference.immutable_version();
         assert!(version.starts_with("sha256:"));
@@ -720,9 +725,9 @@ mod security_context {
 
     #[tokio::test(flavor = "current_thread")]
     async fn every_refused_context_fails_the_execution_closed() {
-        let accepted = vector(0);
-        let mismatch = vector(1);
-        let unknown = vector(2);
+        let accepted = vector("valid governed context");
+        let mismatch = vector("bytes do not match the reference digest");
+        let unknown = vector("unknown field 18");
         // (execution of the claim, reference, served bytes, served digest)
         let cases = [
             // The served bytes do not hash to the signed reference.

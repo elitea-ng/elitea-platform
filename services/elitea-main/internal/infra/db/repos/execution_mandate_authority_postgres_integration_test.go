@@ -189,7 +189,20 @@ func TestPostgresIndexScheduleTargetReadsItsCrons(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// elitea_tools is created with the tenant schema itself (001_initial.sql),
+	// not by the ledgered corpus this template is built from.
 	if _, err := pool.Exec(ctx, `
+CREATE TABLE p_1.elitea_tools (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(128) NOT NULL,
+    type VARCHAR(64) NOT NULL,
+    description TEXT,
+    owner_id INTEGER NOT NULL,
+    author_id INTEGER NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    meta JSONB DEFAULT '{}'::jsonb,
+    settings JSONB DEFAULT '{}'::jsonb
+);
 INSERT INTO p_1.elitea_tools (id, name, type, owner_id, author_id, meta, created_at) VALUES
     (941, 'repo', 'github', 1, 1,
      '{"indexes_meta":{"docs":{"schedules":{"-1":{"cron":"0 3 * * *","enabled":true},"17":{"cron":"30 2 * * *","enabled":true}}},"empty":{}}}',
@@ -237,14 +250,10 @@ func TestPostgresUnattendedRunMandatesAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The template's application_versions holds only what the tenant history
+	// alters; the schedule's foreign key needs nothing more than the id.
 	if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.applications (id, name, owner_id) VALUES (931, 'nightly', 41);
-INSERT INTO p_1.application_versions (
-    id, application_id, name, status, author_id, uuid, llm_settings, instructions,
-    conversation_starters, welcome_message, agent_type, meta, pipeline_settings, created_at
-) VALUES (
-    932, 931, 'base', 'published', 41, '80000000-0000-4000-8000-000000000932',
-    '{}'::jsonb, '', '[]'::json, '', 'pipeline', '{}'::jsonb, '{}'::jsonb, now() AT TIME ZONE 'UTC');
+INSERT INTO p_1.application_versions (id) VALUES (932);
 INSERT INTO p_1.pipeline_schedules (application_id, version_id, cron, active, user_input, author_id)
 VALUES (931, 932, '0 * * * *', true, 'scheduled', 41);`); err != nil {
 		t.Fatal(err)
