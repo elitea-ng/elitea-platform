@@ -91,8 +91,9 @@ func TestGovernedProfile(t *testing.T) {
 
 	t.Run("GOV-003/vault_static_secret", func(t *testing.T) {
 		agent := w.governedAgent(ctx, t, agentSpec{Label: "gov003-vault", MandateFor: []*persona{w.user}, Backend: "vault"})
-		want := fmt.Sprintf("elitea/projects/%d/credentials/%s", w.cfg.Project, agent.Reference.CredentialReferenceID)
-		if agent.Reference.SecretLocation != want && agent.Reference.Locator != want {
+		// The copy is keyed by the source configuration, so a re-run finds it.
+		want := fmt.Sprintf("elitea/projects/%d/credentials/%s", w.cfg.Project, agent.Reference.ConfigurationUUID)
+		if agent.Reference.ConfigurationUUID == "" || agent.Reference.Locator != want {
 			t.Fatalf("the vault copy is not at %s: %+v", want, agent.Reference)
 		}
 		// The value is in OpenBao, written by the CLI, read here only to
@@ -157,9 +158,11 @@ func gov005(ctx context.Context, t *testing.T, w *world) {
 		w.admin.do(ctx, t, http.MethodPost, "/api/v2/admin/agent_identities/"+agent.BindingID+":suspend", map[string]any{}, http.StatusOK)
 		agent.turnFixture = w.converse(ctx, t, w.user, agent.turnFixture)
 		result := w.send(ctx, t, w.user, agent.turnFixture, callTool("list_projects", ""))
+		// Admission finds no usable binding, so it freezes no reference, and
+		// the broker refuses the redeem before any decision.
 		w.expectDenied(ctx, t, w.user, agent, result,
 			[]string{"binding_not_active", "agent_binding_not_active", "agent_binding_required"},
-			[]string{"binding_not_active", "authority_not_active"})
+			[]string{"binding_not_active", "authority_not_active", unfrozenRefusal})
 	})
 
 	t.Run("toolkit", func(t *testing.T) {

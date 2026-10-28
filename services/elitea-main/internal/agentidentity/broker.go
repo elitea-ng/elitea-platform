@@ -87,7 +87,8 @@ type SessionPolicy interface {
 }
 
 // DenyAssertedUser is the default SessionPolicy: the revision's modes, and
-// asserted user evidence never accepted. No revision field enables it yet.
+// asserted user evidence never accepted. Tests use it; Main passes the
+// revision document, which lists the modes that accept it (gate D4).
 type DenyAssertedUser struct{ identity.ModePolicy }
 
 // AllowsAssertedUser always refuses.

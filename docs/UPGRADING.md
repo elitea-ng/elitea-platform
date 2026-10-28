@@ -6,6 +6,17 @@ newest entry is first.
 
 ## P6b
 
+* **Policy revision field `asserted_user_identity_modes` (optional).**
+  It lists the identity modes whose agent sessions may carry a user that
+  Elitea asserts from an approved `delegated_background` mandate. Each
+  must also be in `allowed_identity_modes`. Absent means none, which is
+  how every earlier revision behaves, so a user-attended governed run
+  still needs a verified delegation. List `elitea_native` to let a
+  mandate stand in for one. The field is `omitempty`, so stored revisions
+  keep their digests.
+* `migrate-references --copy-to vault` accepts a deployment without
+  `SECRETS_MASTER_KEY` only when `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true`,
+  the same rule elitea-main applies at start-up.
 * **elitea-main: credential reference lifecycle (#1124, off by default).**
   One additive shared migration (0193) adds nullable `staged_by`,
   `activated_by` and `last_transition_by` (user ids, bigint) and

@@ -182,7 +182,12 @@ func migrateSecretsFromEnv(lookup func(string) (string, bool), pool *pgxpool.Poo
 		return migrateSecrets{}, err
 	}
 	if masterKey == nil {
-		return migrateSecrets{}, errors.New("--copy-to vault reads the pgvault secret, so the vault master key is required")
+		// Main's start-up rule: no key only with the development opt-out,
+		// whose project vault keys are stored unwrapped.
+		getenv := func(name string) string { value, _ := lookup(name); return value }
+		if _, err := requireVaultMasterKey(getenv); err != nil {
+			return migrateSecrets{}, fmt.Errorf("--copy-to vault reads the pgvault secret: %w", err)
+		}
 	}
 	reader, err := storage.NewPostgresSecretVaultLoader(pool, masterKey)
 	if err != nil {

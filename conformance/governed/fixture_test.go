@@ -203,6 +203,7 @@ type migrationLine struct {
 	ProjectID             int64  `json:"project_id"`
 	ToolkitID             int64  `json:"toolkit_id"`
 	ToolkitType           string `json:"toolkit_type"`
+	ConfigurationUUID     string `json:"configuration_uuid"`
 	ProviderType          string `json:"provider_type"`
 	Class                 string `json:"class"`
 	TargetIdentity        string `json:"target_identity"`
@@ -219,10 +220,10 @@ type migrationLine struct {
 // A, and returns the lines that concern toolkitID.
 func (w *world) migrateReferences(ctx context.Context, t *testing.T, toolkitID int64, apply bool, extra ...string) []migrationLine {
 	t.Helper()
-	args := []string{"credential-governance", "migrate-references", "--project", w.p(),
-		"--operator", strconv.FormatInt(w.admin.UserID, 10), "--json"}
+	// --operator names the stager, so the CLI takes it only with --apply.
+	args := []string{"credential-governance", "migrate-references", "--project", w.p(), "--json"}
 	if apply {
-		args = append(args, "--apply")
+		args = append(args, "--apply", "--operator", strconv.FormatInt(w.admin.UserID, 10))
 	}
 	args = append(args, extra...)
 	out, stderr, err := w.cfg.mainCLI(ctx, args...)
@@ -665,7 +666,13 @@ func (w *world) expectDenied(ctx context.Context, t *testing.T, as *persona, age
 	case http.StatusOK:
 		w.settled(ctx, t, as, agent.turnFixture, 4*time.Minute)
 		var denied bool
-		for _, d := range w.decisions(ctx, t, result.ExecutionID) {
+		decisions := w.decisions(ctx, t, result.ExecutionID)
+		// A run whose admission froze no reference (its binding was not
+		// usable) is refused by the broker before any decision is made.
+		if slices.Contains(reasons, unfrozenRefusal) && len(decisions) == 0 {
+			denied = true
+		}
+		for _, d := range decisions {
 			if strings.EqualFold(d.Effect, "deny") {
 				for _, reason := range d.Reasons {
 					if slices.Contains(reasons, reason) {
@@ -686,6 +693,10 @@ func (w *world) expectDenied(ctx context.Context, t *testing.T, as *persona, age
 		t.Fatalf("the provider saw the credential %d more times after a denial", after-before)
 	}
 }
+
+// unfrozenRefusal, in expectDenied's reasons, also accepts a run with no
+// decision at all: the broker refuses credential_reference_not_frozen first.
+const unfrozenRefusal = "credential_reference_not_frozen"
 
 // expectUsed asserts a turn used the governed credential: admitted on the
 // governed profile, the provider saw exactly the reference's secret, and a
