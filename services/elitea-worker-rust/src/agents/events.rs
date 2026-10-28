@@ -11,7 +11,7 @@
 
 #![allow(dead_code)] // Production construction waits for authorized progress delivery.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 
 use adk_rust::graph::interrupt::{GraphInterruptPayload, INTERRUPT_METADATA_KEY};
@@ -128,6 +128,10 @@ pub(crate) const FANOUT_MEMBER_THREAD_KEY: &str = "elitea.fanout.member_thread.v
 /// side by side, so their calls stay open together; only the Parallel node
 /// stamps it.
 pub(crate) const FANOUT_MEMBER_CALL_KEY: &str = "elitea.fanout.member_call.v1";
+/// FU-246: a fixed Parallel member's own confirmation. It is persisted with
+/// the root session (the resume proof) but projected as nothing: the member's
+/// ledger card, raised by the fan-out runner, is its only pause.
+pub(crate) const FANOUT_MEMBER_PAUSE_KEY: &str = "elitea.fanout.member_pause.v1";
 /// The pipeline child's own pending graph checkpoint (#973).
 ///
 /// Private runtime state, carried on the PERSISTED descendant interrupt event
@@ -966,6 +970,9 @@ pub(crate) struct AgentEventProjector {
     state: ProjectionState,
     invocation_id: Option<String>,
     active_tools: BTreeMap<String, ActiveToolCall>,
+    /// FU-246: open calls of a fixed Parallel member's own Agent that paused
+    /// on a ledger card; its resumed Agent re-emits each identical call once.
+    member_paused_calls: BTreeSet<String>,
     sensitive_tools: SensitiveToolCatalog,
     delegated_authorization: DelegatedAuthorizationCatalog,
     application_tools: ApplicationToolPresentationCatalog,
@@ -1109,6 +1116,7 @@ impl AgentEventProjector {
             state: ProjectionState::Created,
             invocation_id: None,
             active_tools: BTreeMap::new(),
+            member_paused_calls: BTreeSet::new(),
             sensitive_tools,
             delegated_authorization,
             application_tools,
@@ -1326,6 +1334,28 @@ impl AgentEventProjector {
         {
             return Err(AgentEventProjectionError::invalid_state());
         }
+        if let Some(request) = event.actions.tool_confirmation.as_ref().filter(|_| {
+            event
+                .provider_metadata
+                .contains_key(FANOUT_MEMBER_PAUSE_KEY)
+        }) {
+            // One pause authority: a fixed Parallel member's own pause is its
+            // ledger card. The confirmation is persisted (the resume proof)
+            // and its open call waits for the member's resumed Agent.
+            let call_id = request
+                .function_call_id
+                .as_deref()
+                .filter(|id| {
+                    self.active_tools.get(*id).is_some_and(|active| {
+                        active.name == request.tool_name && active.arguments == request.args
+                    })
+                })
+                .ok_or_else(AgentEventProjectionError::invalid_state)?;
+            self.member_paused_calls.insert(call_id.to_owned());
+            // The resumed Agent runs under a new invocation; it binds anew.
+            self.invocation_id = None;
+            return Ok(ProjectedAgentEventBatch::new());
+        }
         if event.actions.tool_confirmation.is_some() {
             let batch = if event.provider_metadata.contains_key(ASK_USER_METADATA_KEY) {
                 self.project_clarifying_question(event)?
@@ -1407,6 +1437,20 @@ impl AgentEventProjector {
         }
         if !tool_results.is_empty() {
             return self.project_tool_results(event, &tool_results);
+        }
+        // FU-246: a member Agent resumed after its ledger card re-emits the
+        // call it paused on, unchanged; that call is still open here, so the
+        // replay is that call resuming, not a new model turn.
+        if let [call] = tool_calls.as_slice()
+            && let Some(id) = call.call_id
+            && self.member_paused_calls.contains(id)
+            && self
+                .active_tools
+                .get(id)
+                .is_some_and(|active| active.name == call.name && active.arguments == *call.args)
+        {
+            self.member_paused_calls.remove(id);
+            return Ok(ProjectedAgentEventBatch::new());
         }
         let Some(model_event) = ordinary_model_event(event, !tool_calls.is_empty())? else {
             return Ok(ProjectedAgentEventBatch::new());
@@ -2980,6 +3024,20 @@ impl AgentEventProjector {
         calls: &[adk_rust::ToolCallView<'_>],
         batch: &mut ProjectedAgentEventBatch,
     ) -> Result<(), AgentEventProjectionError> {
+        // FU-246: in this same execution a decided member pause resumes. The
+        // member's own call, still open beside its siblings, is re-emitted
+        // unchanged: it is that call resuming, not a new one.
+        if let [call] = calls
+            && let Some(id) = call.call_id
+            && self
+                .active_tools
+                .get(id)
+                .is_some_and(|active| active.name == call.name && active.arguments == *call.args)
+            && event.provider_metadata.contains_key(FANOUT_MEMBER_CALL_KEY)
+            && self.active_tools[id].fanout_member
+        {
+            return Ok(());
+        }
         // Fan-out member calls stay open together, at most one per branch.
         let member_start = event.provider_metadata.contains_key(FANOUT_MEMBER_CALL_KEY)
             && self
@@ -6985,4 +7043,177 @@ mod fanout_member_tier_tests {
             "a fourth tier is refused"
         );
     }
+}
+
+/// FU-246: the ledger card of a fixed Parallel member's own pause (its saved
+/// Agent asks the user or needs a sensitive-tool approval), built where the
+/// confirmation is born from the child's own sensitive catalog, with the
+/// pending payload the root projector would have shown. It rides in the
+/// member's pause (the Agent node's interrupt data), so a re-raise is
+/// byte-equal. A delegated sign-in stays refused (FU-250).
+pub(crate) fn fanout_member_card(
+    event: &Event,
+    sensitive: &SensitiveToolCatalog,
+) -> Result<Value, AgentEventProjectionError> {
+    let request = event
+        .actions
+        .tool_confirmation
+        .as_ref()
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    if event
+        .provider_metadata
+        .contains_key(DELEGATED_AUTHORIZATION_METADATA_KEY)
+    {
+        return Err(AgentEventProjectionError::invalid_state());
+    }
+    let call_id = request
+        .function_call_id
+        .as_deref()
+        .filter(|value| valid_tool_identity(value))
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    if !valid_tool_identity(&request.tool_name) {
+        return Err(AgentEventProjectionError::invalid_state());
+    }
+    validate_tool_event_value(&request.args)?;
+    let (interrupt_id, call_digest) = sensitive_call_identity(
+        &event.invocation_id,
+        call_id,
+        &request.tool_name,
+        &request.args,
+    )
+    .map_err(|_| AgentEventProjectionError::invalid_state())?;
+    let (kind, actions, pending, display) =
+        if event.provider_metadata.contains_key(ASK_USER_METADATA_KEY) {
+            if request.tool_name != ASK_USER_TOOL_NAME {
+                return Err(AgentEventProjectionError::invalid_state());
+            }
+            let questions = event
+                .provider_metadata
+                .get(ASK_USER_METADATA_KEY)
+                .and_then(|value| decode_ask_user_request(value))
+                .filter(|value| value.matches_arguments(&request.args))
+                .ok_or_else(AgentEventProjectionError::invalid_state)?;
+            let tool_args = questions.arguments_value();
+            let pending = json!({
+                "type": "hitl", "interrupt_id": interrupt_id, "call_digest": call_digest,
+                "guardrail_type": ASK_USER_GUARDRAIL_TYPE, "node_name": ASK_USER_TOOL_NAME,
+                "message": questions.message(), "questions": questions.questions_value(),
+                "available_actions": [ASK_USER_ANSWER_ACTION], "routes": {},
+                "tool_call_id": call_id, "tool_name": ASK_USER_TOOL_NAME,
+                "toolkit_name": ASK_USER_TOOL_NAME, "toolkit_type": "internal",
+                "tool_args": tool_args,
+            });
+            let display = json!({
+                "guardrail_type": ASK_USER_GUARDRAIL_TYPE,
+                "message": questions.message(),
+                "node_name": ASK_USER_TOOL_NAME,
+                "tool_args_json": serde_json::to_string(&tool_args)
+                    .map_err(|_| AgentEventProjectionError::invalid_state())?,
+                "tool_call_id": call_id,
+                "tool_name": ASK_USER_TOOL_NAME,
+            });
+            ("ask_user", vec![ASK_USER_ANSWER_ACTION], pending, display)
+        } else {
+            let policy = sensitive
+                .policy_for(&request.tool_name)
+                .ok_or_else(AgentEventProjectionError::invalid_state)?;
+            let tool_args = mask_sensitive_arguments(&request.args, 0)?;
+            let actions = vec!["approve", "reject", "block_with_comment"];
+            let pending = json!({
+                "type": "hitl", "interrupt_id": interrupt_id, "call_digest": call_digest,
+                "guardrail_type": "sensitive_tool", "node_name": "sensitive_tool_guard",
+                "message": policy.policy_message(), "available_actions": actions,
+                "routes": {}, "tool_call_id": call_id, "tool_name": request.tool_name,
+                "toolkit_name": policy.toolkit_name(), "toolkit_type": policy.toolkit_type(),
+                "action_label": policy.action_name(), "tool_args": tool_args,
+                "policy_message": policy.policy_message(),
+            });
+            let display = json!({
+                "action_label": policy.action_name(),
+                "guardrail_type": "sensitive_tool",
+                "message": policy.policy_message(),
+                "node_name": "sensitive_tool_guard",
+                "policy_message": policy.policy_message(),
+                "tool_args_json": serde_json::to_string(&tool_args)
+                    .map_err(|_| AgentEventProjectionError::invalid_state())?,
+                "tool_call_id": call_id,
+                "tool_name": request.tool_name,
+                "toolkit_name": policy.toolkit_name(),
+                "toolkit_type": policy.toolkit_type(),
+            });
+            ("tool_guard", actions, pending, display)
+        };
+    let encoded =
+        serde_json::to_vec(&pending).map_err(|_| AgentEventProjectionError::invalid_state())?;
+    Ok(json!({
+        "kind": kind,
+        "interrupt_id": interrupt_id,
+        "tool_call_id": call_id,
+        "available_actions": actions,
+        "display": display,
+        "payload_sha256": hex(digest::digest(&digest::SHA256, &encoded).as_ref()),
+    }))
+}
+
+/// The card a [`fanout_member_card`] descriptor names: its kind, identity and
+/// frame parts. `None` for anything that is not exactly such a descriptor.
+pub(crate) fn fanout_member_card_parts(
+    value: &Value,
+) -> Option<(
+    super::graph::fanout_frames::CardKind,
+    String,
+    String,
+    super::graph::fanout_frames::FanoutCardParts,
+)> {
+    use super::graph::fanout_frames::{CardDisplay, CardKind, card_action};
+    let object = value.as_object().filter(|object| object.len() == 6)?;
+    let text = |object: &serde_json::Map<String, Value>, key: &str| {
+        object.get(key).and_then(Value::as_str).map(str::to_owned)
+    };
+    let kind = match object.get("kind")?.as_str()? {
+        "tool_guard" => CardKind::ToolGuard,
+        "ask_user" => CardKind::AskUser,
+        _ => return None,
+    };
+    let interrupt_id = text(object, "interrupt_id").filter(|id| valid_tool_identity(id))?;
+    let tool_call_id = text(object, "tool_call_id").filter(|id| valid_tool_identity(id))?;
+    let available_actions = object
+        .get("available_actions")?
+        .as_array()?
+        .iter()
+        .map(|action| action.as_str().and_then(card_action))
+        .collect::<Option<Vec<_>>>()?;
+    let payload_sha256 = text(object, "payload_sha256").filter(|digest| {
+        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    })?;
+    let display = object.get("display")?.as_object()?;
+    let guardrail_type = match (kind, display.get("guardrail_type")?.as_str()?) {
+        (CardKind::AskUser, ASK_USER_GUARDRAIL_TYPE) => ASK_USER_GUARDRAIL_TYPE,
+        (CardKind::ToolGuard, "sensitive_tool") => "sensitive_tool",
+        _ => return None,
+    };
+    let display = CardDisplay {
+        action_label: text(display, "action_label"),
+        guardrail_type,
+        message: text(display, "message")?,
+        node_name: text(display, "node_name"),
+        policy_message: text(display, "policy_message"),
+        tool_args_json: text(display, "tool_args_json"),
+        tool_call_id: text(display, "tool_call_id"),
+        tool_name: text(display, "tool_name"),
+        toolkit_name: text(display, "toolkit_name"),
+        toolkit_type: text(display, "toolkit_type"),
+        ..CardDisplay::default()
+    };
+    Some((
+        kind,
+        interrupt_id,
+        tool_call_id,
+        super::graph::fanout_frames::FanoutCardParts {
+            kind,
+            available_actions,
+            display,
+            payload_sha256,
+        },
+    ))
 }

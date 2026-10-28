@@ -447,6 +447,28 @@ fn valid_server_url(value: &str) -> bool {
 }
 
 impl DirectHitlDecisionSet {
+    /// FU-246: one decision a fixed Parallel ledger card carries for a member
+    /// Agent's own pause, admitted through the same strict raw shape as a
+    /// browser continuation; `resolve` then binds it to the confirmation the
+    /// member forwarded into the root session.
+    pub(crate) fn fanout_member(
+        interrupt_id: &str,
+        tool_call_id: &str,
+        ask_user: bool,
+        action: &str,
+        value: Option<&str>,
+    ) -> Result<Self, DirectHitlError> {
+        let raw = serde_json::from_value::<RawDirectHitlDecision>(serde_json::json!({
+            "interrupt_id": interrupt_id,
+            "tool_call_id": tool_call_id,
+            "guardrail_type": if ask_user { "clarifying_question" } else { "sensitive_tool" },
+            "action": action,
+            "value": value.unwrap_or_default(),
+        }))
+        .map_err(|_| DirectHitlError::new(DirectHitlErrorCode::InvalidInput))?;
+        Ok(Self::single(DirectHitlDecision::from_raw(raw)?))
+    }
+
     pub(crate) fn single(decision: DirectHitlDecision) -> Self {
         Self {
             decisions: vec![decision],

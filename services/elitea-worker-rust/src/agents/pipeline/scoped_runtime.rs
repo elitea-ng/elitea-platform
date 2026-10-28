@@ -329,8 +329,12 @@ impl PipelineApplicationNodeRuntime {
         let outcome = if crate::agents::application_tools::nested_application_interrupt_ids(&result)
             .is_some()
         {
-            // A fixed Parallel member cannot pause yet (FU-246), at any depth.
-            if fanout {
+            // A fixed Parallel member's own Agent pauses with its ledger cards
+            // (FU-246); a pause deeper inside it carries none and ends typed.
+            let carded = result
+                .get(crate::agents::application_tools::FANOUT_MEMBER_CARDS_KEY)
+                .is_some();
+            if fanout && !carded {
                 let error = self.fanout_pause();
                 if visible {
                     self.close_failed_call(

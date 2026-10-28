@@ -562,11 +562,12 @@ async fn postgres_effectful_fanout_child_may_have_started_stops_the_node() {
     scenario(&url, "effect", "stop").await;
 }
 
-/// FU-246: a member whose saved Agent asks the user cannot pause yet. It ends
-/// with a typed entry naming its node, without a legacy card; the siblings run
-/// and the pipeline completes instead of staying paused.
+/// FU-246: a member whose saved Agent asks the user pauses with its own card
+/// (one pause authority: no legacy pause frame), the card is answered live,
+/// and only that member's Agent resumes with the answer; the siblings run and
+/// the pipeline joins.
 #[tokio::test(flavor = "current_thread")]
-async fn postgres_fanout_agent_branch_that_asks_for_a_decision_ends_typed() {
+async fn postgres_fanout_agent_branch_asks_and_resumes_with_the_answer() {
     let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
         return;
@@ -577,12 +578,14 @@ async fn postgres_fanout_agent_branch_that_asks_for_a_decision_ends_typed() {
         .execute(&db.pool)
         .await
         .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
     let (assembler, captured) = assembler(
         &db.pool,
         vec![
             TestModelGatewayOutcome::Response(pipeline_text_response("first done")),
             TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
             TestModelGatewayOutcome::Response(pipeline_text_response("third done")),
+            TestModelGatewayOutcome::Response(pipeline_text_response("second done")),
         ],
         Arc::new(PipelineMcpConnector {
             connections: Arc::new(AtomicUsize::new(0)),
@@ -593,49 +596,37 @@ async fn postgres_fanout_agent_branch_that_asks_for_a_decision_ends_typed() {
     );
     let request = request("continue");
     let invocation = assembler
+        .with_fanout_decisions_for_tests(ledger.client(1))
         .assemble(claim(&request, 1))
         .await
         .expect("assemble the fan-out pipeline");
-    let members = run_to_end(invocation)
-        .await
-        .expect("the pipeline completes, not paused");
-    assert_eq!(model_requests(&captured), 3);
-    let statuses = members
-        .iter()
-        .map(|member| {
-            format!(
-                "{}:{}",
-                member["fanout_v1"]["member"].as_str().unwrap_or_default(),
-                member["status"].as_str().unwrap_or_default()
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        statuses,
-        [
-            "first:start",
-            "first:end",
-            "second:start",
-            "second:failed",
-            "third:start",
-            "third:end"
-        ]
+    let (members, cards) = run_deciding(invocation, &|card| {
+        let key = card["interrupt_key"].as_str().expect("card key");
+        match (card["fanout_v1"]["member"].as_str(), card["kind"].as_str()) {
+            (Some("second"), Some("ask_user")) => ledger.decide(key, "answer", Some("Staging")),
+            other => panic!("unexpected card {other:?}"),
+        }
+    })
+    .await
+    .expect("the answered member resumes and the pipeline completes");
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    assert_eq!(model_requests(&captured), 4);
+    // The resumed Agent sees the answer to its question.
+    let last = captured.lock().expect("captured model requests");
+    let resumed = String::from_utf8_lossy(&last[3].body).into_owned();
+    assert!(resumed.contains("Staging"), "{resumed}");
+    drop(last);
+    assert!(
+        members
+            .iter()
+            .any(|member| member["fanout_v1"]["member"] == "second" && member["status"] == "end"),
+        "{members:?}"
     );
     let entries = joined(&db.pool).await.expect("joined entries");
-    assert_eq!(entries[0]["status"], "succeeded");
-    assert_eq!(entries[1]["branch_id"], "second");
-    assert_eq!(entries[1]["status"], "failed");
-    assert_eq!(
-        entries[1]["error"]["code"],
-        "graph.fanout.agent_pause_unsupported"
-    );
-    assert!(
-        entries[1]["error"]["message_safe"]
-            .as_str()
-            .is_some_and(|text| text.contains("'second_call'")),
-        "{entries:?}"
-    );
-    assert_eq!(entries[2]["status"], "succeeded");
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    for entry in &entries {
+        assert_eq!(entry["status"], "succeeded", "{entries:?}");
+    }
     db.pool.close().await;
 }
 

@@ -106,6 +106,9 @@ const MAX_PIPELINE_APPLICATION_SCOPE_DECISIONS: usize = 16;
 const ADK_LLM_REQUEST_METADATA_KEY: &str = "gcp.vertex.agent.llm_request";
 const ADK_LLM_RESPONSE_METADATA_KEY: &str = "gcp.vertex.agent.llm_response";
 const NESTED_INTERRUPT_RESULT_KEY: &str = "__elitea_nested_interrupt_v1";
+/// FU-246: the ledger cards of a fixed Parallel member's own pause, beside its
+/// interrupt ids (one card per id, `events::fanout_member_card`).
+pub(crate) const FANOUT_MEMBER_CARDS_KEY: &str = "__elitea_fanout_member_cards_v1";
 const APPLICATION_REPLAY_BATCH_KEY: &str = "elitea.application.replay_batch.v1";
 /// The execution whose ROOT continuation emitted a replay batch. A key of its
 /// own beside the batch (whose schema is strict), so a Worker without it still
@@ -4412,10 +4415,15 @@ impl ApplicationAgentTool {
             }
             application_batch.observe_calls(&event, &self.application.child_tools)?;
             if event.llm_response.interrupted || event.actions.tool_confirmation.is_some() {
-                refuse_fanout_pause(ctx)?;
                 let interrupt_ids = confirmation_interrupt_ids(&event)?;
+                let card = fanout_member_pause(ctx, &mut event, &self.application.sensitive_tools)?;
                 self.send_event(ctx, event).await?;
-                return Ok(nested_interrupt_result(&interrupt_ids));
+                return Ok(match card {
+                    Some(card) => {
+                        json!({NESTED_INTERRUPT_RESULT_KEY: interrupt_ids, FANOUT_MEMBER_CARDS_KEY: [card]})
+                    }
+                    None => nested_interrupt_result(&interrupt_ids),
+                });
             }
             if let Some(text) = event_text(&event) {
                 last_text = Some(text.clone());
@@ -4718,7 +4726,9 @@ pub(super) fn nested_interrupt_result(interrupt_ids: &BTreeSet<String>) -> Value
 }
 
 pub(crate) fn nested_application_interrupt_ids(value: &Value) -> Option<BTreeSet<String>> {
-    let object = value.as_object().filter(|object| object.len() == 1)?;
+    let object = value.as_object().filter(|object| {
+        object.len() == 1 || (object.len() == 2 && object.contains_key(FANOUT_MEMBER_CARDS_KEY))
+    })?;
     let values = object.get(NESTED_INTERRUPT_RESULT_KEY)?.as_array()?;
     if values.is_empty() || values.len() > 16 {
         return None;
@@ -5605,19 +5615,33 @@ pub(super) fn application_event_channel_error() -> AdkError {
 /// decision (FU-246).
 pub(crate) const FANOUT_AGENT_PAUSE_CODE: &str = "graph.fanout.agent_pause_unsupported";
 
-/// A fixed Parallel member cannot pause yet (FU-246): its card would be a
-/// second pause authority. The confirmation is not forwarded; the member ends
-/// with a typed refusal instead.
-fn refuse_fanout_pause(ctx: &dyn ToolContext) -> adk_rust::Result<()> {
+/// FU-246: a fixed Parallel member's Agent that asks for a decision pauses
+/// with its own ledger card. The card is built here, from the child's own
+/// sensitive catalog, and the forwarded confirmation is marked so the root
+/// projector persists it (the resume proof) without raising a second, legacy
+/// pause. `None` outside a member. A pause no card can express (a delegated
+/// sign-in, FU-250) ends the member typed instead.
+fn fanout_member_pause(
+    ctx: &dyn ToolContext,
+    event: &mut Event,
+    sensitive: &SensitiveToolCatalog,
+) -> adk_rust::Result<Option<Value>> {
     if !fanout_child_call(ctx).0 {
-        return Ok(());
+        return Ok(None);
     }
-    Err(AdkError::new(
-        ErrorComponent::Agent,
-        ErrorCategory::Unsupported,
-        FANOUT_AGENT_PAUSE_CODE,
-        "a parallel branch's agent cannot ask for a decision",
-    ))
+    let card = super::events::fanout_member_card(event, sensitive).map_err(|_| {
+        AdkError::new(
+            ErrorComponent::Agent,
+            ErrorCategory::Unsupported,
+            FANOUT_AGENT_PAUSE_CODE,
+            "a parallel branch's agent asked for a decision no card can take",
+        )
+    })?;
+    event.provider_metadata.insert(
+        super::events::FANOUT_MEMBER_PAUSE_KEY.to_owned(),
+        "1".to_owned(),
+    );
+    Ok(Some(card))
 }
 
 pub(super) fn child_execution_error() -> AdkError {

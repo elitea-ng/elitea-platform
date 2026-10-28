@@ -76,10 +76,10 @@ use super::map_yaml::MapNodeDefinition;
 use super::{pipeline_completed_event, pipeline_result_event};
 pub(crate) use map_compiler::MapCompilerBinding;
 use map_compiler::validate_map_ownership;
-#[allow(unused_imports)] // The binding is staged behind the Parallel gate.
-pub(crate) use parallel_compiler::ParallelCompilerBinding;
 pub(crate) use parallel_compiler::refuse_child_parallel;
 use parallel_compiler::validate_parallel_ownership;
+#[allow(unused_imports)] // The binding is staged behind the Parallel gate.
+pub(crate) use parallel_compiler::{ParallelCompilerBinding, RootSessionSource};
 
 pub(crate) const MAX_PIPELINE_YAML_BYTES: usize = 512 * 1024;
 pub(crate) use elitea_agent_runtime::graph::PIPELINE_YAML_BUDGET;
