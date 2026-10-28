@@ -342,7 +342,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
-	credentialReferencesHandler, err := credentialReferencesAdmin(credentialAdmission, pool, securityInvalidations)
+	credentialReferencesHandler, err := credentialReferencesAdmin(credentialAdmission, credentialRevision, os.LookupEnv, pool, securityInvalidations)
 	if err != nil {
 		return err
 	}

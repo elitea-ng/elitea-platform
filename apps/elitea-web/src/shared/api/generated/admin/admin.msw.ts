@@ -500,6 +500,10 @@ export const getListAgentIdentityBindingsResponseMock = (
     application_id: faker.number.int(),
     application_version_id: faker.number.int(),
     definition_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    computed_definition_digest: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
     mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
     external_agent_identity_id: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -528,6 +532,10 @@ export const getCreateAgentIdentityBindingResponseMock = (
   application_id: faker.number.int(),
   application_version_id: faker.number.int(),
   definition_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  computed_definition_digest: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
   mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
   external_agent_identity_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -555,6 +563,10 @@ export const getApproveAgentIdentityBindingResponseMock = (
   application_id: faker.number.int(),
   application_version_id: faker.number.int(),
   definition_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  computed_definition_digest: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
   mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
   external_agent_identity_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -582,6 +594,10 @@ export const getSuspendAgentIdentityBindingResponseMock = (
   application_id: faker.number.int(),
   application_version_id: faker.number.int(),
   definition_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  computed_definition_digest: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
   mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
   external_agent_identity_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -609,6 +625,10 @@ export const getRevokeAgentIdentityBindingResponseMock = (
   application_id: faker.number.int(),
   application_version_id: faker.number.int(),
   definition_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  computed_definition_digest: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
   mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
   external_agent_identity_id: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -627,6 +647,28 @@ export const getRevokeAgentIdentityBindingResponseMock = (
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
 });
+
+export const getRepinAgentIdentityBindingResponseMock =
+  (): AgentIdentityBinding => ({
+    id: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f11",
+    tenant_project_id: 7,
+    application_id: 3,
+    application_version_id: 4,
+    definition_digest:
+      "9f2c4e6a8b0d1f3e5a7c9b1d3f5e7a9c0b2d4f6e8a1c3e5b7d9f0a2c4e6b8d0f",
+    computed_definition_digest:
+      "9f2c4e6a8b0d1f3e5a7c9b1d3f5e7a9c0b2d4f6e8a1c3e5b7d9f0a2c4e6b8d0f",
+    mode: "elitea_native",
+    external_agent_identity_id: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0e21",
+    workload_identity: "",
+    state: "proposed",
+    revocation_epoch: 3,
+    policy_revision_id: "rev-2026-10",
+    proposed_by: "200",
+    approved_by: null,
+    created_at: "2026-10-26T12:00:00Z",
+    updated_at: "2026-10-28T09:30:00Z",
+  });
 
 export const getListMandatesResponseMock = (
   overrideResponse: Partial<Extract<MandateListResponse, object>> = {},
@@ -893,6 +935,26 @@ export const getListCredentialReferencesResponseMock = (
   })),
   ...overrideResponse,
 });
+
+export const getCreateCredentialReferenceResponseMock =
+  (): CredentialReference => ({
+    id: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f21",
+    tenant_project_id: 7,
+    class: "static_secret",
+    backend: "vault",
+    locator: "elitea/projects/7/credentials/jira-prod",
+    provider_type: "jira",
+    target_binding_id: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f22",
+    target_identity: "https://acme.atlassian.net",
+    generation: 3,
+    state: "staged",
+    staged_by: "100",
+    activated_by: null,
+    last_transition_by: "100",
+    migrated_from: null,
+    created_at: "2026-10-28T12:00:00Z",
+    updated_at: "2026-10-28T12:00:00Z",
+  });
 
 export const getGetCredentialReferenceResponseMock = (
   overrideResponse: Partial<Extract<CredentialReference, object>> = {},
@@ -3028,6 +3090,32 @@ export const getRevokeAgentIdentityBindingMockHandler = (
   );
 };
 
+export const getRepinAgentIdentityBindingMockHandler = (
+  overrideResponse?:
+    | AgentIdentityBinding
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentIdentityBinding> | AgentIdentityBinding),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/agent_identities/:id\\:repin",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRepinAgentIdentityBindingResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListMandatesMockHandler = (
   overrideResponse?:
     | MandateListResponse
@@ -3336,6 +3424,32 @@ export const getListCredentialReferencesMockHandler = (
             : overrideResponse
           : getListCredentialReferencesResponseMock(),
         { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateCredentialReferenceMockHandler = (
+  overrideResponse?:
+    | CredentialReference
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialReference> | CredentialReference),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/credential_references",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateCredentialReferenceResponseMock(),
+        { status: 201 },
       );
     },
     options,
@@ -4499,6 +4613,7 @@ export const getAdminMock = () => [
   getApproveAgentIdentityBindingMockHandler(),
   getSuspendAgentIdentityBindingMockHandler(),
   getRevokeAgentIdentityBindingMockHandler(),
+  getRepinAgentIdentityBindingMockHandler(),
   getListMandatesMockHandler(),
   getCreateMandateMockHandler(),
   getApproveMandateMockHandler(),
@@ -4511,6 +4626,7 @@ export const getAdminMock = () => [
   getAttachIndexScheduleMandateMockHandler(),
   getDetachIndexScheduleMandateMockHandler(),
   getListCredentialReferencesMockHandler(),
+  getCreateCredentialReferenceMockHandler(),
   getGetCredentialReferenceMockHandler(),
   getActivateCredentialReferenceMockHandler(),
   getRetireCredentialReferenceMockHandler(),

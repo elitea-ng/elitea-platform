@@ -2805,6 +2805,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(bindingsApprove).Post("/agent_identities/{id}:approve", agentIdentities.ApproveBinding)
 					r.With(bindingsManage).Post("/agent_identities/{id}:suspend", agentIdentities.SuspendBinding)
 					r.With(bindingsManage).Post("/agent_identities/{id}:revoke", agentIdentities.RevokeBinding)
+					// #1462: a re-pin is a new proposal; :approve re-activates it.
+					r.With(bindingsManage).Post("/agent_identities/{id}:repin", agentIdentities.RepinBinding)
 					r.With(mandatesRead).Get("/mandates", agentIdentities.ListMandates)
 					r.With(mandatesManage).Post("/mandates", agentIdentities.CreateMandate)
 					r.With(mandatesApprove).Post("/mandates/{id}:approve", agentIdentities.ApproveMandate)
@@ -2838,8 +2840,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// reference, like approving a binding, makes governed use
 				// possible, so it needs approve, and the stager can never be
 				// the activator (the store and the 0193 CHECK enforce it).
-				// Listing needs manage OR approve; retire, attach, detach and
-				// the toolkit pin need manage.
+				// Listing needs manage OR approve; creating a staged reference
+				// from scratch (#1482), retire, attach, detach and the toolkit
+				// pin need manage.
 				if cfg.CredentialReferencesAdmin != nil {
 					references := cfg.CredentialReferencesAdmin
 					referencesManage := central(v2agentidentity.PermissionBindingsManage)
@@ -2849,6 +2852,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						v2agentidentity.PermissionBindingsManage, v2agentidentity.PermissionBindingsApprove,
 					)
 					r.With(referencesRead).Get("/credential_references", references.List)
+					r.With(referencesManage).Post("/credential_references", references.Create)
 					r.With(referencesRead).Get("/credential_references/{id}", references.Get)
 					r.With(referencesApprove).Post("/credential_references/{id}:activate", references.Activate)
 					r.With(referencesManage).Post("/credential_references/{id}:retire", references.Retire)
