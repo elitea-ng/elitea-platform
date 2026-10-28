@@ -27,8 +27,20 @@
 #
 # THE COST OF ONE PULL REQUEST: one red bump holds every other one. Fix it on
 # the branch (pin the package back with a reason and an `ignore` entry below),
-# never by merging the PR red. Security-alert updates still arrive as their
-# own pull requests; GitHub opens those outside the group.
+# never by merging the PR red.
+#
+# SECURITY UPDATES ARE OFF, AND THAT IS A REPOSITORY SETTING, NOT THIS FILE.
+# GitHub opens a security-update PR per alert per directory, outside every
+# group and on no schedule: on 2026-10-28 one zip/rustls/seroval/node-forge
+# advisory burst opened six of them at once next to the weekly PR, each with
+# its full CI matrix. So "Dependabot security updates" is disabled
+# (Settings → Code security, or `gh api -X DELETE
+# repos/elitea-ng/elitea-platform/automated-security-fixes`); Dependabot ALERTS
+# stay on. A patched version reaches main through the weekly group, which bumps
+# to latest, unless the package is under `ignore` below. An alert on an
+# ignored package (e.g. zip, whose only fix is a major) is a deliberate PR
+# against that ignore entry. Do not turn the setting back on to "get the fix
+# faster": it brings back one PR per advisory per directory.
 #
 # GROUPING IS DELIBERATE. Each group takes ALL update levels (major, minor,
 # patch) into the same pull request. A major bump landing alongside minor and
