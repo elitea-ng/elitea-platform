@@ -214,7 +214,9 @@ afterEach(() => {
   delete globals['elitea_ui_config'];
 });
 
-describe('the desktop chat: the sidebar is the one list', () => {
+// The waits below allow 10 s each (the whole shell boots); the test
+// timeout has to cover them, not the 5 s default.
+describe('the desktop chat: the sidebar is the one list', { timeout: 30_000 }, () => {
   it('never shows the page list in the frame, also with the sidebar hidden', async () => {
     mount();
     expect(await screen.findByTestId('shell-chats', {}, { timeout: 10_000 })).toBeInTheDocument();
@@ -244,7 +246,7 @@ describe('the desktop chat: the sidebar is the one list', () => {
   });
 });
 
-describe('the desktop chat: the title row and the selection', () => {
+describe('the desktop chat: the title row and the selection', { timeout: 30_000 }, () => {
   it('names the open conversation in the title, and renames it on a double-click', async () => {
     const user = userEvent.setup();
     mount();
@@ -272,7 +274,7 @@ describe('the desktop chat: the title row and the selection', () => {
   });
 });
 
-describe('the desktop chat: a message moves the chat to Today', () => {
+describe('the desktop chat: a message moves the chat to Today', { timeout: 30_000 }, () => {
   it('moves a conversation from an older group to the top of Today when a message is sent', async () => {
     conversations = [
       { id: 40, name: 'Fresh chat', folderId: null },
@@ -309,7 +311,7 @@ describe('the desktop chat: a message moves the chat to Today', () => {
   });
 });
 
-describe('the desktop chat: folders in the sidebar', () => {
+describe('the desktop chat: folders in the sidebar', { timeout: 30_000 }, () => {
   it('creates a folder from the Chats row', async () => {
     const user = userEvent.setup();
     mount();
@@ -340,7 +342,7 @@ describe('the desktop chat: folders in the sidebar', () => {
   });
 });
 
-describe('the desktop chat: both lists read one listing', () => {
+describe('the desktop chat: both lists read one listing', { timeout: 30_000 }, () => {
   it('shows the conversation the first send created in the sidebar', async () => {
     const user = userEvent.setup();
     mount('/chat');
