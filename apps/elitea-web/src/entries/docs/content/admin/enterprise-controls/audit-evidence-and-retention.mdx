@@ -1,0 +1,128 @@
+---
+title: "Audit evidence and retention"
+description: "How long Elitea keeps conversations, attachments, gateway request logs and audit records, how a platform administrator sets those limits, and how a legal hold stops deletion."
+---
+
+## Retention and legal hold
+
+### The risk this control addresses
+
+A regulated firm must keep records for the period its records schedule sets, no shorter and no longer. Data kept too long is a privacy and discovery liability. Data deleted too early breaks a regulatory or litigation duty. Before this control, conversations lived until a user deleted them, and the LLM gateway request log was kept for a fixed 92 days.
+
+This control gives a platform administrator a retention policy per data class, enforced by background sweeps. A legal hold stops deletion of the conversations it covers.
+
+What is enforced:
+
+- A maximum age per data class. Data older than the maximum is deleted in bounded batches.
+- Platform bounds. A project may set its own maximum for conversations only, and only inside the platform bounds.
+- Legal hold on a project, an agent or a user. While a hold is active, the retention sweep skips every conversation it covers. A user's own delete of such a conversation is refused (HTTP 409).
+
+What is not enforced:
+
+- A **minimum** age does not stop a user from deleting their own conversation. It only bounds the shortest maximum a project may choose. Use a legal hold to stop a deletion.
+- A legal hold covers conversations. It does not block deleting a whole project, a user account or a single message.
+- Attachments have no separate maximum. They are deleted with their conversation.
+- The reserved classes `step_content` and `step_record` have no data yet and cannot be set.
+
+### Data classes
+
+<Note>
+The defaults keep today's behaviour. An upgrade deletes nothing that was not already deleted before it.
+</Note>
+
+| Data class | Default maximum | Bounds | Project override | Enforced by | What deletion removes |
+| --- | --- | --- | --- | --- | --- |
+| `conversation` | Keep forever | 1 to 36500 days | Yes, inside the platform bounds | elitea-main routine `main.conversation_retention`, hourly | The conversation, its participants, messages, message items, attachment rows and pin, through the same statements as a user's delete. Stored attachment bytes and their object records are deleted next by a journal drain, with retries. |
+| `attachment` | Keep forever | Keep forever only | No | Deleted with the conversation | The stored object and its `elitea_storage.objects` record. |
+| `gateway_request_log` | 92 days | 1 to 36500 days; keep forever is refused | No | LLM gateway, hourly prune | Rows of `gateway.llm_request_logs`. The gateway uses 92 days when it cannot read the policy. |
+| `admin_audit` | 365 days | 7 to 36500 days, or keep forever | No | elitea-scheduler `scheduler.audit_retention` | Rows of `centry.audit_events`. |
+| `security_audit` | Keep forever | 1 to 36500 days, or keep forever | No | elitea-scheduler `scheduler.security_audit_outbox_retention` | Exported rows of the security audit outbox that the durable store already holds. The durable store is append-only and is never deleted from. |
+
+A conversation's age is the time of its **last message** (its creation time when it has no messages). A conversation in use is not old because it was created long ago.
+
+For `admin_audit` and `security_audit`, the deployment settings `AUDIT_RETENTION_DAYS` and `SECURITY_AUDIT_OUTBOX_RETENTION_DAYS` apply until an administrator saves the row on the Data retention page. After that, the saved row applies.
+
+### Configure retention
+
+<Steps>
+  <Step title="Open Data retention">
+    In the admin area, open **Data retention**. You need the `retention.manage` permission. The `super_admin` and `admin` roles have it.
+  </Step>
+  <Step title="Set the platform bounds">
+    For each data class, set the minimum and maximum age in days. Leave the maximum empty to keep forever. Save the row. The sweep applies the new value on its next pass.
+  </Step>
+  <Step title="Allow project overrides (conversations only)">
+    Turn on **Allow project override** for `conversation`. A project override must be at least the platform minimum and at most the platform maximum. A value outside the bounds is refused.
+  </Step>
+  <Step title="Watch the sweep">
+    Open **Schedules & Tasks** to see `main.conversation_retention` and the scheduler sweepers, their last run and outcome. You can pause a sweep there.
+  </Step>
+</Steps>
+
+If you make the platform maximum shorter, the shorter value also applies to every project whose override is now longer. The stored override is not changed.
+
+A sweep deletes nothing while maintenance mode is on. The conversation sweep also deletes nothing when it cannot read the maintenance switch.
+
+### Place and release a legal hold
+
+You need the `legal_hold.manage` permission (`super_admin` and `admin`).
+
+1. Open **Data retention**, then **Legal holds**, and select **New hold**.
+2. Select the scope and give the ids it needs:
+   - **Project**: every conversation in the project.
+   - **Agent**: every conversation in which the agent takes part. Give the agent's own project id and the agent id.
+   - **User**: every conversation the user owns.
+3. Enter the reason, for example the matter reference. The reason is required.
+4. To release the hold, select **Release** and add an optional reason. Deletion of what the hold covered resumes on the next sweep. A released hold stays in the list as a record.
+
+### Evidence
+
+Every policy change and every hold creation and release is written to the audit trail (`centry.audit_events`) by the admin audit middleware. See [Audit trail](/admin/audit-trail). The actions are:
+
+| Action | When |
+| --- | --- |
+| `retention.policy.update` | A platform row is saved. |
+| `retention.override.set` | A project override is set. |
+| `retention.override.delete` | A project override is removed. |
+| `legal_hold.create` | A hold is placed. |
+| `legal_hold.release` | A hold is released. |
+
+An example event, as the audit trail stores it:
+
+```json
+{
+  "event_type": "legal_hold",
+  "action": "legal_hold.create",
+  "entity_type": "legal_hold",
+  "entity_id": 42,
+  "entity_name": "user 1187",
+  "user_id": 7,
+  "user_email": "records.admin@example.com",
+  "http_method": "POST",
+  "http_route": "/api/v2/admin/legal_holds",
+  "status_code": 201,
+  "timestamp": "2026-10-28T14:03:11Z"
+}
+```
+
+The hold itself, with who created and released it and when, is in `elitea_runtime.legal_holds`. Rows are never deleted.
+
+The sweeps report through OpenTelemetry metrics and one log line per pass:
+
+| Metric | Meaning |
+| --- | --- |
+| `retention.conversation.deleted` | Conversations the sweep deleted. |
+| `retention.conversation.skipped_hold` | Expired conversations kept because a hold covers them. |
+| `retention.conversation.errors` | Failures, by stage (`select`, `delete`, `purge`, `drain`, `pass`). |
+| `retention.conversation.lag_seconds` | How far past its cutoff the oldest expired, unheld conversation is. A value that grows means the sweep does not keep up. |
+
+<Note>
+The admin audit trail is itself a data class. If you set a short `admin_audit` maximum, the records of earlier policy changes are deleted with it. Export them to your own store first.
+</Note>
+
+### Customer responsibility
+
+- **Your records schedule.** Elitea does not know your legal retention periods. Set the maximum per data class to match your records schedule, and keep that decision in your own records.
+- **Immutable storage.** Elitea deletes data when the policy says so. It does not keep a write-once (WORM) copy. If you must keep an immutable record, export the audit trail and the security audit stream to your own SIEM or WORM store before the maximum age.
+- **Legal holds come from your legal process.** Elitea applies the holds an administrator places. It does not receive holds from a legal case system. Place and release holds as your legal team instructs.
+- **Backups.** Retention deletes from the live database and object store. Your database and object store backups keep deleted data for their own retention period. Align the backup retention with your records schedule.
