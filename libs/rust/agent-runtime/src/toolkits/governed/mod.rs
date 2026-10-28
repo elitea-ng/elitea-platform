@@ -10,7 +10,7 @@
 //! built FRESH from the envelope and dropped with it when the call returns.
 //!
 //! The seam is toolkit-agnostic: this module and [`client`] name no provider.
-//! The five reference adapters live in [`adapters`]; another adapter registers
+//! The reference adapters live in [`adapters`]; another adapter registers
 //! through [`AuthAdapterRegistryBuilder::register`] from its own module, with
 //! no edit here (the synthetic-adapter suite proves it).
 //!
@@ -96,6 +96,9 @@ impl EnvelopeKind {
 pub enum TargetKind {
     BaseUrl,
     TenantSite,
+    /// A remote MCP server's canonical resource URI (#1123); see
+    /// [`canonical_resource_uri`].
+    ResourceUri,
 }
 
 impl TargetKind {
@@ -104,6 +107,7 @@ impl TargetKind {
         match self {
             Self::BaseUrl => "base_url",
             Self::TenantSite => "tenant_site",
+            Self::ResourceUri => "resource_uri",
         }
     }
 }
@@ -790,6 +794,66 @@ pub fn canonical_target(url: &reqwest::Url) -> String {
         canonical.set_path("");
     }
     canonical.to_string().trim_end_matches('/').to_owned()
+}
+
+/// The bound of a `resource_uri` target (the target binding column's).
+const MAX_RESOURCE_URI_BYTES: usize = 512;
+
+/// The canonical `resource_uri` target of a remote MCP server endpoint
+/// (#1123): Main's `credentialadapters.CanonicalResourceURI`, the string an
+/// MCP access token is bound to (RFC 8707). It is NOT [`canonical_target`]:
+/// `https` only, host lowercased, port 443 dropped, an empty path is `/`,
+/// trailing slashes are KEPT, and any `%`, query, fragment, user info or dot
+/// segment is refused (`None`). The shared vectors in `targets.json`
+/// (`resource_uri_vectors`) pin both sides.
+///
+/// This side refuses more than Main where the two serializers could
+/// disagree (any non-ASCII byte, a path character outside RFC 3986's
+/// unreserved and sub-delimiter set, port 0): such a target can never match
+/// an envelope, so refusing it here is the same answer, earlier.
+#[must_use]
+pub fn canonical_resource_uri(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty()
+        || raw.len() > MAX_RESOURCE_URI_BYTES
+        || !raw.is_ascii()
+        || raw
+            .bytes()
+            .any(|byte| matches!(byte, b'\\' | b'%' | b'?' | b'#') || byte <= b' ' || byte == 0x7f)
+    {
+        return None;
+    }
+    let rest = raw
+        .get(..8)?
+        .eq_ignore_ascii_case("https://")
+        .then(|| &raw[8..])?;
+    let (authority, path) = rest.find('/').map_or((rest, ""), |at| rest.split_at(at));
+    if authority.is_empty() || authority.contains('@') {
+        return None;
+    }
+    if path
+        .split('/')
+        .any(|segment| segment == "." || segment == "..")
+        || !path
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"/-._~!$&'()*+,;=:@".contains(&byte))
+    {
+        return None;
+    }
+    let url = reqwest::Url::parse(raw).ok()?;
+    if url.scheme() != "https" || url.port() == Some(0) {
+        return None;
+    }
+    let host = url.host_str()?;
+    let mut canonical = String::with_capacity(raw.len());
+    canonical.push_str("https://");
+    canonical.push_str(host);
+    if let Some(port) = url.port() {
+        canonical.push(':');
+        canonical.push_str(&port.to_string());
+    }
+    canonical.push_str(if path.is_empty() { "/" } else { path });
+    (canonical.len() <= MAX_RESOURCE_URI_BYTES).then_some(canonical)
 }
 
 /// Validate an envelope against an adapter's class and keys: the class must

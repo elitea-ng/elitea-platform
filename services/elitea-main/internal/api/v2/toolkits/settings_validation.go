@@ -281,6 +281,9 @@ func (h *Handler) refuseUnresolvableToolkitSettings(
 		ProjectID:   int32(projectNumber),
 		UserID:      int32(ownerID),
 		Mode:        configurationapp.CurrentToolkitSettingsReferenceMode,
+		// A governed credential reference is written only through the
+		// governed admin API (#1119).
+		RefuseCredentialReference: true,
 	}); err != nil {
 		return h.answerToolkitSettingsFailure(w, r, save, toolkitType, err)
 	}

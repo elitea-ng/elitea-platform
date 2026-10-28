@@ -1,8 +1,9 @@
-//! The five reference adapters (#1120): Jira, Confluence, Aha!, `SharePoint`
-//! and qTest. Each maps the tools its family serves today onto the
-//! operation catalogue (`testdata/proto/runtime/v1/governed-operations/
-//! catalogue.json`) and rebuilds its family from the frozen settings with the
-//! envelope's material in place of any credential the settings carry.
+//! The reference adapters: Jira, Confluence, Aha!, `SharePoint` and qTest
+//! (#1120), and remote MCP servers (#1123, [`mcp`]). Each family adapter maps
+//! the tools its family serves today onto the operation catalogue
+//! (`testdata/proto/runtime/v1/governed-operations/catalogue.json`) and
+//! rebuilds its family from the frozen settings with the envelope's material
+//! in place of any credential the settings carry.
 //!
 //! A tool a table does not list is not mapped, and a governed run cannot call
 //! it: the generic request tools (`execute_generic_rq`,
@@ -20,11 +21,13 @@ use crate::toolkits::families::https_base_url::{self, BasePath};
 
 mod aha;
 mod atlassian;
+pub mod mcp;
 mod qtest;
 mod sharepoint;
 
 pub use aha::AhaAdapter;
 pub use atlassian::{ConfluenceAdapter, JiraAdapter};
+pub use mcp::McpAdapter;
 pub use qtest::QtestAdapter;
 pub use sharepoint::SharePointAdapter;
 
@@ -32,18 +35,19 @@ pub use sharepoint::SharePointAdapter;
 /// never uses, is replaced with (the `SharePoint` client secret).
 pub(crate) const GOVERNED_UNUSED_SECRET: &str = "elitea-governed-unused";
 
-/// A builder holding the five reference adapters, for a composition root to
+/// A builder holding the six reference adapters, for a composition root to
 /// extend with its own before [`AuthAdapterRegistryBuilder::build`].
 #[must_use]
 pub fn reference_registry_builder() -> AuthAdapterRegistryBuilder {
-    let adapters: [Arc<dyn super::AuthAdapter>; 5] = [
+    let adapters: [Arc<dyn super::AuthAdapter>; 6] = [
         Arc::new(JiraAdapter),
         Arc::new(ConfluenceAdapter),
         Arc::new(AhaAdapter),
         Arc::new(SharePointAdapter),
         Arc::new(QtestAdapter),
+        Arc::new(McpAdapter),
     ];
-    // Five distinct provider types: no registration can collide.
+    // Six distinct provider types: no registration can collide.
     AuthAdapterRegistryBuilder {
         adapters: adapters
             .into_iter()
@@ -52,7 +56,7 @@ pub fn reference_registry_builder() -> AuthAdapterRegistryBuilder {
     }
 }
 
-/// The five reference adapters, built.
+/// The six reference adapters, built.
 #[must_use]
 pub fn reference_registry() -> AuthAdapterRegistry {
     reference_registry_builder().build()

@@ -123,6 +123,50 @@ impl GovernedOperationClient {
         }))
     }
 
+    /// A fresh invocation id (UUID v7 on this client's clock).
+    pub(crate) fn invocation_id(&self) -> Result<String, GovernedError> {
+        uuid_v7(self.clock)
+    }
+
+    /// One redemption, checked against `target`, the clock and `adapter`'s
+    /// material rule before the caller does any provider I/O. A governed
+    /// `AUTHORIZATION_REQUIRED` with a valid reference is the toolkit's
+    /// delegated authorization requirement; every other refusal is a stable
+    /// [`GovernedError`]. The governed MCP path (#1123) shares it.
+    pub(crate) async fn redeem_checked(
+        &self,
+        adapter: &dyn AuthAdapter,
+        toolkit_name: &str,
+        target: &str,
+        invocation: BoundToolInvocation,
+    ) -> Result<Redeemed, GovernedError> {
+        let envelope = match self.redeemer.redeem(invocation).await {
+            Ok(RedeemOutcome::Envelope(envelope)) => envelope,
+            Ok(RedeemOutcome::Denial(denial)) => {
+                if denial.code() == "AUTHORIZATION_REQUIRED"
+                    && let Some(reference) = denial.authorization_reference()
+                    && let Some(requirement) = DelegatedAuthorizationRequirement::governed(
+                        toolkit_name.to_owned(),
+                        adapter.provider_type().to_owned(),
+                        target.to_owned(),
+                        reference.to_owned(),
+                    )
+                {
+                    return Ok(Redeemed::Authorization(requirement));
+                }
+                return Err(GovernedError::CredentialDenied(denial.code().to_owned()));
+            }
+            Err(failure) => {
+                return Err(GovernedError::RedeemUnavailable {
+                    code: failure.code(),
+                    retryable: failure.retryable(),
+                });
+            }
+        };
+        check_envelope(adapter, &envelope, target, (self.clock)())?;
+        Ok(Redeemed::Envelope(envelope))
+    }
+
     /// One governed invocation: map, redeem, check, build fresh, call, drop.
     async fn invoke(
         &self,
@@ -145,36 +189,18 @@ impl GovernedOperationClient {
             arguments_digest: *operation.arguments_digest(),
             credential_reference_id: toolkit.credential_reference_id.clone(),
         };
-        // 2. One redemption for this invocation.
-        let envelope = match self.redeemer.redeem(invocation).await {
-            Ok(RedeemOutcome::Envelope(envelope)) => envelope,
-            Ok(RedeemOutcome::Denial(denial)) => {
-                if denial.code() == "AUTHORIZATION_REQUIRED"
-                    && let Some(reference) = denial.authorization_reference()
-                    && let Some(requirement) = DelegatedAuthorizationRequirement::governed(
-                        toolkit.name.clone(),
-                        adapter.provider_type().to_owned(),
-                        toolkit.target.clone(),
-                        reference.to_owned(),
-                    )
-                {
-                    return Err(delegated_authorization_error(&requirement));
-                }
-                return Err(
-                    GovernedError::CredentialDenied(denial.code().to_owned()).into_adk_error()
-                );
+        // 2. One redemption for this invocation, and 3. its target, expiry
+        //    and material, before any provider I/O.
+        let envelope = match self
+            .redeem_checked(adapter, &toolkit.name, &toolkit.target, invocation)
+            .await
+        {
+            Ok(Redeemed::Envelope(envelope)) => envelope,
+            Ok(Redeemed::Authorization(requirement)) => {
+                return Err(delegated_authorization_error(&requirement));
             }
-            Err(failure) => {
-                return Err(GovernedError::RedeemUnavailable {
-                    code: failure.code(),
-                    retryable: failure.retryable(),
-                }
-                .into_adk_error());
-            }
+            Err(error) => return Err(error.into_adk_error()),
         };
-        // 3. Target, expiry and material, before any provider I/O.
-        check_envelope(adapter, &envelope, &toolkit.target, (self.clock)())
-            .map_err(GovernedError::into_adk_error)?;
         // 4. A fresh client from this envelope alone; the envelope is dropped
         //    as soon as the client holds its copy.
         let client = adapter
@@ -203,6 +229,14 @@ impl GovernedOperationClient {
         drop(client);
         result
     }
+}
+
+/// What a checked redemption produced.
+pub(crate) enum Redeemed {
+    /// The material for this one invocation, already checked.
+    Envelope(CredentialEnvelope),
+    /// Main asked for the user's consent first.
+    Authorization(DelegatedAuthorizationRequirement),
 }
 
 /// The inputs of one governed toolkit.
@@ -252,7 +286,7 @@ impl<'a> GovernedToolkitSpec<'a> {
 /// (top level, then the configuration object). Empty lets Main resolve the
 /// one active grant for the binding, toolkit and operation server-side; an
 /// ambiguous resolution is denied there.
-fn credential_reference_id(settings: &Map<String, Value>) -> String {
+pub(crate) fn credential_reference_id(settings: &Map<String, Value>) -> String {
     const KEY: &str = "credential_reference_id";
     settings
         .get(KEY)

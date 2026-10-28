@@ -38,6 +38,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/pipelineruns"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
@@ -272,6 +273,10 @@ type runRequest struct {
 	// transcript alone, so no extra column has to be kept in step with the
 	// runtime's own state.
 	ScheduleID int64
+	// Authority is the mandate a governed run runs under (governed.go); nil
+	// with credential governance off. Its subject, when it has one, is the
+	// run identity in place of ActorUserID.
+	Authority *securitycontext.RunAuthority
 }
 
 // admit runs the whole sequence: authorize, resolve, create the transcript,
@@ -286,7 +291,19 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 	if !utf8.ValidString(request.Input) || strings.ContainsRune(request.Input, '\x00') {
 		return runOutcome{}, ErrInvalidInput
 	}
-	if err := h.authorizeRunIdentity(ctx, request.ProjectID, request.ActorUserID); err != nil {
+	if request.Authority != nil {
+		// A governed run: the mandate is the authority, and admission writes
+		// it into the security context. A delegated_background mandate runs
+		// as its subject, re-checked here as any run identity is; an
+		// autonomous one has no subject, and ActorUserID is attribution only.
+		ctx = securitycontext.WithRunAuthority(ctx, *request.Authority)
+		if request.Authority.SubjectUserID > 0 {
+			request.ActorUserID = request.Authority.SubjectUserID
+			if err := h.authorizeRunIdentity(ctx, request.ProjectID, request.ActorUserID); err != nil {
+				return runOutcome{}, err
+			}
+		}
+	} else if err := h.authorizeRunIdentity(ctx, request.ProjectID, request.ActorUserID); err != nil {
 		return runOutcome{}, err
 	}
 	target, err := h.resolveRunTarget(ctx, schema, request.VersionID, request.Kinds)

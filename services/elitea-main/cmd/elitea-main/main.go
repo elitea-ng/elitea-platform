@@ -827,6 +827,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if agentIdentity.Reconciler != nil {
 		go agentIdentity.Reconciler.Run(ctx)
 	}
+	// Mandate-bound schedules, triggers and index schedules (#1122). Empty
+	// with the flag off.
+	governedTriggers, err := governedTriggersAtBoot(credentialAdmission, credentialRevision, pool)
+	if err != nil {
+		return err
+	}
 
 	// The operation decider and the credential broker, its only caller
 	// (#1116, #1118). Built after the Entra custody so the decider's
@@ -840,14 +846,23 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// Provider delegated OAuth (#1121): consent routes and the token source
 	// the broker reads for Jira, Confluence and Aha! oauth_delegated uses.
 	// Nil with the flag off or with no provider OAuth application.
-	providerOAuthGoverned, err := providerOAuthAtBoot(credentialAdmission, os.LookupEnv, pool,
-		func() ([]byte, error) { return v2secrets.MasterKeyFromEnv(os.Getenv) }, logger)
+	vaultMasterKey := func() ([]byte, error) { return v2secrets.MasterKeyFromEnv(os.Getenv) }
+	// Governed MCP (#1123): the inbound resource server and remote MCP
+	// OAuth, which joins provider OAuth custody below. Empty with the flag
+	// off.
+	governedMCPComposed, err := governedMCPAtBoot(credentialAdmission, os.LookupEnv, pool, vaultMasterKey, publicOrigin,
+		mcpAuthorizationEgressGuard, logger)
+	if err != nil {
+		return err
+	}
+	providerOAuthGoverned, err := providerOAuthWithMCPAtBoot(credentialAdmission, os.LookupEnv, pool,
+		vaultMasterKey, governedMCPComposed, logger)
 	if err != nil {
 		return err
 	}
 	credentialBroker, err := credentialBrokerAtBoot(credentialAdmission, os.LookupEnv, pool, credentialDecider,
 		credentialGovernanceStore, agentIdentity.Broker, entraGoverned, providerOAuthGoverned.Tokens, credentialCatalog, credentialRevision,
-		securityInvalidations, logger)
+		securityInvalidations, governedMCPComposed.authorizations(), logger)
 	if err != nil {
 		return err
 	}
@@ -2035,6 +2050,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			CredentialProfile:                credentialAdmission,
 			CredentialBroker:                 runtimeCredentialBroker,
 			SecurityInvalidations:            securityInvalidations,
+			IndexScheduleMandates:            governedTriggers.IndexMandates,
+			IndexScheduleMandateGate:         governedTriggers.IndexGate,
 			ControlPool:                      runtimePools.Control,
 			OutputPool:                       runtimePools.Output,
 			ReplayPool:                       runtimePools.Replay,
@@ -2202,6 +2219,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				logger,
 				domainEvents,
 				pipelineRunsRepo,
+				v2pipelinetriggers.WithGovernedRuns(governedTriggers.Runs),
 			)
 			// The schedule TICK. It rides elitea-main's platform scheduler —
 			// the same framework `index.schedule.scan.v1` uses — so the clock,
@@ -2414,6 +2432,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			logger,
 			domainEvents,
 			pipelineRunsRepo,
+			v2pipelinetriggers.WithGovernedRuns(governedTriggers.Runs),
 		)
 	}
 
@@ -2759,7 +2778,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CredentialProbe:               credentialProbeHandler,
 		CredentialConsent:             providerOAuthGoverned.Consent,
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
+		MandateAttachments:            governedTriggers.Attachments,
 		AgentAssertionWellKnown:       eliteaNative.WellKnown,
+		GovernedMCPInbound:            governedMCPComposed.Inbound,
+		GovernedMCPOutbound:           governedMCPComposed.Outbound,
 		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,
 		OnToolkitCleanupJournal:       startToolkitReconciler,

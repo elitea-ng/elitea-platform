@@ -208,6 +208,34 @@
           "resource_kind": "test_case"
         }
       ]
+    },
+    {
+      "provider_type": "mcp",
+      "auth_classes": [
+        "oauth_delegated"
+      ],
+      "target_kind": "resource_uri",
+      "material_keys": {
+        "oauth_delegated": [
+          "access_token"
+        ]
+      },
+      "qualification": {
+        "oauth_delegated": "fixture"
+      },
+      "probe_operation": "",
+      "operations": [
+        {
+          "id": "mcp.tools.list",
+          "class": "read",
+          "resource_kind": "server"
+        },
+        {
+          "id": "mcp.tool.call",
+          "class": "write",
+          "resource_kind": "tool"
+        }
+      ]
     }
   ]
 }

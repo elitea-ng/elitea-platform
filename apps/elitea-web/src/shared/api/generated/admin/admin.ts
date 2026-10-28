@@ -93,8 +93,11 @@ import type {
   ListMandatesParams,
   ListNativeDevicesAdministrationParams,
   Mandate,
+  MandateAttachment,
+  MandateAttachmentRequest,
   MandateCreate,
   MandateListResponse,
+  MandateRefusal,
   MessageResponse,
   ModeRoleAssignRequest,
   ModeRoleAssignResult,
@@ -7088,6 +7091,1635 @@ export function useRevokeMandate<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getRevokeMandateQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type attachPipelineScheduleMandateResponse200 = {
+  data: MandateAttachment;
+  status: 200;
+};
+
+export type attachPipelineScheduleMandateResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type attachPipelineScheduleMandateResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type attachPipelineScheduleMandateResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type attachPipelineScheduleMandateResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type attachPipelineScheduleMandateResponse409 = {
+  data: MandateRefusal;
+  status: 409;
+};
+
+export type attachPipelineScheduleMandateResponseSuccess =
+  attachPipelineScheduleMandateResponse200 & {
+    headers: Headers;
+  };
+export type attachPipelineScheduleMandateResponseError = (
+  | attachPipelineScheduleMandateResponse400
+  | attachPipelineScheduleMandateResponse401
+  | attachPipelineScheduleMandateResponse403
+  | attachPipelineScheduleMandateResponse404
+  | attachPipelineScheduleMandateResponse409
+) & {
+  headers: Headers;
+};
+
+export type attachPipelineScheduleMandateResponse =
+  | attachPipelineScheduleMandateResponseSuccess
+  | attachPipelineScheduleMandateResponseError;
+
+export const getAttachPipelineScheduleMandateUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/admin/mandate_attachments/pipeline_schedules/${projectId}/${versionId}`;
+};
+
+/**
+ * Credential governance (ADR-0039): with the enterprise flag on, a pipeline schedule runs only under the mandate attached here, re-checked at every fire. The mandate must be in the same tenant project, of an unattended kind (autonomous or delegated_background) that the active policy revision lists in `unattended_mandate_kinds`, bound to the version the target starts, not revoked or expired, and its `schedule.cron:` and `schedule.input:sha256:` resource scopes, if any, must cover the target. A proposed or suspended mandate may be attached; it runs nothing until it is active. Replaces any attached mandate. Gated on `models.agent_identity.mandates.manage` in administration mode, and mounted only when the flag is on. Appends a security audit decision.
+ * @summary Attach a mandate to a pipeline schedule
+ */
+export const attachPipelineScheduleMandate = async (
+  projectId: number,
+  versionId: number,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<attachPipelineScheduleMandateResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<attachPipelineScheduleMandateResponse>(
+    getAttachPipelineScheduleMandateUrl(projectId, versionId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(mandateAttachmentRequest),
+    },
+  );
+};
+
+export const getAttachPipelineScheduleMandateQueryKey = (
+  projectId: number,
+  versionId: number,
+  mandateAttachmentRequest?: MandateAttachmentRequest,
+) => {
+  return [
+    "PUT",
+    `/admin/mandate_attachments/pipeline_schedules/${projectId}/${versionId}`,
+    mandateAttachmentRequest,
+  ] as const;
+};
+
+export const getAttachPipelineScheduleMandateQueryOptions = <
+  TData = Awaited<ReturnType<typeof attachPipelineScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response | MandateRefusal,
+>(
+  projectId: number,
+  versionId: number,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachPipelineScheduleMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getAttachPipelineScheduleMandateQueryKey(
+      projectId,
+      versionId,
+      mandateAttachmentRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof attachPipelineScheduleMandate>>
+  > = ({ signal }) =>
+    attachPipelineScheduleMandate(
+      projectId,
+      versionId,
+      mandateAttachmentRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof attachPipelineScheduleMandate>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type AttachPipelineScheduleMandateQueryResult = NonNullable<
+  Awaited<ReturnType<typeof attachPipelineScheduleMandate>>
+>;
+export type AttachPipelineScheduleMandateQueryError =
+  ErrorResponse | N401Response | N403Response | MandateRefusal;
+
+export function useAttachPipelineScheduleMandate<
+  TData = Awaited<ReturnType<typeof attachPipelineScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response | MandateRefusal,
+>(
+  projectId: number,
+  versionId: number,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachPipelineScheduleMandate>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof attachPipelineScheduleMandate>>,
+          TError,
+          Awaited<ReturnType<typeof attachPipelineScheduleMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAttachPipelineScheduleMandate<
+  TData = Awaited<ReturnType<typeof attachPipelineScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response | MandateRefusal,
+>(
+  projectId: number,
+  versionId: number,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachPipelineScheduleMandate>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof attachPipelineScheduleMandate>>,
+          TError,
+          Awaited<ReturnType<typeof attachPipelineScheduleMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAttachPipelineScheduleMandate<
+  TData = Awaited<ReturnType<typeof attachPipelineScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response | MandateRefusal,
+>(
+  projectId: number,
+  versionId: number,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachPipelineScheduleMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Attach a mandate to a pipeline schedule
+ */
+
+export function useAttachPipelineScheduleMandate<
+  TData = Awaited<ReturnType<typeof attachPipelineScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response | MandateRefusal,
+>(
+  projectId: number,
+  versionId: number,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachPipelineScheduleMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getAttachPipelineScheduleMandateQueryOptions(
+    projectId,
+    versionId,
+    mandateAttachmentRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type detachPipelineScheduleMandateResponse200 = {
+  data: MandateAttachment;
+  status: 200;
+};
+
+export type detachPipelineScheduleMandateResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type detachPipelineScheduleMandateResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type detachPipelineScheduleMandateResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type detachPipelineScheduleMandateResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type detachPipelineScheduleMandateResponseSuccess =
+  detachPipelineScheduleMandateResponse200 & {
+    headers: Headers;
+  };
+export type detachPipelineScheduleMandateResponseError = (
+  | detachPipelineScheduleMandateResponse400
+  | detachPipelineScheduleMandateResponse401
+  | detachPipelineScheduleMandateResponse403
+  | detachPipelineScheduleMandateResponse404
+) & {
+  headers: Headers;
+};
+
+export type detachPipelineScheduleMandateResponse =
+  | detachPipelineScheduleMandateResponseSuccess
+  | detachPipelineScheduleMandateResponseError;
+
+export const getDetachPipelineScheduleMandateUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/admin/mandate_attachments/pipeline_schedules/${projectId}/${versionId}`;
+};
+
+/**
+ * Clears the attached mandate. With the flag on, the target then runs nothing (MANDATE_REQUIRED) until another is attached. Gated on `models.agent_identity.mandates.manage`. Appends a security audit decision.
+ * @summary Detach the mandate from a pipeline schedule
+ */
+export const detachPipelineScheduleMandate = async (
+  projectId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<detachPipelineScheduleMandateResponse> => {
+  return eliteaFetch<detachPipelineScheduleMandateResponse>(
+    getDetachPipelineScheduleMandateUrl(projectId, versionId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDetachPipelineScheduleMandateQueryKey = (
+  projectId: number,
+  versionId: number,
+) => {
+  return [
+    "DELETE",
+    `/admin/mandate_attachments/pipeline_schedules/${projectId}/${versionId}`,
+  ] as const;
+};
+
+export const getDetachPipelineScheduleMandateQueryOptions = <
+  TData = Awaited<ReturnType<typeof detachPipelineScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachPipelineScheduleMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDetachPipelineScheduleMandateQueryKey(projectId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof detachPipelineScheduleMandate>>
+  > = ({ signal }) =>
+    detachPipelineScheduleMandate(projectId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof detachPipelineScheduleMandate>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DetachPipelineScheduleMandateQueryResult = NonNullable<
+  Awaited<ReturnType<typeof detachPipelineScheduleMandate>>
+>;
+export type DetachPipelineScheduleMandateQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useDetachPipelineScheduleMandate<
+  TData = Awaited<ReturnType<typeof detachPipelineScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachPipelineScheduleMandate>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof detachPipelineScheduleMandate>>,
+          TError,
+          Awaited<ReturnType<typeof detachPipelineScheduleMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDetachPipelineScheduleMandate<
+  TData = Awaited<ReturnType<typeof detachPipelineScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachPipelineScheduleMandate>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof detachPipelineScheduleMandate>>,
+          TError,
+          Awaited<ReturnType<typeof detachPipelineScheduleMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDetachPipelineScheduleMandate<
+  TData = Awaited<ReturnType<typeof detachPipelineScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachPipelineScheduleMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Detach the mandate from a pipeline schedule
+ */
+
+export function useDetachPipelineScheduleMandate<
+  TData = Awaited<ReturnType<typeof detachPipelineScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachPipelineScheduleMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDetachPipelineScheduleMandateQueryOptions(
+    projectId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type attachPipelineTriggerMandateResponse200 = {
+  data: MandateAttachment;
+  status: 200;
+};
+
+export type attachPipelineTriggerMandateResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type attachPipelineTriggerMandateResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type attachPipelineTriggerMandateResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type attachPipelineTriggerMandateResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type attachPipelineTriggerMandateResponse409 = {
+  data: MandateRefusal;
+  status: 409;
+};
+
+export type attachPipelineTriggerMandateResponseSuccess =
+  attachPipelineTriggerMandateResponse200 & {
+    headers: Headers;
+  };
+export type attachPipelineTriggerMandateResponseError = (
+  | attachPipelineTriggerMandateResponse400
+  | attachPipelineTriggerMandateResponse401
+  | attachPipelineTriggerMandateResponse403
+  | attachPipelineTriggerMandateResponse404
+  | attachPipelineTriggerMandateResponse409
+) & {
+  headers: Headers;
+};
+
+export type attachPipelineTriggerMandateResponse =
+  | attachPipelineTriggerMandateResponseSuccess
+  | attachPipelineTriggerMandateResponseError;
+
+export const getAttachPipelineTriggerMandateUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/admin/mandate_attachments/pipeline_triggers/${projectId}/${versionId}`;
+};
+
+/**
+ * Credential governance (ADR-0039): with the enterprise flag on, an inbound pipeline trigger runs only under the mandate attached here, re-checked at every fire. The mandate must be in the same tenant project, of an unattended kind (autonomous or delegated_background) that the active policy revision lists in `unattended_mandate_kinds`, bound to the version the target starts, not revoked or expired, and its `schedule.cron:` and `schedule.input:sha256:` resource scopes, if any, must cover the target. A proposed or suspended mandate may be attached; it runs nothing until it is active. Replaces any attached mandate. Gated on `models.agent_identity.mandates.manage` in administration mode, and mounted only when the flag is on. Appends a security audit decision.
+ * @summary Attach a mandate to an inbound pipeline trigger
+ */
+export const attachPipelineTriggerMandate = async (
+  projectId: number,
+  versionId: number,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<attachPipelineTriggerMandateResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<attachPipelineTriggerMandateResponse>(
+    getAttachPipelineTriggerMandateUrl(projectId, versionId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(mandateAttachmentRequest),
+    },
+  );
+};
+
+export const getAttachPipelineTriggerMandateQueryKey = (
+  projectId: number,
+  versionId: number,
+  mandateAttachmentRequest?: MandateAttachmentRequest,
+) => {
+  return [
+    "PUT",
+    `/admin/mandate_attachments/pipeline_triggers/${projectId}/${versionId}`,
+    mandateAttachmentRequest,
+  ] as const;
+};
+
+export const getAttachPipelineTriggerMandateQueryOptions = <
+  TData = Awaited<ReturnType<typeof attachPipelineTriggerMandate>>,
+  TError = ErrorResponse | N401Response | N403Response | MandateRefusal,
+>(
+  projectId: number,
+  versionId: number,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachPipelineTriggerMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getAttachPipelineTriggerMandateQueryKey(
+      projectId,
+      versionId,
+      mandateAttachmentRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof attachPipelineTriggerMandate>>
+  > = ({ signal }) =>
+    attachPipelineTriggerMandate(
+      projectId,
+      versionId,
+      mandateAttachmentRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof attachPipelineTriggerMandate>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type AttachPipelineTriggerMandateQueryResult = NonNullable<
+  Awaited<ReturnType<typeof attachPipelineTriggerMandate>>
+>;
+export type AttachPipelineTriggerMandateQueryError =
+  ErrorResponse | N401Response | N403Response | MandateRefusal;
+
+export function useAttachPipelineTriggerMandate<
+  TData = Awaited<ReturnType<typeof attachPipelineTriggerMandate>>,
+  TError = ErrorResponse | N401Response | N403Response | MandateRefusal,
+>(
+  projectId: number,
+  versionId: number,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachPipelineTriggerMandate>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof attachPipelineTriggerMandate>>,
+          TError,
+          Awaited<ReturnType<typeof attachPipelineTriggerMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAttachPipelineTriggerMandate<
+  TData = Awaited<ReturnType<typeof attachPipelineTriggerMandate>>,
+  TError = ErrorResponse | N401Response | N403Response | MandateRefusal,
+>(
+  projectId: number,
+  versionId: number,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachPipelineTriggerMandate>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof attachPipelineTriggerMandate>>,
+          TError,
+          Awaited<ReturnType<typeof attachPipelineTriggerMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAttachPipelineTriggerMandate<
+  TData = Awaited<ReturnType<typeof attachPipelineTriggerMandate>>,
+  TError = ErrorResponse | N401Response | N403Response | MandateRefusal,
+>(
+  projectId: number,
+  versionId: number,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachPipelineTriggerMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Attach a mandate to an inbound pipeline trigger
+ */
+
+export function useAttachPipelineTriggerMandate<
+  TData = Awaited<ReturnType<typeof attachPipelineTriggerMandate>>,
+  TError = ErrorResponse | N401Response | N403Response | MandateRefusal,
+>(
+  projectId: number,
+  versionId: number,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachPipelineTriggerMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getAttachPipelineTriggerMandateQueryOptions(
+    projectId,
+    versionId,
+    mandateAttachmentRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type detachPipelineTriggerMandateResponse200 = {
+  data: MandateAttachment;
+  status: 200;
+};
+
+export type detachPipelineTriggerMandateResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type detachPipelineTriggerMandateResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type detachPipelineTriggerMandateResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type detachPipelineTriggerMandateResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type detachPipelineTriggerMandateResponseSuccess =
+  detachPipelineTriggerMandateResponse200 & {
+    headers: Headers;
+  };
+export type detachPipelineTriggerMandateResponseError = (
+  | detachPipelineTriggerMandateResponse400
+  | detachPipelineTriggerMandateResponse401
+  | detachPipelineTriggerMandateResponse403
+  | detachPipelineTriggerMandateResponse404
+) & {
+  headers: Headers;
+};
+
+export type detachPipelineTriggerMandateResponse =
+  | detachPipelineTriggerMandateResponseSuccess
+  | detachPipelineTriggerMandateResponseError;
+
+export const getDetachPipelineTriggerMandateUrl = (
+  projectId: number,
+  versionId: number,
+) => {
+  return `/admin/mandate_attachments/pipeline_triggers/${projectId}/${versionId}`;
+};
+
+/**
+ * Clears the attached mandate. With the flag on, the target then runs nothing (MANDATE_REQUIRED) until another is attached. Gated on `models.agent_identity.mandates.manage`. Appends a security audit decision.
+ * @summary Detach the mandate from an inbound pipeline trigger
+ */
+export const detachPipelineTriggerMandate = async (
+  projectId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<detachPipelineTriggerMandateResponse> => {
+  return eliteaFetch<detachPipelineTriggerMandateResponse>(
+    getDetachPipelineTriggerMandateUrl(projectId, versionId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDetachPipelineTriggerMandateQueryKey = (
+  projectId: number,
+  versionId: number,
+) => {
+  return [
+    "DELETE",
+    `/admin/mandate_attachments/pipeline_triggers/${projectId}/${versionId}`,
+  ] as const;
+};
+
+export const getDetachPipelineTriggerMandateQueryOptions = <
+  TData = Awaited<ReturnType<typeof detachPipelineTriggerMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachPipelineTriggerMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDetachPipelineTriggerMandateQueryKey(projectId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof detachPipelineTriggerMandate>>
+  > = ({ signal }) =>
+    detachPipelineTriggerMandate(projectId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof detachPipelineTriggerMandate>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DetachPipelineTriggerMandateQueryResult = NonNullable<
+  Awaited<ReturnType<typeof detachPipelineTriggerMandate>>
+>;
+export type DetachPipelineTriggerMandateQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useDetachPipelineTriggerMandate<
+  TData = Awaited<ReturnType<typeof detachPipelineTriggerMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachPipelineTriggerMandate>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof detachPipelineTriggerMandate>>,
+          TError,
+          Awaited<ReturnType<typeof detachPipelineTriggerMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDetachPipelineTriggerMandate<
+  TData = Awaited<ReturnType<typeof detachPipelineTriggerMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachPipelineTriggerMandate>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof detachPipelineTriggerMandate>>,
+          TError,
+          Awaited<ReturnType<typeof detachPipelineTriggerMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDetachPipelineTriggerMandate<
+  TData = Awaited<ReturnType<typeof detachPipelineTriggerMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachPipelineTriggerMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Detach the mandate from an inbound pipeline trigger
+ */
+
+export function useDetachPipelineTriggerMandate<
+  TData = Awaited<ReturnType<typeof detachPipelineTriggerMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachPipelineTriggerMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDetachPipelineTriggerMandateQueryOptions(
+    projectId,
+    versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type attachIndexScheduleMandateResponse200 = {
+  data: MandateAttachment;
+  status: 200;
+};
+
+export type attachIndexScheduleMandateResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type attachIndexScheduleMandateResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type attachIndexScheduleMandateResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type attachIndexScheduleMandateResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type attachIndexScheduleMandateResponse409 = {
+  data: MandateRefusal;
+  status: 409;
+};
+
+export type attachIndexScheduleMandateResponseSuccess =
+  attachIndexScheduleMandateResponse200 & {
+    headers: Headers;
+  };
+export type attachIndexScheduleMandateResponseError = (
+  | attachIndexScheduleMandateResponse400
+  | attachIndexScheduleMandateResponse401
+  | attachIndexScheduleMandateResponse403
+  | attachIndexScheduleMandateResponse404
+  | attachIndexScheduleMandateResponse409
+) & {
+  headers: Headers;
+};
+
+export type attachIndexScheduleMandateResponse =
+  | attachIndexScheduleMandateResponseSuccess
+  | attachIndexScheduleMandateResponseError;
+
+export const getAttachIndexScheduleMandateUrl = (
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+) => {
+  return `/admin/mandate_attachments/index_schedules/${projectId}/${toolkitId}/${indexName}`;
+};
+
+/**
+ * Credential governance (ADR-0039): with the enterprise flag on, an index schedule runs only under the mandate attached here, re-checked at every fire. The mandate must be in the same tenant project, of an unattended kind (autonomous or delegated_background) that the active policy revision lists in `unattended_mandate_kinds`, bound to the version the target starts, not revoked or expired, and its `schedule.cron:` and `schedule.input:sha256:` resource scopes, if any, must cover the target. A proposed or suspended mandate may be attached; it runs nothing until it is active. Replaces any attached mandate. Gated on `models.agent_identity.mandates.manage` in administration mode, and mounted only when the flag is on. Appends a security audit decision.
+ * @summary Attach a mandate to an index schedule
+ */
+export const attachIndexScheduleMandate = async (
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<attachIndexScheduleMandateResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<attachIndexScheduleMandateResponse>(
+    getAttachIndexScheduleMandateUrl(projectId, toolkitId, indexName),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(mandateAttachmentRequest),
+    },
+  );
+};
+
+export const getAttachIndexScheduleMandateQueryKey = (
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  mandateAttachmentRequest?: MandateAttachmentRequest,
+) => {
+  return [
+    "PUT",
+    `/admin/mandate_attachments/index_schedules/${projectId}/${toolkitId}/${indexName}`,
+    mandateAttachmentRequest,
+  ] as const;
+};
+
+export const getAttachIndexScheduleMandateQueryOptions = <
+  TData = Awaited<ReturnType<typeof attachIndexScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response | MandateRefusal,
+>(
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachIndexScheduleMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getAttachIndexScheduleMandateQueryKey(
+      projectId,
+      toolkitId,
+      indexName,
+      mandateAttachmentRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof attachIndexScheduleMandate>>
+  > = ({ signal }) =>
+    attachIndexScheduleMandate(
+      projectId,
+      toolkitId,
+      indexName,
+      mandateAttachmentRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      toolkitId !== null &&
+      toolkitId !== undefined &&
+      indexName !== null &&
+      indexName !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof attachIndexScheduleMandate>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type AttachIndexScheduleMandateQueryResult = NonNullable<
+  Awaited<ReturnType<typeof attachIndexScheduleMandate>>
+>;
+export type AttachIndexScheduleMandateQueryError =
+  ErrorResponse | N401Response | N403Response | MandateRefusal;
+
+export function useAttachIndexScheduleMandate<
+  TData = Awaited<ReturnType<typeof attachIndexScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response | MandateRefusal,
+>(
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachIndexScheduleMandate>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof attachIndexScheduleMandate>>,
+          TError,
+          Awaited<ReturnType<typeof attachIndexScheduleMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAttachIndexScheduleMandate<
+  TData = Awaited<ReturnType<typeof attachIndexScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response | MandateRefusal,
+>(
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachIndexScheduleMandate>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof attachIndexScheduleMandate>>,
+          TError,
+          Awaited<ReturnType<typeof attachIndexScheduleMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAttachIndexScheduleMandate<
+  TData = Awaited<ReturnType<typeof attachIndexScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response | MandateRefusal,
+>(
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachIndexScheduleMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Attach a mandate to an index schedule
+ */
+
+export function useAttachIndexScheduleMandate<
+  TData = Awaited<ReturnType<typeof attachIndexScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response | MandateRefusal,
+>(
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  mandateAttachmentRequest: MandateAttachmentRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachIndexScheduleMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getAttachIndexScheduleMandateQueryOptions(
+    projectId,
+    toolkitId,
+    indexName,
+    mandateAttachmentRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type detachIndexScheduleMandateResponse200 = {
+  data: MandateAttachment;
+  status: 200;
+};
+
+export type detachIndexScheduleMandateResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type detachIndexScheduleMandateResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type detachIndexScheduleMandateResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type detachIndexScheduleMandateResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type detachIndexScheduleMandateResponseSuccess =
+  detachIndexScheduleMandateResponse200 & {
+    headers: Headers;
+  };
+export type detachIndexScheduleMandateResponseError = (
+  | detachIndexScheduleMandateResponse400
+  | detachIndexScheduleMandateResponse401
+  | detachIndexScheduleMandateResponse403
+  | detachIndexScheduleMandateResponse404
+) & {
+  headers: Headers;
+};
+
+export type detachIndexScheduleMandateResponse =
+  | detachIndexScheduleMandateResponseSuccess
+  | detachIndexScheduleMandateResponseError;
+
+export const getDetachIndexScheduleMandateUrl = (
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+) => {
+  return `/admin/mandate_attachments/index_schedules/${projectId}/${toolkitId}/${indexName}`;
+};
+
+/**
+ * Clears the attached mandate. With the flag on, the target then runs nothing (MANDATE_REQUIRED) until another is attached. Gated on `models.agent_identity.mandates.manage`. Appends a security audit decision.
+ * @summary Detach the mandate from an index schedule
+ */
+export const detachIndexScheduleMandate = async (
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<detachIndexScheduleMandateResponse> => {
+  return eliteaFetch<detachIndexScheduleMandateResponse>(
+    getDetachIndexScheduleMandateUrl(projectId, toolkitId, indexName),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDetachIndexScheduleMandateQueryKey = (
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+) => {
+  return [
+    "DELETE",
+    `/admin/mandate_attachments/index_schedules/${projectId}/${toolkitId}/${indexName}`,
+  ] as const;
+};
+
+export const getDetachIndexScheduleMandateQueryOptions = <
+  TData = Awaited<ReturnType<typeof detachIndexScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachIndexScheduleMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDetachIndexScheduleMandateQueryKey(projectId, toolkitId, indexName);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof detachIndexScheduleMandate>>
+  > = ({ signal }) =>
+    detachIndexScheduleMandate(projectId, toolkitId, indexName, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      toolkitId !== null &&
+      toolkitId !== undefined &&
+      indexName !== null &&
+      indexName !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof detachIndexScheduleMandate>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DetachIndexScheduleMandateQueryResult = NonNullable<
+  Awaited<ReturnType<typeof detachIndexScheduleMandate>>
+>;
+export type DetachIndexScheduleMandateQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useDetachIndexScheduleMandate<
+  TData = Awaited<ReturnType<typeof detachIndexScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachIndexScheduleMandate>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof detachIndexScheduleMandate>>,
+          TError,
+          Awaited<ReturnType<typeof detachIndexScheduleMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDetachIndexScheduleMandate<
+  TData = Awaited<ReturnType<typeof detachIndexScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachIndexScheduleMandate>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof detachIndexScheduleMandate>>,
+          TError,
+          Awaited<ReturnType<typeof detachIndexScheduleMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDetachIndexScheduleMandate<
+  TData = Awaited<ReturnType<typeof detachIndexScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachIndexScheduleMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Detach the mandate from an index schedule
+ */
+
+export function useDetachIndexScheduleMandate<
+  TData = Awaited<ReturnType<typeof detachIndexScheduleMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: number,
+  toolkitId: number,
+  indexName: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachIndexScheduleMandate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDetachIndexScheduleMandateQueryOptions(
+    projectId,
+    toolkitId,
+    indexName,
+    options,
+  );
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

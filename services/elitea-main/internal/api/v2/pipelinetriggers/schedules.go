@@ -150,7 +150,7 @@ func (h *Handler) GetSchedule(w http.ResponseWriter, r *http.Request) {
 
 // SaveSchedule creates or replaces the schedule.
 func (h *Handler) SaveSchedule(w http.ResponseWriter, r *http.Request) {
-	schema, _, versionID, ok := h.routeTarget(w, r)
+	schema, projectID, versionID, ok := h.routeTarget(w, r)
 	if !ok {
 		return
 	}
@@ -195,6 +195,12 @@ func (h *Handler) SaveSchedule(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		h.log().Error("pipelinetriggers: resolve version", "err", err)
 		writeError(w, http.StatusInternalServerError, "the pipeline version could not be read")
+		return
+	}
+
+	// GOVERNED: the save keeps the attached mandate (the upsert never writes
+	// it), so the new cron and input must stay inside its scope.
+	if h.governed != nil && !h.saveCovered(w, r, schema, projectID, versionID, expression, input) {
 		return
 	}
 

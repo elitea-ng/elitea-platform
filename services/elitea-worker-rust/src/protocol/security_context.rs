@@ -270,6 +270,15 @@ fn scan_context(encoded: &[u8]) -> Result<(), ProtocolError> {
     for link in fields.repeated_field(15) {
         scan_message(link, Schema::ActorLink)?;
     }
+    for reference in fields.repeated_field(34) {
+        let reference = scan_message(reference, Schema::GovernedCredentialReference)?;
+        if reference.contains(5) {
+            scan_message(
+                reference.length_field(5, "the toolkit digest is missing")?,
+                Schema::Digest,
+            )?;
+        }
+    }
     Ok(())
 }
 

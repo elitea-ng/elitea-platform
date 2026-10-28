@@ -8,15 +8,16 @@ const (
 	oauthDelegated = credentialgrant.ClassOAuthDelegated
 )
 
-// Builtin returns fresh copies of the five reference provider descriptors:
-// Jira, Confluence, Aha!, SharePoint and qTest. Their data equals the shared
-// contract testdata/proto/runtime/v1/governed-operations/catalogue.json,
-// which the Rust governed tool mapping is tested against as well.
+// Builtin returns fresh copies of the six reference provider descriptors:
+// Jira, Confluence, Aha!, SharePoint, qTest and remote MCP servers (#1123).
+// Their data equals the shared contract
+// testdata/proto/runtime/v1/governed-operations/catalogue.json, which the
+// Rust governed tool mapping is tested against as well.
 //
 // Every provider × class is "fixture" at most: no class is qualified
 // against a real tenant until gate D6 and a qualification run (#1124).
 func Builtin() []AdapterDescriptor {
-	return []AdapterDescriptor{Jira(), Confluence(), Aha(), SharePoint(), QTest()}
+	return []AdapterDescriptor{Jira(), Confluence(), Aha(), SharePoint(), QTest(), MCP()}
 }
 
 // NewBuiltinRegistry is the registry of the reference providers.

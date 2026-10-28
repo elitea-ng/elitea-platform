@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -42,21 +43,46 @@ var (
 
 // Consent runs the consent start and callback.
 type Consent struct {
-	grants   *Grants
-	clients  map[string]*Client
-	targets  credentialgrant.TargetReader
-	bindings authzcompose.BindingGetter
-	ttl      time.Duration
-	now      func() time.Time
-	random   func([]byte) error
+	grants    *Grants
+	clients   map[string]*Client
+	perTarget map[string]TargetAuthorizers
+	targets   credentialgrant.TargetReader
+	bindings  authzcompose.BindingGetter
+	ttl       time.Duration
+	now       func() time.Time
+	random    func([]byte) error
+}
+
+// Authorizer is one authorization server's authorization request and code
+// exchange. *Client is the authorizer of a provider with one OAuth
+// application.
+type Authorizer interface {
+	AuthorizationURL(state, challenge string) string
+	Exchange(ctx context.Context, code, verifier string) (TokenResponse, error)
+}
+
+// TargetAuthorizers serve a provider whose authorization server is the
+// target's own (a remote MCP server discovered through RFC 9728, #1123).
+// Begin resolves the authorizer at the start and may answer an opaque
+// registration binding (a dynamically registered client); it is sealed
+// with the PKCE verifier, never leaves Main, and Resume gets it back at the
+// callback to rebuild the same authorizer.
+type TargetAuthorizers interface {
+	Provider() string
+	RedirectURI() string
+	Begin(ctx context.Context, target credentialgrant.TargetBinding) (authorizer Authorizer, binding string, err error)
+	Resume(ctx context.Context, target credentialgrant.TargetBinding, binding string) (Authorizer, error)
 }
 
 // ConsentConfig is the consent flow's dependencies.
 type ConsentConfig struct {
-	Grants   *Grants
-	Clients  []*Client
-	Targets  credentialgrant.TargetReader
-	Bindings authzcompose.BindingGetter
+	Grants  *Grants
+	Clients []*Client
+	// PerTarget are the providers whose authorization server is per target;
+	// a provider in both is configured twice.
+	PerTarget []TargetAuthorizers
+	Targets   credentialgrant.TargetReader
+	Bindings  authzcompose.BindingGetter
 	// StateTTL defaults to DefaultStateTTL.
 	StateTTL time.Duration
 }
@@ -76,12 +102,26 @@ func NewConsent(cfg ConsentConfig) (*Consent, error) {
 		}
 		clients[c.Provider()] = c
 	}
+	perTarget := make(map[string]TargetAuthorizers, len(cfg.PerTarget))
+	for _, p := range cfg.PerTarget {
+		if p == nil {
+			return nil, errors.New("provideroauth: a nil per-target authorizer")
+		}
+		_, dup := clients[p.Provider()]
+		if _, twice := perTarget[p.Provider()]; dup || twice {
+			return nil, fmt.Errorf("provideroauth: provider %q is configured twice", p.Provider())
+		}
+		if err := redirectURI(p.RedirectURI(), p.Provider()); err != nil {
+			return nil, fmt.Errorf("provideroauth: provider %q redirect URI: %w", p.Provider(), err)
+		}
+		perTarget[p.Provider()] = p
+	}
 	ttl := cfg.StateTTL
 	if ttl <= 0 {
 		ttl = DefaultStateTTL
 	}
 	return &Consent{
-		grants: cfg.Grants, clients: clients, targets: cfg.Targets, bindings: cfg.Bindings,
+		grants: cfg.Grants, clients: clients, perTarget: perTarget, targets: cfg.Targets, bindings: cfg.Bindings,
 		ttl: ttl, now: time.Now, random: func(b []byte) error { _, err := rand.Read(b); return err },
 	}, nil
 }
@@ -89,8 +129,25 @@ func NewConsent(cfg ConsentConfig) (*Consent, error) {
 // Configured reports whether provider has an OAuth application.
 func (c *Consent) Configured(provider string) bool {
 	_, ok := c.clients[provider]
-	return ok
+	_, perTarget := c.perTarget[provider]
+	return ok || perTarget
 }
+
+// redirectFor is the provider's exact redirect URI; false when it has no
+// OAuth application.
+func (c *Consent) redirectFor(provider string) (string, bool) {
+	if client, ok := c.clients[provider]; ok {
+		return client.RedirectURI(), true
+	}
+	if p, ok := c.perTarget[provider]; ok {
+		return p.RedirectURI(), true
+	}
+	return "", false
+}
+
+// verifierBindingSeparator joins the PKCE verifier (base64url, which never
+// holds it) and a per-target registration binding in the sealed value.
+const verifierBindingSeparator = "\n"
 
 // StartRequest is one consent start. UserID is the authenticated caller.
 type StartRequest struct {
@@ -114,11 +171,19 @@ func (c *Consent) Start(ctx context.Context, r StartRequest) (StartResult, error
 		!providerPattern.MatchString(r.Provider) {
 		return StartResult{}, ErrInvalid
 	}
-	client, ok := c.clients[r.Provider]
+	redirect, ok := c.redirectFor(r.Provider)
 	if !ok {
 		return StartResult{}, ErrProviderNotConfigured
 	}
-	if err := c.checkSubjects(ctx, r.TenantProjectID, r.Provider, r.TargetBindingID, r.AgentBindingID); err != nil {
+	target, err := c.checkSubjects(ctx, r.TenantProjectID, r.Provider, r.TargetBindingID, r.AgentBindingID)
+	if err != nil {
+		return StartResult{}, err
+	}
+	var authorizer Authorizer
+	var binding string
+	if client, ok := c.clients[r.Provider]; ok {
+		authorizer = client
+	} else if authorizer, binding, err = c.perTarget[r.Provider].Begin(ctx, target); err != nil {
 		return StartResult{}, err
 	}
 
@@ -136,9 +201,13 @@ func (c *Consent) Start(ctx context.Context, r StartRequest) (StartResult, error
 	aad := stateAAD{
 		StateDigest: digest, Provider: r.Provider, TenantProjectID: r.TenantProjectID, UserID: r.UserID,
 		AgentBindingID: r.AgentBindingID, TargetBindingID: r.TargetBindingID,
-		RedirectURI: client.RedirectURI(), ExpiresAt: expires,
+		RedirectURI: redirect, ExpiresAt: expires,
 	}
-	sealed := c.grants.sealer.seal(verifier, aad)
+	plaintext := verifier
+	if binding != "" {
+		plaintext += verifierBindingSeparator + binding
+	}
+	sealed := c.grants.sealer.seal(plaintext, aad)
 	// Expired states are dead weight; a start removes old ones.
 	if _, err := c.grants.pool.Exec(ctx, `
 DELETE FROM elitea_identity.provider_oauth_consent_states
@@ -151,11 +220,11 @@ INSERT INTO elitea_identity.provider_oauth_consent_states
      redirect_uri, verifier_ciphertext, key_label, expires_at)
 VALUES ($1, $2, $3, $4, $5::uuid, $6::uuid, $7, $8, $9, $10)`,
 		digest[:], r.Provider, r.TenantProjectID, r.UserID, r.AgentBindingID, r.TargetBindingID,
-		client.RedirectURI(), sealed, KeyLabel, expires); err != nil {
+		redirect, sealed, KeyLabel, expires); err != nil {
 		return StartResult{}, fmt.Errorf("provideroauth: store the consent state: %w", err)
 	}
 	return StartResult{
-		AuthorizationURL: client.AuthorizationURL(state, base64.RawURLEncoding.EncodeToString(challenge[:])),
+		AuthorizationURL: authorizer.AuthorizationURL(state, base64.RawURLEncoding.EncodeToString(challenge[:])),
 		ExpiresAt:        expires,
 	}, nil
 }
@@ -163,28 +232,28 @@ VALUES ($1, $2, $3, $4, $5::uuid, $6::uuid, $7, $8, $9, $10)`,
 // checkSubjects answers ErrTargetNotFound unless the target binding exists
 // in the project for the provider, and ErrBindingNotUsable unless the agent
 // binding is active there.
-func (c *Consent) checkSubjects(ctx context.Context, tenantProjectID int64, provider, targetBindingID, agentBindingID string) error {
+func (c *Consent) checkSubjects(ctx context.Context, tenantProjectID int64, provider, targetBindingID, agentBindingID string) (credentialgrant.TargetBinding, error) {
 	target, err := c.targets.TargetBinding(ctx, tenantProjectID, targetBindingID)
 	switch {
 	case errors.Is(err, credentialgrant.ErrTargetNotFound):
-		return ErrTargetNotFound
+		return credentialgrant.TargetBinding{}, ErrTargetNotFound
 	case err != nil:
-		return fmt.Errorf("provideroauth: read the target binding: %w", err)
+		return credentialgrant.TargetBinding{}, fmt.Errorf("provideroauth: read the target binding: %w", err)
 	}
 	if target.TenantProjectID != tenantProjectID || target.ProviderType != provider || target.ID != targetBindingID {
-		return ErrTargetNotFound
+		return credentialgrant.TargetBinding{}, ErrTargetNotFound
 	}
 	binding, err := c.bindings.GetUsable(ctx, agentBindingID)
 	switch {
 	case errors.Is(err, agentidentity.ErrBindingNotFound):
-		return ErrBindingNotUsable
+		return credentialgrant.TargetBinding{}, ErrBindingNotUsable
 	case err != nil:
-		return fmt.Errorf("provideroauth: read the agent binding: %w", err)
+		return credentialgrant.TargetBinding{}, fmt.Errorf("provideroauth: read the agent binding: %w", err)
 	}
 	if binding.TenantProjectID != tenantProjectID || binding.State != agentidentity.BindingActive {
-		return ErrBindingNotUsable
+		return credentialgrant.TargetBinding{}, ErrBindingNotUsable
 	}
-	return nil
+	return target, nil
 }
 
 func (c *Consent) randomToken(n int) (string, error) {
@@ -234,7 +303,7 @@ func (c *Consent) Callback(ctx context.Context, r CallbackRequest, authorize Aut
 	if !providerPattern.MatchString(r.Provider) || r.State == "" || len(r.State) > maxStateBytes {
 		return CallbackResult{}, ErrStateInvalid
 	}
-	client, ok := c.clients[r.Provider]
+	redirect, ok := c.redirectFor(r.Provider)
 	if !ok {
 		return CallbackResult{}, ErrProviderNotConfigured
 	}
@@ -261,10 +330,10 @@ RETURNING provider_type, tenant_project_id, user_id, agent_binding_id::text, tar
 	if err != nil {
 		return CallbackResult{}, fmt.Errorf("provideroauth: consume the consent state: %w", err)
 	}
-	if !c.now().Before(expires) || key.Provider != r.Provider || redirectURI != client.RedirectURI() {
+	if !c.now().Before(expires) || key.Provider != r.Provider || redirectURI != redirect {
 		return CallbackResult{}, ErrStateInvalid
 	}
-	verifier, err := c.grants.sealer.open(sealed, stateAAD{
+	opened, err := c.grants.sealer.open(sealed, stateAAD{
 		StateDigest: digest, Provider: key.Provider, TenantProjectID: key.TenantProjectID, UserID: key.SubjectUserID,
 		AgentBindingID: key.AgentBindingID, TargetBindingID: key.TargetBindingID,
 		RedirectURI: redirectURI, ExpiresAt: expires.UTC(),
@@ -272,6 +341,7 @@ RETURNING provider_type, tenant_project_id, user_id, agent_binding_id::text, tar
 	if err != nil {
 		return CallbackResult{}, ErrStateInvalid
 	}
+	verifier, binding, _ := strings.Cut(opened, verifierBindingSeparator)
 	if r.ProviderError != "" {
 		return CallbackResult{}, ErrConsentDenied
 	}
@@ -290,10 +360,17 @@ RETURNING provider_type, tenant_project_id, user_id, agent_binding_id::text, tar
 	// The binding may have been suspended or the target removed since the
 	// start: re-checked before the code is exchanged, so no grant is stored
 	// for either.
-	if err := c.checkSubjects(ctx, key.TenantProjectID, key.Provider, key.TargetBindingID, key.AgentBindingID); err != nil {
+	target, err := c.checkSubjects(ctx, key.TenantProjectID, key.Provider, key.TargetBindingID, key.AgentBindingID)
+	if err != nil {
 		return CallbackResult{}, err
 	}
-	tokens, err := client.Exchange(ctx, r.Code, verifier)
+	var authorizer Authorizer
+	if client, ok := c.clients[key.Provider]; ok {
+		authorizer = client
+	} else if authorizer, err = c.perTarget[key.Provider].Resume(ctx, target, binding); err != nil {
+		return CallbackResult{}, err
+	}
+	tokens, err := authorizer.Exchange(ctx, r.Code, verifier)
 	if err != nil {
 		return CallbackResult{}, err
 	}

@@ -54,6 +54,7 @@ import (
 	identityoidc "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/oidc"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/provideroauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore/backends"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore/pgvault"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
@@ -534,6 +535,7 @@ func credentialBrokerAtBoot(
 	catalog credentialbroker.OperationCatalog,
 	revision profile.PolicyRevision,
 	invalidations *epoch.Hub,
+	providerAuthorizations provideroauth.AuthorizationReferences,
 	logger *slog.Logger,
 ) (*credentialbroker.Broker, error) {
 	if !admission.Governed() {
@@ -590,6 +592,9 @@ func credentialBrokerAtBoot(
 		// Jira, Confluence and Aha! oauth_delegated uses (#1121); nil when
 		// no provider OAuth application is configured.
 		ProviderTokens: providerTokens,
+		// Remote MCP servers (#1123): a missing consent pauses the chat
+		// turn with an authorization_reference; nil denies it as before.
+		ProviderAuthorizations: providerAuthorizations,
 	}
 	// Revocation epochs, the credential cache and its invalidation (#1121).
 	// The cache's bounds are the active revision's; whether a run may reuse

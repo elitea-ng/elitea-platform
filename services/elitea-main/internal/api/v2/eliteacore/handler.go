@@ -40,6 +40,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicproject"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -5101,19 +5102,7 @@ func validateMCPProxyURL(rawURL string) (*url.URL, error) {
 }
 
 func sameMCPProxyOrigin(first, second *url.URL) bool {
-	return strings.EqualFold(first.Scheme, second.Scheme) &&
-		strings.EqualFold(strings.TrimSuffix(first.Hostname(), "."), strings.TrimSuffix(second.Hostname(), ".")) &&
-		effectiveURLPort(first) == effectiveURLPort(second)
-}
-
-func effectiveURLPort(endpoint *url.URL) string {
-	if port := endpoint.Port(); port != "" {
-		return port
-	}
-	if strings.EqualFold(endpoint.Scheme, "https") {
-		return "443"
-	}
-	return "80"
+	return mcpoauth.SameOrigin(first, second)
 }
 
 // defaultMCPEgressClient serves a Handler built without NewHandler. It refuses

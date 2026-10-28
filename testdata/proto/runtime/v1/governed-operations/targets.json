@@ -9,5 +9,27 @@
     {"input": "https://contoso.sharepoint.com/sites/Eng", "canonical": "https://contoso.sharepoint.com/sites/Eng"},
     {"input": "https://contoso.sharepoint.com/sites/eng//", "canonical": "https://contoso.sharepoint.com/sites/eng"},
     {"input": "https://qtest.example.com/a%20b", "canonical": "https://qtest.example.com/a%20b"}
+  ],
+  "resource_uri_note": "The resource_uri target kind (remote MCP servers, #1123) is a different rule: Go credentialadapters.CanonicalResourceURI and Rust governed::canonical_resource_uri must both map each input to its canonical output, and refuse every input whose canonical is null. Unlike base_url it keeps trailing slashes, gives an empty path \"/\" and refuses any '%'.",
+  "resource_uri_vectors": [
+    {"input": "https://mcp.example.com", "canonical": "https://mcp.example.com/"},
+    {"input": "https://MCP.Example.com:443", "canonical": "https://mcp.example.com/"},
+    {"input": " https://mcp.example.com/mcp ", "canonical": "https://mcp.example.com/mcp"},
+    {"input": "https://mcp.example.com/mcp/", "canonical": "https://mcp.example.com/mcp/"},
+    {"input": "https://mcp.example.com:8443/v1/mcp", "canonical": "https://mcp.example.com:8443/v1/mcp"},
+    {"input": "https://[::1]:9443/servers/a/mcp", "canonical": "https://[::1]:9443/servers/a/mcp"},
+    {"input": "https://mcp.example.com/a%20b/mcp", "canonical": null},
+    {"input": "https://mcp.example.com/a%2Fb/mcp", "canonical": null},
+    {"input": "http://mcp.example.com/mcp", "canonical": null},
+    {"input": "https://user:pw@mcp.example.com/mcp", "canonical": null},
+    {"input": "https://mcp.example.com/mcp?x=1", "canonical": null},
+    {"input": "https://mcp.example.com/mcp?", "canonical": null},
+    {"input": "https://mcp.example.com/mcp#f", "canonical": null},
+    {"input": "https://mcp.example.com/../mcp", "canonical": null},
+    {"input": "https://mcp.example.com/./mcp", "canonical": null},
+    {"input": "https://mcp.example.com/a b", "canonical": null},
+    {"input": "https://mcp.example.com\\mcp", "canonical": null},
+    {"input": "https://bücher.example/mcp", "canonical": null},
+    {"input": "", "canonical": null}
   ]
 }

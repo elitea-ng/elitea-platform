@@ -193,6 +193,10 @@ func TestInvocationReplay(t *testing.T) {
 // target B; the decision is denied and audited, and nothing is read.
 func TestGrantForTargetADeniesTargetB(t *testing.T) {
 	w := newWorld().withMandate(mandate.KindDelegatedBackground)
+	// Admission froze B (as if B's grant was later revoked): the grant gate,
+	// not the frozen-reference check, is what denies.
+	w.context.CredentialReferences[0].CredentialReferenceID = tReferenceB
+	w.context.CredentialReferences[0].TargetBindingID = tTargetB
 	req := w.request(t)
 	req.Invocation.CredentialReferenceID = tReferenceB
 	denial := requireDenial(t, redeem(t, w.broker(t), req), CodeDenied)
@@ -465,6 +469,9 @@ func TestEmptyCredentialReferenceIsResolvedFromTheGrant(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			w := newWorld().withMandate(mandate.KindDelegatedBackground)
 			w.store.resolvable = c.resolvable
+			// A toolkit admission froze at its digest alone (#1119).
+			w.context.CredentialReferences[0].CredentialReferenceID = ""
+			w.context.CredentialReferences[0].TargetBindingID = ""
 			req := w.request(t)
 			req.Invocation.CredentialReferenceID = ""
 			result := redeem(t, w.broker(t), req)
@@ -479,6 +486,78 @@ func TestEmptyCredentialReferenceIsResolvedFromTheGrant(t *testing.T) {
 				t.Fatalf("denied: %+v", result.Denial)
 			}
 			result.Envelope.Destroy()
+		})
+	}
+}
+
+// Acceptance (#1119): a redemption names the reference admission froze for
+// its toolkit. Another reference, a toolkit admission froze nothing for, or a
+// reference named for a toolkit frozen at its digest alone denies before any
+// decision or secret read; an empty reference takes the frozen one.
+func TestRedemptionMustNameTheFrozenReference(t *testing.T) {
+	for name, c := range map[string]struct {
+		mutate func(*world, *RedeemRequest)
+		permit bool
+	}{
+		"the frozen reference": {func(*world, *RedeemRequest) {}, true},
+		"empty takes the frozen reference": {func(_ *world, r *RedeemRequest) {
+			r.Invocation.CredentialReferenceID = ""
+		}, true},
+		"another reference": {func(_ *world, r *RedeemRequest) {
+			r.Invocation.CredentialReferenceID = tReferenceB
+		}, false},
+		"a toolkit admission did not freeze": {func(w *world, r *RedeemRequest) {
+			r.Invocation.ToolkitID = tToolkit + 1
+		}, false},
+		"a reference for a digest-only toolkit": {func(w *world, r *RedeemRequest) {
+			w.context.CredentialReferences[0].CredentialReferenceID = ""
+			w.context.CredentialReferences[0].TargetBindingID = ""
+			w.store.resolvable = []string{tReference}
+			*r = w.request(t)
+		}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld().withMandate(mandate.KindDelegatedBackground)
+			req := w.request(t)
+			c.mutate(w, &req)
+			result := redeem(t, w.broker(t), req)
+			if !c.permit {
+				denial := requireDenial(t, result, CodeDenied)
+				if denial.reason != "credential_reference_not_frozen" || w.secrets.readCount() != 0 || len(w.store.events) != 0 {
+					t.Fatalf("denial %+v reads %d events %d", denial, w.secrets.readCount(), len(w.store.events))
+				}
+				return
+			}
+			if result.Envelope == nil {
+				t.Fatalf("denied: %+v", result.Denial)
+			}
+			result.Envelope.Destroy()
+		})
+	}
+}
+
+// Acceptance (#1119): the agent binding gate compares the binding with the
+// version admission ran and the toolkit binding with the digest admission
+// froze, not each record with itself, so drift after admission denies.
+func TestBindingAndToolkitDriftAfterAdmissionDenies(t *testing.T) {
+	for name, c := range map[string]struct {
+		mutate func(*world)
+		reason string
+	}{
+		"binding moved to another version": {func(w *world) { w.bindings.binding.ApplicationVersionID = 5 }, "binding_scope_mismatch"},
+		"binding of another application":   {func(w *world) { w.bindings.binding.ApplicationID = 9 }, "binding_scope_mismatch"},
+		"run of no application": {func(w *world) {
+			w.context.ApplicationID, w.context.ApplicationVersionID = 0, 0
+		}, "agent_missing"},
+		"toolkit re-bound at another digest": {func(w *world) { w.toolkits.binding.ToolkitDigest = [32]byte{0x71} }, "toolkit_digest_mismatch"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld().withMandate(mandate.KindDelegatedBackground)
+			c.mutate(w)
+			denial := requireDenial(t, redeem(t, w.broker(t), w.request(t)), CodeDenied)
+			if denial.reason != c.reason || w.secrets.readCount() != 0 {
+				t.Fatalf("denial %+v reads %d, want %s", denial, w.secrets.readCount(), c.reason)
+			}
 		})
 	}
 }

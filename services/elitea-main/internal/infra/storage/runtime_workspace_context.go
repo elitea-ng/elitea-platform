@@ -39,6 +39,11 @@ func (s *EliteaClientTokenService) WithWorkspaceContext(resolver WorkspaceContex
 type RuntimeContextAccept struct {
 	SecretsHeaderValue bool
 	Workspace          bool
+	// GovernedRun is not a worker field: the content server sets it for a
+	// run pinned to the governed profile. A governed SCHEDULED run is then
+	// refused the project system token (#1122): its authority is its
+	// mandate, and no system-token fallback exists.
+	GovernedRun bool
 }
 
 // ResolveAccepting resolves the runtime context with only the optional
@@ -60,7 +65,7 @@ func (s *EliteaClientTokenService) ResolveAccepting(
 	claim ContentClaim,
 	accept RuntimeContextAccept,
 ) (EliteaClientTokenContext, error) {
-	value, authorization, err := s.resolve(ctx, claim, accept.SecretsHeaderValue)
+	value, authorization, err := s.resolve(ctx, claim, accept.SecretsHeaderValue, accept.GovernedRun)
 	if err != nil {
 		return EliteaClientTokenContext{}, err
 	}
