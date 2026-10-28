@@ -250,3 +250,28 @@ SELECT EXISTS (
       )
       AND job.desired_state = 'CANCELLED'
 );
+
+-- name: ProjectGovernedContinuationRefusal :one
+-- A governed continuation that admission refused (#1485) settles its paused
+-- answer as an error: the pause keys go, as for a stop, and `is_error` with
+-- the safe reason replaces them. Unlike a stop it never deletes the turn: the
+-- question was answered up to the pause, and the reason is the answer.
+UPDATE chat_message_group AS response
+SET is_streaming = FALSE,
+    meta = (response.meta
+            - 'hitl_interrupt'
+            - 'hitl_interrupts'
+            - 'authorization_requests'
+            - 'node_recovery_required_v1')
+        || jsonb_build_object(
+            'is_error', TRUE,
+            'error', sqlc.arg(error_message)::text,
+            'error_code', sqlc.arg(error_code)::text,
+            'governed_refusal_code', sqlc.arg(refusal_code)::text
+        ),
+    updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
+WHERE response.id = sqlc.arg(response_message_group_id)::integer
+  AND response.task_id = sqlc.arg(execution_id)::text
+  AND response.meta ->> 'execution_generation'
+      = sqlc.arg(execution_generation)::text
+RETURNING response.id;

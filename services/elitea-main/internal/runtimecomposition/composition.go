@@ -825,6 +825,14 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// base version, under the caller's folder visibility. Same setter
 		// idiom and admission pool.
 		agentStart = agentStart.WithProjectSkills(repos.NewProjectSkillsRepo(dependencies.AdmissionPool))
+		// A governed continuation that admission refuses settles its paused
+		// turn through the stop's repository (#1485). Only a governed
+		// admission refuses that way, so it is inert with governance off.
+		var governedRefusals agentexecutionapp.GovernedRefusalSettler = agentCancellation
+		if dependencies.ConversationActivity != nil {
+			governedRefusals = activityGovernedRefusalSettler{next: agentCancellation, activity: dependencies.ConversationActivity}
+		}
+		agentStart = agentStart.WithGovernedRefusalSettlement(governedRefusals)
 		// @mention notifications (#977). Same setter idiom, same admission
 		// pool. The composer has always put the tagged users on the wire; the
 		// start route used to REFUSE the field and nothing wrote a row, so a

@@ -284,6 +284,13 @@ func (e pgxExecutor) ProjectCurrentAgentStop(
 	return sqlcgen.New(e.queryer).ProjectCurrentAgentStop(ctx, arg)
 }
 
+func (e pgxExecutor) ProjectGovernedContinuationRefusal(
+	ctx context.Context,
+	arg sqlcgen.ProjectGovernedContinuationRefusalParams,
+) (int32, error) {
+	return sqlcgen.New(e.queryer).ProjectGovernedContinuationRefusal(ctx, arg)
+}
+
 func (e pgxExecutor) IsCurrentAgentCancellationReplay(
 	ctx context.Context,
 	arg sqlcgen.IsCurrentAgentCancellationReplayParams,

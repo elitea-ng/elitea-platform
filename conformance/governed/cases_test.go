@@ -219,10 +219,20 @@ func gov006(ctx context.Context, t *testing.T, w *world) {
 		revoke(agent)
 		// Main re-admits a resume, so the revoked authority refuses it there
 		// with 403 governed_credential_refused and no command is sent. The
-		// pause itself stays until the user stops the turn (#1485); a
-		// resume that was admitted instead must settle without the provider.
+		// refusal settles the paused turn (#1485): the pause keys go and the
+		// answer is an error naming the governed refusal. A resume that was
+		// admitted instead must settle without the provider.
 		switch answer := w.resume(ctx, t, w.user, paused); {
 		case answer.Status == http.StatusForbidden && strings.Contains(string(answer.Body), `"governed_credential_refused"`):
+			last := w.settled(ctx, t, w.user, agent.turnFixture, time.Minute)
+			meta := metadataOf(last)
+			if meta["hitl_interrupts"] != nil || meta["is_error"] != true ||
+				meta["error_code"] != "governed_credential_refused" {
+				t.Fatalf("the refused resume did not settle the paused turn: %s", messageRaw(last))
+			}
+			if again := w.resume(ctx, t, w.user, paused); again.Status < 400 {
+				t.Fatalf("a settled pause accepted another decision: %s", again)
+			}
 		case answer.Status >= 200 && answer.Status < 300:
 			w.settled(ctx, t, w.user, agent.turnFixture, 4*time.Minute)
 		default:

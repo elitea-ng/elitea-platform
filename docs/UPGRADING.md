@@ -4,6 +4,16 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Governance follow-ups
+
+* **elitea-main: a refused governed resume settles its paused turn
+  (#1485).** When a grant, reference or binding is revoked while a governed
+  run waits on an approval, the resume is still refused with `403
+  governed_credential_refused`, and now the turn is settled too: the
+  approval card goes, the answer ends with `is_error`, `error_code:
+  governed_credential_refused` and a reason that names no credential, and
+  the paused job is cancelled. Nothing to configure.
+
 ## P6b
 
 * **Policy revision field `asserted_user_identity_modes` (optional).**
