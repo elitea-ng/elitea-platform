@@ -8,7 +8,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/modelruntoken"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/runtoken"
 )
 
 const (
@@ -25,7 +25,7 @@ const (
 	runtimeContextStagePATValidation     = "pat_validation"
 	runtimeContextStagePrincipalBinding  = "principal_binding"
 	runtimeContextStageSecretsHeader     = "project_secrets_header"
-	runtimeContextStageModelRunToken     = "model_run_token_issuance"
+	runtimeContextStageRunToken          = "run_token_issuance"
 	runtimeContextInitiatorUser          = "user"
 	runtimeContextInitiatorSchedule      = "schedule"
 )
@@ -57,7 +57,7 @@ func runtimeContextUnavailableStage(err error) string {
 		runtimeContextStageExecutionActor,
 		runtimeContextStageExecutionMode,
 		runtimeContextStageActorPATIssuance,
-		runtimeContextStageModelRunToken,
+		runtimeContextStageRunToken,
 		runtimeContextStageSystemPATIssuance,
 		runtimeContextStagePATValidation,
 		runtimeContextStagePrincipalBinding,
@@ -238,23 +238,23 @@ type EliteaClientTokenService struct {
 	validator     ProjectTokenValidator
 	secretsHeader ProjectSecretsHeaderReader
 	workspace     WorkspaceContextResolver
-	modelTokens   ModelRunTokenIssuer
+	runTokens     RunTokenIssuer
 }
 
-// ModelRunTokenIssuer mints a governed run's model run token (#1461,
-// *modelruntoken.Signer): audience the model gateway, bound to the run's
-// claim, valid while its lease is.
-type ModelRunTokenIssuer interface {
-	Issue(binding modelruntoken.Binding) (string, error)
+// RunTokenIssuer mints a governed run's run token (#1461,
+// *runtoken.Signer): audiences the model gateway and the run project's
+// artifacts, bound to the run's claim, valid while its lease is.
+type RunTokenIssuer interface {
+	Issue(binding runtoken.Binding) (string, error)
 }
 
-// WithModelRunTokens makes a governed-pinned run's client token a model run
-// token instead of the actor's personal access token (#1461). Composed with
+// WithRunTokens makes a governed-pinned run's client token a run token
+// instead of the actor's personal access token (#1461). Composed with
 // the governed pins; a legacy-pinned or unpinned run never reaches it, so
 // its response is unchanged. It must be called before the server serves.
-func (s *EliteaClientTokenService) WithModelRunTokens(issuer ModelRunTokenIssuer) *EliteaClientTokenService {
+func (s *EliteaClientTokenService) WithRunTokens(issuer RunTokenIssuer) *EliteaClientTokenService {
 	if s != nil {
-		s.modelTokens = issuer
+		s.runTokens = issuer
 	}
 	return s
 }
@@ -392,13 +392,13 @@ func (s *EliteaClientTokenService) resolveTokenValue(
 	if err != nil {
 		return EliteaClientTokenContext{}, err
 	}
-	if governedRun && s.modelTokens != nil {
-		// A governed run gets a model run token in place of the PAT (#1461):
+	if governedRun && s.runTokens != nil {
+		// A governed run gets a run token in place of the PAT (#1461):
 		// it names the same actor and token row, so usage attributes as
-		// before, but it reaches /llm only and only while this claim's lease
-		// is live. Only a user-initiated run reaches here: a governed
-		// scheduled run was refused above.
-		token, err = s.modelTokens.Issue(modelruntoken.Binding{
+		// before, but it reaches /llm and its project's artifacts only, and
+		// only while this claim's lease is live. Only a user-initiated run
+		// reaches here: a governed scheduled run was refused above.
+		token, err = s.runTokens.Issue(runtoken.Binding{
 			ExecutionID: claim.ExecutionID,
 			Generation:  claim.Generation,
 			ClaimID:     claim.ClaimID,
@@ -408,7 +408,7 @@ func (s *EliteaClientTokenService) resolveTokenValue(
 			TokenID:     tokenID,
 		})
 		if err != nil || len(token) == 0 || len(token) > maxEliteaClientTokenBytes {
-			return EliteaClientTokenContext{}, runtimeContextUnavailable(runtimeContextStageModelRunToken)
+			return EliteaClientTokenContext{}, runtimeContextUnavailable(runtimeContextStageRunToken)
 		}
 	}
 	value := EliteaClientTokenContext{

@@ -11,23 +11,23 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/modelruntoken"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/runtoken"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 )
 
-type modelRunTokenIssuerFunc func(modelruntoken.Binding) (string, error)
+type runTokenIssuerFunc func(runtoken.Binding) (string, error)
 
-func (f modelRunTokenIssuerFunc) Issue(binding modelruntoken.Binding) (string, error) {
+func (f runTokenIssuerFunc) Issue(binding runtoken.Binding) (string, error) {
 	return f(binding)
 }
 
-// #1461: GetEliteaClientToken serves a governed-pinned run a model run token
+// #1461: GetEliteaClientToken serves a governed-pinned run a run token
 // bound to its claim, project, actor and the actor's token row; a
 // legacy-pinned run, an unpinned run and a flag-off deployment get exactly
 // the response they got before, the issuer present or not.
-func TestGovernedRunTokenIsAModelRunToken(t *testing.T) {
+func TestGovernedRunTokenIsARunToken(t *testing.T) {
 	t.Parallel()
-	signer, err := modelruntoken.NewSigner(modelruntoken.DeriveKey([]byte("pat-signing-key")))
+	signer, err := runtoken.NewSigner(runtoken.DeriveKey([]byte("pat-signing-key")))
 	require.NoError(t, err)
 	pinned := func(p profile.Profile, err error) profile.PinReader {
 		return pinReaderFunc(func(_ context.Context, executionID string) (profile.Pin, error) {
@@ -57,9 +57,9 @@ func TestGovernedRunTokenIsAModelRunToken(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			service := newSecretsHeaderTokenService(t, stubProjectSecretsHeader("value"))
-			var issued []modelruntoken.Binding
+			var issued []runtoken.Binding
 			if test.issuer {
-				service.WithModelRunTokens(modelRunTokenIssuerFunc(func(b modelruntoken.Binding) (string, error) {
+				service.WithRunTokens(runTokenIssuerFunc(func(b runtoken.Binding) (string, error) {
 					issued = append(issued, b)
 					return signer.Issue(b)
 				}))
@@ -77,13 +77,15 @@ func TestGovernedRunTokenIsAModelRunToken(t *testing.T) {
 			}
 			var body EliteaClientTokenContext
 			require.NoError(t, json.Unmarshal(response.Body, &body))
-			require.True(t, modelruntoken.HasPrefix(body.Token), "governed token = %q", body.Token)
+			require.True(t, runtoken.HasPrefix(body.Token), "governed token = %q", body.Token)
 			require.NotContains(t, string(response.Body), "header.payload.signature", "the PAT leaked")
 			require.Equal(t, int64(42), body.ProjectID)
 			require.Empty(t, body.SecretsHeaderValue)
-			binding, err := signer.Verify(body.Token)
+			_, err := signer.Verify(body.Token, runtoken.AudienceArtifacts)
+			require.NoError(t, err, "the token reaches the run project's artifacts")
+			binding, err := signer.Verify(body.Token, runtoken.AudienceModelGateway)
 			require.NoError(t, err)
-			require.Equal(t, modelruntoken.Binding{
+			require.Equal(t, runtoken.Binding{
 				ExecutionID: "execution-1", Generation: 1, ClaimID: "claim-1",
 				FenceToken: bytes.Repeat([]byte{1}, sha256.Size),
 				ProjectID:  42, UserID: 900, TokenID: 901,
@@ -97,7 +99,7 @@ func TestGovernedRunTokenIsAModelRunToken(t *testing.T) {
 func TestGovernedRunTokenNeverFallsBackToThePAT(t *testing.T) {
 	t.Parallel()
 	service := newSecretsHeaderTokenService(t, stubProjectSecretsHeader("value"))
-	service.WithModelRunTokens(modelRunTokenIssuerFunc(func(modelruntoken.Binding) (string, error) {
+	service.WithRunTokens(runTokenIssuerFunc(func(runtoken.Binding) (string, error) {
 		return "", errors.New("no key")
 	}))
 	server := newIndexRuntimeContextTestServer(t, service)

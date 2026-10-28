@@ -1,4 +1,4 @@
-package modelruntoken
+package runtoken
 
 import (
 	"context"
@@ -21,7 +21,7 @@ type PostgresLeases struct {
 // NewPostgresLeases returns the reader over store.
 func NewPostgresLeases(store Querier) (*PostgresLeases, error) {
 	if store == nil {
-		return nil, errors.New("modelruntoken: the lease store is required")
+		return nil, errors.New("runtoken: the lease store is required")
 	}
 	return &PostgresLeases{store: store}, nil
 }

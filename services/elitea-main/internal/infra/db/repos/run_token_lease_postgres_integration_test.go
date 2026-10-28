@@ -10,14 +10,14 @@ import (
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/modelruntoken"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/runtoken"
 )
 
-// TestPostgresModelRunTokenLeaseFollowsTheClaim proves a governed run's model
+// TestPostgresRunTokenLeaseFollowsTheClaim proves a governed run's
 // run token (#1461) is live exactly while its claim's lease is: a renewal
 // carries it past the lease it was issued under, and an expired or released
 // lease ends it. Real PostgreSQL; skipped without the integration database.
-func TestPostgresModelRunTokenLeaseFollowsTheClaim(t *testing.T) {
+func TestPostgresRunTokenLeaseFollowsTheClaim(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -68,11 +68,11 @@ WHERE execution_id = $1 AND generation = $2`, frame.Fence.ExecutionID, int64(fra
 			t.Fatal(err)
 		}
 	}
-	leases, err := modelruntoken.NewPostgresLeases(pool)
+	leases, err := runtoken.NewPostgresLeases(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := modelruntoken.Binding{
+	binding := runtoken.Binding{
 		ExecutionID: decision.Lease.Fence.ExecutionID,
 		Generation:  decision.Lease.Fence.Generation,
 		ClaimID:     decision.Lease.ClaimID,
@@ -81,7 +81,7 @@ WHERE execution_id = $1 AND generation = $2`, frame.Fence.ExecutionID, int64(fra
 		UserID:      actorID,
 		TokenID:     1,
 	}
-	live := func(b modelruntoken.Binding) bool {
+	live := func(b runtoken.Binding) bool {
 		t.Helper()
 		ok, err := leases.ClaimLive(ctx, b)
 		if err != nil {
@@ -92,11 +92,11 @@ WHERE execution_id = $1 AND generation = $2`, frame.Fence.ExecutionID, int64(fra
 	if !live(binding) {
 		t.Fatal("a fresh claim's token is not live")
 	}
-	for name, mutate := range map[string]func(*modelruntoken.Binding){
-		"another fence":   func(b *modelruntoken.Binding) { b.FenceToken = make([]byte, 32) },
-		"another project": func(b *modelruntoken.Binding) { b.ProjectID++ },
-		"another actor":   func(b *modelruntoken.Binding) { b.UserID++ },
-		"another claim":   func(b *modelruntoken.Binding) { b.ClaimID += "x" },
+	for name, mutate := range map[string]func(*runtoken.Binding){
+		"another fence":   func(b *runtoken.Binding) { b.FenceToken = make([]byte, 32) },
+		"another project": func(b *runtoken.Binding) { b.ProjectID++ },
+		"another actor":   func(b *runtoken.Binding) { b.UserID++ },
+		"another claim":   func(b *runtoken.Binding) { b.ClaimID += "x" },
 	} {
 		other := binding
 		mutate(&other)

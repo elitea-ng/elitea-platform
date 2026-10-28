@@ -1,4 +1,4 @@
-package modelruntoken
+package runtoken
 
 import (
 	"bytes"
@@ -41,9 +41,9 @@ func TestIssueVerifyRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !HasPrefix(token) || strings.ContainsAny(token, "\r\n\x00 ") {
-		t.Fatalf("token %q is not a header-safe model run token", token)
+		t.Fatalf("token %q is not a header-safe run token", token)
 	}
-	got, err := signer.Verify(token)
+	got, err := signer.Verify(token, AudienceModelGateway)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,13 +77,33 @@ func TestVerifyRefusesForgedTamperedAndExpiredTokens(t *testing.T) {
 		"a PAT JWT":       "eyJhbGciOiJIUzUxMiJ9.e30.sig",
 	}
 	for name, candidate := range cases {
-		if _, err := signer.Verify(candidate); !errors.Is(err, auth.ErrCredentialRejected) {
+		if _, err := signer.Verify(candidate, AudienceModelGateway); !errors.Is(err, auth.ErrCredentialRejected) {
 			t.Fatalf("%s: err = %v, want ErrCredentialRejected", name, err)
 		}
 	}
 	later := testSigner(t, "pat-signing-key", now.Add(MaxLifetime+time.Second))
-	if _, err := later.Verify(token); !errors.Is(err, auth.ErrCredentialRejected) {
+	if _, err := later.Verify(token, AudienceModelGateway); !errors.Is(err, auth.ErrCredentialRejected) {
 		t.Fatalf("past the ceiling: err = %v, want ErrCredentialRejected", err)
+	}
+}
+
+// The token lists both audiences, and each route group checks the one it
+// serves: an audience the token does not list is refused, and so is none.
+func TestVerifyChecksTheRouteGroupAudience(t *testing.T) {
+	signer := testSigner(t, "pat-signing-key", time.Now())
+	token, err := signer.Issue(testBinding())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, audience := range []string{AudienceModelGateway, AudienceArtifacts} {
+		if _, err := signer.Verify(token, audience); err != nil {
+			t.Fatalf("%s: %v", audience, err)
+		}
+	}
+	for _, audience := range []string{"", "elitea-api", "elitea-model-gateway "} {
+		if _, err := signer.Verify(token, audience); !errors.Is(err, auth.ErrCredentialRejected) {
+			t.Fatalf("audience %q: err = %v, want ErrCredentialRejected", audience, err)
+		}
 	}
 }
 
@@ -138,7 +158,7 @@ func TestValidatorFollowsTheLease(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	user, binding, err := validator.ValidateModelRunToken(ctx, token)
+	user, binding, err := validator.ValidateRunToken(ctx, token, AudienceModelGateway)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,28 +172,28 @@ func TestValidatorFollowsTheLease(t *testing.T) {
 		leases.now = leases.now.Add(10 * time.Second)
 		signer.now = func() time.Time { return leases.now }
 		leases.renew(30 * time.Second)
-		if _, _, err := validator.ValidateModelRunToken(ctx, token); err != nil {
+		if _, _, err := validator.ValidateRunToken(ctx, token, AudienceModelGateway); err != nil {
 			t.Fatalf("renewal %d: a renewed lease lost model access: %v", i, err)
 		}
 	}
 
 	// The lease lapses: the token expires with it.
 	leases.now = leases.now.Add(31 * time.Second)
-	if _, _, err := validator.ValidateModelRunToken(ctx, token); !errors.Is(err, auth.ErrCredentialRejected) {
+	if _, _, err := validator.ValidateRunToken(ctx, token, AudienceModelGateway); !errors.Is(err, auth.ErrCredentialRejected) {
 		t.Fatalf("expired lease: err = %v, want ErrCredentialRejected", err)
 	}
 
 	// A released claim ends it even with lease time left.
 	leases.renew(30 * time.Second)
 	leases.released = true
-	if _, _, err := validator.ValidateModelRunToken(ctx, token); !errors.Is(err, auth.ErrCredentialRejected) {
+	if _, _, err := validator.ValidateRunToken(ctx, token, AudienceModelGateway); !errors.Is(err, auth.ErrCredentialRejected) {
 		t.Fatalf("released claim: err = %v, want ErrCredentialRejected", err)
 	}
 
 	// A store fault is not a refusal.
 	leases.released = false
 	leases.err = errors.New("pool timeout")
-	if _, _, err := validator.ValidateModelRunToken(ctx, token); !errors.Is(err, auth.ErrCredentialValidationUnavailable) {
+	if _, _, err := validator.ValidateRunToken(ctx, token, AudienceModelGateway); !errors.Is(err, auth.ErrCredentialValidationUnavailable) {
 		t.Fatalf("store fault: err = %v, want ErrCredentialValidationUnavailable", err)
 	}
 }

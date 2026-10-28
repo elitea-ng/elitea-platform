@@ -1,16 +1,21 @@
-// Package modelruntoken is the model-gateway-scoped client token of a
-// governed run (ADR-0039 follow-up, #1461).
+// Package runtoken is the run-scoped client token of a governed run
+// (ADR-0039 follow-up, #1461).
 //
-// A governed run's worker uses its client token for the model path only: LLM
-// calls, embeddings, images and metering, all /llm routes. Its toolkit
+// A governed run's worker uses its client token for two things only: the
+// model path (LLM calls, embeddings, images and metering, all /llm routes)
+// and the run project's artifact store (the Office host and indexing from
+// platform artifacts, through ArtifactObjectService). Its toolkit
 // credentials come from RedeemCredential (#1118). Handing it the execution
 // actor's ordinary personal access token therefore gave it far more than it
 // uses, so GetEliteaClientToken serves a governed-pinned run this token
 // instead:
 //
-//   - AUDIENCE. It is accepted on the /llm routes only. Every other route of
-//     the Auth middleware answers 403 for it; any other reader of bearer
-//     credentials does not know the format and refuses it.
+//   - AUDIENCES. The token lists its audiences (AudienceModelGateway,
+//     AudienceArtifacts), and each route group that accepts it names the one
+//     audience it serves; the validator checks that audience per request.
+//     Every other route of the Auth middleware answers 403 for it, and any
+//     other reader of bearer credentials does not know the format and
+//     refuses it.
 //   - CLAIM-BOUND. It names the run's claim (claim id, execution, generation
 //     and fence) and is accepted only while that claim is unreleased and its
 //     lease unexpired, read from PostgreSQL on every request. It therefore
@@ -18,19 +23,20 @@
 //     extends lease_expires_at and keeps the claim id and fence token, so the
 //     one token the worker redeemed at assembly carries a long turn through.
 //     A signed ceiling (MaxLifetime) bounds it even if a claim row lingers.
+//   - ONE PROJECT. It names the run's project; the edge refuses a request
+//     that names any other.
 //   - SAME ATTRIBUTION. It resolves to the execution actor and the actor's
 //     personal access token row the ordinary token would have named, so the
-//     principal check, the project membership check, the execution-id check
-//     and the gateway's signed identity are the ones a PAT caller gets, and
-//     usage bills the same project and actor. It names its project and
-//     execution, and the edge refuses a selector that names another.
+//     principal check, the RBAC and membership checks, the execution-id
+//     check and the gateway's signed identity are the ones a PAT caller
+//     gets, and usage bills the same project and actor.
 //
 // The token is `elmrt_<payload>.<mac>`: base64url JSON claims and an
 // HMAC-SHA256 over the prefixed payload. The key is derived from the
 // deployment's personal access token signing key (DeriveKey), so it needs no
 // new secret, and a PAT JWT verifier can never accept it (and vice versa):
 // the formats and keys differ.
-package modelruntoken
+package runtoken
 
 import (
 	"context"
@@ -41,6 +47,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -48,12 +55,20 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
-// Prefix marks a model run token. Restated nowhere else: the middleware and
-// the issuer both read it from here.
+// Prefix marks a run token.
 const Prefix = "elmrt_"
 
-// Audience is the one audience a model run token carries.
-const Audience = "elitea-model-gateway"
+// The audiences a run token carries, one per route group that accepts it.
+const (
+	// AudienceModelGateway is the /llm route group.
+	AudienceModelGateway = "elitea-model-gateway"
+	// AudienceArtifacts is the run project's artifact routes the worker's
+	// ArtifactObjectService calls reach.
+	AudienceArtifacts = "elitea-artifacts"
+)
+
+// audiences is what Issue signs: every audience, in this order.
+var audiences = []string{AudienceModelGateway, AudienceArtifacts}
 
 // MaxLifetime is the signed ceiling. The lease is the real expiry; this only
 // bounds a token whose claim row outlived its run. It equals the runtime's
@@ -66,14 +81,14 @@ const minKeyBytes = 32
 // maxTokenBytes bounds what Verify reads before decoding anything.
 const maxTokenBytes = 4096
 
-const tokenVersion = 1
+const tokenVersion = 2
 
 // keyDerivationLabel separates this key from every other use of the secret
 // it is derived from.
-const keyDerivationLabel = "elitea/model-run-token/v1"
+const keyDerivationLabel = "elitea/run-token/v1"
 
-// Binding is what a model run token names: the run's claim, its project and
-// its actor (with the actor's personal access token row).
+// Binding is what a run token names: the run's claim, its project and its
+// actor (with the actor's personal access token row).
 type Binding struct {
 	ExecutionID string
 	Generation  uint64
@@ -93,21 +108,21 @@ func (b Binding) valid() bool {
 }
 
 type claims struct {
-	Version     int    `json:"v"`
-	Audience    string `json:"aud"`
-	ExecutionID string `json:"exe"`
-	Generation  uint64 `json:"gen"`
-	ClaimID     string `json:"cid"`
-	Fence       string `json:"fen"`
-	ProjectID   int64  `json:"prj"`
-	UserID      int64  `json:"uid"`
-	TokenID     int64  `json:"tid"`
-	IssuedAt    int64  `json:"iat"`
-	ExpiresAt   int64  `json:"exp"`
+	Version     int      `json:"v"`
+	Audiences   []string `json:"aud"`
+	ExecutionID string   `json:"exe"`
+	Generation  uint64   `json:"gen"`
+	ClaimID     string   `json:"cid"`
+	Fence       string   `json:"fen"`
+	ProjectID   int64    `json:"prj"`
+	UserID      int64    `json:"uid"`
+	TokenID     int64    `json:"tid"`
+	IssuedAt    int64    `json:"iat"`
+	ExpiresAt   int64    `json:"exp"`
 }
 
-// DeriveKey derives the model run token key from secret (the deployment's
-// personal access token signing key). It returns nil for an empty secret.
+// DeriveKey derives the run token key from secret (the deployment's personal
+// access token signing key). It returns nil for an empty secret.
 func DeriveKey(secret []byte) []byte {
 	if len(secret) == 0 {
 		return nil
@@ -117,7 +132,7 @@ func DeriveKey(secret []byte) []byte {
 	return mac.Sum(nil)
 }
 
-// Signer issues and verifies model run tokens under one key.
+// Signer issues and verifies run tokens under one key.
 type Signer struct {
 	key []byte
 	now func() time.Time
@@ -126,23 +141,23 @@ type Signer struct {
 // NewSigner returns a signer over key (see DeriveKey).
 func NewSigner(key []byte) (*Signer, error) {
 	if len(key) < minKeyBytes {
-		return nil, errors.New("modelruntoken: the signing key is too short")
+		return nil, errors.New("runtoken: the signing key is too short")
 	}
 	return &Signer{key: append([]byte(nil), key...), now: time.Now}, nil
 }
 
-// Issue mints the token for binding.
+// Issue mints the token for binding, for every audience.
 func (s *Signer) Issue(binding Binding) (string, error) {
 	if s == nil {
-		return "", errors.New("modelruntoken: no signer")
+		return "", errors.New("runtoken: no signer")
 	}
 	if !binding.valid() {
-		return "", errors.New("modelruntoken: the binding is incomplete")
+		return "", errors.New("runtoken: the binding is incomplete")
 	}
 	now := s.now()
 	payload, err := json.Marshal(claims{
 		Version:     tokenVersion,
-		Audience:    Audience,
+		Audiences:   audiences,
 		ExecutionID: binding.ExecutionID,
 		Generation:  binding.Generation,
 		ClaimID:     binding.ClaimID,
@@ -154,16 +169,16 @@ func (s *Signer) Issue(binding Binding) (string, error) {
 		ExpiresAt:   now.Add(MaxLifetime).Unix(),
 	})
 	if err != nil {
-		return "", fmt.Errorf("modelruntoken: encode: %w", err)
+		return "", fmt.Errorf("runtoken: encode: %w", err)
 	}
 	body := Prefix + base64.RawURLEncoding.EncodeToString(payload)
 	return body + "." + base64.RawURLEncoding.EncodeToString(s.mac(body)), nil
 }
 
-// Verify checks the token's signature, audience and signed ceiling. It does
-// not read the lease: Validator does. Every refusal wraps
-// auth.ErrCredentialRejected.
-func (s *Signer) Verify(token string) (Binding, error) {
+// Verify checks the token's signature, that it carries audience, and its
+// signed ceiling. It does not read the lease: Validator does. Every refusal
+// wraps auth.ErrCredentialRejected.
+func (s *Signer) Verify(token, audience string) (Binding, error) {
 	if s == nil || !HasPrefix(token) || len(token) > maxTokenBytes {
 		return Binding{}, rejected("malformed")
 	}
@@ -184,7 +199,7 @@ func (s *Signer) Verify(token string) (Binding, error) {
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		return Binding{}, rejected("malformed")
 	}
-	if decoded.Version != tokenVersion || decoded.Audience != Audience {
+	if decoded.Version != tokenVersion || audience == "" || !slices.Contains(decoded.Audiences, audience) {
 		return Binding{}, rejected("audience")
 	}
 	now := s.now().Unix()
@@ -217,12 +232,12 @@ func (s *Signer) mac(body string) []byte {
 	return mac.Sum(nil)
 }
 
-// HasPrefix reports whether token is shaped as a model run token. It is the
-// test the Auth middleware applies before any validator runs.
+// HasPrefix reports whether token is shaped as a run token. It is the test
+// the Auth middleware applies before any validator runs.
 func HasPrefix(token string) bool { return strings.HasPrefix(token, Prefix) }
 
 func rejected(reason string) error {
-	return fmt.Errorf("%w: model run token %s", auth.ErrCredentialRejected, reason)
+	return fmt.Errorf("%w: run token %s", auth.ErrCredentialRejected, reason)
 }
 
 // LeaseReader answers whether the binding's claim is live: unreleased, its
@@ -232,7 +247,7 @@ type LeaseReader interface {
 	ClaimLive(ctx context.Context, binding Binding) (bool, error)
 }
 
-// Validator authenticates a model run token: signature, audience and ceiling
+// Validator authenticates a run token: signature, audience and ceiling
 // (Signer), then the live claim (LeaseReader) on every request.
 type Validator struct {
 	signer *Signer
@@ -242,28 +257,28 @@ type Validator struct {
 // NewValidator composes the validator.
 func NewValidator(signer *Signer, leases LeaseReader) (*Validator, error) {
 	if signer == nil || leases == nil {
-		return nil, errors.New("modelruntoken: the signer and the lease reader are required")
+		return nil, errors.New("runtoken: the signer and the lease reader are required")
 	}
 	return &Validator{signer: signer, leases: leases}, nil
 }
 
-// ValidateModelRunToken returns the principal the token names and its
-// binding. The principal is shaped as a validated personal access token
-// principal (the actor and the actor's token row), so the principal
-// validator re-reads both and a suspended actor or revoked token loses
-// model access too. A refusal wraps auth.ErrCredentialRejected; a store
-// fault wraps auth.ErrCredentialValidationUnavailable.
-func (v *Validator) ValidateModelRunToken(ctx context.Context, token string) (auth.User, Binding, error) {
+// ValidateRunToken returns the principal the token names and its binding,
+// for a route group serving audience. The principal is shaped as a validated
+// personal access token principal (the actor and the actor's token row), so
+// the principal validator re-reads both and a suspended actor or revoked
+// token loses access too. A refusal wraps auth.ErrCredentialRejected; a
+// store fault wraps auth.ErrCredentialValidationUnavailable.
+func (v *Validator) ValidateRunToken(ctx context.Context, token, audience string) (auth.User, Binding, error) {
 	if v == nil {
 		return auth.User{}, Binding{}, rejected("validator absent")
 	}
-	binding, err := v.signer.Verify(token)
+	binding, err := v.signer.Verify(token, audience)
 	if err != nil {
 		return auth.User{}, Binding{}, err
 	}
 	live, err := v.leases.ClaimLive(ctx, binding)
 	if err != nil {
-		return auth.User{}, Binding{}, fmt.Errorf("%w: model run token lease: %w",
+		return auth.User{}, Binding{}, fmt.Errorf("%w: run token lease: %w",
 			auth.ErrCredentialValidationUnavailable, err)
 	}
 	if !live {

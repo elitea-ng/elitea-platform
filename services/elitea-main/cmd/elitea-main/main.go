@@ -884,10 +884,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if credentialBroker != nil {
 		runtimeCredentialBroker = credentialBroker
 	}
-	// A governed run's client token is scoped to the model gateway (#1461):
-	// the issuer for the content server, the validator for /llm. Empty with
-	// the flag off.
-	modelRunTokens, err := modelRunTokensAtBoot(credentialAdmission, formGraph, pool)
+	// A governed run's client token is scoped to the model gateway and its
+	// project's artifacts (#1461): the issuer for the content server, the
+	// validator for those routes. Empty with the flag off.
+	runTokens, err := runTokensAtBoot(credentialAdmission, formGraph, pool)
 	if err != nil {
 		return err
 	}
@@ -2089,7 +2089,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ActorTokenIssuer:                 runtimeActorTokens,
 			ProjectTokenValidator:            runtimeProjectTokens,
 			ProjectSystemTokenSource:         runtimeSystemTokens,
-			ModelRunTokens:                   modelRunTokens.Issuer,
+			RunTokens:                        runTokens.Issuer,
 			// elitea-vector's token introspection (ADR-0031) reads callback
 			// grants over the main pool, where the minting facades write them.
 			CallbackTokenFacts: dbrepos.NewCallbackTokenGrants(pool),
@@ -2917,7 +2917,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CurrentModelDefault:            currentModelDefault,
 		GatewayProxy:                   gatewayProxy,
 		GatewayProjectResolver:         gatewayProjectResolver,
-		ModelRunTokens:                 modelRunTokens.Validator,
+		RunTokens:                      runTokens.Validator,
 		ConfigConnectionChecker:        configConnectionChecker,
 		PredictCompleter:               predictCompleter,
 		GatewayStatus:                  gatewayStatus,

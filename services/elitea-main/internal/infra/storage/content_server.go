@@ -507,9 +507,10 @@ func (s *ContentServer) GetEliteaClientToken(ctx context.Context, request *runti
 	}
 	// A governed run's toolkit credentials come only from RedeemCredential
 	// (#1118), so its response carries no secrets-header value. The worker
-	// uses the token for the model path only, so a governed run's token is a
-	// model run token (#1461): accepted on /llm alone, while this claim's
-	// lease is live. A deployment that never ran governed reads no pin.
+	// uses the token for the model path and its project's artifacts only, so
+	// a governed run's token is a run token (#1461): accepted there alone,
+	// while this claim's lease is live. A deployment that never ran governed
+	// reads no pin.
 	governed, err := s.governedRun(ctx, claim.ExecutionID)
 	if err != nil {
 		s.logger.WarnContext(ctx, "runtime context unavailable", "stage", "credential_profile_pin")

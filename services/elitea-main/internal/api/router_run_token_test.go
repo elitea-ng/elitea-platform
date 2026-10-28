@@ -9,29 +9,29 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/modelruntoken"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/runtoken"
 )
 
 type liveLeases struct{}
 
-func (liveLeases) ClaimLive(context.Context, modelruntoken.Binding) (bool, error) { return true, nil }
+func (liveLeases) ClaimLive(context.Context, runtoken.Binding) (bool, error) { return true, nil }
 
-// TestRouterScopesAModelRunTokenToTheModelGateway is the #1461 acceptance at
-// the composed router: a governed run's token reaches the /llm proxy and is
+// TestRouterScopesARunTokenToItsRouteGroups is the #1461 acceptance at
+// the composed router: a governed run's run token reaches the /llm proxy and is
 // refused with 403 on an /api/v2 route, with the same RouterConfig.
-func TestRouterScopesAModelRunTokenToTheModelGateway(t *testing.T) {
-	signer, err := modelruntoken.NewSigner(modelruntoken.DeriveKey([]byte("pat-signing-key")))
+func TestRouterScopesARunTokenToItsRouteGroups(t *testing.T) {
+	signer, err := runtoken.NewSigner(runtoken.DeriveKey([]byte("pat-signing-key")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := signer.Issue(modelruntoken.Binding{
+	token, err := signer.Issue(runtoken.Binding{
 		ExecutionID: "exec-1", Generation: 1, ClaimID: "claim-1",
 		FenceToken: bytes.Repeat([]byte{1}, 32), ProjectID: 42, UserID: 9, TokenID: 11,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	validator, err := modelruntoken.NewValidator(signer, liveLeases{})
+	validator, err := runtoken.NewValidator(signer, liveLeases{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestRouterScopesAModelRunTokenToTheModelGateway(t *testing.T) {
 	cfg := buildGatewayRouterConfig(t, &stubTokenValidator{user: auth.User{
 		ID: "9", UserID: "9", TokenID: "11", AuthType: "token",
 	}}, &stubProjectResolver{id: 42}, proxy)
-	cfg.ModelRunTokens = validator
+	cfg.RunTokens = validator
 	router := api.NewRouter(cfg)
 
 	request := httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions", nil)

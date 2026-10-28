@@ -6,18 +6,19 @@ newest entry is first.
 
 ## Governance follow-ups
 
-* **elitea-main: a governed run's worker gets a model-only token (#1461,
+* **elitea-main: a governed run's worker gets a run-scoped token (#1461,
   governed runs only).** With credential governance on, a run pinned to the
   governed profile no longer receives its user's personal access token.
-  It receives an `elmrt_` model run token instead. The token works only
-  on `/llm`, for the run's project and execution, while the run's claim
-  holds its lease, and every other route answers 403 for it. Model usage
-  is billed to the same project and user as before. No new key or
-  setting: the token key is derived from the personal access token
-  signing key. Legacy-pinned runs and deployments with the flag off are
-  unchanged. A governed run can no longer use the platform artifact store
-  through that token, so the Office tools and indexing from artifacts are
-  refused in governed runs.
+  It receives an `elmrt_` run token instead. The token reaches the model
+  gateway (`/llm`) and the run project's artifacts, nothing else. On
+  artifacts it works only on the worker's five routes (create bucket, list
+  objects, upload, download, stat). It works only for the run's project
+  and execution, while the run's claim holds its lease. A request naming
+  another project, and every other route, answers 403 for it. Model usage
+  and artifact access are attributed to the same project and user as
+  before. No new key or setting: the token key is derived from the
+  personal access token signing key. Legacy-pinned runs and deployments
+  with the flag off are unchanged.
 
 ## P6b
 
