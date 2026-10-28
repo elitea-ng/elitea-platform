@@ -139,6 +139,10 @@ type CurrentToolkitSettingsRequest struct {
 	ProjectID   int32
 	UserID      int32
 	Mode        CurrentToolkitSettingsMode
+	// RefuseCredentialReference refuses a configuration reference that names
+	// a governed CredentialReference (the toolkit write path: only the
+	// governed admin API writes one). Readers leave it false and ignore it.
+	RefuseCredentialReference bool
 }
 
 // CurrentToolkitSettingsResolver ports the current schema-driven expansion
@@ -445,7 +449,20 @@ func (w *currentToolkitSettingsWalker) resolveConfigurationField(
 		return nil
 	}
 	reference, ok := value.(map[string]any)
-	if !ok || len(reference) != 2 {
+	// A stored reference may also name its governed CredentialReference
+	// (CredentialReferenceIDField, #1119). The legacy expansion ignores it:
+	// it is dropped from the walker's clone below, so the expanded output is
+	// the title-only reference's. The toolkit write path still refuses it
+	// (RefuseCredentialReference): only the governed admin API writes it.
+	size := len(reference)
+	if id, present := reference[CredentialReferenceIDField]; ok && present {
+		if _, text := id.(string); !text || w.request.RefuseCredentialReference {
+			w.addViolation(fieldPath, CurrentToolkitConfigurationReferenceInvalidCode)
+			return nil
+		}
+		size--
+	}
+	if !ok || size != 2 {
 		w.addViolation(fieldPath, CurrentToolkitConfigurationReferenceInvalidCode)
 		return nil
 	}
@@ -462,6 +479,7 @@ func (w *currentToolkitSettingsWalker) resolveConfigurationField(
 	if err != nil {
 		return err
 	}
+	delete(ownedReference, CredentialReferenceIDField)
 	userID := w.request.UserID
 	expanded, err := w.resolver.configurations.Expand(ctx, CurrentExpansionRequest{
 		Payload:          ownedReference,

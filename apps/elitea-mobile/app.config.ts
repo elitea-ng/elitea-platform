@@ -180,7 +180,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     supportsTablet: true,
     // Resizable on iPad (see `orientation` above); never set this true, it would lock iPad to portrait.
     requireFullScreen: false,
-    // Icon Composer document: light and dark gradient fills; the system derives Dark, Tinted, Clear.
+    // Icon Composer document: the mark on a solid Ink fill; the system derives Dark, Tinted, Clear.
     icon: './assets/elitea.icon',
     infoPlist: {
       // iOS names the app by CFBundleName in system prompts, e.g. the sign-in sheet's
@@ -202,7 +202,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     package: identity.bundleId,
     allowBackup: false,
     adaptiveIcon: {
-      backgroundColor: '#F4F6F9',
+      backgroundColor: '#0B0B18',
       foregroundImage: './assets/images/android-icon-foreground.png',
       backgroundImage: './assets/images/android-icon-background.png',
       monochromeImage: './assets/images/android-icon-monochrome.png',
@@ -228,12 +228,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     [
       'expo-splash-screen',
       {
-        // The `background` tokens (src/design/tokens.ts), so the splash hands over without a flash.
-        backgroundColor: '#FBF7F9',
+        // The `background` tokens (src/design/tokens.ts: Paper light, Ink dark), so the splash hands
+        // over to the first screen without a flash.
+        backgroundColor: '#FFFFFF',
         image: './assets/images/splash-icon.png',
         imageWidth: 200,
         resizeMode: 'contain',
-        dark: { backgroundColor: '#141118', image: './assets/images/splash-icon.png' },
+        dark: { backgroundColor: '#0B0B18', image: './assets/images/splash-icon.png' },
       },
     ],
     // iOS crashes on Face ID use without NSFaceIDUsageDescription.

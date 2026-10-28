@@ -115,6 +115,7 @@ fn policy() -> CompactionPolicy {
         keep_recent_tokens: 1_000,
         fresh_window: true,
         guidance: String::new(),
+        ..CompactionPolicy::default()
     }
 }
 
@@ -983,4 +984,123 @@ fn an_image_costs_what_a_provider_bills_not_its_bytes() {
         content_tokens(&text),
         estimate_tokens(serde_json::to_string(&text).unwrap().len())
     );
+}
+
+#[test]
+fn a_threshold_only_moves_the_trigger_earlier() {
+    let budget = |window: u32| {
+        let limits = ModelContextLimits {
+            context_window_tokens: window,
+            max_output_tokens: 4_096,
+            context_window_fallback: false,
+            max_output_fallback: false,
+            max_input_tokens: None,
+        };
+        RequestContextBudget::resolve(Some(limits), &Map::new(), Some(4_096))
+            .unwrap()
+            .unwrap()
+    };
+    let large = budget(200_000);
+    let near = CompactionPolicy::default().trigger_tokens(&large);
+    let input = u64::from(large.input_limit);
+    let at = |percent: u8| CompactionPolicy {
+        threshold_percent: Some(percent),
+        ..CompactionPolicy::default()
+    };
+    // 60% of the usable input, well before `window − reserve`.
+    assert_eq!(at(60).trigger_tokens(&large), input * 60 / 100);
+    assert!(at(60).trigger_tokens(&large) < near);
+    // 99% of the usable input is past the near-limit trigger: the default wins.
+    assert!(input * 99 / 100 > near, "{input} {near}");
+    assert_eq!(at(99).trigger_tokens(&large), near);
+    // The kept tail follows the earlier trigger (at most half of it).
+    let small = budget(16_000);
+    let early = at(40);
+    assert_eq!(
+        early.trigger_tokens(&small),
+        u64::from(small.input_limit) * 40 / 100
+    );
+    assert_eq!(
+        early.keep_recent_for(&small),
+        early.trigger_tokens(&small) / 2
+    );
+}
+
+#[tokio::test]
+async fn without_automatic_compaction_only_an_asked_one_folds() {
+    let manual = |summarizer: Arc<Summarizer>, host: Arc<Host>| {
+        Arc::new(StepCompaction::new(
+            CompactionPolicy {
+                automatic: false,
+                ..policy()
+            },
+            budget(8_000),
+            summarizer,
+            host,
+        ))
+    };
+    // Past the trigger: sent as it is, measured, nothing summarised.
+    let summarizer = Summarizer::answering(&[]);
+    let host = Arc::new(Host::default());
+    let compaction = manual(summarizer.clone(), host.clone());
+    let contents = session(6, 3, 2_000);
+    let prepared = compaction
+        .prepare(LlmRequest::new("m", contents.clone()), false)
+        .await
+        .unwrap();
+    assert!(same_all(&prepared.contents, &contents));
+    assert_eq!(summarizer.asked().len(), 0);
+    assert_eq!(
+        host.phases.lock().unwrap().as_slice(),
+        [ContextPhase::Measured]
+    );
+    // `/compact` still folds.
+    let summarizer = Summarizer::answering(&[&summary("Fix it.")]);
+    let compaction = manual(summarizer.clone(), Arc::new(Host::default()));
+    compaction.force_next();
+    let prepared = compaction
+        .prepare(LlmRequest::new("m", contents.clone()), false)
+        .await
+        .unwrap();
+    assert_eq!(summarizer.asked().len(), 1);
+    assert!(summary_of(&prepared.contents[0]).is_some());
+}
+
+#[test]
+fn a_hosts_fold_is_the_one_a_step_compaction_would_make() {
+    let contents = session(6, 3, 2_000);
+    let limits = budget(8_000).0;
+    let cut = fold_point(&contents, &policy(), &limits).unwrap();
+    assert!(is_turn_start(&contents[cut]));
+    assert!(contents_tokens(&contents[cut..]) >= policy().keep_recent_for(&limits));
+    let folded = folded_compaction(&contents, cut, summary("Fix the build."));
+    assert_eq!(folded.covered_events, cut);
+    assert_eq!(folded.events_digest, history_digest(&contents[..cut]));
+    assert!(folded.based_on.is_none() && !folded.forced);
+    assert!(summary_of(&folded.summary_content).is_some());
+    // From a stored summary: it is the base, not covered again.
+    let mut resumed = vec![folded.summary_content.clone()];
+    resumed.extend_from_slice(&contents[cut..]);
+    resumed.extend(session(4, 3, 2_000));
+    let again = fold_point(&resumed, &policy(), &limits).unwrap();
+    let next = folded_compaction(&resumed, again, summary("Fix the build."));
+    assert!(same_content(
+        next.based_on.as_ref().unwrap(),
+        &folded.summary_content
+    ));
+    assert_eq!(next.covered_events, again - 1);
+    assert_eq!(next.events_digest, history_digest(&resumed[1..again]));
+    // Nothing complete to fold.
+    assert!(fold_point(&contents[..1], &policy(), &limits).is_none());
+}
+
+#[test]
+fn the_continuation_prompt_keeps_the_contract_without_a_source_block() {
+    let prompt = context_summary::continuation_prompt("Keep ticket ids. {messages}");
+    assert!(prompt.contains(context_summary::CONTRACT));
+    assert!(prompt.contains("the conversation above"));
+    assert!(prompt.contains("do not call any tool"));
+    assert!(!prompt.contains("<source_records>"));
+    assert!(!prompt.contains("{messages}") && !prompt.contains("{conversation_history}"));
+    assert!(prompt.contains("Keep ticket ids."));
 }

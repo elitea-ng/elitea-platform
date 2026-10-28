@@ -326,23 +326,14 @@ const Onboarding = memo(() => {
                   return {
                     color: baseColor,
                     fontWeight: 600,
-                    // `baseColor` is a `var(--el-...)` ref, so the old
-                    // `${baseColor}55` hex-alpha suffix is invalid CSS here;
-                    // `transparent` stands in as the faded stop.
-                    background: `linear-gradient(90deg, transparent 0%, ${baseColor} 21.15%, transparent 100%)`,
-                    backgroundSize: '200% 100%',
-                    backgroundClip: 'text',
-                    WebkitBackgroundClip: 'text',
-                    WebkitTextFillColor: 'transparent',
-                    animation: 'shimmer 4s infinite linear',
+                    // A flat opacity pulse, not a gradient shimmer (brand
+                    // guide v3: flat UI); off under prefers-reduced-motion.
+                    animation: 'shimmer 4s infinite ease-in-out',
                     '@keyframes shimmer': {
-                      '0%': {
-                        backgroundPosition: '200% 0',
-                      },
-                      '100%': {
-                        backgroundPosition: '-200% 0',
-                      },
+                      '0%, 100%': { opacity: 1 },
+                      '50%': { opacity: 0.55 },
                     },
+                    '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
                   };
                 }}
                 variant="headingSmall"

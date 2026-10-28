@@ -23,7 +23,7 @@ import { useDesign } from '@/design/DesignProvider';
 
 export type EliteaMarkVariant = 'mark' | 'avatar';
 
-export const ELITEA_MARK_NAME: string = DEFAULT_PRODUCT.name;
+export const ELITEA_MARK_NAME: string = DEFAULT_PRODUCT.shortName;
 
 /** Minimum rendered size (pt). */
 export const ELITEA_MARK_MIN_SIZE = 24;

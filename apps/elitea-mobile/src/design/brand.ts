@@ -1,14 +1,15 @@
 import { BLACK, WHITE, contrastRatio, formatColor, parseColor, type Rgba } from '@/theme/color';
 
-import { accentGrounds, minContrast, rgb } from './contrast';
+import { accentGrounds, minContrast } from './contrast';
 import { fromOklch, toOklch } from './oklch';
 import { BRAND_TARGETS, colors as baseColors, type BrandOverridableKey, type Scheme, type SemanticColors } from './tokens';
 
 /**
  * Workspace brand → Elitea AI token overrides (docs/design-system.md §3).
  *
- * A brand only *accents* the app: it changes the accent family, the user
- * bubble, the selected chip and a tint of the gradient and orb. Neutrals,
+ * A brand only *accents* the app: it changes the accent family, the primary
+ * fill, the user bubble and the selected chip. The ground stays flat (brand
+ * guide v3: no gradients). Neutrals,
  * status colours and focus never come from a brand. A brand colour that is
  * too weak is not dropped but corrected: its OKLCH lightness moves (darker
  * on light, lighter on dark) until it reaches 4.5:1 on every ground it can
@@ -83,12 +84,7 @@ export function brandOverrides(
   preferredOn: Rgba | null = null,
   base: SemanticColors = baseColors[scheme],
 ): BrandOverrides | null {
-  // Gradient tint: stop 0 takes the brand hue, kept only while tertiary text still reads on it.
-  // The accent is then corrected against the tinted stop too (§3.3, "incl. tinted stop").
-  const tint = fromOklch({ l: scheme === 'light' ? 0.94 : 0.19, c: 0.03, h: toOklch(brand).h });
-  const tinted = contrastRatio(rgb(base.textTertiary), tint) >= BRAND_TARGETS.tintTertiary;
-  const grounds = tinted ? [...accentGrounds(base), tint] : accentGrounds(base);
-  const corrected = correctAccent(brand, scheme, preferredOn, grounds);
+  const corrected = correctAccent(brand, scheme, preferredOn, accentGrounds(base));
   if (!corrected) return null;
   const { accent, on } = corrected;
   const { l, c, h } = toOklch(accent);
@@ -112,21 +108,15 @@ export function brandOverrides(
     accentOn: formatColor(on),
     accentSoft: formatColor(soft),
     accentSoftOn: formatColor(softOn),
+    // The brand's colour is also the primary fill: one action colour per workspace.
+    primary: formatColor(accent),
+    primaryPressed: formatColor(pressed),
+    primaryOn: formatColor(on),
     bubbleUser: formatColor(bubble),
     bubbleUserText: formatColor(bestOn(bubble)),
     chipSelected: formatColor(soft),
     chipSelectedText: formatColor(softOn),
   };
-
-  if (tinted) {
-    const [, s1, s2] = base.backgroundGradient.stops;
-    out.backgroundGradient = { ...base.backgroundGradient, stops: [formatColor(tint), s1, s2] };
-  }
-
-  // Orb tint (decorative): stop 0 at its own lightness and chroma, in the brand hue.
-  const orb0 = toOklch(rgb(base.orb.stops[0]));
-  const [, o1, o2] = base.orb.stops;
-  out.orb = { ...base.orb, stops: [formatColor(fromOklch({ l: orb0.l, c: orb0.c, h })), o1, o2] };
   return out;
 }
 
@@ -150,7 +140,7 @@ function solid(value: string | null | undefined): Rgba | null {
 /**
  * Overrides for both schemes (§3.4): each scheme reads its own accent; when
  * only one scheme has one, the other is derived from it; else `hue`; else
- * nothing (product rose stays). `productDefault` means no colour override at all.
+ * nothing (the product default stays). `productDefault` means no colour override at all.
  */
 export function resolveBrand(input: BrandInput | null): Record<Scheme, BrandOverrides> {
   const none = { light: {}, dark: {} };

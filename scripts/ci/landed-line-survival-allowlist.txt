@@ -9,3 +9,5 @@
 682 apps/elitea-web/package-lock.json  # same revert (#765): the lock entries the bump added go with it
 667 libs/proto/pyproject.toml  # #778 reverted the protobuf 7.36.0 pin on purpose: the Python worker requires protobuf <7 and pip could not resolve the two together
 1301 apps/elitea-web/src/pages/workspace/useThreadHistory.ts  # #1325 un-exported serverMessages on purpose: nothing imported it, and the function is still used inside the file
+1448 apps/elitea-web/src/features/chat-messages/ui/chat-box/ChatMessageList.types.ts  # #1459 turned the steering prop into a flag on purpose: the list reads the steering store itself and Stop and send moved into the composer queue's Send now; steering messages still show under each answer
+1433 apps/elitea-web/src/pages/workspace/useSessionCommands.ts  # #1472 moved idle compaction to the desktop host on purpose: the web-side armIdleCompact/cancelCompact and the compactIdle notice it replaced have no caller left

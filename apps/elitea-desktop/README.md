@@ -341,9 +341,19 @@ cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo
 ```
 
 `tauri build` runs `npm run build:desktop` in `apps/elitea-web` first.
-Icons are the brand mark rasterised with
-`npx tauri icon ../elitea-web/public/brand/logo-mark.svg -o src-tauri/icons --fit contain`
-(keep the six files `tauri.conf.json` lists).
+Icons are the Elitea AI LE-03 mark (brand guide v3) from the approved LE-03 icon pack,
+**colored-dark** variant (the mark on Ink `#0B0B18`), never re-drawn here. Keep the files
+`tauri.conf.json` lists, plus `tray-template.png`:
+
+| File | Source in the pack (`colored-dark/`) |
+|---|---|
+| `32x32.png`, `128x128.png`, `128x128@2x.png` (256), `icon.png` (512) | `macos/…-macos-{32,128,256,512}.png` (squircle masters, alpha) |
+| `icon.icns` | `iconutil -c icns` over an `.iconset` of `macos/` 16…1024 (`icon_16x16` 16, `@2x` 32, `icon_32x32` 32, `@2x` 64, `icon_128x128` 128, `@2x` 256, `icon_256x256` 256, `@2x` 512, `icon_512x512` 512, `@2x` 1024) |
+| `icon.ico` | `windows/elitea-colored-dark.ico` (256…16) as is |
+| `tray-template.png` | not from the pack: `libs/ts/client-core/src/brand/logo-mark.svg` with every fill set to `#000000`, rendered by Inkscape at 38 px and centred on a transparent 44 px canvas (a macOS template image: black + alpha, no tile) |
+
+Check with `sips -g pixelWidth -g pixelHeight -g hasAlpha src-tauri/icons/*` and
+`file src-tauri/icons/icon.icns src-tauri/icons/icon.ico`.
 
 ## Document sidecar
 

@@ -80,7 +80,7 @@ describe('AppProviders', () => {
       .join('\n')
       .toLowerCase();
     expect(styleText).toContain(
-      `--el-palette-primary-main:${DEFAULT_BRAND_PACK.schemes.dark['primary.main']}`,
+      `--el-palette-primary-main:${String(DEFAULT_BRAND_PACK.schemes.dark['primary.main']).toLowerCase()}`,
     );
   });
 

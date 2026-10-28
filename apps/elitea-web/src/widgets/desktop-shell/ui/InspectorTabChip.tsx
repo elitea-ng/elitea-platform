@@ -97,7 +97,7 @@ export function TabChip({
           fontSize: '0.75rem',
           fontWeight: selected ? 600 : 500,
           whiteSpace: 'nowrap',
-          '&:focus-visible': { outline: `2px solid ${theme.vars.palette.primary.main}`, outlineOffset: '-2px' },
+          '&:focus-visible': { outline: `2px solid ${theme.vars.palette.focus.ring}`, outlineOffset: '-2px' },
         })}
       >
         {title}

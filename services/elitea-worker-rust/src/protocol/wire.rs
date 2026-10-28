@@ -83,16 +83,43 @@ mod merge_contract_tests {
     }
 
     #[test]
-    fn the_actor_chain_is_the_only_repeated_context_field() {
+    fn the_actor_chain_and_credential_references_are_the_repeated_context_fields() {
         let chain = scan_message(&[0x7a, 0x00, 0x7a, 0x00], Schema::SecurityContext).unwrap();
         assert_eq!(chain.repeated_field(15).len(), 2);
+        // The frozen credential references (#1119), field 34.
+        let references = scan_message(
+            &[0x92, 0x02, 0x00, 0x92, 0x02, 0x00],
+            Schema::SecurityContext,
+        )
+        .unwrap();
+        assert_eq!(references.repeated_field(34).len(), 2);
         assert!(matches!(
             scan_message(&[0x0a, 0x00, 0x0a, 0x00], Schema::SecurityContext),
             Err(super::ProtocolError::InvalidInput(_))
         ));
-        // Field 18 is reserved, so unknown to this revision.
+        // The application 32-33 are varints; 18-31 are reserved, so unknown
+        // to this revision.
+        assert!(
+            scan_message(
+                &[0x80, 0x02, 0x03, 0x88, 0x02, 0x04],
+                Schema::SecurityContext
+            )
+            .is_ok()
+        );
         assert!(matches!(
             scan_message(&[0x92, 0x01, 0x00], Schema::SecurityContext),
+            Err(super::ProtocolError::IncompatibleVersion(_))
+        ));
+        // A frozen reference holds 1-5; an unknown field 6 is refused.
+        assert!(
+            scan_message(
+                &[0x08, 0x15, 0x12, 0x00, 0x1a, 0x00, 0x20, 0x02, 0x2a, 0x00],
+                Schema::GovernedCredentialReference
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            scan_message(&[0x32, 0x00], Schema::GovernedCredentialReference),
             Err(super::ProtocolError::IncompatibleVersion(_))
         ));
     }
@@ -140,6 +167,8 @@ pub(crate) enum Schema {
     SecurityContext,
     CallerContext,
     ActorLink,
+    /// `GovernedCredentialReferenceV1`, one frozen credential reference (#1119).
+    GovernedCredentialReference,
 }
 
 #[derive(Clone, Copy)]
@@ -372,7 +401,8 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         Schema::SecurityContextReference
         | Schema::SecurityContext
         | Schema::CallerContext
-        | Schema::ActorLink => security_context_rule(schema, field),
+        | Schema::ActorLink
+        | Schema::GovernedCredentialReference => security_context_rule(schema, field),
     }
 }
 
@@ -380,13 +410,17 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
 const fn security_context_rule(schema: Schema, field: u32) -> Option<FieldRule> {
     match (schema, field) {
         // content_entry_id 1, digest 2 (DigestV1), schema_revision 3.
-        // ExecutionSecurityContextV1: the epochs, the tenant and the issue
-        // time are varints; the actor chain 15 is the only repeated field.
+        // ExecutionSecurityContextV1: the epochs, the tenant, the issue time
+        // and the application 32-33 are varints; the actor chain 15 and the
+        // credential references 34 (#1119) are the repeated fields. 18-31
+        // are reserved.
         (Schema::SecurityContextReference, 1..=3)
         | (Schema::CallerContext | Schema::ActorLink, 1..=2)
+        | (Schema::GovernedCredentialReference, 2 | 3 | 5)
         | (Schema::SecurityContext, 1..=4 | 6 | 7 | 9 | 11 | 13 | 14 | 17) => Some(length()),
-        (Schema::SecurityContext, 5 | 8 | 10 | 12 | 16) => Some(varint()),
-        (Schema::SecurityContext, 15) => Some(FieldRule {
+        (Schema::SecurityContext, 5 | 8 | 10 | 12 | 16 | 32 | 33)
+        | (Schema::GovernedCredentialReference, 1 | 4) => Some(varint()),
+        (Schema::SecurityContext, 15 | 34) => Some(FieldRule {
             wire_type: 2,
             oneof: None,
             repeated: true,

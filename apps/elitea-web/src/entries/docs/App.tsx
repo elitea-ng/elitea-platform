@@ -13,14 +13,21 @@ import type { RefObject } from 'react';
 
 import { t } from '@/shared/i18n';
 
+// The generated LE-03 mark (fixed colours, so an <img> renders it right in
+// both themes). `?url` makes Vite emit or inline it as an asset under the
+// build base; the docs build has no publicDir to serve it from.
+import logoMarkUrl from '../../../public/brand/logo-mark.svg?url';
+
 import { docsComponents } from './components';
 import { getContentEntry } from './content-registry';
 import { nav, neighbours, type NavGroup, type NavTab } from './nav';
 import { currentSlug, handleDocsLinkClick, initHistoryListener, onRouteChange, toPath } from './router';
 import { search, type SearchResult } from './search';
 
-const SITE_NAME = 'Elitea Docs';
-const DEFAULT_DESCRIPTION = 'Elitea documentation: guides and reference for the Elitea platform.';
+const SITE_NAME = 'Elitea AI Docs';
+/** Product name in the top-bar lockup. A brand name, so it is not translated. */
+const PRODUCT_NAME = 'Elitea AI';
+const DEFAULT_DESCRIPTION = 'Elitea AI documentation: guides and reference for the Elitea AI platform.';
 
 type Theme = 'system' | 'light' | 'dark';
 const THEME_STORAGE_KEY = 'docs-theme';
@@ -326,8 +333,9 @@ export function App() {
   return (
     <div className="docs-shell">
       <header className="docs-topbar">
-        <a className="docs-topbar__brand" href={toPath('')}>
-          {t('entries.docs.topbar.brand', 'Elitea Docs')}
+        <a className="docs-topbar__brand" href={toPath('')} title={t('entries.docs.topbar.brand', 'Elitea AI Docs')}>
+          <img className="docs-topbar__mark" src={logoMarkUrl} alt="" width={24} height={24} />
+          <span className="docs-topbar__wordmark">{PRODUCT_NAME}</span>
         </a>
         <SearchBox />
         <span className="docs-topbar__spacer" />

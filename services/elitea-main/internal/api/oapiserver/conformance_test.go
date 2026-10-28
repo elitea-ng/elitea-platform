@@ -44,6 +44,7 @@ import (
 	v2indexing "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	v2indextypes "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	v2inventory "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/inventory"
+	v2mandateattachments "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mandateattachments"
 	v2memories "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/memories"
 	v2pipelinetriggers "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
@@ -254,6 +255,8 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// ADR-0039 (#1151): the external agent identity admin operations,
 		// mounted on the same condition.
 		ExternalAgentIdentityAdmin: &v2agentidentity.ExternalHandler{},
+		// Mounted only with the governance flag on (issue 1122).
+		MandateAttachments: &v2mandateattachments.Handler{},
 		// ADR-0039 (#1120): the credential probe, mounted on the same
 		// condition. Same zero handler.
 		CredentialProbe: &v2credentialprobe.Handler{},

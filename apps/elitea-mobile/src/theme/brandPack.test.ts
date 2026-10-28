@@ -43,18 +43,20 @@ describe('mapScheme', () => {
       background: '#f8fcff',
       backgroundElement: '#ffffff',
       border: '#cbced6',
-      accent: '#c428dd',
-      // The pack's near-white label reaches only ~4.2:1 on this accent, below
-      // WCAG AA for normal text, so the higher-contrast of black/white is used.
-      onAccent: '#000000',
+      accent: '#4a4de8',
+      onAccent: '#ffffff',
       danger: '#d71616',
     });
     expect(mapScheme(pack.schemes.dark, pack.brand.hue)).toMatchObject({
       text: '#ffffff',
       background: '#0e131d',
-      accent: '#6ae8fa',
-      onAccent: '#0e131d',
+      accent: '#4a4de8',
+      onAccent: '#ffffff',
     });
+    // A near-white label that reaches only ~4.2:1 on its accent (below WCAG AA for normal
+    // text) gives way to the higher-contrast of black/white.
+    const weakLabel = { ...pack.schemes.light, 'primary.main': 'rgba(196, 40, 221, 1)', 'text.button.primary': 'rgba(248, 252, 255, 1)' };
+    expect(mapScheme(weakLabel, pack.brand.hue)).toMatchObject({ accent: '#c428dd', onAccent: '#000000' });
   });
 
   it('ignores gradients, url(), expressions and garbage', () => {
@@ -250,13 +252,14 @@ describe('a hue-only brand laid over the product default (second workspace hue)'
   });
 
   it('keeps the stated values of the product default itself', () => {
-    expect(packAccentSource(BrandPackSchema.parse(brandPack()))).toMatchObject({ lightAccent: '#c428dd', darkAccent: '#6ae8fa' });
+    expect(packAccentSource(BrandPackSchema.parse(brandPack()))).toMatchObject({ lightAccent: '#4a4de8', darkAccent: '#4a4de8' });
   });
 
   it('a pack that says "default" but carries another hue is that workspace\'s brand', () => {
-    expect(isProductDefault('default', '#6ae8fa')).toBe(true);
+    expect(isProductDefault('default', '#4a4de8')).toBe(true);
+    expect(isProductDefault('default', '#6ae8fa')).toBe(false); // the former (pre-v3) default hue
     expect(isProductDefault('default', ORANGE)).toBe(false);
-    expect(isProductDefault('file', '#6ae8fa')).toBe(false);
+    expect(isProductDefault('file', '#4a4de8')).toBe(false);
   });
 
   it('the orange workspace gets an orange accent in both schemes, not the first workspace\'s magenta', () => {

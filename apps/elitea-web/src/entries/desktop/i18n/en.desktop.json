@@ -1077,5 +1077,22 @@
   "workspace.changes.fileCount": "{{n}} files",
   "workspace.changes.fileCountOne": "1 file",
   "workspace.changes.thisTurn": "This turn",
-  "workspace.handoff.more": "Cloud options"
+  "workspace.handoff.more": "Cloud options",
+  "workspace.compactedIdle": "Summarized while you were away to save cost — the newest messages are kept as they were.",
+  "workspace.context.auto.help": "Only threads with 60k+ tokens of conversation on paid models with a prompt cache. Skipped while you type or after the computer sleeps.",
+  "workspace.context.auto.hourCache": "Uses the 1-hour cache: cache writes cost 2×",
+  "workspace.context.auto.idle": "When idle",
+  "workspace.context.auto.idle1h": "Before the 1-hour cache expires (55 min) · cache writes cost 2×",
+  "workspace.context.auto.idle5m": "Before the 5-minute cache expires (4 min)",
+  "workspace.context.auto.idleCustom": "Custom…",
+  "workspace.context.auto.idleOff": "Off",
+  "workspace.context.auto.minutes": "Minutes idle",
+  "workspace.context.auto.minutesRange": "From 1 to 600 minutes.",
+  "workspace.context.auto.nearLimit": "Near the limit",
+  "workspace.context.auto.pastCache": "Later than the cache lasts: idle compaction won’t run",
+  "workspace.context.auto.scope": "For all folders.",
+  "workspace.context.auto.switch": "Compact automatically",
+  "workspace.context.auto.threshold": "Compact when context reaches",
+  "workspace.context.auto.thresholdHint": "Lower saves on every request but forgets detail sooner.",
+  "workspace.context.auto.title": "Auto-compaction"
 }

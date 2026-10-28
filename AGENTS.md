@@ -25,6 +25,7 @@ prototype shortcuts into new code merely to preserve current behavior.
 | `services/elitea-main/` | Go API, auth, control plane, persistence, and browser streaming |
 | `apps/elitea-web/` | The web UI (React SPA); also builds the admin console, maintenance page and embedded docs |
 | `apps/elitea-mobile/` | Mobile app "Elitea AI" (Expo / React Native): a standalone npm project with its own `AGENTS.md`; its API client is generated from `services/elitea-main/api/openapi/v2.yaml`, and `ci-mobile.yml` fails when it is stale |
+| `brand/` | The Elitea AI brand guide (static site + `BRAND.md` for agents), published to GitHub Pages at `/brand/`; read `brand/BRAND.md` before any work that touches colour, type, the logo or UI copy. Its own `AGENTS.md` says how to edit it |
 | `libs/go/` | Shared Go libraries; keep dependencies narrow and consumer-driven |
 | `libs/ts/client-core/` | `@elitea/client-core`: pure TypeScript that the web, desktop and mobile clients compile from source (brand defaults, chat stream parsing). Its README records what is shared and what is not; `docs/client-feature-parity.md` tracks features across the three clients |
 | `libs/proto/` | Versioned cross-language contracts and generated-code inputs |

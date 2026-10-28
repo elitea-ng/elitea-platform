@@ -120,7 +120,7 @@ function GalleryBody({
       keyboardDismissMode="on-drag"
       style={{ backgroundColor: colors.background }}
       contentContainerStyle={[styles.content, { paddingHorizontal: design.space.screenGutterCompact }]}>
-      <ListSection title="Preview" footer={`Accent ${colors.accent} on ${colors.accentOn}${design.branded ? ' (corrected brand)' : ' (product rose)'}`}>
+      <ListSection title="Preview" footer={`Accent ${colors.accent} on ${colors.accentOn}${design.branded ? ' (corrected brand)' : ' (product default)'}`}>
         <View style={styles.pad}>
           <SegmentedControl
             accessibilityLabel="Preview scheme"

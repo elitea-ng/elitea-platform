@@ -3048,6 +3048,26 @@ main:
     ELITEA_PROVIDER_OAUTH_AHA_TOKEN_URL: ""
     ELITEA_PROVIDER_OAUTH_AHA_SCOPES: ""
     ELITEA_PROVIDER_OAUTH_AHA_TIMEOUT: ""
+    # Governed MCP (#1123). Read ONLY with the flag above on.
+    # Inbound: INBOUND_ISSUER set serves RFC 9728 metadata at
+    # /.well-known/oauth-protected-resource/app/<project id>/mcp, adds
+    # resource_metadata to the MCP 401 and accepts that issuer's access
+    # tokens whose single audience is the MCP endpoint URL. INBOUND_JWKS_URL
+    # is then required and DEPLOYMENT_URL must be https. INBOUND_SCOPES is
+    # space separated (all required); INBOUND_USER_CLAIM (default email)
+    # names the Elitea user. INBOUND_OAUTH_ONLY=true refuses platform tokens
+    # on the MCP endpoint. Outbound: OAUTH_ENABLED=true holds remote MCP
+    # server OAuth in provider OAuth custody (provider "mcp"); it needs an
+    # https DEPLOYMENT_URL and SECRETS_MASTER_KEY. The client identifies with
+    # a Client ID Metadata Document; ALLOW_DYNAMIC_REGISTRATION=true falls
+    # back to RFC 7591 registration. Read in cmd/elitea-main/governed_mcp.go.
+    ELITEA_GOVERNED_MCP_INBOUND_ISSUER: ""
+    ELITEA_GOVERNED_MCP_INBOUND_JWKS_URL: ""
+    ELITEA_GOVERNED_MCP_INBOUND_SCOPES: ""
+    ELITEA_GOVERNED_MCP_INBOUND_USER_CLAIM: ""
+    ELITEA_GOVERNED_MCP_INBOUND_OAUTH_ONLY: ""
+    ELITEA_GOVERNED_MCP_OAUTH_ENABLED: ""
+    ELITEA_GOVERNED_MCP_ALLOW_DYNAMIC_REGISTRATION: ""
     # Entra Agent ID provider (#1152): one agent identity blueprint per
     # deployment. Read ONLY with the flag above on and a revision that allows
     # dedicated_agent. TENANT_ID empty (and no CONFIG_FILE) leaves it

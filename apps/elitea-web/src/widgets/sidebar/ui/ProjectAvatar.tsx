@@ -32,7 +32,8 @@ export function ProjectAvatar({ projectName, size = '2rem' }: ProjectAvatarProps
         minWidth: size,
         minHeight: size,
         borderRadius: theme.vars.shape.radiusPill,
-        background: `linear-gradient(135deg, ${backgroundColor}, ${backgroundColor}4D)`,
+        // Flat (brand guide v3: no gradients in UI chrome, avatars included).
+        backgroundColor,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -43,7 +44,7 @@ export function ProjectAvatar({ projectName, size = '2rem' }: ProjectAvatarProps
         sx={(theme: Theme) => ({
           // Deliberately theme.vars.palette.common.white, not
           // `text.secondary`/etc.: this label sits on an arbitrary
-          // per-project decorative gradient (`projectAvatarColor`, itself a
+          // per-project decorative fill (`projectAvatarColor`, itself a
           // fixed non-brand palette — see that file's header), not a
           // themed surface, so it needs a fixed light colour in both
           // schemes rather than a scheme-aware text token.

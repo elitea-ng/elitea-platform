@@ -731,22 +731,6 @@
     },
     {
       // TEMPORARY (Wave 2 — remove when t() shim and token refactoring land):
-      // F1's Wave-2 help-center unit predates the i18n layer and brand tokens.
-      // TypeScript type-aware rules stay enforced.
-      "files": ["src/pages/help-center/**"],
-      "rules": {
-        "complexity": "off",
-        "max-lines": "off",
-        "i18next/no-literal-string": "off",
-        "elitea/no-raw-color": "off",
-        "elitea/no-mui-internal-selector": "off",
-        "elitea/no-theme-palette": "off",
-        "elitea/raw-px-spacing": "off",
-        "elitea/ad-hoc-radius": "off"
-      }
-    },
-    {
-      // TEMPORARY (Wave 2 — remove when t() shim and token refactoring land):
       // F1's Wave-2 entities/application unit (useCardLike) predates the store
       // factory convention (R-S2) and brand tokens. TypeScript type-aware
       // rules stay enforced.
@@ -886,18 +870,6 @@
         "typescript/no-floating-promises": "off",
         "typescript/no-misused-promises": "off",
         "typescript/no-unsafe-assignment": "off"
-      }
-    },
-    {
-      // TEMPORARY (Wave 2 — typescript type-aware rules disabled because
-      // Wave-2 code predates strict typing):
-      "files": [
-        "src/pages/help-center/ui/ResourceCard.tsx",
-        "src/pages/help-center/ui/ResourceVersionInfo.tsx"
-      ],
-      "rules": {
-        "typescript/no-unnecessary-type-assertion": "off",
-        "typescript/switch-exhaustiveness-check": "off"
       }
     },
     {

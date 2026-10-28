@@ -31,7 +31,7 @@ export function buttonLook(variant: ButtonVariant, design: Pick<Design, 'colors'
   const c = design.colors;
   switch (variant) {
     case 'filled':
-      return { background: c.accent, pressed: c.accentPressed, tone: 'onAccent' };
+      return { background: c.primary, pressed: c.primaryPressed, tone: 'onPrimary' };
     case 'tonal':
       return { background: c.accentSoft, pressed: c.accentSoft, tone: 'accentSoftOn' };
     case 'destructive':
@@ -122,7 +122,7 @@ export function Button({
       {...rest}>
       <View style={[styles.content, disabled ? styles.disabled : null]}>
         {loading ? (
-          <ActivityIndicator color={look.color ?? (variant === 'filled' ? design.colors.accentOn : design.colors.accent)} />
+          <ActivityIndicator color={look.color ?? (variant === 'filled' ? design.colors.primaryOn : design.colors.accent)} />
         ) : icon ? (
           <Icon name={icon} size={design.size.iconInline} tone={look.tone} weight="semibold" />
         ) : null}
@@ -135,7 +135,7 @@ export function Button({
 }
 
 function disabledContainer(design: Pick<Design, 'scheme'>): string {
-  return design.scheme === 'dark' ? 'rgba(247, 242, 245, 0.12)' : 'rgba(28, 22, 34, 0.12)';
+  return design.scheme === 'dark' ? 'rgba(242, 244, 250, 0.12)' : 'rgba(11, 11, 24, 0.12)';
 }
 
 const styles = StyleSheet.create({

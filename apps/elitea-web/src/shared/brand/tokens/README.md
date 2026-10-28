@@ -4,8 +4,8 @@
 members) are **hand-maintained source**. Until 2026-10-22 they were generated
 by `scripts/gen-brand-tokens.mjs` from the `apps/elitea-ui` palettes
 (`darkPalette.js` / `lightPalette.js`). That generator went with the
-submodule, so this file keeps the reasons behind the values that did not come
-straight from those palettes.
+submodule. Since brand guide v3 the values come from client-core's
+`tokens.json` (below); this file keeps the mapping decisions.
 
 ## Editing
 
@@ -22,64 +22,50 @@ straight from those palettes.
   copies disagree: the two schemes' key sets, the pack vs the augmentation
   (both directions), and the pack vs client-core.
 
-## Values that are not a verbatim copy of the old palettes
+## Where the values come from
 
-**Excluded.** `palette.mode` (scheme identity, set by `buildTheme`);
-`typographyVariants.labelLarge` (dead in the old app too);
-`background.moderator` and `icon.fill.select` (admin-ui/Maintenance-UI only,
-or referenced but defined nowhere).
+The pack follows the Elitea AI brand guide v3: every colour is a token of
+`libs/ts/client-core/src/brand/tokens.json` (dark scheme = Ink, light scheme =
+Paper), stated as its hex, or as an alpha of a token hex where a role needs a
+wash. Do not add a colour that is not in `tokens.json`; pick the token with
+the same job. The guide is published at
+<https://elitea-ng.github.io/elitea-platform/brand/>.
 
-**Symmetry fills.** The old palettes had ids defined in one scheme only. Each
-fill is pixel-neutral: the value is the CSS equivalent of what the missing
-token rendered (nothing), or the id had no read site in that scheme.
+The token ids keep their old names (component code reads them), so a name
+does not always say what the value now is. The mapping decisions:
 
-| Token | Scheme filled | Value | Why |
-| --- | --- | --- | --- |
-| `primary.hover` | light | `rgba(244, 124, 255, 1)` | Light magenta hover, already the light value of `background.button.primary.hover`; read only in a dark branch |
-| `text.button.auxiliary` | dark | `#83EFFF` | The dark-branch value at the same read site; read only in a light branch |
-| `boxShadow.aiAnswer` | dark | `none` | Read unconditionally; undefined in dark dropped the declaration, `none` is the equivalent |
-| `background.folder.shadow` | dark | `0 0 0 rgba(0, 0, 0, 0)` | Interpolated into `drop-shadow(...)`; undefined made the filter invalid (no shadow). A transparent zero shadow is equivalent and valid; `none` is not a shadow |
-| `background.folder.borderGradient` | light | `none` | Used as a `background` shorthand; undefined dropped it, `none` is equivalent |
+| Old role | Token now | Notes |
+| --- | --- | --- |
+| Accent / primary action (`primary.*`, `background.button.{primary,neutral,positive,maxi}.*`, switch on, checkbox and radio checked, tag / chip selected) | `primary` / `primaryHover` / `primaryPressed`, label `onPrimary` | One action colour in both schemes. `text.button.primary` is white in both schemes |
+| Soft accent (`background.button.special.*`, `split.*`, selected rows, drawer / conversation selection, drag target) | `selected` (and an alpha of `primary` for hover / pressed) | No per-scheme magenta / cyan washes |
+| Links, active indicators, focus (`text.link`, `info.main`, tab indicators, `icon.fill.active`, `status.draft`, `focus.ring`) | `signal` | Cyan on Ink, indigo on Paper. `focus.ring` (added in v3) is the one keyboard focus colour: `MuiCssBaseline` draws a 2px ring with a 2px offset |
+| AI presence (`aiAssistant.*`, `capability.*`, magic assistant, agent hub icon, `nodeColors.llm|agent`) | `ai` (icons, fills, alpha washes) and `aiText` (text) | Violet marks AI only |
+| Canvas / surfaces (`background.default`, `card.*`, `secondary`, `modal.simple`, `sideBar`, …) | `bg` → `surface` → `elevated` | Dark: page `bg`, cards `surface`, raised `elevated`. Light: page `bg`, cards `elevated` with a `border`, insets `surface` |
+| Text (`text.secondary` = strong, `text.primary` / `text.default` = muted) | `text` / `textMuted` / `textDisabled` | The old names are inverted (`text.primary` is the MUTED role); kept for the call sites |
+| Hairlines (`border.lines`, `table`, dividers, `cardsOutlines`) | `border` | |
+| Control boundaries and hover borders (`border.hover`, `checkbox.default`, `radio.default`, switch off track, `suggestionChip.border`) | `borderStrong` | ≥3:1 (WCAG 1.4.11). Inputs now draw their resting outline with `border.hover` and their hover outline with `border.inputHover` (`textMuted`) |
+| Alarm button, `error.main` | `dangerFill` (hover / pressed and `error.dark`: the Paper `danger` value) | White label on it in both schemes |
+| Error / warning / success text and icons | `danger` / `warning` / `success` (washes: alpha of the same) | Amber for warnings; orange is never a warning |
+| `background.deprecated` + `text.deprecated` | Ink-scheme `warning` fill with `bg` Ink text, both schemes | Amber on Paper is too dark for a fill with dark text and too light for white |
+| `success.contrastText` | `onSignal` (Ink) on dark, `onPrimary` (white) on light | The Ink success green does not carry white text |
+| Every former gradient (cards, banners, agent modal, welcome, side bar, resource cards, tour prompt, icon wells, borders) | the flat token of the same job | No gradients in the pack |
+| Scroll / image fades (`conversation{Top,Bottom}Cover`, `imageAttachment`) | `transparent` | A flat fade would paint an opaque band |
+| Tooltips | inverted: `text` fill with `bg` label | |
+| Shadows (`boxShadow.*`, card hover shadow) | Paper: the guide's light elevation; Ink: `none` | Dark elevation is a lighter surface step, never a shadow |
+| Pipeline node colours (`nodeColors.*`) | `elevated` (dark) / `surface` (light); `llm` and `agent` an alpha of `ai` | No per-type accent hues |
+| Help Center resource cards (`background.resourceCard.<colour>.*`) | the same neutral values for every colour | The page no longer reads per-card colours |
 
-**Additions.** New ids, values copied from the old call sites so rendering
-did not change:
+**Symmetry.** Both scheme records carry the same 408 ids; a value that has
+no meaning in one scheme (for example `background.folder.shadow` on Ink) is
+the pixel-neutral equivalent (`0 0 0 rgba(0, 0, 0, 0)`).
 
-- Brand-accent button tokens (`background.button.special.*`,
-  `background.button.maxi.*`, `text.button.specialDefault|specialPressed|maxiDefault`,
-  `text.button.secondaryPressed`, `background.button.iconCounter.pressed`,
-  `text.button.auxiliaryDefault|Hover|Pressed`): the old button component
-  branched on `palette.mode` with hard-coded cyan (dark) / magenta (light)
-  ramps; each branch became one per-scheme token, so a brand pack can
-  recolour it (spec §4.1 Blocker 1, `parity/brand-hue-map.md`).
-- `error.*` and `success.*` as top-level MUI roles (spec §4.2): absent in the
-  old palettes, so consumers fell back to MUI defaults. Values are the
-  alarm-button ramp and the published-status / positive-button colours.
-- `border.artifactDivider` (#6687): the Artifacts dividers, same pair as
-  `border.table`, as a role of its own.
-
-**Contrast overrides (dark scheme only).** The old palettes used
-`#D71616` for error/danger in both schemes. On the dark surfaces it measures
-3.56:1 against `background.default` (#0E131D) and 3.17:1 against
-`background.card.default`, below WCAG AA 4.5:1 for text. The overrides keep
-hue (0°) and saturation and raise lightness only:
-
-| Token | Old | Now | Why |
-| --- | --- | --- | --- |
-| `icon.fill.error` | `#D71616` | `#ED4F4F` | Text colour of the TextField error helper (5.05:1) |
-| `text.error` | `#D71616` | `#ED4F4F` | Same defect in the text role, fixed before it gets a consumer |
-| `status.rejected` | `#D71616` | `#ED4F4F` | Used as literal text colour at many call sites |
-| `background.button.alarm.default` | `#D71616` | `#ED4F4F` | Under the `alarm` button's `text.button.primary` label: 3.56:1 → 5.16:1 |
-| `background.button.alarm.pressed` | `#C51111` | `#EB3A3A` | Pressed label 3.07:1 → 4.60:1, kept darker than `.hover` and `.default` so the ramp stays monotonic |
-
-Deliberately **not** overridden: `error.main` (a fill paired with white
-`error.contrastText`, 5.23:1; no lightness clears both bars at once, and
-`text.error` is the text role) and `background.button.danger` (icon fill
-only, 3.45:1 clears the 3:1 non-text bar). The light scheme already clears AA
-with `#D71616` (5.07:1).
-
-**Non-colour fields.** `shape.radiusPill: 9999` is the pill/circle shape the
-icon-only and `maxi` buttons need: the old `borderRadius: '50%'` has no token
-form, and a large fixed value clamps to the shorter side, giving a pill on a
-rectangle and a circle on a square. `product.docsUrl: '/docs/'` is the
-same-origin embedded docs SPA, relative so every deployment resolves it
-against its own origin.
+**Non-colour fields.** Typography: `fontFamily` is the Manrope stack,
+`fontFamilyDisplay` (optional, added in v3; headings `h1`–`h6` and the
+`heading*` variants) the Sora stack, `fontFamilyMono` the JetBrains Mono
+stack; `fontFaces` declares the three vendored variable faces
+(`./brand/fonts/*.woff2`, served from `public/brand/fonts/`, document-relative
+like the logo placeholders; nginx's brand alias resolves them from any route
+depth). Shape follows `tokens.json` (`radiusSm` 6, `radiusMd` 10,
+`radiusLg` 14, `radiusPill` 9999); the pill value is the pill/circle shape the
+icon-only and `maxi` buttons need. `product.docsUrl: '/docs/'` is the
+same-origin embedded docs SPA.

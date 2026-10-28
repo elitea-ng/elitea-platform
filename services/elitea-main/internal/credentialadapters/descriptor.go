@@ -28,6 +28,10 @@ const (
 	// TargetTenantSite is a tenant site URL (for example a SharePoint site
 	// collection). Same canonical form as TargetBaseURL.
 	TargetTenantSite TargetKind = "tenant_site"
+	// TargetResourceURI is an OAuth protected resource URI (RFC 8707), such
+	// as a remote MCP server endpoint. Its canonical form is the resource's
+	// own (internal/credentialadapters/mcp), not a trimmed base URL.
+	TargetResourceURI TargetKind = "resource_uri"
 )
 
 // Operation classes. Registry.Class answers one of these.

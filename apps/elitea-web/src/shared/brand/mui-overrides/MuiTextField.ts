@@ -77,16 +77,16 @@ export const MuiTextField: EliteaComponents['MuiTextField'] = {
           opacity: 1,
         },
         '& :not(.Mui-error).MuiInput-underline:before': {
-          borderBottomColor: theme.vars.palette.border.lines,
-        },
-        '& :not(.Mui-error, .Mui-disabled).MuiInput-underline:hover:before': {
           borderBottomColor: theme.vars.palette.border.hover,
         },
+        '& :not(.Mui-error, .Mui-disabled).MuiInput-underline:hover:before': {
+          borderBottomColor: theme.vars.palette.border.inputHover,
+        },
         '& :not(.Mui-error) label.Mui-focused': {
-          color: theme.vars.palette.primary.main,
+          color: theme.vars.palette.focus.ring,
         },
         '& :not(.Mui-error).MuiInput-underline.Mui-focused:after': {
-          borderBottomColor: theme.vars.palette.primary.main,
+          borderBottomColor: theme.vars.palette.focus.ring,
         },
         '& .Mui-error.MuiInput-underline:before, & .Mui-error.MuiInput-underline:after': {
           borderBottomColor: theme.vars.palette.icon.fill.error,

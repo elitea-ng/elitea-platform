@@ -74,6 +74,11 @@ const MAX_CACHE_TTL_SECONDS: u64 = 3_600;
 /// is a loop or a login bounce, neither of which is an MCP endpoint.
 const MAX_REDIRECT_HOPS: usize = 3;
 
+mod governed;
+#[cfg(test)]
+pub(crate) use governed::declared_names as governed_declared_names_for_test;
+pub use governed::{GovernedMcpToolsets, materialize_governed_mcp_toolsets};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum McpMaterializationErrorCode {
     InvalidConfiguration,

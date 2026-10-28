@@ -49,7 +49,7 @@ use crate::toolkits::{
     McpMaterializationError, McpMaterializationErrorCode, ToolAdmissionPolicy, ToolBindingError,
     ToolsetMaterializationError, ToolsetMaterializationErrorCode, bind_frozen_toolsets,
     freeze_toolsets, materialize_configured_toolsets_reporting_refusals_governed,
-    materialize_mcp_toolsets_with_tokens_and_authorization,
+    materialize_governed_mcp_toolsets, materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 use crate::transport::credential_redeemer::governed_client;
 use crate::transport::model_facade::{
@@ -641,7 +641,7 @@ impl OrdinaryNativeAgentAssembler {
             left_out: left_out_toolkits,
         } = materialize_direct_toolsets(
             tool_snapshot,
-            self.mcp_connector.as_ref(),
+            &self.mcp_connector,
             tool_policy,
             mcp_tokens,
             &artifact_authority,
@@ -1269,7 +1269,7 @@ pub(super) fn snapshot_carries_index_catalog(snapshot: &AdmittedToolSnapshot<'_>
 
 async fn materialize_direct_toolsets(
     snapshot: &AdmittedToolSnapshot<'_>,
-    connector: &dyn McpConnector,
+    connector: &Arc<dyn McpConnector>,
     policy: &Arc<ToolAdmissionPolicy>,
     mcp_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: &ArtifactToolAuthority,
@@ -1290,31 +1290,6 @@ async fn materialize_direct_toolsets(
     )
     .await
     .map_err(tool_materialization_error)?;
-    // A governed run has no MCP credential adapter: every MCP connection is
-    // refused as not governable, and no MCP token is used.
-    if governed.is_some() {
-        left_out.extend(
-            snapshot
-                .iter()
-                .filter(|reference| reference.kind() == FrozenToolKind::Mcp)
-                .map(|reference| {
-                    LeftOutToolkit::not_governable(reference.toolkit_name(), reference.tool_type())
-                }),
-        );
-        let sensitive = sensitive_tools_for_kind(
-            snapshot,
-            FrozenToolKind::Configured,
-            &toolsets,
-            policy.as_ref(),
-        )
-        .await?;
-        return Ok(DirectToolsets {
-            toolsets,
-            sensitive,
-            delegated_authorization,
-            left_out,
-        });
-    }
     let mut sensitive = sensitive_tools_for_kind(
         snapshot,
         FrozenToolKind::Configured,
@@ -1322,11 +1297,26 @@ async fn materialize_direct_toolsets(
         policy.as_ref(),
     )
     .await?;
-    let (mut mcp, mcp_authorization) = materialize_mcp_toolsets_with_tokens_and_authorization(
-        snapshot, connector, policy, mcp_tokens,
-    )
-    .await
-    .map_err(|error| mcp_materialization_error(&error))?;
+    // A governed run (#1123): every MCP access token is redeemed through
+    // the broker, one listing per connection and one session per call, and
+    // no claim-time MCP token is used. A connection it cannot govern is left
+    // out and named.
+    let (mut mcp, mcp_authorization) = if let Some(governed) = governed {
+        let built = materialize_governed_mcp_toolsets(snapshot, connector, policy, governed)
+            .await
+            .map_err(|error| mcp_materialization_error(&error))?;
+        left_out.extend(built.left_out);
+        (built.toolsets, built.delegated_authorization)
+    } else {
+        materialize_mcp_toolsets_with_tokens_and_authorization(
+            snapshot,
+            connector.as_ref(),
+            policy,
+            mcp_tokens,
+        )
+        .await
+        .map_err(|error| mcp_materialization_error(&error))?
+    };
     sensitive.merge(
         sensitive_tools_for_kind(snapshot, FrozenToolKind::Mcp, &mcp, policy.as_ref()).await?,
     )?;

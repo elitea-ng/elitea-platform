@@ -183,13 +183,12 @@ export async function shellSettled(
  * `FontFaceSet` to marshal back. `await`ing it inside the page and returning
  * nothing is the same wait without the round trip.
  *
- * It stays even though it is currently a no-op: measured on the E2E stack,
- * `document.fonts` reports `status: "loaded"`, `size: 0`, no faces at all —
- * the served pack is the product default, which declares no `typography.
- * fontFaces`, so `"Montserrat", Roboto, Arial, sans-serif` resolves to the
- * container's own sans. A deployment pack MAY declare self-hosted faces
- * (`shared/brand/fontFaces.ts`), and then this is the wait that keeps a
- * fallback-metrics layout out of a baseline.
+ * It is load-bearing: the product default declares three self-hosted faces
+ * (brand guide v3: Manrope, Sora, JetBrains Mono, `typography.fontFaces`,
+ * `font-display: swap`), so the first paint uses fallback metrics and the
+ * real faces arrive later. This wait keeps a fallback-metrics layout out of
+ * a baseline. A deployment pack MAY declare other faces
+ * (`shared/brand/fontFaces.ts`); the same wait covers them.
  */
 export async function settle(page: Page): Promise<void> {
   // Frozen FIRST, so anything that starts while the waits below run is already

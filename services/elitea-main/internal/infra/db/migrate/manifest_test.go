@@ -1057,7 +1057,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// chat_participant_mapping.conversation_id's key to chat_conversations
 	// becomes ON DELETE CASCADE, the shape the dev bootstrap always had
 	// (#1429). No data, no permission.
-	require.EqualValues(t, 157, Head(tenant))
+	// 158: tenant/0158_unattended_run_mandates.sql, the attached mandate of
+	// a governed pipeline schedule, pipeline trigger (`mandate_id`) and index
+	// schedule (index_schedule_mandates), and the three governed schedule
+	// skips in last_result (#1122). NULL and empty with the flag off. No
+	// data, no permission.
+	require.EqualValues(t, 158, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

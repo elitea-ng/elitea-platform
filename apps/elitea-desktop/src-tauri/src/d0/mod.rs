@@ -46,6 +46,7 @@
 //!   request's `chat_history` stays empty: the session carries the history);
 //! * [`context`] — the model's context limits, the step compaction's budget,
 //!   marker and meter (#1217);
+//! * [`idle`] — an idle thread compacted while its prompt cache is warm;
 //! * [`turn`] — the assembler and the host's turn table.
 
 pub mod api;
@@ -60,6 +61,7 @@ pub mod definition;
 pub mod environment;
 pub mod events;
 pub mod framing;
+pub mod idle;
 pub mod lsp;
 pub mod memory;
 pub mod mentions;

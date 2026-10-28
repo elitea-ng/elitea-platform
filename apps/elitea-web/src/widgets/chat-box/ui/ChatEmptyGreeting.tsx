@@ -1,5 +1,5 @@
 /**
- * The empty-conversation greeting: brand orb, "Hello, <first name>!", and the
+ * The empty-conversation greeting: the flat LE-03 brand mark, "Hello, <first name>!", and the
  * "What can I do for you today?" prompt.
  *
  * This is the visible half of a LAYOUT MODE, not just a nicer empty string.
@@ -63,7 +63,7 @@ export function ChatEmptyGreeting({ userName }: ChatEmptyGreetingProps): ReactNo
         <Typography
           component="p"
           variant="headingLarge"
-          sx={{ color: 'primary.main', textAlign: 'center' }}
+          sx={{ color: 'text.secondary', textAlign: 'center' }}
         >
           {t('widgets.chatBox.greeting', 'Hello, {{name}}!', { name })}
         </Typography>
@@ -71,7 +71,7 @@ export function ChatEmptyGreeting({ userName }: ChatEmptyGreetingProps): ReactNo
       <Typography
         component="p"
         variant="headingMedium"
-        sx={{ color: 'text.secondary', textAlign: 'center' }}
+        sx={{ color: 'text.primary', textAlign: 'center' }}
       >
         {t('widgets.chatBox.greetingPrompt', 'What can I do for you today?')}
       </Typography>

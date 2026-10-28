@@ -245,6 +245,14 @@ func TestValuesFromPack_HandTunedTokensAreKept(t *testing.T) {
 	if values[platformconfig.KeyBrandingLogoFull] != "" {
 		t.Errorf("compiled placeholder leaked into the section: %v", values[platformconfig.KeyBrandingLogoFull])
 	}
+	// The product default's three brand faces are placeholders too: they
+	// import as "inherit" and do not count toward the two-face limit.
+	if len(base.Typography.FontFaces) != 3 {
+		t.Fatalf("product default faces = %d, want 3 (brand guide v3)", len(base.Typography.FontFaces))
+	}
+	if faces, _ := values[platformconfig.KeyBrandingFontFaces].([]any); len(faces) != 0 {
+		t.Errorf("placeholder font faces leaked into the section: %v", faces)
+	}
 }
 
 func TestParse_Refusals(t *testing.T) {
@@ -320,7 +328,11 @@ func TestParse_Refusals(t *testing.T) {
 		// A customer edits brand-pack.json and leaves manifest.json as the
 		// export wrote it. The dialog and the versions list must say the
 		// customer's product, not the one the package was exported from.
-		restyled := bytes.Replace(packJSON, []byte(`"name": "Elitea"`), []byte(`"name": "Acme Corp"`), 1)
+		// The full name first: "Elitea" is also a prefix of "Elitea AI".
+		restyled := bytes.Replace(packJSON, []byte(`"name": "Elitea AI"`), []byte(`"name": "Acme Corp"`), 1)
+		if bytes.Equal(restyled, packJSON) {
+			restyled = bytes.Replace(packJSON, []byte(`"name": "Elitea"`), []byte(`"name": "Acme Corp"`), 1)
+		}
 		if bytes.Equal(restyled, packJSON) {
 			t.Fatalf("fixture pack does not carry the default product name: %s", packJSON[:200])
 		}
@@ -354,8 +366,11 @@ func TestParse_Refusals(t *testing.T) {
 
 func TestExportImportCompiledAppPreview(t *testing.T) {
 	svc, _ := newService(t)
-	// CI builds the trusted app preview at 1,004.11 kB. Export adds the pack.
-	svc.previews.App = []byte("<html><head></head><body>" + strings.Repeat("x", 1_004_110) + "</body></html>")
+	// CI builds the trusted app preview at about 1 MB, just below
+	// maxEntryBytes. Export adds the pack (about 42 kB), which takes the entry
+	// above that limit. The fixture is 8 KiB below the limit, so a smaller
+	// product default pack does not make the test pass for a wrong reason.
+	svc.previews.App = []byte("<html><head></head><body>" + strings.Repeat("x", maxEntryBytes-8*1024) + "</body></html>")
 	data, _, err := svc.Export(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)

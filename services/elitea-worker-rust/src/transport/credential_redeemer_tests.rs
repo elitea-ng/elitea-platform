@@ -219,3 +219,29 @@ async fn a_governed_toolkit_call_redeems_once_and_never_asks_for_the_client_toke
     assert_eq!(fake.redeemed.lock().expect("redeemed").len(), 1);
     assert_eq!(fake.token_calls.load(Ordering::SeqCst), 0);
 }
+
+/// Nested agents and saved pipelines have no governed MCP seam yet (#1123
+/// governs the ordinary agent path only): a governed command whose snapshot
+/// holds an MCP connection is refused there, fail closed, while a legacy
+/// command passes unchanged.
+#[test]
+fn nested_and_pipeline_paths_refuse_a_governed_mcp_connection() {
+    use super::credential_redeemer::refuse_ungoverned_credentials;
+    use crate::agents::runtime::NativeAgentAssemblyErrorCode;
+    use crate::toolkits::FrozenToolSnapshot;
+
+    let version = json!({"tools": [{"id": 41, "type": "mcp", "toolkit_name": "records",
+        "settings": {"url": "https://mcp.example.test/mcp", "ssl_verify": true}}]});
+    let policy = ToolAdmissionPolicy::new(&[], &std::collections::BTreeMap::new()).expect("policy");
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(&policy);
+    let governed = test_runtime_context_authority().governed_for_test(DIGEST);
+    let error = refuse_ungoverned_credentials(&governed, &snapshot).expect_err("refused");
+    assert_eq!(
+        error.code(),
+        NativeAgentAssemblyErrorCode::UnsupportedCapability
+    );
+    refuse_ungoverned_credentials(&test_runtime_context_authority(), &snapshot)
+        .expect("a legacy command is unchanged");
+}

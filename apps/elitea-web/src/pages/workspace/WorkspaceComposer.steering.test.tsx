@@ -26,6 +26,7 @@ interface Handlers {
   queue?: SteeringQueueBinding;
   unsent?: UnsentSteers;
   onStop?: () => void;
+  onDraftChange?: (hasDraft: boolean) => void;
 }
 
 async function mount(handlers: Handlers, busy = true) {
@@ -44,6 +45,7 @@ async function mount(handlers: Handlers, busy = true) {
       onSteer={handlers.onSteer}
       queue={handlers.queue}
       unsent={handlers.unsent}
+      onDraftChange={handlers.onDraftChange}
       onStop={handlers.onStop ?? (() => undefined)}
       onCommand={() => undefined}
     />
@@ -61,6 +63,16 @@ async function mount(handlers: Handlers, busy = true) {
 afterEach(() => useDesktopLayout.getState().setSession(null));
 
 describe('WorkspaceComposer steering', () => {
+  it('reports the draft filling and emptying (the idle-compaction hold), and empty again after a send', async () => {
+    const onDraftChange = vi.fn<(hasDraft: boolean) => void>();
+    const input = await mount({ onSend: vi.fn<OnSend>().mockResolvedValue(true), onDraftChange }, false);
+    expect(onDraftChange.mock.calls).toEqual([[false]]);
+    await userEvent.type(input, 'fix it');
+    expect(onDraftChange.mock.calls).toEqual([[false], [true]]);
+    await userEvent.click(screen.getByTestId('workspace-send-button'));
+    await waitFor(() => expect(onDraftChange.mock.calls).toEqual([[false], [true], [false]]));
+  });
+
   it('queues a message sent while the turn runs, and clears the input', async () => {
     const onSend = vi.fn<OnSend>().mockResolvedValue(true);
     const onSteer = vi.fn<Handler>().mockResolvedValue(true);

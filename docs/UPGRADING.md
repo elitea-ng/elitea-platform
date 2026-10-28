@@ -4,6 +4,66 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Elitea AI brand (guide v3): new default theme
+
+* **elitea-web, the embedded docs and the clients: the default theme is now
+  the Elitea AI brand (brand guide v3).** No migration is added and no
+  setting changes.
+* **Deployments with their own brand pack or `scheme_tokens`** keep their
+  look. A field that you set is not changed.
+* **Deployments on the default** see the new look on the next page load:
+  the Ink (dark) and Paper (light) palettes, indigo for primary actions,
+  cyan for links and focus on dark, the Manrope, Sora and JetBrains Mono
+  typefaces, the LE-03 logo and the product name "Elitea AI". There are no
+  gradients.
+* **What to do:** nothing, unless you want the old look. In that case, set
+  the colours, logo and name in **Admin › Branding** before you upgrade, or
+  import your exported brand package after the upgrade.
+* The embedded docs show the default look in **Admin › Branding**. The
+  brand guide is at <https://elitea-ng.github.io/elitea-platform/brand/>.
+
+## P6a
+
+* **elitea-main: governed credential resolution (#1119, off by default).**
+  Nobody has to act while `ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED`
+  stays `false`; the legacy resolver's output is unchanged. With the flag
+  on, a governed run resolves each toolkit credential only by its exact
+  `credential_reference_id`, in the run's own tenant, with a matching
+  active grant. The resolved list is frozen on the run's security context.
+  A redemption must name a frozen reference. `private` references are
+  refused. No migration is added.
+* **Governed runs in flight at deploy:** a governed run admitted before
+  this release carries no frozen list, so its redemptions are denied. Drain
+  governed runs before you upgrade, or let them fail and run again.
+* **elitea-main: mandate-bound schedules and triggers (#1122, off by
+  default).** One additive tenant migration (0158) adds a nullable
+  `mandate_id` to `pipeline_schedules` and `pipeline_triggers`, and a new
+  `index_schedule_mandates` table. With the flag off the columns stay NULL,
+  the attach routes are not mounted and runs are unchanged.
+* With the flag on, a governed schedule, webhook or index schedule runs
+  only under an attached, active mandate. Without one it is skipped with
+  `MANDATE_REQUIRED` and audited.
+* The new policy revision field `unattended_mandate_kinds` lists the
+  accepted kinds (`autonomous`, `delegated_background`). A revision that
+  lists none refuses every governed schedule and trigger.
+* New admin routes: `PUT` and `DELETE` under
+  `/api/v2/admin/mandate_attachments/...`. They use
+  `models.agent_identity.mandates.manage`.
+* Governed scheduled indexing does not receive the project token and fails
+  closed until #1473.
+* **elitea-main and the Rust worker: governed MCP (#1123, off by
+  default).**
+  * **Inbound:** with `ELITEA_GOVERNED_MCP_INBOUND_ISSUER` and
+    `ELITEA_GOVERNED_MCP_INBOUND_JWKS_URL` set, the MCP endpoint serves
+    RFC 9728 metadata at
+    `/.well-known/oauth-protected-resource/app/{projectID}/mcp`. It accepts
+    tokens only when their audience is the MCP resource.
+  * **Outbound:** with `ELITEA_GOVERNED_MCP_OAUTH_ENABLED`, remote MCP
+    tokens are released only by the broker (`mcp.tools.list` once,
+    `mcp.tool.call` per call). Each call uses a fresh session.
+  * Nested agents and saved pipelines still refuse MCP in a governed run
+    (#1474).
+
 ## P5
 
 * **elitea-main: Entra Agent ID provider (#1152, off by default).** Nobody

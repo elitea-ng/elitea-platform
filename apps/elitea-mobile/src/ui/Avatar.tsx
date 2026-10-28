@@ -12,21 +12,23 @@ import { Text } from './Text';
  * people are not branded.
  */
 export const AVATAR_TONES: Record<Scheme, readonly (readonly [fill: string, text: string])[]> = {
+  // Brand v3: indigo, cyan, green, amber, red and slate washes. Never violet (AI only) or
+  // orange (the dot only).
   light: [
-    ['#FCE4EE', '#93244F'],
-    ['#DDEBF5', '#1E4A6B'],
-    ['#E8F5EF', '#1A6B43'],
-    ['#FCEBD6', '#7A4700'],
-    ['#EDE4FA', '#4B2E83'],
-    ['#F5EFF3', '#5A5262'],
+    ['#EDEDFD', '#3336C0'],
+    ['#E0F5FA', '#005E73'],
+    ['#E8F2EC', '#166534'],
+    ['#FCF6F1', '#92400E'],
+    ['#F8E8E8', '#991B1B'],
+    ['#E8EBF3', '#3A4256'],
   ],
   dark: [
-    ['#3D1E2D', '#FFC2DA'],
-    ['#1C2C3A', '#BFDDF3'],
-    ['#16291F', '#8FE3BC'],
-    ['#2E2213', '#F3C77A'],
-    ['#2A2340', '#D5C6F7'],
-    ['#26222C', '#E6DDE3'],
+    ['#191A46', '#B4B6FF'],
+    ['#0A2A38', '#7FDDF2'],
+    ['#0E2521', '#86EFAC'],
+    ['#2C2016', '#FCD34D'],
+    ['#2C1925', '#FCA5A5'],
+    ['#232A45', '#D3D8E6'],
   ],
 };
 
@@ -66,7 +68,7 @@ export interface AvatarProps {
 
 /**
  * A person or agent avatar: their own image; else, for an agent, the Elitea mark (fallback only,
- * labelled with the AGENT's name) or a monogram on `secondarySoft`; else initials on a pastel
+ * labelled with the AGENT's name) or an AI-coloured monogram on `secondarySoft`; else initials on a pastel
  * tone. The Elitea mark never replaces an agent's own icon or the workspace logo.
  */
 export function Avatar({ name, kind = 'person', imageUri, mark = false, size = 36, decorative = false, style }: AvatarProps) {
@@ -85,7 +87,8 @@ export function Avatar({ name, kind = 'person', imageUri, mark = false, size = 3
   if (kind === 'agent' && mark) {
     return <EliteaMark variant="avatar" size={size} label={name} decorative={decorative} style={style} />;
   }
-  const [fill, text] = kind === 'agent' ? [colors.secondarySoft, colors.secondarySoftOn] : AVATAR_TONES[scheme][toneIndex(name)];
+  // An agent is AI: its monogram takes the AI text colour on the neutral tile (violet = AI only).
+  const [fill, text] = kind === 'agent' ? [colors.secondarySoft, colors.aiText] : AVATAR_TONES[scheme][toneIndex(name)];
   return (
     <View {...a11y} style={[styles.frame, frame, { backgroundColor: fill }, style]}>
       <Text variant={size >= 48 ? 'headline' : 'footnote'} color={text} maxFontSizeMultiplier={1} style={styles.initials}>

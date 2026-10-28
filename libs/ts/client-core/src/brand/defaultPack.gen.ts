@@ -10,13 +10,13 @@
  * workspace brand pack (ADR-0024) replaces them at run time.
  */
 export const DEFAULT_PACK_ACCENTS = {
-  hue: "#6ae8fa",
+  hue: "#4a4de8",
   light: {
-    accent: "rgba(196, 40, 221, 1)",
-    onAccent: "rgba(248, 252, 255, 1)",
+    accent: "#4A4DE8",
+    onAccent: "#FFFFFF",
   },
   dark: {
-    accent: "#6ae8fa",
-    onAccent: "#0E131D",
+    accent: "#4A4DE8",
+    onAccent: "#FFFFFF",
   },
 } as const;

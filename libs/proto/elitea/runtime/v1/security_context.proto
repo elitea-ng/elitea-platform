@@ -42,6 +42,30 @@ message ExecutionSecurityContextV1 {
   // credential: only the credential broker can turn it into one.
   string agent_session_ref = 17;
   reserved 18 to 31;
+  // The application and version the run executes (#1119); 0 for a run with
+  // none. The credential broker compares the agent binding with them.
+  int64 application_id = 32;
+  int64 application_version_id = 33;
+  // The governed-credential-references entry (#1119): the exact credential
+  // reference admission resolved for each credentialed toolkit of the bound
+  // agent, and the toolkit digest it was resolved at. A redemption must
+  // name the reference frozen here for its toolkit.
+  repeated GovernedCredentialReferenceV1 credential_references = 34;
+}
+
+// GovernedCredentialReferenceV1 is one toolkit's frozen credential reference.
+message GovernedCredentialReferenceV1 {
+  int64 toolkit_id = 1;
+  // Empty, with target_binding_id, for a bound toolkit whose stored
+  // settings name no configuration reference: the broker resolves its
+  // reference from the one usable grant.
+  string credential_reference_id = 2;
+  string target_binding_id = 3;
+  // The credential reference's generation at admission.
+  int64 generation = 4;
+  // sha256 over the toolkit's stored definition (credentialgrant.ToolkitDigest).
+  DigestV1 toolkit_digest = 5;
+  reserved 6 to 15;
 }
 
 // CallerContextV1 names how the subject reached Elitea.

@@ -23,12 +23,17 @@ describe('catalogue and hue delta', () => {
   it('measures the delta per scheme against that scheme’s own anchor', () => {
     const anchorDark = hueOf(DEFAULT_BRAND_PACK.schemes.dark[BRAND_ANCHOR_TOKEN] as string);
     const anchorLight = hueOf(DEFAULT_BRAND_PACK.schemes.light[BRAND_ANCHOR_TOKEN] as string);
-    // The baseline's two anchors are genuinely different hues — that IS the
-    // §4.1 Blocker-1 finding, restated as a test.
-    expect(Math.abs(anchorDark - anchorLight)).toBeGreaterThan(60);
+    // Brand guide v3 puts both schemes' anchor on Base Indigo, so the
+    // default pack keeps both schemes on its own hue (delta 0 in each).
+    // The per-scheme anchor still matters for any pack whose two anchors
+    // differ (the old cyan-dark / magenta-light split, §4.1 Blocker 1).
+    expect(anchorDark).toBeCloseTo(anchorLight, 6);
 
     expect(hueDeltaFor('dark', defaultBrand)).toBeCloseTo(0, 6);
-    expect(hueDeltaFor('light', defaultBrand)).toBeCloseTo(anchorDark - anchorLight, 6);
+    expect(hueDeltaFor('light', defaultBrand)).toBeCloseTo(0, 6);
+    const shifted = hue(90);
+    expect(hueDeltaFor('dark', shifted)).toBeCloseTo(hueOf(shifted.hue) - anchorDark, 6);
+    expect(hueDeltaFor('light', shifted)).toBeCloseTo(hueOf(shifted.hue) - anchorLight, 6);
   });
 
   it('lands BOTH schemes on the pack hue when a pack states only a hue', () => {
@@ -71,10 +76,13 @@ describe('resolveScheme', () => {
 
   it('tints neutrals so a hue-only pack repaints the greys too', () => {
     const resolved = resolveScheme({}, hue(90), 'dark');
-    // `step.default.border` is the baseline's one mid-lightness pure grey.
+    // `step.default.border` is a mid-lightness neutral (Ink's borderStrong,
+    // a cool grey). A neutral turns by the same delta as the accents.
+    const sourceGrey = DEFAULT_BRAND_PACK.schemes.dark['step.default.border'] as string;
     const derivedGrey = resolved['step.default.border'] as string;
-    expect(derivedGrey).not.toBe(DEFAULT_BRAND_PACK.schemes.dark['step.default.border']);
-    expect(rgbaToHsla(parseColor(derivedGrey) as never).h).toBeCloseTo(90, 0);
+    expect(derivedGrey).not.toBe(sourceGrey);
+    const expectedHue = (((hueOf(sourceGrey) + hueDeltaFor('dark', hue(90))) % 360) + 360) % 360;
+    expect(rgbaToHsla(parseColor(derivedGrey) as never).h).toBeCloseTo(expectedHue, -1);
 
     // Pure white is repainted too, but at the saturation floor and clamped
     // lightness the chroma is ~1/255, so 8-bit rounding leaves only a few

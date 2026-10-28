@@ -42,6 +42,8 @@
  */
 import * as zod from "zod";
 
+export const credentialConsentStartRequestAuthorizationReferenceMax = 2048;
+
 export const CredentialConsentStartRequest = zod
   .object({
     project_id: zod
@@ -50,11 +52,18 @@ export const CredentialConsentStartRequest = zod
       .describe(
         "The tenant project. The caller needs models.credentials.governed.use there.",
       ),
-    agent_binding_id: zod.uuid(),
-    target_binding_id: zod.uuid(),
+    agent_binding_id: zod.uuid().optional(),
+    target_binding_id: zod.uuid().optional(),
+    authorization_reference: zod
+      .string()
+      .max(credentialConsentStartRequestAuthorizationReferenceMax)
+      .optional()
+      .describe(
+        "The opaque reference of an AUTHORIZATION_REQUIRED denial for a remote MCP server (`mar_` prefix), in place of the two binding ids.\n",
+      ),
   })
   .describe(
-    "ADR-0039 provider OAuth consent start (issue 1121). Names the tenant project, the agent binding and the target binding the grant is for.\n",
+    "ADR-0039 provider OAuth consent start (issue 1121). Names the tenant project and either the agent binding and the target binding the grant is for, or the authorization_reference of an AUTHORIZATION_REQUIRED pause (issue 1123), which resolves server side to both. A reference opens only for the user and the project it was issued to and for the provider in the path; sending it with either binding id is refused.\n",
   );
 
 export type CredentialConsentStartRequest = zod.input<

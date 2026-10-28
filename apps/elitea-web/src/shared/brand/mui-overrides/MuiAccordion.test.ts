@@ -38,10 +38,10 @@ describe('MuiAccordion styleOverrides', () => {
     expect(Object.keys(style).sort()).toEqual(['&:first-of-type', '&:last-of-type']);
   });
 
-  it('radiusSm (4px) is the actual gap being closed: the ambient theme.shape.borderRadius MUI\'s own un-overridden Accordion reads is radiusMd (8px), not radiusSm', () => {
+  it('radiusSm (6px) is the actual gap being closed: the ambient theme.shape.borderRadius MUI\'s own un-overridden Accordion reads is radiusMd (10px), not radiusSm', () => {
     expect(theme.vars.shape.radiusSm).not.toBe(theme.vars.shape.radiusMd);
     expect(theme.shape.borderRadius).toBe(DEFAULT_BRAND_PACK.shape.radiusMd);
-    expect(DEFAULT_BRAND_PACK.shape.radiusSm).toBe(4);
-    expect(DEFAULT_BRAND_PACK.shape.radiusMd).toBe(8);
+    expect(DEFAULT_BRAND_PACK.shape.radiusSm).toBe(6);
+    expect(DEFAULT_BRAND_PACK.shape.radiusMd).toBe(10);
   });
 });

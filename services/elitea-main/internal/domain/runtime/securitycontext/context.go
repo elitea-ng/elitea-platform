@@ -37,6 +37,9 @@ const (
 	ContentIDPrefix = "elitea.security-context/"
 	// MaxActorChain bounds the RFC 8693 actor chain.
 	MaxActorChain = 8
+	// MaxCredentialReferences bounds the frozen credential references: one
+	// per credentialed toolkit of the bound agent.
+	MaxCredentialReferences = 64
 	// MaxBytes bounds the marshalled context.
 	MaxBytes = 16 << 10
 
@@ -87,6 +90,26 @@ type Context struct {
 	IssuedAt   time.Time
 	// AgentSessionRef is the opaque run-scoped agent session (#1151).
 	AgentSessionRef string
+	// ApplicationID and ApplicationVersionID name the version the run
+	// executes (#1119); zero for a run with none.
+	ApplicationID        int64
+	ApplicationVersionID int64
+	// CredentialReferences is the governed-credential-references entry
+	// (#1119): one frozen reference per credentialed toolkit, toolkit ids
+	// ascending.
+	CredentialReferences []CredentialReference
+}
+
+// CredentialReference is one toolkit's credential reference, resolved and
+// frozen at admission. A bound toolkit whose stored settings name no
+// configuration reference is frozen at its digest alone: the broker then
+// resolves its reference from the one usable grant, and refuses any other.
+type CredentialReference struct {
+	ToolkitID             int64
+	CredentialReferenceID string
+	TargetBindingID       string
+	Generation            int64
+	ToolkitDigest         runtimedomain.Digest
 }
 
 // Reference is the bus reference to a stored context.
@@ -147,7 +170,51 @@ func (c Context) Validate() error {
 	if c.IssuedAt.IsZero() || c.IssuedAt.UnixMilli() <= 0 {
 		return fmt.Errorf("%w: issued at is required", ErrInvalidContext)
 	}
+	if c.ApplicationID < 0 || c.ApplicationVersionID < 0 || (c.ApplicationID == 0) != (c.ApplicationVersionID == 0) {
+		return fmt.Errorf("%w: an application and its version come together", ErrInvalidContext)
+	}
+	if len(c.CredentialReferences) > MaxCredentialReferences {
+		return fmt.Errorf("%w: more than %d credential references", ErrInvalidContext, MaxCredentialReferences)
+	}
+	if len(c.CredentialReferences) > 0 && c.AgentBindingID == "" {
+		return fmt.Errorf("%w: credential references need an agent binding", ErrInvalidContext)
+	}
+	for i, ref := range c.CredentialReferences {
+		if ref.ToolkitID <= 0 || (i > 0 && ref.ToolkitID <= c.CredentialReferences[i-1].ToolkitID) ||
+			!validRef(ref.CredentialReferenceID, false) || !validRef(ref.TargetBindingID, false) ||
+			(ref.CredentialReferenceID == "") != (ref.TargetBindingID == "") ||
+			ref.Generation < 0 || ref.ToolkitDigest == (runtimedomain.Digest{}) {
+			return fmt.Errorf("%w: a credential reference is malformed or out of order", ErrInvalidContext)
+		}
+	}
 	return nil
+}
+
+// CredentialReferenceFor answers the frozen credential reference of a
+// toolkit.
+func CredentialReferenceFor(message *runtimev1.ExecutionSecurityContextV1, toolkitID int64) (CredentialReference, bool) {
+	for _, ref := range message.GetCredentialReferences() {
+		if ref.GetToolkitId() == toolkitID {
+			return CredentialReferenceOf(ref)
+		}
+	}
+	return CredentialReference{}, false
+}
+
+// CredentialReferenceOf converts one frozen reference; false when its
+// toolkit digest is not a SHA-256.
+func CredentialReferenceOf(ref *runtimev1.GovernedCredentialReferenceV1) (CredentialReference, bool) {
+	digest := ref.GetToolkitDigest()
+	if digest.GetAlgorithm() != runtimev1.DigestAlgorithmV1_DIGEST_ALGORITHM_V1_SHA256 ||
+		len(digest.GetValue()) != len(runtimedomain.Digest{}) {
+		return CredentialReference{}, false
+	}
+	out := CredentialReference{
+		ToolkitID: ref.GetToolkitId(), CredentialReferenceID: ref.GetCredentialReferenceId(),
+		TargetBindingID: ref.GetTargetBindingId(), Generation: ref.GetGeneration(),
+	}
+	copy(out.ToolkitDigest[:], digest.GetValue())
+	return out, true
 }
 
 func validRef(value string, required bool) bool {
@@ -184,8 +251,17 @@ func (c Context) Proto() *runtimev1.ExecutionSecurityContextV1 {
 			AuthenticationSource: c.Caller.AuthenticationSource,
 			CallingApplicationId: c.Caller.CallingApplicationID,
 		},
-		IssuedAtUnixMillis: c.IssuedAt.UTC().UnixMilli(),
-		AgentSessionRef:    c.AgentSessionRef,
+		IssuedAtUnixMillis:   c.IssuedAt.UTC().UnixMilli(),
+		AgentSessionRef:      c.AgentSessionRef,
+		ApplicationId:        c.ApplicationID,
+		ApplicationVersionId: c.ApplicationVersionID,
+	}
+	for _, ref := range c.CredentialReferences {
+		message.CredentialReferences = append(message.CredentialReferences, &runtimev1.GovernedCredentialReferenceV1{
+			ToolkitId: ref.ToolkitID, CredentialReferenceId: ref.CredentialReferenceID,
+			TargetBindingId: ref.TargetBindingID, Generation: ref.Generation,
+			ToolkitDigest: digestProto(ref.ToolkitDigest),
+		})
 	}
 	if c.DefinitionDigest != (runtimedomain.Digest{}) {
 		message.DefinitionDigest = digestProto(c.DefinitionDigest)

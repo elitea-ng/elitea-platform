@@ -75,13 +75,12 @@ describe('the design system on the home screen (redesign)', () => {
   const tree = (env: Record<string, unknown>) =>
     renderWidgetSource<WidgetNode>(layouts.get(COUNTS_WIDGET), snap(true), { widgetFamily: 'systemMedium', ...env });
 
-  it('wears the pastel gradient and product rose in full colour, per scheme (the tokens)', () => {
+  it('wears the flat ground and signal colour in full colour, per scheme (the tokens)', () => {
     const { colors: color } = jest.requireActual('@/design/tokens') as typeof import('@/design/tokens');
     for (const scheme of ['light', 'dark'] as const) {
       const mods = modifiersOf(tree({ colorScheme: scheme, widgetRenderingMode: 'fullColor' }));
-      const ground = mods.find((m) => m.modifier === 'containerBackground')!.args[0] as { type: string; colors: string[] };
-      expect(ground.type).toBe('linearGradient');
-      expect(ground.colors).toEqual([...color[scheme].backgroundGradient.stops]);
+      const ground = mods.find((m) => m.modifier === 'containerBackground')!.args[0] as { type: string; color: string };
+      expect(ground).toEqual({ type: 'color', color: color[scheme].background });
       expect(mods.filter((m) => m.modifier === 'foregroundStyle').map((m) => m.args[0])).toContain(color[scheme].accent);
     }
   });
@@ -89,7 +88,7 @@ describe('the design system on the home screen (redesign)', () => {
   it('on a tinted or clear home screen the system draws the ground and colour', () => {
     const mods = modifiersOf(tree({ colorScheme: 'light', widgetRenderingMode: 'accented' }));
     expect(mods.find((m) => m.modifier === 'containerBackground')!.args[0]).toEqual({ type: 'hierarchical', style: 'quinary' });
-    expect(mods.filter((m) => m.modifier === 'foregroundStyle').map((m) => m.args[0])).not.toContain('#B4306A');
+    expect(mods.filter((m) => m.modifier === 'foregroundStyle').map((m) => m.args[0])).not.toContain('#4A4DE8');
   });
 
   it('every text follows Dynamic Type: a text style, never a fixed size', () => {

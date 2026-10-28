@@ -68,6 +68,10 @@ type CurrentExecutor struct {
 	indexMeta      ScheduledIndexInspector
 	inputs         ScheduledInputResolver
 	start          ScheduledIndexStarter
+	// mandates and gate make the executor mandate-bound (governed.go); both
+	// nil with credential governance off.
+	mandates ScheduleMandates
+	gate     MandateGate
 }
 
 func NewCurrentExecutor(
@@ -112,6 +116,22 @@ func (executor *CurrentExecutor) ExecuteScheduled(
 	if accessUserID == -1 {
 		accessUserID = candidate.Schedule.CreatedBy
 	}
+	governed := executor.gate != nil
+	if governed {
+		// The attached mandate, checked now, or no run; and no project
+		// system token below (governed.go).
+		var (
+			refused *ExecutionOutcome
+			err     error
+		)
+		ctx, accessUserID, refused, err = executor.admitMandate(ctx, candidate, accessUserID)
+		if err != nil {
+			return ExecutionOutcome{}, dependencyError(ctx, err)
+		}
+		if refused != nil {
+			return *refused, nil
+		}
+	}
 	toolkit, found, err := executor.toolkits.GetCurrentToolkit(
 		ctx,
 		int32(candidate.ProjectID),
@@ -138,16 +158,20 @@ func (executor *CurrentExecutor) ExecuteScheduled(
 			scheduleCredentialFailureReason,
 		), nil
 	}
-	if err := executor.systemIdentity.CheckProjectSystemIdentity(
-		ctx,
-		candidate.ProjectID,
-	); err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return ExecutionOutcome{}, contextErr
+	// A governed index run never asks for the project system token: its
+	// authority is the mandate admitted above.
+	if !governed {
+		if err := executor.systemIdentity.CheckProjectSystemIdentity(
+			ctx,
+			candidate.ProjectID,
+		); err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return ExecutionOutcome{}, contextErr
+			}
+			return scheduleInitializationFailure(
+				scheduleSystemPATFailureReason,
+			), nil
 		}
-		return scheduleInitializationFailure(
-			scheduleSystemPATFailureReason,
-		), nil
 	}
 
 	// The returned map may contain plaintext and is deliberately discarded.

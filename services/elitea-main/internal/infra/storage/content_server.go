@@ -522,6 +522,7 @@ func (s *ContentServer) GetEliteaClientToken(ctx context.Context, request *runti
 	value, err := s.runtimeToken.ResolveAccepting(ctx, claim, RuntimeContextAccept{
 		SecretsHeaderValue: !governed && acceptsField(request.GetAcceptFields(), runtimeContextFieldSecretsHeader),
 		Workspace:          acceptsField(request.GetAcceptFields(), workspaceruntime.RuntimeContextField),
+		GovernedRun:        governed,
 	})
 	if err != nil {
 		code := codes.Unavailable

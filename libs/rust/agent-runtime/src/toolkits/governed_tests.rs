@@ -1,4 +1,4 @@
-//! The governed operation client and the five reference adapters (#1120).
+//! The governed operation client and the reference adapters (#1120, #1123).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -694,6 +694,7 @@ fn every_mapping_is_in_the_shared_operation_catalogue() {
         let target_kind = match adapter.target_kind() {
             TargetKind::BaseUrl => "base_url",
             TargetKind::TenantSite => "tenant_site",
+            TargetKind::ResourceUri => "resource_uri",
         };
         assert_eq!(provider["target_kind"], target_kind, "{name}");
         assert_eq!(
@@ -712,8 +713,11 @@ fn every_mapping_is_in_the_shared_operation_catalogue() {
                 )
             })
             .collect();
+        // Every family adapter names a probe; the MCP adapter has none (a
+        // listing needs the user's consent) and the catalogue says so.
         assert!(
-            operations.contains_key(adapter.probe_operation()),
+            (name == "mcp" && adapter.probe_operation().is_empty())
+                || operations.contains_key(adapter.probe_operation()),
             "{name} probe"
         );
         for row in adapter.tool_operations() {
@@ -754,6 +758,8 @@ fn every_mapping_is_in_the_shared_operation_catalogue() {
             "aha" => aha::tools::tool_catalog(),
             "sharepoint" => sharepoint::tools::tool_catalog(),
             "qtest" => qtest::tools::tool_catalog(),
+            // A remote server's tools are its own: no fixed table.
+            "mcp" => Vec::new(),
             other => panic!("unexpected provider {other}"),
         }
         .into_iter()
