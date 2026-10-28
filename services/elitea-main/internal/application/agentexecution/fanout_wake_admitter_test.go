@@ -15,6 +15,7 @@ import (
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -139,9 +140,14 @@ func (s *fakeWakeSubmitter) Submit(_ context.Context, request SubmitRequest) (ex
 
 func TestFanoutWakeAdmitterMapsRefusalsToTypedFailures(t *testing.T) {
 	cases := map[error]string{
-		ErrFanoutWakeActorNotAllowed:               FanoutWakeFailureActorNotAllowed,
-		ErrFanoutWakeTargetGone:                    FanoutWakeFailureResponseNotParked,
-		executionapp.ErrIdempotencyConflict:        FanoutWakeFailureAdmission,
+		ErrFanoutWakeActorNotAllowed:        FanoutWakeFailureActorNotAllowed,
+		ErrFanoutWakeTargetGone:             FanoutWakeFailureResponseNotParked,
+		executionapp.ErrIdempotencyConflict: FanoutWakeFailureAdmission,
+		// REVIEW-1470 delta B: refusals that repeat for the same frozen
+		// request end the wake typed; they never give their attempt back.
+		&GovernedCredentialAdmissionError{Code: "grant_revoked"}:                FanoutWakeFailureGovernedCredential,
+		&apierr.APIError{Status: 422, Code: "pipeline_limit", Message: "limit"}: FanoutWakeFailureAdmission,
+		ErrProjectSkillUnknown:                     FanoutWakeFailureAdmission,
 		ErrFanoutWakeNotQueued:                     "",
 		executionapp.ErrAdmissionCapacityExhausted: "",
 		errors.New("database unavailable"):         "",
@@ -161,10 +167,11 @@ func TestFanoutWakeAdmitterMapsRefusalsToTypedFailures(t *testing.T) {
 		if (wantCode == "" && len(store.failed) != 0) || (wantCode != "" && (len(store.failed) != 1 || store.failed[0] != wantCode)) {
 			t.Errorf("%v: failed=%v want %q", submitErr, store.failed, wantCode)
 		}
-		// A transient refusal gives its attempt back (REVIEW-1470 #3); every
-		// pass also closes the cards of runs that ended without parking.
-		transient := errors.Is(submitErr, executionapp.ErrAdmissionCapacityExhausted) || submitErr.Error() == "database unavailable"
-		if (store.deferred == 1) != transient || store.stranded != 1 {
+		// Only a capacity refusal gives its attempt back; an unknown error
+		// keeps it and counts toward FanoutWakeMaxAttempts. Every pass also
+		// closes the cards of runs that ended without parking.
+		capacity := errors.Is(submitErr, executionapp.ErrAdmissionCapacityExhausted)
+		if (store.deferred == 1) != capacity || store.stranded != 1 {
 			t.Errorf("%v: deferred=%d stranded=%d", submitErr, store.deferred, store.stranded)
 		}
 		if strings.Contains(logs.String(), "10000000-0000-4000-8000-000000000002") || strings.Contains(logs.String(), "thread-1") {

@@ -81,11 +81,12 @@ var (
 
 // Wake failure codes stored on execution_interrupt_wakes.failure_code.
 const (
-	FanoutWakeFailureActorNotAllowed   = "actor_not_allowed"
-	FanoutWakeFailureResponseNotParked = "response_not_parked"
-	FanoutWakeFailureParkedInput       = "parked_input_invalid"
-	FanoutWakeFailureAdmission         = "admission_refused"
-	FanoutWakeFailureExhausted         = "admission_exhausted"
+	FanoutWakeFailureActorNotAllowed    = "actor_not_allowed"
+	FanoutWakeFailureResponseNotParked  = "response_not_parked"
+	FanoutWakeFailureParkedInput        = "parked_input_invalid"
+	FanoutWakeFailureAdmission          = "admission_refused"
+	FanoutWakeFailureGovernedCredential = "governed_credential_refused"
+	FanoutWakeFailureExhausted          = "admission_exhausted"
 )
 
 // CurrentFanoutWakeTurn is the server-owned side of one wake admission. Every

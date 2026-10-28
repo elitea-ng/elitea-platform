@@ -7,6 +7,7 @@ import (
 	"time"
 
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // Wake admission bounds (fanout-interrupt-decisions v1.1 §8.1).
@@ -20,10 +21,11 @@ const (
 	// FanoutWakeAdmissionLease is how long a claimed row is skipped by other
 	// admitters before it may be claimed again (database clock).
 	FanoutWakeAdmissionLease = 30 * time.Second
-	// FanoutWakeMaxAttempts ends a wake whose claims keep ending without an
-	// outcome (an admitter lost mid-pass) with the typed failure
-	// admission_exhausted. A transient refusal (capacity, unavailable) gives
-	// its attempt back, so load alone never ends an admissible wake.
+	// FanoutWakeMaxAttempts ends a wake whose admission keeps failing for a
+	// reason it cannot classify, or whose claims end without an outcome,
+	// with the typed failure admission_exhausted (cards closed, the response
+	// ends readably). Only a capacity refusal gives its attempt back, so load
+	// alone never ends an admissible wake.
 	FanoutWakeMaxAttempts = 20
 )
 
@@ -146,17 +148,25 @@ func (a *FanoutWakeAdmitter) Sweep(ctx context.Context) (int, error) {
 			a.fail(ctx, target.Turn, FanoutWakeFailureResponseNotParked)
 		case errors.Is(err, errInvalidFanoutWake):
 			a.fail(ctx, target.Turn, FanoutWakeFailureParkedInput)
+		case governedRefusal(err):
+			// A grant revoked or a reference rotated while the run waited.
+			a.fail(ctx, target.Turn, FanoutWakeFailureGovernedCredential)
 		case errors.Is(err, ErrInvalidAgentAdmission), errors.Is(err, executionapp.ErrInvalidAdmission),
-			errors.Is(err, executionapp.ErrIdempotencyConflict):
+			errors.Is(err, executionapp.ErrIdempotencyConflict), errors.Is(err, ErrProjectSkillUnknown),
+			admissionRefusal(err):
 			a.fail(ctx, target.Turn, FanoutWakeFailureAdmission)
 		case errors.Is(err, executionapp.ErrAdmissionCapacityExhausted):
-			// Stays QUEUED; the next pass after the lease retries.
+			// Stays QUEUED and gives its attempt back; the next pass after
+			// the lease retries.
 			a.deferWake(ctx, target.Turn, "capacity_exhausted")
 		default:
 			if ctx.Err() != nil {
 				return created, ctx.Err()
 			}
-			a.deferWake(ctx, target.Turn, "admission_unavailable")
+			// Stays QUEUED and keeps its attempt: an error that never
+			// clears ends the wake typed after FanoutWakeMaxAttempts.
+			// Fixed reason only: never the response, decision or input.
+			a.logger.Warn("fanout wake admission deferred", "reason", "admission_unavailable")
 		}
 	}
 	return created, nil
@@ -182,6 +192,19 @@ func (a *FanoutWakeAdmitter) admit(ctx context.Context, target FanoutWakeTarget)
 		CurrentFanoutWakeTurn: turn.Clone(),
 		TriggerOrigin:         target.TriggerOrigin,
 	})
+}
+
+// governedRefusal reports a governed-credential admission refusal.
+func governedRefusal(err error) bool {
+	var governed *GovernedCredentialAdmissionError
+	return errors.As(err, &governed)
+}
+
+// admissionRefusal reports a typed client refusal of the admission (limits,
+// composition): it will refuse the same frozen request every time.
+func admissionRefusal(err error) bool {
+	var refused *apierr.APIError
+	return errors.As(err, &refused) && refused.Status >= 400 && refused.Status < 500
 }
 
 // deferWake keeps a transiently refused wake QUEUED for the next pass after

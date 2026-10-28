@@ -4,8 +4,10 @@ package repos
 // real PostgreSQL (fanout-interrupt-decisions §5, §8a; REVIEW-1470 #2, #3).
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
 )
 
@@ -338,4 +341,58 @@ func TestRunLookupsByResponseUseTheClientMessageIndex(t *testing.T) {
 		}
 	}
 	assertDecideLatencyBudget(t, h)
+}
+
+type refusingSubmitter struct{ err error }
+
+func (s refusingSubmitter) Submit(context.Context, agentexecutionapp.SubmitRequest) (executionapp.AdmissionOutcome, error) {
+	return executionapp.AdmissionOutcome{}, s.err
+}
+
+// TestAWakeRefusedForGovernedCredentialsEndsReadably (REVIEW-1470 delta B):
+// the governed freeze refuses the wake's admission (a grant revoked or a
+// reference rotated while the run waited for the human). The wake ends FAILED
+// with governed_credential_refused, its cards are CANCELLED and the response
+// carries the typed readable error; it never gives its attempt back. An
+// unclassified error keeps the wake QUEUED and its attempt counted.
+func TestAWakeRefusedForGovernedCredentialsEndsReadably(t *testing.T) {
+	w := newWakeHarness(t)
+	response := w.newResponse()
+	card := w.queueWake(response)
+	admitter, err := agentexecutionapp.NewFanoutWakeAdmitter(w.repo, refusingSubmitter{err: &agentexecutionapp.GovernedCredentialAdmissionError{Code: "grant_revoked"}}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admitter.Sweep(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.wakes(response); len(got) != 1 || !strings.HasPrefix(got[0], "FAILED:1:") {
+		t.Fatalf("wake = %v", got)
+	}
+	if state := w.cardState(response, card); state != "CANCELLED" {
+		t.Fatalf("card = %s", state)
+	}
+	var code string
+	if err := w.pool.QueryRow(t.Context(), `SELECT meta ->> 'error_code' FROM p_1.chat_message_group WHERE uuid = $1::uuid`, response).Scan(&code); err != nil {
+		t.Fatal(err)
+	}
+	if code != "graph.fanout.wake_failed.governed_credential_refused" {
+		t.Fatalf("response error code = %q", code)
+	}
+
+	unknown := w.newResponse()
+	w.queueWake(unknown)
+	admitter, err = agentexecutionapp.NewFanoutWakeAdmitter(w.repo, refusingSubmitter{err: errors.New("something new")}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admitter.Sweep(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.wakes(unknown); len(got) != 1 || !strings.HasPrefix(got[0], "QUEUED:1:") {
+		t.Fatalf("wake after an unknown error = %v", got)
+	}
+	if n := w.count(`SELECT admission_attempts FROM elitea_runtime.execution_interrupt_wakes WHERE root_response_id = $1::uuid`, unknown); n != 1 {
+		t.Fatalf("an unknown error gave back its attempt: attempts = %d", n)
+	}
 }
