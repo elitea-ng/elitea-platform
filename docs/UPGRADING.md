@@ -14,6 +14,16 @@ newest entry is first.
   still needs a verified delegation. List `elitea_native` to let a
   mandate stand in for one. The field is `omitempty`, so stored revisions
   keep their digests.
+* **elitea-worker (every run, governed or not): a chat turn's final event no
+  longer carries toolkit settings.** The worker copied each toolkit's
+  resolved settings, credentials included, into
+  `response_metadata.application_details.version_details.tools[].settings`
+  on the final `full_message`. That reached the browser and was kept in
+  `elitea_runtime.execution_replay_events` and `execution_replay_state`. The
+  field is dropped now; tool names and ids stay. Rows written before the
+  upgrade still hold it, so rotate any toolkit credential that a user who
+  must not see it could have streamed, and leave the replay tables to their
+  usual pruning.
 * `migrate-references --copy-to vault` accepts a deployment without
   `SECRETS_MASTER_KEY` only when `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true`,
   the same rule elitea-main applies at start-up.

@@ -3496,6 +3496,16 @@ fn public_application_details(
     if let Some(Value::Object(version)) = application.get_mut("version_details") {
         version.remove("instructions");
         version.remove("project_context");
+        // A toolkit's settings hold its resolved credentials (a token, a
+        // password, a private key), and these details are published on the
+        // final `full_message` to the browser and the replay log.
+        if let Some(Value::Array(tools)) = version.get_mut("tools") {
+            for tool in tools {
+                if let Value::Object(tool) = tool {
+                    tool.remove("settings");
+                }
+            }
+        }
     }
     let application = Value::Object(application);
     let length = serde_json::to_vec(&application)
@@ -3733,5 +3743,30 @@ mod public_application_metadata_tests {
         );
         assert_eq!(original["version_details"]["instructions"], instructions);
         assert_eq!(original["instructions"], instructions);
+    }
+
+    #[test]
+    fn toolkit_credentials_never_reach_public_event_metadata() {
+        let application = serde_json::json!({
+            "id": 83,
+            "version_details": {
+                "id": 90,
+                "tools": [{
+                    "id": 2,
+                    "name": "jira",
+                    "type": "jira",
+                    "settings": {"jira_configuration": {"token": "canary-token"}}
+                }]
+            }
+        });
+        let original = application.as_object().expect("application");
+        let projected = public_application_details(original).expect("bounded public metadata");
+        assert_eq!(projected["version_details"]["tools"][0]["name"], "jira");
+        assert!(projected["version_details"]["tools"][0].get("settings").is_none());
+        assert!(!projected.to_string().contains("canary-token"));
+        assert_eq!(
+            original["version_details"]["tools"][0]["settings"]["jira_configuration"]["token"],
+            "canary-token"
+        );
     }
 }
