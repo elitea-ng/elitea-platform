@@ -2,7 +2,7 @@
 //
 //     release-retention.yml, through actions/github-script, by an admin only:
 //       const { main } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/prune-releases.mjs`);
-//       const code = await main({ github, owner, repo, org, keepReleases, keepPrereleases, dryRun, deleteRetired, deadline });
+//       const code = await main({ github, owner, repo, org, keepReleases, keepPrereleases, dryRun, retired, deadline });
 //
 // WHAT. publish.yml's `prune` job only ever deletes pre-releases. Stable
 // releases, and the images and charts each one published, are kept until an
@@ -17,15 +17,18 @@
 //     version created before the oldest kept release. Untagged versions are
 //     what superseded pushes, rolled-back runs and old attestations left;
 //     nothing a kept release pushed is older than that release.
-//   * with `deleteRetired`, every container package this repository published
-//     that no workflow publishes any more: not a release image or chart, not a
-//     CI image (`ci-*`), not in KEEP_PACKAGES. The dry run lists them.
+//   * the whole container packages named in `retired`, which no workflow
+//     publishes any more. Named, not found: a workflow token cannot list the
+//     org's packages (GitHub answers "Invalid argument"). Each must be this
+//     repository's, and not a release image or chart, a CI image (`ci-*`) or
+//     in KEEP_PACKAGES; one that is not refuses the whole run before anything
+//     is deleted.
 //
 // The package lists are publish.yml's rollback arrays, read as
 // prune-prereleases.mjs reads them.
 //
 // BUDGET AND ORDER are prune-prereleases.mjs's, through its `deleter`: the
-// run waits out the rate limit (the first run had some 11,000 versions to
+// run waits out the rate limit (the first run had some 11,250 versions to
 // delete) and stops cleanly before `deadline`; packages go first, each
 // manifest with its signatures, then each tag and then its release; a version
 // GitHub refuses to delete is reported and kept. Every step is safe to repeat:
@@ -102,15 +105,17 @@ export function planPackage(versions, tags, cutoff) {
   return { remove: [...remove, ...orphans, ...untagged], kept };
 }
 
-/** This repository's container packages that nothing publishes any more. */
-export function retiredPackages(packages, repo, images, charts) {
-  const live = new Set([...images, ...charts.map((c) => `charts/${c}`)]);
-  return packages
-    .filter((p) => p.repository && p.repository.name === repo)
-    .map((p) => p.name)
-    .filter((name) => !live.has(name) && !name.startsWith("ci-") && !KEEP_PACKAGES.has(name))
-    .sort();
+/** Why `name` may not be deleted as a retired package, or null. */
+export function refuseRetired(name, images, charts) {
+  if (!/^[a-z0-9][a-z0-9._/-]*$/.test(name)) return "is not a package name";
+  if (images.includes(name) || charts.some((c) => `charts/${c}` === name)) return "is a release image or chart publish.yml still publishes";
+  if (name.startsWith("ci-")) return "is a CI image; ci-image-cleanup.yml prunes those";
+  if (KEEP_PACKAGES.has(name)) return "is still in use (KEEP_PACKAGES)";
+  return null;
 }
+
+/** The space- or comma-separated package names of the workflow input. */
+export const parseRetired = (text) => [...new Set(String(text || "").split(/[\s,]+/).filter(Boolean))].sort();
 
 /** Returns 0 (also when it stopped at the deadline; it says so), or 2 for a bad argument. A failed API call throws. */
 export async function main({
@@ -121,7 +126,7 @@ export async function main({
   keepReleases,
   keepPrereleases,
   dryRun = true,
-  deleteRetired = false,
+  retired = [],
   deadline = Infinity,
   root = ROOT,
   log = console.log,
@@ -140,6 +145,33 @@ export async function main({
   }
   const lists = readPackageLists(root, log);
   if (!lists) return 2;
+  for (const name of retired) {
+    const reason = refuseRetired(name, lists.images, lists.charts);
+    if (reason) {
+      log(`::error::retired package ${JSON.stringify(name)} ${reason}; nothing deleted`);
+      return 2;
+    }
+  }
+  // Checked before anything is deleted: a package of another repository, or a
+  // typo, refuses the run.
+  const retiredFound = [];
+  for (const name of retired) {
+    let pkg;
+    try {
+      ({ data: pkg } = await github.rest.packages.getPackageForOrganization({ package_type: "container", package_name: name, org }));
+    } catch (error) {
+      if (error && error.status === 404) {
+        log(`retired package ${name}: no such package; skipped`);
+        continue;
+      }
+      throw new Error(`GET package ${name} failed: ${error && error.message}`);
+    }
+    if (!pkg.repository || pkg.repository.name !== repo) {
+      log(`::error::retired package ${name} belongs to ${(pkg.repository && pkg.repository.name) || "no repository"}, not ${repo}; nothing deleted`);
+      return 2;
+    }
+    retiredFound.push(name);
+  }
 
   const releases = await github.paginate(github.rest.repos.listReleases, { owner, repo, per_page: 100 });
   const { keptStable, doomedStable, doomedPre, kept, cutoff } = plan(releases, keepReleases, keepPrereleases);
@@ -176,15 +208,8 @@ export async function main({
       log(`${name}: ${removed} of ${all.length} version(s) ${dryRun ? "would be " : ""}deleted`);
     }
 
-    await del.budget(10);
-    const packages = await github.paginate(github.rest.packages.listPackagesForOrganization, { org, package_type: "container", per_page: 100 });
-    const retired = retiredPackages(packages, repo, lists.images, lists.charts);
-    if (!retired.length) log("no retired packages");
-    for (const name of retired) {
-      if (!deleteRetired) {
-        log(`retired package ${name}: kept (deleteRetired is off)`);
-        continue;
-      }
+    if (!retired.length) log("no retired packages named");
+    for (const name of retiredFound) {
       const outcome = await del.remove(() => github.rest.packages.deletePackageForOrg({ package_type: "container", package_name: name, org }), `DELETE package ${name}`);
       if (outcome !== "refused") log(`retired package ${name}: ${dryRun ? "would be " : ""}deleted`);
     }

@@ -62,14 +62,16 @@ test("orphaned signatures go; a signature of a live manifest stays", () => {
   assert.deepEqual(p.planPackage(versions, new Set(), null).remove.map((v) => v.id), [3]);
 });
 
-test("retired packages are this repository's, and never a live, CI or kept one", () => {
-  const pkg = (name, repo = "elitea-platform") => ({ name, repository: { name: repo } });
-  const packages = [pkg("elitea-main"), pkg("charts/elitea"), pkg("ci-elitea-main"), pkg("ci-cache-elitea-web"), pkg("buildkit"), pkg("old-image"), pkg("charts/old"), pkg("other", "elitea-e2e-llm"), { name: "orphan" }];
-  assert.deepEqual(p.retiredPackages(packages, "elitea-platform", ["elitea-main"], ["elitea"]), ["charts/old", "old-image"]);
+test("a retired package is never a live, CI or kept one", () => {
+  const refuse = (name) => p.refuseRetired(name, ["elitea-main"], ["elitea"]);
+  for (const name of ["elitea-main", "charts/elitea", "ci-elitea-main", "ci-cache-elitea-web", "buildkit", "Bad Name", ""]) assert.ok(refuse(name), name);
+  for (const name of ["old-image", "charts/old"]) assert.equal(refuse(name), null, name);
+  assert.deepEqual(p.parseRetired(" b, a  a\nc "), ["a", "b", "c"]);
+  assert.deepEqual(p.parseRetired(""), []);
 });
 
 class FakeGithub {
-  constructor(releases, packages, orgPackages = []) {
+  constructor(releases, packages, orgPackages = {}) {
     this.releases = releases;
     this.packages = packages;
     this.orgPackages = orgPackages;
@@ -86,7 +88,10 @@ class FakeGithub {
       rateLimit: { get: async () => ({ data: { resources: { core: { remaining: 5000, reset: 0 } } } }) },
       packages: {
         getAllPackageVersionsForPackageOwnedByOrg: { endpoint: "versions" },
-        listPackagesForOrganization: { endpoint: "packages" },
+        getPackageForOrganization: async ({ package_name }) => {
+          if (!Object.hasOwn(self.orgPackages, package_name)) throw Object.assign(new Error("Not Found"), { status: 404 });
+          return { data: { name: package_name, repository: { name: self.orgPackages[package_name] } } };
+        },
         deletePackageVersionForOrg: async ({ package_name, package_version_id }) => record(`pkg/${package_name}/${package_version_id}`),
         deletePackageForOrg: async ({ package_name }) => record(`package/${package_name}`),
       },
@@ -95,7 +100,6 @@ class FakeGithub {
 
   async paginate(method, params) {
     if (method === this.rest.repos.listReleases) return this.releases;
-    if (method === this.rest.packages.listPackagesForOrganization) return this.orgPackages;
     if (!Object.hasOwn(this.packages, params.package_name)) throw Object.assign(new Error("Not Found"), { status: 404 });
     return this.packages[params.package_name];
   }
@@ -119,21 +123,19 @@ async function run(github, options = {}) {
 }
 
 const world = () =>
-  new FakeGithub([rel(1, "v5.0.0", 1), rel(2, "v6.0.0", 2)], { "elitea-main": [ver(10, ["5.0.0", "5.0"], 1), ver(11, [], 1), ver(12, ["6.0.0", "6.0", "latest"], 2)] }, [
-    { name: "old-image", repository: { name: "elitea-platform" } },
-  ]);
+  new FakeGithub([rel(1, "v5.0.0", 1), rel(2, "v6.0.0", 2)], { "elitea-main": [ver(10, ["5.0.0", "5.0"], 1), ver(11, [], 1), ver(12, ["6.0.0", "6.0", "latest"], 2)] }, { "old-image": "elitea-platform", "foreign-image": "elitea-e2e-llm" });
 
 test("a run deletes packages, retired packages when asked, then releases, then tags", async () => {
   const github = world();
-  const [code, lines] = await run(github, { deleteRetired: true });
+  const [code, lines] = await run(github, { retired: ["old-image", "gone-image"] });
   assert.equal(code, 0);
   assert.deepEqual(github.calls, ["pkg/elitea-main/10", "pkg/elitea-main/11", "package/old-image", "ref/tags/v5.0.0", "release/1"]);
   assert.equal(lines.at(-1), "1 release(s) and 2 package version(s) deleted");
 });
 
-test("a dry run and a run without deleteRetired delete nothing they were not asked to", async () => {
+test("a dry run and a run naming no retired package delete nothing they were not asked to", async () => {
   const dry = world();
-  const [code, lines] = await run(dry, { dryRun: true, deleteRetired: true });
+  const [code, lines] = await run(dry, { dryRun: true, retired: ["old-image"] });
   assert.equal(code, 0);
   assert.deepEqual(dry.calls, []);
   assert.match(lines[0], /^DRY RUN/);
@@ -156,6 +158,16 @@ test("a run waits out the rate limit, and stops cleanly when the deadline comes 
   assert.equal(stopped, 0);
   assert.deepEqual(late.calls, ["pkg/elitea-main/10"]);
   assert.match(lines.at(-1), /stopped at the deadline after 1 package version/);
+});
+
+test("a retired package of another repository, or a live one, refuses the run before any delete", async () => {
+  for (const retired of [["foreign-image"], ["old-image", "elitea-main"]]) {
+    const github = world();
+    const [code, lines] = await run(github, { retired });
+    assert.equal(code, 2, JSON.stringify(retired));
+    assert.deepEqual(github.calls, []);
+    assert.match(lines.at(-1), /nothing deleted/);
+  }
 });
 
 test("bad arguments are refused before any call", async () => {

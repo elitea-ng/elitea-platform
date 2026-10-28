@@ -13,8 +13,8 @@ name: Release Retention
 # pre-releases on its own (the newest PRERELEASE_KEEP per channel stay, and a
 # stable release takes every pre-release cut before it); stable releases go
 # only here. Leave dry_run on first, read the log, then run it again with
-# dry_run off. A workflow token gets 1,000 API calls an hour, so a long run
-# waits out the limit and stops cleanly before the job times out: run it
+# dry_run off. A workflow token gets a few thousand API calls an hour, so a
+# long run waits out the limit and stops cleanly before the job times out: run it
 # again and it carries on where it stopped.
 
 on:
@@ -28,10 +28,14 @@ on:
         description: Pre-releases to keep per channel (nightly, dev), of those cut after the newest stable release.
         type: number
         default: 3
-      delete_retired:
-        description: Also delete the container packages no workflow publishes any more (the dry run lists them).
-        type: boolean
-        default: false
+      retired_packages:
+        description: >-
+          Whole container packages to delete, space- or comma-separated, that
+          no workflow publishes any more. Each must be this repository's and
+          not a release image or chart, a ci-* image or buildkit; anything else
+          refuses the run before it deletes anything.
+        type: string
+        default: ""
       dry_run:
         description: List what would be deleted, delete nothing.
         type: boolean
@@ -89,12 +93,12 @@ jobs:
         env:
           KEEP_RELEASES: ${{ inputs.keep_releases }}
           KEEP_PRERELEASES: ${{ inputs.keep_prereleases }}
-          DELETE_RETIRED: ${{ inputs.delete_retired == true }}
+          RETIRED_PACKAGES: ${{ inputs.retired_packages }}
           DRY_RUN: ${{ inputs.dry_run != false }}
           ORG: ${{ github.repository_owner }}
         with:
           script: |
-            const { main } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/prune-releases.mjs`);
+            const { main, parseRetired } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/prune-releases.mjs`);
             const code = await main({
               github,
               owner: context.repo.owner,
@@ -102,7 +106,7 @@ jobs:
               org: process.env.ORG,
               keepReleases: Number(process.env.KEEP_RELEASES),
               keepPrereleases: Number(process.env.KEEP_PRERELEASES),
-              deleteRetired: process.env.DELETE_RETIRED === "true",
+              retired: parseRetired(process.env.RETIRED_PACKAGES),
               dryRun: process.env.DRY_RUN === "true",
               // Stop 20 minutes before the job's timeout, so the log says where it stopped.
               deadline: Date.now() + 330 * 60 * 1000,

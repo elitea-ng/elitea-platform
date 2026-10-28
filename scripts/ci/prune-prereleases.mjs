@@ -35,7 +35,7 @@
 // (and a missing tag is a 404 it ignores). Each manifest's signatures go
 // right after it, so a stop never strands them.
 //
-// BUDGET. A workflow token gets 1,000 calls an hour. The run waits out the
+// BUDGET. A workflow token gets a few thousand calls an hour. The run waits out the
 // limit while it has time before `deadline`, and stops cleanly when it has not;
 // the next run carries on. A version GitHub refuses to delete (a public one
 // pulled more than 5,000 times) is reported and kept, not fatal.
