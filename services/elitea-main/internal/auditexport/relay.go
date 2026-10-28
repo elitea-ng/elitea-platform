@@ -173,6 +173,11 @@ func (r *AuditEventsRelay) Close() {
 func (r *AuditEventsRelay) dropLockLocked() {
 	if r.lockConn != nil {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Unlock first: closing the session releases the lock too, but only
+		// once the server has noticed the backend exit, so a replica asking
+		// right after would still find it held. Best effort; the close below
+		// is the backstop.
+		_, _ = r.lockConn.Exec(closeCtx, `SELECT pg_advisory_unlock($1)`, lockKey(StreamAdminAudit))
 		_ = r.lockConn.Close(closeCtx) // ends the session, which releases the lock
 		cancel()
 		r.lockConn = nil

@@ -386,8 +386,10 @@ func TestAuditEventsRelayGivesEachSinkItsOwnPosition(t *testing.T) {
 	// A sink dropped from the configuration loses its position, so it no
 	// longer holds the retention sweep back.
 	solo := newRelay(t, pool, healthy, nil)
-	relay.Close()
-	_, _ = solo.Drain(context.Background())
+	relay.Close() // releases the relay lock at once, so solo's pass runs
+	if _, err := solo.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	var n int
 	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM elitea_runtime.audit_export_cursors WHERE sink = 'webhook'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("removed sink's position rows = %d, %v", n, err)

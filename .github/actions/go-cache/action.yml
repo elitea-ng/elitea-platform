@@ -97,6 +97,9 @@ runs:
         set -euo pipefail
         cd "$GITHUB_WORKSPACE"
         for dir in $MODDIRS; do
+          # A go.work.sum names the workspace root, which is not a module;
+          # its modules are listed through their own go.sum lines.
+          [ -f "$dir/go.mod" ] || continue
           for attempt in 1 2 3 4; do
             if (cd "$dir" && GOWORK=off go mod download); then break; fi
             if [ "$attempt" = 4 ]; then echo "::error::go mod download failed four times in $dir"; exit 1; fi
