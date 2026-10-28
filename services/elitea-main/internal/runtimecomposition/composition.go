@@ -1213,6 +1213,14 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	settlementOptions = append(settlementOptions, workspaceSettlementHooks(dependencies.Workspace, dependencies.Logger)...)
 	settlementOptions = append(settlementOptions, activitySettlementHooks(dependencies.ConversationActivity)...)
+	// A run that ended without parking leaves cards nothing can apply; the
+	// wake sweep closes them (contract §5, §8a). Kick it once the turn settles.
+	settlementOptions = append(settlementOptions, executionapp.WithAfterSettleHooks(
+		func(_ context.Context, proposal executionapp.SettlementProposal, _ executionapp.SettlementReceipt) {
+			if changesConversationActivity(proposal) && interruptSignals.Wakes != nil {
+				interruptSignals.Wakes.Kick()
+			}
+		}))
 	settlements, err := executionapp.NewSettlementService(settlementsRepository, settlementOptions...)
 	if err != nil {
 		return nil, err

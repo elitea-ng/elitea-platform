@@ -336,9 +336,9 @@ func (r *ExecutionInterruptRepository) Decide(ctx context.Context, input domain.
 	selector := input.Selector
 	var result domain.DecideResult
 	var notice resolvedNotice
-	var wakeQueued bool
+	var wakeQueued, runEnded bool
 	err = r.projects.WithinProjectTx(ctx, selector.ProjectID, interruptWriteTx, func(tx sqlExecutor) error {
-		notice, wakeQueued = resolvedNotice{}, false
+		notice, wakeQueued, runEnded = resolvedNotice{}, false, false
 		if _, err := lockOwnedResponse(ctx, tx, selector, true); err != nil {
 			return err
 		}
@@ -346,13 +346,27 @@ func (r *ExecutionInterruptRepository) Decide(ctx context.Context, input domain.
 			return err
 		}
 		var decisionRevision int64
-		err := tx.QueryRow(ctx, `SELECT decision_revision FROM elitea_runtime.execution_interrupt_responses
-WHERE root_response_id = $1::uuid AND project_id = $2 FOR UPDATE`, selector.ResponseMessageID, selector.ProjectID).Scan(&decisionRevision)
+		var ended bool
+		var claimID string
+		err := tx.QueryRow(ctx, `SELECT response.decision_revision,`+runEndedColumnsSQL+`
+FROM elitea_runtime.execution_interrupt_responses response`+latestExecutionSQL+`
+WHERE response.root_response_id = $1::uuid AND response.project_id = $2
+FOR UPDATE OF response`, selector.ResponseMessageID, selector.ProjectID).Scan(&decisionRevision, &ended, &claimID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.ErrNotFound
 		}
 		if err != nil {
 			return err
+		}
+		// A run that ended without parking can never apply a decision: its
+		// cards are closed here (committed) and the decision is refused.
+		if ended {
+			closedNotice, err := closeCardsAtRunEnd(ctx, tx, selector.ResponseMessageID, claimID)
+			if err != nil {
+				return err
+			}
+			notice, runEnded = closedNotice, true
+			return nil
 		}
 		var row lockedInterrupt
 		err = tx.QueryRow(ctx, `
@@ -439,6 +453,9 @@ SELECT decided.revision, bumped.decision_revision, bumped.parked_execution_id, b
 	}
 	// After commit only: the frame and the wake row are durable now.
 	r.signals.resolved(ctx, notice)
+	if runEnded {
+		return domain.DecideResult{}, domain.ErrAlreadyResolved
+	}
 	r.signals.wakeQueued(wakeQueued)
 	return result, nil
 }
@@ -664,7 +681,16 @@ func (r *ExecutionInterruptRepository) SupersedeForResponse(ctx context.Context,
 // closeOpenExecutionInterrupts returns the closed cards and the replay notice
 // the caller owes after its commit.
 func closeOpenExecutionInterrupts(ctx context.Context, tx sqlExecutor, rootResponseID string, state domain.State, by domain.Closer) ([]domain.Resolved, resolvedNotice, error) {
-	if tx == nil || !domain.ValidResponseMessageID(rootResponseID) || !by.Valid() {
+	return closeOpenCards(ctx, tx, rootResponseID, state, state, by)
+}
+
+// closeOpenCards moves PENDING cards to pendingTo and DECIDED cards to
+// decidedTo. A run that ended without parking closes a DECIDED card as
+// SUPERSEDED (it may already have been applied) and a PENDING one as
+// CANCELLED (contract §5).
+func closeOpenCards(ctx context.Context, tx sqlExecutor, rootResponseID string, pendingTo, decidedTo domain.State, by domain.Closer) ([]domain.Resolved, resolvedNotice, error) {
+	if tx == nil || !domain.ValidResponseMessageID(rootResponseID) || !by.Valid() ||
+		!closingState(pendingTo) || !closingState(decidedTo) {
 		return nil, resolvedNotice{}, domain.ErrInvalidClose
 	}
 	// Take the per-response lock that Raise takes, so a raise in flight
@@ -686,22 +712,24 @@ func closeOpenExecutionInterrupts(ctx context.Context, tx sqlExecutor, rootRespo
 	rows, err := tx.Query(ctx, `
 WITH closed AS (
   UPDATE elitea_runtime.execution_interrupts
-  SET state = $2, revision = revision + 1, closed_at = clock_timestamp(), updated_at = clock_timestamp()
+  SET state = CASE state WHEN 'PENDING' THEN $2 ELSE $5 END,
+      revision = revision + 1, closed_at = clock_timestamp(), updated_at = clock_timestamp()
   WHERE root_response_id = $1::uuid AND state IN ('PENDING', 'DECIDED')
-  RETURNING root_response_id, interrupt_key, interrupt_id, revision
+  RETURNING root_response_id, interrupt_key, interrupt_id, revision, state
 ), audited AS (
   INSERT INTO elitea_runtime.execution_interrupt_audit (root_response_id, interrupt_key, transition, revision, actor_id, claim_id)
-  SELECT root_response_id, interrupt_key, $2, revision, $3, $4 FROM closed
+  SELECT root_response_id, interrupt_key, state, revision, $3, $4 FROM closed
 )
-SELECT interrupt_key, interrupt_id, revision FROM closed ORDER BY interrupt_key`, rootResponseID, string(state), actor, claim)
+SELECT interrupt_key, interrupt_id, revision, state FROM closed ORDER BY interrupt_key`,
+		rootResponseID, string(pendingTo), actor, claim, string(decidedTo))
 	if err != nil {
 		return nil, resolvedNotice{}, fmt.Errorf("execution interrupt close: %w", err)
 	}
 	defer rows.Close()
 	closed := []domain.Resolved{}
 	for rows.Next() {
-		resolved := domain.Resolved{State: state}
-		if err := rows.Scan(&resolved.InterruptKey, &resolved.InterruptID, &resolved.Revision); err != nil {
+		var resolved domain.Resolved
+		if err := rows.Scan(&resolved.InterruptKey, &resolved.InterruptID, &resolved.Revision, &resolved.State); err != nil {
 			return nil, resolvedNotice{}, err
 		}
 		closed = append(closed, resolved)
@@ -722,7 +750,7 @@ WITH unparked AS (
 )
 UPDATE elitea_runtime.execution_interrupt_wakes
 SET state = 'FAILED', failure_code = $2, updated_at = clock_timestamp()
-WHERE root_response_id = $1::uuid AND state = 'QUEUED'`, rootResponseID, wakeClosedFailureCode(state)); err != nil {
+WHERE root_response_id = $1::uuid AND state = 'QUEUED'`, rootResponseID, wakeClosedFailureCode(pendingTo)); err != nil {
 		return nil, resolvedNotice{}, fmt.Errorf("execution interrupt close: %w", err)
 	}
 	notice, err := emitInterruptResolved(ctx, tx, projectID, rootResponseID, closed)
@@ -730,4 +758,8 @@ WHERE root_response_id = $1::uuid AND state = 'QUEUED'`, rootResponseID, wakeClo
 		return nil, resolvedNotice{}, err
 	}
 	return closed, notice, nil
+}
+
+func closingState(state domain.State) bool {
+	return state == domain.StateCancelled || state == domain.StateSuperseded
 }

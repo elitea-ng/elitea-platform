@@ -192,18 +192,100 @@ func fanoutWakeActorRefused(ctx context.Context, tx sqlExecutor, permissions int
 	return false
 }
 
-// FailFanoutWake ends a QUEUED wake with a typed reason. The cards stay
-// DECIDED and visible; nothing is admitted for this wake.
+// FailFanoutWake ends a QUEUED wake with a typed reason. Nothing can apply
+// the response's decisions any more, so in the same transaction its open
+// cards are CANCELLED and the parked response ends with a typed, readable
+// error (graph.fanout.wake_failed.<code>, support reference: the parked
+// execution) instead of a park nothing will ever wake.
 func (r *ExecutionInterruptRepository) FailFanoutWake(ctx context.Context, turn agentexecutionapp.CurrentFanoutWakeTurn, failureCode string) error {
-	if r == nil || r.shared == nil || !domain.ValidResponseMessageID(turn.ResponseMessageID) || turn.DecisionRevision < 1 {
+	if r == nil || r.shared == nil || r.projects == nil || turn.ProjectID <= 0 ||
+		!domain.ValidResponseMessageID(turn.ResponseMessageID) || turn.DecisionRevision < 1 ||
+		!domain.ValidExecutionID(turn.ParkedExecutionID) || turn.ParkedGeneration < 1 || failureCode == "" {
 		return errors.New("fanout wake failure is invalid")
 	}
-	if _, err := r.shared.Exec(ctx, `
+	var notice resolvedNotice
+	err := r.projects.WithinProjectTx(ctx, turn.ProjectID, interruptWriteTx, func(tx sqlExecutor) error {
+		notice = resolvedNotice{}
+		// The ledger's lock order: the response row, then its interrupt row.
+		var groupID int64
+		err := tx.QueryRow(ctx, `SELECT id FROM chat_message_group WHERE uuid = $1::uuid FOR UPDATE`,
+			turn.ResponseMessageID).Scan(&groupID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT 1 FROM elitea_runtime.execution_interrupt_responses
+WHERE root_response_id = $1::uuid AND project_id = $2 FOR UPDATE`, turn.ResponseMessageID, turn.ProjectID).Scan(new(int)); err != nil &&
+			!errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		tag, err := tx.Exec(ctx, `
 UPDATE elitea_runtime.execution_interrupt_wakes
 SET state = 'FAILED', failure_code = $3, updated_at = clock_timestamp()
 WHERE root_response_id = $1::uuid AND decision_revision = $2 AND state = 'QUEUED'`,
-		turn.ResponseMessageID, turn.DecisionRevision, failureCode); err != nil {
+			turn.ResponseMessageID, turn.DecisionRevision, failureCode)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return nil // admitted elsewhere, or already closed by stop, regenerate or a new turn
+		}
+		var claimID string
+		err = tx.QueryRow(ctx, `SELECT claim_id FROM elitea_runtime.execution_claims
+WHERE execution_id = $1 AND generation = $2 ORDER BY claimed_at DESC, claim_id DESC LIMIT 1`,
+			turn.ParkedExecutionID, turn.ParkedGeneration).Scan(&claimID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrLedgerFault // a parked execution ran under a claim
+		}
+		if err != nil {
+			return err
+		}
+		if _, notice, err = closeOpenCards(ctx, tx, turn.ResponseMessageID, domain.StateCancelled,
+			domain.StateCancelled, domain.Closer{ClaimID: claimID}); err != nil {
+			return err
+		}
+		if groupID == 0 {
+			return nil
+		}
+		code := fanoutWakeFailedCodePrefix + failureCode
+		_, err = tx.Exec(ctx, `
+UPDATE chat_message_group
+SET is_streaming = FALSE,
+    meta = (meta - 'fanout_parked_v1')
+        || jsonb_build_object('is_error', TRUE, 'error', $2::text, 'error_code', $3::text),
+    updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
+WHERE id = $1`, groupID, fanoutWakeFailedMessage(code, turn.ParkedExecutionID), code)
+		return err
+	})
+	if err != nil {
 		return fmt.Errorf("fail fanout wake: %w", err)
+	}
+	r.signals.resolved(ctx, notice)
+	return nil
+}
+
+// fanoutWakeFailedCodePrefix names a wake that ended without a continuation.
+const fanoutWakeFailedCodePrefix = "graph.fanout.wake_failed."
+
+// fanoutWakeFailedMessage is the response's readable error: the typed code
+// and a support reference, never the decision or the input.
+func fanoutWakeFailedMessage(code, parkedExecutionID string) string {
+	return "The run could not continue after the answered cards, and the open cards were closed (" + code +
+		"). Support reference: " + parkedExecutionID + "."
+}
+
+// DeferFanoutWake keeps a transiently refused wake QUEUED and gives back the
+// attempt its claim took: capacity pressure never exhausts an admissible
+// wake. The claim's lease (updated_at) still spaces the retries.
+func (r *ExecutionInterruptRepository) DeferFanoutWake(ctx context.Context, turn agentexecutionapp.CurrentFanoutWakeTurn) error {
+	if r == nil || r.shared == nil || !domain.ValidResponseMessageID(turn.ResponseMessageID) || turn.DecisionRevision < 1 {
+		return errors.New("fanout wake deferral is invalid")
+	}
+	if _, err := r.shared.Exec(ctx, `
+UPDATE elitea_runtime.execution_interrupt_wakes
+SET admission_attempts = GREATEST(admission_attempts - 1, 1)
+WHERE root_response_id = $1::uuid AND decision_revision = $2 AND state = 'QUEUED'`,
+		turn.ResponseMessageID, turn.DecisionRevision); err != nil {
+		return fmt.Errorf("defer fanout wake: %w", err)
 	}
 	return nil
 }

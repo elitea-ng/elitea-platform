@@ -104,6 +104,9 @@ func newWakeHarness(t *testing.T) *wakeHarness {
 func (w *wakeHarness) parkable(responseID string) {
 	w.t.Helper()
 	executionID := w.executions[responseID]
+	// A parked execution ran under a claim: the closer of record when its
+	// wake fails.
+	w.bindLiveClaim(responseID)
 	var generation string
 	if err := w.pool.QueryRow(w.t.Context(), `SELECT gen_random_uuid()::text`).Scan(&generation); err != nil {
 		w.t.Fatal(err)

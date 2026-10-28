@@ -20,12 +20,15 @@ const (
 	// FanoutWakeAdmissionLease is how long a claimed row is skipped by other
 	// admitters before it may be claimed again (database clock).
 	FanoutWakeAdmissionLease = 30 * time.Second
-	// FanoutWakeMaxAttempts ends a wake that keeps failing admission with
-	// the typed failure admission_exhausted (cards stay DECIDED and visible).
+	// FanoutWakeMaxAttempts ends a wake whose claims keep ending without an
+	// outcome (an admitter lost mid-pass) with the typed failure
+	// admission_exhausted. A transient refusal (capacity, unavailable) gives
+	// its attempt back, so load alone never ends an admissible wake.
 	FanoutWakeMaxAttempts = 20
 )
 
-// FanoutWakeStore claims QUEUED wake rows and records typed failures.
+// FanoutWakeStore claims QUEUED wake rows, records typed failures and closes
+// the cards of runs that ended without parking.
 //
 // ClaimFanoutWakes claims at most limit QUEUED rows that no other admitter
 // holds (FOR UPDATE SKIP LOCKED; a claimed row is skipped for lease on the
@@ -34,7 +37,16 @@ const (
 // exhausted, and returns the rest with their frozen request.
 type FanoutWakeStore interface {
 	ClaimFanoutWakes(ctx context.Context, limit int, lease time.Duration, maxAttempts int) ([]FanoutWakeTarget, error)
+	// FailFanoutWake ends the wake FAILED and, in the same transaction,
+	// closes the response's cards and records a typed, readable failure on
+	// the response.
 	FailFanoutWake(ctx context.Context, turn CurrentFanoutWakeTurn, failureCode string) error
+	// DeferFanoutWake keeps a transiently refused wake QUEUED and gives its
+	// attempt back.
+	DeferFanoutWake(ctx context.Context, turn CurrentFanoutWakeTurn) error
+	// CloseStrandedCards closes the open cards of responses whose run ended
+	// without parking (contract §5, §8a).
+	CloseStrandedCards(ctx context.Context) (int, error)
 }
 
 // FanoutWakeSubmitter is the ordinary agent admission (AdmissionService).
@@ -101,8 +113,16 @@ func (a *FanoutWakeAdmitter) Run(ctx context.Context) error {
 
 // Sweep runs one bounded pass and reports how many jobs it created. A row it
 // cannot admit for a transient reason (capacity, database) stays QUEUED for
-// a later pass; a typed refusal ends the row FAILED with its reason.
+// a later pass without using up an attempt; a typed refusal ends the row
+// FAILED with its reason. Each pass also closes the cards of runs that ended
+// without parking.
 func (a *FanoutWakeAdmitter) Sweep(ctx context.Context) (int, error) {
+	if _, err := a.store.CloseStrandedCards(ctx); err != nil {
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		a.logger.Warn("fanout stranded card close deferred", "reason", "unavailable")
+	}
 	targets, err := a.store.ClaimFanoutWakes(ctx, FanoutWakeSweepBatch, FanoutWakeAdmissionLease, FanoutWakeMaxAttempts)
 	if err != nil {
 		return 0, err
@@ -131,12 +151,12 @@ func (a *FanoutWakeAdmitter) Sweep(ctx context.Context) (int, error) {
 			a.fail(ctx, target.Turn, FanoutWakeFailureAdmission)
 		case errors.Is(err, executionapp.ErrAdmissionCapacityExhausted):
 			// Stays QUEUED; the next pass after the lease retries.
+			a.deferWake(ctx, target.Turn, "capacity_exhausted")
 		default:
 			if ctx.Err() != nil {
 				return created, ctx.Err()
 			}
-			// Fixed reason only: never the response, decision or input.
-			a.logger.Warn("fanout wake admission deferred", "reason", "admission_unavailable")
+			a.deferWake(ctx, target.Turn, "admission_unavailable")
 		}
 	}
 	return created, nil
@@ -162,6 +182,17 @@ func (a *FanoutWakeAdmitter) admit(ctx context.Context, target FanoutWakeTarget)
 		CurrentFanoutWakeTurn: turn.Clone(),
 		TriggerOrigin:         target.TriggerOrigin,
 	})
+}
+
+// deferWake keeps a transiently refused wake QUEUED for the next pass after
+// the lease, giving its attempt back. Fixed reason only: never the response,
+// decision or input.
+func (a *FanoutWakeAdmitter) deferWake(ctx context.Context, turn CurrentFanoutWakeTurn, reason string) {
+	if err := a.store.DeferFanoutWake(ctx, turn); err != nil && ctx.Err() == nil {
+		a.logger.Warn("fanout wake deferral was not recorded", "reason", "unavailable")
+		return
+	}
+	a.logger.Warn("fanout wake admission deferred", "reason", reason)
 }
 
 func (a *FanoutWakeAdmitter) fail(ctx context.Context, turn CurrentFanoutWakeTurn, code string) {

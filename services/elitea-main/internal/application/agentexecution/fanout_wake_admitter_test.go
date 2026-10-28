@@ -86,10 +86,12 @@ func TestFanoutWakeInputKeepsFrozenFieldsAndCarriesOnlyTheMarker(t *testing.T) {
 }
 
 type fakeWakeStore struct {
-	mu      sync.Mutex
-	targets []FanoutWakeTarget
-	failed  []string
-	claims  int
+	mu       sync.Mutex
+	targets  []FanoutWakeTarget
+	failed   []string
+	deferred int
+	stranded int
+	claims   int
 }
 
 func (s *fakeWakeStore) ClaimFanoutWakes(context.Context, int, time.Duration, int) ([]FanoutWakeTarget, error) {
@@ -106,6 +108,20 @@ func (s *fakeWakeStore) FailFanoutWake(_ context.Context, turn CurrentFanoutWake
 	defer s.mu.Unlock()
 	s.failed = append(s.failed, code)
 	return nil
+}
+
+func (s *fakeWakeStore) DeferFanoutWake(context.Context, CurrentFanoutWakeTurn) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deferred++
+	return nil
+}
+
+func (s *fakeWakeStore) CloseStrandedCards(context.Context) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stranded++
+	return 0, nil
 }
 
 type fakeWakeSubmitter struct {
@@ -144,6 +160,12 @@ func TestFanoutWakeAdmitterMapsRefusalsToTypedFailures(t *testing.T) {
 		}
 		if (wantCode == "" && len(store.failed) != 0) || (wantCode != "" && (len(store.failed) != 1 || store.failed[0] != wantCode)) {
 			t.Errorf("%v: failed=%v want %q", submitErr, store.failed, wantCode)
+		}
+		// A transient refusal gives its attempt back (REVIEW-1470 #3); every
+		// pass also closes the cards of runs that ended without parking.
+		transient := errors.Is(submitErr, executionapp.ErrAdmissionCapacityExhausted) || submitErr.Error() == "database unavailable"
+		if (store.deferred == 1) != transient || store.stranded != 1 {
+			t.Errorf("%v: deferred=%d stranded=%d", submitErr, store.deferred, store.stranded)
 		}
 		if strings.Contains(logs.String(), "10000000-0000-4000-8000-000000000002") || strings.Contains(logs.String(), "thread-1") {
 			t.Errorf("%v: log carries identities: %s", submitErr, logs.String())
