@@ -59,7 +59,22 @@ runs:
         done <<< "$COMPOSE_FILES"
         bash "${GITHUB_WORKSPACE}/scripts/ci/pull-third-party-images.sh" "${args[@]}"
 
+    # The artifact service drops a connection now and then (ECONNRESET on
+    # GetSignedArtifactURL) and download-artifact does not retry it, which
+    # failed a whole lane. One retry of the same download: a second failure
+    # still fails the job, and the maps are overwritten whole, so a partial
+    # first attempt leaves nothing behind.
     - name: Download the digest maps for this commit
+      id: digests
+      continue-on-error: true
+      uses: actions/download-artifact@v8
+      with:
+        pattern: ${{ inputs.digests-pattern }}
+        merge-multiple: true
+        path: ${{ runner.temp }}/stack-image-digests
+
+    - name: Download the digest maps for this commit (retry)
+      if: steps.digests.outcome == 'failure'
       uses: actions/download-artifact@v8
       with:
         pattern: ${{ inputs.digests-pattern }}
