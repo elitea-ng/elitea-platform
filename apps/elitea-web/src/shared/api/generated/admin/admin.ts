@@ -57,6 +57,8 @@ import type {
   AgentIdentityBinding,
   AgentIdentityBindingCreate,
   AgentIdentityBindingListResponse,
+  AgentToolkitPin,
+  AgentToolkitPinRequest,
   BackgroundJobListResponse,
   BrandingAsset,
   BrandingPackageReport,
@@ -70,6 +72,10 @@ import type {
   CredentialConsentStart,
   CredentialConsentStartRequest,
   CredentialProbeResult,
+  CredentialReference,
+  CredentialReferenceAttachment,
+  CredentialReferenceListResponse,
+  CredentialReferenceToolkitRequest,
   CredentialUseGrant,
   CredentialUseGrantCreate,
   CredentialUseGrantListResponse,
@@ -87,6 +93,7 @@ import type {
   ListAgentIdentityBindingsParams,
   ListBackgroundJobsParams,
   ListBrandingPackageVersions200,
+  ListCredentialReferencesParams,
   ListCredentialUseGrantsParams,
   ListExternalAgentIdentitiesParams,
   ListExternalAgentIdentityDriftFindingsParams,
@@ -133,6 +140,7 @@ import type {
   SendBrandingTestEmail200,
   SendBrandingTestEmailBody,
   SystemInfo,
+  UnpinAgentToolkitParams,
   UpdateUserProjectPermissionsParams,
   UploadBrandingAssetBody,
   UserDeleteParams,
@@ -8718,6 +8726,1958 @@ export function useDetachIndexScheduleMandate<
     projectId,
     toolkitId,
     indexName,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listCredentialReferencesResponse200 = {
+  data: CredentialReferenceListResponse;
+  status: 200;
+};
+
+export type listCredentialReferencesResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listCredentialReferencesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listCredentialReferencesResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listCredentialReferencesResponseSuccess =
+  listCredentialReferencesResponse200 & {
+    headers: Headers;
+  };
+export type listCredentialReferencesResponseError = (
+  | listCredentialReferencesResponse400
+  | listCredentialReferencesResponse401
+  | listCredentialReferencesResponse403
+) & {
+  headers: Headers;
+};
+
+export type listCredentialReferencesResponse =
+  | listCredentialReferencesResponseSuccess
+  | listCredentialReferencesResponseError;
+
+export const getListCredentialReferencesUrl = (
+  params: ListCredentialReferencesParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/credential_references?${stringifiedParams}`
+    : `/admin/credential_references`;
+};
+
+/**
+ * ADR-0039 credential references of one tenant project, newest first. A reference names where a governed credential lives (backend and a backend-relative locator), never a value. Gated on `models.agent_identity.bindings.manage` or `models.agent_identity.bindings.approve`. Mounted only when the enterprise credential governance flag is on.
+ * @summary List a project's credential references
+ */
+export const listCredentialReferences = async (
+  params: ListCredentialReferencesParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listCredentialReferencesResponse> => {
+  return eliteaFetch<listCredentialReferencesResponse>(
+    getListCredentialReferencesUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListCredentialReferencesQueryKey = (
+  params?: ListCredentialReferencesParams,
+) => {
+  return [`/admin/credential_references`, ...(params ? [params] : [])] as const;
+};
+
+export const getListCredentialReferencesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listCredentialReferences>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params: ListCredentialReferencesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCredentialReferences>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListCredentialReferencesQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listCredentialReferences>>
+  > = ({ signal }) =>
+    listCredentialReferences(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listCredentialReferences>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListCredentialReferencesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listCredentialReferences>>
+>;
+export type ListCredentialReferencesQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListCredentialReferences<
+  TData = Awaited<ReturnType<typeof listCredentialReferences>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params: ListCredentialReferencesParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCredentialReferences>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listCredentialReferences>>,
+          TError,
+          Awaited<ReturnType<typeof listCredentialReferences>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListCredentialReferences<
+  TData = Awaited<ReturnType<typeof listCredentialReferences>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params: ListCredentialReferencesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCredentialReferences>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listCredentialReferences>>,
+          TError,
+          Awaited<ReturnType<typeof listCredentialReferences>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListCredentialReferences<
+  TData = Awaited<ReturnType<typeof listCredentialReferences>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params: ListCredentialReferencesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCredentialReferences>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List a project's credential references
+ */
+
+export function useListCredentialReferences<
+  TData = Awaited<ReturnType<typeof listCredentialReferences>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params: ListCredentialReferencesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCredentialReferences>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListCredentialReferencesQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getCredentialReferenceResponse200 = {
+  data: CredentialReference;
+  status: 200;
+};
+
+export type getCredentialReferenceResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getCredentialReferenceResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getCredentialReferenceResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type getCredentialReferenceResponseSuccess =
+  getCredentialReferenceResponse200 & {
+    headers: Headers;
+  };
+export type getCredentialReferenceResponseError = (
+  | getCredentialReferenceResponse401
+  | getCredentialReferenceResponse403
+  | getCredentialReferenceResponse404
+) & {
+  headers: Headers;
+};
+
+export type getCredentialReferenceResponse =
+  getCredentialReferenceResponseSuccess | getCredentialReferenceResponseError;
+
+export const getGetCredentialReferenceUrl = (id: string) => {
+  return `/admin/credential_references/${id}`;
+};
+
+/**
+ * Gated on `models.agent_identity.bindings.manage` or `models.agent_identity.bindings.approve`. Mounted only when the enterprise credential governance flag is on.
+ * @summary Read a credential reference
+ */
+export const getCredentialReference = async (
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getCredentialReferenceResponse> => {
+  return eliteaFetch<getCredentialReferenceResponse>(
+    getGetCredentialReferenceUrl(id),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetCredentialReferenceQueryKey = (id: string) => {
+  return [`/admin/credential_references/${id}`] as const;
+};
+
+export const getGetCredentialReferenceQueryOptions = <
+  TData = Awaited<ReturnType<typeof getCredentialReference>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetCredentialReferenceQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getCredentialReference>>
+  > = ({ signal }) => getCredentialReference(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getCredentialReference>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetCredentialReferenceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getCredentialReference>>
+>;
+export type GetCredentialReferenceQueryError =
+  N401Response | N403Response | ErrorResponse;
+
+export function useGetCredentialReference<
+  TData = Awaited<ReturnType<typeof getCredentialReference>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCredentialReference>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCredentialReference>>,
+          TError,
+          Awaited<ReturnType<typeof getCredentialReference>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetCredentialReference<
+  TData = Awaited<ReturnType<typeof getCredentialReference>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCredentialReference>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCredentialReference>>,
+          TError,
+          Awaited<ReturnType<typeof getCredentialReference>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetCredentialReference<
+  TData = Awaited<ReturnType<typeof getCredentialReference>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read a credential reference
+ */
+
+export function useGetCredentialReference<
+  TData = Awaited<ReturnType<typeof getCredentialReference>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetCredentialReferenceQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type activateCredentialReferenceResponse200 = {
+  data: CredentialReference;
+  status: 200;
+};
+
+export type activateCredentialReferenceResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type activateCredentialReferenceResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type activateCredentialReferenceResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type activateCredentialReferenceResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type activateCredentialReferenceResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type activateCredentialReferenceResponseSuccess =
+  activateCredentialReferenceResponse200 & {
+    headers: Headers;
+  };
+export type activateCredentialReferenceResponseError = (
+  | activateCredentialReferenceResponse400
+  | activateCredentialReferenceResponse401
+  | activateCredentialReferenceResponse403
+  | activateCredentialReferenceResponse404
+  | activateCredentialReferenceResponse409
+) & {
+  headers: Headers;
+};
+
+export type activateCredentialReferenceResponse =
+  | activateCredentialReferenceResponseSuccess
+  | activateCredentialReferenceResponseError;
+
+export const getActivateCredentialReferenceUrl = (id: string) => {
+  return `/admin/credential_references/${id}:activate`;
+};
+
+/**
+ * Moves a `staged` reference to `active`. Two-person rule: the caller must not be the operator who staged it (`staged_by`); a reference that records no stager cannot be activated. The body is empty or `{}`. Gated on `models.agent_identity.bindings.approve`. Appends a security audit decision in the same transaction. Mounted only when the enterprise credential governance flag is on.
+ * @summary Activate a staged credential reference
+ */
+export const activateCredentialReference = async (
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<activateCredentialReferenceResponse> => {
+  return eliteaFetch<activateCredentialReferenceResponse>(
+    getActivateCredentialReferenceUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getActivateCredentialReferenceQueryKey = (id: string) => {
+  return ["POST", `/admin/credential_references/${id}:activate`] as const;
+};
+
+export const getActivateCredentialReferenceQueryOptions = <
+  TData = Awaited<ReturnType<typeof activateCredentialReference>>,
+  TError = ErrorResponse | N401Response,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof activateCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getActivateCredentialReferenceQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof activateCredentialReference>>
+  > = ({ signal }) =>
+    activateCredentialReference(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof activateCredentialReference>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ActivateCredentialReferenceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof activateCredentialReference>>
+>;
+export type ActivateCredentialReferenceQueryError =
+  ErrorResponse | N401Response;
+
+export function useActivateCredentialReference<
+  TData = Awaited<ReturnType<typeof activateCredentialReference>>,
+  TError = ErrorResponse | N401Response,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof activateCredentialReference>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof activateCredentialReference>>,
+          TError,
+          Awaited<ReturnType<typeof activateCredentialReference>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useActivateCredentialReference<
+  TData = Awaited<ReturnType<typeof activateCredentialReference>>,
+  TError = ErrorResponse | N401Response,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof activateCredentialReference>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof activateCredentialReference>>,
+          TError,
+          Awaited<ReturnType<typeof activateCredentialReference>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useActivateCredentialReference<
+  TData = Awaited<ReturnType<typeof activateCredentialReference>>,
+  TError = ErrorResponse | N401Response,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof activateCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Activate a staged credential reference
+ */
+
+export function useActivateCredentialReference<
+  TData = Awaited<ReturnType<typeof activateCredentialReference>>,
+  TError = ErrorResponse | N401Response,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof activateCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getActivateCredentialReferenceQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type retireCredentialReferenceResponse200 = {
+  data: CredentialReference;
+  status: 200;
+};
+
+export type retireCredentialReferenceResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type retireCredentialReferenceResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type retireCredentialReferenceResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type retireCredentialReferenceResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type retireCredentialReferenceResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type retireCredentialReferenceResponseSuccess =
+  retireCredentialReferenceResponse200 & {
+    headers: Headers;
+  };
+export type retireCredentialReferenceResponseError = (
+  | retireCredentialReferenceResponse400
+  | retireCredentialReferenceResponse401
+  | retireCredentialReferenceResponse403
+  | retireCredentialReferenceResponse404
+  | retireCredentialReferenceResponse409
+) & {
+  headers: Headers;
+};
+
+export type retireCredentialReferenceResponse =
+  | retireCredentialReferenceResponseSuccess
+  | retireCredentialReferenceResponseError;
+
+export const getRetireCredentialReferenceUrl = (id: string) => {
+  return `/admin/credential_references/${id}:retire`;
+};
+
+/**
+ * Moves any reference that is not already retired to `retired`. A governed run that froze the reference is denied at its next credential redemption (`authority_revoked`), because the revocation epoch check treats a reference outside `active` and `retiring` as revoked. `generation` (the secret version) does not change. The body is empty or `{}`. Gated on `models.agent_identity.bindings.manage`. Mounted only when the enterprise credential governance flag is on.
+ * @summary Retire a credential reference
+ */
+export const retireCredentialReference = async (
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<retireCredentialReferenceResponse> => {
+  return eliteaFetch<retireCredentialReferenceResponse>(
+    getRetireCredentialReferenceUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getRetireCredentialReferenceQueryKey = (id: string) => {
+  return ["POST", `/admin/credential_references/${id}:retire`] as const;
+};
+
+export const getRetireCredentialReferenceQueryOptions = <
+  TData = Awaited<ReturnType<typeof retireCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof retireCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getRetireCredentialReferenceQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof retireCredentialReference>>
+  > = ({ signal }) =>
+    retireCredentialReference(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof retireCredentialReference>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RetireCredentialReferenceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof retireCredentialReference>>
+>;
+export type RetireCredentialReferenceQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useRetireCredentialReference<
+  TData = Awaited<ReturnType<typeof retireCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof retireCredentialReference>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof retireCredentialReference>>,
+          TError,
+          Awaited<ReturnType<typeof retireCredentialReference>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRetireCredentialReference<
+  TData = Awaited<ReturnType<typeof retireCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof retireCredentialReference>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof retireCredentialReference>>,
+          TError,
+          Awaited<ReturnType<typeof retireCredentialReference>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRetireCredentialReference<
+  TData = Awaited<ReturnType<typeof retireCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof retireCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Retire a credential reference
+ */
+
+export function useRetireCredentialReference<
+  TData = Awaited<ReturnType<typeof retireCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof retireCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRetireCredentialReferenceQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type attachCredentialReferenceResponse200 = {
+  data: CredentialReferenceAttachment;
+  status: 200;
+};
+
+export type attachCredentialReferenceResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type attachCredentialReferenceResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type attachCredentialReferenceResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type attachCredentialReferenceResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type attachCredentialReferenceResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type attachCredentialReferenceResponseSuccess =
+  attachCredentialReferenceResponse200 & {
+    headers: Headers;
+  };
+export type attachCredentialReferenceResponseError = (
+  | attachCredentialReferenceResponse400
+  | attachCredentialReferenceResponse401
+  | attachCredentialReferenceResponse403
+  | attachCredentialReferenceResponse404
+  | attachCredentialReferenceResponse409
+) & {
+  headers: Headers;
+};
+
+export type attachCredentialReferenceResponse =
+  | attachCredentialReferenceResponseSuccess
+  | attachCredentialReferenceResponseError;
+
+export const getAttachCredentialReferenceUrl = (id: string) => {
+  return `/admin/credential_references/${id}:attach`;
+};
+
+/**
+ * Writes `credential_reference_id` into the one non-private configuration reference of the toolkit's stored settings. This edits the toolkit, so its digest changes: pin the agent toolkit binding again afterwards. The toolkit type must be the reference's provider type and the toolkit must be in the reference's project. An MCP toolkit has no configuration reference and is governed by its digest and a grant alone, so it answers 409. Gated on `models.agent_identity.bindings.manage`. Mounted only when the enterprise credential governance flag is on.
+ * @summary Attach a credential reference to a toolkit
+ */
+export const attachCredentialReference = async (
+  id: string,
+  credentialReferenceToolkitRequest: CredentialReferenceToolkitRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<attachCredentialReferenceResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<attachCredentialReferenceResponse>(
+    getAttachCredentialReferenceUrl(id),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(credentialReferenceToolkitRequest),
+    },
+  );
+};
+
+export const getAttachCredentialReferenceQueryKey = (
+  id: string,
+  credentialReferenceToolkitRequest?: CredentialReferenceToolkitRequest,
+) => {
+  return [
+    "POST",
+    `/admin/credential_references/${id}:attach`,
+    credentialReferenceToolkitRequest,
+  ] as const;
+};
+
+export const getAttachCredentialReferenceQueryOptions = <
+  TData = Awaited<ReturnType<typeof attachCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  credentialReferenceToolkitRequest: CredentialReferenceToolkitRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getAttachCredentialReferenceQueryKey(id, credentialReferenceToolkitRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof attachCredentialReference>>
+  > = ({ signal }) =>
+    attachCredentialReference(id, credentialReferenceToolkitRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof attachCredentialReference>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type AttachCredentialReferenceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof attachCredentialReference>>
+>;
+export type AttachCredentialReferenceQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useAttachCredentialReference<
+  TData = Awaited<ReturnType<typeof attachCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  credentialReferenceToolkitRequest: CredentialReferenceToolkitRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachCredentialReference>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof attachCredentialReference>>,
+          TError,
+          Awaited<ReturnType<typeof attachCredentialReference>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAttachCredentialReference<
+  TData = Awaited<ReturnType<typeof attachCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  credentialReferenceToolkitRequest: CredentialReferenceToolkitRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachCredentialReference>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof attachCredentialReference>>,
+          TError,
+          Awaited<ReturnType<typeof attachCredentialReference>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAttachCredentialReference<
+  TData = Awaited<ReturnType<typeof attachCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  credentialReferenceToolkitRequest: CredentialReferenceToolkitRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Attach a credential reference to a toolkit
+ */
+
+export function useAttachCredentialReference<
+  TData = Awaited<ReturnType<typeof attachCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  credentialReferenceToolkitRequest: CredentialReferenceToolkitRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof attachCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getAttachCredentialReferenceQueryOptions(
+    id,
+    credentialReferenceToolkitRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type detachCredentialReferenceResponse200 = {
+  data: CredentialReferenceAttachment;
+  status: 200;
+};
+
+export type detachCredentialReferenceResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type detachCredentialReferenceResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type detachCredentialReferenceResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type detachCredentialReferenceResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type detachCredentialReferenceResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type detachCredentialReferenceResponseSuccess =
+  detachCredentialReferenceResponse200 & {
+    headers: Headers;
+  };
+export type detachCredentialReferenceResponseError = (
+  | detachCredentialReferenceResponse400
+  | detachCredentialReferenceResponse401
+  | detachCredentialReferenceResponse403
+  | detachCredentialReferenceResponse404
+  | detachCredentialReferenceResponse409
+) & {
+  headers: Headers;
+};
+
+export type detachCredentialReferenceResponse =
+  | detachCredentialReferenceResponseSuccess
+  | detachCredentialReferenceResponseError;
+
+export const getDetachCredentialReferenceUrl = (id: string) => {
+  return `/admin/credential_references/${id}:detach`;
+};
+
+/**
+ * Removes `credential_reference_id` from the toolkit's configuration reference. A governed run of the toolkit is then refused `credential_reference_required`. Gated on `models.agent_identity.bindings.manage`. Mounted only when the enterprise credential governance flag is on.
+ * @summary Detach a credential reference from a toolkit
+ */
+export const detachCredentialReference = async (
+  id: string,
+  credentialReferenceToolkitRequest: CredentialReferenceToolkitRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<detachCredentialReferenceResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<detachCredentialReferenceResponse>(
+    getDetachCredentialReferenceUrl(id),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(credentialReferenceToolkitRequest),
+    },
+  );
+};
+
+export const getDetachCredentialReferenceQueryKey = (
+  id: string,
+  credentialReferenceToolkitRequest?: CredentialReferenceToolkitRequest,
+) => {
+  return [
+    "POST",
+    `/admin/credential_references/${id}:detach`,
+    credentialReferenceToolkitRequest,
+  ] as const;
+};
+
+export const getDetachCredentialReferenceQueryOptions = <
+  TData = Awaited<ReturnType<typeof detachCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  credentialReferenceToolkitRequest: CredentialReferenceToolkitRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDetachCredentialReferenceQueryKey(id, credentialReferenceToolkitRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof detachCredentialReference>>
+  > = ({ signal }) =>
+    detachCredentialReference(id, credentialReferenceToolkitRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof detachCredentialReference>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DetachCredentialReferenceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof detachCredentialReference>>
+>;
+export type DetachCredentialReferenceQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useDetachCredentialReference<
+  TData = Awaited<ReturnType<typeof detachCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  credentialReferenceToolkitRequest: CredentialReferenceToolkitRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachCredentialReference>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof detachCredentialReference>>,
+          TError,
+          Awaited<ReturnType<typeof detachCredentialReference>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDetachCredentialReference<
+  TData = Awaited<ReturnType<typeof detachCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  credentialReferenceToolkitRequest: CredentialReferenceToolkitRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachCredentialReference>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof detachCredentialReference>>,
+          TError,
+          Awaited<ReturnType<typeof detachCredentialReference>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDetachCredentialReference<
+  TData = Awaited<ReturnType<typeof detachCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  credentialReferenceToolkitRequest: CredentialReferenceToolkitRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Detach a credential reference from a toolkit
+ */
+
+export function useDetachCredentialReference<
+  TData = Awaited<ReturnType<typeof detachCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  credentialReferenceToolkitRequest: CredentialReferenceToolkitRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof detachCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDetachCredentialReferenceQueryOptions(
+    id,
+    credentialReferenceToolkitRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type pinAgentToolkitResponse200 = {
+  data: AgentToolkitPin;
+  status: 200;
+};
+
+export type pinAgentToolkitResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type pinAgentToolkitResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type pinAgentToolkitResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type pinAgentToolkitResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type pinAgentToolkitResponseSuccess = pinAgentToolkitResponse200 & {
+  headers: Headers;
+};
+export type pinAgentToolkitResponseError = (
+  | pinAgentToolkitResponse400
+  | pinAgentToolkitResponse401
+  | pinAgentToolkitResponse403
+  | pinAgentToolkitResponse404
+) & {
+  headers: Headers;
+};
+
+export type pinAgentToolkitResponse =
+  pinAgentToolkitResponseSuccess | pinAgentToolkitResponseError;
+
+export const getPinAgentToolkitUrl = (id: string, toolkitId: number) => {
+  return `/admin/agent_identities/${id}/toolkits/${toolkitId}`;
+};
+
+/**
+ * Writes, or re-pins, the agent toolkit binding at the toolkit's current stored digest (the digest governed admission computes). A later edit of the toolkit, including a credential reference attach, changes the digest and needs a new pin. The agent binding must be in the project and not revoked. Gated on `models.agent_identity.bindings.manage`. Mounted only when the enterprise credential governance flag is on.
+ * @summary Bind a toolkit to an agent binding at its current digest
+ */
+export const pinAgentToolkit = async (
+  id: string,
+  toolkitId: number,
+  agentToolkitPinRequest: AgentToolkitPinRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<pinAgentToolkitResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<pinAgentToolkitResponse>(
+    getPinAgentToolkitUrl(id, toolkitId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentToolkitPinRequest),
+    },
+  );
+};
+
+export const getPinAgentToolkitQueryKey = (
+  id: string,
+  toolkitId: number,
+  agentToolkitPinRequest?: AgentToolkitPinRequest,
+) => {
+  return [
+    "PUT",
+    `/admin/agent_identities/${id}/toolkits/${toolkitId}`,
+    agentToolkitPinRequest,
+  ] as const;
+};
+
+export const getPinAgentToolkitQueryOptions = <
+  TData = Awaited<ReturnType<typeof pinAgentToolkit>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  toolkitId: number,
+  agentToolkitPinRequest: AgentToolkitPinRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof pinAgentToolkit>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getPinAgentToolkitQueryKey(id, toolkitId, agentToolkitPinRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof pinAgentToolkit>>> = ({
+    signal,
+  }) =>
+    pinAgentToolkit(id, toolkitId, agentToolkitPinRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      id !== null &&
+      id !== undefined &&
+      toolkitId !== null &&
+      toolkitId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof pinAgentToolkit>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type PinAgentToolkitQueryResult = NonNullable<
+  Awaited<ReturnType<typeof pinAgentToolkit>>
+>;
+export type PinAgentToolkitQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function usePinAgentToolkit<
+  TData = Awaited<ReturnType<typeof pinAgentToolkit>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  toolkitId: number,
+  agentToolkitPinRequest: AgentToolkitPinRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof pinAgentToolkit>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof pinAgentToolkit>>,
+          TError,
+          Awaited<ReturnType<typeof pinAgentToolkit>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePinAgentToolkit<
+  TData = Awaited<ReturnType<typeof pinAgentToolkit>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  toolkitId: number,
+  agentToolkitPinRequest: AgentToolkitPinRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof pinAgentToolkit>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof pinAgentToolkit>>,
+          TError,
+          Awaited<ReturnType<typeof pinAgentToolkit>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePinAgentToolkit<
+  TData = Awaited<ReturnType<typeof pinAgentToolkit>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  toolkitId: number,
+  agentToolkitPinRequest: AgentToolkitPinRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof pinAgentToolkit>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Bind a toolkit to an agent binding at its current digest
+ */
+
+export function usePinAgentToolkit<
+  TData = Awaited<ReturnType<typeof pinAgentToolkit>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  toolkitId: number,
+  agentToolkitPinRequest: AgentToolkitPinRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof pinAgentToolkit>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getPinAgentToolkitQueryOptions(
+    id,
+    toolkitId,
+    agentToolkitPinRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type unpinAgentToolkitResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type unpinAgentToolkitResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type unpinAgentToolkitResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type unpinAgentToolkitResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type unpinAgentToolkitResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type unpinAgentToolkitResponseSuccess = unpinAgentToolkitResponse204 & {
+  headers: Headers;
+};
+export type unpinAgentToolkitResponseError = (
+  | unpinAgentToolkitResponse400
+  | unpinAgentToolkitResponse401
+  | unpinAgentToolkitResponse403
+  | unpinAgentToolkitResponse404
+) & {
+  headers: Headers;
+};
+
+export type unpinAgentToolkitResponse =
+  unpinAgentToolkitResponseSuccess | unpinAgentToolkitResponseError;
+
+export const getUnpinAgentToolkitUrl = (
+  id: string,
+  toolkitId: number,
+  params?: UnpinAgentToolkitParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/agent_identities/${id}/toolkits/${toolkitId}?${stringifiedParams}`
+    : `/admin/agent_identities/${id}/toolkits/${toolkitId}`;
+};
+
+/**
+ * A governed run of the agent binding then no longer governs the toolkit. The project is named by the `project_id` query parameter or a body. Gated on `models.agent_identity.bindings.manage`. Mounted only when the enterprise credential governance flag is on.
+ * @summary Remove an agent toolkit binding
+ */
+export const unpinAgentToolkit = async (
+  id: string,
+  toolkitId: number,
+  params?: UnpinAgentToolkitParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<unpinAgentToolkitResponse> => {
+  return eliteaFetch<unpinAgentToolkitResponse>(
+    getUnpinAgentToolkitUrl(id, toolkitId, params),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getUnpinAgentToolkitQueryKey = (
+  id: string,
+  toolkitId: number,
+  params?: UnpinAgentToolkitParams,
+) => {
+  return [
+    "DELETE",
+    `/admin/agent_identities/${id}/toolkits/${toolkitId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getUnpinAgentToolkitQueryOptions = <
+  TData = Awaited<ReturnType<typeof unpinAgentToolkit>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  toolkitId: number,
+  params?: UnpinAgentToolkitParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof unpinAgentToolkit>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUnpinAgentToolkitQueryKey(id, toolkitId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof unpinAgentToolkit>>
+  > = ({ signal }) =>
+    unpinAgentToolkit(id, toolkitId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      id !== null &&
+      id !== undefined &&
+      toolkitId !== null &&
+      toolkitId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof unpinAgentToolkit>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UnpinAgentToolkitQueryResult = NonNullable<
+  Awaited<ReturnType<typeof unpinAgentToolkit>>
+>;
+export type UnpinAgentToolkitQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useUnpinAgentToolkit<
+  TData = Awaited<ReturnType<typeof unpinAgentToolkit>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  toolkitId: number,
+  params: undefined | UnpinAgentToolkitParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof unpinAgentToolkit>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof unpinAgentToolkit>>,
+          TError,
+          Awaited<ReturnType<typeof unpinAgentToolkit>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUnpinAgentToolkit<
+  TData = Awaited<ReturnType<typeof unpinAgentToolkit>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  toolkitId: number,
+  params?: UnpinAgentToolkitParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof unpinAgentToolkit>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof unpinAgentToolkit>>,
+          TError,
+          Awaited<ReturnType<typeof unpinAgentToolkit>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUnpinAgentToolkit<
+  TData = Awaited<ReturnType<typeof unpinAgentToolkit>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  toolkitId: number,
+  params?: UnpinAgentToolkitParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof unpinAgentToolkit>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove an agent toolkit binding
+ */
+
+export function useUnpinAgentToolkit<
+  TData = Awaited<ReturnType<typeof unpinAgentToolkit>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  toolkitId: number,
+  params?: UnpinAgentToolkitParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof unpinAgentToolkit>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUnpinAgentToolkitQueryOptions(
+    id,
+    toolkitId,
+    params,
     options,
   );
 
