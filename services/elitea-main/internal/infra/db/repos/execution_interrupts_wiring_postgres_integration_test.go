@@ -772,3 +772,46 @@ func TestPrivateRouteLogsCarryNoValues(t *testing.T) {
 		}
 	}
 }
+
+// TestAWakeThatParksAgainWithAHeldDecisionRecordsThePark covers a child with
+// two cards: the wake admitted for card A's decision restores A but cannot
+// apply it until B is decided, so it parks again having seen that same
+// revision while A is still DECIDED. The park is recorded (no second wake at
+// the same revision, no fault); B's decision then admits exactly one wake.
+func TestAWakeThatParksAgainWithAHeldDecisionRecordsThePark(t *testing.T) {
+	h := newInterruptHarness(t)
+	response := h.newResponse()
+	a := h.raise(response, "fanout-interrupt-card-v1.json")
+	b := h.raise(response, "fanout-interrupt-card-v1.map-ask-user.json")
+	if s, err := h.park(response, 0); err != nil || s.WakeQueued {
+		t.Fatalf("first park = %+v, %v", s, err)
+	}
+	if _, err := h.decide(interruptOwner, response, a, "held-a", "approve", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.wakes(response); len(got) != 1 || !strings.HasPrefix(got[0], "QUEUED:1:") {
+		t.Fatalf("wake after A = %v", got)
+	}
+	// The wake is admitted as its own execution, then parks again with A held.
+	wake := strings.Repeat("e", 32)
+	h.seedExecution(wake)
+	h.exec(`UPDATE elitea_runtime.execution_interrupt_wakes SET state = 'ADMITTED', wake_execution_id = $2
+WHERE root_response_id = $1::uuid`, response, wake)
+	h.executions[response] = wake
+	if s, err := h.park(response, 1); err != nil || s.WakeQueued {
+		t.Fatalf("a wake parking again with a held decision = %+v, %v", s, err)
+	}
+	if n := h.count(`SELECT count(*) FROM elitea_runtime.execution_interrupt_responses
+WHERE root_response_id = $1::uuid AND parked_execution_id = $2`, response, wake); n != 1 {
+		t.Fatal("the second park was not recorded")
+	}
+	if got := h.wakes(response); len(got) != 1 || !strings.HasPrefix(got[0], "DONE:1:") {
+		t.Fatalf("wakes after the second park = %v", got)
+	}
+	if _, err := h.decide(interruptOwner, response, b, "held-b", "answer", "yes"); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.wakes(response); len(got) != 2 || !strings.HasPrefix(got[1], "QUEUED:2:") {
+		t.Fatalf("wakes after B = %v", got)
+	}
+}

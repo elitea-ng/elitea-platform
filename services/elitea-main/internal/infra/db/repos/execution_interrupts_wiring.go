@@ -396,8 +396,8 @@ type ParkSettlement struct {
 // response row is locked (the terminal projection's lock), so it serializes
 // with Decide. Under the per-response row lock:
 //   - a wake admitted for this very execution is DONE (it ran and parked);
-//   - if decision_revision > seen, or any card is DECIDED, one wake is
-//     queued now;
+//   - if decision_revision > seen, or a card is DECIDED and no wake was
+//     admitted for this revision yet, one wake is queued now;
 //   - otherwise the response is recorded parked, and the next decision
 //     queues the wake.
 func (r *ExecutionInterruptRepository) SettleParkedResponse(ctx context.Context, tx sqlExecutor, projectID int64, rootResponseID, executionID string, generation, decisionRevisionSeen int64) (ParkSettlement, error) {
@@ -410,14 +410,17 @@ func settleParkedResponse(ctx context.Context, tx sqlExecutor, projectID int64, 
 		return ParkSettlement{}, domain.ErrInvalidRaise
 	}
 	var current int64
-	var decided bool
+	var decided, wokenAtCurrent bool
 	err := tx.QueryRow(ctx, `
 SELECT response.decision_revision,
        EXISTS (SELECT 1 FROM elitea_runtime.execution_interrupts card
-               WHERE card.root_response_id = response.root_response_id AND card.state = 'DECIDED')
+               WHERE card.root_response_id = response.root_response_id AND card.state = 'DECIDED'),
+       EXISTS (SELECT 1 FROM elitea_runtime.execution_interrupt_wakes wake
+               WHERE wake.root_response_id = response.root_response_id
+                 AND wake.decision_revision = response.decision_revision)
 FROM elitea_runtime.execution_interrupt_responses response
 WHERE response.root_response_id = $1::uuid AND response.project_id = $2
-FOR UPDATE OF response`, rootResponseID, projectID).Scan(&current, &decided)
+FOR UPDATE OF response`, rootResponseID, projectID).Scan(&current, &decided, &wokenAtCurrent)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// A park always has open cards, and every card has this row.
 		return ParkSettlement{}, domain.ErrLedgerFault
@@ -434,7 +437,11 @@ WHERE root_response_id = $1::uuid AND state = 'ADMITTED' AND wake_execution_id =
 		return ParkSettlement{}, fmt.Errorf("execution interrupt park: %w", err)
 	}
 	settlement := ParkSettlement{DecisionRevision: current}
-	if current > decisionRevisionSeen || decided {
+	// A DECIDED card the park saw queues a wake only if no wake was admitted
+	// for this revision yet (decided while live). A wake that parks again with
+	// a decision it holds (a child with two cards, one answered) has its row at
+	// this revision: the park is recorded and the next decision wakes it.
+	if current > decisionRevisionSeen || (decided && !wokenAtCurrent) {
 		if err := retireSettledWakes(ctx, tx, rootResponseID); err != nil {
 			return ParkSettlement{}, err
 		}
