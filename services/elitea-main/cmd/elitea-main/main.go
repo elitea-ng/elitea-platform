@@ -827,6 +827,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if agentIdentity.Reconciler != nil {
 		go agentIdentity.Reconciler.Run(ctx)
 	}
+	// Mandate-bound schedules, triggers and index schedules (#1122). Empty
+	// with the flag off.
+	governedTriggers, err := governedTriggersAtBoot(credentialAdmission, credentialRevision, pool)
+	if err != nil {
+		return err
+	}
 
 	// The operation decider and the credential broker, its only caller
 	// (#1116, #1118). Built after the Entra custody so the decider's
@@ -2035,6 +2041,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			CredentialProfile:                credentialAdmission,
 			CredentialBroker:                 runtimeCredentialBroker,
 			SecurityInvalidations:            securityInvalidations,
+			IndexScheduleMandates:            governedTriggers.IndexMandates,
+			IndexScheduleMandateGate:         governedTriggers.IndexGate,
 			ControlPool:                      runtimePools.Control,
 			OutputPool:                       runtimePools.Output,
 			ReplayPool:                       runtimePools.Replay,
@@ -2202,6 +2210,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				logger,
 				domainEvents,
 				pipelineRunsRepo,
+				v2pipelinetriggers.WithGovernedRuns(governedTriggers.Runs),
 			)
 			// The schedule TICK. It rides elitea-main's platform scheduler —
 			// the same framework `index.schedule.scan.v1` uses — so the clock,
@@ -2414,6 +2423,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			logger,
 			domainEvents,
 			pipelineRunsRepo,
+			v2pipelinetriggers.WithGovernedRuns(governedTriggers.Runs),
 		)
 	}
 
@@ -2759,6 +2769,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CredentialProbe:               credentialProbeHandler,
 		CredentialConsent:             providerOAuthGoverned.Consent,
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
+		MandateAttachments:            governedTriggers.Attachments,
 		AgentAssertionWellKnown:       eliteaNative.WellKnown,
 		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,

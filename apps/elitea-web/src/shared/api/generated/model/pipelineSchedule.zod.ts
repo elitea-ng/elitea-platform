@@ -78,6 +78,9 @@ export const PipelineSchedule = zod
         "skipped_overlap",
         "skipped_unauthorized",
         "skipped_missing_version",
+        "skipped_mandate_required",
+        "skipped_mandate_not_usable",
+        "skipped_mandate_scope",
         "failed",
       ])
       .optional()

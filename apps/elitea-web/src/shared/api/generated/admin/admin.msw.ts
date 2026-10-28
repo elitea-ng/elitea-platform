@@ -64,6 +64,7 @@ import type {
   GlobalUserInviteResult,
   ListBrandingPackageVersions200,
   Mandate,
+  MandateAttachment,
   MandateListResponse,
   MessageResponse,
   ModeRoleAssignResult,
@@ -802,6 +803,51 @@ export const getRevokeMandateResponseMock = (
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
 });
+
+export const getAttachPipelineScheduleMandateResponseMock =
+  (): MandateAttachment => ({
+    origin: "pipeline_schedule",
+    project_id: 7,
+    resource_id: "3",
+    mandate_id: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e1b04",
+  });
+
+export const getDetachPipelineScheduleMandateResponseMock =
+  (): MandateAttachment => ({
+    origin: "pipeline_schedule",
+    project_id: 7,
+    resource_id: "3",
+  });
+
+export const getAttachPipelineTriggerMandateResponseMock =
+  (): MandateAttachment => ({
+    origin: "pipeline_trigger",
+    project_id: 7,
+    resource_id: "5",
+    mandate_id: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e1b04",
+  });
+
+export const getDetachPipelineTriggerMandateResponseMock =
+  (): MandateAttachment => ({
+    origin: "pipeline_trigger",
+    project_id: 7,
+    resource_id: "5",
+  });
+
+export const getAttachIndexScheduleMandateResponseMock =
+  (): MandateAttachment => ({
+    origin: "index_schedule",
+    project_id: 7,
+    resource_id: "12:docs",
+    mandate_id: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e1b04",
+  });
+
+export const getDetachIndexScheduleMandateResponseMock =
+  (): MandateAttachment => ({
+    origin: "index_schedule",
+    project_id: 7,
+    resource_id: "12:docs",
+  });
 
 export const getListExternalAgentIdentitiesResponseMock = (
   overrideResponse: Partial<
@@ -2923,6 +2969,162 @@ export const getRevokeMandateMockHandler = (
   );
 };
 
+export const getAttachPipelineScheduleMandateMockHandler = (
+  overrideResponse?:
+    | MandateAttachment
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<MandateAttachment> | MandateAttachment),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/admin/mandate_attachments/pipeline_schedules/:projectId/:versionId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getAttachPipelineScheduleMandateResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDetachPipelineScheduleMandateMockHandler = (
+  overrideResponse?:
+    | MandateAttachment
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<MandateAttachment> | MandateAttachment),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/admin/mandate_attachments/pipeline_schedules/:projectId/:versionId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDetachPipelineScheduleMandateResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getAttachPipelineTriggerMandateMockHandler = (
+  overrideResponse?:
+    | MandateAttachment
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<MandateAttachment> | MandateAttachment),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/admin/mandate_attachments/pipeline_triggers/:projectId/:versionId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getAttachPipelineTriggerMandateResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDetachPipelineTriggerMandateMockHandler = (
+  overrideResponse?:
+    | MandateAttachment
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<MandateAttachment> | MandateAttachment),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/admin/mandate_attachments/pipeline_triggers/:projectId/:versionId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDetachPipelineTriggerMandateResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getAttachIndexScheduleMandateMockHandler = (
+  overrideResponse?:
+    | MandateAttachment
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<MandateAttachment> | MandateAttachment),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/admin/mandate_attachments/index_schedules/:projectId/:toolkitId/:indexName",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getAttachIndexScheduleMandateResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDetachIndexScheduleMandateMockHandler = (
+  overrideResponse?:
+    | MandateAttachment
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<MandateAttachment> | MandateAttachment),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/admin/mandate_attachments/index_schedules/:projectId/:toolkitId/:indexName",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDetachIndexScheduleMandateResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListExternalAgentIdentitiesMockHandler = (
   overrideResponse?:
     | ExternalAgentIdentityListResponse
@@ -3905,6 +4107,12 @@ export const getAdminMock = () => [
   getApproveMandateMockHandler(),
   getSuspendMandateMockHandler(),
   getRevokeMandateMockHandler(),
+  getAttachPipelineScheduleMandateMockHandler(),
+  getDetachPipelineScheduleMandateMockHandler(),
+  getAttachPipelineTriggerMandateMockHandler(),
+  getDetachPipelineTriggerMandateMockHandler(),
+  getAttachIndexScheduleMandateMockHandler(),
+  getDetachIndexScheduleMandateMockHandler(),
   getListExternalAgentIdentitiesMockHandler(),
   getCreateExternalAgentIdentityMockHandler(),
   getListExternalAgentIdentityDriftFindingsMockHandler(),

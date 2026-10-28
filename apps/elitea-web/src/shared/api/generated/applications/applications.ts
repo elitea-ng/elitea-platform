@@ -119,6 +119,7 @@ import type {
   ListProjectIconsParams,
   ListProjectsParams,
   ListPublicApplicationsParams,
+  MandateRefusal,
   N400Response,
   N401Response,
   N403Response,
@@ -19763,6 +19764,11 @@ export type savePipelineScheduleResponse404 = {
   status: 404;
 };
 
+export type savePipelineScheduleResponse409 = {
+  data: MandateRefusal;
+  status: 409;
+};
+
 export type savePipelineScheduleResponseSuccess =
   savePipelineScheduleResponse200 & {
     headers: Headers;
@@ -19771,6 +19777,7 @@ export type savePipelineScheduleResponseError = (
   | savePipelineScheduleResponse400
   | savePipelineScheduleResponse403
   | savePipelineScheduleResponse404
+  | savePipelineScheduleResponse409
 ) & {
   headers: Headers;
 };
@@ -19858,7 +19865,7 @@ export const getSavePipelineScheduleQueryKey = (
 
 export const getSavePipelineScheduleQueryOptions = <
   TData = Awaited<ReturnType<typeof savePipelineSchedule>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | MandateRefusal,
 >(
   projectId: number,
   versionId: number,
@@ -19911,11 +19918,11 @@ export const getSavePipelineScheduleQueryOptions = <
 export type SavePipelineScheduleQueryResult = NonNullable<
   Awaited<ReturnType<typeof savePipelineSchedule>>
 >;
-export type SavePipelineScheduleQueryError = ErrorResponse;
+export type SavePipelineScheduleQueryError = ErrorResponse | MandateRefusal;
 
 export function useSavePipelineSchedule<
   TData = Awaited<ReturnType<typeof savePipelineSchedule>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | MandateRefusal,
 >(
   projectId: number,
   versionId: number,
@@ -19944,7 +19951,7 @@ export function useSavePipelineSchedule<
 };
 export function useSavePipelineSchedule<
   TData = Awaited<ReturnType<typeof savePipelineSchedule>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | MandateRefusal,
 >(
   projectId: number,
   versionId: number,
@@ -19973,7 +19980,7 @@ export function useSavePipelineSchedule<
 };
 export function useSavePipelineSchedule<
   TData = Awaited<ReturnType<typeof savePipelineSchedule>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | MandateRefusal,
 >(
   projectId: number,
   versionId: number,
@@ -19998,7 +20005,7 @@ export function useSavePipelineSchedule<
 
 export function useSavePipelineSchedule<
   TData = Awaited<ReturnType<typeof savePipelineSchedule>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | MandateRefusal,
 >(
   projectId: number,
   versionId: number,
@@ -20282,6 +20289,11 @@ export type runPipelineInboundTriggerResponse401 = {
   status: 401;
 };
 
+export type runPipelineInboundTriggerResponse403 = {
+  data: MandateRefusal;
+  status: 403;
+};
+
 export type runPipelineInboundTriggerResponse413 = {
   data: ErrorResponse;
   status: 413;
@@ -20310,6 +20322,7 @@ export type runPipelineInboundTriggerResponseSuccess = (
 export type runPipelineInboundTriggerResponseError = (
   | runPipelineInboundTriggerResponse400
   | runPipelineInboundTriggerResponse401
+  | runPipelineInboundTriggerResponse403
   | runPipelineInboundTriggerResponse413
   | runPipelineInboundTriggerResponse422
   | runPipelineInboundTriggerResponse429
@@ -20485,7 +20498,7 @@ export const getRunPipelineInboundTriggerQueryKey = (
 
 export const getRunPipelineInboundTriggerQueryOptions = <
   TData = Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | MandateRefusal,
 >(
   projectId: number,
   tokenId: string,
@@ -20543,11 +20556,12 @@ export const getRunPipelineInboundTriggerQueryOptions = <
 export type RunPipelineInboundTriggerQueryResult = NonNullable<
   Awaited<ReturnType<typeof runPipelineInboundTrigger>>
 >;
-export type RunPipelineInboundTriggerQueryError = ErrorResponse;
+export type RunPipelineInboundTriggerQueryError =
+  ErrorResponse | MandateRefusal;
 
 export function useRunPipelineInboundTrigger<
   TData = Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | MandateRefusal,
 >(
   projectId: number,
   tokenId: string,
@@ -20578,7 +20592,7 @@ export function useRunPipelineInboundTrigger<
 };
 export function useRunPipelineInboundTrigger<
   TData = Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | MandateRefusal,
 >(
   projectId: number,
   tokenId: string,
@@ -20608,7 +20622,7 @@ export function useRunPipelineInboundTrigger<
 };
 export function useRunPipelineInboundTrigger<
   TData = Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | MandateRefusal,
 >(
   projectId: number,
   tokenId: string,
@@ -20634,7 +20648,7 @@ export function useRunPipelineInboundTrigger<
 
 export function useRunPipelineInboundTrigger<
   TData = Awaited<ReturnType<typeof runPipelineInboundTrigger>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | MandateRefusal,
 >(
   projectId: number,
   tokenId: string,
@@ -20690,6 +20704,11 @@ export type runPipelineInboundTriggerForProviderResponse401 = {
   status: 401;
 };
 
+export type runPipelineInboundTriggerForProviderResponse403 = {
+  data: MandateRefusal;
+  status: 403;
+};
+
 export type runPipelineInboundTriggerForProviderResponse413 = {
   data: ErrorResponse;
   status: 413;
@@ -20719,6 +20738,7 @@ export type runPipelineInboundTriggerForProviderResponseSuccess = (
 export type runPipelineInboundTriggerForProviderResponseError = (
   | runPipelineInboundTriggerForProviderResponse400
   | runPipelineInboundTriggerForProviderResponse401
+  | runPipelineInboundTriggerForProviderResponse403
   | runPipelineInboundTriggerForProviderResponse413
   | runPipelineInboundTriggerForProviderResponse422
   | runPipelineInboundTriggerForProviderResponse429
@@ -20849,7 +20869,7 @@ export const getRunPipelineInboundTriggerForProviderQueryKey = (
 
 export const getRunPipelineInboundTriggerForProviderQueryOptions = <
   TData = Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | MandateRefusal,
 >(
   projectId: number,
   tokenId: string,
@@ -20909,11 +20929,12 @@ export const getRunPipelineInboundTriggerForProviderQueryOptions = <
 export type RunPipelineInboundTriggerForProviderQueryResult = NonNullable<
   Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>
 >;
-export type RunPipelineInboundTriggerForProviderQueryError = ErrorResponse;
+export type RunPipelineInboundTriggerForProviderQueryError =
+  ErrorResponse | MandateRefusal;
 
 export function useRunPipelineInboundTriggerForProvider<
   TData = Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | MandateRefusal,
 >(
   projectId: number,
   tokenId: string,
@@ -20944,7 +20965,7 @@ export function useRunPipelineInboundTriggerForProvider<
 };
 export function useRunPipelineInboundTriggerForProvider<
   TData = Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | MandateRefusal,
 >(
   projectId: number,
   tokenId: string,
@@ -20974,7 +20995,7 @@ export function useRunPipelineInboundTriggerForProvider<
 };
 export function useRunPipelineInboundTriggerForProvider<
   TData = Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | MandateRefusal,
 >(
   projectId: number,
   tokenId: string,
@@ -21000,7 +21021,7 @@ export function useRunPipelineInboundTriggerForProvider<
 
 export function useRunPipelineInboundTriggerForProvider<
   TData = Awaited<ReturnType<typeof runPipelineInboundTriggerForProvider>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | MandateRefusal,
 >(
   projectId: number,
   tokenId: string,
