@@ -109,7 +109,9 @@ function webUserInputStyles(isFocused: boolean, isDragOver: boolean, isRecording
       background: isDragOver ? `${theme.vars.palette.primary.main}15` : getInputBackground(theme),
       border: isDragOver
         ? `0.125rem dashed ${theme.vars.palette.primary.main}`
-        : `0.0625rem solid ${isFocused || isRecording ? 'transparent' : theme.vars.palette.border.lines}`,
+        : // The wrapper's 1px padding draws the one edge (borderStrong at rest);
+          // a second line here would double it.
+          '0.0625rem solid transparent',
       boxSizing: 'border-box',
       gap: '1.5rem',
       transition: 'all 0.2s ease-in-out',

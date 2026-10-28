@@ -165,7 +165,7 @@ func TestPackJSON_DatabaseLayerOverProductDefault(t *testing.T) {
 	if pack.Assets.Favicon != "data:image/svg+xml;base64,PHN2Zy8+" {
 		t.Errorf("a data: URI must pass through, got %q", pack.Assets.Favicon)
 	}
-	if len(pack.Typography.FontFaces) != 1 || !strings.HasPrefix(pack.Typography.FontFaces[0].URL, "https://elitea.example.com/api/v2/branding/assets/font/") {
+	if len(pack.Typography.FontFaces) != 4 || !strings.HasPrefix(pack.Typography.FontFaces[0].URL, "https://elitea.example.com/api/v2/branding/assets/font/") {
 		t.Errorf("fontFaces = %+v", pack.Typography.FontFaces)
 	}
 	// The resolver's own pack is not modified by absolutisation.

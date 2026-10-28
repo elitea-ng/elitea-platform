@@ -71,11 +71,11 @@ export function fontFaceRule(face: BrandFontFace, base?: string): string | undef
  * a pack with no `fontFaces` produces. The default pack declares the three
  * brand faces (brand guide v3: Manrope, Sora, JetBrains Mono).
  */
-export function fontFaceStylesheet(pack: Pick<BrandPack, 'typography'>): string {
+export function fontFaceStylesheet(pack: Pick<BrandPack, 'typography'>, base?: string): string {
   const faces = pack.typography.fontFaces ?? [];
   const rules: string[] = [];
   for (const face of faces) {
-    const rule = fontFaceRule(face);
+    const rule = fontFaceRule(face, base);
     if (rule === undefined) {
       // Handled (§3.6): a refused face is a logged omission, not a broken
       // theme — the text keeps rendering in the fallback family.

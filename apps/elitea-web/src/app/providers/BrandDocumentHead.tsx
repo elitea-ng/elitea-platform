@@ -2,6 +2,8 @@ import { useEffect, useInsertionEffect } from 'react';
 
 import { type BrandPack, FONT_FACE_STYLE_ATTRIBUTE, fontFaceStylesheet, resolveBrandAsset } from '@/shared/brand';
 
+import { getAppBasename } from './basename';
+
 export interface BrandDocumentHeadProps {
   readonly pack: BrandPack;
 }
@@ -25,7 +27,12 @@ export interface BrandDocumentHeadProps {
  */
 export function BrandDocumentHead({ pack }: BrandDocumentHeadProps): null {
   useInsertionEffect(() => {
-    const css = fontFaceStylesheet(pack);
+    // One cacheable URL per face: `./brand/fonts/…` resolved against the
+    // app's absolute basename (`/app/`) instead of each deep route's
+    // directory. Without an absolute basename (admin, desktop) the build
+    // base decides (shared/brand/fontFaces.ts).
+    const basename = getAppBasename();
+    const css = fontFaceStylesheet(pack, basename.startsWith('/') && basename !== '/' ? basename : undefined);
     const existing = document.head.querySelector<HTMLStyleElement>(`style[${FONT_FACE_STYLE_ATTRIBUTE}]`);
     if (css === '') {
       existing?.remove();

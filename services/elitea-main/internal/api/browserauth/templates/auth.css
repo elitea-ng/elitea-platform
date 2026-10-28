@@ -24,7 +24,7 @@
 @font-face {
   font-family: "Manrope";
   src: url("/app/brand/fonts/manrope.woff2") format("woff2");
-  font-weight: 400 600;
+  font-weight: 200 800;
   font-style: normal;
   font-display: swap;
 }
@@ -32,7 +32,7 @@
 @font-face {
   font-family: "Sora";
   src: url("/app/brand/fonts/sora.woff2") format("woff2");
-  font-weight: 700 800;
+  font-weight: 100 800;
   font-style: normal;
   font-display: swap;
 }
@@ -67,7 +67,7 @@
     --accent: var(--brand-dark, #4a4de8);
     --on-accent: var(--on-brand-dark, #ffffff);
     --accent-hover: var(--accent);
-    --signal: var(--signal-dark, #00bfe6);
+    --signal: var(--signal-dark, var(--brand-dark, #00bfe6));
     --page: var(--page-dark, #0b0b18);
     --card: var(--card-dark, #12172b);
     --text: var(--text-dark, #f2f4fa);
@@ -90,7 +90,7 @@
   --accent: var(--brand-dark, #4a4de8);
   --on-accent: var(--on-brand-dark, #ffffff);
   --accent-hover: var(--accent);
-  --signal: var(--signal-dark, #00bfe6);
+  --signal: var(--signal-dark, var(--brand-dark, #00bfe6));
   --page: var(--page-dark, #0b0b18);
   --card: var(--card-dark, #12172b);
   --text: var(--text-dark, #f2f4fa);

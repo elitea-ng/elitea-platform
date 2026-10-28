@@ -106,7 +106,7 @@ func TestTheStylesheetCarriesBothSchemes(t *testing.T) {
 		"--on-accent: var(--on-brand-light, #ffffff);",
 		"--on-accent: var(--on-brand-dark, #ffffff);",
 		"--signal: var(--signal-light, var(--accent));",
-		"--signal: var(--signal-dark, #00bfe6);",
+		"--signal: var(--signal-dark, var(--brand-dark, #00bfe6));",
 		"outline: 2px solid var(--signal);",
 		"outline-offset: 2px;",
 		"@media (prefers-reduced-motion: reduce)",

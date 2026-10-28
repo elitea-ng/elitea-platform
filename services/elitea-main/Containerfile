@@ -24,6 +24,9 @@ RUN npm ci
 COPY libs/ts/client-core/ /build/libs/ts/client-core/
 COPY apps/elitea-web/index.html apps/elitea-web/tsconfig.json apps/elitea-web/vite.config.ts ./
 COPY apps/elitea-web/src/ ./src/
+# The brand typefaces: the admin build copies them to dist/admin/brand/fonts
+# (vite.config.ts, elitea-admin-brand-fonts) for the default pack's fontFaces.
+COPY apps/elitea-web/public/brand/fonts/ ./public/brand/fonts/
 
 # vite.config.ts `admin` mode: root src/entries/admin, base '/admin/app/',
 # outDir dist/admin.

@@ -240,7 +240,9 @@ func TestResolver_FontFacesOverlay(t *testing.T) {
 		},
 	}, nil)})
 	snap := r.Current(context.Background())
-	if snap.Pack == nil || len(snap.Pack.Typography.FontFaces) != 1 {
+	// The overlay's face comes first; the default's three faces of OTHER
+	// families stay, so the mono and display stacks keep their faces.
+	if snap.Pack == nil || len(snap.Pack.Typography.FontFaces) != 4 {
 		t.Fatalf("pack = %+v", snap.Pack)
 	}
 	face := snap.Pack.Typography.FontFaces[0]
@@ -249,6 +251,45 @@ func TestResolver_FontFacesOverlay(t *testing.T) {
 	}
 	if !strings.Contains(string(snap.Body), `"fontFaces":[{"family":"Inter"`) {
 		t.Fatalf("body does not carry the face: %s", snap.Body)
+	}
+}
+
+func TestResolver_FontFacesOverlayReplacesSameFamily(t *testing.T) {
+	url := "/api/v2/branding/assets/font/" + strings.Repeat("ef", 32) + ".woff2"
+	r := NewResolver(ResolverConfig{loadOverlay: overlayLoader(platformconfig.BrandingOverlay{
+		FontFaces: []platformconfig.FontFaceOverlay{{Family: "Manrope", URL: url}},
+	}, nil)})
+	snap := r.Current(context.Background())
+	if snap.Pack == nil {
+		t.Fatal("no pack")
+	}
+	families := map[string]string{}
+	for _, f := range snap.Pack.Typography.FontFaces {
+		if _, dup := families[f.Family]; dup {
+			t.Fatalf("family %q appears twice: %+v", f.Family, snap.Pack.Typography.FontFaces)
+		}
+		families[f.Family] = f.URL
+	}
+	if families["Manrope"] != url || families["Sora"] == "" || families["JetBrains Mono"] == "" {
+		t.Fatalf("faces = %v", families)
+	}
+}
+
+// A package exported from the product default restates its UI stack; the
+// re-import must not drop the display (Sora) stack.
+func TestResolver_RestatedFontFamilyKeepsDisplayStack(t *testing.T) {
+	// A layer must contribute something, or the resolver serves the inert body.
+	def := NewResolver(ResolverConfig{loadOverlay: overlayLoader(platformconfig.BrandingOverlay{ProductName: "Acme"}, nil)}).Current(context.Background())
+	if def.Pack == nil || def.Pack.Typography.FontFamilyDisplay == nil {
+		t.Fatal("the product default must carry a display stack")
+	}
+	same := NewResolver(ResolverConfig{loadOverlay: overlayLoader(platformconfig.BrandingOverlay{ProductName: "Acme", FontFamily: def.Pack.Typography.FontFamily}, nil)}).Current(context.Background())
+	if same.Pack == nil || same.Pack.Typography.FontFamilyDisplay == nil {
+		t.Fatal("restating the default UI family dropped the display stack")
+	}
+	other := NewResolver(ResolverConfig{loadOverlay: overlayLoader(platformconfig.BrandingOverlay{FontFamily: `"Inter", sans-serif`}, nil)}).Current(context.Background())
+	if other.Pack == nil || other.Pack.Typography.FontFamilyDisplay != nil {
+		t.Fatal("a different UI family should carry onto headings")
 	}
 }
 

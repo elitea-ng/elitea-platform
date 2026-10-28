@@ -273,8 +273,12 @@ func applyOverlay(base *Pack, o platformconfig.BrandingOverlay) (*Pack, error) {
 	setOptional(&merged.Product.SupportEmail, o.SupportEmail)
 	setString(&merged.Brand.Hue, o.Hue)
 	setOptional(&merged.Brand.OnBrand, o.OnBrand)
+	baseFamily := merged.Typography.FontFamily
 	setString(&merged.Typography.FontFamily, o.FontFamily)
-	if o.FontFamily != "" {
+	// Compared with the base, not with "": a package exported from the
+	// product default restates the default's UI stack, and re-importing it
+	// must keep the Sora headings.
+	if o.FontFamily != "" && o.FontFamily != baseFamily {
 		// An overlay that names its own UI family gets it on headings too:
 		// the product default's display stack (Sora) is part of the default
 		// look, not a separate setting the overlay can see.
@@ -315,12 +319,23 @@ func applyOverlay(base *Pack, o platformconfig.BrandingOverlay) (*Pack, error) {
 		}
 	}
 	if len(o.FontFaces) > 0 {
-		faces := make([]FontFace, 0, len(o.FontFaces))
+		// The overlay's faces replace the base's faces of the SAME family and
+		// keep the rest: the default ships three (UI, display, mono) and the
+		// overlay allows two, so a wholesale replace silently dropped the
+		// faces that fontFamilyMono and the display stack still name.
+		overlaid := make(map[string]bool, len(o.FontFaces))
+		faces := make([]FontFace, 0, len(o.FontFaces)+len(merged.Typography.FontFaces))
 		for _, f := range o.FontFaces {
 			face := FontFace{Family: f.Family, URL: f.URL}
 			setOptional(&face.Weight, f.Weight)
 			setOptional(&face.Style, f.Style)
 			faces = append(faces, face)
+			overlaid[f.Family] = true
+		}
+		for _, f := range merged.Typography.FontFaces {
+			if !overlaid[f.Family] {
+				faces = append(faces, f)
+			}
 		}
 		merged.Typography.FontFaces = faces
 	}
