@@ -137,6 +137,10 @@ type Dependencies struct {
 	ActorTokenIssuer                 storage.ActorTokenIssuer
 	ProjectTokenValidator            storage.ProjectTokenValidator
 	ProjectSystemTokenSource         ProjectSystemTokenSource
+	// ModelRunTokens mints a governed-pinned run's model-gateway-scoped
+	// client token (#1461). Built at the composition root with the governed
+	// pins; nil leaves every run's client token the actor's PAT.
+	ModelRunTokens storage.ModelRunTokenIssuer
 	// CallbackTokenFacts reads callback token grants for elitea-vector's
 	// token introspection (ADR-0031). Required only when
 	// Config.VectorIntrospectionClients is set; ProjectTokenValidator then
@@ -1592,6 +1596,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct runtime worker client-token context: %w", err)
 		}
 		runtimeToken.WithWorkspaceContext(newWorkspaceContextResolver(dependencies))
+		if dependencies.ModelRunTokens != nil {
+			runtimeToken.WithModelRunTokens(dependencies.ModelRunTokens)
+		}
 	}
 	// nestedApplicationVersions is what makes agent-as-tool executable at all:
 	// without this route the native worker reaches

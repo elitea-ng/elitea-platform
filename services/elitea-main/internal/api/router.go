@@ -668,6 +668,11 @@ type RouterConfig struct {
 	// in the production router.
 	GatewayProxy           http.Handler
 	GatewayProjectResolver apimw.PersonalProjectResolver
+	// ModelRunTokens authenticates a governed run's model run token on /llm
+	// only (#1461). Every other route refuses that token with 403 whether or
+	// not this is set; nil leaves /llm refusing it too, which is the state of
+	// a deployment that issues none.
+	ModelRunTokens apimw.ModelRunTokenValidator
 	// ConfigConnectionChecker performs the real, minimal provider round trip
 	// backing /configurations/check_connection(s) (#319). nil leaves those
 	// routes reporting an honest "not available" failure rather than the
@@ -5118,6 +5123,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				SessionSecret:              cfg.SessionSecret,
 				SessionStore:               cfg.Auth.SessionStore,
 				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
+				// The one group a governed run's model run token reaches.
+				ModelRunTokens: cfg.ModelRunTokens,
 			}))
 			// The session cookie authenticates /llm, and the browser voice
 			// client POSTs audio here with it. A cookie-authenticated write

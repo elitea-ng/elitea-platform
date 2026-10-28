@@ -8,6 +8,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/modelruntoken"
 )
 
 const (
@@ -24,6 +25,7 @@ const (
 	runtimeContextStagePATValidation     = "pat_validation"
 	runtimeContextStagePrincipalBinding  = "principal_binding"
 	runtimeContextStageSecretsHeader     = "project_secrets_header"
+	runtimeContextStageModelRunToken     = "model_run_token_issuance"
 	runtimeContextInitiatorUser          = "user"
 	runtimeContextInitiatorSchedule      = "schedule"
 )
@@ -55,6 +57,7 @@ func runtimeContextUnavailableStage(err error) string {
 		runtimeContextStageExecutionActor,
 		runtimeContextStageExecutionMode,
 		runtimeContextStageActorPATIssuance,
+		runtimeContextStageModelRunToken,
 		runtimeContextStageSystemPATIssuance,
 		runtimeContextStagePATValidation,
 		runtimeContextStagePrincipalBinding,
@@ -235,6 +238,25 @@ type EliteaClientTokenService struct {
 	validator     ProjectTokenValidator
 	secretsHeader ProjectSecretsHeaderReader
 	workspace     WorkspaceContextResolver
+	modelTokens   ModelRunTokenIssuer
+}
+
+// ModelRunTokenIssuer mints a governed run's model run token (#1461,
+// *modelruntoken.Signer): audience the model gateway, bound to the run's
+// claim, valid while its lease is.
+type ModelRunTokenIssuer interface {
+	Issue(binding modelruntoken.Binding) (string, error)
+}
+
+// WithModelRunTokens makes a governed-pinned run's client token a model run
+// token instead of the actor's personal access token (#1461). Composed with
+// the governed pins; a legacy-pinned or unpinned run never reaches it, so
+// its response is unchanged. It must be called before the server serves.
+func (s *EliteaClientTokenService) WithModelRunTokens(issuer ModelRunTokenIssuer) *EliteaClientTokenService {
+	if s != nil {
+		s.modelTokens = issuer
+	}
+	return s
 }
 
 func NewEliteaClientTokenService(
@@ -361,13 +383,33 @@ func (s *EliteaClientTokenService) resolveTokenValue(
 		return EliteaClientTokenContext{}, runtimeContextUnavailable(runtimeContextStageExecutionMode)
 	}
 
-	if err := validateRuntimeTokenPrincipal(
+	tokenID, err := validatedRuntimeTokenID(
 		ctx,
 		s.validator,
 		token,
 		expectedPrincipalID,
-	); err != nil {
+	)
+	if err != nil {
 		return EliteaClientTokenContext{}, err
+	}
+	if governedRun && s.modelTokens != nil {
+		// A governed run gets a model run token in place of the PAT (#1461):
+		// it names the same actor and token row, so usage attributes as
+		// before, but it reaches /llm only and only while this claim's lease
+		// is live. Only a user-initiated run reaches here: a governed
+		// scheduled run was refused above.
+		token, err = s.modelTokens.Issue(modelruntoken.Binding{
+			ExecutionID: claim.ExecutionID,
+			Generation:  claim.Generation,
+			ClaimID:     claim.ClaimID,
+			FenceToken:  claim.FenceToken,
+			ProjectID:   authorization.ResourceProjectID,
+			UserID:      expectedPrincipalID,
+			TokenID:     tokenID,
+		})
+		if err != nil || len(token) == 0 || len(token) > maxEliteaClientTokenBytes {
+			return EliteaClientTokenContext{}, runtimeContextUnavailable(runtimeContextStageModelRunToken)
+		}
 	}
 	value := EliteaClientTokenContext{
 		SchemaVersion: EliteaClientTokenSchemaVersion,
@@ -439,12 +481,24 @@ func validateRuntimeTokenPrincipal(
 	token string,
 	expectedPrincipalID int64,
 ) error {
+	_, err := validatedRuntimeTokenID(ctx, validator, token, expectedPrincipalID)
+	return err
+}
+
+// validatedRuntimeTokenID validates token as expectedPrincipalID's personal
+// access token and answers its token row id.
+func validatedRuntimeTokenID(
+	ctx context.Context,
+	validator ProjectTokenValidator,
+	token string,
+	expectedPrincipalID int64,
+) (int64, error) {
 	principal, err := validator.ValidateToken(ctx, token)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
-			return contextErr
+			return 0, contextErr
 		}
-		return runtimeContextUnavailable(runtimeContextStagePATValidation)
+		return 0, runtimeContextUnavailable(runtimeContextStagePATValidation)
 	}
 	ownerID, ownerOK := principal.OwningUserID()
 	tokenID, tokenIDErr := strconv.ParseInt(principal.TokenID, 10, 64)
@@ -452,7 +506,7 @@ func validateRuntimeTokenPrincipal(
 	if !ownerOK || ownerID <= 0 || tokenIDErr != nil || tokenID <= 0 ||
 		ownerID != expectedPrincipalID || principal.ID != expectedPrincipal ||
 		principal.UserID != expectedPrincipal || principal.AuthType != "token" {
-		return runtimeContextUnavailable(runtimeContextStagePrincipalBinding)
+		return 0, runtimeContextUnavailable(runtimeContextStagePrincipalBinding)
 	}
-	return nil
+	return tokenID, nil
 }

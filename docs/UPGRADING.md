@@ -4,6 +4,21 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Governance follow-ups
+
+* **elitea-main: a governed run's worker gets a model-only token (#1461,
+  governed runs only).** With credential governance on, a run pinned to the
+  governed profile no longer receives its user's personal access token.
+  It receives an `elmrt_` model run token instead. The token works only
+  on `/llm`, for the run's project and execution, while the run's claim
+  holds its lease, and every other route answers 403 for it. Model usage
+  is billed to the same project and user as before. No new key or
+  setting: the token key is derived from the personal access token
+  signing key. Legacy-pinned runs and deployments with the flag off are
+  unchanged. A governed run can no longer use the platform artifact store
+  through that token, so the Office tools and indexing from artifacts are
+  refused in governed runs.
+
 ## P6b
 
 * **Policy revision field `asserted_user_identity_modes` (optional).**

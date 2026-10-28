@@ -17,6 +17,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/modelruntoken"
 )
 
 // TokenValidator validates a token string and returns the authenticated user.
@@ -93,6 +94,10 @@ type AuthConfig struct {
 	// keep a stateless credential alive for a day sets
 	// ELITEA_SESSION_REJECT_LEGACY_COOKIES=true.
 	RejectLegacySessionCookies bool
+	// ModelRunTokens accepts a governed run's model run token (#1461). Only
+	// the /llm group sets it. Everywhere else such a token is refused with
+	// 403 before any validator runs: its audience is the model gateway.
+	ModelRunTokens ModelRunTokenValidator
 }
 
 // Auth authenticates every request against exactly four credential sources:
@@ -178,6 +183,10 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 
 			// X-API-Key header (legacy client compatibility)
 			if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
+				if modelruntoken.HasPrefix(apiKey) {
+					serveModelRunToken(next, w, r, cfg, sourceAPIKey, apiKey)
+					return
+				}
 				user, err := validateToken(r.Context(), cfg, apiKey)
 				if err != nil {
 					writeTokenRefusal(w, r, sourceAPIKey, cfg, err)
@@ -273,6 +282,10 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 				return
 			}
 
+			if modelruntoken.HasPrefix(token) {
+				serveModelRunToken(next, w, r, cfg, sourceToken, token)
+				return
+			}
 			user, err := validateToken(r.Context(), cfg, token)
 			if err != nil {
 				writeTokenRefusal(w, r, sourceToken, cfg, err)
