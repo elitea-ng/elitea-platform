@@ -327,14 +327,17 @@ FROM elitea_identity.agent_identity_bindings WHERE id = $1::uuid FOR UPDATE`, id
 	if strings.TrimSpace(next.LastTransitionBy) == "" {
 		return agentidentity.AgentIdentityBinding{}, fmt.Errorf("%w: the actor is unknown", agentidentity.ErrInvalidBinding)
 	}
+	// definition_digest and proposed_by change only on a re-pin (#1462),
+	// which is a new proposal of the same binding; every other transition
+	// writes back what it read.
 	written, err := scanAgentIdentityBinding(tx.QueryRow(ctx, `
 UPDATE elitea_identity.agent_identity_bindings
 SET state = $2, revocation_epoch = $3, approved_by = $4, policy_revision_id = $5, updated_at = $6,
-    last_transition_by = $8
+    last_transition_by = $8, definition_digest = $9, proposed_by = $10
 WHERE id = $1::uuid AND revocation_epoch = $7
 RETURNING `+agentIdentityBindingSelectColumnList,
 		id, string(next.State), next.RevocationEpoch, agentIdentityNullableText(next.ApprovedBy), next.PolicyRevisionID,
-		next.UpdatedAt, current.RevocationEpoch, next.LastTransitionBy))
+		next.UpdatedAt, current.RevocationEpoch, next.LastTransitionBy, next.DefinitionDigest[:], next.ProposedBy))
 	if errors.Is(err, agentidentity.ErrBindingNotFound) {
 		return agentidentity.AgentIdentityBinding{}, agentidentity.ErrInvalidTransition
 	}
@@ -433,6 +436,10 @@ func bindingAuditEvent(b agentidentity.AgentIdentityBinding, previous *agentiden
 	if previous != nil {
 		action = "binding." + bindingVerb(b.State)
 		reasons = append(reasons, "from."+string(previous.State))
+		if previous.DefinitionDigest != b.DefinitionDigest {
+			// A re-pin to the computed definition digest (#1462).
+			action = "binding.repin"
+		}
 	}
 	return securityaudit.SecurityEvent{
 		Type:             securityaudit.TypeBindingChanged,

@@ -121,7 +121,9 @@ describe('AdminConfiguration → Native clients (composition)', () => {
   });
 });
 
-describe('AdminNativeClientsEditor', () => {
+// Each case types a whole dialog through userEvent; under the coverage
+// shard that alone can pass the 5 s default.
+describe('AdminNativeClientsEditor', { timeout: 20_000 }, () => {
   it('lists each client with its device count, and leaves file entries read-only', async () => {
     useHandlers();
     renderAdminRoute(<AdminNativeClientsEditor />);

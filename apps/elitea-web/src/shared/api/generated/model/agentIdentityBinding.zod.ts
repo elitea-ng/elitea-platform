@@ -51,7 +51,13 @@ export const AgentIdentityBinding = zod
     definition_digest: zod
       .string()
       .describe(
-        "Frozen definition digest, sha256 as 64 lowercase hex characters.",
+        "The pinned definition digest, sha256 as 64 lowercase hex characters. Admission binds this binding to a run only while it equals the canonical digest of the version's stored definition (computed_definition_digest); on a mismatch the run gets no agent identity and the security audit records definition_digest_mismatch.\n",
+      ),
+    computed_definition_digest: zod
+      .string()
+      .nullable()
+      .describe(
+        "The canonical digest of the version's definition as it is stored now, computed the way admission computes it (#1462). Null when the version cannot be read in the tenant project. Editing the agent, or a toolkit its definition embeds (including a credential reference attach), changes it; `:repin` pins it.\n",
       ),
     mode: zod
       .string()

@@ -15,6 +15,7 @@ import (
 	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
 	identityapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/runtoken"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authattempt"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authflow"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsession"
@@ -304,6 +305,17 @@ func (graph *FormGraph) SignPAT(tokenUUID *string, expiresAt *time.Time) (string
 		return "", ErrInvalidGraph
 	}
 	return authsvc.SignBaselinePAT(graph.patSigningKey, tokenUUID, expiresAt)
+}
+
+// RunTokenKey is the key of governed runs' run tokens (#1461),
+// derived from the personal access token signing key under its own label, so
+// it needs no new secret, every replica derives the same key, and neither
+// key verifies the other's tokens. Nil without a signing key.
+func (graph *FormGraph) RunTokenKey() []byte {
+	if graph == nil {
+		return nil
+	}
+	return runtoken.DeriveKey(graph.patSigningKey)
 }
 
 // IssueToken recreates the current-baseline bearer representation for the

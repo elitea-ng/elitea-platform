@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore"
 )
 
 type noPins struct{}
@@ -50,9 +51,9 @@ func TestCredentialGrantGovernanceBuildsTheDeciderWithTheFlagOn(t *testing.T) {
 // Flag off (#1118): no broker is built, so RedeemCredential answers
 // Unimplemented. Nothing is read: every dependency may be nil.
 func TestCredentialBrokerBuildsNothingWithTheFlagOff(t *testing.T) {
-	broker, err := credentialBrokerAtBoot(profile.LegacyAdmission(true), func(string) (string, bool) {
-		t.Fatal("the flag-off broker composition read the environment")
-		return "", false
+	broker, err := credentialBrokerAtBoot(profile.LegacyAdmission(true), func() (map[string]secretstore.SecretStore, error) {
+		t.Fatal("the flag-off broker composition built the secret stores")
+		return nil, nil
 	}, nil, nil, nil, nil, nil, nil, nil, profile.PolicyRevision{}, nil, nil, nil)
 	if err != nil || broker != nil {
 		t.Fatalf("flag off built broker=%v err=%v", broker, err)
@@ -63,7 +64,7 @@ func TestCredentialBrokerBuildsNothingWithTheFlagOff(t *testing.T) {
 // that cannot decide.
 func TestCredentialBrokerRefusesMissingDependenciesWithTheFlagOn(t *testing.T) {
 	governed := profile.GovernedAdmission(profile.PolicyRevision{ID: "2026-10-r1", Digest: [32]byte{1}})
-	if _, err := credentialBrokerAtBoot(governed, func(string) (string, bool) { return "", false },
+	if _, err := credentialBrokerAtBoot(governed, onceSecretStores(func(string) (string, bool) { return "", false }, nil),
 		nil, nil, noPins{}, nil, nil, nil, credentialOperationCatalog(), profile.PolicyRevision{}, nil, nil, nil); err == nil {
 		t.Fatal("flag on without a decider or a database was accepted")
 	}

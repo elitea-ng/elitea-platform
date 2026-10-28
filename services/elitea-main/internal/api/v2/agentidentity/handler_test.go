@@ -57,6 +57,21 @@ func (f *fakeService) TransitionBinding(_ context.Context, id string, action age
 	return f.binding(), f.err
 }
 
+func (f *fakeService) RepinBinding(ctx context.Context, id, by string,
+	digestOf func(context.Context, agentidentity.AgentIdentityBinding) ([32]byte, error)) (agentidentity.AgentIdentityBinding, error) {
+	f.lastID, f.lastAction, f.lastActor = id, "repin", by
+	if f.err != nil {
+		return agentidentity.AgentIdentityBinding{}, f.err
+	}
+	current := f.binding()
+	current.TenantProjectID, current.ApplicationID, current.ApplicationVersionID = 7, 3, 4
+	digest, err := digestOf(ctx, current)
+	if err != nil {
+		return agentidentity.AgentIdentityBinding{}, err
+	}
+	return current.Repin(digest, by, fixedTime)
+}
+
 func (f *fakeService) IssueMandate(_ context.Context, req mandate.Request, by string) (mandate.Mandate, error) {
 	f.lastActor = by
 	return mandate.Mandate{ID: "m", Kind: req.Kind, ExpiresAt: req.ExpiresAt, State: mandate.StateProposed}, f.err
@@ -94,6 +109,7 @@ func newRouter(t *testing.T, service Service, permissions ...string) http.Handle
 		r.With(gate(PermissionBindingsApprove)).Post("/agent_identities/{id}:approve", h.ApproveBinding)
 		r.With(gate(PermissionBindingsManage)).Post("/agent_identities/{id}:suspend", h.SuspendBinding)
 		r.With(gate(PermissionBindingsManage)).Post("/agent_identities/{id}:revoke", h.RevokeBinding)
+		r.With(gate(PermissionBindingsManage)).Post("/agent_identities/{id}:repin", h.RepinBinding)
 		r.With(gate(PermissionMandatesManage, PermissionMandatesApprove)).Get("/mandates", h.ListMandates)
 		r.With(gate(PermissionMandatesManage)).Post("/mandates", h.CreateMandate)
 		r.With(gate(PermissionMandatesApprove)).Post("/mandates/{id}:approve", h.ApproveMandate)
@@ -119,6 +135,7 @@ func TestEveryRouteRefusesACallerWithoutItsPermission(t *testing.T) {
 		{http.MethodPost, "/api/v2/admin/agent_identities/" + bindingID + ":approve", PermissionBindingsApprove},
 		{http.MethodPost, "/api/v2/admin/agent_identities/" + bindingID + ":suspend", PermissionBindingsManage},
 		{http.MethodPost, "/api/v2/admin/agent_identities/" + bindingID + ":revoke", PermissionBindingsManage},
+		{http.MethodPost, "/api/v2/admin/agent_identities/" + bindingID + ":repin", PermissionBindingsManage},
 		{http.MethodGet, "/api/v2/admin/mandates", PermissionMandatesManage},
 		{http.MethodPost, "/api/v2/admin/mandates", PermissionMandatesManage},
 		{http.MethodPost, "/api/v2/admin/mandates/" + bindingID + ":approve", PermissionMandatesApprove},
@@ -255,6 +272,7 @@ func TestActorIsOnlyTheResolvedUserID(t *testing.T) {
 			`{"tenant_project_id":7,"application_id":1,"application_version_id":2,"definition_digest":"` + strings.Repeat("ab", 32) + `","mode":"dedicated_agent"}`},
 		{http.MethodPost, "/api/v2/admin/agent_identities/" + bindingID + ":approve", h.ApproveBinding, ""},
 		{http.MethodPost, "/api/v2/admin/agent_identities/" + bindingID + ":revoke", h.RevokeBinding, ""},
+		{http.MethodPost, "/api/v2/admin/agent_identities/" + bindingID + ":repin", h.RepinBinding, ""},
 		{http.MethodPost, "/api/v2/admin/mandates", h.CreateMandate,
 			`{"tenant_project_id":7,"kind":"autonomous","agent_binding_id":"` + bindingID + `","operation_scopes":["a"]}`},
 		{http.MethodPost, "/api/v2/admin/mandates/" + bindingID + ":approve", h.ApproveMandate, ""},

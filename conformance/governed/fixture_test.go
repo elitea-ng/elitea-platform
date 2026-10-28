@@ -203,15 +203,37 @@ func (w *world) bindAgent(ctx context.Context, t *testing.T, applicationID, vers
 		"mode":              "elitea_native", "external_agent_identity_id": externalID,
 	}, http.StatusCreated).Object(t)
 	bindingID := textOf(t, binding, "id")
-	approved := w.approver.do(ctx, t, http.MethodPost, "/api/v2/admin/agent_identities/"+bindingID+":approve", map[string]any{}, http.StatusOK).Object(t)
-	if approved["state"] != "active" {
-		t.Fatalf("an approved binding is not active: %v", approved)
+	// The proposal named a placeholder digest; admission binds only the
+	// canonical digest of the version (#1462), which the view computes.
+	if binding["computed_definition_digest"] == nil || binding["computed_definition_digest"] == binding["definition_digest"] {
+		t.Fatalf("the binding view computes no different digest: %v", binding)
 	}
+	w.repinAgent(ctx, t, bindingID)
 	activated := w.approver.do(ctx, t, http.MethodPost, "/api/v2/admin/external_agent_identities/"+externalID+":activate", map[string]any{}, http.StatusOK).Object(t)
 	if activated["state"] != "active" {
 		t.Fatalf("the external identity did not activate: %v", activated)
 	}
 	return bindingID
+}
+
+// repinAgent moves the binding to the computed definition digest of its
+// version (#1462) and has the approver re-approve it: the admin re-pins (a
+// new proposal of the same binding), the approver approves. Attaching a
+// reference rewrites the toolkit settings the agent definition embeds, so
+// every attach is followed by a re-pin, as the runbook says.
+func (w *world) repinAgent(ctx context.Context, t *testing.T, bindingID string) {
+	t.Helper()
+	path := "/api/v2/admin/agent_identities/" + bindingID
+	repinned := w.admin.do(ctx, t, http.MethodPost, path+":repin", map[string]any{}, http.StatusOK).Object(t)
+	if repinned["state"] != "proposed" || repinned["definition_digest"] != repinned["computed_definition_digest"] {
+		t.Fatalf("a re-pinned binding is not a proposal of the computed digest: %v", repinned)
+	}
+	// The re-pinner is the proposer: it may not approve its own re-pin.
+	w.admin.do(ctx, t, http.MethodPost, path+":approve", map[string]any{}, http.StatusForbidden)
+	approved := w.approver.do(ctx, t, http.MethodPost, path+":approve", map[string]any{}, http.StatusOK).Object(t)
+	if approved["state"] != "active" {
+		t.Fatalf("an approved binding is not active: %v", approved)
+	}
 }
 
 // migrationLine is one --json line of `credential-governance
@@ -419,8 +441,12 @@ func (w *world) governedAgent(ctx context.Context, t *testing.T, spec agentSpec)
 	if spec.BindBeforeAttach {
 		w.bindToolkit(ctx, t, bindingID, toolkitID)
 		w.attachReference(ctx, t, reference.CredentialReferenceID, toolkitID)
+		// The agent's definition digest moved with the attach; re-pin it,
+		// but not the toolkit's, so only the toolkit gate can deny.
+		w.repinAgent(ctx, t, bindingID)
 	} else {
 		w.attachReference(ctx, t, reference.CredentialReferenceID, toolkitID)
+		w.repinAgent(ctx, t, bindingID)
 		w.bindToolkit(ctx, t, bindingID, toolkitID)
 	}
 	grantID := w.grant(ctx, t, bindingID, toolkitID, reference, []string{"use", "probe"}, spec.GrantOperations)
