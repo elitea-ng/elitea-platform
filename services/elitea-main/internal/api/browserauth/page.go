@@ -5,10 +5,12 @@ package browserauth
 //
 // # Presentation
 //
-// One stylesheet (templates/auth.css) in the web app's tokens, with a light
-// and a dark scheme, decorative ring art drawn as inline SVG in the brand
-// colours, and the shared markup in templates/partials.html. Nothing is
-// loaded from anywhere: no external stylesheet, font, image or script.
+// One stylesheet (templates/auth.css) in the Elitea AI brand tokens, with a
+// light ("Paper") and a dark ("Ink") scheme, and the shared markup in
+// templates/partials.html. The page is flat: no decorative art. The built-in
+// logo is inline SVG. The only load is the brand fonts, from the web app's
+// same-origin /app/brand/fonts/ (`font-src 'self'`); if they do not load, the
+// system UI font shows. Nothing loads from another origin.
 //
 // # The colour scheme
 //

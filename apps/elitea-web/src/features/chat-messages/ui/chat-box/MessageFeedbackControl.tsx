@@ -17,7 +17,8 @@
  *
  * The aggregate counts are the Tooltip title on each thumb — "shown on
  * hover" per the issue's own wording — and the caller's own vote is the
- * highlighted (filled) icon + `aria-pressed`.
+ * highlighted (filled) icon + `aria-pressed`. The thumbs are drawn as the
+ * reply row's own `ReplyActionButton`s, so they sit in that row unmarked.
  */
 import type { MouseEvent, ReactNode } from 'react';
 import { useCallback, useState } from 'react';
@@ -29,13 +30,13 @@ import ThumbUpIcon from '@mui/icons-material/ThumbUp';
 import ThumbUpOutlinedIcon from '@mui/icons-material/ThumbUpOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import IconButton from '@mui/material/IconButton';
 import Popover from '@mui/material/Popover';
 import TextField from '@mui/material/TextField';
-import Tooltip from '@mui/material/Tooltip';
 
 import { conversationApi } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
+
+import { ReplyActionButton } from './ReplyActionButton';
 
 /** Matches `messageFeedbackCommentMaxLen` (internal/api/v2/conversations/handler.go). */
 const COMMENT_MAX_LEN = 2000;
@@ -101,48 +102,22 @@ export function MessageFeedbackControl({
     : '';
 
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
-      <Tooltip title={likeCount} placement="top">
-        <span>
-          <IconButton
-            size="small"
-            color={mine?.rating === 1 ? 'primary' : 'tertiary'}
-            disabled={isDisabled}
-            onClick={() => handleVote(1)}
-            aria-label={likeLabel}
-            aria-pressed={mine?.rating === 1}
-          >
-            {mine?.rating === 1 ? <ThumbUpIcon fontSize="small" /> : <ThumbUpOutlinedIcon fontSize="small" />}
-          </IconButton>
-        </span>
-      </Tooltip>
-      <Tooltip title={dislikeCount} placement="top">
-        <span>
-          <IconButton
-            size="small"
-            color={mine?.rating === -1 ? 'primary' : 'tertiary'}
-            disabled={isDisabled}
-            onClick={() => handleVote(-1)}
-            aria-label={dislikeLabel}
-            aria-pressed={mine?.rating === -1}
-          >
-            {mine?.rating === -1 ? <ThumbDownIcon fontSize="small" /> : <ThumbDownOutlinedIcon fontSize="small" />}
-          </IconButton>
-        </span>
-      </Tooltip>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+      <ReplyActionButton label={likeLabel} tooltip={likeCount} pressed={mine?.rating === 1} disabled={isDisabled} onClick={() => handleVote(1)}>
+        {mine?.rating === 1 ? <ThumbUpIcon /> : <ThumbUpOutlinedIcon />}
+      </ReplyActionButton>
+      <ReplyActionButton label={dislikeLabel} tooltip={dislikeCount} pressed={mine?.rating === -1} disabled={isDisabled} onClick={() => handleVote(-1)}>
+        {mine?.rating === -1 ? <ThumbDownIcon /> : <ThumbDownOutlinedIcon />}
+      </ReplyActionButton>
       {mine && (
-        <Tooltip
-          title={
-            mine.comment
-              ? t('features.chatMessages.feedback.editComment', 'Edit your comment')
-              : t('features.chatMessages.feedback.addComment', 'Add a comment')
-          }
-          placement="top"
+        <ReplyActionButton
+          label={t('features.chatMessages.feedback.addComment', 'Add a comment')}
+          tooltip={mine.comment ? t('features.chatMessages.feedback.editComment', 'Edit your comment') : undefined}
+          disabled={isDisabled}
+          onClick={handleOpenComment}
         >
-          <IconButton size="small" color="tertiary" disabled={isDisabled} onClick={handleOpenComment} aria-label={t('features.chatMessages.feedback.addComment', 'Add a comment')}>
-            <ModeCommentOutlinedIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
+          <ModeCommentOutlinedIcon />
+        </ReplyActionButton>
       )}
       <Popover
         open={Boolean(commentAnchor)}

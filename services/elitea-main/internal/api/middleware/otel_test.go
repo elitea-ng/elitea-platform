@@ -78,7 +78,7 @@ func TestOtelMiddleware_AnEventStreamBehindCompressFlushesAtOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no response while the stream is open: %v", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	line, err := bufio.NewReader(response.Body).ReadString('\n')
 	if err != nil || line != ": connected\n" {
 		t.Fatalf("first frame = %q, %v", line, err)

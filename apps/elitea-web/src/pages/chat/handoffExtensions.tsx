@@ -26,7 +26,7 @@ export interface HandoffExtensionsInput {
   readonly projectId: string | undefined;
   readonly conversationId: string | undefined;
   readonly userId: string | undefined;
-  /** The composer's existing context indicator, which stays under the cloud notice. */
+  /** What sits over the composer beside the cloud notice (nothing today: the budget is in the participants rail). */
   readonly contextIndicator: React.ReactNode;
 }
 

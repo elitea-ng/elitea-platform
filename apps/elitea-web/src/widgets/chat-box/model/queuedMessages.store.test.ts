@@ -107,6 +107,29 @@ describe('remove', () => {
   });
 });
 
+describe('promote ("Send now")', () => {
+  it('moves one waiting message to the head and keeps the others in order', () => {
+    const store = freshStore();
+    const state = store.getState();
+    state.enqueue(KEY, 'first');
+    state.enqueue(KEY, 'second');
+    const third = state.enqueue(KEY, 'third');
+    store.getState().promote(KEY, third?.id ?? '');
+    expect(store.getState().queues[KEY]?.map((row) => row.text)).toEqual(['third', 'first', 'second']);
+    expect(store.getState().dequeue(KEY)?.text).toBe('third');
+  });
+
+  it('is a no-op for the head or an id that is not in this queue', () => {
+    const store = freshStore();
+    const first = store.getState().enqueue(KEY, 'first');
+    store.getState().enqueue(KEY, 'second');
+    const before = store.getState().queues;
+    store.getState().promote(KEY, first?.id ?? '');
+    store.getState().promote(KEY, 'nope');
+    expect(store.getState().queues).toBe(before);
+  });
+});
+
 describe('per-conversation isolation', () => {
   it('never mixes two conversations', () => {
     const store = freshStore();

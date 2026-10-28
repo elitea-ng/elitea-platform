@@ -8,8 +8,6 @@ import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
 
 import { DragOverlay, useDroppable } from '@dnd-kit/core';
 
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import Box from '@mui/material/Box';
 import InputBase from '@mui/material/InputBase';
@@ -23,6 +21,7 @@ import { GroupActivitySummary } from '@/shared/ui/ConversationActivity';
 import type { ChatRail } from '../model/chatRail';
 import { folderDropId, UNGROUPED_DROP_ID, type useSidebarChatDrag } from '../model/useSidebarChatDrag';
 import { ConversationRow, type ConversationRowActions } from './ConversationRow';
+import { FolderClosedIcon, FolderOpenIcon } from './folderIcons';
 import { CHILD_INDENT, ShellRow } from './rows';
 
 /** How long a dragged row hovers a closed folder before it opens. */
@@ -42,8 +41,8 @@ interface GroupProps {
 }
 
 /**
- * A date group, drawn as Local work draws a folder: the chevron in the icon
- * column, the caption on the text edge its chats share, the count at the right
+ * A date group, drawn as Local work draws a folder: an open or closed folder
+ * in the icon column (a group the listing made, like "Today", is a folder too), the caption on the text edge its chats share, the count at the right
  * while it is closed.
  */
 export function Group({ caption, count, open, onToggle, children, rows, serverNeedsYou }: GroupProps): React.JSX.Element {
@@ -53,7 +52,7 @@ export function Group({ caption, count, open, onToggle, children, rows, serverNe
         <ShellRow
           testId="shell-chats-group"
           muted
-          icon={open ? <ExpandMoreIcon /> : <ChevronRightIcon />}
+          icon={open ? <FolderOpenIcon /> : <FolderClosedIcon />}
           ariaExpanded={open}
           label={caption}
           labelClassName="shell-group-caption"
@@ -129,7 +128,7 @@ export function FolderItem({ rail, folder, expanded, onToggle, onExpand, openId,
       <Box ref={setNodeRef}>
         <ShellRow
           testId="shell-chats-folder"
-          icon={expanded ? <ExpandMoreIcon /> : <ChevronRightIcon />}
+          icon={expanded ? <FolderOpenIcon /> : <FolderClosedIcon />}
           ariaExpanded={expanded}
           label={folder.name}
           meta={String(count)}

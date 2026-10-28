@@ -83,6 +83,18 @@ afterAll(() => {
   configure({ asyncUtilTimeout });
 });
 
+/** The composers' unsent texts, as kept in this device's storage (`composerDrafts`). */
+const storedDrafts = (): Record<string, { text: string }> => JSON.parse(window.localStorage.getItem('el.composer.drafts') ?? '{}') as Record<string, { text: string }>;
+
+/** Picks a mode in the composer's mode picker ("Act ⌄"). */
+async function pickMode(user: ReturnType<typeof userEvent.setup>, name: string): Promise<void> {
+  await user.click(await screen.findByTestId('mode-picker'));
+  await user.click(await screen.findByRole('menuitemradio', { name }));
+}
+
+/** The mode the picker shows. */
+const shownMode = (): HTMLElement => screen.getByTestId('mode-picker');
+
 /** Bypass mode is kept per folder in storage: each bypass test starts, and leaves, without it. */
 function forgetBypass(): void {
   window.localStorage.removeItem('el.desktop.workspace.w1.bypass');
@@ -302,7 +314,7 @@ describe('WorkspaceSessionPage', () => {
     const session = await screen.findByTestId('workspace-session');
     // The session page opens the index, which checks the folder; its settings are in the ⋯ menu.
     await waitFor(() => expect(indexIpc.calls.opened).toEqual(['w1']));
-    await userEvent.click(within(session).getByRole('button', { name: 'More' }));
+    await userEvent.click(within(session).getByTestId('thread-more'));
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Index settings…' }));
     // The inspector opens on its Index tab.
     expect(await screen.findByTestId('index-panel')).toBeInTheDocument();
@@ -325,7 +337,7 @@ describe('WorkspaceSessionPage', () => {
     await pickCoder(user);
 
     await user.type(screen.getByTestId('chat-message-input'), 'fix the build');
-    await user.click(screen.getByRole('radio', { name: 'Plan mode (no changes)' }));
+    await pickMode(user, 'Plan mode (no changes)');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
@@ -352,7 +364,7 @@ describe('WorkspaceSessionPage', () => {
     ipc.emit({ ...at(3), kind: 'tool_call', payload: { call_id: 'c1', tool: 'run_command', args_summary: 'cargo build', remote: false } });
     expect(await screen.findByText('Looking at the build')).toBeInTheDocument();
     expect(screen.getByText('Local')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop generating' })).toBeInTheDocument();
 
     ipc.emit({ ...at(4), kind: 'approval_request', payload: { request_id: 'r1', tool: 'run_command', title: 'Run cargo build', detail: 'Build it', command: ['cargo', 'build'], reason: 'unlisted', can_remember: true } });
     const dialog = await screen.findByRole('dialog', { name: 'Run cargo build' });
@@ -368,9 +380,11 @@ describe('WorkspaceSessionPage', () => {
     ipc.emit({ ...at(6), kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: ['m1'], changed_files: 1 } });
     ipc.emit({ ...at(7), kind: 'status', payload: { phase: 'done' } });
 
-    expect(await screen.findByText('src/main.rs')).toBeInTheDocument();
+    // The panel's row: the file name, its folder quiet beside it.
+    expect(await screen.findByText('main.rs')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Undo turn' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'More' }));
+    // The thread's ⋯ in the toolbar (the composer has a ⋯ of its own).
+    await user.click(screen.getByTestId('thread-more'));
     expect(await screen.findByRole('menuitem', { name: 'Open in chat' })).not.toHaveAttribute('aria-disabled', 'true');
   });
 
@@ -417,7 +431,8 @@ describe('WorkspaceSessionPage', () => {
     expect(screen.getAllByTestId('tool-row')).toHaveLength(1);
     expect(screen.getByText(/did not finish/)).toBeInTheDocument();
     expect(screen.queryByText(/Earlier messages of this thread/)).toBeNull();
-    await user.click(screen.getByRole('button', { name: 'More' }));
+    // The thread's ⋯ in the toolbar (the composer has a ⋯ of its own).
+    await user.click(screen.getByTestId('thread-more'));
     expect(await screen.findByRole('menuitem', { name: 'Open in chat' })).not.toHaveAttribute('aria-disabled', 'true');
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
@@ -428,7 +443,12 @@ describe('WorkspaceSessionPage', () => {
     expect(await within(sets[0] as HTMLElement).findByText('t2-live.txt')).toBeInTheDocument();
     expect(within(sets[0] as HTMLElement).getByRole('button', { name: 'Undo turn' })).toBeInTheDocument();
     expect(within(sets[0] as HTMLElement).getByText('Prompt of t2')).toBeInTheDocument();
-    expect(within(sets[1] as HTMLElement).getByText('t1.txt')).toBeInTheDocument();
+    // The older turn starts folded to its header; it unfolds on a click.
+    const olderToggle = within(sets[1] as HTMLElement).getByRole('button', { name: /Prompt of t1/ });
+    expect(olderToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(within(sets[1] as HTMLElement).queryByText('t1.txt')).toBeNull();
+    await user.click(olderToggle);
+    expect(await within(sets[1] as HTMLElement).findByText('t1.txt')).toBeInTheDocument();
     expect(within(sets[1] as HTMLElement).queryByRole('button', { name: 'Undo turn' })).toBeNull();
   });
 
@@ -439,14 +459,14 @@ describe('WorkspaceSessionPage', () => {
     mount(ipc, '/workspaces/w1?conversation=77');
 
     expect(await screen.findByText('Answer of t9')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop generating' })).toBeInTheDocument();
     expect(screen.queryAllByTestId('history-turn')).toHaveLength(0);
     // A live event the record already holds is not shown twice; a new one appends.
     ipc.emit({ turn_id: 't9', seq: 2, kind: 'text_delta', payload: { text: 'Answer of t9' } });
     ipc.emit({ turn_id: 't9', seq: 3, kind: 'text_delta', payload: { text: ', and more' } });
     expect(await screen.findByText('Answer of t9, and more')).toBeInTheDocument();
     ipc.emit({ turn_id: 't9', seq: 4, kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: [], changed_files: 0 } });
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop generating' })).toBeNull());
     expect(screen.getByText('Prompt of t9')).toBeInTheDocument();
   });
 
@@ -555,7 +575,7 @@ describe('WorkspaceSessionPage', () => {
       // The new thread opens with the turns up to the fork point, and says the files were not rolled back.
       expect(await screen.findByTestId('fork-notice')).toHaveTextContent('Files stay as they are now.');
       expect(screen.getAllByTestId('history-turn')).toHaveLength(1);
-      expect(screen.getByText('Prompt of t1')).toBeInTheDocument();
+      expect(within(await screen.findByTestId('session-transcript')).getByText('Prompt of t1')).toBeInTheDocument();
       expect(screen.queryByText('Prompt of t2')).toBeNull();
       expect(screen.getByTestId('thread-title')).toHaveTextContent('Fix the build (fork)');
       // The source thread is untouched.
@@ -616,7 +636,7 @@ describe('WorkspaceSessionPage', () => {
       appIpc.chooseFromContextMenu('fork');
       fireEvent.contextMenu(await screen.findByTestId('your-prompt'));
       expect(await screen.findByTestId('fork-notice')).toBeInTheDocument();
-      await waitFor(() => expect(screen.queryByText('Prompt of t1')).toBeInTheDocument());
+      await waitFor(() => expect(within(screen.getByTestId('session-transcript')).queryByText('Prompt of t1')).toBeInTheDocument());
       expect(screen.queryByTestId('fork-restore')).toBeNull();
 
       server.use(
@@ -636,8 +656,9 @@ describe('WorkspaceSessionPage', () => {
       const user = userEvent.setup();
       mount(ipc, '/workspaces/w1?conversation=77');
 
-      await screen.findByText('Prompt of t1');
-      await user.click(screen.getByRole('button', { name: 'More' }));
+      await within(await screen.findByTestId('session-transcript')).findByText('Prompt of t1');
+      // The thread's ⋯ in the toolbar (the composer has a ⋯ of its own).
+      await user.click(screen.getByTestId('thread-more'));
       await user.click(await screen.findByRole('menuitem', { name: 'Fork Thread' }));
 
       await waitFor(() => expect(forkBodies).toEqual([{ fork_id: ANY_FORK_ID }]));
@@ -666,7 +687,7 @@ describe('WorkspaceSessionPage', () => {
 
       expect(await screen.findByTestId('fork-error')).toHaveTextContent('a turn is still running or waits for an approval');
       expect(ipc.calls.forks).toEqual([]);
-      expect(screen.getByText('Prompt of t1')).toBeInTheDocument();
+      expect(within(await screen.findByTestId('session-transcript')).getByText('Prompt of t1')).toBeInTheDocument();
 
       // Asked again (the first answer may have been lost): the same fork_id, so the server makes one fork at most.
       appIpc.chooseFromContextMenu('fork');
@@ -861,12 +882,12 @@ describe('WorkspaceSessionPage', () => {
     await act(() => openFolder('w2'));
     expect(await screen.findByRole('heading', { name: 'lib' })).toBeInTheDocument();
     expect(screen.queryByText('working in app')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Stop generating' })).toBeNull();
     // One listener: the old session's was removed with it.
     await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
   });
 
-  it('cancels the running turn from the transcript', async () => {
+  it('stops the running turn from the composer: no Cancel in the transcript', async () => {
     serveProject();
     const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
     const user = userEvent.setup();
@@ -878,7 +899,28 @@ describe('WorkspaceSessionPage', () => {
     await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
 
     ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'status', payload: { phase: 'running' } });
-    await user.click(await screen.findByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByTestId('turn-status')).toHaveTextContent('Working');
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+    await user.click(await screen.findByRole('button', { name: 'Stop generating' }));
+    expect(ipc.calls.cancelled).toEqual(['turn-1']);
+  });
+
+  it('stops the running turn on Esc Esc, not on one Escape', async () => {
+    serveProject();
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+    const user = userEvent.setup();
+    mount(ipc, '/workspaces/w1');
+
+    await pickCoder(user);
+    await user.type(screen.getByTestId('chat-message-input'), 'go');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+    ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'status', payload: { phase: 'running' } });
+    await screen.findByRole('button', { name: 'Stop generating' });
+
+    await user.keyboard('{Escape}');
+    expect(ipc.calls.cancelled).toEqual([]);
+    await user.keyboard('{Escape}');
     expect(ipc.calls.cancelled).toEqual(['turn-1']);
   });
 
@@ -1101,7 +1143,7 @@ describe('WorkspaceSessionPage', () => {
       expect(screen.queryByTestId('agent-chip')).toBeNull();
 
       await user.click(within(empty).getByRole('button', { name: 'Use another project' }));
-      await user.click(await screen.findByRole('menuitemradio', { name: 'Public' }));
+      await user.click(await screen.findByRole('menuitem', { name: 'Public' }));
       await waitFor(async () => expect((await ipc.list())[0]?.project_id).toBe(1));
     });
 
@@ -1214,11 +1256,11 @@ describe('WorkspaceSessionPage', () => {
       onTestFinished(forgetBypass);
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       const user = await ready(ipc);
-      await user.click(await screen.findByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      await pickMode(user, 'Bypass mode (no approvals)');
       const dialog = await screen.findByRole('dialog', { name: 'Run without approvals?' });
       await user.click(within(dialog).getByRole('button', { name: 'Turn on bypass mode' }));
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull());
-      expect(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' })).toBeChecked();
+      expect(shownMode()).toHaveTextContent('Bypass');
       expect(screen.getByTestId('workspace-bypass-notice')).toBeInTheDocument();
       const input = screen.getByTestId('chat-message-input');
       await user.type(input, 'go{Enter}');
@@ -1227,10 +1269,10 @@ describe('WorkspaceSessionPage', () => {
       expect(ipc.calls.started[0]?.plan_mode).toBe(false);
       // Off from the notice; on again without the warning (the folder confirmed it).
       await user.click(within(screen.getByTestId('workspace-bypass-notice')).getByRole('button', { name: 'Turn off' }));
-      expect(screen.getByRole('radio', { name: 'Act' })).toBeChecked();
-      await user.click(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      expect(shownMode()).toHaveTextContent('Act');
+      await pickMode(user, 'Bypass mode (no approvals)');
       expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull();
-      expect(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' })).toBeChecked();
+      expect(shownMode()).toHaveTextContent('Bypass');
     }, 30_000);
 
     it('keeps plan mode when the bypass warning is cancelled, and leaves it once bypass is on', async () => {
@@ -1238,16 +1280,16 @@ describe('WorkspaceSessionPage', () => {
       onTestFinished(forgetBypass);
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       const user = await ready(ipc);
-      await user.click(await screen.findByRole('radio', { name: 'Plan mode (no changes)' }));
-      await user.click(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      await pickMode(user, 'Plan mode (no changes)');
+      await pickMode(user, 'Bypass mode (no approvals)');
       const dialog = await screen.findByRole('dialog', { name: 'Run without approvals?' });
       await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull());
-      expect(screen.getByRole('radio', { name: 'Plan mode (no changes)' })).toBeChecked();
-      await user.click(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      expect(shownMode()).toHaveTextContent('Plan');
+      await pickMode(user, 'Bypass mode (no approvals)');
       await user.click(within(await screen.findByRole('dialog', { name: 'Run without approvals?' })).getByRole('button', { name: 'Turn on bypass mode' }));
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull());
-      expect(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' })).toBeChecked();
+      expect(shownMode()).toHaveTextContent('Bypass');
     }, 30_000);
 
     it('asks the host to read ahead for the selected agent when the composer gets focus', async () => {
@@ -1268,9 +1310,14 @@ describe('WorkspaceSessionPage', () => {
       await user.type(input, 'one{Shift>}{Enter}{/Shift}two');
       expect(input).toHaveValue('one\ntwo');
       expect(ipc.calls.started).toHaveLength(0);
+      // Unsent, the text is the new thread's draft.
+      await waitFor(() => expect(storedDrafts()['workspace:w1:new']?.text).toBe('one\ntwo'));
       await user.keyboard('{Enter}');
       await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
       expect(ipc.calls.started[0]?.prompt).toBe('one\ntwo');
+      // Sent, it is nobody's draft: not the thread's it started, not the next new thread's.
+      await waitFor(() => expect(input).toHaveValue(''));
+      await waitFor(() => expect(storedDrafts()).toEqual({}));
     });
 
     // Six commands, a turn and a new thread in one test: the default 5 s is not
@@ -1285,7 +1332,7 @@ describe('WorkspaceSessionPage', () => {
       const menu = await screen.findByTestId('workspace-command-menu');
       expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(['/new', '/plan', '/undo', '/retry', '/agent', '/model', '/steps', '/clear', '/compact', '/help']);
       await user.type(input, 'pl{Enter}');
-      expect(screen.getByRole('radio', { name: 'Plan mode (no changes)' })).toBeChecked();
+      expect(shownMode()).toHaveTextContent('Plan');
       await waitFor(() => expect(input).toHaveValue(''));
 
       await user.type(input, '/help{Enter}');

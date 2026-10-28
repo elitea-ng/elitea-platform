@@ -10,6 +10,7 @@ import Tooltip from '@mui/material/Tooltip';
 
 import { agentEditorHooks } from '@/features/agents';
 import { t } from '@/shared/i18n';
+import { ComposerIconButton } from '@/shared/ui/native-composer';
 
 import { AttachmentButton } from './AttachmentButton';
 import type { AttachmentButtonHandle } from './AttachmentButton';
@@ -86,6 +87,34 @@ export interface PlusChatButtonProps {
   participants?: unknown[];
   entitySubmenus?: PlusChatButtonEntitySubmenus;
   attachmentButtonRef?: RefObject<AttachmentButtonHandle | null>;
+  /** The desktop composer's look: the trigger is a plain `ComposerIconButton`; the menu is the same. */
+  native?: boolean;
+}
+
+/** The "+" trigger, in the web's or the desktop composer's look; the same id, name and handler either way. */
+function PlusTrigger({ native, anchorRef, onClick }: { readonly native: boolean; readonly anchorRef: RefObject<HTMLButtonElement | null>; readonly onClick: () => void }) {
+  const tooltip = t('widgets.chat.plusChatButton.tooltip', 'Add files, agents, toolkits and more...');
+  if (native) {
+    return (
+      <ComposerIconButton ref={anchorRef} label={tooltip} data-testid="plus-menu-button" onClick={onClick}>
+        <AddIcon />
+      </ComposerIconButton>
+    );
+  }
+  return (
+    <Tooltip title={tooltip} placement="top">
+      <IconButton
+        ref={anchorRef}
+        color="secondary"
+        aria-label={t('widgets.chat.plusChatButton.ariaLabel', 'plus menu')}
+        data-testid="plus-menu-button"
+        onClick={onClick}
+        sx={{ marginLeft: 0 }}
+      >
+        <AddIcon fontSize="small" />
+      </IconButton>
+    </Tooltip>
+  );
 }
 
 export const PlusChatButton = memo(
@@ -102,6 +131,7 @@ export const PlusChatButton = memo(
     participants,
     entitySubmenus,
     attachmentButtonRef,
+    native = false,
   }: PlusChatButtonProps) => {
     const [menuOpen, setMenuOpen] = useState(false);
     const [activeSubmenu, setActiveSubmenu] = useState<SubmenuKey | null>(null);
@@ -220,18 +250,7 @@ export const PlusChatButton = memo(
           limits={limits}
         />
 
-        <Tooltip title={t('widgets.chat.plusChatButton.tooltip', 'Add files, agents, toolkits and more...')} placement="top">
-          <IconButton
-            ref={anchorRef}
-            color="secondary"
-            aria-label={t('widgets.chat.plusChatButton.ariaLabel', 'plus menu')}
-            data-testid="plus-menu-button"
-            onClick={toggleMenu}
-            sx={{ marginLeft: 0 }}
-          >
-            <AddIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
+        <PlusTrigger native={native} anchorRef={anchorRef} onClick={toggleMenu} />
 
         <Popper
           open={menuOpen}

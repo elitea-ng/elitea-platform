@@ -72,6 +72,14 @@ export interface VoiceControlButtonProps {
   readonly hasModelTTS: boolean;
   /** The project a model voice preview bills (`/llm` edge, `X-Project-Id`). */
   readonly projectId?: string | undefined;
+  /**
+   * The settings dialog, controlled from outside: the desktop composer opens
+   * it from its ⋯ menu ("Voice settings…") and passes `hideControls`, so only
+   * the dialog renders here. Left out, the gear opens it as before.
+   */
+  readonly settingsOpen?: boolean | undefined;
+  readonly onSettingsOpenChange?: ((open: boolean) => void) | undefined;
+  readonly hideControls?: boolean | undefined;
 }
 
 const containerSx = (theme: Theme) => ({
@@ -116,18 +124,29 @@ export function VoiceControlButton({
   ttsModel,
   hasModelTTS,
   projectId,
+  settingsOpen,
+  onSettingsOpenChange,
+  hideControls = false,
 }: VoiceControlButtonProps): ReactNode {
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [ownDialogOpen, setOwnDialogOpen] = useState(false);
   const voiceFlags = useVoiceFeatureFlags();
+  const dialogOpen = settingsOpen ?? ownDialogOpen;
+  const setDialogOpen = useCallback(
+    (open: boolean) => {
+      setOwnDialogOpen(open);
+      onSettingsOpenChange?.(open);
+    },
+    [onSettingsOpenChange],
+  );
 
-  const handleDialogOpen = useCallback(() => setDialogOpen(true), []);
-  const handleDialogClose = useCallback(() => setDialogOpen(false), []);
+  const handleDialogOpen = useCallback(() => setDialogOpen(true), [setDialogOpen]);
+  const handleDialogClose = useCallback(() => setDialogOpen(false), [setDialogOpen]);
   const handleApply = useCallback(
     (config: VoiceConfig) => {
       onVoiceConfigChange(config);
       setDialogOpen(false);
     },
-    [onVoiceConfigChange],
+    [onVoiceConfigChange, setDialogOpen],
   );
 
   // Same platform switch as `widgets/chat`'s VoiceButton (A14, issue 200).
@@ -147,7 +166,7 @@ export function VoiceControlButton({
 
   return (
     <>
-      <Box
+      {!hideControls && <Box
         data-testid="chat-voice-play-stop-container"
         sx={containerSx}
       >
@@ -188,7 +207,7 @@ export function VoiceControlButton({
             </BaseBtn>
           </Box>
         </Tooltip>
-      </Box>
+      </Box>}
       {/*
        * `isPlaying={isPlaying}` — disclosed baseline-bug fix, not a port
        * bug. Baseline (`VoiceControlButton.jsx:83-92`) passes bare

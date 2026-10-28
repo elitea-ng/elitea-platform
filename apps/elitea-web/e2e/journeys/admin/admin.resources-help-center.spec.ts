@@ -214,10 +214,10 @@ adminTest(
         // heading role), so it is located by text, exact — a substring match
         // on "Release Notes" would also match nothing else here, but exact
         // keeps this honest against a future card whose name contains it.
-        await expect(page.getByText('Release Notes', { exact: true })).toHaveCount(0, { timeout: 20_000 });
+        await expect(page.getByText('Release notes', { exact: true })).toHaveCount(0, { timeout: 20_000 });
         // The control, so a `visibleCards` regression that hid every card
         // does not pass this test by accident.
-        await expect(page.getByText('Video Library', { exact: true })).toBeVisible();
+        await expect(page.getByText('Video library', { exact: true })).toBeVisible();
 
         // ── re-enable, and both halves reverse ──────────────────────────
         const reenabled = await putResources(request, { resources_release_notes_enabled: true });
@@ -227,7 +227,7 @@ adminTest(
         await expect(page.getByRole('switch', { name: 'Release Notes Card Enabled' })).toBeChecked();
 
         await page.goto(BASE_URL + '/app/help-center', { waitUntil: 'domcontentloaded' });
-        await expect(page.getByText('Release Notes', { exact: true })).toBeVisible({ timeout: 20_000 });
+        await expect(page.getByText('Release notes', { exact: true })).toBeVisible({ timeout: 20_000 });
       } finally {
         await restoreOwnedFields(request);
       }

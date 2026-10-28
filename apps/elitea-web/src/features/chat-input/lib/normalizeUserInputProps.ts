@@ -26,8 +26,9 @@ export function resolveField(field: UserInputSlotProps['field']): {
   readonly placeholder: string | undefined;
   readonly color: string | undefined;
   readonly iconColor: string | undefined;
+  readonly draftKey: string | undefined;
 } {
-  return { placeholder: field?.placeholder, color: field?.color, iconColor: field?.iconColor };
+  return { placeholder: field?.placeholder, color: field?.color, iconColor: field?.iconColor, draftKey: field?.draftKey };
 }
 
 export function resolveMention(mention: UserInputSlotProps['mention']): {
@@ -60,16 +61,23 @@ export function resolveSendButtonConfig(sendButton: UserInputSlotProps['sendButt
  *
  * A17: the send control is no longer the "else" of Stop. A host that QUEUES
  * what is sent during a run (`UserInputSendButtonConfig.keepWhileStreaming`)
- * shows both; every other host keeps the baseline's either/or. A pure function
+ * shows both; every other host keeps the baseline's either/or. The desktop
+ * (`oneButton`) draws ONE round end button there instead: Stop while the
+ * input is empty, Send (which queues) once it holds text. A pure function
  * because `UserInput` itself sits on the §3.5 complexity ceiling.
  */
 export function resolveFooterControls(flags: {
   readonly isStreaming: boolean;
   readonly isUploading: boolean;
   readonly keepSendWhileStreaming: boolean | undefined;
+  readonly oneButton?: boolean;
+  readonly hasText?: boolean;
 }): { readonly showStop: boolean; readonly showSend: boolean } {
-  const showStop = flags.isStreaming && !flags.isUploading;
-  return { showStop, showSend: !showStop || flags.keepSendWhileStreaming === true };
+  const running = flags.isStreaming && !flags.isUploading;
+  if (!running) return { showStop: false, showSend: true };
+  if (flags.keepSendWhileStreaming !== true) return { showStop: true, showSend: false };
+  if (flags.oneButton !== true) return { showStop: true, showSend: true };
+  return { showStop: flags.hasText !== true, showSend: flags.hasText === true };
 }
 
 export function resolveAttachmentsProps(attachments: UserInputAttachmentsProps | undefined): {

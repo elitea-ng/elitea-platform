@@ -1,5 +1,7 @@
 import { type CSSProperties, useMemo } from 'react';
 
+import { useTheme } from '@mui/material/styles';
+
 import { resolveBrandAsset, resolveBrandPack } from '@/shared/brand';
 import { LogoIcon } from '@/shared/ui/icons/logo-icon';
 import { LogoMarkIcon } from '@/shared/ui/icons/logo-mark-icon';
@@ -37,7 +39,7 @@ function useBrandLogo(key: 'logoMark' | 'logoFull') {
   }, [key]);
 }
 
-/** The square MARK (the orb). */
+/** The square MARK (LE-03). */
 export function BrandLogoMark({ style, className }: BrandLogoProps) {
   const { asset, alt } = useBrandLogo('logoMark');
   if (asset.custom && asset.url !== undefined) {
@@ -54,8 +56,9 @@ export function BrandLogoMark({ style, className }: BrandLogoProps) {
   return <LogoMarkIcon style={style} className={className} data-testid="brand-logo-mark" />;
 }
 
-/** The full WORDMARK (orb + lettering). */
+/** The full LOCKUP (LE-03 mark + "Elitea AI" wordmark). */
 export function BrandLogoFull({ style, className }: BrandLogoProps) {
+  const theme = useTheme();
   const { asset, alt } = useBrandLogo('logoFull');
   if (asset.custom && asset.url !== undefined) {
     return (
@@ -68,5 +71,15 @@ export function BrandLogoFull({ style, className }: BrandLogoProps) {
       />
     );
   }
-  return <LogoIcon style={style} className={className} data-testid="brand-logo-full" />;
+  // The compiled lockup paints its wordmark in `currentColor` (the LE-03
+  // mark keeps its own four colours), so the text takes the scheme's strong
+  // text colour here. A custom `<img>` above cannot inherit a colour: a pack
+  // that ships its own lockup ships it in final colours.
+  return (
+    <LogoIcon
+      style={{ color: theme.vars?.palette.text.secondary, ...style }}
+      className={className}
+      data-testid="brand-logo-full"
+    />
+  );
 }

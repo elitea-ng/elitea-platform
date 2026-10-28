@@ -164,3 +164,21 @@ func TestFlagOffComposesNoEpochCheck(t *testing.T) {
 		t.Fatalf("renewal %v err %v", renewal, err)
 	}
 }
+
+// A governed command whose stored context is gone can never be claimed: the
+// refusal is final and the run is cancelled durably, so its job settles
+// instead of the conversation streaming until the stream drops the command.
+func TestGovernedClaimWithoutAStoredContextCancelsTheRun(t *testing.T) {
+	calls := []string{}
+	checker := &runCheckerStub{governed: false}
+	revoker := &revokerStub{}
+	server := withEpochs(t, governedTestServer(t, &calls, nil), checker, revoker)
+	response, err := server.ClaimCommand(context.Background(), governedClaimRequest(t, nil, true))
+	code := rejectionCode(t, response, err)
+	if code != runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_GOVERNED_CONTEXT_MISSING || response.GetRejection().GetRetryable() {
+		t.Fatalf("code = %v (retryable %t)", code, response.GetRejection().GetRetryable())
+	}
+	if claimed(calls) || len(revoker.revoked) != 1 {
+		t.Fatalf("calls %v, revoked %v", calls, revoker.revoked)
+	}
+}

@@ -273,6 +273,32 @@ jobs:
           node --test scripts/ci/check-client-feature-parity.test.mjs
           node scripts/ci/check-client-feature-parity.mjs
 
+  # The brand guide (brand/, published to GitHub Pages at /brand/ by
+  # docs-pages.yml). Its build reads client-core's tokens.json, the logo SVGs
+  # and the web app's vendored fonts, so a change to any of them can break
+  # it: here, where there is no path filter, rather than behind ci-web's.
+  # The build recomputes every contrast pair and fails below its minimum.
+  # Node's standard library only. The test count is asserted because a
+  # suite that collects nothing exits 0.
+  brand-guide:
+    name: Brand guide builds and its links resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the brand guide and test it
+        run: |
+          set -euo pipefail
+          expected="$(grep -c '^test(' brand/test/build.test.mjs)"
+          status=0
+          output="$(node --test --test-reporter=tap brand/test/build.test.mjs 2>&1)" || status=$?
+          printf '%s\n' "${output}"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
+          if [ "${status}" -ne 0 ] || [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
+            echo "::error::brand/test/build.test.mjs holds ${expected} test(s); node --test passed ${ran:-none} (exit ${status})"
+            exit 1
+          fi
+          node brand/scripts/build.mjs --out "${RUNNER_TEMP}/brand"
+
   # Issue #520. A migration states its version number when an author writes it.
   # The number is only true when the pull request MERGES. Pull requests #369 and
   # #388 both claimed 0072; #495 and #516 both claimed 0084. In each case both
@@ -530,7 +556,7 @@ jobs:
       - name: The build-once contract and the CI-image prune policy hold
         run: |
           set -euo pipefail
-          for suite in stack-images.test.mjs prune-ci-images.test.mjs prune-prereleases.test.mjs; do
+          for suite in stack-images.test.mjs prune-ci-images.test.mjs prune-prereleases.test.mjs prune-releases.test.mjs; do
             expected="$(grep -c '^test(' "scripts/ci/${suite}")"
             [ "${expected}" -ge 5 ] || { echo "::error::${suite}: found ${expected} scenario(s), expected at least 5"; exit 1; }
             # Capture the status: under `set -e` a failing command substitution

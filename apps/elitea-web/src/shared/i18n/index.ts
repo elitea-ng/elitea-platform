@@ -23,3 +23,7 @@ export { I18nProvider } from './I18nProvider';
  * else, use `t()` above.
  */
 export { i18n } from './i18n';
+
+/** The shipped languages and switching between them (`./locales.ts`). */
+export { LOCALES, applyLocale, currentLocale, detectLocale, isRtl, saveLocale, startLocale } from './locales';
+export type { Locale } from './locales';

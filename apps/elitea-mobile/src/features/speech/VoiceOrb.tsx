@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Animated, Easing, StyleSheet, View } from 'react-native';
-import Svg, { Circle, Defs, LinearGradient, RadialGradient, Stop } from 'react-native-svg';
+import Svg, { Circle } from 'react-native-svg';
 
 import { useDesign } from '@/design/DesignProvider';
 
 /**
- * The voice orb of the reference (docs/design-system.md §4.8): a glossy sphere in the orb stops
- * (pink → lavender → mint, the corrected workspace accent at the first stop when the workspace
- * is branded) with a specular highlight. Decorative: the listening state is said in text next
- * to it, never by the orb alone.
+ * The voice orb (docs/design-system.md §4.8): a flat disc in the orb colour (the scheme's signal
+ * colour; the corrected workspace accent when the workspace is branded). No gradient, no
+ * highlight (brand guide v3). Decorative: the listening state is said in text next to it, never
+ * by the orb alone.
  *
  * While `active` it breathes (a slow 2.4 s scale loop) and grows with the microphone level
  * (1.0 → 1.12). Reduce Motion: no breathing and no scaling; a static ring around the orb steps
@@ -17,8 +17,7 @@ import { useDesign } from '@/design/DesignProvider';
 export function VoiceOrb({ size, active, level }: { size: number; active: boolean; level: number }) {
   const design = useDesign();
   const { colors, motion, reduceMotion } = design;
-  const stops = colors.orb.stops;
-  const first = design.branded ? colors.accent : stops[0];
+  const first = design.branded ? colors.accent : colors.orb.stops[0];
   const [breath] = useState(() => new Animated.Value(0));
   const [loud] = useState(() => new Animated.Value(0));
 
@@ -64,25 +63,7 @@ export function VoiceOrb({ size, active, level }: { size: number; active: boolea
       ) : null}
       <Animated.View style={{ width: size, height: size, transform: [{ scale }] }}>
         <Svg width={size} height={size} viewBox="0 0 100 100">
-          <Defs>
-            <LinearGradient id="orbFill" x1="0.15" y1="0.1" x2="0.85" y2="0.95">
-              <Stop offset="0" stopColor={first} />
-              <Stop offset="0.55" stopColor={stops[1]} />
-              <Stop offset="1" stopColor={stops[2]} />
-            </LinearGradient>
-            <RadialGradient id="orbShine" cx="0.36" cy="0.3" rx="0.42" ry="0.36" fx="0.34" fy="0.26">
-              <Stop offset="0" stopColor="#FFFFFF" stopOpacity={0.95} />
-              <Stop offset="0.45" stopColor={colors.orb.highlight} stopOpacity={0.35} />
-              <Stop offset="1" stopColor="#FFFFFF" stopOpacity={0} />
-            </RadialGradient>
-            <RadialGradient id="orbRim" cx="0.5" cy="0.5" r="0.5">
-              <Stop offset="0.78" stopColor="#FFFFFF" stopOpacity={0} />
-              <Stop offset="1" stopColor="#FFFFFF" stopOpacity={design.scheme === 'dark' ? 0.25 : 0.55} />
-            </RadialGradient>
-          </Defs>
-          <Circle cx="50" cy="50" r="49" fill="url(#orbFill)" />
-          <Circle cx="50" cy="50" r="49" fill="url(#orbRim)" />
-          <Circle cx="50" cy="50" r="49" fill="url(#orbShine)" />
+          <Circle cx="50" cy="50" r="49" fill={first} />
         </Svg>
       </Animated.View>
     </View>

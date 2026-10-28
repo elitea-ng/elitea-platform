@@ -25,7 +25,7 @@ export const DEFAULT_BRAND_PACK = BrandPack.parse(packJson);
  * replaces. Derivation rotates each scheme's reference ramp by
  * `hue(pack.brand.hue) - hue(anchor of that scheme)`, so a pack that sets
  * one hue lands BOTH schemes' accents on it. That is the structural
- * resolution of §4.1 Blocker 1: the shipped app's cyan-dark/magenta-light
- * split survives only because the default pack states both verbatim.
+ * resolution of §4.1 Blocker 1 (the old cyan-dark / magenta-light split).
+ * Since brand guide v3 both schemes' anchor is the same Base Indigo.
  */
 export const BRAND_ANCHOR_TOKEN = 'primary.main';

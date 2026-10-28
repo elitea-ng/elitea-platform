@@ -9,7 +9,7 @@
 //
 // The branding path must NEVER fail: a missing, unreadable, malformed or
 // schema-violating pack file degrades to the built-in default pack (id
-// "default", product name "Elitea") with the reason logged. There is no
+// "default", product name "Elitea AI") with the reason logged. There is no
 // partial merge — a pack is served either exactly as validated or not at all.
 package branding
 
@@ -84,10 +84,13 @@ type Assets struct {
 
 // Typography mirrors BrandPack.typography.
 type Typography struct {
-	FontFamily     string  `json:"fontFamily"`
-	FontFamilyMono string  `json:"fontFamilyMono"`
-	BaseSize       float64 `json:"baseSize"`
-	Scale          float64 `json:"scale"`
+	FontFamily     string `json:"fontFamily"`
+	FontFamilyMono string `json:"fontFamilyMono"`
+	// FontFamilyDisplay is the optional heading/display stack (schema.ts
+	// `typography.fontFamilyDisplay`). Absent means headings use FontFamily.
+	FontFamilyDisplay *string `json:"fontFamilyDisplay,omitempty"`
+	BaseSize          float64 `json:"baseSize"`
+	Scale             float64 `json:"scale"`
 	// FontFaces are the self-hosted faces the web app declares as @font-face
 	// rules so that FontFamily resolves (ADR-0024 WP2/WP3; schema.ts
 	// `typography.fontFaces`, optional). Absent means "no self-hosted face".
@@ -167,7 +170,7 @@ var topLevelKeys = []string{
 // DefaultPack returns the built-in minimal default pack — the never-500
 // degradation floor for the branding endpoint. It is NOT the canonical
 // product default (unit T1 owns that, compiled into the UI as channel A);
-// it only has to be schema-valid and recognisably "Elitea".
+// it only has to be schema-valid and recognisably "Elitea AI".
 //
 // Asset values are same-origin paths on purpose: no data: blobs, no binary
 // payloads (scripts/no-binaries-check.sh must stay green).
@@ -176,26 +179,26 @@ func DefaultPack() *Pack {
 		Schema:  SchemaURL,
 		ID:      "default",
 		Version: "1.0.0",
-		Product: Product{Name: "Elitea", ShortName: "Elitea"},
+		Product: Product{Name: "Elitea AI", ShortName: "Elitea"},
 		Assets: Assets{
 			LogoFull: "/app/brand/logo-full.svg",
 			LogoMark: "/app/brand/logo-mark.svg",
 			Favicon:  "/app/brand/favicon.svg",
 		},
 		Typography: Typography{
-			FontFamily:     "'Roboto', 'Helvetica Neue', Arial, sans-serif",
-			FontFamilyMono: "'Roboto Mono', Consolas, monospace",
+			FontFamily:     `"Manrope", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`,
+			FontFamilyMono: `"JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace`,
 			BaseSize:       defaultBaseSize,
 			Scale:          defaultScale,
 		},
-		// radiusPill is the pill/circle radius; 9999 is the value the UI's
-		// own default pack (shared/brand/tokens/default.pack.json) uses.
-		Shape:  Shape{RadiusSm: 4, RadiusMd: 8, RadiusLg: 12, RadiusPill: 9999, Density: "comfortable"},
+		// The radii are the brand shape scale (tokens.json `shape`: 6/10/14
+		// and the pill). 9999 is the pill/circle radius.
+		Shape:  Shape{RadiusSm: 6, RadiusMd: 10, RadiusLg: 14, RadiusPill: 9999, Density: "comfortable"},
 		Locale: Locale{Default: defaultLocale, DateLocale: defaultLocale},
-		// Placeholder hue pending unit T1's hue unification (spec §4.1
-		// blocker 1); any valid value serves, since channel A's compiled-in
-		// pack is the real default the UI renders with.
-		Brand: Brand{Hue: "#C428DD"},
+		// The brand primary (Base Indigo, tokens.json `palette.indigo`), the
+		// same hue as the product default pack. Channel A's compiled-in pack
+		// is still the real default the UI renders with.
+		Brand: Brand{Hue: "#4a4de8"},
 		// EMPTY, deliberately. The schema permits any token id (the records
 		// are open), but the id VOCABULARY belongs to the UI's default pack,
 		// and the UI expands dotted ids into nested groups
@@ -346,6 +349,7 @@ func ParsePack(data []byte) (*Pack, error) {
 		{akeys, "logoEmail", "assets.logoEmail", &p.Assets.LogoEmail},
 		{tkeys, "fontFamily", "typography.fontFamily", &p.Typography.FontFamily},
 		{tkeys, "fontFamilyMono", "typography.fontFamilyMono", &p.Typography.FontFamilyMono},
+		{tkeys, "fontFamilyDisplay", "typography.fontFamilyDisplay", &p.Typography.FontFamilyDisplay},
 		{tkeys, "baseSize", "typography.baseSize", &p.Typography.BaseSize},
 		{tkeys, "scale", "typography.scale", &p.Typography.Scale},
 		{shkeys, "radiusSm", "shape.radiusSm", &p.Shape.RadiusSm},

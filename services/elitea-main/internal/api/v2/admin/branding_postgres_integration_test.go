@@ -110,10 +110,10 @@ func TestBranding_SaveIsServedWithoutARestart(t *testing.T) {
 		t.Errorf("base size not applied: %v", saved.Effective.Typography.BaseSize)
 	}
 	// The base under a database-only overlay is the PRODUCT default (its
-	// Montserrat stack), and a NEW hue drops its stated tokens so the UI
+	// Manrope stack), and a NEW hue drops its stated tokens so the UI
 	// derives every id from #FF6600 rather than keeping the default palette
 	// (branding.Resolver's applyOverlay).
-	if !strings.Contains(saved.Effective.Typography.FontFamily, "Montserrat") {
+	if !strings.Contains(saved.Effective.Typography.FontFamily, "Manrope") {
 		t.Errorf("base is not the product default: font %q", saved.Effective.Typography.FontFamily)
 	}
 	if len(saved.Effective.Schemes.Dark) != 0 || len(saved.Effective.Schemes.Light) != 0 {

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
@@ -39,9 +40,19 @@ func poolRows(pool *pgxpool.Pool) rowFunc {
 type securityContextFacts struct {
 	tenantProjectID      int64
 	actorID              string
+	applicationID        int64
 	applicationVersionID int64
 	admittedAt           time.Time
+	// governed is the agent run's governed credential freeze (#1119); nil
+	// when admission resolved none.
+	governed *agentexecutionapp.GovernedCredentialFreeze
 }
+
+// ErrGovernedBindingChanged refuses an admission whose transaction binds a
+// different agent binding than the one its governed credentials were
+// resolved for (#1119): a binding was approved, suspended or replaced in
+// between. A retry resolves again.
+var ErrGovernedBindingChanged = errors.New("the agent binding changed while governed credentials were resolved")
 
 // recordFacts reads the facts every admission record carries.
 func recordFacts(record executiondomain.Admission, admittedAt time.Time, applicationVersionID int64) securityContextFacts {
@@ -100,17 +111,29 @@ WHERE execution_id = $1 AND profile = 'elitea.credential-profile.governed.v1'`, 
 		Caller:              callerFromContext(ctx),
 		IssuedAt:            facts.admittedAt,
 	}
-	if facts.actorID != "" {
-		built.ActorChain = []securitycontext.ActorLink{{Kind: "user", Ref: facts.actorID}}
-	}
-	if facts.applicationVersionID > 0 {
-		if err := bindActiveAgentIdentity(ctx, rows, &built, facts); err != nil {
+	if authority, ok := securitycontext.RunAuthorityFrom(ctx); ok {
+		// An unattended governed run (#1122): its authority is the attached
+		// mandate, never one inferred from the run's user. The context value
+		// reaches here because admission runs in the entry point's call.
+		if err := bindMandateAuthority(ctx, rows, &built, facts, authority); err != nil {
 			return securitycontext.Reference{}, err
 		}
+	} else if err := bindInferredAuthority(ctx, rows, &built, facts); err != nil {
+		return securitycontext.Reference{}, err
 	}
-	if built.AgentBindingID != "" {
-		if err := bindRunAuthority(ctx, rows, &built, facts); err != nil {
-			return securitycontext.Reference{}, err
+	if facts.applicationID > 0 && facts.applicationVersionID > 0 {
+		built.ApplicationID, built.ApplicationVersionID = facts.applicationID, facts.applicationVersionID
+	}
+	if governed := facts.governed; governed != nil {
+		if governed.AgentBindingID != built.AgentBindingID || governed.ApplicationVersionID != facts.applicationVersionID {
+			return securitycontext.Reference{}, ErrGovernedBindingChanged
+		}
+		for _, ref := range governed.References {
+			built.CredentialReferences = append(built.CredentialReferences, securitycontext.CredentialReference{
+				ToolkitID: ref.ToolkitID, CredentialReferenceID: ref.CredentialReferenceID,
+				TargetBindingID: ref.TargetBindingID, Generation: ref.Generation,
+				ToolkitDigest: runtimedomain.Digest(ref.ToolkitDigest),
+			})
 		}
 	}
 	encoded, reference, err := built.Marshal(executionID)
@@ -128,6 +151,95 @@ INSERT INTO elitea_runtime.execution_security_contexts (
 	return reference, nil
 }
 
+// bindInferredAuthority is the authority of a run that names none: the
+// run's user, the version's usable binding and the delegation or mandate
+// bindRunAuthority finds for them.
+func bindInferredAuthority(ctx context.Context, rows rowFunc, built *securitycontext.Context, facts securityContextFacts) error {
+	if facts.actorID != "" {
+		built.ActorChain = []securitycontext.ActorLink{{Kind: "user", Ref: facts.actorID}}
+	}
+	if facts.applicationVersionID > 0 {
+		if err := bindActiveAgentIdentity(ctx, rows, built, facts); err != nil {
+			return err
+		}
+	}
+	if built.AgentBindingID != "" {
+		return bindRunAuthority(ctx, rows, built, facts)
+	}
+	return nil
+}
+
+// ErrRunAuthorityNotUsable refuses the admission of an unattended governed
+// run whose attached mandate changed after its fire-time check: revoked,
+// suspended, expired, at another epoch, or bound to an agent that is not
+// usable or is not the run's version (#1122). The admission transaction
+// rolls back, so the run writes no row.
+var ErrRunAuthorityNotUsable = errors.New("the run's mandate is not usable")
+
+// bindMandateAuthority names the attached mandate, its binding and its
+// delegation in the context, read in the admission transaction. The subject
+// is the mandate's: empty for an autonomous mandate, whatever user the run
+// is attributed to.
+func bindMandateAuthority(ctx context.Context, rows rowFunc, built *securitycontext.Context, facts securityContextFacts, authority securitycontext.RunAuthority) error {
+	var (
+		subject                    *int64
+		mandateEpoch, bindingEpoch int64
+		bindingID, delegationID    string
+		versionID                  int64
+		digest                     []byte
+		delegationEpoch            *int64
+	)
+	err := rows(ctx, `
+SELECT m.subject_user_id, m.revocation_epoch, b.id::text, b.revocation_epoch, b.definition_digest,
+       b.application_version_id, coalesce(m.delegation_id::text, ''), d.revocation_epoch
+FROM elitea_identity.mandates AS m
+JOIN elitea_identity.agent_identity_bindings AS b
+  ON b.id = m.agent_binding_id AND b.tenant_project_id = m.tenant_project_id AND b.state = 'active'
+JOIN elitea_identity.external_agent_identities AS e
+  ON e.id = b.external_agent_identity_id AND e.tenant_project_id = b.tenant_project_id AND e.state = 'active'
+LEFT JOIN elitea_identity.delegations AS d
+  ON d.id = m.delegation_id AND d.tenant_project_id = m.tenant_project_id
+ AND d.state = 'active' AND d.expires_at > $3
+WHERE m.id::text = $1 AND m.tenant_project_id = $2 AND m.state = 'active'
+  AND m.not_before <= $3 AND m.expires_at > $3
+  AND m.kind IN ('autonomous', 'delegated_background')`,
+		authority.MandateID, facts.tenantProjectID, facts.admittedAt,
+	).Scan(&subject, &mandateEpoch, &bindingID, &bindingEpoch, &digest, &versionID, &delegationID, &delegationEpoch)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrRunAuthorityNotUsable
+	}
+	if err != nil {
+		return fmt.Errorf("read the run's mandate: %w", err)
+	}
+	subjectID := int64(0)
+	if subject != nil {
+		subjectID = *subject
+	}
+	switch {
+	case mandateEpoch != authority.MandateEpoch,
+		subjectID != authority.SubjectUserID,
+		len(digest) != len(runtimedomain.Digest{}),
+		facts.applicationVersionID > 0 && versionID != facts.applicationVersionID,
+		delegationID != "" && delegationEpoch == nil:
+		return ErrRunAuthorityNotUsable
+	}
+	built.SubjectPrincipalRef, built.ActorChain = "", nil
+	if subjectID > 0 {
+		built.SubjectPrincipalRef = strconv.FormatInt(subjectID, 10)
+		built.ActorChain = []securitycontext.ActorLink{{Kind: "user", Ref: built.SubjectPrincipalRef}}
+	}
+	if authority.Caller != (securitycontext.Caller{}) {
+		built.Caller = authority.Caller
+	}
+	built.AgentBindingID, built.AgentBindingEpoch = bindingID, bindingEpoch
+	built.DefinitionDigest = runtimedomain.Digest(digestArray(digest))
+	built.MandateID, built.MandateEpoch = authority.MandateID, mandateEpoch
+	if delegationID != "" {
+		built.DelegationID, built.DelegationEpoch = delegationID, *delegationEpoch
+	}
+	return nil
+}
+
 // bindActiveAgentIdentity names the agent version's usable binding in the
 // context: active, with an active external agent identity
 // (agentidentity.UsableBinding). Exactly one usable binding binds the run. None, or more than one
@@ -135,6 +247,30 @@ INSERT INTO elitea_runtime.execution_security_contexts (
 // context records that no binding was proven, and the decision (#1116)
 // denies every governed credential use of the run.
 func bindActiveAgentIdentity(ctx context.Context, rows rowFunc, built *securitycontext.Context, facts securityContextFacts) error {
+	id, epoch, digest, found, err := usableBindingForVersion(ctx, rows, facts.tenantProjectID, facts.applicationVersionID)
+	if err != nil || !found {
+		return err
+	}
+	built.AgentBindingID, built.AgentBindingEpoch = id, epoch
+	built.DefinitionDigest = digest
+	return nil
+}
+
+// UsableBindingForVersion answers the usable binding the admission
+// transaction binds for an application version
+// (agentexecution.GovernedAgentBindings, #1119).
+func (s *AgentIdentityBindings) UsableBindingForVersion(ctx context.Context, tenantProjectID, applicationVersionID int64) (string, bool, error) {
+	if s == nil || s.pool == nil {
+		return "", false, errors.New("agent identity bindings: no database pool")
+	}
+	id, _, _, found, err := usableBindingForVersion(ctx, poolRows(s.pool), tenantProjectID, applicationVersionID)
+	return id, found, err
+}
+
+// usableBindingForVersion is bindActiveAgentIdentity's rule: the one usable
+// binding of the version. None, more than one, or a malformed digest is
+// found=false.
+func usableBindingForVersion(ctx context.Context, rows rowFunc, tenantProjectID, applicationVersionID int64) (string, int64, runtimedomain.Digest, bool, error) {
 	var (
 		id      string
 		epoch   int64
@@ -149,19 +285,17 @@ JOIN elitea_identity.external_agent_identities AS e
 WHERE b.tenant_project_id = $1 AND b.application_version_id = $2 AND b.state = 'active'
   AND e.state = 'active'
 ORDER BY b.id
-LIMIT 1`, facts.tenantProjectID, facts.applicationVersionID).Scan(&id, &epoch, &digest, &matches)
+LIMIT 1`, tenantProjectID, applicationVersionID).Scan(&id, &epoch, &digest, &matches)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
+		return "", 0, runtimedomain.Digest{}, false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("read active agent identity binding: %w", err)
+		return "", 0, runtimedomain.Digest{}, false, fmt.Errorf("read active agent identity binding: %w", err)
 	}
 	if matches != 1 || len(digest) != len(runtimedomain.Digest{}) {
-		return nil
+		return "", 0, runtimedomain.Digest{}, false, nil
 	}
-	built.AgentBindingID, built.AgentBindingEpoch = id, epoch
-	built.DefinitionDigest = runtimedomain.Digest(digestArray(digest))
-	return nil
+	return id, epoch, runtimedomain.Digest(digestArray(digest)), true, nil
 }
 
 func storedSecurityContext(ctx context.Context, rows rowFunc, executionID string) (securitycontext.Reference, bool, error) {
@@ -217,6 +351,10 @@ func callerFromContext(ctx context.Context) securitycontext.Caller {
 	}
 	if user, ok := auth.UserFromContext(ctx); ok && user.TokenID != "" {
 		caller.CallingApplicationID = "token:" + user.TokenID
+	}
+	// A verified inbound MCP OAuth token names its client (#1123).
+	if application, ok := auth.CallingApplicationFromContext(ctx); ok {
+		caller.CallingApplicationID = application
 	}
 	return caller
 }

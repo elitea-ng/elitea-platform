@@ -62,7 +62,6 @@ import {
 } from '@elitea/client-core/stream';
 
 import {
-  editSteering,
   handOffSteering,
   listSteering,
   newSteeringKey,
@@ -109,14 +108,14 @@ export interface SteeringOffer {
 export interface ChatSteeringModel {
   /** What the composer calls. */
   readonly onSend: (question: string) => void;
-  readonly edit: (item: SteeringItem, content: string) => Promise<void>;
-  readonly remove: (item: SteeringItem) => Promise<void>;
+  /** Takes an own pending message off the turn; resolves `false` when it could not (the turn injected it first). */
+  readonly remove: (item: SteeringItem) => Promise<boolean>;
   /** A reattach after a reload opened the stream: read the list of its answer. */
   readonly onReattached: () => void;
   /** A short text about the last refused send, or `null`. */
   readonly notice: string | null;
   readonly dismissNotice: () => void;
-  /** The user pressed Stop (not "Stop and send"): the leftovers of this turn are offered, not sent. */
+  /** The user pressed Stop (or Esc Esc; not a queue row's "Send now"): the leftovers of this turn are offered, not sent. */
   readonly onStop: () => void;
   /** The leftover texts of a stopped or failed turn of this conversation, or `null`. */
   readonly offer: SteeringOffer | null;
@@ -143,7 +142,7 @@ function targetOf(responseMessageId: string, projectId: string): SteeringTarget 
   return { projectId, responseMessageId };
 }
 
-// eslint-disable-next-line eslint/max-lines-per-function -- one routing hook: send, edit, remove and the end-of-turn rule share the same refs
+// eslint-disable-next-line eslint/max-lines-per-function -- one routing hook: send, remove and the end-of-turn rule share the same refs
 export function useChatSteering(params: UseChatSteeringParams): ChatSteeringModel {
   const { conversationKey, isStreaming } = params;
   const [notice, setNotice] = useState<string | null>(null);
@@ -294,33 +293,21 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
 
   const recordOf = (item: SteeringItem) => useChatSteeringStore.getState().own[item.responseMessageId];
 
-  const edit = useCallback(async (item: SteeringItem, content: string): Promise<void> => {
+  const remove = useCallback(async (item: SteeringItem): Promise<boolean> => {
     const record = recordOf(item);
-    if (record === undefined || content.trim() === '') return;
-    const target = targetOf(item.responseMessageId, record.projectId);
-    const result = await editSteering(target, item.id, content);
-    if (result.ok) {
-      if (result.item) useChatSteeringStore.getState().apply(item.responseMessageId, [result.item]);
-      return;
-    }
-    // `steering_not_pending`: the turn injected it first; the list shows it as delivered.
-    if (result.code === STEERING_ERROR.notPending) await refresh(target);
-    else setNotice(t('chatMessages.steering.editFailed', 'The message could not be changed. Try again.'));
-  }, [refresh]);
-
-  const remove = useCallback(async (item: SteeringItem): Promise<void> => {
-    const record = recordOf(item);
-    if (record === undefined) return;
+    if (record === undefined) return false;
     const target = targetOf(item.responseMessageId, record.projectId);
     const result = await removeSteering(target, item.id);
     const store = useChatSteeringStore.getState();
     if (result.ok) {
       store.apply(item.responseMessageId, [{ ...item, state: STEERING_STATE.Removed }]);
       store.dropOwn(item.responseMessageId, [item.id]);
-      return;
+      return true;
     }
+    // `steering_not_pending`: the turn injected it first; the list shows it as delivered.
     if (result.code === STEERING_ERROR.notPending) await refresh(target);
     else setNotice(t('chatMessages.steering.removeFailed', 'The message could not be removed. Try again.'));
+    return false;
   }, [refresh]);
 
   // A carry-over can give this tab a message of an answer whose turn already ended.
@@ -377,5 +364,5 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
     if (record !== undefined) useChatSteeringStore.getState().dropOwn(offerId, record.ids);
   }, [offerId, closeOffer]);
 
-  return { onSend, edit, remove, onReattached, notice: countdownText ?? notice, dismissNotice, onStop, offer, acceptOffer, dismissOffer };
+  return { onSend, remove, onReattached, notice: countdownText ?? notice, dismissNotice, onStop, offer, acceptOffer, dismissOffer };
 }

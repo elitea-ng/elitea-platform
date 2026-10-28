@@ -17,18 +17,13 @@ import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turn
 import { steeringCommands, type SteeringCommands, type SteeringEvent } from './steeringIpc';
 import { threadForkCommands, type ThreadForkCommands } from './threadForkIpc';
 import type { UsagePayload, UsageTotalPayload } from './turnUsage';
+import type { Workspace } from './workspace';
 
 export type { ContextMeter } from './contextMeter';
 export type { AttachedImage, CustomCommand, TurnCommand, TurnImagePick, TurnMode, TurnStartRequest } from './turnStart';
 export type { ThreadForkRequest } from './threadForkIpc';
 
-export interface Workspace {
-  id: string;
-  path: string;
-  name: string;
-  project_id: number | null;
-  is_git: boolean;
-}
+export { openedFolders, type Workspace } from './workspace';
 
 /** `agent_prewarm`: the agent version (and thread) the composer is about to send to. */
 export interface TurnPrewarmRequest {

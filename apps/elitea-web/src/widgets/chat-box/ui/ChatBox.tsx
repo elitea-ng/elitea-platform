@@ -23,6 +23,7 @@ import { ChatMessageList, useDeleteMessageAlert, currentNodeRecoveryBinding, app
 import { getAllTokens } from '@/features/mcps';
 import { conversationApi } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
+import { useDoubleEscape } from '@/shared/lib/useDoubleEscape';
 
 import {
   buildAgentEditorProps,
@@ -37,13 +38,17 @@ import {
   resolveConversationStarters, shouldDisableClearChat,
 } from './ChatBox.helpers';
 import { buildMessageActions } from './ChatBox.messageActions';
+import { CONVERSATION_COLUMN } from '@/shared/ui/conversation-column';
+
+import { chatDraftKey, withDraftCarry } from './ChatBox.draft';
 import { unwrapChatBoxConversation } from './ChatBox.props';
 import type { ChatBoxHandle, ChatBoxProps } from './ChatBox.types';
 export type { ChatBoxProps } from './ChatBox.types';
 import { buildChatBoxContinuationProps } from './ChatBoxContinuation';
 import { useChatBoxLlmSettingsDialog } from './ChatBoxLlmSettingsDialog';
-import { buildChatBoxAttachmentProps, buildChatBoxInputSlots, useChatBoxVoiceFeedback } from './ChatBoxInputSlots';
-import { ChatBoxQueuedMessages, ChatBoxSteeringNotice, ChatBoxSteeringOffer, chatBoxQueueKey, useChatBoxQueuedMessages } from './ChatBoxQueuedMessages';
+import { buildChatBoxAttachmentProps, buildChatBoxInputSlots } from './ChatBoxInputSlots'; import { useChatBoxVoiceFeedback } from './ChatBoxVoiceFeedback';
+import { ChatBoxSteeringNotice, ChatBoxSteeringOffer, chatBoxQueueKey, useChatBoxQueuedMessages } from './ChatBoxQueuedMessages';
+import { ChatBoxComposerQueue } from './ChatBoxComposerQueue';
 import { ChatBoxVoicePlayer } from './ChatBoxVoicePlayer';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
 import { ChatBoxWithdrawnNotice } from './ChatBoxWithdrawnNotice';
@@ -90,7 +95,8 @@ const ChatBoxInner = memo(function ChatBox({
   const { editorTest, editorCallbacks, entitySubmenus, onAgentEvent, contextIndicator, readOnlyNotice, noRegenerate, onForkFromMessage } = extensions ?? {};
   const chatInputRef = useRef<NewChatInputHandle>(null);
   const attachmentButtonRef = useRef<AttachmentButtonHandle>(null); const voiceButtonRef = useRef<VoiceButtonHandle>(null);
-  const { activeConversation, isLoadingConversation, onConversationCreated, onTurn } = unwrapChatBoxConversation(conversation);
+  const { activeConversation, isLoadingConversation, onConversationCreated: onCreated, onTurn } = unwrapChatBoxConversation(conversation);
+  const onConversationCreated = withDraftCarry(onCreated, { projectId, scratch: [isAgentsPage, editorTest], text: () => chatInputRef.current?.getInputContent() ?? '' });
   const { userId, userName, userAvatar, llmSettings, onSetLLMSettings, onDeleteAnswer, onDeleteAllMessages } = flattenChatBoxProps({ user, llm, onDelete });
   const { conversationId, conversationParticipants, conversationUuid, conversationMeta, isConversationSending, projectIdString } = deriveChatBoxIds(activeConversation, projectId);
   const { activeParticipant, onChangeParticipant } = useActiveParticipantSelection(participant, conversationParticipants);
@@ -169,7 +175,7 @@ const ChatBoxInner = memo(function ChatBox({
   });
   useChatBoxInterruptLedger({ projectId, conversationUuid, messages, setChatHistory: data.setChatHistory, reattach: reattachStreamedExecution }); // per-interrupt cards across tabs; a fan-out wake attaches
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
-  const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), ...(onConversationCreated ? { onConversationCreated } : {}) });
+  const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), onConversationCreated });
   // `isStreamingNow` is derived from the PERSISTED message groups, which carry no
   // in-flight flag while an SSE turn runs — without the transport's own flag the
   // composer never offers Stop for the turn Stop exists to cancel (#328).
@@ -213,7 +219,6 @@ const ChatBoxInner = memo(function ChatBox({
       onDeleteAllMessages?.();
     },
   });
-
 
 
   // Version selection (real fetch + persist) + auto-recovery
@@ -295,6 +300,9 @@ const ChatBoxInner = memo(function ChatBox({
   // Contract 1.27: a send while the owned cloud turn runs STEERS it; a refusal or a leftover goes through the A17 queue.
   const steering = useChatSteering({ conversationKey: chatBoxQueueKey(conversationUuid, conversationId), isStreaming, streamTarget, send: queued.onSend, queueAfterTurn: queued.enqueue, answerFailed: (id) => messages.some((m) => m.id === id && (Boolean(m.exception) || m.failureCode !== undefined)) });
   useReattachSeededTurn({ messages, conversationUuid, reattach: reattachStreamedExecution, onReattached: steering.onReattached }); // #6654: a reload mid-turn observes the run again
+  // The composer's Stop, and Esc Esc anywhere on the page: the leftovers of the turn are offered, not sent.
+  const stopTurn = (): void => { steering.onStop(); stopGeneration(); };
+  useDoubleEscape(isStreaming && !hidden, stopTurn);
   // MUST target the host `ref`, never `chatInputRef` — see `ChatBox.types.ts`.
   useImperativeHandle(ref, () => ({
     onClear: () => { handleClearRef.current(); },
@@ -325,7 +333,7 @@ const ChatBoxInner = memo(function ChatBox({
             onForkFromMessage,
           }, noRegenerate)}
           continuation={{ ...buildChatBoxContinuationProps({ onHitlResume: handleHitlResume, onContinueMcpExecution: handleContinueMcpExecution, onContinueTokenLimitExecution: handleContinueTokenLimit }, projectIdString), staticPause }}
-          tts={buildTtsProps(readAloud, state.isSpeakingMode)} canvas={buildCanvasProps(editorCallbacks)} steering={{ model: steering, onStopAndSend: stopGeneration }}
+          tts={buildTtsProps(readAloud, state.isSpeakingMode)} canvas={buildCanvasProps(editorCallbacks)} steering
         />
         {state.shouldShowStarters && (
           <ChatConversationStarters
@@ -334,10 +342,10 @@ const ChatBoxInner = memo(function ChatBox({
           />
         )}
       </Box>
-      <Box sx={{ p: 1 }}>
+      <Box sx={{ ...CONVERSATION_COLUMN, paddingTop: 1, paddingBottom: 2 }}>
         {readOnlyNotice ?? <>
         <ChatBoxVoicePlayer showPlayer={readAloud.showPlayer} voicePlayerProps={readAloud.voicePlayerProps} />
-        <ChatBoxQueuedMessages queue={queued} /><ChatBoxSteeringNotice notice={steering.notice} onDismiss={steering.dismissNotice} /><ChatBoxSteeringOffer offer={steering.offer} onSend={steering.acceptOffer} onDismiss={steering.dismissOffer} />
+        <ChatBoxComposerQueue queue={queued} steering={steering} conversationKey={chatBoxQueueKey(conversationUuid, conversationId)} isStreaming={isStreaming} onInterrupt={stopGeneration} input={chatInputRef} /><ChatBoxSteeringNotice notice={steering.notice} onDismiss={steering.dismissNotice} /><ChatBoxSteeringOffer offer={steering.offer} onSend={steering.acceptOffer} onDismiss={steering.dismissOffer} />
         <ChatBoxPopups
           {...buildChatBoxPopupsProps({
             state,
@@ -354,8 +362,8 @@ const ChatBoxInner = memo(function ChatBox({
           ref={chatInputRef}
           conversationId={conversationId !== undefined ? String(conversationId) : undefined}
           state={{ isLoading: isComposerBusy, disabledInput: isDraftInputBusy, isStreaming, disabledSend, isCreatingConversation: data.lifecycle.isCreating, allowSendWhileStreaming: true }}
-          content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: state.combinedHighlightRanges }}
-          callbacks={{ onSend: steering.onSend, onStopGeneration: () => { steering.onStop(); stopGeneration(); }, onNormalKeyDown: state.onNormalKeyDown, onInputChange: state.onInputChange }}
+          content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: state.combinedHighlightRanges, draftKey: chatDraftKey({ projectId, conversationId, scratch: [isAgentsPage, editorTest] }) }}
+          callbacks={{ onSend: steering.onSend, onStopGeneration: stopTurn, onNormalKeyDown: state.onNormalKeyDown, onInputChange: state.onInputChange }}
           agentEditor={buildAgentEditorProps({
             participantForEditor,
             activeParticipantDetails: agentEditorParticipantDetails,
@@ -371,7 +379,7 @@ const ChatBoxInner = memo(function ChatBox({
           slots={buildChatBoxInputSlots({
             attachments: { attachments: data.attachments.state.attachments, onAttachFiles: data.attachments.state.onAttachFiles, disabled: areAttachmentsDisabled },
             internalTools: { disabled: isInputLoading, tools: internalToolsButtonTools, onToolChange: handleInternalToolChange },
-            model: { llmSettings, onSetLLMSettings, selectedModel: selectedLlmModel, onSelectModel: handleSelectModel, models: modelsList },
+            model: { llmSettings, onSetLLMSettings, selectedModel: selectedLlmModel, onSelectModel: handleSelectModel, models: modelsList, shown: !participantForEditor },
             clearChat: { disabled: shouldDisableClearChat(isStreaming, messages.length), onClear: handleClear },
             refs: { attachmentButtonRef, voiceButtonRef, voiceInputRef: chatInputRef }, voice: readAloud.voicePlayerProps, voiceInput: { onRecordingChange: voiceFeedback.onRecordingChange, onError: voiceFeedback.onError },
             isAgentsPage: !!isAgentsPage, participants: normalisedParticipants,

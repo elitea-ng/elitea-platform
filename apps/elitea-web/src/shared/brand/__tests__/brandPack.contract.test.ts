@@ -145,8 +145,8 @@ describe('§4.6 check 7 — brand-pack round trip', () => {
       url: '/api/v2/branding/assets/font/def.woff2',
     });
 
-    // The default pack declares none; an absent array is absent, not [].
-    expect(DEFAULT_BRAND_PACK.typography.fontFaces).toBeUndefined();
+    // The default pack declares the three brand faces (brand guide v3).
+    expect(DEFAULT_BRAND_PACK.typography.fontFaces).toHaveLength(3);
 
     // Field-level contract the Go mirror shares: family/url non-empty, style
     // is a closed enum.
@@ -237,7 +237,10 @@ describe('§4.6 check 7 — brand-pack round trip', () => {
         });
       }
     }
-    expect(defaultPackColors.size).toBeGreaterThan(100);
+    // Brand guide v3 folds the old ~200 one-off colours onto the token set,
+    // so the default pack states far fewer distinct colours (79 when this
+    // floor was set); the floor still stops a scan that reads nothing.
+    expect(defaultPackColors.size).toBeGreaterThan(60);
 
     // The sweep must cover every override key that is actually wired, so it
     // widens automatically as unit S1 fills in the remaining ~28 keys.

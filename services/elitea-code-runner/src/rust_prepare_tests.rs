@@ -2,6 +2,31 @@ use super::*;
 use rust_prepare_archive::safe_path;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
+// A fixture is executed right after it is written. Another test that forks
+// in that window holds the file open for writing until its exec, and the
+// kernel refuses to exec a file open for writing (ETXTBSY), so the spawn
+// fails as "Cargo could not start". Only that start failure is retried; every
+// outcome of a started fixture is returned as is.
+async fn run_fixture(
+    image: &CargoImage,
+    workspace: &Path,
+    home: &Path,
+    arguments: &[&str],
+    deadline: Instant,
+) -> Result<Vec<u8>> {
+    let mut attempts = 0;
+    loop {
+        let result = cargo_command(image, workspace, home, arguments, deadline).await;
+        match &result {
+            Err(error) if error.diagnostic == "Cargo could not start" && attempts < 20 => {
+                attempts += 1;
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            _ => return result,
+        }
+    }
+}
+
 fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(30)
 }
@@ -265,7 +290,7 @@ async fn subprocess_deadline_output_and_safe_diagnostics_are_bounded() {
     std::fs::create_dir(&workspace).unwrap();
     std::fs::create_dir(&home).unwrap();
     let noisy = image("exec yes private-dependency-message", directory.path());
-    let error = cargo_command(
+    let error = run_fixture(
         &noisy,
         &workspace,
         &home,
@@ -278,7 +303,7 @@ async fn subprocess_deadline_output_and_safe_diagnostics_are_bounded() {
     assert!(!error.diagnostic.contains("private-dependency-message"));
     let sleepy = image("exec /bin/sleep 30", directory.path());
     let start = Instant::now();
-    let error = cargo_command(
+    let error = run_fixture(
         &sleepy,
         &workspace,
         &home,
@@ -293,7 +318,7 @@ async fn subprocess_deadline_output_and_safe_diagnostics_are_bounded() {
         "printf secret-on-stdout; printf secret-on-stderr >&2; exit 7",
         directory.path(),
     );
-    let error = cargo_command(
+    let error = run_fixture(
         &failure,
         &workspace,
         &home,

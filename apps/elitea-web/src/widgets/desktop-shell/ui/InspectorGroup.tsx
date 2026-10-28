@@ -11,7 +11,7 @@
  * A tab open in its own window keeps its chip here, marked; a click on it
  * brings the window to the front.
  */
-import { useCallback, useId, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useId, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 
 import { useDroppable } from '@dnd-kit/core';
 
@@ -23,10 +23,7 @@ import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
-import ListItemIcon from '@mui/material/ListItemIcon';
-import ListItemText from '@mui/material/ListItemText';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import type { Theme } from '@mui/material/styles';
@@ -35,6 +32,7 @@ import Typography from '@mui/material/Typography';
 
 import type { InspectorTabId, InspectorTabInfo } from '@/shared/desktop/inspectorSlot';
 import { t } from '@/shared/i18n';
+import { MenuDivider, MenuRow, MenuRowIcon, MenuRowText, pressToOpen } from '@/shared/ui/native-menu';
 
 import type { InspectorGroupView } from '../lib/inspectorLayout';
 import { useDesktopLayout } from '../model/desktopLayout.store';
@@ -81,7 +79,7 @@ function GroupActions({ top, activePopped, onMore, onPopOut }: { readonly top: b
   const hide = t('desktop.inspector.hide', 'Hide inspector');
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
-      <HeaderButton label={t('desktop.inspector.more', 'Inspector options')} onClick={(event) => onMore(event.currentTarget)} testId="inspector-more">
+      <HeaderButton label={t('desktop.inspector.more', 'Inspector options')} {...pressToOpen(onMore)} testId="inspector-more">
         <MoreHorizIcon fontSize="inherit" />
       </HeaderButton>
       <HeaderButton label={activePopped ? t('desktop.inspector.focusWindow', 'Show its window') : t('desktop.inspector.openWindow', 'Open in new window')} onClick={onPopOut} testId="inspector-pop-out">
@@ -134,10 +132,10 @@ function TabBody({ tab, id, labelledBy, testId, bodyRef }: { readonly tab: Inspe
   return <Box id={id} role="tabpanel" aria-labelledby={labelledBy} data-testid={testId} ref={ref} sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }} />;
 }
 
-function HeaderButton({ label, hint, onClick, children, testId }: { readonly label: string; readonly hint?: string; readonly onClick: (event: MouseEvent<HTMLButtonElement>) => void; readonly children: ReactNode; readonly testId?: string }): React.JSX.Element {
+function HeaderButton({ label, hint, onClick, onPointerDown, children, testId }: { readonly label: string; readonly hint?: string; readonly onClick: (event: MouseEvent<HTMLElement>) => void; readonly onPointerDown?: (event: PointerEvent<HTMLElement>) => void; readonly children: ReactNode; readonly testId?: string }): React.JSX.Element {
   return (
     <Tooltip title={hint ?? label}>
-      <IconButton size="small" aria-label={label} onClick={onClick} data-testid={testId}>
+      <IconButton size="small" aria-label={label} onClick={onClick} onPointerDown={onPointerDown} data-testid={testId}>
         {children}
       </IconButton>
     </Tooltip>
@@ -279,9 +277,14 @@ export function InspectorGroup({ view, infos, offered, visible, other, top, popp
           ))}
       </Menu>
 
-      <Menu anchorEl={moreAnchor} open={moreAnchor !== null} onClose={() => setMoreAnchor(null)} slotProps={{ list: { 'aria-label': t('desktop.inspector.more', 'Inspector options') } }}>
+      <Menu
+        anchorEl={moreAnchor}
+        open={moreAnchor !== null}
+        onClose={() => setMoreAnchor(null)}
+        slotProps={{ list: { dense: true, 'aria-label': t('desktop.inspector.more', 'Inspector options') }, paper: { sx: { minWidth: '13rem' } } }}
+      >
         {offered.map((info) => (
-          <MenuItem
+          <MenuRow
             key={info.id}
             role="menuitemcheckbox"
             aria-checked={visible.has(info.id)}
@@ -291,23 +294,24 @@ export function InspectorGroup({ view, infos, offered, visible, other, top, popp
               layout().showInspector(info.id);
             }}
           >
-            <ListItemIcon>{visible.has(info.id) && <CheckIcon fontSize="small" />}</ListItemIcon>
-            <ListItemText>{info.title}</ListItemText>
-          </MenuItem>
+            <MenuRowIcon>{visible.has(info.id) && <CheckIcon />}</MenuRowIcon>
+            <MenuRowText>{info.title}</MenuRowText>
+          </MenuRow>
         ))}
-        <Divider />
+        <MenuDivider />
         {tabActions(active)
           .filter((action) => action.id !== 'close')
           .map((action) => (
-            <MenuItem
+            <MenuRow
               key={action.id}
               onClick={() => {
                 setMoreAnchor(null);
                 action.run();
               }}
             >
-              {action.label}
-            </MenuItem>
+              <MenuRowIcon />
+              <MenuRowText>{action.label}</MenuRowText>
+            </MenuRow>
           ))}
       </Menu>
     </Box>

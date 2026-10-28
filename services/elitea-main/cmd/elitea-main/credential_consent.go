@@ -40,6 +40,22 @@ func providerOAuthAtBoot(
 	masterKey func() ([]byte, error),
 	logger *slog.Logger,
 ) (providerOAuth, error) {
+	return providerOAuthWithMCPAtBoot(admission, lookup, pool, masterKey, governedMCP{}, logger)
+}
+
+// providerOAuthWithMCPAtBoot is providerOAuthAtBoot with the governed MCP
+// OAuth service (#1123) as one more provider: its grants, consent and
+// refresh are the same custody, under provider type "mcp", and the consent
+// start opens the authorization_reference of an MCP AUTHORIZATION_REQUIRED
+// pause. An empty governed is providerOAuthAtBoot.
+func providerOAuthWithMCPAtBoot(
+	admission profile.Admission,
+	lookup func(string) (string, bool),
+	pool *pgxpool.Pool,
+	masterKey func() ([]byte, error),
+	governed governedMCP,
+	logger *slog.Logger,
+) (providerOAuth, error) {
 	if !admission.Governed() {
 		return providerOAuth{}, nil
 	}
@@ -47,7 +63,8 @@ func providerOAuthAtBoot(
 	if err != nil {
 		return providerOAuth{}, err
 	}
-	if len(configs) == 0 {
+	mcp := governed.Outbound
+	if len(configs) == 0 && mcp == nil {
 		return providerOAuth{}, nil
 	}
 	if pool == nil || masterKey == nil {
@@ -88,20 +105,30 @@ func providerOAuthAtBoot(
 	if err != nil {
 		return providerOAuth{}, err
 	}
+	var refreshers []provideroauth.Refresher
+	var perTarget []provideroauth.TargetAuthorizers
+	if mcp != nil {
+		refreshers, perTarget = []provideroauth.Refresher{mcp}, []provideroauth.TargetAuthorizers{mcp}
+		providers = append(providers, mcp.Provider())
+	}
 	tokens, err := provideroauth.NewTokenSource(provideroauth.TokenSourceConfig{
-		Grants: grants, Leases: leases, Coordinator: coordinator, Clients: clients,
+		Grants: grants, Leases: leases, Coordinator: coordinator, Clients: clients, Refreshers: refreshers,
 	})
 	if err != nil {
 		return providerOAuth{}, err
 	}
 	references := repos.NewCredentialGrants(pool, audit)
 	consent, err := provideroauth.NewConsent(provideroauth.ConsentConfig{
-		Grants: grants, Clients: clients, Targets: references, Bindings: repos.NewAgentIdentityBindings(pool, audit),
+		Grants: grants, Clients: clients, PerTarget: perTarget, Targets: references, Bindings: repos.NewAgentIdentityBindings(pool, audit),
 	})
 	if err != nil {
 		return providerOAuth{}, err
 	}
-	handler, err := v2credentialconsent.New(consent, logger)
+	var options []v2credentialconsent.Option
+	if governed.References != nil {
+		options = append(options, v2credentialconsent.WithAuthorizationReferences(governed.References))
+	}
+	handler, err := v2credentialconsent.New(consent, logger, options...)
 	if err != nil {
 		return providerOAuth{}, err
 	}

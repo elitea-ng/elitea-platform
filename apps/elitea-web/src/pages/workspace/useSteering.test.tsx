@@ -27,7 +27,7 @@ describe('useSteering', () => {
     expect(nextTurnMessage([])).toBe('');
   });
 
-  it('queues a send while the turn runs, and edits and removes it', async () => {
+  it('queues a send while the turn runs, and removes it', async () => {
     const ipc = createFakeWorkspaceIpc();
     const { result } = await running(ipc, vi.fn(() => Promise.resolve(true)));
     expect(result.current.steering.active).toBe(true);
@@ -39,14 +39,17 @@ describe('useSteering', () => {
     expect(ipc.calls.steers).toEqual([{ turnId: 'turn-1', text: 'also tests' }]);
     act(() => ipc.emit(ev(1, { kind: 'steer_queued', payload: { steer_id: 'steer-1', text: 'also tests', revision: 1 } })));
     expect(result.current.steering.pending).toEqual([{ steerId: 'steer-1', text: 'also tests', revision: 1 }]);
-    await act(() => result.current.steering.edit('steer-1', 'also docs'));
-    await act(() => result.current.steering.remove('steer-1'));
-    expect(ipc.calls.steerUpdates).toEqual([
-      { turnId: 'turn-1', steerId: 'steer-1', text: 'also docs' },
-      { turnId: 'turn-1', steerId: 'steer-1', text: null },
-    ]);
+    let removed = false;
+    await act(async () => {
+      removed = await result.current.steering.remove('steer-1');
+    });
+    expect(removed).toBe(true);
+    expect(ipc.calls.steerUpdates).toEqual([{ turnId: 'turn-1', steerId: 'steer-1', text: null }]);
     ipc.failNext('updateSteer', 'steer_not_pending', 'The agent has it already.');
-    await act(() => result.current.steering.remove('steer-1'));
+    await act(async () => {
+      removed = await result.current.steering.remove('steer-1');
+    });
+    expect(removed).toBe(false);
     expect(result.current.steering.error).toBe('The agent has it already.');
   });
 
@@ -83,19 +86,36 @@ describe('useSteering', () => {
     await waitFor(() => expect(sendNext).toHaveBeenCalledWith('late'));
   });
 
-  it('stops the turn, then sends the text after the turn ended (after what the turn did not take)', async () => {
+  it('Send now takes the message off the queue, stops the turn, and starts the next turn with it (then what the turn did not take)', async () => {
     const ipc = createFakeWorkspaceIpc();
     const sendNext = vi.fn(() => Promise.resolve(true));
     const { result } = await running(ipc, sendNext);
-    await act(() => result.current.steering.stopAndSend('do this instead').then(() => undefined));
+    act(() => {
+      ipc.emit(ev(1, { kind: 'steer_queued', payload: { steer_id: 's1', text: 'queued', revision: 1 } }));
+      ipc.emit(ev(2, { kind: 'steer_queued', payload: { steer_id: 's2', text: 'do this instead', revision: 1 } }));
+    });
+    await act(() => result.current.steering.sendNow('s2'));
+    expect(ipc.calls.steerUpdates).toEqual([{ turnId: 'turn-1', steerId: 's2', text: null }]);
     expect(ipc.calls.cancelled).toEqual(['turn-1']);
     expect(sendNext).not.toHaveBeenCalled();
     act(() => {
-      ipc.emit(ev(1, { kind: 'steer_dropped', payload: { steer_id: 's1', text: 'queued', reason: 'turn_ended' } }));
-      ipc.emit(ev(2, { kind: 'status', payload: { phase: 'cancelled' } }));
-      ipc.emit(ev(3, { kind: 'done', payload: DONE }));
+      ipc.emit(ev(3, { kind: 'steer_dropped', payload: { steer_id: 's2', text: 'do this instead', reason: 'removed' } }));
+      ipc.emit(ev(4, { kind: 'steer_dropped', payload: { steer_id: 's1', text: 'queued', reason: 'turn_ended' } }));
+      ipc.emit(ev(5, { kind: 'status', payload: { phase: 'cancelled' } }));
+      ipc.emit(ev(6, { kind: 'done', payload: DONE }));
     });
-    await waitFor(() => expect(sendNext).toHaveBeenCalledWith('queued\n\ndo this instead'));
+    await waitFor(() => expect(sendNext).toHaveBeenCalledWith('do this instead\n\nqueued'));
+  });
+
+  it('Send now leaves the turn running when the agent has the message already', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const sendNext = vi.fn(() => Promise.resolve(true));
+    const { result } = await running(ipc, sendNext);
+    act(() => ipc.emit(ev(1, { kind: 'steer_queued', payload: { steer_id: 's1', text: 'taken', revision: 1 } })));
+    ipc.failNext('updateSteer', 'steer_not_pending', 'The agent has it already.');
+    await act(() => result.current.steering.sendNow('s1'));
+    expect(ipc.calls.cancelled).toEqual([]);
+    expect(result.current.steering.error).toBe('The agent has it already.');
   });
 
   it('keeps the texts as unsent when the next turn did not start, and sends them again on retry', async () => {

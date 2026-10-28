@@ -716,8 +716,10 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 	); err != nil {
 		return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("insert agent command outbox: %w", err)
 	}
+	facts := recordFacts(admission.Record, timing.AdmittedAt, agentApplicationVersionID(admission))
+	facts.applicationID, facts.governed = agentApplicationID(admission), admission.GovernedCredentials
 	if _, err := admitExecutionProfile(ctx, tx, pgxRows(tx), r.policy.CredentialProfile, agentAdmissionPin(admission),
-		recordFacts(admission.Record, timing.AdmittedAt, agentApplicationVersionID(admission))); err != nil {
+		facts); err != nil {
 		return executionapp.AdmissionOutcome{}, nil, err
 	}
 	// Mark the reserved slot materialized in the same commit as the job.
@@ -1254,6 +1256,30 @@ func insertCurrentTurnAttachments(
 	return nil
 }
 
+// AgentAdmissionReplays reads committed agent admissions by idempotency key
+// (agentexecution.AgentAdmissionReplays): the same lookup AdmitAgentExecution
+// replays with.
+type AgentAdmissionReplays struct {
+	pool *pgxpool.Pool
+}
+
+// NewAgentAdmissionReplays builds the reader over pool.
+func NewAgentAdmissionReplays(pool *pgxpool.Pool) *AgentAdmissionReplays {
+	return &AgentAdmissionReplays{pool: pool}
+}
+
+// AgentAdmissionReplay answers the committed admission of scope and key.
+func (r *AgentAdmissionReplays) AgentAdmissionReplay(ctx context.Context, scope, key string) (executionapp.AdmissionOutcome, runtimedomain.Digest, bool, error) {
+	outcome, digest, err := loadAgentAdmission(ctx, sqlcgen.New(r.pool), scope, key)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return executionapp.AdmissionOutcome{}, runtimedomain.Digest{}, false, nil
+	case err != nil:
+		return executionapp.AdmissionOutcome{}, runtimedomain.Digest{}, false, err
+	}
+	return outcome, digest, true, nil
+}
+
 func resourceProjectIDUnchecked(value string) int64 {
 	projectID, _ := strconv.ParseInt(value, 10, 64)
 	return projectID
@@ -1491,6 +1517,19 @@ func agentApplicationVersionID(admission agentexecutionapp.Admission) int64 {
 		return admission.CurrentRegenerateTurn.ApplicationVersionID
 	case admission.CurrentContinueTurn != nil:
 		return admission.CurrentContinueTurn.ApplicationVersionID
+	}
+	return 0
+}
+
+// agentApplicationID is agentApplicationVersionID's application.
+func agentApplicationID(admission agentexecutionapp.Admission) int64 {
+	switch {
+	case admission.CurrentTurn != nil:
+		return admission.CurrentTurn.ApplicationID
+	case admission.CurrentRegenerateTurn != nil:
+		return admission.CurrentRegenerateTurn.ApplicationID
+	case admission.CurrentContinueTurn != nil:
+		return admission.CurrentContinueTurn.ApplicationID
 	}
 	return 0
 }

@@ -102,7 +102,7 @@ func TestSend_DefaultBrandAndHostileValues(t *testing.T) {
 	if err := composer.SendTest(context.Background(), "ops@example.com"); err != nil {
 		t.Fatalf("SendTest: %v", err)
 	}
-	if !strings.Contains(sink.sent[0].HTML, ">Elitea</p>") || strings.Contains(sink.sent[0].HTML, "<img") {
+	if !strings.Contains(sink.sent[0].HTML, ">Elitea AI</p>") || strings.Contains(sink.sent[0].HTML, "<img") {
 		t.Fatalf("default brand html:\n%s", sink.sent[0].HTML)
 	}
 

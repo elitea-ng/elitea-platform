@@ -290,6 +290,11 @@ jobs:
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
           bash deploy/helm/tests/render-egress-proxy.sh
 
+      # The Elitea-native agent assertion keys (#1153): a whole-directory
+      # Secret volume on Main only, defaultMode 0444, nothing when unset.
+      - name: The agent assertion key Secret mounts on Main only
+        run: bash deploy/helm/tests/render-agent-assertion.sh
+
       # Four suites that passed and that no job ran (the deploy/ audit of the
       # one-chart PR found them): the default-deny NetworkPolicies, the
       # elitea-main platform listener, the sandbox image references, and the

@@ -67,14 +67,16 @@ describe('WCAG proofs (docs/design-system.md §2.1)', () => {
 
   // Spot checks against the published table, so the proof code itself is checked too.
   it.each([
-    ['light', 'textPrimary', 'background', 16.66],
-    ['dark', 'textPrimary', 'background', 16.89],
-    ['light', 'textTertiary', 'backgroundGradient', 4.79],
-    ['dark', 'textTertiary', 'surfaceGlass', 5.28],
-    ['light', 'accent', 'surfaceGlass', 5.64],
-    ['dark', 'accentOn', 'accent', 7.8],
-    ['light', 'separatorStrong', 'background', 3.34],
-    ['dark', 'focus', 'backgroundGradient', 9.31],
+    ['light', 'textPrimary', 'background', 19.53],
+    ['dark', 'textPrimary', 'background', 17.76],
+    ['light', 'textTertiary', 'backgroundGradient', 5.95],
+    ['dark', 'textTertiary', 'surfaceGlass', 6.8],
+    ['light', 'accent', 'surfaceGlass', 5.97],
+    ['dark', 'accentOn', 'accent', 8.92],
+    ['light', 'separatorStrong', 'background', 3.64],
+    ['dark', 'focus', 'backgroundGradient', 8.92],
+    ['light', 'primaryOn', 'primary', 5.97],
+    ['dark', 'aiText', 'elevated', 5.81],
   ] as const)('%s %s on %s is %p', (scheme, fg, bg, ratio) => {
     expect(proofRatio(colors[scheme], fg, bg)).toBeCloseTo(ratio, 1);
   });

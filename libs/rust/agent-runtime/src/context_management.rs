@@ -606,7 +606,9 @@ const EARLY_LENGTH_TOKENS: u64 = 512;
 /// The longest files-touched entry (the contract's string limit).
 const MAX_FILES_ENTRY_BYTES: usize = 2_000;
 
-const TEMPLATE_RETRY: &str = "Your previous answer did not follow the required template. Do not call tools. Return only the one JSON object of the platform contract above (version 1, every field present), without Markdown fences or any other text.";
+/// The second ask after an answer that ignored the template (also a host's
+/// cached continuation's, `context_summary::continuation_prompt`).
+pub const TEMPLATE_RETRY: &str = "Your previous answer did not follow the required template. Do not call tools. Return only the one JSON object of the platform contract above (version 1, every field present), without Markdown fences or any other text.";
 
 /// The policy of [`StepCompaction`] (see the module docs).
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -621,6 +623,15 @@ pub struct CompactionPolicy {
     /// Optional summary guidance (the plan's `summary_instructions`); it
     /// never replaces the v1 contract ([`context_summary::prompt`]).
     pub guidance: String,
+    /// Compact when the request passes the trigger. `false` (a host
+    /// setting): only an asked-for compaction (`/compact`,
+    /// [`StepCompaction::force_next`]) and the one retry after an overflow
+    /// compact; the budget alone never does.
+    pub automatic: bool,
+    /// A host's earlier trigger: this share (40 to 99) of the budget's
+    /// usable input, when it is below [`Self::trigger_tokens`]' default.
+    /// `None`: near the limit (`window − reserve`).
+    pub threshold_percent: Option<u8>,
 }
 
 impl Default for CompactionPolicy {
@@ -630,6 +641,8 @@ impl Default for CompactionPolicy {
             keep_recent_tokens: DEFAULT_KEEP_RECENT_TOKENS,
             fresh_window: true,
             guidance: String::new(),
+            automatic: true,
+            threshold_percent: None,
         }
     }
 }
@@ -674,17 +687,22 @@ impl CompactionPolicy {
     /// Compact once the estimated input passes this: `window − reserve`,
     /// `reserve = max(reserve_tokens, the output reservation)`, the reserve
     /// at most a quarter of the window (an 8k window keeps 6k of input),
-    /// and never past the budget's usable input.
+    /// and never past the budget's usable input. With
+    /// [`Self::threshold_percent`] `p`, the smaller of that and `p`% of the
+    /// usable input (a threshold only ever moves the trigger earlier).
     #[must_use]
     pub fn trigger_tokens(&self, budget: &RequestContextBudget) -> u64 {
         let total = u64::from(budget.total_tokens);
+        let input = u64::from(budget.input_limit);
         let reserve = self
             .reserve_tokens
             .max(u64::from(budget.output_reservation))
             .min(total / 4);
-        total
-            .saturating_sub(reserve)
-            .min(u64::from(budget.input_limit))
+        let near_limit = total.saturating_sub(reserve).min(input);
+        match self.threshold_percent {
+            Some(percent) => near_limit.min(input * u64::from(percent.min(100)) / 100),
+            None => near_limit,
+        }
     }
 
     /// The recent tail kept verbatim under `budget`: [`Self::keep_recent_tokens`],
@@ -916,7 +934,10 @@ impl StepCompaction {
         let max_output = max_output(&request, &usage.budget);
         let trigger = self.policy.trigger_tokens(&usage.budget);
         let keep = self.policy.keep_recent_for(&usage.budget);
-        let under = force == Force::No && usage.estimated_input <= trigger && usage.fits();
+        // Not automatic (a host setting): only an asked-for compaction or
+        // the overflow retry folds anything.
+        let under = force == Force::No
+            && (!self.policy.automatic || (usage.estimated_input <= trigger && usage.fits()));
         // Under the trigger, or nothing complete to fold (one open tool
         // batch): send as it is.
         let cut = (!under)
@@ -1097,50 +1118,7 @@ impl StepCompaction {
     /// host's (a later operation on a path replaces an earlier one, except
     /// that a read never hides a change), newest last, cut to fit.
     fn files_entry(&self, previous: Option<&str>, folded: &[Content]) -> Option<String> {
-        let mut order: Vec<String> = Vec::new();
-        let mut ops: HashMap<String, FileOp> = HashMap::new();
-        let mut touch = |path: String, op: FileOp| {
-            if let Some(known) = ops.get_mut(&path) {
-                if op != FileOp::Read {
-                    *known = op;
-                }
-                order.retain(|seen| seen != &path);
-            } else {
-                ops.insert(path.clone(), op);
-            }
-            order.push(path);
-        };
-        if let Some(entry) = previous.and_then(context_summary::files_touched_entry)
-            && let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&entry)
-        {
-            for item in items {
-                if let (Some(path), Some(op)) = (
-                    item.get("path").and_then(Value::as_str),
-                    item.get("op")
-                        .and_then(Value::as_str)
-                        .and_then(FileOp::parse),
-                ) {
-                    touch(path.to_owned(), op);
-                }
-            }
-        }
-        for file in self.host.files_touched(folded) {
-            touch(file.path, file.op);
-        }
-        if order.is_empty() {
-            return None;
-        }
-        let mut items: Vec<Value> = order
-            .iter()
-            .map(|path| json!({"path": path, "op": ops[path].as_str()}))
-            .collect();
-        loop {
-            let text = Value::Array(items.clone()).to_string();
-            if text.len() <= MAX_FILES_ENTRY_BYTES || items.is_empty() {
-                return Some(text);
-            }
-            items.remove(0);
-        }
+        files_entry(previous, self.host.files_touched(folded))
     }
 
     /// One v1 summary of `folded`, carrying `previous` (module docs).
@@ -1224,6 +1202,56 @@ impl StepCompaction {
             }
         }
         Ok(text)
+    }
+}
+
+/// The cumulative files-touched entry of a summary: `previous`'s, then
+/// `touched` (a later operation on a path replaces an earlier one, except
+/// that a read never hides a change), newest last, cut to fit.
+pub fn files_entry(previous: Option<&str>, touched: Vec<FileTouch>) -> Option<String> {
+    let mut order: Vec<String> = Vec::new();
+    let mut ops: HashMap<String, FileOp> = HashMap::new();
+    let mut touch = |path: String, op: FileOp| {
+        if let Some(known) = ops.get_mut(&path) {
+            if op != FileOp::Read {
+                *known = op;
+            }
+            order.retain(|seen| seen != &path);
+        } else {
+            ops.insert(path.clone(), op);
+        }
+        order.push(path);
+    };
+    if let Some(entry) = previous.and_then(context_summary::files_touched_entry)
+        && let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&entry)
+    {
+        for item in items {
+            if let (Some(path), Some(op)) = (
+                item.get("path").and_then(Value::as_str),
+                item.get("op")
+                    .and_then(Value::as_str)
+                    .and_then(FileOp::parse),
+            ) {
+                touch(path.to_owned(), op);
+            }
+        }
+    }
+    for file in touched {
+        touch(file.path, file.op);
+    }
+    if order.is_empty() {
+        return None;
+    }
+    let mut items: Vec<Value> = order
+        .iter()
+        .map(|path| json!({"path": path, "op": ops[path].as_str()}))
+        .collect();
+    loop {
+        let text = Value::Array(items.clone()).to_string();
+        if text.len() <= MAX_FILES_ENTRY_BYTES || items.is_empty() {
+            return Some(text);
+        }
+        items.remove(0);
     }
 }
 
@@ -1469,6 +1497,58 @@ pub fn summary_content(summary: &str, current_request: Option<&str>) -> Content 
         text.push_str(request);
     }
     Content::new("user").with_text(text)
+}
+
+// ===== A host's compaction between turns =====
+
+/// Where a host folds `history` (a conversation's contents as its next
+/// request would carry them, a stored summary first when there is one)
+/// with a summary it obtained itself between turns (the desktop's idle
+/// compaction): the cut [`StepCompaction`] would choose under `policy` and
+/// `budget`, keeping about [`CompactionPolicy::keep_recent_for`] verbatim.
+/// `None` when nothing complete can be folded.
+#[must_use]
+pub fn fold_point(
+    history: &[Content],
+    policy: &CompactionPolicy,
+    budget: &RequestContextBudget,
+) -> Option<usize> {
+    let base = usize::from(history.first().and_then(summary_of).is_some());
+    choose_cut(
+        history,
+        base,
+        policy.keep_recent_for(budget),
+        policy.trigger_tokens(budget),
+    )
+}
+
+/// The [`Compaction`] of folding `history[..cut]` into `summary` (a
+/// validated v1 record), as [`StepCompaction`] reports one to its host: the
+/// summary content (with the current request when the cut falls inside a
+/// turn), what it is based on and the digest of the contents it covers. A
+/// host persists it as it persists a step compaction's.
+#[must_use]
+pub fn folded_compaction(history: &[Content], cut: usize, summary: String) -> Compaction {
+    let base = usize::from(history.first().and_then(summary_of).is_some());
+    let cut = cut.clamp(base, history.len());
+    let current = (cut > base)
+        .then(|| current_request(history, base, cut))
+        .flatten();
+    Compaction {
+        summary_content: summary_content(&summary, current.as_deref()),
+        summary,
+        based_on: (base == 1).then(|| history[0].clone()),
+        covered_events: cut - base,
+        events_digest: history_digest(&history[base..cut]),
+        forced: false,
+    }
+}
+
+/// Estimated tokens of `contents` as a request carries them (an image at
+/// what a provider bills for one).
+#[must_use]
+pub fn contents_tokens(contents: &[Content]) -> u64 {
+    contents.iter().map(content_tokens).sum()
 }
 
 /// The request a cut inside the current turn keeps verbatim: the turn's

@@ -17,6 +17,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter as _, Manager as _, State};
 
 use crate::attention::Attention;
+use crate::compaction_settings::CompactionSettings;
 use crate::d0::mentions::Located;
 
 use crate::auth::{AuthService, RefreshResult};
@@ -223,6 +224,12 @@ impl EventEmitter for MainWindowEvents {
     fn emit_lsp(&self, event: crate::d0::lsp::LspEvent) {
         if let Err(error) = self.0.emit_to("main", crate::d0::lsp::EVENT_NAME, &event) {
             log::warn!("could not deliver a language server event: {error}");
+        }
+    }
+
+    fn emit_app(&self, name: &'static str, payload: Value) {
+        if let Err(error) = self.0.emit_to("main", name, &payload) {
+            log::warn!("could not deliver a {name} event: {error}");
         }
     }
 }
@@ -568,6 +575,44 @@ pub struct TurnModel {
     pub name: String,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+}
+
+/// The app-wide context compaction settings (`src/compaction_settings.rs`).
+#[tauri::command(rename_all = "snake_case")]
+pub fn compaction_settings_get(state: State<'_, LocalState>) -> CompactionSettings {
+    state.agents.compaction_store().get()
+}
+
+/// Validate and keep the compaction settings; the saved settings, also sent
+/// as `compaction-settings-changed`. Every scheduled idle compaction is
+/// cancelled. Rejects with a message for a person (a string) when a value
+/// is out of range or the file could not be written.
+#[tauri::command(rename_all = "snake_case")]
+pub fn compaction_settings_set(
+    app: AppHandle,
+    state: State<'_, LocalState>,
+    settings: CompactionSettings,
+) -> Result<CompactionSettings, String> {
+    let saved = state.agents.compaction_store().set(settings)?;
+    state.agents.compaction_settings_changed();
+    if let Err(error) = app.emit_to("main", crate::compaction_settings::EVENT_NAME, &saved) {
+        log::warn!("could not deliver the compaction settings event: {error}");
+    }
+    Ok(saved)
+}
+
+/// The thread's composer holds unsent text (`hold: true`), or no longer
+/// does: a held thread is not compacted while idle (`src/d0/idle.rs`).
+#[tauri::command(rename_all = "snake_case")]
+pub fn compaction_idle_hold(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    conversation_id: Value,
+    hold: bool,
+) -> Result<(), IpcError> {
+    Ok(state
+        .agents
+        .idle_hold(&workspace_id, &conversation_id, hold)?)
 }
 
 #[allow(clippy::too_many_arguments)] // the IPC contract's argument list

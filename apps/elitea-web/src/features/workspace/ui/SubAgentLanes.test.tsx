@@ -1,6 +1,6 @@
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
@@ -26,7 +26,7 @@ const view = (status: 'running' | 'completed'): TurnView => ({
 
 describe('SubAgentLanes', () => {
   it('shows a running child open under its spawn_agent row, with its own tool rows', () => {
-    renderWithTheme(<TurnTranscript view={view('running')} busy onCancel={vi.fn()} />);
+    renderWithTheme(<TurnTranscript view={view('running')} busy />);
     const lane = screen.getByTestId('subagent-lane');
     expect(lane).toHaveTextContent('Sub-agent 1 · callers');
     expect(screen.getByTestId('subagent-status')).toHaveTextContent('Running');
@@ -36,7 +36,7 @@ describe('SubAgentLanes', () => {
   });
 
   it('folds a settled child, with its spend, and opens its report on demand', async () => {
-    renderWithTheme(<TurnTranscript view={view('completed')} busy={false} onCancel={vi.fn()} />);
+    renderWithTheme(<TurnTranscript view={view('completed')} busy={false} />);
     expect(screen.getByTestId('subagent-status')).toHaveTextContent('Done');
     expect(screen.getByTestId('subagent-lane')).toHaveTextContent('3 steps · 1200 tokens');
     expect(screen.queryByTestId('subagent-result')).toBeNull();

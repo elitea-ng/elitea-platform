@@ -45,6 +45,8 @@ declare module '@mui/material/styles' {
     subtitle: React.CSSProperties;
     /** Pack field `typography.fontFamilyMono`; MUI has no built-in slot. */
     fontFamilyMono: string;
+    /** Pack field `typography.fontFamilyDisplay` (falls back to `fontFamily`): headings. */
+    fontFamilyDisplay: string;
   }
 
   interface TypographyVariantsOptions {
@@ -57,6 +59,7 @@ declare module '@mui/material/styles' {
     bodySmall?: React.CSSProperties;
     subtitle?: React.CSSProperties;
     fontFamilyMono?: string;
+    fontFamilyDisplay?: string;
   }
 
   /** `shape.radius*` — the only radii R-T10 allows (see buildTheme.ts). */

@@ -63,6 +63,7 @@ import { ParticipantsSheet } from '@/features/chat/ParticipantsSheet';
 import type { Suggestion, SuggestionState } from '@/features/chat/SuggestionStrip';
 import { TargetChip } from '@/features/chat/TargetChip';
 import { setTarget, targetKey, useTarget } from '@/features/chat/targetStore';
+import { draftKey } from '@/features/chat/composerDrafts';
 import { useAgentSkills, useToolkitTools } from '@/api/queries/skillsTools';
 import {
   matches,
@@ -82,6 +83,7 @@ import { MessageActionsSheet } from '@/features/chat/actions/MessageActionsSheet
 import { planActions } from '@/features/chat/actions/messageActions';
 import { usePolicy } from '@/security/policy';
 import { useTurnAnnouncements } from '@/features/a11y/turnAnnouncements';
+import { useScreenReader } from '@/features/a11y/screenReader';
 import { canDictateOnDevice } from '@/features/speech/dictation';
 import { canReadAloud, readAloud, stopReading, useReading } from '@/features/speech/readAloud';
 import { exportErrorText } from '@/api/queries/exportConversation';
@@ -177,7 +179,12 @@ export function ThreadView({
   const queryClient = useQueryClient();
   const chosenKey = projectId !== null ? targetKey(projectId, ref) : null;
   const chosen = useTarget(chosenKey);
-  const lastAnsweredBy = [...messages].reverse().find((m) => m.role === 'assistant')?.authorParticipantId ?? null;
+  const latestAnswer = [...messages].reverse().find((m) => m.role === 'assistant') ?? null;
+  const lastAnsweredBy = latestAnswer?.authorParticipantId ?? null;
+  // The action row: under the latest answer; an older one's actions are its long press (the
+  // sheet), and every row stays drawn for a screen reader.
+  const latestAnswerKey = latestAnswer?.key ?? null;
+  const screenReader = useScreenReader();
   const target = chatTarget(detail, { targetParticipantId: chosen, lastAnsweredBy });
   // A model conversation with no saved model runs on the project's default.
   const needsDefaultModel = target.ok && target.kind === 'model' && target.model === null;
@@ -834,7 +841,7 @@ export function ThreadView({
                           onActions={() => setActionsFor({ message, dislike: false })}
                           avatar={message.role === 'assistant' ? avatarFor(message.authorParticipantId, message.author) : undefined}
                           actions={
-                            message.role === 'assistant' ? (
+                            message.role === 'assistant' && (message.key === latestAnswerKey || screenReader) ? (
                               <AnswerActions
                                 message={message}
                                 plan={plan}
@@ -952,6 +959,7 @@ export function ThreadView({
             initialText={typeof prefill === 'string' ? prefill.slice(0, MAX_PREFILL) : null}
             placeholder={targetName ? `Message ${targetName}…` : 'Message'}
             draft={draft}
+            unsentKey={projectId !== null && ref !== '' ? draftKey(projectId, ref) : null}
             disabledReason={disabledReason}
             busy={turn.busy}
             people={people}

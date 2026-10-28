@@ -236,7 +236,7 @@ describe('the desktop chat: the sidebar is the one list', () => {
     mount();
 
     expect(await screen.findByTestId('shell-chats', {}, { timeout: 10_000 })).toBeInTheDocument();
-    expect(screen.getByTestId('shell-elitea-help')).toBeInTheDocument();
+    expect(screen.getByTestId('shell-elitea-applications')).toBeInTheDocument();
 
     await user.click(screen.getByTestId('shell-chats-toggle'));
     await waitFor(() => expect(screen.queryByTestId('shell-chats')).not.toBeInTheDocument());

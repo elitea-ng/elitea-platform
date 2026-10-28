@@ -84,6 +84,8 @@ interface QueuedMessagesState extends PersistedShape {
   readonly enqueue: (conversationKey: string, text: string, questionId?: string) => QueuedChatMessage | undefined;
   /** Drops one waiting message by id — the list's own remove control. */
   readonly remove: (conversationKey: string, id: string) => void;
+  /** Moves one waiting message to the head, so it goes first when the turn settles — the list's "Send now". */
+  readonly promote: (conversationKey: string, id: string) => void;
   /** Takes the HEAD of the queue (FIFO, ELITEA-2865) and removes it. */
   readonly dequeue: (conversationKey: string) => QueuedChatMessage | undefined;
   readonly clear: (conversationKey: string) => void;
@@ -212,6 +214,16 @@ export function createQueuedMessagesStore(): QueuedMessagesStore {
         if (!current.some((row) => row.id === id)) return;
         commit({
           queues: withList(state.queues, conversationKey, current.filter((row) => row.id !== id)),
+          interjected: state.interjected,
+        });
+      },
+      promote: (conversationKey, id) => {
+        const state = get();
+        const current = state.queues[conversationKey] ?? [];
+        const row = current.find((entry) => entry.id === id);
+        if (row === undefined || current[0] === row) return;
+        commit({
+          queues: withList(state.queues, conversationKey, [row, ...current.filter((entry) => entry !== row)]),
           interjected: state.interjected,
         });
       },

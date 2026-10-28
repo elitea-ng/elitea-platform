@@ -1,5 +1,5 @@
 /**
- * RememberMemoryAction — "Remember this" on an assistant message (#870):
+ * "Remember this" on an assistant message (#870):
  * saves the message's own text as a persistent, cross-conversation personal
  * memory (`internal/api/v2/memories`), stamping `source_conversation_id` so
  * Settings > Memory's list can show where it came from.
@@ -9,8 +9,12 @@
  * rather than threading a callback through `ApplicationAnswer`'s already-
  * large prop surface, and it degrades to rendering nothing whenever it has
  * no project id to call with (same gate `showFeedback` uses in
- * `ApplicationAnswer.tsx`, which is where this mounts, right beside
- * `MessageFeedbackControl`).
+ * `ApplicationAnswer.tsx`).
+ *
+ * Two halves: `useRememberMemory`, held by the reply's action row, and
+ * `RememberMemoryMenuRow`, the row in that row's ⋯ menu. The menu closes on
+ * the click, so the save's state (pending, "Saved", the failure toast) lives
+ * in the hook, outside it, and outlasts the menu.
  */
 import type { ReactNode } from 'react';
 import { useCallback, useState } from 'react';
@@ -19,15 +23,14 @@ import { useMutation } from '@tanstack/react-query';
 
 import BookmarkAddOutlinedIcon from '@mui/icons-material/BookmarkAddOutlined';
 import BookmarkAddedIcon from '@mui/icons-material/BookmarkAdded';
-import IconButton from '@mui/material/IconButton';
 import Snackbar from '@mui/material/Snackbar';
 import Alert from '@mui/material/Alert';
-import Tooltip from '@mui/material/Tooltip';
 
 import { t } from '@/shared/i18n';
 import type { MemoryEntryWriteRequest } from '@/shared/api/generated/model';
 import { createMemory } from '@/shared/api/generated/chat/chat';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
+import { MenuRow, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
 
 /**
  * The SERVER's own explanation, when it sent one. Duplicated from
@@ -51,18 +54,27 @@ function memoryServerErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-export interface RememberMemoryActionProps {
+export interface RememberMemoryParams {
   readonly projectId: string;
   readonly content: string;
   /** The owning conversation's uuid, stamped as `source_conversation_id` when known. */
   readonly conversationId?: string | undefined;
-  readonly disabled?: boolean;
 }
 
-/** How long the "Saved" confirmation state shows before the icon reverts — long enough to notice, short enough that a second save is never blocked by it. */
+export interface RememberMemory {
+  /** False with no project id or no text: the menu offers no row. */
+  readonly available: boolean;
+  readonly save: () => void;
+  readonly isPending: boolean;
+  readonly justSaved: boolean;
+  /** The failure toast; the caller renders it outside the menu. */
+  readonly toast: ReactNode;
+}
+
+/** How long the "Saved" confirmation state shows before the row reverts — long enough to notice, short enough that a second save is never blocked by it. */
 const SAVED_STATE_MS = 2500;
 
-export function RememberMemoryAction({ projectId, content, conversationId, disabled = false }: RememberMemoryActionProps): ReactNode {
+export function useRememberMemory({ projectId, content, conversationId }: RememberMemoryParams): RememberMemory {
   const [justSaved, setJustSaved] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -70,7 +82,7 @@ export function RememberMemoryAction({ projectId, content, conversationId, disab
     mutationFn: (body: MemoryEntryWriteRequest) => createMemory(projectId, body),
   });
 
-  const handleClick = useCallback(() => {
+  const save = useCallback(() => {
     const trimmed = content.trim();
     if (!trimmed) return;
     saveMutation.mutate(
@@ -91,36 +103,39 @@ export function RememberMemoryAction({ projectId, content, conversationId, disab
     );
   }, [content, conversationId, saveMutation]);
 
-  if (!projectId || !content.trim()) return null;
+  const toast = (
+    <Snackbar
+      open={errorMessage !== null}
+      autoHideDuration={4000}
+      onClose={() => setErrorMessage(null)}
+      anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+    >
+      {errorMessage ? (
+        <Alert onClose={() => setErrorMessage(null)} severity="error" variant="filled">
+          {errorMessage}
+        </Alert>
+      ) : undefined}
+    </Snackbar>
+  );
 
+  return { available: Boolean(projectId) && content.trim() !== '', save, isPending: saveMutation.isPending, justSaved, toast };
+}
+
+export function RememberMemoryMenuRow({ memory, disabled = false, onDone }: { readonly memory: RememberMemory; readonly disabled?: boolean; readonly onDone: () => void }): ReactNode {
+  if (!memory.available) return null;
   return (
-    <>
-      <Tooltip title={justSaved ? t('chat.rememberThis.saved', 'Saved to memory') : t('chat.rememberThis.tooltip', 'Remember this')} placement="top">
-        <span>
-          <IconButton
-            size="small"
-            color="tertiary"
-            disabled={disabled || saveMutation.isPending}
-            onClick={handleClick}
-            aria-label={t('chat.rememberThis.aria', 'Remember this')}
-            data-testid="remember-memory-action"
-          >
-            {justSaved ? <BookmarkAddedIcon fontSize="small" data-testid="remember-memory-saved-icon" /> : <BookmarkAddOutlinedIcon fontSize="small" />}
-          </IconButton>
-        </span>
-      </Tooltip>
-      <Snackbar
-        open={errorMessage !== null}
-        autoHideDuration={4000}
-        onClose={() => setErrorMessage(null)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        {errorMessage ? (
-          <Alert onClose={() => setErrorMessage(null)} severity="error" variant="filled">
-            {errorMessage}
-          </Alert>
-        ) : undefined}
-      </Snackbar>
-    </>
+    <MenuRow
+      data-testid="remember-memory-action"
+      disabled={disabled || memory.isPending}
+      onClick={() => {
+        memory.save();
+        onDone();
+      }}
+    >
+      <MenuRowIcon>
+        {memory.justSaved ? <BookmarkAddedIcon data-testid="remember-memory-saved-icon" /> : <BookmarkAddOutlinedIcon />}
+      </MenuRowIcon>
+      <MenuRowText>{memory.justSaved ? t('chat.rememberThis.saved', 'Saved to memory') : t('chat.rememberThis.tooltip', 'Remember this')}</MenuRowText>
+    </MenuRow>
   );
 }

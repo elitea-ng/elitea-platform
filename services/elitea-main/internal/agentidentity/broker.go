@@ -87,7 +87,8 @@ type SessionPolicy interface {
 }
 
 // DenyAssertedUser is the default SessionPolicy: the revision's modes, and
-// asserted user evidence never accepted. No revision field enables it yet.
+// asserted user evidence never accepted. Tests use it; Main passes the
+// revision document, which lists the modes that accept it (gate D4).
 type DenyAssertedUser struct{ identity.ModePolicy }
 
 // AllowsAssertedUser always refuses.
@@ -495,7 +496,13 @@ func (b *Broker) credential(ctx context.Context, claim SessionClaim, req Credent
 		return SessionCredential{}, deny(ReasonTTLTooShort, nil)
 	}
 	spec := AssumeSpec{Ref: external.Ref, ProviderConfigKey: external.ProviderConfigKey, SessionID: session.ID,
-		Audience: audience, Scopes: scopes, TTL: ttl}
+		Audience: audience, Scopes: scopes, TTL: ttl, Run: RunContext{
+			TenantProjectID: session.TenantProjectID, ExecutionID: session.ExecutionID, Generation: session.Generation,
+			AgentBindingID: session.AgentBindingID, AgentBindingEpoch: session.AgentBindingEpoch,
+			ExternalAgentIdentityID: session.ExternalAgentIdentityID, ExternalEpoch: session.ExternalEpoch,
+			VersionDigest: binding.DefinitionDigest, PolicyRevisionID: session.PolicyRevisionID,
+			SessionExpiresAt: session.ExpiresAt,
+		}}
 	var credential SessionCredential
 	switch session.EvidenceKind {
 	case EvidenceVerified:

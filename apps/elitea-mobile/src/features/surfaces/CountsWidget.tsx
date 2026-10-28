@@ -31,22 +31,15 @@ const CountsLayout = (props: SurfaceSnapshot, environment: WidgetEnvironment) =>
   const p = props ?? { signedIn: false, approvals: 0, unread: 0, running: 0, host: '', titles: [], openUrl: '' };
   const family = environment.widgetFamily ?? 'systemSmall';
   const dark = environment.colorScheme === 'dark';
-  // In full colour the widget wears the app's pastel ground and product rose (design-tokens.json:
-  // accent light #B4306A / dark #FF8CB8, gradient stops of backgroundGradient). On a tinted or
-  // clear home screen (accented / vibrant) the system recolours it, so the ground is the system's.
+  // In full colour the widget wears the app's flat ground and signal colour (design-tokens.json:
+  // background light #FFFFFF / dark #0B0B18, accent light #4A4DE8 / dark #00BFE6; brand v3 has no
+  // gradients). On a tinted or clear home screen (accented / vibrant) the system recolours it, so
+  // the ground is the system's.
   const fullColor = (environment.widgetRenderingMode ?? 'fullColor') === 'fullColor';
-  const accent = dark ? '#FF8CB8' : '#B4306A';
+  const accent = dark ? '#00BFE6' : '#4A4DE8';
   const short = (n: number) => (n > 99 ? '99+' : String(n));
   const ground = fullColor
-    ? containerBackground(
-        {
-          type: 'linearGradient',
-          colors: dark ? ['#1F1520', '#16151F', '#111B19'] : ['#FCEBF2', '#F2EEFB', '#E8F5EF'],
-          startPoint: { x: 0.3, y: 0 },
-          endPoint: { x: 0.7, y: 1 },
-        },
-        'widget',
-      )
+    ? containerBackground({ type: 'color', color: dark ? '#0B0B18' : '#FFFFFF' }, 'widget')
     : containerBackground({ type: 'hierarchical', style: 'quinary' }, 'widget');
   // The lock-screen families always take the system's material.
   const lockGround = containerBackground({ type: 'hierarchical', style: 'quinary' }, 'widget');

@@ -105,7 +105,13 @@ type Dependencies struct {
 	// (#1121); built at the composition root only with credential governance
 	// on. The runtime plane carries it between replicas over NATS and checks
 	// governed runs' epochs at ClaimCommand and RenewLease. Nil: neither.
-	SecurityInvalidations         *epoch.Hub
+	SecurityInvalidations *epoch.Hub
+	// IndexScheduleMandates and IndexScheduleMandateGate make every index
+	// schedule occurrence mandate-bound (#1122): built at the composition
+	// root only with credential governance on. Nil: the executor keeps the
+	// project-system identity rule.
+	IndexScheduleMandates         indexscheduleapp.ScheduleMandates
+	IndexScheduleMandateGate      indexscheduleapp.MandateGate
 	OriginalCodeDefinitions       repos.CodeDefinitionSourceReader
 	OriginalCodeWorkspaceVerifier storage.OriginalCodeWorkspaceVerifier
 	OriginalCodeBrokerVerifier    storage.OriginalCodeBrokerVerifier
@@ -699,6 +705,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct nested application version reader: %w", nestedErr)
 		}
 		agentAdmissions.WithNestedMemoryToolkits(admissionNestedVersions)
+		// Governed runs freeze each toolkit's exact credential reference
+		// (#1119); nil with credential governance off.
+		governedCredentials, governedErr := governedAgentCredentials(dependencies.CredentialProfile, dependencies.AdmissionPool)
+		if governedErr != nil {
+			return nil, fmt.Errorf("construct governed agent credentials: %w", governedErr)
+		}
+		agentAdmissions.WithGovernedCredentials(governedCredentials)
 		agentTargets, targetErr := newCurrentAgentStartRepository(
 			dependencies.AdmissionPool,
 			catalogueProjectID,
@@ -1844,6 +1857,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			if executorErr != nil {
 				return nil, executorErr
 			}
+			executor.WithMandates(dependencies.IndexScheduleMandates, dependencies.IndexScheduleMandateGate)
 			notifications, notificationErr :=
 				repos.NewCurrentIndexScheduleNotificationRepository(
 					dependencies.ControlPool,

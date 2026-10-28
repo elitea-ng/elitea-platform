@@ -177,7 +177,7 @@ func TestTheDefaultBrandRendersWithoutAPack(t *testing.T) {
 	recorder := getLogin(newTestChooser(t, nil, gitHubProvider(), entraProvider()), "")
 	body := recorder.Body.String()
 	// The product's own logo, inline: the page loads no image to show it.
-	if !strings.Contains(body, `<svg class="brand-mark" viewBox="0 0 99 20" fill="none" role="img" aria-label="Elitea"`) ||
+	if !strings.Contains(body, `<svg class="brand-mark" viewBox="0 0 1703 372" fill="none" role="img" aria-label="Elitea AI"`) ||
 		strings.Contains(body, `class="brand-logo"`) || strings.Contains(body, "<style></style>") {
 		t.Fatalf("default brand missing:\n%s", body)
 	}

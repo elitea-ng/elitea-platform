@@ -29,6 +29,8 @@ export interface FolderMenuInput {
   appIpc: AppIpc | undefined;
   /** The first action: "New thread" in the sidebar, "Open" in the list. */
   primary: { label: string; enabled?: boolean; run: () => void };
+  /** A git folder's "New thread in a worktree". */
+  worktree?: () => void;
   bind: (projectId: number) => void;
   remove: () => void;
   /** Open the picker sheet (every project). */
@@ -40,7 +42,7 @@ const clip = (text: string): string => (text.length <= LABEL_CHARS ? text : `${t
 /** The projects a folder may be bound to: not suspended. */
 export const bindable = <P extends ProjectLike>(projects: readonly P[]): P[] => projects.filter((project) => project.suspended !== true);
 
-export function folderContextActions({ workspace, projects, appIpc, primary, bind, remove, choosePicker }: FolderMenuInput): ContextAction[] {
+export function folderContextActions({ workspace, projects, appIpc, primary, worktree, bind, remove, choosePicker }: FolderMenuInput): ContextAction[] {
   const choices = bindable(projects);
   const shown = choices.slice(0, SUBMENU_PROJECTS).map((project) => ({
     id: `project:${String(project.id)}`,
@@ -51,6 +53,7 @@ export function folderContextActions({ workspace, projects, appIpc, primary, bin
   const more = choices.length > SUBMENU_PROJECTS ? [{ id: 'project:more', label: t('desktop.menu.moreProjects', 'More projects…'), run: choosePicker }] : [];
   return [
     { id: 'primary', label: primary.label, ...(primary.enabled === undefined ? {} : { enabled: primary.enabled }), run: primary.run },
+    ...(worktree === undefined ? [] : [{ id: 'worktree', label: t('desktop.shell.newWorktreeThread', 'New thread in a worktree'), run: worktree }]),
     { separator: true },
     { id: 'reveal', label: t('workspace.path.reveal', 'Reveal in Finder'), enabled: appIpc !== undefined, run: () => void appIpc?.revealPath(workspace.id, '').catch(() => undefined) },
     { id: 'copy', label: t('workspace.path.copy', 'Copy Path'), run: () => copyText(workspace.path) },

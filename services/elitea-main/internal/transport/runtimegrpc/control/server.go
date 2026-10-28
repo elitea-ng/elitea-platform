@@ -1063,7 +1063,7 @@ func (s *Server) governedClaimRejection(ctx context.Context, request *runtimev1.
 		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, "The durable claim state is temporarily unavailable.", true)
 	}
 	if pin.Profile == profile.ProfileGoverned {
-		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_GOVERNED_CONTEXT_MISSING, "The governed execution's command carries no security context.", false)
+		return s.epochs.contextMissing(ctx, command)
 	}
 	return nil
 }

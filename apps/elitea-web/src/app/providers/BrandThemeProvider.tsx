@@ -1,6 +1,9 @@
 import { type ReactNode, useMemo } from 'react';
 
+import type { EmotionCache } from '@emotion/cache';
+import { CacheProvider } from '@emotion/react';
 import CssBaseline from '@mui/material/CssBaseline';
+import GlobalStyles from '@mui/material/GlobalStyles';
 import { ThemeProvider } from '@mui/material/styles';
 
 import {
@@ -54,10 +57,34 @@ export interface BrandThemeProviderProps {
  * `BrandDocumentHead` carries the `<head>` half of the pack: `@font-face`
  * rules from `typography.fontFaces` and the custom favicon.
  */
-export function BrandThemeProvider({ children, pack = DEFAULT_BRAND_PACK }: BrandThemeProviderProps) {
-  const theme = useMemo(() => buildEliteaTheme(pack), [pack]);
+/**
+ * Right-to-left languages: the desktop entry applies the language (which sets
+ * `dir="rtl"` on the document) and installs an emotion cache whose RTL plugin
+ * mirrors physical properties (`paddingLeft`, `left`, `textAlign: 'left'`, …)
+ * app-wide (`entries/desktop/rtlStyleCache.ts`), both before the first render.
+ * The plugin is loaded only then, so the web app's bundle never carries it.
+ * Left-to-right keeps emotion's default cache, so its styles are untouched.
+ */
+let rtlCache: EmotionCache | undefined;
 
-  return (
+/**
+ * Icons whose meaning is a direction (back/forward, a disclosure, the next
+ * page) point the other way in RTL. MUI names each icon in `data-testid`.
+ * Brands, clocks, media controls and text are never mirrored.
+ */
+const MIRRORED_ICONS = ['ChevronRight', 'ChevronLeft', 'ArrowBack', 'ArrowForward', 'ArrowBackIos', 'ArrowForwardIos', 'KeyboardArrowRight', 'KeyboardArrowLeft', 'NavigateNext', 'NavigateBefore', 'FirstPage', 'LastPage', 'Undo', 'Redo', 'Logout', 'Login', 'OpenInNew']
+  .map((name) => `[dir='rtl'] [data-testid='${name}Icon'], [dir='rtl'] [data-testid='${name}OutlinedIcon']`)
+  .join(', ');
+
+export function installRtlStyleCache(cache: EmotionCache): void {
+  rtlCache = cache;
+}
+
+export function BrandThemeProvider({ children, pack = DEFAULT_BRAND_PACK }: BrandThemeProviderProps) {
+  const rtl = rtlCache !== undefined && document.documentElement.dir === 'rtl';
+  const theme = useMemo(() => buildEliteaTheme(pack, undefined, rtl ? 'rtl' : 'ltr'), [pack, rtl]);
+
+  const themed = (
     <ThemeProvider
       theme={theme}
       defaultMode={DEFAULT_COLOR_SCHEME}
@@ -67,5 +94,14 @@ export function BrandThemeProvider({ children, pack = DEFAULT_BRAND_PACK }: Bran
       <BrandDocumentHead pack={pack} />
       {children}
     </ThemeProvider>
+  );
+  return rtl && rtlCache !== undefined ? (
+    <CacheProvider value={rtlCache}>
+      {/* `scale`, not `transform`: it composes with an icon's own rotation (an expanded disclosure). */}
+      <GlobalStyles styles={{ [MIRRORED_ICONS]: { scale: '-1 1' } }} />
+      {themed}
+    </CacheProvider>
+  ) : (
+    themed
   );
 }

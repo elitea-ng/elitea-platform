@@ -11,6 +11,8 @@ import (
 	"time"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"google.golang.org/protobuf/proto"
+
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
@@ -54,6 +56,10 @@ type Admission struct {
 	CurrentRegenerateTurn *CurrentRegenerateTurn
 	CurrentContinueTurn   *CurrentContinueTurn
 	CurrentFanoutWakeTurn *CurrentFanoutWakeTurn
+	// GovernedCredentials is the governed-credential-references freeze of a
+	// bound agent's run (#1119); nil otherwise. The admission transaction
+	// writes it into the run's security context.
+	GovernedCredentials *GovernedCredentialFreeze
 }
 
 type AtomicAdmissionStore interface {
@@ -67,6 +73,8 @@ type AdmissionService struct {
 	newID   executionapp.IDGenerator
 	// nested reads sub-agents' frozen toolkits (WithNestedMemoryToolkits).
 	nested NestedApplicationTools
+	// governed freezes governed credential references (WithGovernedCredentials).
+	governed *GovernedCredentials
 }
 
 func NewAdmissionService(
@@ -96,6 +104,37 @@ func (s *AdmissionService) Submit(
 		!agentCapability(request.CapabilityID) || !request.TriggerOrigin.Valid() {
 		return executionapp.AdmissionOutcome{}, ErrInvalidAgentAdmission
 	}
+	if err := validateAuthoritativeInput(request.Input); err != nil {
+		return executionapp.AdmissionOutcome{}, fmt.Errorf("%w: %v", ErrInvalidAgentAdmission, err)
+	}
+	if err := validateAgentTurns(request, request.Input.GetExecutionGeneration()); err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
+	// The request digest is the CLIENT's request: the governed freeze below
+	// rewrites the input, and a reference rotated between an admission and
+	// its retry must not turn the retry into an idempotency conflict.
+	clientContent, err := proto.MarshalOptions{Deterministic: true}.Marshal(request.Input)
+	if err != nil {
+		return executionapp.AdmissionOutcome{}, fmt.Errorf("%w: %v", ErrInvalidAgentAdmission, err)
+	}
+	requestDigest := agentRequestDigest(request, clientContent)
+	idempotencyScope := request.Identity.TenantID + "/" + request.Identity.ResourceProjectID + "/" + request.Identity.ActorID
+	var governed *GovernedCredentialFreeze
+	if s.governed != nil {
+		// A retry of a committed admission replays it before anything is
+		// resolved: a grant revoked since must not refuse the retry.
+		outcome, found, err := s.governed.replay(ctx, idempotencyScope, request.IdempotencyKey, requestDigest)
+		if err != nil || found {
+			return outcome, err
+		}
+		// Before the bundle is built: the frozen references are part of the
+		// request entry, so the bundle digest covers them (#1119).
+		input, freeze, err := s.governed.Freeze(ctx, request)
+		if err != nil {
+			return executionapp.AdmissionOutcome{}, err
+		}
+		request.Input, governed = input, freeze
+	}
 	bundle, binding, err := s.factory.Build(
 		ctx, request.Input, request.ClientStreamID, request.ClientMessageID,
 		request.SIOEvent,
@@ -103,7 +142,6 @@ func (s *AdmissionService) Submit(
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("%w: %v", ErrInvalidAgentAdmission, err)
 	}
-	requestDigest := agentRequestDigest(request, bundle.Entries[0].Content)
 
 	executionID, commandID, outboxID, err := s.allocateAdmissionIDs()
 	if err != nil {
@@ -111,7 +149,7 @@ func (s *AdmissionService) Submit(
 	}
 	createdAt := s.now().UTC()
 	record := executiondomain.Admission{
-		IdempotencyScope: request.Identity.TenantID + "/" + request.Identity.ResourceProjectID + "/" + request.Identity.ActorID,
+		IdempotencyScope: idempotencyScope,
 		IdempotencyKey:   request.IdempotencyKey,
 		RequestDigest:    requestDigest,
 		InputBundle:      bundle.Clone(),
@@ -142,62 +180,6 @@ func (s *AdmissionService) Submit(
 	if err := binding.Validate(record.InputBundle); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("%w: %v", ErrInvalidAgentAdmission, err)
 	}
-	if request.CurrentTurn != nil {
-		if request.CapabilityID != executiondomain.AgentApplicationCapability ||
-			request.CurrentRegenerateTurn != nil ||
-			request.CurrentContinueTurn != nil ||
-			request.CurrentTurn.Validate() != nil ||
-			request.CurrentTurn.ResponseMessageID != request.ClientMessageID ||
-			request.CurrentTurn.ConversationUUID != request.ClientStreamID ||
-			request.CurrentTurn.QuestionID != binding.ClientExecutionGeneration {
-			return executionapp.AdmissionOutcome{}, ErrInvalidAgentAdmission
-		}
-	}
-	if request.CurrentAdhocTurn != nil {
-		if request.CurrentTurn != nil || request.CurrentRegenerateTurn != nil || request.CurrentContinueTurn != nil ||
-			request.CapabilityID != executiondomain.AgentAdhocCapability ||
-			request.CurrentAdhocTurn.Validate() != nil ||
-			request.CurrentAdhocTurn.ResponseMessageID != request.ClientMessageID ||
-			request.CurrentAdhocTurn.ConversationUUID != request.ClientStreamID ||
-			request.CurrentAdhocTurn.QuestionID != binding.ClientExecutionGeneration {
-			return executionapp.AdmissionOutcome{}, ErrInvalidAgentAdmission
-		}
-	}
-	if request.CurrentRegenerateTurn != nil {
-		turn := request.CurrentRegenerateTurn
-		if request.CurrentTurn != nil || request.CurrentAdhocTurn != nil || request.CurrentContinueTurn != nil ||
-			turn.Validate() != nil || turn.ResponseMessageID != request.ClientMessageID ||
-			turn.ConversationUUID != request.ClientStreamID ||
-			turn.ExecutionGeneration != binding.ClientExecutionGeneration ||
-			(turn.Kind == CurrentRegenerationApplication && request.CapabilityID != executiondomain.AgentApplicationCapability) ||
-			(turn.Kind == CurrentRegenerationAdhoc && request.CapabilityID != executiondomain.AgentAdhocCapability) {
-			return executionapp.AdmissionOutcome{}, ErrInvalidAgentAdmission
-		}
-	}
-	if request.CurrentContinueTurn != nil {
-		turn := request.CurrentContinueTurn
-		if request.CurrentTurn != nil || request.CurrentAdhocTurn != nil || request.CurrentRegenerateTurn != nil ||
-			turn.Validate() != nil || turn.ProjectionResponseID() != request.ClientMessageID ||
-			turn.ConversationUUID != request.ClientStreamID ||
-			turn.ExecutionGeneration != binding.ClientExecutionGeneration ||
-			request.SIOEvent != "chat_continue_predict" ||
-			(turn.Kind == CurrentRegenerationApplication && request.CapabilityID != executiondomain.AgentApplicationCapability) ||
-			(turn.Kind == CurrentRegenerationAdhoc && request.CapabilityID != executiondomain.AgentAdhocCapability) {
-			return executionapp.AdmissionOutcome{}, ErrInvalidAgentAdmission
-		}
-	}
-	if request.CurrentFanoutWakeTurn != nil {
-		turn := request.CurrentFanoutWakeTurn
-		if request.CurrentTurn != nil || request.CurrentAdhocTurn != nil || request.CurrentRegenerateTurn != nil ||
-			request.CurrentContinueTurn != nil || turn.Validate() != nil ||
-			request.IdempotencyKey != FanoutWakeIdempotencyKey(turn.ResponseMessageID, turn.DecisionRevision) ||
-			turn.ResponseMessageID != request.ClientMessageID || turn.ConversationUUID != request.ClientStreamID ||
-			turn.ExecutionGeneration != binding.ClientExecutionGeneration || request.SIOEvent != "chat_continue_predict" ||
-			strconv.FormatInt(turn.ProjectID, 10) != request.Identity.ResourceProjectID ||
-			strconv.FormatInt(turn.ActorUserID, 10) != request.Identity.ActorID {
-			return executionapp.AdmissionOutcome{}, ErrInvalidAgentAdmission
-		}
-	}
 
 	memoryToolkits, err := s.runMemoryToolkits(ctx, request)
 	if err != nil {
@@ -212,6 +194,7 @@ func (s *AdmissionService) Submit(
 		CurrentRegenerateTurn: request.CurrentRegenerateTurn.Clone(),
 		CurrentContinueTurn:   request.CurrentContinueTurn.Clone(),
 		CurrentFanoutWakeTurn: request.CurrentFanoutWakeTurn.Clone(),
+		GovernedCredentials:   governed,
 	})
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("admit agent execution: %w", err)
@@ -221,6 +204,68 @@ func (s *AdmissionService) Submit(
 		return executionapp.AdmissionOutcome{}, errors.New("agent admission store returned invalid durable outcome")
 	}
 	return outcome, nil
+}
+
+// validateAgentTurns checks the current turn against the request; generation
+// is the input's execution generation (the binding's client generation).
+func validateAgentTurns(request SubmitRequest, generation string) error {
+	if request.CurrentTurn != nil {
+		if request.CapabilityID != executiondomain.AgentApplicationCapability ||
+			request.CurrentRegenerateTurn != nil ||
+			request.CurrentContinueTurn != nil ||
+			request.CurrentTurn.Validate() != nil ||
+			request.CurrentTurn.ResponseMessageID != request.ClientMessageID ||
+			request.CurrentTurn.ConversationUUID != request.ClientStreamID ||
+			request.CurrentTurn.QuestionID != generation {
+			return ErrInvalidAgentAdmission
+		}
+	}
+	if request.CurrentAdhocTurn != nil {
+		if request.CurrentTurn != nil || request.CurrentRegenerateTurn != nil || request.CurrentContinueTurn != nil ||
+			request.CapabilityID != executiondomain.AgentAdhocCapability ||
+			request.CurrentAdhocTurn.Validate() != nil ||
+			request.CurrentAdhocTurn.ResponseMessageID != request.ClientMessageID ||
+			request.CurrentAdhocTurn.ConversationUUID != request.ClientStreamID ||
+			request.CurrentAdhocTurn.QuestionID != generation {
+			return ErrInvalidAgentAdmission
+		}
+	}
+	if request.CurrentRegenerateTurn != nil {
+		turn := request.CurrentRegenerateTurn
+		if request.CurrentTurn != nil || request.CurrentAdhocTurn != nil || request.CurrentContinueTurn != nil ||
+			turn.Validate() != nil || turn.ResponseMessageID != request.ClientMessageID ||
+			turn.ConversationUUID != request.ClientStreamID ||
+			turn.ExecutionGeneration != generation ||
+			(turn.Kind == CurrentRegenerationApplication && request.CapabilityID != executiondomain.AgentApplicationCapability) ||
+			(turn.Kind == CurrentRegenerationAdhoc && request.CapabilityID != executiondomain.AgentAdhocCapability) {
+			return ErrInvalidAgentAdmission
+		}
+	}
+	if request.CurrentContinueTurn != nil {
+		turn := request.CurrentContinueTurn
+		if request.CurrentTurn != nil || request.CurrentAdhocTurn != nil || request.CurrentRegenerateTurn != nil ||
+			turn.Validate() != nil || turn.ProjectionResponseID() != request.ClientMessageID ||
+			turn.ConversationUUID != request.ClientStreamID ||
+			turn.ExecutionGeneration != generation ||
+			request.SIOEvent != "chat_continue_predict" ||
+			(turn.Kind == CurrentRegenerationApplication && request.CapabilityID != executiondomain.AgentApplicationCapability) ||
+			(turn.Kind == CurrentRegenerationAdhoc && request.CapabilityID != executiondomain.AgentAdhocCapability) {
+			return ErrInvalidAgentAdmission
+		}
+	}
+	if request.CurrentFanoutWakeTurn != nil {
+		turn := request.CurrentFanoutWakeTurn
+		if request.CurrentTurn != nil || request.CurrentAdhocTurn != nil || request.CurrentRegenerateTurn != nil ||
+			request.CurrentContinueTurn != nil || turn.Validate() != nil ||
+			request.IdempotencyKey != FanoutWakeIdempotencyKey(turn.ResponseMessageID, turn.DecisionRevision) ||
+			turn.ResponseMessageID != request.ClientMessageID || turn.ConversationUUID != request.ClientStreamID ||
+			turn.ExecutionGeneration != generation || request.SIOEvent != "chat_continue_predict" ||
+			strconv.FormatInt(turn.ProjectID, 10) != request.Identity.ResourceProjectID ||
+			strconv.FormatInt(turn.ActorUserID, 10) != request.Identity.ActorID {
+			return ErrInvalidAgentAdmission
+		}
+	}
+	return nil
 }
 
 func (s *AdmissionService) allocateAdmissionIDs() (string, string, string, error) {

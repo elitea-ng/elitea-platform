@@ -25,6 +25,9 @@ const SIZES: Record<string, number> = {
   subtitle: 11,
 };
 
+/** Menus and popovers (ms): on screen at once, a short grow out. */
+const MENU_TRANSITION = { enter: 0, exit: 120 } as const;
+
 /** Controls stay between 22 and 28px: small 22, medium 28. */
 const CONTROL = { small: 22, medium: 28 } as const;
 
@@ -144,16 +147,24 @@ export function withDesktopComponents(outer: Theme): Theme {
           backgroundColor: `color-mix(in srgb, ${t.vars.palette.text.primary} 3%, transparent)`,
           '& .MuiOutlinedInput-notchedOutline': { top: 0, borderColor: t.vars.palette.divider },
           '& .MuiOutlinedInput-notchedOutline legend': { display: 'none' },
-          '&.Mui-focused': { outline: `3px solid color-mix(in srgb, ${t.vars.palette.primary.main} 40%, transparent)`, outlineOffset: 0 },
-          '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: t.vars.palette.primary.main, borderWidth: 1 },
+          '&.Mui-focused': { outline: `2px solid ${t.vars.palette.focus.ring}`, outlineOffset: 0 },
+          '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: t.vars.palette.focus.ring, borderWidth: 1 },
         }),
         input: { padding: '4px 8px', height: 'auto' },
         inputSizeSmall: { padding: '2px 8px' },
       },
     },
+    // A native menu is on screen the moment it is asked for; MUI's default Grow takes ~250ms each way.
+    // No scroll lock either: the window's body never scrolls, and locking it restyles <body>, which
+    // re-lays-out the whole window (a long thread) before the menu can paint.
     MuiMenu: {
       ...outer.components?.MuiMenu,
+      defaultProps: { ...outer.components?.MuiMenu?.defaultProps, transitionDuration: MENU_TRANSITION, disableScrollLock: true },
       styleOverrides: { paper: { borderRadius: 8, marginTop: 4 }, list: { padding: 4 } },
+    },
+    MuiPopover: {
+      ...outer.components?.MuiPopover,
+      defaultProps: { ...outer.components?.MuiPopover?.defaultProps, transitionDuration: MENU_TRANSITION, disableScrollLock: true },
     },
     MuiMenuItem: {
       ...outer.components?.MuiMenuItem,

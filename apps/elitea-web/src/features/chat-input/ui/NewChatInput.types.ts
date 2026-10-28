@@ -136,6 +136,8 @@ export interface NewChatInputContentProps {
   readonly clearInputAfterSubmit?: boolean | undefined;
   readonly tooltipOfSendButton?: string | undefined;
   readonly slashHighlights?: readonly { readonly start: number; readonly end: number }[] | undefined;
+  /** What the unsent text belongs to (a conversation, a thread, "new chat in project N"): it is kept per key and restored (`shared/lib/composerDrafts.ts`). */
+  readonly draftKey?: string | undefined;
 }
 
 export interface NewChatInputCallbacks {

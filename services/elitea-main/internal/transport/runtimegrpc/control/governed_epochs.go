@@ -88,8 +88,8 @@ func (g *governedEpochs) claimRejection(ctx context.Context, command *runtimev1.
 	}
 	if !governed {
 		// Field 65 without a stored context: the context admission recorded
-		// is gone.
-		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_GOVERNED_CONTEXT_MISSING, "The governed execution's command carries no security context.", false)
+		// is gone, so no claim can ever succeed.
+		return g.contextMissing(ctx, command)
 	}
 	if len(stale) == 0 {
 		return nil
@@ -99,6 +99,19 @@ func (g *governedEpochs) claimRejection(ctx context.Context, command *runtimev1.
 		slog.WarnContext(ctx, "governed run cancellation failed", "point", "claim", "execution_id", command.GetExecutionId())
 	}
 	return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED, authorityRevokedMessage, false)
+}
+
+// contextMissing refuses a governed run that can never be claimed and
+// cancels it durably, so its job settles instead of being redelivered and
+// refused until the stream drops it while the conversation stays streaming.
+// A nil receiver only refuses.
+func (g *governedEpochs) contextMissing(ctx context.Context, command *runtimev1.WorkerCommandV1) *runtimev1.ClaimCommandResponseV1 {
+	if g != nil {
+		if err := g.revoker.RevokeAuthority(ctx, command.GetExecutionId(), command.GetGeneration()); err != nil {
+			slog.WarnContext(ctx, "governed run cancellation failed", "point", "context_missing", "execution_id", command.GetExecutionId())
+		}
+	}
+	return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_GOVERNED_CONTEXT_MISSING, "The governed execution's command carries no security context.", false)
 }
 
 // renewDesiredState answers CANCELLED for a governed run whose epochs are

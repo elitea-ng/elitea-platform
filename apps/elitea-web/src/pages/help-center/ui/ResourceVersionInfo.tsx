@@ -23,6 +23,8 @@ import Typography from '@mui/material/Typography';
 import { CopyToClipboardButton } from '@/shared/ui/CopyToClipboardButton';
 import { InfoIcon } from '@/shared/ui/icons/info-icon';
 
+import { t } from '@/shared/i18n';
+
 import type { ResourcesConfigComponent } from '../lib/useResourcesConfig';
 
 /** Props consumed by ResourceVersionInfo. */
@@ -42,8 +44,8 @@ const headerSx: SxProps<Theme> = (t: Theme): SystemStyleObject<Theme> => ({
   px: t.spacing(3),
   height: '3.75rem',
   minHeight: '3.75rem',
-  borderBottom: `0.0625rem solid ${t.palette.divider}`,
-  backgroundColor: t.vars.palette.background?.tabPanel ?? t.palette.background.default,
+  borderBottom: `0.0625rem solid ${t.vars.palette.border.cardsOutlines}`,
+  backgroundColor: t.vars.palette.background.tabPanel,
 });
 
 const headerRightSx: SxProps<Theme> = {
@@ -62,7 +64,7 @@ const infoIconSx: SxProps<Theme> = {
   alignItems: 'center',
   flexShrink: 0,
   cursor: 'pointer',
-  color: (t: Theme) => t.palette.text.primary,
+  color: (t: Theme) => t.vars.palette.text.primary,
 };
 
 const infoIconSvgSx: SxProps<Theme> = {
@@ -100,7 +102,7 @@ const ResourceVersionInfo = memo(({ versionLabel = '', components = [] }: Resour
         variant="headingMedium"
         color="text.secondary"
       >
-        Help Center
+        {t('pages.helpCenter.title', 'Help Center')}
       </Typography>
       <Box sx={headerRightSx}>
         {hasVersion && (

@@ -19,6 +19,7 @@ import {
 } from '@/features/chat/mentions/mentions';
 import { SuggestionStrip, type Suggestion, type SuggestionState } from '@/features/chat/SuggestionStrip';
 import { holdsOnlySent } from '@/features/chat/keyboardCommit';
+import { composerDrafts, useDraftLoads } from '@/features/chat/composerDrafts';
 import { DictationPanel } from '@/features/speech/DictationPanel';
 import { dictationProblemText, joinDictation, useDictation } from '@/features/speech/dictation';
 
@@ -78,6 +79,11 @@ export interface ComposerProps {
   placeholder?: string;
   /** Text put in the input from outside (an empty-state suggestion); a new `key` puts it again. */
   draft?: { text: string; key: number } | null;
+  /**
+   * The key the unsent text is kept under (`draftKey`, composerDrafts.ts): restored when the
+   * composer opens for it, cleared by an accepted send. Null: not kept.
+   */
+  unsentKey?: string | null;
   /**
    * Development previews only (`/design-chat`): draw the composer's own listening state with
    * these words, as if dictation had heard them, without starting the recogniser.
@@ -142,6 +148,7 @@ export function Composer({
   initialText = null,
   placeholder = 'Message',
   draft = null,
+  unsentKey = null,
   dictationPreview = null,
 }: ComposerProps) {
   const design = useDesign();
@@ -152,7 +159,11 @@ export function Composer({
   const keyboardUp = useKeyboardState((state) => state.isVisible);
   const bottomInset = keyboardUp ? design.space[2] : Math.max(insets.bottom, design.space[2]);
   const input = useRef<ComponentRef<typeof TextInput>>(null);
-  const [text, setText] = useState(dictationPreview ? joinDictation(initialText ?? '', dictationPreview.heard) : (initialText ?? ''));
+  const [text, setText] = useState(() =>
+    dictationPreview
+      ? joinDictation(initialText ?? '', dictationPreview.heard)
+      : (initialText ?? (unsentKey !== null ? composerDrafts.get(unsentKey) : null) ?? ''),
+  );
   const [selection, setSelection] = useState<Selection>({ start: 0, end: 0 });
   /** Set once after a pick to move the caret; released on the next selection event. */
   const [forcedSelection, setForcedSelection] = useState<Selection | undefined>(undefined);
@@ -207,6 +218,26 @@ export function Composer({
   useEffect(() => {
     if (draftKey !== null) input.current?.focus();
   }, [draftKey]);
+  // The unsent text: another conversation's comes in when the key changes (taken over while
+  // rendering), one loaded from the device after opening fills an input still empty, and every
+  // change is kept for the key.
+  const [keptFor, setKeptFor] = useState(unsentKey);
+  const loads = useDraftLoads();
+  const [seenLoads, setSeenLoads] = useState(loads);
+  if (unsentKey !== keptFor || loads !== seenLoads) {
+    const switched = unsentKey !== keptFor;
+    setKeptFor(unsentKey);
+    setSeenLoads(loads);
+    if (switched || text === '') {
+      const kept = (unsentKey !== null ? composerDrafts.get(unsentKey) : null) ?? '';
+      setText(kept);
+      setSelection({ start: kept.length, end: kept.length });
+      if (switched) setError(null);
+    }
+  }
+  useEffect(() => {
+    if (unsentKey !== null) composerDrafts.set(unsentKey, text);
+  }, [unsentKey, text]);
   /** A token whose pick failed; its strip stays hidden until the token changes. */
   const [dismissed, setDismissed] = useState<string | null>(null);
 
@@ -294,7 +325,7 @@ export function Composer({
       .finally(() => setStopping(false));
   };
 
-  const settle = (sent: string, problem: string | null) => {
+  const settle = (sent: string, problem: string | null, keptAs: string | null) => {
     setError(problem);
     if (problem !== null) return;
     // Only the accepted text is cleared; an edit made meanwhile is kept. A pending keyboard
@@ -302,6 +333,8 @@ export function Composer({
     const at = sentAt.current;
     const last = changedAt.current;
     setText((current) => (holdsOnlySent(sent, current, at, last) ? '' : current));
+    // The draft too, even when the composer is gone (the thread was left mid-send).
+    if (keptAs !== null) composerDrafts.clearIfSent(keptAs, (stored) => holdsOnlySent(sent, stored, at, last));
   };
   const submit = () => {
     if (!canSend) return;
@@ -312,18 +345,19 @@ export function Composer({
     if (voice.listening) voice.cancel();
     dictationBase.current = null;
     const sent = text;
+    const keptAs = unsentKey;
     sentAt.current = Date.now();
     changedAt.current = null;
     const mentions = people.length > 0 ? deriveMentions(sent, people, { everyone: true }) : null;
     const result = onSend({ text: sent, mentions });
     if (!(result instanceof Promise)) {
-      settle(sent, result);
+      settle(sent, result, keptAs);
       return;
     }
     setSubmitting(true);
     result
-      .then((problem) => settle(sent, problem))
-      .catch(() => settle(sent, 'This message could not be sent.'))
+      .then((problem) => settle(sent, problem, keptAs))
+      .catch(() => settle(sent, 'This message could not be sent.', keptAs))
       .finally(() => setSubmitting(false));
   };
 
@@ -471,14 +505,14 @@ export function Composer({
               disabled={!canSend}
               onPress={submit}
               hitSlop={hitSlopFor(SEND_SIZE)}
-              android_ripple={{ color: colors.accentPressed, borderless: true }}
+              android_ripple={{ color: colors.primaryPressed, borderless: true }}
               style={({ pressed }) => [
                 styles.send,
                 canSend
-                  ? { backgroundColor: pressed && uiPlatform === 'ios' ? colors.accentPressed : colors.accent }
+                  ? { backgroundColor: pressed && uiPlatform === 'ios' ? colors.primaryPressed : colors.primary }
                   : { backgroundColor: colors.surfaceSunken, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.separator },
               ]}>
-              <Icon name="send" size={18} color={canSend ? colors.accentOn : colors.textTertiary} weight="bold" scales={false} />
+              <Icon name="send" size={18} color={canSend ? colors.primaryOn : colors.textTertiary} weight="bold" scales={false} />
             </Pressable>
           )}
         </View>

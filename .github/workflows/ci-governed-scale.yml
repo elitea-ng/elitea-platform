@@ -1,0 +1,139 @@
+name: CI — Governed credential scale
+
+# ADR-0039 P6b (#1124 work item 4): the synthetic scale report of the
+# governed credential profile. 300 teams x 60 calling applications are
+# seeded through the real stores, then admission p95 (the #999 method),
+# redeem p95/p99, refresh contention, revocation-to-deny latency, the audit
+# outbox lag and the NATS invalidation fan-out are measured on one
+# PostgreSQL 18. A measurement, not a gate: it fails only when a measurement
+# breaks an invariant (a redemption denied that should be permitted, a
+# second provider refresh, a permit after a revocation committed). The
+# report is uploaded and written to the job summary.
+#
+# TestGovernedScale skips without ELITEA_GOVERNED_SCALE=1, so ci-go.yml
+# never runs it (declared in scripts/go/declared-skips.txt). This job fails
+# when it did not RUN: a skip must not read as a pass.
+
+on:
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  schedule:
+    - cron: "29 3 * * *"
+  workflow_dispatch:
+    inputs:
+      teams:
+        description: "Teams (projects)"
+        default: "300"
+      apps:
+        description: "Calling applications per team"
+        default: "60"
+      agents:
+        description: "Agents per calling application"
+        default: "1"
+      grants:
+        description: "Grants per agent"
+        default: "2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-governed-scale-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  scale:
+    name: Governed credential scale report
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        # Plain PostgreSQL 18, the server every deployment runs. The default
+        # 100 connections: the run stays inside them.
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      # The invalidation fan-out runs over core NATS on the production
+      # subject. The -alpine tag for a shell the health command needs.
+      nats:
+        image: nats:2.12.0-alpine
+        command: -js -m 8222
+        ports:
+          - 4222:4222
+          - 8222:8222
+        options: >-
+          --health-cmd="wget -qO- 'http://127.0.0.1:8222/healthz?js-enabled-only=true'"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          # The cache is .github/actions/go-cache below.
+          cache: false
+          go-version-file: go.work
+      - name: Restore the Go cache (main writes)
+        uses: ./.github/actions/go-cache
+        with:
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
+
+      - name: Run the scale measurements
+        working-directory: services/elitea-main
+        env:
+          ELITEA_GOVERNED_SCALE: "1"
+          ELITEA_GOVERNED_SCALE_REPORT: ${{ runner.temp }}/governed-scale-report.txt
+          ELITEA_GOVERNED_SCALE_TEAMS: ${{ inputs.teams || '300' }}
+          ELITEA_GOVERNED_SCALE_APPS: ${{ inputs.apps || '60' }}
+          ELITEA_GOVERNED_SCALE_AGENTS: ${{ inputs.agents || '1' }}
+          ELITEA_GOVERNED_SCALE_GRANTS: ${{ inputs.grants || '2' }}
+          ELITEA_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+          ELITEA_TEST_NATS_URL: "nats://127.0.0.1:4222"
+          GOFLAGS: -count=1
+        run: |
+          set -uo pipefail
+          # The step shell runs with -e: capture the status explicitly, or a
+          # failing test exits the step before its output is printed.
+          status=0
+          go test -run '^TestGovernedScale$' -v -timeout 40m ./internal/credentialgovernance/scale/ > scale.log 2>&1 || status=$?
+          cat scale.log
+          {
+            echo '### Governed credential scale (synthetic)'
+            echo 'Synthetic dimensions only; no claim beyond them. Runner: GitHub-hosted ubuntu-latest.'
+            echo '```'
+            cat "$ELITEA_GOVERNED_SCALE_REPORT" 2>/dev/null || echo 'no report was written'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+          if ! grep -q -- '--- PASS: TestGovernedScale ' scale.log; then
+            echo '::error::TestGovernedScale did not run and pass'
+            exit 1
+          fi
+          if ! grep -q '^latency invalidation.nats .* measured=yes' "$ELITEA_GOVERNED_SCALE_REPORT"; then
+            echo '::error::the NATS invalidation path was not measured'
+            exit 1
+          fi
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: governed-scale-report
+          path: |
+            ${{ runner.temp }}/governed-scale-report.txt
+            services/elitea-main/scale.log
+          if-no-files-found: warn
+          retention-days: 30

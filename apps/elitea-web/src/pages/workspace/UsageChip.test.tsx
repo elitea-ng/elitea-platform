@@ -1,5 +1,8 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+
+import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { budgetLine, costOf, describeUsage, modelPrice, threadUsage, UsageChipView, type ModelPrice, type TurnUsage } from './UsageChip';
 
@@ -10,20 +13,20 @@ const priced = { name: 'gpt-x', input_cost_per_1m_tokens: 2, output_cost_per_1m_
 function shown(turns: TurnUsage[], catalogue: unknown): HTMLElement {
   const priceOf = (model: string | undefined) => modelPrice(catalogue, model);
   const latest = turns[turns.length - 1] as TurnUsage;
-  render(<UsageChipView text={describeUsage(latest, threadUsage(turns, priceOf), priceOf(latest.model), undefined)} />);
+  renderWithTheme(<UsageChipView text={describeUsage(latest, threadUsage(turns, priceOf), priceOf(latest.model), undefined)} />);
   return screen.getByTestId('usage-chip');
 }
 
 describe('UsageChip', () => {
   it('shows tokens and no currency figure when the catalogue names no price', () => {
     const chip = shown([turn()], { items: [{ name: 'gpt-x', input_cost_per_1m_tokens: null, output_cost_per_1m_tokens: null }] });
-    expect(chip).toHaveTextContent('≈ 10.5K tokens');
-    expect(chip.textContent).not.toMatch(/\$|USD/);
+    expect(chip).toHaveAccessibleName('Tokens used: ≈ 10.5K tokens');
+    expect(chip.getAttribute('aria-label')).not.toMatch(/\$|USD/);
     expect(chip).toHaveAttribute('data-cached-percent', '60');
   });
 
   it('shows the cost from the catalogue’s price', () => {
-    expect(shown([turn()], { items: [priced] })).toHaveTextContent(/0\.02 · 10\.5K tokens/);
+    expect(shown([turn()], { items: [priced] })).toHaveAccessibleName(/0\.02 · 10\.5K tokens/);
   });
 
   it('reads a price only when all of it is there', () => {
@@ -56,5 +59,15 @@ describe('UsageChip', () => {
     expect(text.detail).toContain('This thread: 10.5K tokens');
     expect(text.detail).toMatch(/Your budget: 42% of \S*100\.00 used this period/);
     expect(budgetLine({ can_see_amounts: false, effective_limit: 100, currency: 'USD' })).toBeUndefined();
+  });
+
+  it('is a ring of the context share whose click opens the Context tab', async () => {
+    const onClick = vi.fn();
+    renderWithTheme(<UsageChipView text={describeUsage(turn(), undefined, undefined, undefined)} contextPercent={42} onClick={onClick} />);
+    const ring = screen.getByTestId('usage-chip');
+    expect(ring).toHaveAttribute('data-context-percent', '42');
+    expect(screen.getAllByRole('progressbar', { hidden: true }).map((bar) => bar.getAttribute('aria-valuenow'))).toEqual(['100', '42']);
+    await userEvent.click(ring);
+    expect(onClick).toHaveBeenCalledOnce();
   });
 });

@@ -402,12 +402,16 @@ test('the other answer controls stay functional while an answer is being read', 
   await startPlayback(page);
   expect((await ttsState(page)).speaking, 'the voice must be running for this case to mean anything').toBe(true);
 
-  for (const name of ['Copy to clipboard', 'Like this answer', 'Dislike this answer', 'Regenerate', 'Delete']) {
+  for (const name of ['Copy to clipboard', 'Like this answer', 'Dislike this answer', 'Regenerate']) {
     await expect(
       page.getByRole('button', { name, exact: true }).last(),
       `${name} must stay operable while the answer is read aloud`,
     ).toBeEnabled({ timeout: 10_000 });
   }
+  // Delete is a row in the reply's ⋯ menu.
+  await page.getByTestId('chat-message-list').getByTestId('answer-more-actions').last().click();
+  await expect(page.getByRole('menuitem', { name: 'Delete', exact: true }), 'Delete must stay operable while the answer is read aloud').toBeEnabled({ timeout: 10_000 });
+  await page.keyboard.press('Escape');
   // Rating really registers mid-playback, and the voice is not disturbed by it.
   await page.getByRole('button', { name: 'Like this answer', exact: true }).last().click();
   await expect(page.getByRole('button', { name: 'Dislike this answer', exact: true }).last()).toBeEnabled();
@@ -444,7 +448,8 @@ test('deleting the answer being read stops playback', async ({ page }) => {
   await startPlayback(page);
   const before = (await ttsState(page)).cancels;
 
-  await page.getByTestId('chat-message-list').getByRole('button', { name: 'Delete', exact: true }).last().click();
+  await page.getByTestId('chat-message-list').getByTestId('answer-more-actions').last().click();
+  await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
   const dialog = page.getByTestId('chat-delete-confirm-dialog');
   await expect(dialog).toBeVisible({ timeout: 15_000 });
   await dialog.getByRole('button', { name: 'Delete', exact: true }).click();

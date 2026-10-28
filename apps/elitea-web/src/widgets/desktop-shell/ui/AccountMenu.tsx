@@ -1,0 +1,327 @@
+/**
+ * The sidebar's foot: who is signed in, to which tenant, and the menu of
+ * everything about the account and the app that is not a place to work in.
+ *
+ * The button reads "avatar · name · tenant ⌄" (the tenant is the deployment's
+ * display name, `useHostInfo`), with a separate bug button beside it that
+ * opens a prefilled GitHub issue (`lib/accountLinks.ts`). The menu opens
+ * upwards: the email, Settings (⌘,), Usage, the Elitea items moved out of the
+ * sidebar (`ACCOUNT_MENU_ITEMS`), Appearance and Language, help, what's new,
+ * Troubleshoot and Sign out.
+ *
+ * A language change saves the choice and reloads: `t()` is not reactive
+ * (`shared/i18n/locales.ts`), and the host keeps the session across a reload.
+ */
+import { useState, type ReactNode } from 'react';
+
+import BugReportOutlinedIcon from '@mui/icons-material/BugReportOutlined';
+import CheckIcon from '@mui/icons-material/Check';
+import DataUsageOutlinedIcon from '@mui/icons-material/DataUsageOutlined';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import HelpOutlineOutlinedIcon from '@mui/icons-material/HelpOutlineOutlined';
+import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
+import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined';
+import LogoutOutlinedIcon from '@mui/icons-material/LogoutOutlined';
+import MedicalServicesOutlinedIcon from '@mui/icons-material/MedicalServicesOutlined';
+import NewReleasesOutlinedIcon from '@mui/icons-material/NewReleasesOutlined';
+import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
+import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
+import Avatar from '@mui/material/Avatar';
+import Box from '@mui/material/Box';
+import ButtonBase from '@mui/material/ButtonBase';
+import IconButton from '@mui/material/IconButton';
+import Menu from '@mui/material/Menu';
+import { useColorScheme, type Theme } from '@mui/material/styles';
+import Tooltip from '@mui/material/Tooltip';
+import Typography from '@mui/material/Typography';
+
+import { performLogout } from '@/shared/api/auth';
+import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
+import { LOCALES, currentLocale, saveLocale, t, type Locale } from '@/shared/i18n';
+import { useIsUsageVisible } from '@/shared/lib/hooks/useIsUsageVisible';
+
+import { bugReportUrl, whatsNewUrl } from '../lib/accountLinks';
+import type { EliteaItem, EliteaItemValue } from '../lib/eliteaSections';
+import type { ShellAction } from '../lib/shellActions';
+import { useHostInfo } from '../model/useHostInfo';
+import { MenuDivider, MenuHeader, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText, NativeSubmenu, pressToOpen } from '@/shared/ui/native-menu';
+import { modKey } from './shortcutLabel';
+
+type ThemeMode = 'system' | 'light' | 'dark';
+
+interface CurrentAuthor {
+  name?: string;
+  email?: string;
+  avatar?: string;
+}
+
+const ITEM_ICONS: Partial<Record<EliteaItemValue, ReactNode>> = {
+  credentials: <KeyOutlinedIcon />,
+  catalog: <StorefrontOutlinedIcon />,
+};
+
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('')
+    .slice(0, 2);
+}
+
+interface Choice<T extends string> {
+  readonly value: T;
+  readonly label: string;
+}
+
+interface ChoiceSubmenuProps<T extends string> {
+  readonly icon: ReactNode;
+  readonly label: string;
+  readonly value: T;
+  readonly choices: readonly Choice<T>[];
+  readonly onChoose: (value: T) => void;
+  readonly testId: string;
+}
+
+/** A menu row that opens its choices beside it (on hover, a click, or the arrow toward the end side), the current one checked. */
+function ChoiceSubmenu<T extends string>({ icon, label, value, choices, onChoose, testId }: ChoiceSubmenuProps<T>): React.JSX.Element {
+  return (
+    <NativeSubmenu testId={testId} icon={icon} label={label} minWidth="10rem">
+      {(close) =>
+        choices.map((choice) => (
+          <MenuRow
+            key={choice.value}
+            role="menuitemradio"
+            aria-checked={choice.value === value}
+            onClick={() => {
+              close();
+              onChoose(choice.value);
+            }}
+          >
+            <MenuRowIcon>{choice.value === value ? <CheckIcon /> : null}</MenuRowIcon>
+            <MenuRowText>{choice.label}</MenuRowText>
+          </MenuRow>
+        ))
+      }
+    </NativeSubmenu>
+  );
+}
+
+function openExternally(url: string): void {
+  // In the desktop app `window.open` hands http(s) URLs to the system browser (`shared/desktop/externalLinks.ts`).
+  window.open(url, '_blank', 'noopener');
+}
+
+export interface AccountMenuProps {
+  /** The Elitea items this person can open that live in this menu (`ACCOUNT_MENU_ITEMS`). */
+  readonly items: readonly EliteaItem[];
+  readonly run: (action: ShellAction) => void;
+  /** The page on screen is one the menu leads to. */
+  readonly selected?: boolean;
+  /** Applies a new language (tests pass a spy). */
+  readonly reload?: () => void;
+}
+
+interface AccountButtonProps {
+  readonly author: CurrentAuthor;
+  readonly tenant: string | undefined;
+  readonly label: string;
+  readonly expanded: boolean;
+  /** On a page the menu leads to (Settings, Credentials, …): the sidebar's "you are here". */
+  readonly selected: boolean;
+  readonly onOpen: (anchor: HTMLElement) => void;
+}
+
+/** "avatar · name · tenant ⌄": the person, the deployment they are connected to, and the menu's disclosure. */
+function AccountButton({ author, tenant, label, expanded, selected, onOpen }: AccountButtonProps): React.JSX.Element {
+  // An SSO account may carry only an email.
+  const name = author.name || author.email || '';
+  return (
+    <ButtonBase
+      data-testid="shell-account"
+      aria-haspopup="menu"
+      aria-expanded={expanded}
+      aria-label={label}
+      {...pressToOpen(onOpen)}
+      sx={(theme: Theme) => ({
+        flex: 1,
+        minWidth: 0,
+        justifyContent: 'flex-start',
+        gap: 1,
+        paddingX: 1,
+        paddingY: 0.75,
+        borderRadius: theme.vars.shape.radiusSm,
+        color: theme.vars.palette.text.secondary,
+        background: selected ? theme.vars.palette.background.button.drawerMenu.selected : 'transparent',
+        '&:hover': { background: theme.vars.palette.background.button.drawerMenu.hover },
+      })}
+    >
+      <Avatar src={author.avatar || undefined} alt={name} sx={{ width: '1.5rem', height: '1.5rem', fontSize: '0.6875rem' }}>
+        {initials(name)}
+      </Avatar>
+      <Typography variant="labelSmall" component="span" noWrap sx={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+        {name}
+        {tenant !== undefined && (
+          <Box
+            component="span"
+            data-testid="shell-account-tenant"
+            sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics, '&::before': { content: '" · "' } })}
+          >
+            {tenant}
+          </Box>
+        )}
+      </Typography>
+      <ExpandMoreIcon sx={{ width: '1rem', height: '1rem', flexShrink: 0 }} />
+    </ButtonBase>
+  );
+}
+
+function reloadPage(): void {
+  window.location.reload();
+}
+
+export function AccountMenu({ items, run, selected = false, reload = reloadPage }: AccountMenuProps): React.JSX.Element {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const { data } = useGetCurrentAuthor();
+  const author = (data?.data ?? {}) as CurrentAuthor;
+  const { tenant, version } = useHostInfo();
+  const usageVisible = useIsUsageVisible();
+  const { mode, setMode } = useColorScheme();
+  const close = (): void => setAnchor(null);
+  const go = (to: string): void => {
+    close();
+    run({ type: 'go', to });
+  };
+  const help = items.find((item) => item.value === 'help');
+  const reportBug = (): void => {
+    close();
+    openExternally(bugReportUrl({ version, userAgent: navigator.userAgent, locale: currentLocale() }));
+  };
+  const chooseTheme = (next: ThemeMode): void => {
+    close();
+    // As the Settings toggle does (`shared/ui/ThemeModeToggle.tsx`): applied at once, then stored for the user's other clients.
+    setMode(next);
+    void import('@/shared/api/themePreference')
+      .then(({ saveThemePreference }) => saveThemePreference(next))
+      .catch(() => undefined);
+  };
+  const chooseLanguage = (next: Locale): void => {
+    close();
+    if (next === currentLocale()) return;
+    saveLocale(next);
+    reload();
+  };
+  const menuLabel = t('desktop.account.menu', 'Account menu');
+  const bugLabel = t('desktop.account.reportBug', 'Report a bug');
+
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+      <AccountButton author={author} tenant={tenant} label={menuLabel} expanded={anchor !== null} selected={selected} onOpen={setAnchor} />
+      <Tooltip title={bugLabel}>
+        <IconButton size="small" aria-label={bugLabel} data-testid="shell-report-bug" onClick={reportBug}>
+          <BugReportOutlinedIcon fontSize="inherit" />
+        </IconButton>
+      </Tooltip>
+      <Menu
+        anchorEl={anchor}
+        open={anchor !== null}
+        onClose={close}
+        anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
+        transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        slotProps={{ list: { dense: true, 'aria-label': menuLabel }, paper: { sx: { minWidth: '15rem' } } }}
+      >
+        {author.email !== undefined && author.email !== '' && (
+          <MenuHeader>{author.email}</MenuHeader>
+        )}
+        <MenuRow onClick={() => go('/settings')}>
+          <MenuRowIcon>
+            <SettingsOutlinedIcon />
+          </MenuRowIcon>
+          <MenuRowText>{t('desktop.shell.settings', 'Settings')}</MenuRowText>
+          <MenuRowHint component="kbd">{`${modKey()},`}</MenuRowHint>
+        </MenuRow>
+        {usageVisible && (
+          <MenuRow onClick={() => go('/settings/usage')}>
+            <MenuRowIcon>
+              <DataUsageOutlinedIcon />
+            </MenuRowIcon>
+            <MenuRowText>{t('desktop.account.usage', 'Usage')}</MenuRowText>
+          </MenuRow>
+        )}
+        {items
+          .filter((item) => item.value !== 'help')
+          .map((item) => (
+            <MenuRow key={item.value} data-testid={`shell-account-${item.value}`} onClick={() => go(item.url)}>
+              <MenuRowIcon>{ITEM_ICONS[item.value]}</MenuRowIcon>
+              <MenuRowText>{item.label}</MenuRowText>
+            </MenuRow>
+          ))}
+        <MenuDivider />
+        <ChoiceSubmenu<ThemeMode>
+          testId="shell-account-appearance"
+          icon={<PaletteOutlinedIcon />}
+          label={t('desktop.account.appearance', 'Appearance')}
+          value={mode ?? 'system'}
+          choices={[
+            { value: 'system', label: t('shared.ui.themeModeToggle.system', 'System') },
+            { value: 'light', label: t('shared.ui.themeModeToggle.light', 'Light') },
+            { value: 'dark', label: t('shared.ui.themeModeToggle.dark', 'Dark') },
+          ]}
+          onChoose={chooseTheme}
+        />
+        <ChoiceSubmenu<Locale>
+          testId="shell-account-language"
+          icon={<LanguageOutlinedIcon />}
+          label={t('desktop.account.language', 'Language')}
+          value={currentLocale()}
+          choices={LOCALES.map(({ code, label }) => ({ value: code, label }))}
+          onChoose={chooseLanguage}
+        />
+        <MenuDivider />
+        {help !== undefined && (
+          <MenuRow onClick={() => go(help.url)}>
+            <MenuRowIcon>
+              <HelpOutlineOutlinedIcon />
+            </MenuRowIcon>
+            <MenuRowText>{t('desktop.account.getHelp', 'Get help')}</MenuRowText>
+          </MenuRow>
+        )}
+        <MenuRow
+          data-testid="shell-account-whats-new"
+          onClick={() => {
+            close();
+            openExternally(whatsNewUrl(version));
+          }}
+        >
+          <MenuRowIcon>
+            <NewReleasesOutlinedIcon />
+          </MenuRowIcon>
+          <MenuRowText>{t('desktop.account.whatsNew', 'What’s new')}</MenuRowText>
+          {version !== undefined && (
+            <MenuRowHint>{version}</MenuRowHint>
+          )}
+        </MenuRow>
+        <MenuRow onClick={() => go('/settings/troubleshoot')}>
+          <MenuRowIcon>
+            <MedicalServicesOutlinedIcon />
+          </MenuRowIcon>
+          <MenuRowText>{t('desktop.account.troubleshoot', 'Troubleshoot')}</MenuRowText>
+        </MenuRow>
+        <MenuDivider />
+        <MenuRow
+          data-testid="shell-account-sign-out"
+          onClick={() => {
+            close();
+            performLogout();
+          }}
+        >
+          <MenuRowIcon>
+            <LogoutOutlinedIcon />
+          </MenuRowIcon>
+          <MenuRowText>{t('desktop.account.signOut', 'Sign out')}</MenuRowText>
+        </MenuRow>
+      </Menu>
+    </Box>
+  );
+}

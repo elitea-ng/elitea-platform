@@ -75,6 +75,11 @@
     "description": "Console and operator settings: identity, e-mail, egress, budgets, workers, observability and maintenance."
   },
   {
+    "slug": "deployment/credential-governance-runbook",
+    "title": "Credential governance runbook",
+    "description": "Operating the governed credential profile: prerequisites, the enable order (governed workers first, then the flag), staging credential references with migrate-references, activation and attachment, drain, rollback checks, and incident response by revoking a binding, mandate, grant or credential reference."
+  },
+  {
     "slug": "deployment/credential-governance",
     "title": "Enterprise credential governance",
     "description": "The off-by-default governed credential profile: the boot flag, policy revisions, the execution security context and governed workers, agent identity bindings, external identities, credential grants, Entra delegation, the credential broker, the Vault/OpenBao secret store and the security audit chain."
@@ -381,7 +386,7 @@
   },
   {
     "slug": "",
-    "title": "Elitea Docs",
+    "title": "Elitea AI Docs",
     "description": "Elitea is a platform for building, running, and sharing AI agents, pipelines, and toolkits inside your projects."
   },
   {
@@ -663,6 +668,11 @@
     "slug": "menus/settings/analytics-and-usage",
     "title": "Analytics and usage",
     "description": "Review project-wide adoption, cost, and health metrics, and track budget consumption for the project or yourself."
+  },
+  {
+    "slug": "menus/settings/desktop-account-menu",
+    "title": "Desktop account menu",
+    "description": "The account button at the foot of the desktop app's sidebar: settings, usage, credentials, catalog, appearance, language, help, release notes, troubleshooting, sign-out, and bug reports."
   },
   {
     "slug": "menus/settings/memory",

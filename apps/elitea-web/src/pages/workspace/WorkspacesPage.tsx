@@ -22,7 +22,7 @@ import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutl
 
 import { WorkspaceList, describeWorkspaceError, useWorkspaceIpc } from '@/features/workspace';
 import { WorkspaceIndexControl } from '@/features/workspace-index';
-import { toWorkspaceIpcError, type Workspace } from '@/shared/desktop/workspaceIpc';
+import { openedFolders, toWorkspaceIpcError, type Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { folderContextActions, ProjectPickerSheet, ShowSidebarButton, TitleBarSpacer, useAppIpc, useContextMenu, useDesktopLayout, type ContextAction } from '@/widgets/desktop-shell';
 
@@ -62,7 +62,7 @@ export default function WorkspacesPage(): React.JSX.Element {
     onSuccess: refresh,
   });
 
-  const workspaces = useMemo(() => list.data ?? [], [list.data]);
+  const workspaces = useMemo(() => openedFolders(list.data ?? []), [list.data]);
   const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);
 
   if (ipc === undefined) {

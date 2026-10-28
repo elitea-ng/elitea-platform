@@ -22,8 +22,8 @@ export const contentWrapperSx: SxProps<Theme> = {
 export function contentBackgroundSx(showSplitView: boolean): SxProps<Theme> {
   return (theme) =>
     showSplitView
-      ? { background: `linear-gradient(90deg, ${theme.vars.palette.background.secondary} 0%, ${theme.vars.palette.background.card.hover} 100%)` }
-      : { background: `linear-gradient(90deg, ${theme.vars.palette.background.tabPanel} 0%, ${theme.vars.palette.background.default} 100%)` };
+      ? { background: theme.vars.palette.background.secondary }
+      : { background: theme.vars.palette.background.default };
 }
 
 export const splitViewContainerSx: SxProps<Theme> = {

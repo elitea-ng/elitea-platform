@@ -28,11 +28,11 @@ export function agentEditorPanelStyles(isSmallView: boolean) {
     buttonRow: {
       display: 'flex',
       alignItems: 'center',
-      minWidth: 0,
-      maxWidth: '100%',
       // Stops the group being flex-shrunk below its buttons' real content
       // width in the first place — see `outerContainer`'s own comment for
-      // what shrinking it silently caused.
+      // what shrinking it silently caused. No `maxWidth: 100%` either: in a
+      // narrow composer that cap did the same, the last buttons spilling
+      // out under `SwitchToModelButton` (ELITEA-0386 timed out on it).
       flexShrink: 0,
     },
     entityIconWrapper: {

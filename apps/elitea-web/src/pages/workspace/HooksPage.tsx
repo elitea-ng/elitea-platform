@@ -9,6 +9,7 @@ import { useMemo, useState } from 'react';
 import { useWorkspaceIpc } from '@/features/workspace';
 import { HooksPanel } from '@/features/workspace-hooks';
 import { tauriHooksIpc, type HooksIpc } from '@/shared/desktop/hooksIpc';
+import { openedFolders } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
 export default function HooksPage({ ipc }: { ipc?: HooksIpc }): React.JSX.Element {
@@ -16,7 +17,7 @@ export default function HooksPage({ ipc }: { ipc?: HooksIpc }): React.JSX.Elemen
   const workspaceIpc = useWorkspaceIpc();
   const list = useQuery({ queryKey: ['workspace', 'list'], queryFn: () => workspaceIpc?.list() ?? Promise.resolve([]), enabled: workspaceIpc !== undefined });
   const [picked, setPicked] = useState<string | null>(null);
-  const workspaces = list.data ?? [];
+  const workspaces = openedFolders(list.data ?? []);
   const workspaceId = picked ?? workspaces[0]?.id ?? null;
   return (
     <Stack spacing={2} sx={{ p: 3, maxWidth: 860 }}>

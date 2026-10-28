@@ -369,14 +369,14 @@ describe('MuiChip — slot-to-token wiring', () => {
    * `shape.radiusLg` is 16, which states the same number where a brand pack
    * can see it (issue 841).
    */
-  it('pins the chip radius on shape.radiusLg, the token that equals the measured 16px', () => {
+  it('pins the chip radius on shape.radiusLg (14px since brand guide v3; the baseline measured 16px)', () => {
     const rootStyle = muiChip.styleOverrides?.root;
     if (typeof rootStyle !== 'function') {
       throw new Error('MuiChip.styleOverrides.root is not a function');
     }
     const resolved = rootStyle({ theme } as never) as StyleObject;
     expect(resolved.borderRadius).toBe(theme.vars?.shape.radiusLg);
-    expect(theme.shape.radiusLg).toBe(16);
+    expect(theme.shape.radiusLg).toBe(14);
   });
 
   /**

@@ -257,7 +257,7 @@ describe('ApplicationAnswer caption line and reasoning summary', () => {
     ],
   } as unknown as ChatMessage;
 
-  it('captions the answer with the participant, the reply-to link and the time', () => {
+  it('draws the reply as plain text with no caption line, the thinking first and the time in the action row', () => {
     renderWithTheme(
       <ApplicationAnswer
         answer={withActions}
@@ -267,11 +267,35 @@ describe('ApplicationAnswer caption line and reasoning summary', () => {
       />,
     );
 
-    const header = screen.getByTestId('chat-message-header');
-    expect(header.textContent).toContain('Elitea');
-    expect(screen.getByTestId('chat-message-recipient').textContent).toBe('Message');
-    expect(screen.getByTestId('chat-message-time')).toBeInTheDocument();
+    // No `<mark> Elitea to Message` line: one assistant needs no name.
+    expect(screen.queryByTestId('chat-message-author')).toBeNull();
+    expect(screen.queryByTestId('chat-message-avatar')).toBeNull();
+    expect(screen.queryByText('Elitea')).toBeNull();
+    // Thinking, then the text, then the row that ends in the time.
+    const thinking = screen.getByRole('button', { name: /Thought for/ });
+    const text = screen.getByText('Hello! How can I help you today?');
+    expect(thinking.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const time = screen.getByTestId('chat-message-time');
+    expect(time.closest('[data-reply-actions]')).not.toBeNull();
+    expect(text.compareDocumentPosition(time) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('captions the reply with the participant only when the list says several assistants answer here', () => {
+    renderWithTheme(
+      <ApplicationAnswer answer={withActions} messageId={withActions.id} author={{ participantName: 'Pipeline Alpha', showCaption: true }} />,
+    );
+
+    expect(screen.getByTestId('chat-message-author')).toHaveTextContent('Pipeline Alpha');
     expect(screen.getByTestId('chat-message-avatar')).toBeInTheDocument();
+  });
+
+  it('moves the "Using N memories" chip into the action row', () => {
+    const answer = { ...withActions, memoriesUsed: 2 } as unknown as ChatMessage;
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} author={{ participantName: 'Elitea' }} />);
+
+    const chip = screen.getByTestId('chat-message-memories-used');
+    expect(chip).toHaveTextContent('Using 2 memories');
+    expect(chip.closest('[data-reply-actions]')).not.toBeNull();
   });
 
   it('collapses the reasoning behind a "Thought for ..." summary instead of dumping it inline', () => {
@@ -299,7 +323,7 @@ describe('ApplicationAnswer caption line and reasoning summary', () => {
     expect(panel?.className).toContain('MuiCollapse-hidden');
   });
 
-  it('still opens the reasoning panel of a turn the reader WATCHED stream', async () => {
+  it('opens the reasoning panel of a turn the reader WATCHED stream, on demand', async () => {
     // The regression the toolkit journey caught, and the reason a click test
     // on a freshly-mounted row could not: this panel mounts with its first
     // action, which arrives while the turn is still streaming. MUI decides
@@ -323,8 +347,8 @@ describe('ApplicationAnswer caption line and reasoning summary', () => {
       />,
     );
 
-    // While the turn runs the panel is forced open, as in the baseline.
-    expect(screen.getByRole('button', { name: /Thought for/ }).getAttribute('aria-expanded')).toBe('true');
+    // Folded while the turn runs: the reader opens it on demand.
+    expect(screen.getByRole('button', { name: /Thought for/ }).getAttribute('aria-expanded')).toBe('false');
 
     rerender(
       <ApplicationAnswer
@@ -336,13 +360,11 @@ describe('ApplicationAnswer caption line and reasoning summary', () => {
       />,
     );
 
-    // Reference `ApplicationThinkView.jsx`: a live tree stays expanded when
-    // it settles, and the reader owns it from then on.
+    // Still folded once the turn settles; the summary stays live, so the
+    // reader can open it.
     const summary = screen.getByRole('button', { name: /Thought for/ });
-    expect(summary.getAttribute('aria-expanded')).toBe('true');
-
-    await user.click(summary);
     expect(summary.getAttribute('aria-expanded')).toBe('false');
+
     await user.click(summary);
     expect(summary.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('The user is greeting me.')).toBeVisible();
@@ -415,8 +437,9 @@ describe('ApplicationAnswer "Open as document" action (issue #879)', () => {
       />,
     );
 
-    const button = screen.getByTestId('answer-open-as-document');
-    await user.click(button);
+    // A row in the reply's ⋯ menu.
+    await user.click(screen.getByTestId('answer-more-actions'));
+    await user.click(screen.getByTestId('answer-open-as-document'));
 
     expect(onCreateCanvasFromSelection).toHaveBeenCalledWith({
       messageGroupUuid: answer.id,

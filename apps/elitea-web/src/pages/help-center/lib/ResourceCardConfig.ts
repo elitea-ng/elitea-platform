@@ -28,6 +28,7 @@ import { VideoIcon } from '@/shared/ui/icons/video-icon';
 // Tour target ids — ported from interactive-tours constants (already built).
 import { RESOURCES_TOUR_TARGET_IDS } from '@/features/interactive-tours';
 import { docsLink } from '@/shared/brand';
+import { t } from '@/shared/i18n';
 
 /**
  * #891 (issues 890-891, ELITEA-0967/0972/0973/0975): every card's link list
@@ -92,7 +93,6 @@ export const RESOURCE_CARD_CONFIGS: ReadonlyArray<ResourceCardConfig> = [
     defaultDescription: 'API reference, guides, and platform concepts',
     Icon: FileIcon,
     linksKey: 'resources_documentation_links',
-    colorScheme: 'blue',
     tourTargetId: RESOURCES_TOUR_TARGET_IDS.documentationCard,
     defaultLinks: DOCUMENTATION_LINKS,
   },
@@ -100,11 +100,10 @@ export const RESOURCE_CARD_CONFIGS: ReadonlyArray<ResourceCardConfig> = [
     enabledKey: 'resources_release_notes_enabled',
     titleKey: 'resources_release_notes_title',
     descriptionKey: 'resources_release_notes_description',
-    defaultTitle: 'Release Notes',
+    defaultTitle: 'Release notes',
     defaultDescription: 'Product updates, improvements, and fixes',
     Icon: RocketIcon,
     linksKey: 'resources_release_notes_links',
-    colorScheme: 'orange',
     tourTargetId: RESOURCES_TOUR_TARGET_IDS.releaseNotesCard,
     defaultLinks: RELEASE_NOTES_LINKS,
   },
@@ -112,11 +111,15 @@ export const RESOURCE_CARD_CONFIGS: ReadonlyArray<ResourceCardConfig> = [
     enabledKey: 'resources_video_library_enabled',
     titleKey: 'resources_video_library_title',
     descriptionKey: 'resources_video_library_description',
-    defaultTitle: 'Video Library',
+    defaultTitle: 'Video library',
     defaultDescription: 'Product walkthroughs and recorded sessions',
     Icon: VideoIcon,
     linksKey: 'resources_video_library_links',
-    colorScheme: 'purple',
+    emptyMessage: () =>
+      t(
+        'pages.helpCenter.empty.videoLibrary',
+        'No videos yet. An administrator can add links in Admin › Features › Help Center.',
+      ),
     tourTargetId: RESOURCES_TOUR_TARGET_IDS.videoLibraryCard,
   },
   {
@@ -127,7 +130,6 @@ export const RESOURCE_CARD_CONFIGS: ReadonlyArray<ResourceCardConfig> = [
     defaultDescription: 'Step-by-step guides and use cases',
     Icon: TutorialsIcon,
     linksKey: 'resources_tutorials_links',
-    colorScheme: 'green',
     tourTargetId: RESOURCES_TOUR_TARGET_IDS.tutorialsCard,
     defaultLinks: TUTORIALS_LINKS,
   },
@@ -135,11 +137,15 @@ export const RESOURCE_CARD_CONFIGS: ReadonlyArray<ResourceCardConfig> = [
     enabledKey: 'resources_interactive_tours_enabled',
     titleKey: 'resources_interactive_tours_title',
     descriptionKey: 'resources_interactive_tours_description',
-    defaultTitle: 'Interactive Tours',
+    defaultTitle: 'Interactive tours',
     defaultDescription: 'Guided tours to explore key features and workflows',
     Icon: VideoIcon,
     linksKey: 'resources_interactive_tours_links',
-    colorScheme: 'pink',
+    emptyMessage: () =>
+      t(
+        'pages.helpCenter.empty.interactiveTours',
+        'No tours yet. An administrator can add links in Admin › Features › Help Center.',
+      ),
     tourTargetId: RESOURCES_TOUR_TARGET_IDS.interactiveToursCard,
   },
 ];

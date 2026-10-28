@@ -52,9 +52,20 @@ type TokenSource struct {
 	grants  *Grants
 	leases  *refresh.Leases
 	coord   *refresh.Coordinator
-	clients map[string]*Client
+	clients map[string]Refresher
 	skew    time.Duration
 	now     func() time.Time
+}
+
+// Refresher trades one grant's refresh token for new tokens. *Client is
+// the refresher of a provider with one OAuth application; a provider whose
+// token endpoint differs per target (a remote MCP server, #1123) seals
+// what its refresh needs into the refresh token it hands the grant, and
+// opens it again here.
+type Refresher interface {
+	Provider() string
+	Timeout() time.Duration
+	Refresh(ctx context.Context, refreshToken string) (TokenResponse, error)
 }
 
 // TokenSourceConfig is the token source's dependencies.
@@ -64,6 +75,9 @@ type TokenSourceConfig struct {
 	Coordinator *refresh.Coordinator
 	// Clients are keyed by provider type.
 	Clients []*Client
+	// Refreshers are the providers with no single client (keyed by provider
+	// type like Clients; a provider in both is configured twice).
+	Refreshers []Refresher
 	// Skew defaults to DefaultSkew.
 	Skew time.Duration
 }
@@ -73,8 +87,16 @@ func NewTokenSource(cfg TokenSourceConfig) (*TokenSource, error) {
 	if cfg.Grants == nil || cfg.Leases == nil || cfg.Coordinator == nil {
 		return nil, errors.New("provideroauth: grants, leases and a refresh coordinator are required")
 	}
-	clients := make(map[string]*Client, len(cfg.Clients))
+	all := make([]Refresher, 0, len(cfg.Clients)+len(cfg.Refreshers))
 	for _, c := range cfg.Clients {
+		if c == nil {
+			return nil, errors.New("provideroauth: a nil provider client")
+		}
+		all = append(all, c)
+	}
+	all = append(all, cfg.Refreshers...)
+	clients := make(map[string]Refresher, len(all))
+	for _, c := range all {
 		if c == nil {
 			return nil, errors.New("provideroauth: a nil provider client")
 		}
@@ -149,7 +171,7 @@ func tokenOf(s snapshot) AccessToken {
 	return AccessToken{Token: s.AccessToken, ExpiresAt: s.ExpiresAt, GrantID: s.ID, Generation: s.Generation}
 }
 
-func (s *TokenSource) refresh(ctx context.Context, client *Client, lease refresh.Lease, snap snapshot) (AccessToken, error) {
+func (s *TokenSource) refresh(ctx context.Context, client Refresher, lease refresh.Lease, snap snapshot) (AccessToken, error) {
 	refreshToken, err := s.grants.openRefresh(snap)
 	if err != nil {
 		return AccessToken{}, err

@@ -10,8 +10,9 @@ import type { ActionPlan } from '@/features/chat/actions/messageActions';
 import type { ChatMessage } from '@/features/chat/messageModel';
 import { haptic, IconButton, type IconName } from '@/ui';
 
-/** The action row's buttons: 36 pt visuals in 44/48 targets (§4.6). */
-const BUTTON = 36;
+/** The action row's buttons: 32 pt visuals in 44/48 targets (§4.6); the glyphs small and outlined. */
+const BUTTON = 32;
+const GLYPH = 16;
 
 export interface AnswerActionsProps {
   message: ChatMessage;
@@ -40,8 +41,10 @@ export interface AnswerActionsProps {
 
 /**
  * The action row under a finished answer, as in the reference (docs/design-system.md §4.6):
- * copy, like, dislike and read aloud on the left, regenerate (newest answer only) and the
- * "…" menu on the right. Only what the workspace offers is drawn: copy needs
+ * one compact, quiet row below the bubble, left-aligned: copy, like, dislike, read aloud,
+ * regenerate (newest answer only), then the "…" menu with the rest (copy code, share, fork).
+ * The screen draws it under the latest answer; an older one shows it on a long press (the
+ * actions sheet) or while a screen reader runs. Only what the workspace offers is drawn: copy needs
  * `allow_share_out`, like/dislike client contract 1.3 and a persisted answer, regenerate
  * the screen's own checks; never a dead button. Like and dislike are toggles
  * (`accessibilityState.selected`, filled glyph in the accent). At accessibility text sizes the
@@ -115,8 +118,8 @@ export function AnswerActions({
       icon={icon}
       variant="plain"
       size={BUTTON}
-      iconSize={18}
-      iconColor={extra.selected ? colors.accent : colors.textSecondary}
+      iconSize={GLYPH}
+      iconColor={extra.selected ? colors.accent : colors.textTertiary}
       selected={extra.selected}
       disabled={extra.disabled}
       accessibilityLabel={label}
@@ -126,11 +129,17 @@ export function AnswerActions({
   );
 
   const more = button('more', 'more', 'Answer actions', onMore, { hint: 'Copy code, share, feedback and more' });
-  if (design.accessibilityLayout) return <View style={styles.row}>{more}</View>;
+  if (design.accessibilityLayout) {
+    return (
+      <View style={styles.row} testID="answer-actions">
+        {more}
+      </View>
+    );
+  }
 
-  // The reference's order: copy, like, dislike, read aloud.
-  const order: ActionPlan['actions'] = ['copy', 'like', 'dislike', 'read_aloud'];
-  const left = order.filter((action) => plan.actions.includes(action)).flatMap((action) => {
+  // The reference's order: copy, like, dislike, read aloud, regenerate, then "…".
+  const order: ActionPlan['actions'] = ['copy', 'like', 'dislike', 'read_aloud', 'regenerate'];
+  const buttons = order.filter((action) => plan.actions.includes(action)).flatMap((action) => {
     switch (action) {
       case 'copy':
         return [button('copy', 'copy', 'Copy answer', () => void copy())];
@@ -156,22 +165,22 @@ export function AnswerActions({
             ? button('read', 'speakerOff', 'Stop reading answer', onStopReading, { selected: true })
             : button('read', 'readAloud', 'Read answer aloud', onReadAloud),
         ];
+      case 'regenerate':
+        return [button('regenerate', 'regenerate', 'Regenerate', onRegenerate)];
       default:
         return [];
     }
   });
   return (
     <View style={styles.row} testID="answer-actions">
-      <View style={styles.group}>{left}</View>
-      <View style={styles.group}>
-        {plan.actions.includes('regenerate') ? button('regenerate', 'regenerate', 'Regenerate', onRegenerate) : null}
-        {more}
-      </View>
+      {buttons}
+      {more}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', marginTop: -2 },
-  group: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  // The 44 pt frames touch; the small glyphs inside them keep the row quiet. Pulled in so the
+  // first glyph lines up with the bubble's text rather than its frame.
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', flexWrap: 'wrap', gap: 0, marginTop: -6, marginStart: -6 },
 });

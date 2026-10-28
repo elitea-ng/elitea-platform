@@ -1,7 +1,9 @@
 /**
  * The thread's tabs in the frame's inspector (toggle ⌘⌥\): Changes — what
- * the thread's turns changed, newest first: diff, Reveal in Finder / Open,
- * and for a turn the host still keeps per-file revert and undo; Approvals —
+ * the thread's turns changed, newest first, one folding header per turn
+ * (older turns start folded) over one-line file rows: a click shows the
+ * diff; Reveal in Finder / Open, and for a turn the host still keeps
+ * per-file revert and undo, show on hover or focus; Approvals —
  * the approvals of this thread (the one being asked is a modal dialog; the
  * tab shows the queue behind it and what was decided); Plan — the agent's
  * checklist (offered once it keeps one, or in plan mode); Processes — the
@@ -115,19 +117,6 @@ function PathActions({ appIpc, workspaceId, path }: { appIpc: AppIpc; workspaceI
   );
 }
 
-function TurnLabel({ text }: { text: string }): React.JSX.Element {
-  return (
-    <Typography
-      variant="labelSmall"
-      component="h3"
-      title={text}
-      sx={(theme: Theme) => ({ margin: 0, color: theme.vars.palette.text.secondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' })}
-    >
-      {text}
-    </Typography>
-  );
-}
-
 function ChangesPane({ ipc, appIpc, workspaceId, changeSets, undoTurnId, undoRequest }: Pick<SessionPanelProps, 'ipc' | 'appIpc' | 'workspaceId' | 'changeSets' | 'undoTurnId' | 'undoRequest'>): React.JSX.Element {
   const showMenu = useContextMenu();
   const fileMenu = (file: { path: string }, event: React.MouseEvent): void =>
@@ -144,23 +133,25 @@ function ChangesPane({ ipc, appIpc, workspaceId, changeSets, undoTurnId, undoReq
       </Typography>
     );
   }
+  // Newest first: the newest turn starts expanded, older ones folded to their one-line header.
   return (
-    <>
-      {changeSets.map((set) => (
-        <Box key={set.turnId} component="section" data-testid="panel-turn-changes" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-          {changeSets.length > 1 && set.label !== '' && <TurnLabel text={set.label} />}
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, marginX: -1 }}>
+      {changeSets.map((set, index) => (
+        <Box key={set.turnId} data-testid="panel-turn-changes">
           <ChangedFilesCard
             ipc={ipc}
             turnId={set.turnId}
             files={set.files}
             undoRequest={set.turnId === undoTurnId ? undoRequest : 0}
             variant="panel"
+            label={set.label}
+            defaultExpanded={index === 0}
             onFileContextMenu={fileMenu}
             fileActions={appIpc === undefined ? undefined : (file) => <PathActions appIpc={appIpc} workspaceId={workspaceId} path={file.path} />}
           />
         </Box>
       ))}
-    </>
+    </Box>
   );
 }
 

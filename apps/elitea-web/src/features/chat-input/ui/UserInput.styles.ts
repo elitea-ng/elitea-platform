@@ -34,7 +34,46 @@ export const stopIconStyle = { width: '1rem', height: '1rem' };
  * `background.onboardingBody`). It is chosen for those VALUES, which match the
  * baseline pair exactly in both schemes, not for its name.
  */
-export function userInputStyles(isFocused: boolean, isDragOver: boolean, isRecording: boolean) {
+/**
+ * The desktop's composer (`native`): a plain text box the way a native app
+ * draws one — a hairline border, an accent ring on focus, no gradient rim
+ * or glow — with 20px lines (`COMPOSER_LINE_PX`, the resize handle's step)
+ * and a compact footer row.
+ */
+function nativeContainer(theme: Theme, isFocused: boolean, isDragOver: boolean, isRecording: boolean) {
+  const active = isFocused || isRecording;
+  return {
+    display: 'flex',
+    flexDirection: 'column',
+    width: '100%',
+    padding: '.5rem .5rem .375rem .75rem',
+    alignItems: 'flex-start',
+    borderRadius: theme.vars.shape.radiusMd,
+    background: isDragOver ? theme.vars.palette.background.button.drawerMenu.hover : theme.vars.palette.background.card.hover,
+    border: `1px ${isDragOver ? 'dashed' : 'solid'} ${active || isDragOver ? theme.vars.palette.primary.main : theme.vars.palette.divider}`,
+    // The focus ring: the accent border doubled, as a native text view draws it.
+    boxShadow: active ? `0 0 0 1px ${theme.vars.palette.primary.main}` : 'none',
+    boxSizing: 'border-box',
+    gap: '.375rem',
+    transition: 'border-color 120ms, box-shadow 120ms',
+    position: 'relative',
+  };
+}
+
+export function userInputStyles(isFocused: boolean, isDragOver: boolean, isRecording: boolean, native = false) {
+  const base = webUserInputStyles(isFocused, isDragOver, isRecording);
+  if (!native) return base;
+  return {
+    ...base,
+    gradientBorder: (theme: Theme) => ({ width: '100%', padding: '0', borderRadius: theme.vars.shape.radiusMd, background: 'transparent' }),
+    container: (theme: Theme) => nativeContainer(theme, isFocused, isDragOver, isRecording),
+    mirrorDiv: { ...base.mirrorDiv, lineHeight: '1.25rem' },
+    textField: { ...base.textField, lineHeight: '1.25rem' },
+    footer: { ...base.footer, minHeight: '1.75rem' },
+  };
+}
+
+function webUserInputStyles(isFocused: boolean, isDragOver: boolean, isRecording: boolean) {
   const getInputBackground = (theme: Theme): string =>
     isFocused || isRecording
       ? theme.vars.palette.background.card.hover
@@ -42,8 +81,10 @@ export function userInputStyles(isFocused: boolean, isDragOver: boolean, isRecor
 
   const getInputBorder = (theme: Theme): string => {
     if (isRecording) return theme.vars.palette.primary.main;
-    if (!isFocused) return 'transparent';
-    return `linear-gradient(0deg, ${theme.vars.palette.background.userInputBorderDark} 0%, ${theme.vars.palette.background.userInputBorderLight} 100%)`;
+    // Control boundary at rest (brand guide v3: borderStrong, ≥3:1).
+    if (!isFocused) return theme.vars.palette.border.hover;
+    // Flat focus ring colour (brand guide v3: no gradients in UI chrome).
+    return theme.vars.palette.background.userInputBorderLight;
   };
 
   return {
@@ -68,7 +109,9 @@ export function userInputStyles(isFocused: boolean, isDragOver: boolean, isRecor
       background: isDragOver ? `${theme.vars.palette.primary.main}15` : getInputBackground(theme),
       border: isDragOver
         ? `0.125rem dashed ${theme.vars.palette.primary.main}`
-        : `0.0625rem solid ${isFocused || isRecording ? 'transparent' : theme.vars.palette.border.lines}`,
+        : // The wrapper's 1px padding draws the one edge (borderStrong at rest);
+          // a second line here would double it.
+          '0.0625rem solid transparent',
       boxSizing: 'border-box',
       gap: '1.5rem',
       transition: 'all 0.2s ease-in-out',
@@ -76,6 +119,11 @@ export function userInputStyles(isFocused: boolean, isDragOver: boolean, isRecor
       ...(isDragOver && { boxShadow: `0 0.25rem 0.75rem ${theme.vars.palette.primary.main}30` }),
     }),
     textFieldWrapper: {
+      // Kerning a long unbroken run in a variable web font costs ~100x a plain
+      // layout (437 ms vs 4 ms for a 100k-character paste, measured in Chromium);
+      // the composer and its mirror both turn it off so their glyphs stay aligned.
+      fontKerning: 'none',
+      '& textarea': { fontKerning: 'none' },
       flex: 1,
       display: 'flex',
       flexDirection: 'column',
@@ -96,6 +144,7 @@ export function userInputStyles(isFocused: boolean, isDragOver: boolean, isRecor
       fontWeight: 500,
       lineHeight: '1.5rem',
       fontFamily: 'inherit',
+      fontKerning: 'none',
       '&::-webkit-scrollbar': { display: 'none' },
       scrollbarWidth: 'none',
     },
@@ -150,4 +199,4 @@ export function userInputStyles(isFocused: boolean, isDragOver: boolean, isRecor
   };
 }
 
-export type UserInputStyles = ReturnType<typeof userInputStyles>;
+export type UserInputStyles = ReturnType<typeof webUserInputStyles>;

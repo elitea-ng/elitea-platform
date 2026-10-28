@@ -813,7 +813,16 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 381 -> 383 (issue 1121, ADR-0039): startCredentialConsent and
 // completeCredentialConsent, the provider OAuth consent flow. No web code
 // calls any of the three yet, so the manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 383;
+// 383 -> 389 (issue 1122, ADR-0039): attach/detachPipelineScheduleMandate,
+// attach/detachPipelineTriggerMandate and attach/detachIndexScheduleMandate,
+// the mandate attachments of unattended runs. Admin routes are not in the
+// manifest, so its count is unchanged.
+// 389 -> 397 (issue 1124, ADR-0039): listCredentialReferences,
+// getCredentialReference, activate/retire/attach/detachCredentialReference
+// and pin/unpinAgentToolkit, the credential reference lifecycle and agent
+// toolkit binding admin API. Admin routes are not in the manifest, so its
+// count is unchanged.
+const GENERATED_OPERATION_COUNT = 397;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

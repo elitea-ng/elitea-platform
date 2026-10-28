@@ -21,38 +21,47 @@
  * Both menus are driven from the keyboard without leaving the textarea:
  * ↑/↓ move, Enter or Tab pick, Esc closes until the token changes.
  *
- * Images (#1229): a pasted image, or an image file dropped on the window
- * (the host reports its path; the shell hands it to `attachFiles`), is
+ * Images (#1229): a pasted image, an image picked with the footer's +
+ * (`AttachImagesButton`), or an image file dropped on the window (the host
+ * reports its path; the shell hands it to `attachFiles`), is
  * registered with the host (`attachBytes` / `attachFile`), which checks and
  * shrinks it and answers a token and a thumbnail. The thumbnails sit above
  * the input with a remove button each; Send carries the tokens. The host
  * enforces the limits (five images, 10 MiB each); this only stops offering.
  *
  * Steering (`onSteer`): while a turn runs, the input stays open and Send queues the text against the turn
- * (images stay for the next turn). "Stop and send" (`onStopAndSend`) stops the turn and sends the text next.
- * Texts that did not start the next turn (`unsent`) go back into the input, with "Send again" (`SteeringControls`).
+ * (images stay for the next turn); with no text, the round button is Stop. The queued messages sit at the top of the
+ * composer (`queue`, `SteeringQueue`: Send now, Edit, Remove). Texts that did not start the next turn (`unsent`) go
+ * back into the input, with "Send again" (`SteeringControls`).
+ *
+ * Unsent text is kept per thread (`draftKey`: `workspace:<folder>:<thread>`, `…:new` before the thread exists) and
+ * comes back when the thread is opened again. A new thread that gets its id (its first turn started) takes the text
+ * along (`useCarriedDraft`), so the next new thread starts empty. The steering texts put back (`useRestoredDraft`)
+ * go in after the draft is restored, before it, so neither is lost.
  */
-import { useMemo, useRef, useState, type ComponentRef, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentRef, type KeyboardEvent, type ReactNode } from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
-import SendIcon from '@mui/icons-material/Send';
 import Box from '@mui/material/Box';
-import IconButton from '@mui/material/IconButton';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import { NewChatInput } from '@/features/chat-input';
 import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 
+import { AttachImagesButton } from './AttachImagesButton';
 import { FooterControls } from './FooterControls';
-import { RetryUnsent, StopAndSend, useRestoredDraft } from './SteeringControls';
+import { RetryUnsent, useRestoredDraft } from './SteeringControls';
+import { SteeringQueue, type SteeringQueueBinding } from './SteeringQueue';
 import type { UnsentSteers } from './useSteering';
 import type { ComposerSkill } from './useAgentSkills';
+import { threadDraftKey, useCarriedDraft } from './useCarriedDraft';
 import { useImageAttachments } from './useImageAttachments';
 import type { SentImages } from './useSendPrompt';
+import { WorkspaceSendControl } from './WorkspaceSendControl';
 import type { CustomCommand, TurnCommand, TurnStartRequest, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
@@ -75,6 +84,8 @@ const NO_AGENT_EDITOR = {
 export interface WorkspaceComposerProps {
   ipc: WorkspaceIpc;
   workspaceId: string;
+  /** The thread (`''` before its first turn): what the unsent text is kept under. */
+  conversationId?: string;
   canSend: boolean;
   /** The thread runs in the cloud: the input is off and `canSend` is false (its banner says why and offers Take back). */
   readOnly?: boolean;
@@ -91,8 +102,10 @@ export interface WorkspaceComposerProps {
   /** Act | Plan | Bypass: off for a cloud thread, whose turns have no plan mode. */
   showMode?: boolean;
   runLocation?: ReactNode;
-  /** The meters (the language-server and usage chips), after the run location. */
+  /** The meters (the language servers and the context ring), after the run location. */
   contextMeter?: ReactNode;
+  /** The ⋯ menu's rows (the step limit); no ⋯ without them. */
+  more?: ((close: () => void) => ReactNode) | undefined;
   /** The model chip (`ModelChip`), after the agent picker. */
   modelPicker?: ReactNode;
   onPlanModeChange: (planMode: boolean) => void;
@@ -117,31 +130,16 @@ export interface WorkspaceComposerProps {
   onFocus?: () => void;
   /** While `busy`: Send queues the text against the running turn; resolves `true` once queued (the input clears). */
   onSteer?: ((text: string) => Promise<boolean>) | undefined;
-  /** While `busy`: stop the turn, then send the text as the next turn. */
-  onStopAndSend?: ((text: string) => Promise<boolean>) | undefined;
+  /** The messages that wait for the running turn, at the top of the composer (a local thread). */
+  queue?: SteeringQueueBinding | undefined;
   /** The texts that did not start the next turn: put into the input, with "Send again" while no turn runs. */
   unsent?: UnsentSteers | undefined;
+  /** The input became non-empty or empty (and again when this callback changes): the idle-compaction hold (`useIdleHold`). */
+  onDraftChange?: ((hasDraft: boolean) => void) | undefined;
 }
 
 /** What `/steps <value>` asks for (`composer.stepsCommand`). */
 export type StepsCommand = NonNullable<ReturnType<typeof composer.stepsCommand>>;
-
-function sendButtonSx(theme: Theme) {
-  return {
-    width: '1.75rem',
-    height: '1.75rem',
-    padding: 0,
-    borderRadius: theme.vars.shape.radiusPill,
-    backgroundColor: theme.vars.palette.primary.main,
-    color: theme.vars.palette.icon.fill.send,
-    '&:hover': { backgroundColor: theme.vars.palette.primary.main },
-    '&.Mui-disabled': {
-      opacity: 1,
-      backgroundColor: theme.vars.palette.background.button.primary.disabled,
-      color: theme.vars.palette.icon.fill.send,
-    },
-  };
-}
 
 /** The input's hint: what to type, or why it is off. */
 function placeholderFor(readOnly: boolean, steering: boolean): string {
@@ -195,8 +193,16 @@ const takesImages = (accept: boolean | undefined, locked: boolean): boolean => a
 
 const sameToken = (a: Token, b: Token): boolean => a?.kind === b?.kind && a?.start === b?.start && a?.query === b?.query;
 
+/** The footer row (`FooterControls`) from the composer's props; the + that picks images (`onPick`) when they are taken. */
+function footerOf(props: WorkspaceComposerProps, images: boolean, onPick: (files: readonly File[]) => void): React.JSX.Element {
+  const { planMode, onPlanModeChange, onBypassChange, agentPicker, modelPicker, more, runLocation, contextMeter } = props;
+  const attach = images ? <AttachImagesButton onPick={onPick} /> : null;
+  const rest = { agentPicker, modelPicker, more, runLocation, contextMeter };
+  return <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} bypass={props.bypass === true} onBypassChange={onBypassChange} showMode={props.showMode !== false} attach={attach} {...rest} />;
+}
+
 export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Element {
-  const { ipc, workspaceId, canSend, busy, planMode, onPlanModeChange, skills, customCommands, onSend, onStop, onCommand } = props;
+  const { ipc, workspaceId, canSend, busy, skills, customCommands, onSend, onStop, onCommand } = props;
   // The thread runs in the cloud: the input is off, and `canSend` is false.
   const locked = props.readOnly === true;
   const steering = steersNow(busy, props.onSteer);
@@ -207,8 +213,12 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   const [activeIndex, setActiveIndex] = useState(0);
   // What was picked with "@", in pick order (a folder keeps its trailing "/").
   const [picked, setPicked] = useState<string[]>([]);
-  const attachments = useImageAttachments(ipc, workspaceId, takesImages(props.acceptImages, locked));
+  const images = takesImages(props.acceptImages, locked);
+  const attachments = useImageAttachments(ipc, workspaceId, images);
   useRestoredDraft(inputRef, props.unsent, () => setHasDraft(true));
+  useCarriedDraft(workspaceId, props.conversationId, inputRef);
+  const { onDraftChange } = props;
+  useEffect(() => onDraftChange?.(hasDraft), [hasDraft, onDraftChange]);
 
   const open = token !== null && !sameToken(token, dismissed) ? token : null;
   const files = useQuery({
@@ -332,11 +342,6 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     });
   };
 
-  const stopAndSend = (): void => {
-    const text = inputRef.current?.getInputContent() ?? '';
-    if (text.trim() !== '') void props.onStopAndSend?.(text).then((sent) => sent && clearInput());
-  };
-
   const retryUnsent = (): void => {
     const text = inputRef.current?.getInputContent() ?? '';
     if (text.trim() !== '') void props.unsent?.onRetry(text).then((sent) => sent && clearInput());
@@ -360,33 +365,25 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
           onClose={() => setDismissed(open)}
         />
       )}
-      <StopAndSend shown={steersNow(busy, props.onStopAndSend)} disabled={!hasDraft} onClick={stopAndSend} />
       <RetryUnsent unsent={props.unsent} busy={busy} hasDraft={hasDraft} canSend={canSend} onClick={retryUnsent} />
+      <SteeringQueue queue={props.queue} input={inputRef} onRestored={() => setHasDraft(true)} />
       <NewChatInput
         ref={inputRef}
-        state={{ isStreaming: busy, disabledSend: !canSend, disabledInput: locked, allowSendWhileStreaming: steering }}
+        // Stop is drawn by `WorkspaceSendControl`, in Send's place: the input draws no Stop of its own.
+        state={{ isStreaming: false, disabledSend: !canSend, disabledInput: locked }}
         content={{
           placeholder: props.placeholder ?? placeholderFor(locked, steering),
           clearInputAfterSubmit: false,
           tooltipOfSendButton: t('workspace.send', 'Send'),
+          draftKey: threadDraftKey(workspaceId, props.conversationId),
         }}
         callbacks={{ onSend: send, onStopGeneration: onStop, onNormalKeyDown: onKeyDown, onInputChange: track }}
         agentEditor={NO_AGENT_EDITOR}
         slots={{
-          modelSelector: null,
-          attachmentButton: <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} bypass={props.bypass === true} onBypassChange={props.onBypassChange} showMode={props.showMode !== false} agentPicker={props.agentPicker} modelPicker={props.modelPicker} runLocation={props.runLocation} contextMeter={props.contextMeter} />,
+          // The whole row goes in the model selector's place: the part of the footer that shrinks.
+          modelSelector: footerOf(props, images, attachments.attachPicked),
           sendControl: ({ disabledSend, question, onSend: submit }) => (
-            <IconButton
-              data-testid="workspace-send-button"
-              type="button"
-              size="small"
-              aria-label={t('workspace.send', 'Send')}
-              disabled={disabledSend || question.trim() === ''}
-              onClick={submit}
-              sx={sendButtonSx}
-            >
-              <SendIcon fontSize="small" />
-            </IconButton>
+            <WorkspaceSendControl busy={busy} steering={steering} empty={question.trim() === ''} disabled={disabledSend} onSend={submit} onStop={onStop} />
           ),
         }}
       />

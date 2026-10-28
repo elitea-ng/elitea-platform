@@ -4,7 +4,7 @@ Thank you for contributing.
 
 ## Before You Start
 
-- Read the project documentation in docs/.
+- Read [Set up a development environment](https://elitea-ng.github.io/elitea-platform/development/overview) and the architecture rules in [AGENTS.md](AGENTS.md).
 - Be respectful and follow the Code of Conduct in CODE_OF_CONDUCT.md.
 - For security issues, do not open a public issue. Follow SECURITY.md.
 
@@ -12,7 +12,7 @@ Thank you for contributing.
 
 - Open a PR with a clear problem statement and scope.
 - Include tests that cover your changes.
-- Update docs when behavior or configuration changes.
+- Update the embedded docs (`apps/elitea-web/src/entries/docs`) when behavior or configuration changes.
 - Keep PRs small and reviewable when possible.
 
 ## Commit Messages
@@ -24,6 +24,15 @@ Examples:
 - feat(auth): add token refresh validation
 - fix(ui): correct footer alignment on mobile
 - docs: clarify oidc setup variables
+
+The type sets the next release's version (semantic-release):
+
+| Commit | Release |
+|---|---|
+| `fix: …`, `perf: …` | patch (`x.y.Z`) |
+| `feat: …` | minor (`x.Y.0`) |
+| `feat!: …` or a `BREAKING CHANGE:` footer | major (`X.0.0`) |
+| `docs:`, `chore:`, `ci:`, `test:`, `refactor:` | none |
 
 ## Legal
 

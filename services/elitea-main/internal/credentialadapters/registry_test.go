@@ -168,7 +168,7 @@ func TestRegistryUnknownLookupsAnswerNothing(t *testing.T) {
 	if nilRegistry.Known("jira.issue.read") || nilRegistry.MaterialKeys("jira", staticSecret) != nil {
 		t.Error("a nil registry knows something")
 	}
-	if got := r.Providers(); strings.Join(got, ",") != "jira,confluence,aha,sharepoint,qtest" {
+	if got := r.Providers(); strings.Join(got, ",") != "jira,confluence,aha,sharepoint,qtest,mcp" {
 		t.Errorf("providers = %v", got)
 	}
 }

@@ -637,6 +637,14 @@ where
         now_unix_millis: i64,
     ) -> Result<CheckpointDeliveryRoute, AgentDeliveryError> {
         use crate::protocol::control::CheckpointClaimDecision;
+        if verified.command().security_context_ref.is_some() {
+            // See route_node_recovery_verified: a governed command takes the
+            // fresh claim.
+            return self
+                .route_verified(delivery, verified, now_unix_millis)
+                .await
+                .map(CheckpointDeliveryRoute::Ordinary);
+        }
         match self
             .control
             .claim_agent_checkpoint_delivery(&verified, now_unix_millis)
@@ -663,6 +671,17 @@ where
         now_ms: i64,
     ) -> Result<NodeRecoveryDeliveryRoute, AgentDeliveryError> {
         use crate::protocol::control::NodeRecoveryClaimDecision;
+        if verified.command().security_context_ref.is_some() {
+            // A governed command (ADR-0039 field 65) takes the fresh claim.
+            // The recovery claim carries no governed opt-in and never fetches
+            // the security context, so Main refuses it every governed command
+            // (GOVERNED_WORKER_REQUIRED); with node recovery on, that was
+            // every governed run.
+            return self
+                .route_verified(delivery, verified, now_ms)
+                .await
+                .map(NodeRecoveryDeliveryRoute::Ordinary);
+        }
         match self
             .control
             .claim_node_recovery_delivery(&verified, now_ms)

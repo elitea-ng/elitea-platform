@@ -11,6 +11,8 @@ import type { Theme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 import { useVoiceFeatureFlags } from '@/shared/lib/hooks/useVoiceFeatureFlags';
 import { VoicewaveIcon } from '@/shared/ui/icons/voicewave-icon';
+import { StopIcon } from '@/shared/ui/icons/stop-icon';
+import { ComposerSendButton } from '@/shared/ui/native-composer';
 
 /**
  * Chat button primitive: SendButton
@@ -64,6 +66,12 @@ export interface SendButtonProps {
   onExitSpeakingMode?: () => void;
   onSend?: () => void;
   tooltipOfSendButton?: string;
+  /**
+   * The desktop composer's look: every state is the one round
+   * `ComposerSendButton` (arrow, wave, or a square to leave speaking mode);
+   * the states, ids, names and handlers are the web's.
+   */
+  native?: boolean;
 }
 
 const voicewaveIconStyle = { width: '1rem', height: '1rem' };
@@ -72,7 +80,7 @@ const voicewaveIconStyle = { width: '1rem', height: '1rem' };
  * The filled accent disc both composer end-buttons render as.
  *
  * Baseline `ComponentsLib/Chat/UserInput.jsx:693-704`'s `styles.sendButton`:
- * a 1.75rem square filled `primary.main` (`#6ae8fa`), icon in
+ * a 1.75rem square filled `primary.main` (`#4A4DE8` by default), icon in
  * `icon.fill.send`, `background.button.primary.disabled` when disabled — and
  * `NewChatInput.jsx:361-365` is what supplies those three values. Measured
  * live on next.elitea.ai: `28×28`, `border-radius: 50%`,
@@ -109,6 +117,7 @@ interface SendControlProps {
   readonly tooltip: string;
   readonly disabled: boolean;
   readonly onSend: () => void;
+  readonly native: boolean;
 }
 
 /**
@@ -116,7 +125,8 @@ interface SendControlProps {
  * spreads the child's own props after the name it injects, so an explicit
  * label wins. A different string gives a WCAG 2.5.3 label-in-name mismatch.
  */
-function SendControl({ tooltip, disabled, onSend }: SendControlProps) {
+function SendControl({ tooltip, disabled, onSend, native }: SendControlProps) {
+  if (native) return <ComposerSendButton label={tooltip} disabled={disabled} onClick={onSend} testId="chat-send-button" />;
   return (
     <Tooltip title={tooltip} placement="top">
       <Box component="span" sx={{ display: 'inline-flex' }}>
@@ -140,11 +150,15 @@ interface MicControlProps {
   readonly disabled: boolean;
   readonly temporarilyDisabled: boolean;
   readonly onEnterSpeaking: () => void;
+  readonly native: boolean;
 }
 
 /** The voice-wave icon that enters speaking mode, shown while the composer is empty. */
-function MicControl({ disabled, temporarilyDisabled, onEnterSpeaking }: MicControlProps) {
+function MicControl({ disabled, temporarilyDisabled, onEnterSpeaking, native }: MicControlProps) {
   const title = micTooltipTitle(temporarilyDisabled);
+  if (native) {
+    return <ComposerSendButton label={title} disabled={disabled} onClick={onEnterSpeaking} testId="chat-speaking-mode-button" icon={<VoicewaveIcon style={voicewaveIconStyle} />} />;
+  }
   return (
     <Tooltip title={title} placement="top">
       <Box component="span" sx={{ display: 'inline-flex' }}>
@@ -164,16 +178,58 @@ function MicControl({ disabled, temporarilyDisabled, onEnterSpeaking }: MicContr
   );
 }
 
+/** Speaking mode is on: the web's "Speaking..." pill with a close button, or on the desktop a quiet caption and the round button as a square stop. */
+function SpeakingStrip({ native, onExit }: { readonly native: boolean; readonly onExit: () => void }) {
+  const stopLabel = t('widgets.chat.sendButton.stopSpeakingTitle', 'Stop speaking');
+  const speaking = t('widgets.chat.sendButton.speakingLabel', 'Speaking...');
+  if (native) {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography component="span" variant="labelSmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
+          {speaking}
+        </Typography>
+        <ComposerSendButton label={stopLabel} disabled={false} onClick={onExit} icon={<StopIcon style={voicewaveIconStyle} />} />
+      </Box>
+    );
+  }
+  return (
+    <Box
+      sx={(theme: Theme) => ({
+        display: 'flex',
+        alignItems: 'center',
+        gap: 0.5,
+        padding: '0.5rem 1rem',
+        borderRadius: theme.vars.shape.radiusLg,
+        border: '1px solid',
+        borderColor: 'border.chatContinue',
+      })}
+    >
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: 'primary.main' }}>
+        <VoicewaveIcon style={voicewaveIconStyle} />
+        <Typography component="span" variant="bodyMedium" color="text.secondary">
+          {speaking}
+        </Typography>
+      </Box>
+      <Tooltip title={stopLabel}>
+        <IconButton size="small" onClick={onExit} sx={{ color: 'text.secondary' }}>
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+    </Box>
+  );
+}
+
 export const SendButton = memo(
   ({
     isSpeakingMode = false,
-    question = '',
+    question,
     disabledSend = false,
     isRecording = false,
     onEnterSpeakingMode,
     onExitSpeakingMode,
     onSend,
     tooltipOfSendButton = t('widgets.chat.sendButton.defaultTooltip', 'Send'),
+    native = false,
   }: SendButtonProps) => {
     const voiceFlags = useVoiceFeatureFlags();
     const isEmpty = !question;
@@ -197,48 +253,10 @@ export const SendButton = memo(
     // that was already in speaking mode returns to the send arrow when the
     // operator turns the feature off. It does not keep the recording surface.
     if (!voiceFlags.enabled) {
-      return <SendControl tooltip={tooltipOfSendButton} disabled={isDisabled} onSend={handleSend} />;
+      return <SendControl tooltip={tooltipOfSendButton} disabled={isDisabled} onSend={handleSend} native={native} />;
     }
 
-    // Speaking mode strip
-    if (isSpeakingMode) {
-      return (
-        <Box
-          sx={(theme: Theme) => ({
-            display: 'flex',
-            alignItems: 'center',
-            gap: 0.5,
-            padding: '0.5rem 1rem',
-            borderRadius: theme.vars.shape.radiusLg,
-            border: '1px solid',
-            borderColor: 'border.chatContinue',
-          })}
-        >
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 0.5,
-              color: 'primary.main',
-            }}
-          >
-            <VoicewaveIcon style={voicewaveIconStyle} />
-            <Typography component="span" variant="bodyMedium" color="text.secondary">
-              {t('widgets.chat.sendButton.speakingLabel', 'Speaking...')}
-            </Typography>
-          </Box>
-          <Tooltip title={t('widgets.chat.sendButton.stopSpeakingTitle', 'Stop speaking')}>
-            <IconButton
-              size="small"
-              onClick={handleExitSpeaking}
-              sx={{ color: 'text.secondary' }}
-            >
-              <CloseIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Box>
-      );
-    }
+    if (isSpeakingMode) return <SpeakingStrip native={native} onExit={handleExitSpeaking} />;
 
     // Idle, empty input: show the voice-wave icon to enter speaking mode.
     if (isEmpty) {
@@ -247,12 +265,13 @@ export const SendButton = memo(
           disabled={micDisabled}
           temporarilyDisabled={voiceFlags.temporarilyDisabled}
           onEnterSpeaking={handleEnterSpeaking}
+          native={native}
         />
       );
     }
 
     // Active state: send button (has text).
-    return <SendControl tooltip={tooltipOfSendButton} disabled={isDisabled} onSend={handleSend} />;
+    return <SendControl tooltip={tooltipOfSendButton} disabled={isDisabled} onSend={handleSend} native={native} />;
   },
 );
 

@@ -1,10 +1,10 @@
 /**
  * Whether a sidebar section is expanded, remembered per viewer (an `el.`
- * key, swept by logout like every `el.` key): the "Elitea" section
- * (`el.desktop.eliteaOpen` — collapsed, it keeps only the page on screen, so
- * local work gets the room) and the conversations under its Chats row
- * (`el.desktop.chatsOpen`). The third element expands the section (and
- * remembers it): opening the chat expands both, so its conversations show.
+ * key, swept by logout like every `el.` key): the Chats list
+ * (`el.desktop.chatsOpen`), and the "Workshop" group
+ * (`el.desktop.workshopOpen`, closed until opened). The third element
+ * expands the section (and remembers it): opening the chat expands the
+ * Chats list, so its conversations show.
  *
  * The date groups of the Chats list are disclosures too
  * (`el.desktop.chatGroupsOpen`, one flag per group): Pinned and Today are
@@ -15,26 +15,26 @@ import { useCallback, useState } from 'react';
 
 import { createStorage } from '@/shared/lib/storage';
 
-const ELITEA_KEY = 'desktop.eliteaOpen';
 const CHATS_KEY = 'desktop.chatsOpen';
+const WORKSHOP_KEY = 'desktop.workshopOpen';
 
 function validate(raw: unknown): boolean {
   if (typeof raw !== 'boolean') throw new Error('invalid');
   return raw;
 }
 
-function readOpen(key: string): boolean {
+function readOpen(key: string, fallback: boolean): boolean {
   try {
-    return createStorage('local').getJSON(key, validate) ?? true;
+    return createStorage('local').getJSON(key, validate) ?? fallback;
   } catch {
-    return true;
+    return fallback;
   }
 }
 
 type SectionOpen = [open: boolean, toggle: () => void, expand: () => void];
 
-function usePersistedOpen(key: string): SectionOpen {
-  const [open, setOpen] = useState(() => readOpen(key));
+function usePersistedOpen(key: string, fallback = true): SectionOpen {
+  const [open, setOpen] = useState(() => readOpen(key, fallback));
   const change = useCallback(
     (decide: (current: boolean) => boolean) => {
       setOpen((current) => {
@@ -55,12 +55,12 @@ function usePersistedOpen(key: string): SectionOpen {
   return [open, toggle, expand];
 }
 
-export function useEliteaSectionOpen(): SectionOpen {
-  return usePersistedOpen(ELITEA_KEY);
-}
-
 export function useChatsSectionOpen(): SectionOpen {
   return usePersistedOpen(CHATS_KEY);
+}
+
+export function useWorkshopOpen(): SectionOpen {
+  return usePersistedOpen(WORKSHOP_KEY, false);
 }
 
 const GROUPS_KEY = 'desktop.chatGroupsOpen';

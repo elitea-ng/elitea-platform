@@ -1,7 +1,12 @@
-name: Docs — GitHub Pages
+name: Docs and brand guide — GitHub Pages
 
 # Publishes the embedded docs SPA (apps/elitea-web, `vite build --mode docs`)
-# to GitHub Pages (embedded-docs programme decision 6). This is a SEPARATE
+# to GitHub Pages (embedded-docs programme decision 6), and the brand guide
+# (brand/, `node brand/scripts/build.mjs`) beside it at /brand/. They are
+# separate sites with separate sources: the docs describe the product, the
+# brand guide its identity, and neither links into the other's build. They
+# share one deployment only because a repository has one Pages site, and every
+# deployment replaces the whole site, so both must be in each artifact. This is a SEPARATE
 # deployment target from the `/docs/` nginx location ci-web.yml's `build` job
 # proves — Pages has no server, so this build sets DOCS_BASE to the repo's
 # Pages subpath instead of `/docs/`, and the two are never the same artifact.
@@ -69,6 +74,11 @@ jobs:
         # nginx deployment's /docs/, which ci-web.yml's build job proves
         # separately with the default base.
         run: DOCS_BASE=/elitea-platform/ npm run build:docs
+      - name: Build the brand guide into /brand/
+        # Zero dependencies (node's standard library); every URL it emits is
+        # relative, so the same build works under /elitea-platform/brand/.
+        working-directory: .
+        run: node brand/scripts/build.mjs --out apps/elitea-web/dist/docs/brand
       - name: Configure Pages
         uses: actions/configure-pages@v6
       - name: Upload Pages artifact

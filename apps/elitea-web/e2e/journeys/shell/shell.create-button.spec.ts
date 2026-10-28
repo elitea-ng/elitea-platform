@@ -69,6 +69,9 @@ async function settleToolkitsList(page: Page): Promise<void> {
  * navigates directly to that entity's create surface.
  * ──────────────────────────────────────────────────────────────────────── */
 test('CB01: main-section create button labels and direct-click destinations', async ({ page }) => {
+  // One navigation and one create-form load per section, eight sections: the
+  // default 30 s ran out on webkit under load, part way through.
+  test.setTimeout(90_000);
   // [section path, expected label, destination URL substring].
   const sections: ReadonlyArray<{ path: string; label: string; dest: string }> = [
     { path: '/agents/all', label: 'Agent', dest: '/agents/create' },
@@ -246,6 +249,9 @@ test('CB07: Settings > Users — Invite User label opens the real invite dialog'
 test('CB08: collapsed rail — icon-only button, full dropdown, outside-click close, entity navigation', async ({
   page,
 }) => {
+  // Seven navigations, twelve rail toggles and an a11y sweep in one test: the
+  // default 30 s ran out on webkit under load, at whichever step was next.
+  test.setTimeout(90_000);
   const REAL_OPTIONS = [
     'Chat',
     'Agent',

@@ -86,7 +86,6 @@ it('renders persisted artifact metadata after the authorized detail read', async
   renderWithTheme(<QueryClientProvider client={client}><PersistedMessageTrace value={{ projectId: '7', conversationId: '10', messageGroupId: 51, failed: false, steps: [step] }} /></QueryClientProvider>);
   const user = userEvent.setup();
   await user.click(screen.getByRole('button', { name: 'Execution details' }));
-  await user.click(screen.getByRole('button', { name: 'run / debug export' }));
   expect(await screen.findByRole('button', { name: 'Download verified snapshot' })).toBeVisible();
 });
 
@@ -96,7 +95,6 @@ it('keeps foreign persisted detail metadata inert', async () => {
   renderWithTheme(<QueryClientProvider client={client}><PersistedMessageTrace value={{ projectId: '7', conversationId: '10', messageGroupId: 51, failed: false, steps: [step] }} /></QueryClientProvider>);
   const user = userEvent.setup();
   await user.click(screen.getByRole('button', { name: 'Execution details' }));
-  await user.click(screen.getByRole('button', { name: 'run / debug export' }));
   await screen.findByText('foreign row');
   expect(screen.queryByTestId('code-debug-artifact')).toBeNull();
 });

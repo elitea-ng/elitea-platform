@@ -57,8 +57,17 @@ type ExecutionSecurityContextV1 struct {
 	// The opaque run-scoped agent session reference (#1151). Never a
 	// credential: only the credential broker can turn it into one.
 	AgentSessionRef string `protobuf:"bytes,17,opt,name=agent_session_ref,json=agentSessionRef,proto3" json:"agent_session_ref,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// The application and version the run executes (#1119); 0 for a run with
+	// none. The credential broker compares the agent binding with them.
+	ApplicationId        int64 `protobuf:"varint,32,opt,name=application_id,json=applicationId,proto3" json:"application_id,omitempty"`
+	ApplicationVersionId int64 `protobuf:"varint,33,opt,name=application_version_id,json=applicationVersionId,proto3" json:"application_version_id,omitempty"`
+	// The governed-credential-references entry (#1119): the exact credential
+	// reference admission resolved for each credentialed toolkit of the bound
+	// agent, and the toolkit digest it was resolved at. A redemption must
+	// name the reference frozen here for its toolkit.
+	CredentialReferences []*GovernedCredentialReferenceV1 `protobuf:"bytes,34,rep,name=credential_references,json=credentialReferences,proto3" json:"credential_references,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *ExecutionSecurityContextV1) Reset() {
@@ -210,6 +219,109 @@ func (x *ExecutionSecurityContextV1) GetAgentSessionRef() string {
 	return ""
 }
 
+func (x *ExecutionSecurityContextV1) GetApplicationId() int64 {
+	if x != nil {
+		return x.ApplicationId
+	}
+	return 0
+}
+
+func (x *ExecutionSecurityContextV1) GetApplicationVersionId() int64 {
+	if x != nil {
+		return x.ApplicationVersionId
+	}
+	return 0
+}
+
+func (x *ExecutionSecurityContextV1) GetCredentialReferences() []*GovernedCredentialReferenceV1 {
+	if x != nil {
+		return x.CredentialReferences
+	}
+	return nil
+}
+
+// GovernedCredentialReferenceV1 is one toolkit's frozen credential reference.
+type GovernedCredentialReferenceV1 struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ToolkitId int64                  `protobuf:"varint,1,opt,name=toolkit_id,json=toolkitId,proto3" json:"toolkit_id,omitempty"`
+	// Empty, with target_binding_id, for a bound toolkit whose stored
+	// settings name no configuration reference: the broker resolves its
+	// reference from the one usable grant.
+	CredentialReferenceId string `protobuf:"bytes,2,opt,name=credential_reference_id,json=credentialReferenceId,proto3" json:"credential_reference_id,omitempty"`
+	TargetBindingId       string `protobuf:"bytes,3,opt,name=target_binding_id,json=targetBindingId,proto3" json:"target_binding_id,omitempty"`
+	// The credential reference's generation at admission.
+	Generation int64 `protobuf:"varint,4,opt,name=generation,proto3" json:"generation,omitempty"`
+	// sha256 over the toolkit's stored definition (credentialgrant.ToolkitDigest).
+	ToolkitDigest *DigestV1 `protobuf:"bytes,5,opt,name=toolkit_digest,json=toolkitDigest,proto3" json:"toolkit_digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GovernedCredentialReferenceV1) Reset() {
+	*x = GovernedCredentialReferenceV1{}
+	mi := &file_elitea_runtime_v1_security_context_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GovernedCredentialReferenceV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GovernedCredentialReferenceV1) ProtoMessage() {}
+
+func (x *GovernedCredentialReferenceV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_security_context_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GovernedCredentialReferenceV1.ProtoReflect.Descriptor instead.
+func (*GovernedCredentialReferenceV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_security_context_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *GovernedCredentialReferenceV1) GetToolkitId() int64 {
+	if x != nil {
+		return x.ToolkitId
+	}
+	return 0
+}
+
+func (x *GovernedCredentialReferenceV1) GetCredentialReferenceId() string {
+	if x != nil {
+		return x.CredentialReferenceId
+	}
+	return ""
+}
+
+func (x *GovernedCredentialReferenceV1) GetTargetBindingId() string {
+	if x != nil {
+		return x.TargetBindingId
+	}
+	return ""
+}
+
+func (x *GovernedCredentialReferenceV1) GetGeneration() int64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *GovernedCredentialReferenceV1) GetToolkitDigest() *DigestV1 {
+	if x != nil {
+		return x.ToolkitDigest
+	}
+	return nil
+}
+
 // CallerContextV1 names how the subject reached Elitea.
 type CallerContextV1 struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -223,7 +335,7 @@ type CallerContextV1 struct {
 
 func (x *CallerContextV1) Reset() {
 	*x = CallerContextV1{}
-	mi := &file_elitea_runtime_v1_security_context_proto_msgTypes[1]
+	mi := &file_elitea_runtime_v1_security_context_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -235,7 +347,7 @@ func (x *CallerContextV1) String() string {
 func (*CallerContextV1) ProtoMessage() {}
 
 func (x *CallerContextV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_security_context_proto_msgTypes[1]
+	mi := &file_elitea_runtime_v1_security_context_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -248,7 +360,7 @@ func (x *CallerContextV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallerContextV1.ProtoReflect.Descriptor instead.
 func (*CallerContextV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_security_context_proto_rawDescGZIP(), []int{1}
+	return file_elitea_runtime_v1_security_context_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *CallerContextV1) GetAuthenticationSource() string {
@@ -276,7 +388,7 @@ type ActorLinkV1 struct {
 
 func (x *ActorLinkV1) Reset() {
 	*x = ActorLinkV1{}
-	mi := &file_elitea_runtime_v1_security_context_proto_msgTypes[2]
+	mi := &file_elitea_runtime_v1_security_context_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -288,7 +400,7 @@ func (x *ActorLinkV1) String() string {
 func (*ActorLinkV1) ProtoMessage() {}
 
 func (x *ActorLinkV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_security_context_proto_msgTypes[2]
+	mi := &file_elitea_runtime_v1_security_context_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -301,7 +413,7 @@ func (x *ActorLinkV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActorLinkV1.ProtoReflect.Descriptor instead.
 func (*ActorLinkV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_security_context_proto_rawDescGZIP(), []int{2}
+	return file_elitea_runtime_v1_security_context_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ActorLinkV1) GetKind() string {
@@ -332,7 +444,7 @@ type ExecutionSecurityContextReferenceV1 struct {
 
 func (x *ExecutionSecurityContextReferenceV1) Reset() {
 	*x = ExecutionSecurityContextReferenceV1{}
-	mi := &file_elitea_runtime_v1_security_context_proto_msgTypes[3]
+	mi := &file_elitea_runtime_v1_security_context_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -344,7 +456,7 @@ func (x *ExecutionSecurityContextReferenceV1) String() string {
 func (*ExecutionSecurityContextReferenceV1) ProtoMessage() {}
 
 func (x *ExecutionSecurityContextReferenceV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_security_context_proto_msgTypes[3]
+	mi := &file_elitea_runtime_v1_security_context_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -357,7 +469,7 @@ func (x *ExecutionSecurityContextReferenceV1) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use ExecutionSecurityContextReferenceV1.ProtoReflect.Descriptor instead.
 func (*ExecutionSecurityContextReferenceV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_security_context_proto_rawDescGZIP(), []int{3}
+	return file_elitea_runtime_v1_security_context_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ExecutionSecurityContextReferenceV1) GetContentEntryId() string {
@@ -385,7 +497,7 @@ var File_elitea_runtime_v1_security_context_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_security_context_proto_rawDesc = "" +
 	"\n" +
-	"(elitea/runtime/v1/security_context.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\"\xc9\x06\n" +
+	"(elitea/runtime/v1/security_context.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\"\x8d\b\n" +
 	"\x1aExecutionSecurityContextV1\x12'\n" +
 	"\x0fschema_revision\x18\x01 \x01(\tR\x0eschemaRevision\x12\x18\n" +
 	"\aprofile\x18\x02 \x01(\tR\aprofile\x12,\n" +
@@ -406,7 +518,19 @@ const file_elitea_runtime_v1_security_context_proto_rawDesc = "" +
 	"\vactor_chain\x18\x0f \x03(\v2\x1e.elitea.runtime.v1.ActorLinkV1R\n" +
 	"actorChain\x121\n" +
 	"\x15issued_at_unix_millis\x18\x10 \x01(\x03R\x12issuedAtUnixMillis\x12*\n" +
-	"\x11agent_session_ref\x18\x11 \x01(\tR\x0fagentSessionRefJ\x04\b\x12\x10 \"\x82\x01\n" +
+	"\x11agent_session_ref\x18\x11 \x01(\tR\x0fagentSessionRef\x12%\n" +
+	"\x0eapplication_id\x18  \x01(\x03R\rapplicationId\x124\n" +
+	"\x16application_version_id\x18! \x01(\x03R\x14applicationVersionId\x12e\n" +
+	"\x15credential_references\x18\" \x03(\v20.elitea.runtime.v1.GovernedCredentialReferenceV1R\x14credentialReferencesJ\x04\b\x12\x10 \"\x8c\x02\n" +
+	"\x1dGovernedCredentialReferenceV1\x12\x1d\n" +
+	"\n" +
+	"toolkit_id\x18\x01 \x01(\x03R\ttoolkitId\x126\n" +
+	"\x17credential_reference_id\x18\x02 \x01(\tR\x15credentialReferenceId\x12*\n" +
+	"\x11target_binding_id\x18\x03 \x01(\tR\x0ftargetBindingId\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x04 \x01(\x03R\n" +
+	"generation\x12B\n" +
+	"\x0etoolkit_digest\x18\x05 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\rtoolkitDigestJ\x04\b\x06\x10\x10\"\x82\x01\n" +
 	"\x0fCallerContextV1\x123\n" +
 	"\x15authentication_source\x18\x01 \x01(\tR\x14authenticationSource\x124\n" +
 	"\x16calling_application_id\x18\x02 \x01(\tR\x14callingApplicationIdJ\x04\b\x03\x10\x10\"9\n" +
@@ -430,25 +554,28 @@ func file_elitea_runtime_v1_security_context_proto_rawDescGZIP() []byte {
 	return file_elitea_runtime_v1_security_context_proto_rawDescData
 }
 
-var file_elitea_runtime_v1_security_context_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_elitea_runtime_v1_security_context_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_elitea_runtime_v1_security_context_proto_goTypes = []any{
 	(*ExecutionSecurityContextV1)(nil),          // 0: elitea.runtime.v1.ExecutionSecurityContextV1
-	(*CallerContextV1)(nil),                     // 1: elitea.runtime.v1.CallerContextV1
-	(*ActorLinkV1)(nil),                         // 2: elitea.runtime.v1.ActorLinkV1
-	(*ExecutionSecurityContextReferenceV1)(nil), // 3: elitea.runtime.v1.ExecutionSecurityContextReferenceV1
-	(*DigestV1)(nil),                            // 4: elitea.runtime.v1.DigestV1
+	(*GovernedCredentialReferenceV1)(nil),       // 1: elitea.runtime.v1.GovernedCredentialReferenceV1
+	(*CallerContextV1)(nil),                     // 2: elitea.runtime.v1.CallerContextV1
+	(*ActorLinkV1)(nil),                         // 3: elitea.runtime.v1.ActorLinkV1
+	(*ExecutionSecurityContextReferenceV1)(nil), // 4: elitea.runtime.v1.ExecutionSecurityContextReferenceV1
+	(*DigestV1)(nil),                            // 5: elitea.runtime.v1.DigestV1
 }
 var file_elitea_runtime_v1_security_context_proto_depIdxs = []int32{
-	4, // 0: elitea.runtime.v1.ExecutionSecurityContextV1.policy_digest:type_name -> elitea.runtime.v1.DigestV1
-	1, // 1: elitea.runtime.v1.ExecutionSecurityContextV1.caller:type_name -> elitea.runtime.v1.CallerContextV1
-	4, // 2: elitea.runtime.v1.ExecutionSecurityContextV1.definition_digest:type_name -> elitea.runtime.v1.DigestV1
-	2, // 3: elitea.runtime.v1.ExecutionSecurityContextV1.actor_chain:type_name -> elitea.runtime.v1.ActorLinkV1
-	4, // 4: elitea.runtime.v1.ExecutionSecurityContextReferenceV1.digest:type_name -> elitea.runtime.v1.DigestV1
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	5, // 0: elitea.runtime.v1.ExecutionSecurityContextV1.policy_digest:type_name -> elitea.runtime.v1.DigestV1
+	2, // 1: elitea.runtime.v1.ExecutionSecurityContextV1.caller:type_name -> elitea.runtime.v1.CallerContextV1
+	5, // 2: elitea.runtime.v1.ExecutionSecurityContextV1.definition_digest:type_name -> elitea.runtime.v1.DigestV1
+	3, // 3: elitea.runtime.v1.ExecutionSecurityContextV1.actor_chain:type_name -> elitea.runtime.v1.ActorLinkV1
+	1, // 4: elitea.runtime.v1.ExecutionSecurityContextV1.credential_references:type_name -> elitea.runtime.v1.GovernedCredentialReferenceV1
+	5, // 5: elitea.runtime.v1.GovernedCredentialReferenceV1.toolkit_digest:type_name -> elitea.runtime.v1.DigestV1
+	5, // 6: elitea.runtime.v1.ExecutionSecurityContextReferenceV1.digest:type_name -> elitea.runtime.v1.DigestV1
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_security_context_proto_init() }
@@ -463,7 +590,7 @@ func file_elitea_runtime_v1_security_context_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_security_context_proto_rawDesc), len(file_elitea_runtime_v1_security_context_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

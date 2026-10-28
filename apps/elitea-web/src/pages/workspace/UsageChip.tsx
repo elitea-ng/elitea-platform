@@ -1,5 +1,7 @@
 /**
- * The composer's usage chip (#1227), beside the context meter: the latest
+ * The composer's context ring (#1227): a 16px ring filled to the share of
+ * the model's window the thread's latest call used (`contextPercent`, the
+ * Context tab's figure); a click opens that tab. Its tooltip carries the usage: the latest
  * turn's tokens and their cached share, the thread's total, and a cost only
  * when the model catalogue names the model's price (`listConfigurationModels`
  * `input_cost_per_1m_tokens` …, served to a caller who may see amounts, the
@@ -11,9 +13,10 @@
  */
 import { useState } from 'react';
 
-import Box from '@mui/material/Box';
+import ButtonBase from '@mui/material/ButtonBase';
+import CircularProgress from '@mui/material/CircularProgress';
+import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
 
 import { composer, type WorkspaceTurn } from '@/features/workspace';
 import type { SocialAuthorProfile } from '@/shared/api/generated/model';
@@ -24,6 +27,8 @@ import { unwrapBody } from '@/shared/api/unwrap';
 import type { UsageCounts } from '@/shared/desktop/turnUsage';
 import { t } from '@/shared/i18n';
 import { formatMoney } from '@/shared/lib/money';
+
+import { WARN_PERCENT } from './contextBreakdown';
 
 export type TurnUsage = NonNullable<WorkspaceTurn['view']['usage']>;
 
@@ -133,9 +138,13 @@ export interface UsageChipProps {
   /** The thread's turns that reported usage, oldest first: the last is the one shown. */
   turns: readonly TurnUsage[];
   projectId: number;
+  /** The share of the model's window in use, 0 to 100; `undefined` before the host measured it. */
+  contextPercent?: number | undefined;
+  /** Opens the Context tab. */
+  onOpenContext?: (() => void) | undefined;
 }
 
-export default function UsageChip({ turns, projectId }: UsageChipProps): React.JSX.Element | null {
+export default function UsageChip({ turns, projectId, contextPercent, onOpenContext }: UsageChipProps): React.JSX.Element | null {
   const [open, setOpen] = useState(false);
   // The model chip's read (same key): already cached when it is shown.
   const catalogue = useListConfigurationModels(String(projectId), { section: 'llm', include_shared: true }, { query: { staleTime: 60_000 } });
@@ -145,25 +154,53 @@ export default function UsageChip({ turns, projectId }: UsageChipProps): React.J
   const usage = turns[turns.length - 1];
   if (usage === undefined) return null;
   const priceOf = (model: string | undefined) => modelPrice(catalogue.data, model);
-  return <UsageChipView text={describeUsage(usage, threadUsage(turns, priceOf), priceOf(usage.model), budgetLine(member.data))} onOpen={() => setOpen(true)} />;
+  return (
+    <UsageChipView
+      text={describeUsage(usage, threadUsage(turns, priceOf), priceOf(usage.model), budgetLine(member.data))}
+      contextPercent={contextPercent}
+      onOpen={() => setOpen(true)}
+      onClick={onOpenContext}
+    />
+  );
 }
 
-/** The chip itself, from what it says. */
-export function UsageChipView({ text, onOpen }: { text: UsageText; onOpen?: () => void }): React.JSX.Element {
+const RING = 16;
+
+const ringColor = (theme: Theme, percent: number | undefined): string =>
+  percent !== undefined && percent >= WARN_PERCENT ? theme.vars.palette.warning.main : theme.vars.palette.text.secondary;
+
+interface UsageChipViewProps {
+  text: UsageText;
+  contextPercent?: number | undefined;
+  onOpen?: () => void;
+  onClick?: (() => void) | undefined;
+}
+
+/** The ring itself, from what it says: the context share drawn, the usage in its tooltip and its accessible name. */
+export function UsageChipView({ text, contextPercent, onOpen, onClick }: UsageChipViewProps): React.JSX.Element {
   const { label, detail, cachedPercent } = text;
+  const context = contextPercent === undefined ? undefined : t('workspace.usage.context', 'Context: {{percent}}% of the window used', { percent: contextPercent });
+  const title = [label, context, detail].filter((line) => line !== undefined).join(' · ');
   return (
-    <Tooltip title={detail} {...(onOpen === undefined ? {} : { onOpen })}>
-      <Box
-        component="span"
+    <Tooltip title={title} {...(onOpen === undefined ? {} : { onOpen })}>
+      <ButtonBase
         data-testid="usage-chip"
         data-cached-percent={cachedPercent}
+        data-context-percent={contextPercent}
         aria-label={t('workspace.usage.aria', 'Tokens used: {{label}}', { label })}
-        sx={{ display: 'inline-flex', alignItems: 'center', color: 'text.secondary', flexShrink: 0 }}
+        onClick={onClick}
+        sx={(theme: Theme) => ({
+          position: 'relative',
+          flexShrink: 0,
+          width: '1.75rem',
+          height: '1.75rem',
+          borderRadius: theme.vars.shape.radiusSm,
+          '&:hover': { background: theme.vars.palette.background.button.drawerMenu.hover },
+        })}
       >
-        <Typography component="span" variant="labelSmall" aria-hidden>
-          {label}
-        </Typography>
-      </Box>
+        <CircularProgress variant="determinate" value={100} size={RING} thickness={5} aria-hidden sx={(theme: Theme) => ({ position: 'absolute', color: theme.vars.palette.divider })} />
+        <CircularProgress variant="determinate" value={contextPercent ?? 0} size={RING} thickness={5} aria-hidden sx={(theme: Theme) => ({ position: 'absolute', color: ringColor(theme, contextPercent) })} />
+      </ButtonBase>
     </Tooltip>
   );
 }

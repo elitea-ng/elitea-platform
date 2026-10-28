@@ -29,6 +29,11 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
+import { acquireNamedLock } from '../../fixtures/mutex';
+
+/** The cross-worker lock over e2e-member's bucket-exception map (`fixtures/mutex.ts`). */
+const MEMBER_EXCEPTIONS_LOCK = 'member-bucket-exceptions';
+
 
 /** A bucket no other spec uses — see the header on blast radius. */
 const ACL_BUCKET = 'autotest-j20-acl-art';
@@ -123,6 +128,24 @@ test.describe('J20 artifacts bucket access lists', () => {
   // bucket and one exception row, and J20j depends on J20i having removed its
   // own.
   test.describe.configure({ mode: 'serial' });
+
+  // Every test here writes e2e-member's exception map, and a PUT REPLACES that
+  // whole map: a sibling's read-merge-write that read before this test's write
+  // deletes this test's entry after it was confirmed, and the enforcement
+  // check then passes for the wrong reason (200 instead of 403, CI run
+  // 40688617060). artifacts.p13-bucket-permissions.spec.ts and
+  // artifacts.bucket-access.spec.ts take the same lock for each test's life.
+  let releaseExceptions: (() => Promise<void>) | undefined;
+  test.beforeEach(async () => {
+    // Queueing behind siblings counts against the test's budget; stay above
+    // the mutex's own 240 s outer bound, as the other lock holders do.
+    test.setTimeout(280_000);
+    releaseExceptions = await acquireNamedLock(MEMBER_EXCEPTIONS_LOCK);
+  });
+  test.afterEach(async () => {
+    await releaseExceptions?.();
+    releaseExceptions = undefined;
+  });
 
   test('J20h: the dialog states the default and shows no exceptions for an open bucket', async ({ page, request }) => {
     await openArtifacts(page);

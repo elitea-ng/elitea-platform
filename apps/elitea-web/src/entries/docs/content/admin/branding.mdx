@@ -49,3 +49,28 @@ An unsaved draft is respected by the import and restore controls — neither sil
 
 Every branding field defaults to the platform's own look unless you override it. This means a fresh deployment already looks complete without any editing here — Branding is where you replace that default with your organization's identity, one field at a time, not something you must fully populate before it is usable.
 
+
+## The default look: Elitea AI
+
+When you do not set a field, the platform uses the Elitea AI brand (brand guide v3). The full guide is at [the Elitea AI brand guide](https://elitea-ng.github.io/elitea-platform/brand/).
+
+| Part | Default |
+| --- | --- |
+| Product name | Elitea AI |
+| Logo | The LE-03 mark: four rounded bars in cyan, violet, orange and indigo. The full logo adds the "Elitea AI" wordmark. |
+| Dark scheme ("Ink") | Near-black canvas `#0B0B18`, with lighter surface steps for raised areas. Raised areas do not use shadows. |
+| Light scheme ("Paper") | White canvas `#FFFFFF`, light grey surfaces and near-black text. |
+| Primary colour | Indigo `#4A4DE8`, with white text, in both schemes. It is the only colour for primary actions. |
+| Signal colour | Cyan `#00BFE6` on dark for links, focus rings and the active navigation item. On light, the signal colour is indigo, because cyan text on white is not legible. |
+| AI colour | Violet `#7A5CFF` marks AI only, for example model badges. |
+| Dot | Orange `#FF6B1A` is only a small notification or live marker. It is never a text background. |
+| Typefaces | Manrope for UI text, Sora for headings and JetBrains Mono for code. The font files are part of the platform, so no external font service is used. |
+| Shape | Corner radii of 6, 10 and 14 px, and pill shapes. Keyboard focus shows a 2 px ring in the signal colour, 2 px from the control. |
+| Surfaces | Flat. There are no gradients. |
+| Sign-in pages and e-mail | The same look: indigo button with white text, Ink or Paper surfaces, the LE-03 logo. |
+
+A hand-tuned scheme token can set the focus colour separately: the token `focus.ring` holds the ring colour for each scheme (by default the signal colour).
+
+<Note>
+A deployment that has its own brand pack, or its own scheme tokens, keeps its look after an upgrade. Only fields that inherit the default show the Elitea AI look. To start again from the default, reset the field.
+</Note>

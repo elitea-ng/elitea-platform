@@ -20,15 +20,19 @@ describe('OKLCH', () => {
   });
 });
 
-/** Inputs and results of docs/design-system.md §3.3 (the design's reference script). */
+/**
+ * Inputs and results of docs/design-system.md §3.3 (the design's reference script), against the
+ * brand v3 grounds (Paper / Ink surfaces, flat). The first two are the former Elitea accents,
+ * kept as sample workspace brands.
+ */
 const CASES: [string, string, Record<Scheme, [string, Rgba]>][] = [
-  ['Elitea primary.main light', '#C428DD', { light: ['#B810D1', WHITE], dark: ['#DA44F3', BLACK] }],
-  ['Elitea primary.main dark', '#6AE8FA', { light: ['#087784', WHITE], dark: ['#6AE8FA', BLACK] }],
-  ['lemon', '#FFD400', { light: ['#816B04', WHITE], dark: ['#FFD400', BLACK] }],
-  ['navy', '#0B1F44', { light: ['#0B1F44', WHITE], dark: ['#718BB9', BLACK] }],
-  ['teal', '#14B8A6', { light: ['#0B796D', WHITE], dark: ['#14B8A6', BLACK] }],
-  ['orange', '#F97316', { light: ['#B14F0C', WHITE], dark: ['#F97316', BLACK] }],
-  ['product rose', '#B4306A', { light: ['#B4306A', WHITE], dark: ['#E15A90', BLACK] }],
+  ['magenta (former light accent)', '#C428DD', { light: ['#BD1CD6', WHITE], dark: ['#D741F0', BLACK] }],
+  ['pale cyan (former dark accent)', '#6AE8FA', { light: ['#147C89', WHITE], dark: ['#6AE8FA', BLACK] }],
+  ['lemon', '#FFD400', { light: ['#866F0F', WHITE], dark: ['#FFD400', BLACK] }],
+  ['navy', '#0B1F44', { light: ['#0B1F44', WHITE], dark: ['#6F89B6', BLACK] }],
+  ['teal', '#14B8A6', { light: ['#027F72', WHITE], dark: ['#14B8A6', BLACK] }],
+  ['orange', '#F97316', { light: ['#B95204', WHITE], dark: ['#F97316', BLACK] }],
+  ['rose', '#B4306A', { light: ['#B4306A', WHITE], dark: ['#DE588D', BLACK] }],
 ];
 
 describe('correctAccent', () => {
@@ -79,7 +83,7 @@ describe('brandOverrides', () => {
     // A file chip on my own bubble (AttachmentStrip) veils the bubble.
     pairs.push([merged.bubbleUserText, formatColor(bubbleChipGround(merged))]);
     for (const [fg, bg] of pairs) expect(contrastRatio(hex(fg), hex(bg))).toBeGreaterThanOrEqual(4.5);
-    // The (possibly tinted) gradient still carries tertiary text and the accent.
+    // The (flat) ground still carries tertiary text and the accent.
     for (const stop of merged.backgroundGradient.stops) {
       expect(contrastRatio(hex(merged.textTertiary), hex(stop))).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(hex(merged.accent), hex(stop))).toBeGreaterThanOrEqual(4.5);
@@ -96,12 +100,13 @@ describe('brandOverrides', () => {
     const out = brandOverrides(hex('#14B8A6'), 'light')!;
     expect(Object.keys(out).sort()).toEqual(
       [
-        'accent', 'accentOn', 'accentPressed', 'accentSoft', 'accentSoftOn', 'backgroundGradient',
-        'bubbleUser', 'bubbleUserText', 'chipSelected', 'chipSelectedText', 'orb',
+        'accent', 'accentOn', 'accentPressed', 'accentSoft', 'accentSoftOn', 'primary', 'primaryOn', 'primaryPressed',
+        'bubbleUser', 'bubbleUserText', 'chipSelected', 'chipSelectedText',
       ].sort(),
     );
-    expect(out.backgroundGradient!.stops.slice(1)).toEqual(colors.light.backgroundGradient.stops.slice(1));
-    expect(out.orb!.stops.slice(1)).toEqual(colors.light.orb.stops.slice(1));
+    // No gradient tint and no orb tint (brand v3: no gradients); the primary fill is the accent.
+    expect(out.primary).toBe(out.accent);
+    expect(out.primaryOn).toBe(out.accentOn);
   });
 
   it('dark user bubble is a deep brand tone, not the bright accent', () => {
@@ -129,18 +134,18 @@ describe('resolveBrand (scheme mapping, §3.4)', () => {
 
   it('each scheme reads its own accent', () => {
     const out = resolveBrand({ productDefault: false, lightAccent: '#C428DD', darkAccent: '#6AE8FA' });
-    expect(out.light.accent).toBe('#b402cd'); // §3.3 table + the tinted stop
+    expect(out.light.accent).toBe('#bd1cd6'); // §3.3 table
     expect(out.dark.accent).toBe('#6ae8fa');
   });
 
   it('derives the missing scheme from the other one', () => {
     const out = resolveBrand({ productDefault: false, lightAccent: '#0B1F44' });
     expect(out.light.accent).toBe('#0b1f44');
-    expect(out.dark.accent).toBe('#718bb9');
+    expect(out.dark.accent).toBe('#6f89b6');
   });
 
   it('falls back to brand.hue', () => {
-    expect(resolveBrand({ productDefault: false, hue: '#F97316' }).light.accent).toBe('#ae4d06');
+    expect(resolveBrand({ productDefault: false, hue: '#F97316' }).light.accent).toBe('#b95204');
   });
 
   it('ignores unparseable and translucent inputs', () => {

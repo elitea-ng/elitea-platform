@@ -180,4 +180,23 @@ describe('App boot redirect', () => {
     expect(assigned).toEqual([]);
   });
 
+
+  it('asks again on desktop when the boot probe fails, instead of loading forever', async () => {
+    configureEnv();
+    vi.stubEnv('MODE', 'desktop');
+    vi.stubGlobal('open', () => null);
+    let calls = 0;
+    server.use(
+      http.get('/api/v2/social/author/', () => {
+        calls++;
+        // The network is not up yet on the first ask (launch, wake from sleep).
+        return calls === 1 ? HttpResponse.error() : HttpResponse.json({ id: '7', personal_project_id: '' });
+      }),
+      http.all('*', () => new HttpResponse(null, { status: 404 })),
+    );
+
+    render(<App />);
+    await waitFor(() => expect(useSessionStore.getState().user?.id).toBe('7'), { timeout: 4000 });
+    expect(calls).toBe(2);
+  });
 });

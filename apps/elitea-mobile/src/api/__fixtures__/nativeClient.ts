@@ -103,8 +103,9 @@ export function upgradeRequiredBody(minimum = '0.2.0') {
  * A brand pack as `pack.json` serves it: asset references absolute against the
  * public origin, the scheme token records in the web app's vocabulary. Only
  * the token ids the app maps are included; their values are those of the
- * server's product default pack at 398985cdc, plus a gradient the mapper must
- * ignore.
+ * server's product default pack at 398985cdc, with the brand v3 accent inputs
+ * (`brand.hue`, `primary.main`, `text.button.primary`: `DEFAULT_PACK_ACCENTS` of
+ * `@elitea/client-core/brand`), plus a gradient the mapper must ignore.
  */
 export function brandPack(overrides: Record<string, unknown> = {}) {
   return {
@@ -125,7 +126,7 @@ export function brandPack(overrides: Record<string, unknown> = {}) {
     },
     shape: { radiusSm: 4, radiusMd: 8, radiusLg: 16, radiusPill: 9999, density: 'comfortable' },
     locale: { default: 'en-GB', dateLocale: 'en-GB' },
-    brand: { hue: '#6ae8fa' },
+    brand: { hue: '#4a4de8' },
     schemes: {
       light: {
         'background.default': 'rgba(248, 252, 255, 1)',
@@ -133,8 +134,8 @@ export function brandPack(overrides: Record<string, unknown> = {}) {
         'background.agentModal.background': 'linear-gradient(224.97deg, #DEEDFF 0%, #F9DFFE 100%)',
         'border.lines': 'rgba(203, 206, 214, 1)',
         'error.main': '#D71616',
-        'primary.main': 'rgba(196, 40, 221, 1)',
-        'text.button.primary': 'rgba(248, 252, 255, 1)',
+        'primary.main': '#4A4DE8',
+        'text.button.primary': '#FFFFFF',
         'text.primary': '#777A83',
         'text.secondary': '#0E131D',
       },
@@ -143,8 +144,8 @@ export function brandPack(overrides: Record<string, unknown> = {}) {
         'background.secondary': '#181F2A',
         'border.lines': '#3B3E46',
         'error.main': '#D71616',
-        'primary.main': '#6ae8fa',
-        'text.button.primary': '#0E131D',
+        'primary.main': '#4A4DE8',
+        'text.button.primary': '#FFFFFF',
         'text.primary': '#A9B7C1',
         'text.secondary': '#FFFFFF',
       },

@@ -207,5 +207,9 @@ refused the model-checkpoint reclaim (473c27f27), the answered child was parked 
 `migrations/shared/0192_execution_interrupt_wakes.sql` (manifest head 192) and the Worker's opt-in is
 `ClaimCommandRequestV1.fanout_interrupt_decisions = 19` (neither was released). Generated Go/Python protobuf code and
 `api.gen.go` were regenerated with the pinned tools (`scripts/contract/generate_proto.sh`, oapi-codegen v2.7.2).
+A later merge (2026-10-28) brought migration 0193 with 0192 left free for this PR (main skipped 0189 the same
+way): the migration stays 0192 and the manifest head is 193; the runner applies any unapplied migration in manifest
+order, and 0192 and 0193 are independent. main moved the turn checks into `validateAgentTurns`; the fan-out wake check
+moved with them, and the admission carries both `CurrentFanoutWakeTurn` and main's `GovernedCredentials`.
 `main` routed agent claims through a shared fresh-claim builder that dropped the fan-out opt-in; agent claims now use
 an agent builder with both opt-ins (`ordinary_agent_claims_opt_into_fanout_interrupt_decisions` caught it).

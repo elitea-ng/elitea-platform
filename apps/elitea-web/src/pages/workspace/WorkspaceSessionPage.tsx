@@ -38,12 +38,15 @@ import { CloudTranscript } from './CloudTranscript';
 import { CreateAgentDialog } from './CreateAgentDialog';
 import { HandoffDialogs } from './HandoffControls';
 import { ForkNotices } from './forkNotices';
-import { COLUMN, EarlierTurns, Exchanges, ThreadIntro } from './sessionParts';
+import { CONVERSATION_COLUMN as COLUMN } from '@/shared/ui/conversation-column';
+
+import { EarlierTurns, Exchanges, ThreadIntro } from './sessionParts';
 import { SessionInspector } from './SessionPanel';
 import { ThreadComposer } from './ThreadComposer';
 import { ThreadToolbar } from './ThreadToolbar';
 import { UnboundFolder } from './UnboundFolder';
 import { threadMeter } from './contextBreakdown';
+import { useIdleCompacted, withIdleCompaction, type IdleCompacted } from './useIdleCompacted';
 import { useCloudChat } from './useCloudChat';
 import { useSessionFork } from './useForkThread';
 import { useAgentSkills } from './useAgentSkills';
@@ -70,8 +73,9 @@ function useThreadSubject(workspace: Workspace, conversationId: string): string 
   return threads.data?.find((x) => x.id === conversationId)?.title ?? workspace.name;
 }
 
-/** The Context tab's figures: none for the cloud copy (its context is the cloud's). */
-const inspectorMeter = (handoff: ThreadHandoff, turn: WorkspaceTurn, history: ThreadHistory) => (handoff.status?.executor === 'cloud' ? undefined : threadMeter(turn, history));
+/** The Context tab's figures, after a background idle compaction: none for the cloud copy (its context is the cloud's). */
+const inspectorMeter = (handoff: ThreadHandoff, turn: WorkspaceTurn, history: ThreadHistory, compacted: IdleCompacted | null) =>
+  handoff.status?.executor === 'cloud' ? undefined : withIdleCompaction(threadMeter(turn, history), compacted);
 
 const indexSettingsOpener = (hasIndex: boolean): (() => void) | undefined => (hasIndex ? () => useDesktopLayout.getState().showInspector('index') : undefined);
 
@@ -79,9 +83,9 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { ipc, workspace, projectId, conversationId } = props;
   const session = useThreadSession(props);
   const subject = useThreadSubject(workspace, conversationId);
+  const idleCompacted = useIdleCompacted(workspace.id, conversationId);
   const { turn, commands, raw } = session;
   const skills = useAgentSkills(projectId, raw.versionId);
-  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const hasIndex = useHasIndexHost();
   const appIpc = useAppIpc();
   // "Continue?" at the step limit and an MCP sign-in are cards in the transcript; the rest are the dialog's queue.
@@ -114,11 +118,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           workspace={workspace}
           conversationId={conversationId}
           projectId={projectId}
-          projects={session.projects}
           busy={busy}
-          onChangeProject={(next) => session.rebind.mutate(next)}
-          pathOpen={projectMenuOpen}
-          onPathOpenChange={setProjectMenuOpen}
           attention={attentionOf(session)}
           onIndexSettings={indexSettingsOpener(hasIndex)}
           onFork={forking.onForkThread}
@@ -131,7 +131,13 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
             ) : (
               <>
               {raw.empty && (
-                <NoAgents codingAgent={codingAgent} busy={busy} onCreate={session.createAgent} onOtherProject={() => setProjectMenuOpen(true)} />
+                <NoAgents
+                  codingAgent={codingAgent}
+                  busy={busy}
+                  onCreate={session.createAgent}
+                  otherProjects={session.projects.filter((project) => project.id !== projectId)}
+                  onMoveTo={(next) => session.rebind.mutate(next)}
+                />
               )}
               {!raw.empty && !started && nothingEarlier && (
                 <ThreadIntro
@@ -153,7 +159,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           </Box>
         </Box>
         <Box sx={{ ...COLUMN, flexShrink: 0, paddingTop: 1, paddingBottom: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <ThreadComposer ipc={ipc} workspaceId={workspace.id} projectId={projectId} conversationId={conversationId} session={session} turn={turn} handoff={handoff} cloud={cloud} skills={skills} />
+          <ThreadComposer ipc={ipc} workspaceId={workspace.id} projectId={projectId} conversationId={conversationId} session={session} turn={turn} handoff={handoff} cloud={cloud} skills={skills} canBranch={workspace.is_git && workspace.parent_id === undefined} />
         </Box>
       </Box>
       <SessionInspector
@@ -169,7 +175,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         decided={session.decided}
         plan={session.plan}
         planMode={commands.planMode}
-        context={inspectorMeter(handoff, turn, session.history)}
+        context={inspectorMeter(handoff, turn, session.history, idleCompacted)}
       />
       <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} />
       <CreateAgentDialog

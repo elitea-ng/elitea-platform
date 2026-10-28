@@ -2370,9 +2370,9 @@ impl<R> AgentControlClient<R> {
     }
 
     /// A fresh claim request with this worker's governed opt-in. The node
-    /// recovery and checkpoint inspection claims never set it: they do not
-    /// fetch the context, so Main refuses them a governed command
-    /// (`GOVERNED_WORKER_REQUIRED`) and the recovery fails closed.
+    /// recovery and checkpoint inspection claims never set it, because they
+    /// do not fetch the context; the delivery router therefore sends every
+    /// governed command to the fresh claim, even with recovery enabled.
     fn fresh_claim_request(
         &self,
         verified: &impl VerifiedExecutionCommand,

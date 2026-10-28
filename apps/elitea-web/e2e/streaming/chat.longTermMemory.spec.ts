@@ -33,7 +33,7 @@
  * (`entities/message/lib/normalise.ts`'s `normaliseAssistantMessage`, the
  * one path this feature's `memoriesUsed` field is guaranteed to flow
  * through) and the journey asserts the "Using N memories" indicator
- * (`MessageHeaderRow`'s `chat-message-memories-used` chip) renders on the
+ * (`MessageMeta`'s `chat-message-memories-used` chip, in the reply's action row) renders on the
  * answer — proof `RecordCurrentMemoryUsage`'s best-effort stamp onto
  * `chat_message_group.meta` reached the ordinary transcript read, not just
  * the admission response.

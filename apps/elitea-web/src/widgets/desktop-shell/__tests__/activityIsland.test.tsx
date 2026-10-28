@@ -108,24 +108,15 @@ describe('ActivityIsland', () => {
     await waitFor(() => expect(island).toHaveTextContent('Index ready'));
   });
 
-  it('lists everything running with progress, and cancels an index build', async () => {
-    const user = userEvent.setup();
+  it('leaves an index build out of the title bar: the composer icon and the Index tab show it', async () => {
     const { ipc, indexIpc } = mount();
     await screen.findByTestId('activity-island');
     await waitFor(() => expect(ipc.subscriberCount()).toBeGreaterThan(0));
     act(() => {
-      indexIpc.emit({ workspace_id: 'w1', phase: 'parsing', message: '[extract] Parsing 120 files', status: building });
       indexIpc.emit({ workspace_id: 'w1', phase: 'building', message: '[progress] Processed 40 files', status: building });
     });
-    const island = screen.getByTestId('activity-island');
-    await waitFor(() => expect(island).toHaveTextContent('Indexing 40/120'));
-    await user.click(island);
-    const popover = await screen.findByTestId('island-popover');
-    const row = within(popover).getByTestId('island-row');
-    expect(row).toHaveTextContent('Indexing 40/120');
-    expect(within(row).getByRole('progressbar', { name: 'Indexing 40/120' })).toHaveAttribute('aria-valuenow', '33');
-    await user.click(within(row).getByRole('button', { name: /Cancel Indexing/ }));
-    await waitFor(() => expect(indexIpc.calls.cancelled).toEqual(['w1']));
+    await waitFor(() => expect(useActivityFeed.getState().indexes['w1']).toBeDefined());
+    expect(screen.getByTestId('activity-island')).not.toHaveTextContent('Indexing');
   });
 
   it('opens the thread of an approval when it is clicked', async () => {

@@ -835,7 +835,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// elitea_runtime.execution_interrupt_wakes with the partial unique index
 	// "one active continuation per response", and the open-card index a new
 	// turn supersedes through. No data, no permission.
-	require.EqualValues(t, 192, Head(shared))
+	//
+	// 193: shared/0193_credential_reference_lifecycle.sql, the stager,
+	// activator and migration source of credential references (#1124).
+	// Nullable columns only; 0192 is claimed by another branch. No data, no
+	// permission.
+	require.EqualValues(t, 193, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -1064,7 +1069,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// chat_participant_mapping.conversation_id's key to chat_conversations
 	// becomes ON DELETE CASCADE, the shape the dev bootstrap always had
 	// (#1429). No data, no permission.
-	require.EqualValues(t, 157, Head(tenant))
+	// 158: tenant/0158_unattended_run_mandates.sql, the attached mandate of
+	// a governed pipeline schedule, pipeline trigger (`mandate_id`) and index
+	// schedule (index_schedule_mandates), and the three governed schedule
+	// skips in last_result (#1122). NULL and empty with the flag off. No
+	// data, no permission.
+	require.EqualValues(t, 158, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

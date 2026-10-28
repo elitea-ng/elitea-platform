@@ -7,7 +7,7 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { readThreads, recordThread, WorkspaceIpcProvider } from '@/features/workspace';
@@ -30,10 +30,15 @@ const globals = globalThis as unknown as Record<string, unknown>;
 const APP: Workspace = { id: 'w1', path: '/Users/me/code/app', name: 'app', project_id: 42, is_git: true };
 const DOCS: Workspace = { id: 'w2', path: '/Users/me/docs', name: 'docs', project_id: null, is_git: false };
 
-function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Workspace[]; nextOpen?: Workspace; handoffIpc?: FakeHandoffIpc } = {}) {
+const PROJECTS = [
+  { id: 42, name: 'Marketing', suspended: false },
+  { id: 7, name: 'Sales', suspended: false },
+];
+
+function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Workspace[]; nextOpen?: Workspace; handoffIpc?: FakeHandoffIpc; onSelectProject?: (id: string, name: string) => void; projects?: typeof PROJECTS; permissions?: ReadonlySet<string> } = {}) {
   const rootRoute = createRootRoute({
     component: () => (
-      <DesktopFrame permissions={new Set()} projects={[{ id: 42, name: 'Marketing', suspended: false }]} selectedProjectId="42" onSelectProject={() => undefined}>
+      <DesktopFrame permissions={options.permissions ?? new Set()} projects={options.projects ?? PROJECTS} selectedProjectId="42" onSelectProject={options.onSelectProject ?? (() => undefined)}>
         <Outlet />
       </DesktopFrame>
     ),
@@ -45,6 +50,9 @@ function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Wo
       createRoute({ getParentRoute: () => rootRoute, path: '/workspaces/$workspaceId', component: page('thread') }),
       createRoute({ getParentRoute: () => rootRoute, path: '/settings', component: page('settings') }),
       createRoute({ getParentRoute: () => rootRoute, path: '/elitea-catalog', component: page('catalog') }),
+      createRoute({ getParentRoute: () => rootRoute, path: '/apps', component: page('apps') }),
+      createRoute({ getParentRoute: () => rootRoute, path: '/skills', component: page('skills') }),
+      createRoute({ getParentRoute: () => rootRoute, path: '/chat', component: page('chat') }),
     ]),
     history: createMemoryHistory({ initialEntries: [options.path ?? '/workspaces'] }),
   });
@@ -75,22 +83,23 @@ afterEach(() => {
 });
 
 describe('DesktopFrame sidebar', () => {
-  it('lists the folders with their project and their threads, newest first, and opens a thread', async () => {
+  it("lists the project's folders and their threads, newest first, and opens a thread", async () => {
     recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
     recordThread('w1', { id: '78', title: 'quick overview', updatedAt: 2 });
     const user = userEvent.setup();
     const { router } = mount();
 
     const folders = await screen.findAllByTestId('shell-folder');
-    // A folder with threads shows their count after its name.
-    expect(folders.map((f) => within(f).getAllByRole('button')[0]?.textContent)).toEqual(['appMarketing2', 'docsNo project']);
+    // A folder with threads shows their count after its name; only one with no project names that.
+    expect(folders.map((f) => within(f).getAllByRole('button')[0]?.textContent)).toEqual(['app2', 'docsNo project']);
     const threads = await within(folders[0] as HTMLElement).findAllByTestId('shell-thread');
     expect(threads.map((thread) => thread.textContent)).toEqual(['quick overview', 'fix the build']);
 
-    await user.click(within(threads[1] as HTMLElement).getByRole('button'));
+    // The row's first button opens it; the second is its hover "⋯".
+    await user.click(within(threads[1] as HTMLElement).getAllByRole('button')[0] as HTMLElement);
     await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/w1'));
     expect(router.state.location.search).toEqual({ conversation: '77' });
-    expect(within(threads[1] as HTMLElement).getByRole('button')).toHaveAttribute('aria-current', 'page');
+    expect(within(threads[1] as HTMLElement).getAllByRole('button')[0]).toHaveAttribute('aria-current', 'page');
 
     // A folder collapses to its row.
     await user.click(within(folders[0] as HTMLElement).getAllByRole('button')[0] as HTMLElement);
@@ -170,12 +179,28 @@ describe('DesktopFrame sidebar', () => {
     const user = userEvent.setup();
     const { router } = mount();
     const sidebar = await screen.findByTestId('desktop-sidebar');
-    await user.click(within(within(sidebar).getByTestId('shell-elitea-catalog')).getByRole('button'));
+    await user.click(within(within(sidebar).getByTestId('shell-elitea-applications')).getByRole('button'));
+    expect(await screen.findByTestId('apps')).toBeInTheDocument();
+    expect(screen.getByTestId('page-title')).toHaveTextContent('Applications');
+    // Catalog and Settings live in the account menu at the sidebar's foot.
+    await user.click(within(sidebar).getByTestId('shell-account'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Catalog' }));
     expect(await screen.findByTestId('catalog')).toBeInTheDocument();
     expect(screen.getByTestId('page-title')).toHaveTextContent('Catalog');
-    await user.click(within(sidebar).getByRole('button', { name: 'Settings' }));
+    expect(within(sidebar).queryByTestId('shell-elitea-catalog')).not.toBeInTheDocument();
+    await user.click(within(sidebar).getByTestId('shell-account'));
+    await user.click(await screen.findByRole('menuitem', { name: /^Settings/ }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
-    expect(screen.getByTestId('page-title')).toHaveTextContent('Settings');
+    // Settings opens as a dialog over the page it came from, and closing goes back there.
+    const dialog = await screen.findByTestId('settings-dialog');
+    expect(within(dialog).getByTestId('settings')).toBeInTheDocument();
+    // Behind it, a still copy of the Catalog page: inert, without the live page's test ids.
+    expect(document.querySelector('[inert] main')).not.toBeNull();
+    expect(screen.queryByTestId('catalog')).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/elitea-catalog'));
+    expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument();
+    expect(screen.getByTestId('page-title')).toHaveTextContent('Catalog');
     // The sidebar is the way to everything: the title row carries no "back to Local work" button.
     const main = screen.getByRole('main');
     expect(within(main).queryByRole('button', { name: 'Local work' })).not.toBeInTheDocument();
@@ -184,6 +209,29 @@ describe('DesktopFrame sidebar', () => {
     act(() => useDesktopLayout.getState().setSidebarOpen(false));
     expect(within(main).getByRole('button', { name: 'Show sidebar' })).toBeInTheDocument();
     expect(within(main).queryByRole('button', { name: 'Local work' })).not.toBeInTheDocument();
+  });
+});
+
+describe('DesktopFrame Workshop group', () => {
+  // Without permissions only Skills is offered of the five (agents, pipelines, toolkits and MCPs are gated).
+  it('keeps agents, pipelines and the rest in a group that is closed until opened, and remembers it', async () => {
+    const user = userEvent.setup();
+    const { router } = mount();
+    const sidebar = await screen.findByTestId('desktop-sidebar');
+    const workshop = within(sidebar).getByTestId('shell-elitea-workshop');
+    expect(within(sidebar).queryByTestId('shell-elitea-skills')).not.toBeInTheDocument();
+    expect(within(workshop).getByRole('button', { name: 'Workshop' })).toHaveAttribute('aria-expanded', 'false');
+    await user.click(within(workshop).getByRole('button', { name: 'Workshop' }));
+    expect(localStorage.getItem('el.desktop.workshopOpen')).toBe('true');
+    await user.click(within(within(sidebar).getByTestId('shell-elitea-skills')).getByRole('button'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/skills'));
+    expect(await screen.findByTestId('skills')).toBeInTheDocument();
+  });
+
+  it('opens itself when one of its pages is on screen', async () => {
+    mount({ path: '/skills' });
+    const sidebar = await screen.findByTestId('desktop-sidebar');
+    expect(await within(sidebar).findByTestId('shell-elitea-skills')).toBeInTheDocument();
   });
 });
 
@@ -197,7 +245,7 @@ describe('DesktopFrame context menus', () => {
     appIpc.chooseFromContextMenu('chat');
     fireEvent.contextMenu(thread);
     await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
-    expect((appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'))).toEqual(['Open', 'Open in chat', 'Copy Link', 'Rename…']);
+    expect((appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'))).toEqual(['Open', 'Open in chat', 'Copy Link', 'Rename…', '-', 'Archive', '-', 'Delete…']);
     await waitFor(() => expect(router.state.location.pathname).toBe('/chat/77'));
   });
 
@@ -249,9 +297,9 @@ describe('DesktopFrame context menus', () => {
     fireEvent.contextMenu(within(folders[0] as HTMLElement).getAllByRole('button')[0] as HTMLElement);
     await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
     const labels = (appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'));
-    expect(labels).toEqual(['New thread', '-', 'Reveal in Finder', 'Copy Path', '-', 'Project', '-', 'Remove from sidebar']);
+    expect(labels).toEqual(['New thread', 'New thread in a worktree', '-', 'Reveal in Finder', 'Copy Path', '-', 'Project', '-', 'Remove from sidebar']);
     const submenu = (appIpc.calls.contextMenus[0] ?? []).find((item) => 'children' in item);
-    expect(submenu !== undefined && 'children' in submenu ? submenu.children.map((c) => c.label) : []).toEqual(['✓ Marketing']);
+    expect(submenu !== undefined && 'children' in submenu ? submenu.children.map((c) => c.label) : []).toEqual(['✓ Marketing', 'Sales']);
   });
 
   it('leaves the browser alone without a host', async () => {
@@ -264,7 +312,7 @@ describe('DesktopFrame context menus', () => {
 });
 
 describe('DesktopFrame sidebar layout', () => {
-  it('heads the folders "Local work" and keeps each folder on one line, its project as quiet text and in the tooltip', async () => {
+  it('heads the folders "Local work" and keeps each folder on one line, its project in the tooltip', async () => {
     mount();
     const sidebar = await screen.findByTestId('desktop-sidebar');
     expect(within(sidebar).getByRole('navigation', { name: 'Local work' })).toBeInTheDocument();
@@ -272,7 +320,7 @@ describe('DesktopFrame sidebar layout', () => {
     const [app] = await screen.findAllByTestId('shell-folder');
     const row = within(app as HTMLElement).getAllByRole('button')[0] as HTMLElement;
     expect(row).toHaveAttribute('title', '/Users/me/code/app\nProject: Marketing');
-    expect(within(row).getByText('Marketing')).toHaveClass('shell-row-meta');
+    expect(within(row).queryByText('Marketing')).toBeNull();
     // The empty-state row shows only when there is no folder.
     expect(within(sidebar).queryByRole('button', { name: 'Open a folder to work in' })).toBeNull();
   });
@@ -292,18 +340,82 @@ describe('DesktopFrame sidebar layout', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/w3'));
   });
 
-  it('collapses the Elitea section to the page on screen, and remembers it', async () => {
+  it("has one project switcher; the folders listed are that project's and those with none", async () => {
     const user = userEvent.setup();
-    mount({ path: '/elitea-catalog' });
+    const onSelectProject = vi.fn();
+    const other: Workspace = { id: 'w9', path: '/Users/me/sales', name: 'sales-deck', project_id: 7, is_git: false };
+    mount({ workspaces: [APP, DOCS, other], onSelectProject });
     const sidebar = await screen.findByTestId('desktop-sidebar');
-    const toggle = within(sidebar).getByRole('button', { name: 'Elitea' });
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    const before = within(sidebar).getAllByTestId(/^shell-elitea-/).length;
-    expect(before).toBeGreaterThan(1);
-    await user.click(toggle);
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(within(sidebar).getAllByTestId(/^shell-elitea-/).map((row) => row.dataset['testid'])).toEqual(['shell-elitea-catalog']);
-    expect(localStorage.getItem('el.desktop.eliteaOpen')).toBe('false');
+    await within(sidebar).findAllByTestId('shell-folder');
+    expect(within(sidebar).queryByText('sales-deck')).toBeNull();
+    expect(within(sidebar).queryByRole('button', { name: 'Elitea' })).toBeNull();
+    const switcher = within(sidebar).getByTestId('shell-project-switcher');
+    expect(switcher).toHaveAccessibleName('Project: Marketing');
+    await user.click(switcher);
+    expect(await screen.findByRole('option', { name: 'Marketing' })).toHaveAttribute('aria-selected', 'true');
+    await user.click(screen.getByRole('option', { name: 'Sales' }));
+    expect(onSelectProject).toHaveBeenCalledWith('7', 'Sales');
+  });
+
+  it('opens the Local work page from its caption, and a new chat from the Chats caption', async () => {
+    const user = userEvent.setup();
+    const { router } = mount({ path: '/skills', permissions: new Set(['models.chat.folders.get']) });
+    await user.click(await screen.findByTestId('shell-local-work'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces'));
+    await user.click(screen.getByTestId('shell-chats-caption'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat'));
+    expect(router.state.location.search).toEqual({ create: '1' });
+  });
+
+  it('searches the projects as the person types and draws a long list a page at a time', async () => {
+    const user = userEvent.setup();
+    const many = Array.from({ length: 120 }, (_, index) => ({ id: 1000 + index, name: `Team ${index}`, suspended: false }));
+    const onSelectProject = vi.fn();
+    mount({ projects: [...PROJECTS, ...many], onSelectProject });
+    await user.click(await screen.findByTestId('shell-project-switcher'));
+    const list = await screen.findByRole('listbox', { name: 'Projects' });
+    expect(within(list).getAllByRole('option')).toHaveLength(50);
+    const search = screen.getByTestId('project-picker-search');
+    expect(search).toHaveFocus();
+    await user.type(search, 'team 11');
+    expect(within(list).getAllByRole('option').map((option) => option.textContent)).toEqual(['Team 11', ...Array.from({ length: 10 }, (_, index) => `Team ${110 + index}`)]);
+    await user.keyboard('{ArrowDown}{Enter}');
+    expect(onSelectProject).toHaveBeenCalledWith('1110', 'Team 110');
+    await user.click(screen.getByTestId('shell-project-switcher'));
+    await user.type(await screen.findByTestId('project-picker-search'), 'nothing like it');
+    expect(screen.getByText('No projects match')).toBeInTheDocument();
+  });
+
+  it("leaves a folder's thread for the start screen when switching to another project", async () => {
+    const user = userEvent.setup();
+    const onSelectProject = vi.fn();
+    const { router } = mount({ path: `/workspaces/${APP.id}`, onSelectProject });
+    await user.click(await screen.findByTestId('shell-project-switcher'));
+    await user.click(await screen.findByRole('option', { name: 'Sales' }));
+    await waitFor(() => expect(onSelectProject).toHaveBeenCalledWith('7', 'Sales'));
+    expect(router.state.location.pathname).toBe('/workspaces');
+  });
+
+  it('moves a folder to another project only after a confirmation; one with no project joins at once', async () => {
+    const user = userEvent.setup();
+    mount();
+    const [app, docs] = await screen.findAllByTestId('shell-folder');
+    await user.click(within(app as HTMLElement).getByLabelText('More for app'));
+    await user.click(await screen.findByRole('menuitemradio', { name: 'Sales' }));
+    const dialog = await screen.findByTestId('move-folder-dialog');
+    expect(within(dialog).getByRole('heading')).toHaveTextContent('Move “app” to Sales?');
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findAllByTestId('shell-folder')).toHaveLength(2);
+    await user.click(within(app as HTMLElement).getByLabelText('More for app'));
+    await user.click(await screen.findByRole('menuitemradio', { name: 'Sales' }));
+    await user.click(within(await screen.findByTestId('move-folder-dialog')).getByRole('button', { name: 'Move' }));
+    // Now Sales' folder: it leaves Marketing's sidebar.
+    await waitFor(() => expect(screen.getAllByTestId('shell-folder')).toHaveLength(1));
+
+    await user.click(within(docs as HTMLElement).getByLabelText('More for docs'));
+    await user.click(await screen.findByRole('menuitemradio', { name: 'Marketing' }));
+    expect(screen.queryByTestId('move-folder-dialog')).toBeNull();
+    await waitFor(() => expect(within(screen.getByTestId('shell-folder')).queryByText('No project')).toBeNull());
   });
 });
 
@@ -311,7 +423,7 @@ describe('DesktopFrame commands', () => {
   it('without a host, binds the shortcuts in the page: ⌘K palette, ⌘\\ sidebar, ⌘⌥\\ changes', async () => {
     const user = userEvent.setup();
     // An Elitea page: the frame draws the title row (with "Show sidebar" once it is hidden).
-    mount({ appIpc: null, path: '/settings' });
+    mount({ appIpc: null, path: '/apps' });
     await screen.findByTestId('desktop-sidebar');
 
     await user.keyboard('{Meta>}k{/Meta}');

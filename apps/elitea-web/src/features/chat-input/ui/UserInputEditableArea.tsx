@@ -27,7 +27,8 @@ export interface UserInputEditableAreaProps {
   readonly content: { readonly value: string; readonly hasHighlights: boolean; readonly ranges: readonly HighlightRange[] };
   readonly highlightOverlay: UserInputSlots['highlightOverlay'];
   readonly focusState: { readonly isFocused: boolean; readonly onFocus: () => void; readonly onBlur: () => void };
-  readonly rowState: { readonly rows: number; readonly showExpandIcon: boolean; readonly onClickExpander: () => void };
+  /** `minRows`: the desktop's resize handle (`ComposerResizeHandle`); it replaces the expand button there. */
+  readonly rowState: { readonly rows: number; readonly showExpandIcon: boolean; readonly onClickExpander: () => void; readonly minRows?: number | undefined };
   readonly handlers: {
     readonly onChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
     readonly onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
@@ -99,7 +100,7 @@ export function UserInputEditableArea(props: UserInputEditableAreaProps): ReactN
         id="standard-multiline-static"
         label=""
         multiline
-        maxRows={rowState.rows}
+        {...(rowState.minRows === undefined ? { maxRows: rowState.rows } : { minRows: rowState.minRows, maxRows: Math.max(rowState.rows, rowState.minRows) })}
         variant="standard"
         autoComplete="off"
         onChange={handlers.onChange}
@@ -122,7 +123,7 @@ export function UserInputEditableArea(props: UserInputEditableAreaProps): ReactN
               content.hasHighlights ? styles.transparentCaretText(field.color) : undefined,
             ),
             disableUnderline: true,
-            endAdornment: rowState.showExpandIcon ? (
+            endAdornment: rowState.showExpandIcon && rowState.minRows === undefined ? (
               <ExpandAdornment
                 rows={rowState.rows}
                 onClick={rowState.onClickExpander}

@@ -36,6 +36,8 @@ import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { createFakeHandoffIpc } from '@/shared/desktop/handoffIpc.fake';
 import { createFakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
+import { installCompactionIpc } from '@/shared/desktop/compactionSettings';
+import { createFakeCompactionIpc } from '@/shared/desktop/compactionSettings.fake';
 import { PERMISSION_GROUPS, PERMISSIONS } from '@/shared/lib/permissions';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { AppIpcProvider, DesktopFrame, useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
@@ -140,7 +142,7 @@ const API: [string, RegExp, unknown][] = [
   ['POST', /\/elitea_core\/messages\/prompt_lib\/42\/c0ffee00-0000-4000-8000-000000000072$/, { task_id: 'exec-1', events_url: '/api/v2/executions/42/exec-1/events', response_message_id: 'e3f5b0f2-8a3c-4d9a-9a1e-0c2b7f5d1a44' }],
   ['GET', /\/elitea_core\/conversations\/prompt_lib\/42/, { rows: [], total: 0 }],
   ['POST', /\/elitea_core\/participants\//, []],
-  ['GET', /\/social\/author/, { id: 3, name: 'Me' }],
+  ['GET', /\/social\/author/, { id: 3, name: 'Alex K', email: 'alex@example.com' }],
   ['GET', /\/auth\/permissions\/prompt_lib\/42$/, ['get', 'create', 'update', 'delete'].map((verb) => ({ name: `models.chat.folders.${verb}`, enabled: true }))],
 ];
 
@@ -212,6 +214,9 @@ export function mountDesktopHarness(container: HTMLElement): void {
     allowed: !params.has('handoffOff'),
     ...(params.has('cloud') ? { status: { state: 'CLOUD_IDLE', executor: 'cloud' as const, read_only: true, sent_from_here: true, epoch: 2 } } : {}),
   });
+  // The Context tab's auto-compaction settings; `__harness.compactIdle()` plays a background idle compaction.
+  const compaction = createFakeCompactionIpc();
+  installCompactionIpc(compaction);
   // The cloud copy's reply streams over SSE: a scripted one, played by `__harness.playCloudReply()`.
   const streams = installTestEventSource();
   const vibrancy = params.has('vibrancy');
@@ -295,6 +300,10 @@ export function mountDesktopHarness(container: HTMLElement): void {
     appIpc,
     indexIpc,
     handoffIpc,
+    compaction,
+    /** The host summarized a thread in the background while it was idle. */
+    compactIdle: (workspaceId = 'w1', conversationId = '71') =>
+      compaction.compact({ workspace_id: workspaceId, conversation_id: conversationId, reason: 'idle', before_tokens: 120_000, after_tokens: 24_000 }),
     feed: useActivityFeed,
     /** The cloud copy stops on an approval (`&cloud`, after a message was sent); `cards: 2` is a pause only the chat can answer. */
     playCloudApproval(cards = 1) {

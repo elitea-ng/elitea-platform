@@ -81,7 +81,10 @@ describe('the thread as a detail column', () => {
     await renderThread('pane');
     expect(await screen.findByRole('header', { name: 'Q3 planning' })).toBeTruthy();
     expect(screen.getByTestId('pane-header')).toBeTruthy();
-    expect(screen.getByLabelText('Message')).toBeTruthy();
+    // The composer can mount a tick after the title (it waits on its own
+    // queries), so wait for it as the stack case below does; a sync get raced
+    // it under CI load (run 40686082335).
+    expect(await screen.findByLabelText('Message')).toBeTruthy();
     expect(mockStackOptions).toEqual([]);
   });
 

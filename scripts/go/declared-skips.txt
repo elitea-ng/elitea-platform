@@ -72,3 +72,18 @@ github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/d
 github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run	TestTheNativeRunnerReadsAnArtifactFolderInItsWorker	Needs the Rust engine binary (ELITEA_DEEPWIKI_NATIVE_ENGINE_BIN). ci-deepwiki-engine.yml builds it and runs these with ELITEA_REQUIRE_NATIVE_ENGINE=1, which makes a missing binary FAIL there.
 github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run	TestTheNativeEngineIngestsWhatTheGoFixtureDoes	Needs the Rust Inventory engine binary (ELITEA_INVENTORY_NATIVE_ENGINE_BIN). ci-inventory-engine.yml builds it and runs these with ELITEA_REQUIRE_NATIVE_ENGINE=1, which makes a missing binary FAIL there.
 github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run	TestTheNativeEngineAnswersRetrievalAsTheGoFixtureDoes	Needs the Rust Inventory engine binary (ELITEA_INVENTORY_NATIVE_ENGINE_BIN). ci-inventory-engine.yml builds it and runs these with ELITEA_REQUIRE_NATIVE_ENGINE=1, which makes a missing binary FAIL there.
+github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/scale	TestGovernedScale	A measurement, not a unit test: ci-governed-scale.yml runs it nightly and on dispatch with ELITEA_GOVERNED_SCALE=1 and fails when it did not run.
+
+# ── The governed-profile conformance suite (ADR-0039 P6b, #1124) ─────────────
+#
+# Stack cases that cannot run on the standalone stack, each naming its gate.
+# deploy/scripts/governed-conformance.sh holds every phase to this list with
+# conformance/governed/cmd/skip-check: an undeclared skip, or a line here whose
+# test ran and passed, fails the run.
+
+github.com/elitea-ng/elitea-platform/conformance/governed	TestGovernedProfile/GOV-002	Gate D1/entra: an Entra-delegated interactive run needs a sign-in that mints an Entra delegation, sealed with SECRETS_MASTER_KEY, which the standalone stack leaves unset. Unit legs are mapped in conformance/governed/EVIDENCE.md. Runs only in ci-governed-conformance.yml (build tag conformance).
+github.com/elitea-ng/elitea-platform/conformance/governed	TestGovernedProfile/GOV-004	Gate synthetic-adapter: the shipped worker registers no synthetic sixth adapter, by design. Proven by the unit tests a_sixth_adapter_registers_and_serves_a_governed_call (Rust) and TestSyntheticAdapterRegistersBesideTheBuiltins (Go).
+github.com/elitea-ng/elitea-platform/conformance/governed	TestGovernedProfile/GOV-005/auth_source	Gate auth-source: every way to start a run on this stack is an allowed auth source; a development or unknown source is unit-proven by TestDefaultAuthSourcesRefuseUnknownAndDevelopment.
+github.com/elitea-ng/elitea-platform/conformance/governed	TestGovernedProfile/GOV-005/entity_access	Gate entity-access: project membership is the RBAC gate's own precondition here, so no persona passes RBAC and fails entity access alone; unit-proven by TestDecideEachGateAloneDenies.
+github.com/elitea-ng/elitea-platform/conformance/governed	TestGovernedProfile/GOV-006/delegation_revoked	Gate D1/entra: no delegation exists on this stack (see GOV-002); the delegation epoch is unit-proven by TestStaleEpochsAndDigestsDeny.
+github.com/elitea-ng/elitea-platform/conformance/governed	TestGovernedProfile/GOV-009/outbound	Gate vault-key: outbound MCP OAuth seals the provider grant with SECRETS_MASTER_KEY, which the standalone stack leaves unset; unit-proven by the governed MCP client tests (EVIDENCE.md).

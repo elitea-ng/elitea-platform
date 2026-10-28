@@ -121,6 +121,12 @@ func newWorld() *world {
 			MandateID: tMandate, MandateEpoch: 5,
 			Caller: securitycontext.Caller{AuthenticationSource: "session"}, DefinitionDigest: runtimedomain.Digest(tDefinition),
 			ActorChain: []securitycontext.ActorLink{{Kind: "user", Ref: "7"}}, IssuedAt: tNow,
+			// The version admission ran and the reference it froze (#1119).
+			ApplicationID: 3, ApplicationVersionID: 4,
+			CredentialReferences: []securitycontext.CredentialReference{{
+				ToolkitID: tToolkit, CredentialReferenceID: tReference, TargetBindingID: tTargetA, Generation: 1,
+				ToolkitDigest: runtimedomain.Digest(tToolkitDigest),
+			}},
 		},
 	}
 }

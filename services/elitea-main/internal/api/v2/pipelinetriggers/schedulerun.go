@@ -44,7 +44,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
@@ -229,6 +231,24 @@ func (h *Handler) fireSchedule(
 		return
 	}
 
+	// GOVERNED: the attached mandate, checked now, or no run (governed.go).
+	var authority *securitycontext.RunAuthority
+	if h.governed != nil {
+		granted, skip, detail, err := h.scheduleAuthority(ctx, tenant, schedule)
+		switch {
+		case err != nil:
+			h.log().Error("pipelinetriggers: mandate check", "schedule_id", schedule.ID, "err", err)
+			result.Failed++
+			record(resultFailed, "the schedule's mandate could not be checked", "")
+			return
+		case skip != "":
+			result.Skipped++
+			record(skip, detail, "")
+			return
+		}
+		authority = &granted
+	}
+
 	outcome, err := h.admit(ctx, tenant.Schema, runRequest{
 		ProjectID:   tenant.ProjectID,
 		ActorUserID: schedule.AuthorID,
@@ -236,8 +256,13 @@ func (h *Handler) fireSchedule(
 		Input:       schedule.UserInput,
 		Origin:      OriginSchedule,
 		ScheduleID:  schedule.ID,
+		Authority:   authority,
 	})
 	switch {
+	case governedStartRefused(err):
+		result.Skipped++
+		_, detail := mandateSkip(runmandate.CodeMandateNotUsable)
+		record(resultSkippedMandateUnusable, detail, "")
 	case errors.Is(err, ErrRunForbidden):
 		result.Skipped++
 		record(resultSkippedAuth,

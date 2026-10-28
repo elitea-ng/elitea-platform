@@ -38,12 +38,10 @@ import { NodeRecoveryNotice } from './NodeRecoveryNotice';
 import { SkippedCapabilitiesNotice } from './SkippedCapabilitiesNotice';
 import { skippedCapabilitiesOf } from '../../lib/skippedCapabilities';
 import { ApplicationAnswerActions } from './ApplicationAnswerActions';
+import { replyActionsRevealSx } from './ReplyActionButton';
 import { ApplicationAnswerLoading } from './ApplicationAnswerLoading';
 import { ApplicationAnswerApprovals, useAnswerApprovalModel } from './ApplicationAnswerApprovals';
-import { AssistantAvatar } from './MessageAvatar';
-import { MessageFeedbackControl } from './MessageFeedbackControl';
-import { RememberMemoryAction } from './RememberMemoryAction';
-import { MessageHeaderRow } from './MessageHeaderRow';
+import { AssistantCaption } from './MessageAvatar';
 import { actionKey, asDraft, ApplicationAnswerThinking, swarmChildContent } from './ApplicationAnswerThinking';
 import { ChatContinue } from '../chat-continue/ChatContinue';
 import { AskUserAnswerSummary } from '../chat-hitl-actions/AskUserAnswerSummary';
@@ -57,10 +55,10 @@ import { PersistedMessageTrace } from './PersistedMessageTrace';
 import { AnswerContent } from './AnswerContent';
 import { readAnswerItems } from './AnswerMessageItems';
 
-import { t } from '@/shared/i18n';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { Markdown } from '@/shared/ui/Markdown';
 import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
+import { conversationBubbleSx } from '@/shared/ui/conversation-column';
 
 import type { SubAgentGroupable } from '../../lib/subAgentGrouping';
 
@@ -89,6 +87,13 @@ export type {
  * `ApplicationAnswer` — renders an AI assistant's answer with markdown
  * content, tool actions (accordion), error traces, HITL/continue prompts,
  * and action buttons.
+ *
+ * Drawn as a chat reply: plain text on the page background, the full width
+ * of the column, on the left — no card, no shadow, no `<mark> Elitea to
+ * Message` caption line. The thinking / execution-details line comes first,
+ * then the text, then the action row with the time at its end. A name shows
+ * over the reply only when the list says the conversation has more than one
+ * assistant (`author.showCaption`).
  */
 // eslint-disable-next-line eslint/complexity, eslint/max-lines-per-function -- integrates markdown/tool-actions/error-trace/HITL/continue/buttons; oxlint's complexity+max-lines are already disabled repo-wide for this directory (.oxlintrc.json)
 export function ApplicationAnswer({
@@ -97,7 +102,7 @@ export function ApplicationAnswer({
   toolActions = [],
   isSpeakingMode = false,
   isLastMessage = false,
-  author: { participantName, isSwarmChild = false, swarmAgentName = '' } = {},
+  author: { participantName, showCaption = false, isSwarmChild = false, swarmAgentName = '' } = {},
   status: { isLoading = false, isStreaming = false, isRegenerating = false } = {},
   actions: { onCopy, onDelete, onRegenerate, onFork, shouldDisableRegenerate = false, onEditCanvas, selectedCodeBlockInfo, onCreateCanvasFromSelection } = {},
   tts: { onAutoSpeak, speakingMessageId, spokenRange } = {},
@@ -235,12 +240,9 @@ export function ApplicationAnswer({
         alignItems: 'flex-start',
         alignSelf: 'stretch',
         width: '100%',
-        // baseline `applicationAnswerStyles.userMessageContainer` (vertical):
-        // `padding: 0.75rem 0; gap: 0.5rem`. Measured identically on the
-        // production transcript's own `<li>`.
-        gap: '0.5rem',
-        padding: '0.75rem 0',
-        borderRadius: '0.25rem',
+        // The gap between turns is the list's (`ChatMessageList`), not padding here.
+        gap: 0.5,
+        ...replyActionsRevealSx,
         ...(isSwarmChild
           ? { ml: 6, pl: 2, borderLeft: '3px solid', borderColor: 'primary.main' }
           : {}),
@@ -250,16 +252,9 @@ export function ApplicationAnswer({
         <Typography variant="bodySmall" sx={{ color: 'text.secondary' }}>
           {swarmAgentName}
         </Typography>
-      ) : (
-        <MessageHeaderRow
-          avatar={<AssistantAvatar />}
-          name={participantName ?? ''}
-          sentToName={t('features.chatMessages.replyTo', 'Message')}
-          sentToInteractive
-          createdAt={displayTime}
-          memoriesUsed={answer.memoriesUsed}
-        />
-      )}
+      ) : showCaption && participantName ? (
+        <AssistantCaption name={participantName} />
+      ) : null}
 
       {!isProcessing && toolActions.length === 0 && <PersistedMessageTrace value={answer.persistedTrace} />}
 
@@ -288,20 +283,11 @@ export function ApplicationAnswer({
         <Box
           data-testid={isLastMessage ? 'skill-test-last-response' : 'chat-answer-content'}
           sx={(theme) => ({
-            // baseline `applicationAnswerStyles.answerBlock`, confirmed against
-            // the live production row: `12px 16px` padding (not a uniform 12),
-            // an 8px radius, a 3rem floor so a one-line answer keeps the same
-            // card height, and the 0.5rem gap under the thinking accordion.
-            width: '100%',
-            boxSizing: 'border-box',
-            backgroundColor: theme.vars.palette.background.aiAnswerBkg,
-            color: theme.vars.palette.text.secondary,
-            boxShadow: theme.vars.palette.boxShadow.aiAnswer,
-            borderRadius: theme.vars.shape.radiusMd,
-            padding: '0.75rem 1rem',
-            minHeight: '3rem',
+            // A left-hand bubble in the neutral fill (`conversationBubbleSx`):
+            // hugs a short reply, takes the column for a long one.
+            ...conversationBubbleSx(false)(theme),
             position: 'relative',
-            marginTop: nonSwarmChildActions.length > 0 || !!exception ? '0.5rem' : 0,
+            marginTop: nonSwarmChildActions.length > 0 || !!exception ? 0.5 : 0,
           })}
         >
           {recovery && <NodeRecoveryNotice binding={recovery} />}
@@ -343,48 +329,37 @@ export function ApplicationAnswer({
             visibleHitlInterrupts.length === 0 && (
               <ApplicationAnswerLoading isStreaming={isStreaming} />
             )}
-
-          <Box
-            sx={{
-              display: 'flex',
-              // `space-between` needs TWO items to place one at each edge — a
-              // single flex child under it sits at flex-start, which would
-              // silently un-right-align the actions row on every message with
-              // no resolved project id. `flex-end` is the ORIGINAL single-row
-              // alignment (`ApplicationAnswerActions`'s own box), kept as the
-              // fallback rather than assumed to still hold once this became a
-              // two-item row.
-              justifyContent: showFeedback ? 'space-between' : 'flex-end',
-              alignItems: 'flex-start',
-            }}
-          >
-            {showFeedback && <MessageFeedbackControl projectId={feedbackProjectId as string} messageId={messageId} />}
-            {showFeedback && (
-              // #870 "Remember this" — same gate as the feedback control
-              // beside it (a resolved project id, not still processing).
-              // `conversationId` is not yet threaded to this row (no
-              // `ChatMessage` field carries it today), so a memory saved
-              // here has no `source_conversation_id` — informational-only
-              // provenance, not a functional gap.
-              <RememberMemoryAction projectId={feedbackProjectId as string} content={answer.content} disabled={isProcessing} />
-            )}
-            <ApplicationAnswerActions
-              hasContent={hasTextContent || !!exception}
-              isProcessing={isProcessing}
-              shouldDisableRegenerate={shouldDisableRegenerate || Boolean(recovery)}
-              hasSpeakableText={hasTextContent}
-              isSpeaking={!!speakingMessageId}
-              onAutoSpeak={onAutoSpeak ? handleAutoSpeak : undefined}
-              onCopy={onCopy}
-              onRegenerate={onRegenerate}
-              onFork={onFork}
-              onDelete={onDelete}
-              onOpenAsDocument={
-                onCreateCanvasFromSelection && wholeAnswerText && wholeAnswerText.trim() !== '' ? onOpenAsDocument : undefined
-              }
-            />
-          </Box>
         </Box>
+      )}
+
+      {shouldRenderAnswerBlock && (
+        // Below the text (`ApplicationAnswerActions`' module doc), the time and
+        // the "Using N memories" chip at its end.
+        // #870's "Remember this" rides on the feedback gate (a resolved project
+        // id, not still processing); `conversationId` is not yet threaded to
+        // this row (no `ChatMessage` field carries it), so a memory saved here
+        // has no `source_conversation_id` — informational-only provenance.
+        <ApplicationAnswerActions
+          alwaysVisible={isLastMessage}
+          state={{
+            hasContent: hasTextContent || !!exception,
+            isProcessing,
+            shouldDisableRegenerate: shouldDisableRegenerate || Boolean(recovery),
+            hasSpeakableText: hasTextContent,
+            isSpeaking: !!speakingMessageId,
+          }}
+          handlers={{
+            onAutoSpeak: onAutoSpeak ? handleAutoSpeak : undefined,
+            onCopy,
+            onRegenerate,
+            onFork,
+            onDelete,
+            onOpenAsDocument: onCreateCanvasFromSelection && wholeAnswerText && wholeAnswerText.trim() !== '' ? onOpenAsDocument : undefined,
+          }}
+          feedback={showFeedback ? { projectId: feedbackProjectId as string, messageId } : undefined}
+          memoryContent={answer.content}
+          meta={{ createdAt: displayTime, memoriesUsed: answer.memoriesUsed }}
+        />
       )}
     </Box>
   );

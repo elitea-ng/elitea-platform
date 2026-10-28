@@ -142,6 +142,7 @@ import (
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/pipelineruns"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
@@ -201,6 +202,9 @@ type Handler struct {
 	logger      *slog.Logger
 	events      EventEmitter
 	runTracker  RunTracker
+	// governed makes every unattended run mandate-bound (governed.go). Nil
+	// with credential governance off.
+	governed *runmandate.Service
 }
 
 // EventEmitter is the seam to internal/events.Publisher, declared locally so

@@ -159,10 +159,11 @@ export function SettingsLayout() {
 
   return (
     <Box sx={styles.container}>
-      <Box sx={styles.drawer}>
+      <Box sx={NATIVE ? styles.nativeDrawer : styles.drawer}>
         <SettingsDrawer
           sections={sections}
           onItemClick={handleItemClick}
+          variant={NATIVE ? 'native' : 'web'}
         />
       </Box>
       {/* A <section>, not a second <main>. `widgets/app-shell/ui/AppShell.tsx`
@@ -184,6 +185,12 @@ export function SettingsLayout() {
   );
 }
 
+/**
+ * The desktop shows Settings in a dialog over the app (`widgets/desktop-shell/ui/SettingsDialog.tsx`):
+ * its drawer takes the desktop sidebar's look and sizes itself. `MODE` is a build-time literal.
+ */
+const NATIVE = import.meta.env.MODE === 'desktop';
+
 /** @type {MuiSx} */
 const styles: Record<string, SxProps<Theme>> = {
   container: {
@@ -198,11 +205,16 @@ const styles: Record<string, SxProps<Theme>> = {
     borderRight: `0.0625rem solid ${theme.vars.palette.border.table ?? 'transparent'}`,
     boxSizing: 'border-box',
   }),
+  nativeDrawer: {
+    flexShrink: 0,
+    height: '100%',
+  },
   mainContent: (theme) => ({
     flexGrow: 1,
+    minWidth: 0,
     height: '100%',
     background: theme.vars.palette.background.settingsPage,
-    maxWidth: `calc(100% - ${SETTINGS_LAYOUT.DRAWER_WIDTH})`,
+    maxWidth: NATIVE ? undefined : `calc(100% - ${SETTINGS_LAYOUT.DRAWER_WIDTH})`,
     overflow: 'auto',
   }),
 };

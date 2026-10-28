@@ -21,9 +21,9 @@ it('fetches heavy output only when its step opens and keeps the message identity
   renderWithTheme(<QueryClientProvider client={client}><PersistedMessageTrace value={{ projectId: '2', conversationId: '543', messageGroupId: 5820, failed: false, steps: [{ id: 7279, message_group_id: 5820, kind: 'tool_call', tool_name: 'get_issues', is_error: false }] }} /></QueryClientProvider>);
   const user = userEvent.setup();
   expect(requests).toBe(0);
+  // One step: opening "Execution details" shows it straight away, no second fold.
   await user.click(screen.getByRole('button', { name: 'Execution details' }));
-  expect(requests).toBe(0);
-  await user.click(screen.getByRole('button', { name: 'get_issues' }));
+  expect(screen.getByText('get_issues')).toBeVisible();
   await waitFor(() => expect(screen.getByText('persisted issue 11148')).toBeVisible());
   expect(requests).toBe(1);
 });
@@ -37,5 +37,24 @@ it('preserves the incomplete generation label stored in trace display metadata',
       attrs: { response_metadata: { tool_name: 'Incomplete response' } } }],
   }} /></QueryClientProvider>);
   await userEvent.setup().click(screen.getByRole('button', { name: 'Execution details' }));
-  expect(screen.getByRole('button', { name: 'Child · Incomplete response' })).toBeVisible();
+  expect(screen.getByText('Child · Incomplete response')).toBeVisible();
+});
+
+it('folds each of several steps, fetching only the one opened', async () => {
+  let requests = 0;
+  server.use(http.get('/api/v2/elitea_core/message_trace/prompt_lib/2/:id', ({ params }) => {
+    requests++;
+    return HttpResponse.json({ id: Number(params['id']), message_group_id: 5820, kind: 'tool_call', tool_output: `output ${String(params['id'])}`, is_error: false });
+  }));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  renderWithTheme(<QueryClientProvider client={client}><PersistedMessageTrace value={{ projectId: '2', conversationId: '543', messageGroupId: 5820, failed: false, steps: [
+    { id: 1, message_group_id: 5820, kind: 'tool_call', tool_name: 'first', is_error: false },
+    { id: 2, message_group_id: 5820, kind: 'tool_call', tool_name: 'second', is_error: false },
+  ] }} /></QueryClientProvider>);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('button', { name: 'Execution details' }));
+  expect(requests).toBe(0);
+  await user.click(screen.getByRole('button', { name: 'second' }));
+  await waitFor(() => expect(screen.getByText('output 2')).toBeVisible());
+  expect(requests).toBe(1);
 });

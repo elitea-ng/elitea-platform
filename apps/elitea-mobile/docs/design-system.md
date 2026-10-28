@@ -1,6 +1,11 @@
-# Elitea AI design system v1
+# Elitea AI design system v2
 
-Status: proposal for the mobile redesign (elitea-mobile, Expo SDK 58 / RN 0.88).
+Status: v2 repaints v1 (the mobile redesign, Expo SDK 58 / RN 0.88) in the **Elitea AI brand
+guide v3** (LE-03 mark). The colours now come from `BRAND_TOKENS` of `@elitea/client-core/brand`
+(`libs/ts/client-core/src/brand/tokens.json`), the one source the web and desktop apps read too;
+the structure, type, spacing, motion and branding rules of v1 stand. Where a v1 passage below
+still names the pastel palette, the gradient ground or the glossy orb, §1.1–§2 win: brand v3
+has no gradients.
 Companions: `design-tokens.json` (values; the source for code), `screens.md` (screen layouts).
 Inputs: `reference-ui.jpg` (pastel glass assistant UI), the app (then a separate repository) `origin/main` @ 654061a (`src/theme/*`,
 `src/constants/theme.ts`, `src/constants/use-palette.ts`, `app.config.ts`,
@@ -27,48 +32,44 @@ Read from `origin/main`. These are the issues the redesign has to fix.
 
 ## 1. Visual language
 
-**Personality:** friendly, soft and calm, but competent. The reference supplies the
-*structure*: a big greeting, glass cards, circular arrow buttons, a chip row and a
-floating composer. The *palette* is pastel: marshmallow pink, cream, coat blue,
-mint pedestal and belt orange. Everything sits on a slow, very light pastel gradient. The
-saturated colours are deep "ink" versions of the pastel hues, so text and controls pass
-WCAG AA.
+**Personality:** calm, precise and competent. The reference supplies the *structure*: a big
+greeting, glass cards, circular arrow buttons, a chip row and a floating composer. The
+*palette* is brand guide v3: neutrals (Ink `#0B0B18` and its surface steps on dark, Paper
+`#FFFFFF` and cool greys on light) carry the UI, and four brand colours each have one job.
+There are no gradients.
 
-### 1.1 Palette primitives
+### 1.1 Palette (brand guide v3)
 
-| Family | Source | Light use | Dark use |
-|---|---|---|---|
-| Marshmallow (pink) | head swirl, tie (sampled ~`#F2B4BE`) | gradient stop `#FCEBF2`, accent `#B4306A` (600), soft `#FCE4EE` | accent `#FF8CB8`, soft `#3D1E2D` |
-| Cream | face, shirt | background `#FBF7F9` | n/a (night neutrals) |
-| Coat (blue) | coat (sampled `#BDD9E3`→`#9FB4C0`) | secondary/focus `#2D6894`, soft `#DDEBF5` | `#8DC3EA` |
-| Mint | pedestal (sampled `#CBE9DA`) | gradient end `#E8F5EF`, success `#1D7A4C` | `#5CD49C` |
-| Belt (orange) | belt, antenna light (sampled `#E4A176`) | warning `#8F5300`, highlight sparkle only | `#F3B54A` |
-| Ink / Night | the plum-tinted neutrals (not pure grey) | text `#1C1622`… | background `#141118`… |
+| Colour | Value | Job in the app |
+|---|---|---|
+| Base Indigo | `#4A4DE8` | The one primary: filled buttons, the send button, the user's bubble (`primary`, `bubbleUser`), both schemes. On light it is also the signal colour (`accent`, `focus`). |
+| Signal Cyan | `#00BFE6` | Dark-scheme signal only: links, focus, active controls, spinners (`accent`, `focus`) with Ink labels. Never text on light (2.19:1). |
+| Layer Violet | `#7A5CFF` | AI presence only: agent monograms and AI markers (`ai`; text uses `aiText`, `#9A8CFF` dark / `#6447F0` light). |
+| Dot Orange | `#FF6B1A` | The dot only: one unread or live marker per view (`dot`). Never a button, a warning or a text background. |
+| Ink | `#0B0B18` | Dark canvas and light-scheme text. |
+| Paper | `#FFFFFF` | Light canvas and the label on indigo. |
 
-Pastels (`marshmallow.200-400`, `coat.300`, `mint.200`, `belt.300`) are **decorative
-only**: gradients, illustration and the orb. They never carry text and never mark state.
-Their contrast is about 1.3–2.5:1.
+Status colours (`success`, `warning`, `danger`) are the guide's per-scheme values; the
+destructive badge is `dangerFill` `#DC2626` with a white numeral. The retired v1 primitives
+(marshmallow, cream, coat, mint, belt, plum night) and the gradient orb mark are gone.
 
-### 1.2 Gradient ground
+### 1.2 Ground
 
-- One full-screen `LinearGradient` per root screen, at 160°, with three stops:
-  - light: pink mist `#FCEBF2`, lavender `#F2EEFB`, mint mist `#E8F5EF`
-  - dark: `#1F1520`, `#16151F`, `#111B19`
-- The gradient sits behind the scroll content and does not scroll (no parallax).
-- Chat and long reading surfaces use the flat `background` instead, so the gradient does
-  not sit behind dense text. The gradient appears on Home, the connect, sign-in and voice
-  screens, and empty states.
-- When `Reduce Transparency` (iOS) is on, or high-contrast text (Android) is on, use the
-  flat `background`.
+- One flat full-screen `background` per root screen (Paper light, Ink dark). The
+  `backgroundGradient` token survives only for its shape: its three stops are all the
+  `background`, so `<GradientBackground>` draws a plain colour.
+- A workspace brand no longer tints the ground (v1 tinted stop 0 with the brand hue).
+- When `Reduce Transparency` (iOS) is on, or high-contrast text (Android) is on, the flat
+  `background` is drawn directly.
 
 ### 1.3 Glass and surfaces
 
 | Token | Light | Dark | Use |
 |---|---|---|---|
-| `surface` | `#FFFFFF` | `#1D1A22` | list rows, bubbles, settings groups |
-| `elevated` | `#FFFFFF` + e2 | `#26222C` | sheets, menus, cards over cards |
-| `surfaceGlass` | white α .72, blur 24, 1 px border α .9 | `#2A2631` α .72, blur 24, border white α .08 | composer, action cards, chips on gradient, header buttons |
-| `surfaceSunken` | `#F5EFF3` | `#100E13` | text field interiors, code blocks |
+| `surface` | `#F4F6FB` | `#12172B` | list rows, agent bubbles, settings groups |
+| `elevated` | `#FFFFFF` + e2 | `#1A2036` | sheets, menus, cards over cards |
+| `surfaceGlass` | white α .72, blur 24, 1 px border Ink α .08 | `#1A2036` α .72, blur 24, border `#F2F4FA` α .08 | composer, action cards, chips, header buttons |
+| `surfaceSunken` | `#EEF1F7` | `#07070F` (`codeBg`) | text field interiors, code blocks |
 
 Platform rendering of glass:
 
@@ -237,7 +238,13 @@ hairline), `separatorStrong` (input borders, 3:1), `accent`, `accentPressed`, `a
 `success`, `successSoft`, `warning`, `warningSoft`, `danger`, `dangerOn`, `dangerSoft`,
 `bubbleUser`, `bubbleUserText`, `bubbleAgent`, `bubbleAgentText`, `bubbleAgentBorder`,
 `chip`, `chipText`, `chipSelected`, `chipSelectedText`, `badge`, `badgeText`, `focus`,
-`scrim`, `orb` (decorative), `skeleton`.
+`scrim`, `orb` (decorative), `skeleton`, and since v2 `primary`, `primaryPressed`,
+`primaryOn` (the one filled action colour), `ai`, `aiText` (AI presence) and `dot`.
+
+`accent` is the **signal** colour (tint of links, focus, active controls and spinners: cyan on
+dark, indigo on light); `primary` is the **fill** of filled buttons and the send button (indigo
+in both schemes). v1 used `accent` for both; on dark no single colour can be both a 4.5:1 text
+colour on Ink and the indigo primary.
 
 ### 2.1 Proofs
 
@@ -253,64 +260,75 @@ gradient stop and the flat background. Gradient rows use the worst stop.
 
 | Foreground on background | Light | Dark | Bar |
 |---|---|---|---|
-| textPrimary / background | 16.66 | 16.89 | 4.5 |
-| textPrimary / gradient (worst stop) | 15.42 | 15.88 | 4.5 |
-| textPrimary / surface | 17.69 | 15.51 | 4.5 |
-| textPrimary / surfaceGlass (worst) | 16.98 | 14.10 | 4.5 |
-| textPrimary / elevated | 17.69 | 14.08 | 4.5 |
-| textPrimary / surfaceSunken | 15.60 | 17.34 | 4.5 |
-| textSecondary / background | 7.02 | 9.32 | 4.5 |
-| textSecondary / gradient (worst) | 6.50 | 8.77 | 4.5 |
-| textSecondary / surface | 7.45 | 8.56 | 4.5 |
-| textSecondary / surfaceGlass (worst) | 7.15 | 7.78 | 4.5 |
-| textSecondary / elevated | 7.45 | 7.77 | 4.5 |
-| textTertiary / background | 5.17 | 6.33 | 4.5 |
-| textTertiary / gradient (worst) | 4.79 | 5.95 | 4.5 |
-| textTertiary / surface | 5.49 | 5.81 | 4.5 |
-| textTertiary / surfaceGlass (worst) | 5.27 | 5.28 | 4.5 |
-| textTertiary / elevated | 5.49 | 5.28 | 4.5 |
-| accent / background (as link text) | 5.54 | 8.63 | 4.5 |
-| accent / gradient (worst) | 5.13 | 8.12 | 4.5 |
-| accent / surface | 5.88 | 7.93 | 4.5 |
-| accent / surfaceGlass (worst) | 5.64 | 7.21 | 4.5 |
-| accent / elevated | 5.88 | 7.19 | 4.5 |
-| accentOn / accent (button label) | 5.88 | 7.80 | 4.5 |
-| accentSoftOn / accentSoft | 6.70 | 9.83 | 4.5 |
-| secondary / surface | 5.97 | 9.10 | 4.5 |
-| secondary / gradient (worst) | 5.20 | 9.31 | 4.5 |
-| secondarySoftOn / secondarySoft | 7.69 | 10.10 | 4.5 |
-| success / surface | 5.33 | 9.28 | 4.5 |
-| warning / surface | 6.17 | 9.42 | 4.5 |
-| danger / surface | 5.90 | 7.38 | 4.5 |
-| danger / gradient (worst) | 5.15 | 7.56 | 4.5 |
-| dangerOn / danger | 5.90 | 7.45 | 4.5 |
-| bubbleUserText / bubbleUser | 5.88 | 11.76 | 4.5 |
-| bubbleUserText / bubbleUserChip (a file chip's 12 % veil on my bubble: black under white text, white under black) | 7.14 | 12.98 | 4.5 |
-| bubbleAgentText / bubbleAgent | 17.69 | 14.66 | 4.5 |
-| chipText / chip | 17.69 | 14.08 | 4.5 |
-| chipText / surfaceGlass (worst) | 16.98 | 14.10 | 4.5 |
-| chipSelectedText / chipSelected | 6.70 | 9.83 | 4.5 |
-| badgeText / badge | 5.90 | 4.91 | 4.5 |
-| separatorStrong / surface (input border) | 3.55 | 3.60 | 3.0 |
-| separatorStrong / background | 3.34 | 3.92 | 3.0 |
-| separatorStrong / surfaceSunken (selected segment edge) | 3.13 | 4.02 | 3.0 |
-| focus / background (focus ring) | 5.62 | 9.91 | 3.0 |
-| focus / gradient (worst) | 5.20 | 9.31 | 3.0 |
-| focus / surface | 5.97 | 9.10 | 3.0 |
+| textPrimary / background | 19.53 | 17.76 | 4.5 |
+| textPrimary / gradient (flat) | 19.53 | 17.76 | 4.5 |
+| textPrimary / surface | 18.06 | 16.14 | 4.5 |
+| textPrimary / surfaceGlass (worst) | 19.53 | 15.64 | 4.5 |
+| textPrimary / elevated | 19.53 | 14.65 | 4.5 |
+| textPrimary / surfaceSunken | 17.26 | 18.25 | 4.5 |
+| textSecondary / background | 5.95 | 7.72 | 4.5 |
+| textSecondary / gradient (flat) | 5.95 | 7.72 | 4.5 |
+| textSecondary / surface | 5.50 | 7.02 | 4.5 |
+| textSecondary / surfaceGlass (worst) | 5.95 | 6.80 | 4.5 |
+| textSecondary / elevated | 5.95 | 6.37 | 4.5 |
+| textTertiary / background | 5.95 | 7.72 | 4.5 |
+| textTertiary / gradient (flat) | 5.95 | 7.72 | 4.5 |
+| textTertiary / surface | 5.50 | 7.02 | 4.5 |
+| textTertiary / surfaceGlass (worst) | 5.95 | 6.80 | 4.5 |
+| textTertiary / elevated | 5.95 | 6.37 | 4.5 |
+| accent / background | 5.97 | 8.92 | 4.5 |
+| accent / gradient (flat) | 5.97 | 8.92 | 4.5 |
+| accent / surface | 5.52 | 8.11 | 4.5 |
+| accent / surfaceGlass (worst) | 5.97 | 7.86 | 4.5 |
+| accent / elevated | 5.97 | 7.36 | 4.5 |
+| accentOn / accent | 5.97 | 8.92 | 4.5 |
+| accentSoftOn / accentSoft | 6.25 | 7.51 | 4.5 |
+| secondary / surface | 5.50 | 7.02 | 4.5 |
+| secondary / gradient (flat) | 5.95 | 7.72 | 4.5 |
+| secondarySoftOn / secondarySoft | 16.38 | 12.83 | 4.5 |
+| success / surface | 4.64 | 7.79 | 4.5 |
+| warning / surface | 4.64 | 8.26 | 4.5 |
+| danger / surface | 5.98 | 6.42 | 4.5 |
+| danger / gradient (flat) | 6.47 | 7.06 | 4.5 |
+| dangerOn / danger | 6.47 | 7.06 | 4.5 |
+| bubbleUserText / bubbleUser | 5.97 | 5.97 | 4.5 |
+| bubbleAgentText / bubbleAgent | 18.06 | 16.14 | 4.5 |
+| chipText / chip | 19.53 | 14.65 | 4.5 |
+| chipText / surfaceGlass (worst) | 19.53 | 15.64 | 4.5 |
+| chipSelectedText / chipSelected | 6.25 | 7.51 | 4.5 |
+| badgeText / badge | 4.83 | 4.83 | 4.5 |
+| separatorStrong / surface | 3.36 | 3.86 | 3.0 |
+| separatorStrong / background | 3.64 | 4.25 | 3.0 |
+| separatorStrong / surfaceSunken | 3.21 | 4.37 | 3.0 |
+| focus / background | 5.97 | 8.92 | 3.0 |
+| focus / gradient (flat) | 5.97 | 8.92 | 3.0 |
+| focus / surface | 5.52 | 8.11 | 3.0 |
+| textSecondary / surfaceSunken | 5.26 | 7.94 | 4.5 |
+| textTertiary / surfaceSunken | 5.26 | 7.94 | 4.5 |
+| danger / dangerSoft | 5.45 | 5.96 | 4.5 |
+| warning / warningSoft | 4.68 | 7.38 | 4.5 |
+| accent / surfaceSunken | 5.28 | 9.17 | 4.5 |
+| bubbleUserText / bubbleUserChip | 7.18 | 7.18 | 4.5 |
+| primaryOn / primary | 5.97 | 5.97 | 4.5 |
+| aiText / background | 5.67 | 7.04 | 4.5 |
+| aiText / surface | 5.25 | 6.40 | 4.5 |
+| aiText / elevated | 5.67 | 5.81 | 4.5 |
+| aiText / secondarySoft | 4.76 | 5.08 | 4.5 |
+| ai / background | 4.37 | 4.47 | 3.0 |
 
 **Not proven, by design:**
 
-- `separator` (`#E6DDE3`, `#332E3A`) is a decorative hairline. Grouping is always also
+- `separator` (`#E2E6F0`, `#232A45`) is a decorative hairline. Grouping is always also
   shown by spacing or a surface change (WCAG 1.4.11 does not apply).
-- The `orb` and the gradients are decorative.
-- Never use the pastel primitives for text or state.
+- The `orb` is decorative.
+- `dot` (orange) is a marker beside text that already says "unread"; it never carries text.
 
-**Re-proving:** any token change re-runs the proof script. It should become a unit test
-next to `src/theme/color.test.ts` that iterates `design-tokens.json → proofs` over both schemes.
+**Re-proving:** `src/design/tokens.test.ts` iterates `PROOFS` over both schemes and fails
+when `tokens.ts` and `design-tokens.json` drift.
 
 ### 2.2 State colours
 
-- **Pressed:** `accentPressed` for filled controls. Elsewhere, an overlay of
+- **Pressed:** `primaryPressed` for filled controls. Elsewhere, an overlay of
   `textPrimary` at α .08 (light) or white at α .10 (dark). On Android this is
   additionally the ripple (`android_ripple`), with the colour set to the same overlay.
 - **Disabled:** content at α .38 and container at α .12 (M3). Disabled controls are
@@ -329,12 +347,11 @@ The app is always **Elitea AI**. A workspace *accents* it. It never re-skins it.
 | Overridden from the pack | Pack source (per scheme) | Notes |
 |---|---|---|
 | `accent` (+ `accentPressed`) | `schemes.<s>["primary.main"]`, else `brand.hue` | contrast-corrected (3.3) |
+| `primary` / `primaryPressed` / `primaryOn` | = the corrected accent, its pressed step and label | one action colour per workspace |
 | `accentOn` | `schemes.<s>["text.button.primary"]`, else `brand.onBrand`, else auto black/white | must reach 4.5 on the corrected accent |
 | `accentSoft` / `accentSoftOn` | derived from the corrected accent hue (OKLCH) | soft L .94/.27, C ≤ .045 |
 | `bubbleUser` / `bubbleUserText` | light: the corrected accent; dark: OKLCH(L .33, C ≤ .10, brand hue) | text auto-picked, ≥ 4.5 |
 | `chipSelected` / `chipSelectedText` | = accentSoft / accentSoftOn | |
-| gradient tint | stop 0 of `backgroundGradient` → OKLCH(L .95 light / .19 dark, C .03, brand hue) | dropped if `textTertiary` falls below 4.5 on it |
-| orb tint | orb stop 0 → brand hue at the orb's lightness | decorative |
 | logo | `assets.logoMark`, `assets.logoFull` (existing vetting in `acceptImage`/`BrandLogo`) | |
 | workspace name | `product.name` (≤ 80 chars, existing) | shown as the workspace name, never as the app name |
 | display font | `typography.fontFaces` same-origin `.ttf/.otf` (existing `mapFonts`) | display/title/headline roles only |
@@ -345,14 +362,15 @@ These never come from the pack:
 
 - every neutral: `background`, `surface*`, `elevated`, `text*`, `separator*`, `scrim`,
   `skeleton`, `bubbleAgent*`, `chip`, `chipText`
-- `focus`: it stays coat blue, so a focus ring never disappears against an accent-filled
-  control
+- `focus`: it stays the product signal colour, so a focus ring never disappears against an
+  accent-filled control
+- `ai`, `aiText`, `dot`: AI presence and the dot keep their meaning on every server
 - the status colours: `success`, `warning`, `danger`, `badge`, `secondary`
 - spacing, radii, elevation, type scale, motion, haptics, icons, the Elitea mark, the app
   icon set and the app name.
 
 **Reason:** the pack's neutrals are tuned for the web app. For example, the default dark
-background `#0E131D` is a blue-black and would fight the plum night palette. All AA proofs
+background `#0E131D` is close to, but not, the Ink ground. All AA proofs
 in §2 depend on fixed neutrals. Fixed neutrals also keep security-relevant UI (the connect
 confirmation, approvals, lock) recognisable on every server.
 
@@ -371,7 +389,7 @@ brand colour instead, so a brand still shows:
 
 ```
 correctAccent(brand, scheme):
-  S = worst-case set for scheme = backgroundGradient stops (incl. tinted stop) ∪ background
+  S = worst-case set for scheme = backgroundGradient stops (flat) ∪ background
       ∪ surface ∪ elevated ∪ (surfaceGlass composited over each of those)
   (L, C, H) = OKLCH(brand)
   step = scheme == light ? -0.004 : +0.004                // darken on light, lighten on dark
@@ -393,24 +411,20 @@ correctAccent(brand, scheme):
 
 The correction was demonstrated on real inputs (from the script):
 
-| Brand input | Light result (min over S) / on | Dark result / on |
+| Brand input | Light result / on | Dark result / on |
 |---|---|---|
-| Elitea `primary.main` light `#C428DD` (3.90) | `#B810D1` 4.54 / white 5.21 | `#DA44F3` 4.53 / black 6.10 |
-| Elitea `primary.main` dark `#6AE8FA` (1.26 light) | `#087784` 4.60 / white 5.27 | unchanged 10.79 / black 14.54 |
-| lemon `#FFD400` | `#816B04` 4.53 / white 5.20 | unchanged 10.89 / black |
-| navy `#0B1F44` | unchanged 14.15 / white | `#718BB9` 4.52 / black 6.10 |
-| teal `#14B8A6` | `#0B796D` 4.61 / white | unchanged 6.26 / black |
-| orange `#F97316` | `#B14F0C` 4.58 / white | unchanged 5.56 / black |
-| product rose `#B4306A` | unchanged 5.13 / white 5.88 | `#E15A90` 4.50 / black 6.07 |
+| magenta `#C428DD` (the former Elitea light accent) | `#BD1CD6` / white | `#D741F0` / black |
+| pale cyan `#6AE8FA` (the former Elitea dark accent) | `#147C89` / white | unchanged / black |
+| lemon `#FFD400` | `#866F0F` / white | unchanged / black |
+| navy `#0B1F44` | unchanged / white | `#6F89B6` / black |
+| teal `#14B8A6` | `#027F72` / white | unchanged / black |
+| orange `#F97316` | `#B95204` / white | unchanged / black |
+| rose `#B4306A` | unchanged / white | `#DE588D` / black |
 
-The table is the correction against the untinted grounds (`correctAccent` alone, and what
-`src/design/brand.test.ts` pins). When the brand also tints gradient stop 0, the app corrects
-against that tinted stop as well, so a few results come out one step darker (Elitea light
-`#B402CD`, teal light `#08786C`, orange light `#AE4D06`); every bar still holds.
-
-The derived soft, bubble and tint values for each also pass. Each result had
-`accentSoftOn/accentSoft` ≥ 6.0, `bubbleUserText` ≥ 5.2, and `textTertiary` on the
-tinted gradient stop ≥ 4.54.
+The table is the correction against the brand v3 grounds (flat Paper / Ink and their surface
+steps), what `src/design/brand.test.ts` pins; every result is ≥ 4.5:1 on every ground and its
+label ≥ 4.5:1 on it. Brand v3 has no gradient tint, so there is no second, tinted correction.
+The derived soft and bubble values pass too.
 
 ### 3.4 Scheme mapping
 
@@ -421,10 +435,10 @@ tinted gradient stop ≥ 4.54.
   - If only one scheme yields an accent, derive the other from its hue with the
     correction above, starting from the same colour.
   - If neither does, use `brand.hue`.
-  - If there is still nothing, keep product rose.
+  - If there is still nothing, keep the product default (indigo / cyan).
 - **`productDefault: true`** (the `X-Elitea-Brand-Layers: default` header, i.e. the server
   has no brand of its own) means **no colour override at all**.
-  - The app keeps product rose.
+  - The app keeps the product default.
   - The workspace name and logo still show, because they identify the server.
   - **Change from today:** `usePalette` currently applies Elitea's default web colours.
 - High contrast: the pack's optional `schemes.hc` is ignored. On iOS "Increase Contrast"
@@ -455,12 +469,12 @@ alternate "workspace" icon belonged to the app's former mascot branding and was 
 the app moved into the Elitea platform repository. The files and how they are made are in
 `docs/assets.md`.
 
-- **iOS:** an Icon Composer `.icon` (`ios.icon: './assets/elitea.icon'`): the mark layer centred
-  within 0.40 of the canvas (clear of the squircle corners) on a light gradient fill, with a
-  dark-appearance fill; the system derives the Dark, Tinted and Clear appearances.
+- **iOS:** an Icon Composer `.icon` (`ios.icon: './assets/elitea.icon'`): the LE-03 mark layer
+  (the LE-03 pack's iOS proportion) on a solid Ink fill; the system derives the Dark, Tinted and
+  Clear appearances.
 - **Android:** an adaptive icon (108 dp canvas, the mark inside the 66 dp safe circle: reach 0.29
-  of the canvas) on a light gradient background, and a **monochrome** layer (the mark's
-  silhouette, reach 0.25) for themed icons on Android 13+.
+  of the canvas) on a solid Ink background, and a **monochrome** layer (the mark in white, the
+  same size) for themed icons on Android 13+.
 - `icon.png` (1024, opaque) is the Expo fallback and the store listing source.
 
 ### 4.1 Greeting header (Home)
@@ -597,10 +611,12 @@ the app moved into the Elitea platform repository. The files and how they are ma
     spring; static dots under reduced motion)
   - the screen-reader announcement is "{Agent} is responding". The text is announced on
     completion, not token by token.
-- **Action row** (under a completed agent message, 36 pt icon buttons with a 44/48 hit
-  area, `textSecondary`):
-  - left group: copy, like, dislike, read aloud
-  - right: regenerate.
+- **Action row** (below the bubble of the latest completed agent message, one compact
+  left-aligned row: 32 pt plain buttons with 16 pt outlined glyphs in `textTertiary`, 44/48
+  hit areas that touch):
+  - copy, like, dislike, read aloud, regenerate, then "…" (copy code, share, fork).
+  - Older answers show it while a screen reader runs; otherwise their actions are the
+    long press.
   - **Like and dislike** are toggles (`accessibilityState.selected`). The selected one is
     filled in `accent`. Dislike opens an optional reason sheet.
   - **Read aloud** uses `expo-speech` (on-device TTS, a new dependency). While speaking,
@@ -649,8 +665,8 @@ the app moved into the Elitea platform repository. The files and how they are ma
 - **Title:** "Listening…" (title1) and below it the live transcript (body,
   `textSecondary`, up to 4 lines, scrolling).
 - **Orb:** a 220 pt circle (160 on compact heights).
-  - fill: a radial and linear blend of the `orb.stops` (pink → lavender → mint, from the
-    reference), plus a specular `highlight`.
+  - fill: flat `orb.stops[0]` (the scheme's signal colour; the corrected workspace accent
+    when branded). No gradient, no highlight (brand v3).
   - It scales between 1.0 and 1.12 with mic level, and breathes at idle.
   - It is decorative (`accessible={false}`). Status is conveyed by text.
   - **Reduced motion:** a static orb plus a ring whose width steps with level.
@@ -747,7 +763,8 @@ the app moved into the Elitea platform repository. The files and how they are ma
 ## 5. Elitea mark usage rules
 
 The product's own identity is the Elitea logo mark (`src/components/EliteaMark.tsx`, the same
-SVG as `apps/elitea-web/public/brand/logo-mark.svg`). It is vector art, so one source serves
+SVG as `libs/ts/client-core/src/brand/logo-mark.svg`, the LE-03 mark: four flat rounded
+layers in cyan, violet + an orange dot, and indigo, 1:1). It is vector art, so one source serves
 every size.
 
 | Where | Variant | Size (pt) | Accessibility |
@@ -972,8 +989,8 @@ Landed on `feat/redesign-chat`:
   `ActionMenu`), the input ("Message {agent}…"), mic, send (accent circle, sunken when disabled)
   or stop (`textPrimary` circle). The target chip and the attachment tray (56 pt thumbnails,
   `xmark.circle.fill` remove, which cancels a file still uploading, tap a failed file to retry) sit inside the glass above the input.
-- **Dictation** (`DictationPanel`, `VoiceOrb`): the listening state is a pastel glass card above the
-  composer with a red-dot "Listening" pill, the orb (SVG gradient + specular highlight; breathes
+- **Dictation** (`DictationPanel`, `VoiceOrb`): the listening state is a glass card above the
+  composer with a red-dot "Listening" pill, the orb (a flat SVG disc in the signal colour; breathes
   and scales with the microphone level from `volumechange`; a static ring that steps with the
   level under Reduce Motion), the words heard, and keyboard / stop / cancel (cancel restores the
   text typed before dictation). Recognition stays on the device.
@@ -1032,7 +1049,7 @@ Landed on `feat/redesign-secondary`:
   sections (agent monograms, a cpu tile for models).
 - **Sheets inside the chat**: participants and tool details use the kit (header buttons, avatars,
   segmented control, code role, banners with symbols). The ask-user chips use the chip tokens.
-- **Widgets and Live Activity**: the pastel gradient and product rose per scheme in full colour (pinned
+- **Widgets and Live Activity**: the flat ground and the signal colour per scheme in full colour (pinned
   to the token values by a test), the system ground and tint on accented / clear home screens, text
   styles only (Dynamic Type, capped at xLarge on the home screen so a 158 pt widget never clips its
   counts; the small widget puts unread and running on one line), the waiting count as a rounded hero

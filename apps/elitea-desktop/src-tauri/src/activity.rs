@@ -22,6 +22,7 @@ use tauri::{AppHandle, Manager as _, Wry};
 
 use crate::app_events;
 use crate::d0::events::AgentEvent;
+use crate::labels;
 use crate::local_commands::LocalState;
 
 /// The tray item's id (`AppHandle::tray_by_id`).
@@ -332,9 +333,10 @@ impl ActivityState {
         let place = |turn: &str| workspace_of(turn).map(|name| shown(&name, 40));
         let mut list: Vec<Entry> = Vec::new();
         for approval in self.approvals.values() {
+            let approve = labels::text("activity_approve").replace("{tool}", &approval.tool);
             let label = match place(&approval.turn_id) {
-                Some(name) => format!("Approve {} — {name}", approval.tool),
-                None => format!("Approve {}", approval.tool),
+                Some(name) => format!("{approve} — {name}"),
+                None => approve,
             };
             list.push(Entry::Turn {
                 turn_id: approval.turn_id.clone(),
@@ -345,18 +347,19 @@ impl ActivityState {
             if self.approvals.values().any(|a| &a.turn_id == turn) {
                 continue;
             }
+            let running = labels::text("activity_running");
             let label = match place(turn) {
-                Some(name) => format!("Running — {name}"),
-                None => "Running".to_owned(),
+                Some(name) => format!("{running} — {name}"),
+                None => running,
             };
             list.push(Entry::Turn {
                 turn_id: turn.clone(),
                 label,
             });
         }
-        let cloud_label = |what: &str, run: &CloudRun| match run.workspace_name.as_deref() {
+        let cloud_label = |what: String, run: &CloudRun| match run.workspace_name.as_deref() {
             Some(name) => format!("{what} — {}", shown(name, 40)),
-            None => what.to_owned(),
+            None => what,
         };
         for (uuid, run) in &self.cloud {
             if run.waiting {
@@ -364,7 +367,7 @@ impl ActivityState {
                     0,
                     Entry::Cloud {
                         uuid: uuid.clone(),
-                        label: cloud_label("Approve in cloud", run),
+                        label: cloud_label(labels::text("activity_approve_cloud"), run),
                     },
                 );
             }
@@ -373,13 +376,13 @@ impl ActivityState {
             if run.running {
                 list.push(Entry::Cloud {
                     uuid: uuid.clone(),
-                    label: cloud_label("Running in cloud", run),
+                    label: cloud_label(labels::text("activity_running_cloud"), run),
                 });
             }
         }
         list.truncate(MAX_ENTRIES);
         if list.is_empty() {
-            list.push(Entry::Note("Nothing running".to_owned()));
+            list.push(Entry::Note(labels::text("activity_nothing")));
         }
         list.extend([Entry::Separator, Entry::Show, Entry::Quit]);
         list
@@ -503,6 +506,15 @@ impl Activity {
     }
 
     /// Re-render now, and keep re-rendering each second while a timer shows.
+    /// The language changed (`labels.rs`): rebuild the tray menu even though the state did not.
+    pub fn relabel(&self) {
+        *self
+            .applied
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        self.render();
+    }
+
     fn changed(&self) {
         self.render();
         if self.state().has_timer() && !self.ticking.swap(true, Ordering::AcqRel) {
@@ -634,14 +646,14 @@ fn build_menu(app: &AppHandle, entries: &[Entry]) -> tauri::Result<Menu<Wry>> {
             Entry::Show => menu.append(&MenuItem::with_id(
                 app,
                 SHOW,
-                "Show Elitea",
+                labels::text("tray_show"),
                 true,
                 None::<&str>,
             )?)?,
             Entry::Quit => menu.append(&MenuItem::with_id(
                 app,
                 QUIT,
-                "Quit Elitea",
+                labels::text("tray_quit"),
                 true,
                 Some("CmdOrCtrl+Q"),
             )?)?,

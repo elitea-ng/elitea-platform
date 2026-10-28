@@ -34,6 +34,19 @@ pub trait EventEmitter: Send + Sync {
     /// A language server's status on the app channel (`lsp://event`,
     /// #1236); nowhere by default.
     fn emit_lsp(&self, _event: super::lsp::LspEvent) {}
+
+    /// An app event of its own name that no turn carries (the idle
+    /// compaction's `workspace-context-compacted`, `super::idle`); nowhere by
+    /// default.
+    fn emit_app(&self, _name: &'static str, _payload: Value) {}
+}
+
+/// Emits nothing: the events of a host call outside any turn (the idle
+/// compaction's summary, whose retries no transcript shows).
+pub struct Silent;
+
+impl EventEmitter for Silent {
+    fn emit(&self, _event: AgentEvent) {}
 }
 
 /// A turn's phases, as `status` events name them.
@@ -245,7 +258,7 @@ impl ContextMeter {
         (self.used_tokens.saturating_mul(100) / u64::from(self.window_tokens)).min(100)
     }
 
-    fn payload(&self) -> Value {
+    pub(crate) fn payload(&self) -> Value {
         let mut value = json!({
             "used_tokens": self.used_tokens,
             "window_tokens": self.window_tokens,
@@ -625,6 +638,8 @@ pub struct VecEmitter {
     pub process_events: Mutex<Vec<super::processes::ProcessEvent>>,
     /// The app channel's language-server events (#1236).
     pub lsp_events: Mutex<Vec<super::lsp::LspEvent>>,
+    /// App events by name (`emit_app`).
+    pub app_events: Mutex<Vec<(&'static str, Value)>>,
 }
 
 #[cfg(test)]
@@ -661,6 +676,10 @@ impl EventEmitter for VecEmitter {
 
     fn emit_lsp(&self, event: super::lsp::LspEvent) {
         self.lsp_events.lock().expect("lock").push(event);
+    }
+
+    fn emit_app(&self, name: &'static str, payload: Value) {
+        self.app_events.lock().expect("lock").push((name, payload));
     }
 }
 

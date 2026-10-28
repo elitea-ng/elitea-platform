@@ -118,7 +118,10 @@ describe.each(PACKS)('pack $label', ({ baseSize, scale, ladder }) => {
 
   it('(f) aliases every stock variant to typeScale(target), without colour', () => {
     for (const [stock, target] of Object.entries(ALIASES)) {
-      expect(built[stock], stock).toEqual(typeScale(built[target] as Record<string, never>));
+      const source = built[target] as Record<string, never>;
+      // A heading alias also carries the display family (brand guide v3: Sora).
+      const expected = source['fontFamily'] === undefined ? typeScale(source) : { ...typeScale(source), fontFamily: source['fontFamily'] };
+      expect(built[stock], stock).toEqual(expected);
       expect(built[stock], stock).not.toHaveProperty('color');
     }
   });
@@ -132,9 +135,9 @@ describe.each(PACKS)('pack $label', ({ baseSize, scale, ladder }) => {
 describe('default-pack variants', () => {
   const built = build(DEFAULT.baseSize, DEFAULT.scale);
   const SPEC = {
-    headingLarge: { fontWeight: 600, size: '1.25rem', leading: 1.4 },
-    headingMedium: { fontWeight: 600, size: '1rem', leading: 1.5 },
-    headingSmall: { fontWeight: 600, size: '0.875rem', leading: 1.43 },
+    headingLarge: { fontWeight: 700, size: '1.25rem', leading: 1.4 },
+    headingMedium: { fontWeight: 700, size: '1rem', leading: 1.5 },
+    headingSmall: { fontWeight: 700, size: '0.875rem', leading: 1.43 },
     labelMedium: { fontWeight: 500, size: '0.875rem', leading: 1.43 },
     bodyMedium: { fontWeight: 400, size: '0.875rem', leading: 1.43 },
     labelSmall: { fontWeight: 500, size: '0.75rem', leading: 1.4 },

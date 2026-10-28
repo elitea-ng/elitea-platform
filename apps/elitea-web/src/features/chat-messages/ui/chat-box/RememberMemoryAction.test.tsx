@@ -1,11 +1,13 @@
 /**
- * `RememberMemoryAction` — "Remember this" on an assistant message (#870).
+ * `useRememberMemory` + `RememberMemoryMenuRow` — "Remember this" on an
+ * assistant message (#870), the row in the reply's ⋯ menu.
  * MSW-backed: every assertion goes through the real
  * `POST /elitea_core/memories/prompt_lib/{projectId}` route shape, not a
  * mocked hook — same discipline `MessageFeedbackControl.test.tsx` (#880)
  * establishes for the sibling per-message action.
  */
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import MenuList from '@mui/material/MenuList';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -13,7 +15,20 @@ import { AppProviders } from '@/app/providers/AppProviders';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
-import { RememberMemoryAction } from './RememberMemoryAction';
+import { RememberMemoryMenuRow, useRememberMemory } from './RememberMemoryAction';
+
+/** The hook as the reply's action row holds it: the row inside the menu, the toast beside it. */
+function RememberMemoryAction({ projectId, content, conversationId }: { readonly projectId: string; readonly content: string; readonly conversationId?: string }) {
+  const memory = useRememberMemory({ projectId, content, conversationId });
+  return (
+    <>
+      <MenuList>
+        <RememberMemoryMenuRow memory={memory} onDone={() => {}} />
+      </MenuList>
+      {memory.toast}
+    </>
+  );
+}
 
 const BASE = '/api/v2';
 const MEMORIES_URL = `${BASE}/elitea_core/memories/prompt_lib/proj-1`;
@@ -34,10 +49,10 @@ function mount(content = 'This is the assistant answer to remember.') {
   );
 }
 
-describe('RememberMemoryAction', () => {
+describe('RememberMemoryMenuRow', () => {
   it('renders nothing when there is no content to remember', () => {
-    const { container } = mount('');
-    expect(container).toBeEmptyDOMElement();
+    mount('');
+    expect(screen.queryByTestId('remember-memory-action')).not.toBeInTheDocument();
   });
 
   it('renders nothing when there is no project id', () => {

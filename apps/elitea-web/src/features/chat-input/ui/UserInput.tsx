@@ -36,8 +36,13 @@ import { useFileDragAndDrop } from '../lib/hooks/useFileDragAndDrop.hooks';
 import type { UserInputHandle, UserInputProps } from './UserInput.types';
 import { MAX_ROWS, MIN_ROWS } from './UserInput.types';
 import { userInputStyles } from './UserInput.styles';
+import { useComposerResize } from './ComposerResizeHandle';
+import { useComposerDraft } from '@/shared/lib/composerDrafts';
 import { UserInputEditableArea } from './UserInputEditableArea';
 import { UserInputFooter } from './UserInputFooter';
+
+/** The desktop build draws the composer as a native text box (a literal MODE test: the web build keeps its own look). */
+const NATIVE = import.meta.env.MODE === 'desktop';
 
 // Only the 4 types below are re-exported from this path (knip: `UserInput
 // .test.tsx` is the one real consumer that imports via `'./UserInput'`,
@@ -123,7 +128,7 @@ export const UserInput = forwardRef(function UserInput(props: UserInputProps, re
   useUserInputMentions({ inputContent, users: mention.users, onMentionChange: mention.onMentionChange, inputRef });
 
   const { isDragOver, handleDragOver, handleDragLeave, handleDrop } = useFileDragAndDrop(sp.container?.onDrop);
-  const footerControls = resolveFooterControls({ isStreaming, isUploading, keepSendWhileStreaming: sendButtonConfig.keepWhileStreaming });
+  const footerControls = resolveFooterControls({ isStreaming, isUploading, keepSendWhileStreaming: sendButtonConfig.keepWhileStreaming, oneButton: NATIVE, hasText: question.trim() !== '' });
 
   const hasHighlights = highlightRanges.length > 0 && inputContent !== '';
 
@@ -166,7 +171,13 @@ export const UserInput = forwardRef(function UserInput(props: UserInputProps, re
     onNormalKeyDown,
   });
 
-  const styles = userInputStyles(isFocused, isDragOver, isRecording);
+  const resize = useComposerResize(NATIVE);
+  useComposerDraft(field.draftKey, inputContent, (text) => {
+    setInputContent(text);
+    setQuestion(text);
+    onInputChange?.(text);
+  });
+  const styles = userInputStyles(isFocused, isDragOver, isRecording, NATIVE);
 
   return (
     <Box
@@ -183,13 +194,14 @@ export const UserInput = forwardRef(function UserInput(props: UserInputProps, re
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
+          {resize.handle}
           {renderAttachmentList(attachmentItems, attachmentList, onDeleteAttachment, isStreaming || showLoading)}
           <UserInputEditableArea
             refs={{ inputRef, mirrorRef }}
             content={{ value: inputContent, hasHighlights, ranges: highlightRanges }}
             highlightOverlay={highlightOverlay}
             focusState={{ isFocused, onFocus, onBlur }}
-            rowState={{ rows, showExpandIcon, onClickExpander }}
+            rowState={{ rows, showExpandIcon, onClickExpander, minRows: resize.minRows }}
             handlers={{ onChange: onInputQuestion, onKeyDown, onKeyUp, onCompositionStart, onCompositionEnd, onPaste: handlePaste }}
             field={field}
             disabled={disabledInput}

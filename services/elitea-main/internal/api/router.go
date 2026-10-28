@@ -16,6 +16,7 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity/eliteanative"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/adminui"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/browserauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/gateway"
@@ -39,6 +40,7 @@ import (
 	v2credentialconsent "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialconsent"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
 	v2credentialprobe "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialprobe"
+	v2credentialreferences "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreferences"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	v2discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
@@ -49,6 +51,7 @@ import (
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
 	v2indextypes "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	v2inventory "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/inventory"
+	v2mandateattachments "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mandateattachments"
 	v2mcp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mcp"
 	v2memories "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/memories"
 	v2messagetraces "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/messagetraces"
@@ -90,6 +93,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/events"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/governedmcp"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -701,6 +705,22 @@ type RouterConfig struct {
 	// API (ADR-0039, issue 1151). Set, like AgentIdentityAdmin, only with the
 	// credential governance flag on; nil mounts none of its routes.
 	ExternalAgentIdentityAdmin *v2agentidentity.ExternalHandler
+	// MandateAttachments serves the routes that attach a mandate to a
+	// pipeline schedule, pipeline trigger or index schedule (ADR-0039, issue
+	// 1122). Set only with the credential governance flag on; nil mounts
+	// none of its routes.
+	MandateAttachments *v2mandateattachments.Handler
+	// CredentialReferencesAdmin serves the credential reference lifecycle,
+	// toolkit attachment and agent toolkit binding routes (ADR-0039, issue
+	// 1124). Set only with the credential governance flag on; nil mounts
+	// none of its routes.
+	CredentialReferencesAdmin *v2credentialreferences.Handler
+	// AgentAssertionWellKnown serves the Elitea-native agent assertion JWKS
+	// and issuer metadata (ADR-0039, issue 1153). The composition root sets
+	// it only with the credential governance flag on and at least one
+	// relying party configured; nil mounts neither route, so both answer
+	// 404. It holds public keys only: no route signs.
+	AgentAssertionWellKnown *eliteanative.WellKnown
 	// CredentialProbe serves the credential probe (ADR-0039, issue 1120).
 	// Set only with the credential governance flag on; nil mounts no route.
 	CredentialProbe *v2credentialprobe.Handler
@@ -708,6 +728,17 @@ type RouterConfig struct {
 	// issue 1121). Set only with the credential governance flag on and at
 	// least one provider OAuth application configured; nil mounts no route.
 	CredentialConsent *v2credentialconsent.Handler
+	// GovernedMCPInbound makes the MCP endpoint an OAuth protected resource
+	// (ADR-0039, issue 1123): the RFC 9728 metadata route, the
+	// resource_metadata challenge on a 401 and audience-checked inbound
+	// tokens. Set only with the credential governance flag on and an
+	// inbound issuer configured; nil leaves the MCP routes, their
+	// authentication and their responses unchanged, and mounts no metadata.
+	GovernedMCPInbound *v2mcp.GovernedInbound
+	// GovernedMCPOutbound serves the Client ID Metadata Document remote MCP
+	// authorization servers fetch (issue 1123). Set only with the flag on
+	// and governed MCP OAuth composed; nil mounts no route.
+	GovernedMCPOutbound *governedmcp.Service
 }
 
 type RuntimeRoutes struct {
@@ -1218,6 +1249,7 @@ func mountMCPServerRoutes(
 	conversationHandler *v2convs.Handler,
 	folderHandler *v2folders.Handler,
 	platformTools *desktopopsapi.PlatformToolBridge,
+	governed *v2mcp.GovernedInbound,
 ) {
 	// The resolver ASKS for the personal project it could not find, for the
 	// reason stated at `withPersonalProjects`: an MCP client authenticates
@@ -1247,6 +1279,11 @@ func mountMCPServerRoutes(
 	// tool through THIS handler's dispatch, so a local turn and a cloud turn
 	// reach the same operations under the same permission checks.
 	platformTools.Bind(platformToolAdapter{handler: handler})
+	// Governed (issue 1123): the resource server runs in front of the
+	// platform authentication; with it nil nothing changes.
+	if governed != nil {
+		authenticate = governed.Wrap(authenticate)
+	}
 	r.Group(func(r chi.Router) {
 		r.Use(authenticate)
 		r.Use(apimw.RequireProjectAccess(pool))
@@ -1640,6 +1677,24 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	})
 	r.Get(v2discovery.Path, discoveryHandler.ServeHTTP)
 	r.Head(v2discovery.Path, discoveryHandler.ServeHTTP)
+	// The agent assertion issuer's public documents (issue 1153). Public
+	// for the same reason as discovery: a relying party fetches them with
+	// no credential, and they carry public keys and URLs only.
+	if cfg.AgentAssertionWellKnown != nil {
+		r.Get(eliteanative.JWKSPath, cfg.AgentAssertionWellKnown.ServeJWKS)
+		r.Get(eliteanative.MetadataPath, cfg.AgentAssertionWellKnown.ServeMetadata)
+	}
+	// Governed MCP (issue 1123): the MCP endpoint's RFC 9728 metadata and
+	// Main's Client ID Metadata Document. Public for the same reason: an
+	// MCP client or a remote authorization server reads them before it
+	// holds any credential, and they carry URLs only.
+	if cfg.GovernedMCPInbound != nil {
+		r.Get(v2mcp.ProtectedResourceMetadataPrefix+"/app/{projectID}/mcp", cfg.GovernedMCPInbound.ServeMetadata)
+		r.Get(v2mcp.ProtectedResourceMetadataPrefix+"/app/{projectID}/mcp/*", cfg.GovernedMCPInbound.ServeMetadata)
+	}
+	if cfg.GovernedMCPOutbound != nil {
+		r.Get(governedmcp.ClientMetadataPath, cfg.GovernedMCPOutbound.ServeClientMetadata)
+	}
 	// Uploaded brand assets (ADR-0024 decision 3): public for the same
 	// reason as /icons — <img src>, <link rel="icon"> and @font-face fetches
 	// carry no credential. Content-addressed and immutable; the route
@@ -1931,7 +1986,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg.CurrentNotificationStore,
 		cfg.ToolkitArgumentSchemas, cfg.MCPToolkitRun, personalProjects,
 		cfg.InternalConfigurationTools, draftHandler, cfg.ToolkitDiscovery, convHandler, folderHandler,
-		cfg.PlatformMCPTools,
+		cfg.PlatformMCPTools, cfg.GovernedMCPInbound,
 	)
 
 	// SCIM 2.0 provisioning (shared migrations 0096, 0098, 0134).
@@ -2755,6 +2810,52 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(mandatesApprove).Post("/mandates/{id}:approve", agentIdentities.ApproveMandate)
 					r.With(mandatesManage).Post("/mandates/{id}:suspend", agentIdentities.SuspendMandate)
 					r.With(mandatesManage).Post("/mandates/{id}:revoke", agentIdentities.RevokeMandate)
+				}
+
+				// Mandate attachments of unattended runs (ADR-0039, issue
+				// 1122). Mounted only with the governance flag on. Attaching
+				// names the authority an unattended run acts under, so it takes
+				// the permission that issues and revokes mandates. The target
+				// is read from the path; the handler checks the mandate is in
+				// that tenant project.
+				if cfg.MandateAttachments != nil {
+					attachments := cfg.MandateAttachments
+					attachManage := central(v2agentidentity.PermissionMandatesManage)
+					r.Route("/mandate_attachments", func(r chi.Router) {
+						r.Use(attachManage)
+						r.Put("/pipeline_schedules/{projectID}/{versionID}", attachments.AttachPipelineSchedule)
+						r.Delete("/pipeline_schedules/{projectID}/{versionID}", attachments.DetachPipelineSchedule)
+						r.Put("/pipeline_triggers/{projectID}/{versionID}", attachments.AttachPipelineTrigger)
+						r.Delete("/pipeline_triggers/{projectID}/{versionID}", attachments.DetachPipelineTrigger)
+						r.Put("/index_schedules/{projectID}/{toolkitID}/{indexName}", attachments.AttachIndexSchedule)
+						r.Delete("/index_schedules/{projectID}/{toolkitID}/{indexName}", attachments.DetachIndexSchedule)
+					})
+				}
+
+				// Credential references and agent toolkit bindings (ADR-0039,
+				// issue 1124). Mounted only with the governance flag on. They
+				// reuse the binding permissions of shared 0181: activating a
+				// reference, like approving a binding, makes governed use
+				// possible, so it needs approve, and the stager can never be
+				// the activator (the store and the 0193 CHECK enforce it).
+				// Listing needs manage OR approve; retire, attach, detach and
+				// the toolkit pin need manage.
+				if cfg.CredentialReferencesAdmin != nil {
+					references := cfg.CredentialReferencesAdmin
+					referencesManage := central(v2agentidentity.PermissionBindingsManage)
+					referencesApprove := central(v2agentidentity.PermissionBindingsApprove)
+					referencesRead := apimw.RequireCentralPermissions(
+						permissionResolver, platformauth.PermissionModeAdministration,
+						v2agentidentity.PermissionBindingsManage, v2agentidentity.PermissionBindingsApprove,
+					)
+					r.With(referencesRead).Get("/credential_references", references.List)
+					r.With(referencesRead).Get("/credential_references/{id}", references.Get)
+					r.With(referencesApprove).Post("/credential_references/{id}:activate", references.Activate)
+					r.With(referencesManage).Post("/credential_references/{id}:retire", references.Retire)
+					r.With(referencesManage).Post("/credential_references/{id}:attach", references.Attach)
+					r.With(referencesManage).Post("/credential_references/{id}:detach", references.Detach)
+					r.With(referencesManage).Put("/agent_identities/{id}/toolkits/{toolkitID}", references.PinToolkit)
+					r.With(referencesManage).Delete("/agent_identities/{id}/toolkits/{toolkitID}", references.UnpinToolkit)
 				}
 
 				// External agent identities (ADR-0039, issue 1151). Mounted

@@ -25,7 +25,7 @@ prost = "=0.14.4"
 qdrant-client = { version = "=1.19.0", default-features = false, features = ["serde"] }
 # The process crypto provider (ring), chosen explicitly: the OTLP exporter's
 # reqwest also links aws-lc-rs, and with two providers rustls picks none.
-rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }
 serde_json = "=1.0.151"
 sha2 = "=0.10.9"
 thiserror = "=2.0.21"

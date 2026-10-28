@@ -23,6 +23,7 @@ import Skeleton from '@mui/material/Skeleton';
 import { ApplicationAnswer } from './ApplicationAnswer';
 import { SteeringMessages } from './SteeringMessages';
 import { UserMessage } from './UserMessage';
+import { useStickToBottom } from './useStickToBottom';
 
 import { useChatSessionStore } from '@/entities/conversation';
 import { WELCOME_MESSAGE_ID } from '@/shared/lib/enums';
@@ -32,6 +33,7 @@ import type { SimpleBarInstance } from '@/shared/ui/ScrollableContainer';
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
 import { TraceStepDetailProvider } from '../../model/traceStepDetail';
 import { t } from '@/shared/i18n';
+import { CONVERSATION_COLUMN } from '@/shared/ui/conversation-column';
 
 import type { ChatMessageListProps } from './ChatMessageList.types';
 
@@ -96,6 +98,20 @@ function isOwnMessage(readerId: string | undefined, authorId: string | undefined
   return reader === author;
 }
 
+/**
+ * Which side a question sits on: someone else's (left) only when BOTH the
+ * reader and the author are stated and differ. Layout is not a permission, so
+ * an unstated side does not refuse the way `isOwnMessage` must — a reloaded
+ * row the server attributed to nobody is far more likely the reader's own
+ * question in their own chat than a stranger's, and drawing it on the left
+ * would make every such conversation look like someone else's.
+ */
+function isOtherAuthor(readerId: string | undefined, authorId: string | undefined): boolean {
+  const reader = statedAuthorId(readerId);
+  const author = statedAuthorId(authorId);
+  return reader !== undefined && author !== undefined && reader !== author;
+}
+
 /** Baseline `ChatMessageWrapper.jsx`'s `canDeleteThisAIMessage` — whether `userId` authored the question this AI answer replies to. */
 function canDeleteAiMessage(
   chatHistory: readonly ChatMessage[],
@@ -136,7 +152,7 @@ export function ChatMessageList({
   steering,
 }: ChatMessageListProps): ReactNode {
   const scrollRef = useRef<SimpleBarInstance | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLUListElement | null>(null);
   const messageRowRefs = useRef<Record<string, HTMLElement | null>>({});
 
   const messageIdToView = useChatSessionStore((state) => state.messageIdToView);
@@ -156,18 +172,27 @@ export function ChatMessageList({
   // than invented.
   // Steering (contract 1.27): an injected message that the transcript already holds is not shown two times.
   const transcriptIds = useMemo(() => new Set(chatHistory.map((message) => message.id)), [chatHistory]);
+  // A name over each reply only when more than one assistant answers here.
+  const isMultiAssistant = useMemo(() => {
+    const names = new Set(chatHistory.filter((msg) => msg.role !== 'user').map((msg) => msg.authorName ?? assistantName ?? ''));
+    names.delete('');
+    return names.size > 1;
+  }, [chatHistory, assistantName]);
   const lastUserMessageIndex = useMemo(
     () => chatHistory.reduce((last, msg, i) => (msg.role === 'user' ? i : last), -1),
     [chatHistory],
   );
 
-  const firstMessageId = chatHistory[0]?.id;
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ block: 'end' });
-    // A new conversation (first message identity changes) or a newly-arrived
-    // message (list length changes) both warrant scrolling to the bottom —
-    // baseline: `ChatMessageList.jsx`'s own `[activeConversation?.id]` effect.
-  }, [firstMessageId, chatHistory.length]);
+  // Land at the bottom on open/send and follow a streaming reply while the
+  // reader stays at the bottom — see `useStickToBottom` for why the message
+  // count alone (the baseline's `[activeConversation?.id]` effect) is not enough.
+  useStickToBottom({
+    scrollRef,
+    contentRef: listRef,
+    firstId: chatHistory[0]?.id,
+    lastId: chatHistory.at(-1)?.id,
+    count: chatHistory.length,
+  });
 
   useEffect(() => {
     const scrollEl = scrollRef.current?.getScrollElement();
@@ -223,8 +248,9 @@ export function ChatMessageList({
         */}
       <Box
         component="ul"
+        ref={listRef}
         data-testid="chat-message-list"
-        sx={{ width: '100%', flexGrow: 1, listStyle: 'none', margin: 0, padding: '0 0.75rem 0.75rem' }}
+        sx={{ ...CONVERSATION_COLUMN, flexGrow: 1, listStyle: 'none', marginY: 0, paddingTop: 2, paddingBottom: 1.5 }}
       >
         {isLoadingMore && (
           <Box component="li" sx={{ display: 'flex', flexDirection: 'column', gap: 1, pb: 1, listStyle: 'none' }}>
@@ -284,12 +310,14 @@ export function ChatMessageList({
               key={messageId}
               data-testid="chat-message-item"
               ref={setMessageRowRef(messageId)}
-              sx={{ listStyle: 'none', width: '100%', mb: 1 }}
+              // The one gap between turns: the rows carry no padding of their own.
+              sx={{ listStyle: 'none', width: '100%', mb: 2 }}
             >
               {isUser ? (
                 <UserMessage
                   message={message}
                   messageId={messageId}
+                  isOwn={!isOtherAuthor(userId, message.userId)}
                   projectId={projectId}
                   onOpenFileInCanvas={onOpenFileInCanvas}
                   onCopy={handleCopy}
@@ -308,7 +336,7 @@ export function ChatMessageList({
                   // the answers — the mode's whole point (reading the reply
                   // back) could not happen.
                   isSpeakingMode={autoSpeak}
-                  author={{ participantName: message.authorName ?? assistantName }}
+                  author={{ participantName: message.authorName ?? assistantName, showCaption: isMultiAssistant }}
                   toolActions={message.toolActions}
                   status={{ isLoading: Boolean(message.isLoading), isStreaming: messageIsStreaming }}
                   actions={{
@@ -347,12 +375,11 @@ export function ChatMessageList({
                 />
               )}
               {!isUser && steering && (
-                <SteeringMessages responseMessageId={messageId} transcriptIds={transcriptIds} isLive={messageIsStreaming || Boolean(message.isLoading)} model={steering.model} onStopAndSend={steering.onStopAndSend} />
+                <SteeringMessages responseMessageId={messageId} transcriptIds={transcriptIds} isLive={messageIsStreaming || Boolean(message.isLoading)} />
               )}
             </Box>
           );
         })}
-        <Box component="li" ref={messagesEndRef} sx={{ listStyle: 'none' }} />
       </Box>
     </ScrollableContainer>
     </TraceStepDetailProvider>

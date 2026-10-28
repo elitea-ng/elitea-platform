@@ -8,7 +8,8 @@
  * changes panel; every other page (the Elitea features, Settings) gets a slim
  * title row: the window's drag region, the name of what is open
  * (`PageTitle.tsx`: `Chats ▸ folder ▸ conversation`, or the page's name) and
- * the sidebar and inspector toggles. The sidebar is the way to everything, so
+ * the sidebar and inspector toggles. Settings opens as a dialog over the
+ * page it was opened from (`SettingsDialog.tsx`). The sidebar is the way to everything, so
  * the row has no "back" button. A page with an inspector (the chat's
  * participants, Local work's changes, approvals and index) contributes tabs
  * to the frame's ONE full-height right panel through
@@ -19,7 +20,7 @@
  * Mail). Both the sidebar and the title read ONE chat rail
  * (`model/chatRail.tsx`), while the Chats row is there.
  */
-import { useEffect, useMemo, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 
 import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
 import Box from '@mui/material/Box';
@@ -48,6 +49,7 @@ import { NativeLook } from './NativeLook';
 import { BannerStack, NoticeBanner } from './NoticeBanner';
 import { PageTitle } from './PageTitle';
 import { ReclaimRequestToast } from './ReclaimRequestToast';
+import { PageSnapshot, SettingsDialog, usePreloadSettings, useSnapshotOnOpen, useSettingsOnScreen, useReturnAddress, type Snapshot } from './SettingsDialog';
 import { modKey } from './shortcutLabel';
 import { TitleBarSpacer } from './TitleBarSpacer';
 
@@ -92,7 +94,7 @@ function ShellNotice(): React.JSX.Element | null {
 const NOTICE_MS = 8000;
 
 export function DesktopFrame({ children, permissions, projects, selectedProjectId, onSelectProject }: DesktopFrameProps): React.JSX.Element {
-  const run = useShellActions();
+  const run = useShellActions(selectedProjectId);
   const ipc = useAppIpc();
   useHostIntegration(run, ipc);
   useNativeWindowTheme(ipc);
@@ -108,6 +110,19 @@ export function DesktopFrame({ children, permissions, projects, selectedProjectI
   const inspectorGroups = useInspectorView(inspector);
   const inspectorShown = inspectorOpen && inspectorGroups.length > 0;
   const mainHidden = maximized && inspectorShown;
+  const inSettings = useSettingsOnScreen();
+  const returnTo = useReturnAddress();
+  usePreloadSettings();
+  const pageSnapshot = useRef<Snapshot>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  useSnapshotOnOpen(mainRef, pageSnapshot);
+  // The frame's notices show over whatever is in front: the page, or the Settings dialog.
+  const banners = (
+    <BannerStack>
+      <ShellNotice />
+      <ReclaimRequestToast run={run} />
+    </BannerStack>
+  );
 
   return (
     <NativeLook>
@@ -125,32 +140,37 @@ export function DesktopFrame({ children, permissions, projects, selectedProjectI
                 onSelectProject={onSelectProject}
               />
             )}
-            <Box
-              component="main"
-              sx={(theme: Theme) => ({
-                flex: 1,
-                minWidth: 0,
-                height: '100vh',
-                display: mainHidden ? 'none' : 'flex',
-                flexDirection: 'column',
-                background: theme.vars.palette.background.default,
-                position: 'relative',
-              })}
-            >
-              {!location.inFolders && (
-                <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
-                  <TitleBarSpacer leading={!sidebarOpen} logo={false} trailing={<InspectorToggle host={inspector} />}>
-                    <ShowSidebarButton />
-                    <PageTitle pathname={location.pathname} items={items} projectId={selectedProjectId} />
-                  </TitleBarSpacer>
-                </Box>
-              )}
-              <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative' }}>{children}</Box>
-              <BannerStack>
-                <ShellNotice />
-                <ReclaimRequestToast run={run} />
-              </BannerStack>
-            </Box>
+            {inSettings ? (
+              <PageSnapshot from={pageSnapshot} />
+            ) : (
+              <Box
+                ref={mainRef}
+                component="main"
+                sx={(theme: Theme) => ({
+                  flex: 1,
+                  minWidth: 0,
+                  height: '100vh',
+                  display: mainHidden ? 'none' : 'flex',
+                  flexDirection: 'column',
+                  background: theme.vars.palette.background.default,
+                  position: 'relative',
+                })}
+              >
+                {!location.inFolders && (
+                  <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
+                    <TitleBarSpacer leading={!sidebarOpen} logo={false} trailing={<InspectorToggle host={inspector} />}>
+                      <ShowSidebarButton />
+                      <PageTitle pathname={location.pathname} items={items} projectId={selectedProjectId} />
+                    </TitleBarSpacer>
+                  </Box>
+                )}
+                <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative' }}>{children}</Box>
+                {banners}
+              </Box>
+            )}
+            {inSettings && <SettingsDialog returnTo={returnTo} banners={banners}>
+                {children}
+              </SettingsDialog>}
             <InspectorPane host={inspector} />
             <InspectorWindows host={inspector} />
             <CommandPalette items={items} run={run} />

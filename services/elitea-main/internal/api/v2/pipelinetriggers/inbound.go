@@ -30,7 +30,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
@@ -277,6 +279,17 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 	// the signature and the revocation check: an unauthenticated request
 	// must not be able to write a row, and a refused one must not occupy a
 	// key a genuine delivery will need.
+	//
+	// GOVERNED (governed.go): the trigger's mandate is the run authority,
+	// checked before the claim so a refused call occupies no key.
+	var authority *securitycontext.RunAuthority
+	if h.governed != nil {
+		granted, ok := h.triggerAuthority(w, r, schema, projectID, trigger, record)
+		if !ok {
+			return
+		}
+		authority = &granted
+	}
 	deliveryKey := signedDeliveryKey(trigger, r.Header, raw)
 	if deliveryKey != "" {
 		state, previous, claimErr := h.claimDelivery(r.Context(), schema, trigger.TokenID, deliveryKey)
@@ -330,6 +343,7 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		Variables:     variables,
 		TriggerID:     trigger.ID,
 		TriggerKind:   storedTargetKind(trigger),
+		Authority:     authority,
 	})
 	if deliveryKey != "" {
 		if err != nil {
@@ -339,6 +353,12 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	switch {
+	case governedStartRefused(err):
+		record(http.StatusForbidden, projectID, trigger.CreatedBy, trigger.VersionID, runmandate.CodeMandateNotUsable)
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error": "this trigger has no usable mandate", "code": runmandate.CodeMandateNotUsable,
+		})
+		return
 	case errors.Is(err, ErrRunForbidden):
 		record(http.StatusUnauthorized, projectID, trigger.CreatedBy, trigger.VersionID,
 			"the trigger creator no longer holds "+RunPermission)

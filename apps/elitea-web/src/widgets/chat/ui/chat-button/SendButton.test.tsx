@@ -196,3 +196,32 @@ describe('issue 932: an active voice recording blocks the speaking-mode wave ico
     await waitFor(() => expect(screen.getByTestId('chat-send-button')).toBeEnabled());
   });
 });
+
+describe('SendButton — the desktop look (native)', () => {
+  it('sends from the round button, with the web id and name', async () => {
+    serveFlags(true, false);
+    const onSend = vi.fn();
+    render(<Harness><SendButton native question="hi" onSend={onSend} /></Harness>);
+    const button = await screen.findByTestId('chat-send-button');
+    expect(button).toHaveAccessibleName('Send');
+    fireEvent.click(button);
+    expect(onSend).toHaveBeenCalledOnce();
+  });
+
+  it('enters speaking mode from the same round button while the input is empty', async () => {
+    serveFlags(true, false);
+    const onEnterSpeakingMode = vi.fn();
+    render(<Harness><SendButton native question="" onEnterSpeakingMode={onEnterSpeakingMode} /></Harness>);
+    await waitFor(() => expect(screen.getByTestId('chat-speaking-mode-button')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('chat-speaking-mode-button'));
+    expect(onEnterSpeakingMode).toHaveBeenCalledOnce();
+  });
+
+  it('leaves speaking mode from a round stop button', async () => {
+    serveFlags(true, false);
+    const onExitSpeakingMode = vi.fn();
+    render(<Harness><SendButton native isSpeakingMode onExitSpeakingMode={onExitSpeakingMode} /></Harness>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop speaking' }));
+    expect(onExitSpeakingMode).toHaveBeenCalledOnce();
+  });
+});

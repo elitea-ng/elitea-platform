@@ -1,31 +1,26 @@
+import { BRAND_TOKENS } from '@elitea/client-core/brand';
+
 /**
- * Elitea AI design tokens v1 (docs/design-system.md, docs/design-tokens.json).
+ * Elitea AI design tokens v2: the brand guide v3 palette (docs/design-system.md,
+ * docs/design-tokens.json).
  *
- * This module is the typed copy of `docs/design-tokens.json`; `tokens.test.ts`
- * fails when the two drift and re-proves every WCAG pair in `PROOFS`. Screens
- * read these through `useDesign()` (src/design/DesignProvider.tsx), never
+ * The colours come from `BRAND_TOKENS` (`@elitea/client-core/brand`, the one source the web and
+ * desktop apps read too); this module maps them onto the app's semantic set. It is the typed copy
+ * of `docs/design-tokens.json`; `tokens.test.ts` fails when the two drift and re-proves every WCAG
+ * pair in `PROOFS`. Screens read these through `useDesign()` (src/design/DesignProvider.tsx), never
  * directly, so the workspace brand and accessibility modifiers apply.
  */
 
 export type Scheme = 'light' | 'dark';
 
+/** The brand palette (guide v3): one job each, see `BRAND_TOKENS.palette`. */
 export const primitives = {
-  marshmallow: {
-    50: '#FFF4F8', 100: '#FCE4EE', 200: '#F8C7DA', 300: '#F2A6C3', 400: '#E77AA4',
-    500: '#D04F86', 600: '#B4306A', 700: '#93244F', 800: '#6E1A3B', 900: '#3D1E2D',
-  },
-  cream: { 50: '#FFFCFA', 100: '#FBF7F9', 200: '#F5EFF3' },
-  coat: {
-    50: '#EEF6FB', 100: '#DDEBF5', 200: '#BFDDF3', 300: '#A8CCE6', 400: '#8DC3EA',
-    500: '#5E9CC8', 600: '#2D6894', 700: '#1E4A6B', 800: '#1C2C3A',
-  },
-  mint: { 50: '#EEF9F4', 100: '#E8F5EF', 200: '#CBE9DA', 300: '#9ED9D0', 500: '#3FA68A', 700: '#1D7A4C' },
-  belt: { 100: '#FCEBD6', 300: '#F0B98C', 400: '#E4A176', 600: '#B8652A', 700: '#8F5300' },
-  ink: {
-    0: '#FFFFFF', 50: '#F7F2F5', 100: '#E6DDE3', 300: '#BDB4C2', 400: '#9C93A2', 500: '#8E8592',
-    550: '#77707E', 600: '#6E6676', 700: '#5A5262', 900: '#1C1622',
-  },
-  night: { 950: '#100E13', 900: '#141118', 850: '#1D1A22', 800: '#221F28', 750: '#26222C', 700: '#2A2631', 600: '#332E3A' },
+  indigo: BRAND_TOKENS.palette.indigo.value,
+  cyan: BRAND_TOKENS.palette.cyan.value,
+  violet: BRAND_TOKENS.palette.violet.value,
+  orange: BRAND_TOKENS.palette.orange.value,
+  ink: BRAND_TOKENS.palette.ink.value,
+  paper: BRAND_TOKENS.palette.paper.value,
 } as const;
 
 export interface Gradient {
@@ -69,6 +64,10 @@ export interface SemanticColors {
   accentOn: string;
   accentSoft: string;
   accentSoftOn: string;
+  /** The one primary action fill (filled buttons, send): indigo in both schemes. */
+  primary: string;
+  primaryPressed: string;
+  primaryOn: string;
   secondary: string;
   secondarySoft: string;
   secondarySoftOn: string;
@@ -91,6 +90,11 @@ export interface SemanticColors {
   badge: string;
   badgeText: string;
   focus: string;
+  /** AI presence only (model and agent markers); `aiText` is its text-safe shade. */
+  ai: string;
+  aiText: string;
+  /** The dot: one unread or live marker per view, never a fill for text. */
+  dot: string;
   scrim: string;
   orb: Orb;
   skeleton: string;
@@ -101,92 +105,119 @@ export type ColorKey = {
   [K in keyof SemanticColors]: SemanticColors[K] extends string ? K : never;
 }[keyof SemanticColors];
 
+const DARK = BRAND_TOKENS.schemes.dark;
+const LIGHT = BRAND_TOKENS.schemes.light;
+
+/** No gradients (brand guide v3): the ground is flat, every stop is the background. */
+function flat(color: string): Gradient {
+  return { angleDeg: 180, stops: [color, color, color], positions: [0, 0.5, 1] };
+}
+
+/**
+ * Brand v3 tokens per scheme. Indigo is the one primary fill; the signal colour (cyan on dark,
+ * indigo on light) is `accent`, the tint of links, focus, active controls and spinners; violet
+ * marks AI only; orange is the dot only; neutrals (Ink / Paper surfaces) carry everything else.
+ * The tinted "soft" fills are the scheme's colour at the alpha of `BRAND_TOKENS.schemes.*.selected`
+ * composited over the background, so they stay opaque for the proofs.
+ */
 export const colors: Record<Scheme, SemanticColors> = {
   light: {
-    background: '#FBF7F9',
-    backgroundGradient: { angleDeg: 160, stops: ['#FCEBF2', '#F2EEFB', '#E8F5EF'], positions: [0, 0.55, 1] },
-    surface: '#FFFFFF',
-    surfaceSunken: '#F5EFF3',
-    surfaceGlass: { rgb: '#FFFFFF', alpha: 0.72, blur: 24, border: 'rgba(255, 255, 255, 0.9)', opaqueFallback: '#FFFFFF' },
-    elevated: '#FFFFFF',
-    textPrimary: '#1C1622',
-    textSecondary: '#5A5262',
-    textTertiary: '#6E6676',
-    separator: '#E6DDE3',
-    separatorStrong: '#8E8592',
-    accent: '#B4306A',
-    accentPressed: '#93244F',
-    accentOn: '#FFFFFF',
-    accentSoft: '#FCE4EE',
-    accentSoftOn: '#93244F',
-    secondary: '#2D6894',
-    secondarySoft: '#DDEBF5',
-    secondarySoftOn: '#1E4A6B',
-    success: '#1D7A4C',
-    successSoft: '#E8F5EF',
-    warning: '#8F5300',
-    warningSoft: '#FCEBD6',
-    danger: '#C0262D',
-    dangerOn: '#FFFFFF',
-    dangerSoft: '#FBE0E0',
-    bubbleUser: '#B4306A',
-    bubbleUserText: '#FFFFFF',
-    bubbleAgent: '#FFFFFF',
-    bubbleAgentText: '#1C1622',
-    bubbleAgentBorder: '#E6DDE3',
-    chip: '#FFFFFF',
-    chipText: '#1C1622',
-    chipSelected: '#FCE4EE',
-    chipSelectedText: '#93244F',
-    badge: '#C0262D',
-    badgeText: '#FFFFFF',
-    focus: '#2D6894',
-    scrim: 'rgba(28, 22, 34, 0.40)',
-    orb: { stops: ['#F7A8C8', '#C9B6F2', '#9ED9D0'], highlight: 'rgba(255, 255, 255, 0.85)', decorative: true },
-    skeleton: '#EFE7EC',
+    background: LIGHT.bg,
+    backgroundGradient: flat(LIGHT.bg),
+    surface: LIGHT.surface,
+    surfaceSunken: '#EEF1F7',
+    surfaceGlass: { rgb: LIGHT.elevated, alpha: 0.72, blur: 24, border: 'rgba(11, 11, 24, 0.08)', opaqueFallback: LIGHT.elevated },
+    elevated: LIGHT.elevated,
+    textPrimary: LIGHT.text,
+    textSecondary: LIGHT.textMuted,
+    textTertiary: LIGHT.textMuted,
+    separator: LIGHT.border,
+    separatorStrong: LIGHT.borderStrong,
+    accent: LIGHT.signal,
+    accentPressed: LIGHT.primaryHover,
+    accentOn: LIGHT.onSignal,
+    accentSoft: '#EDEDFD',
+    accentSoftOn: LIGHT.primaryHover,
+    primary: LIGHT.primary,
+    primaryPressed: LIGHT.primaryPressed,
+    primaryOn: LIGHT.onPrimary,
+    secondary: LIGHT.textMuted,
+    secondarySoft: '#E8EBF3',
+    secondarySoftOn: LIGHT.text,
+    success: LIGHT.success,
+    successSoft: '#E8F2EC',
+    warning: LIGHT.warning,
+    warningSoft: '#FCF6F1',
+    danger: LIGHT.danger,
+    dangerOn: LIGHT.onDangerFill,
+    dangerSoft: '#F8E8E8',
+    bubbleUser: LIGHT.primary,
+    bubbleUserText: LIGHT.onPrimary,
+    bubbleAgent: LIGHT.surface,
+    bubbleAgentText: LIGHT.text,
+    bubbleAgentBorder: LIGHT.border,
+    chip: LIGHT.elevated,
+    chipText: LIGHT.text,
+    chipSelected: '#EDEDFD',
+    chipSelectedText: LIGHT.primaryHover,
+    badge: LIGHT.dangerFill,
+    badgeText: LIGHT.onDangerFill,
+    focus: LIGHT.signal,
+    ai: LIGHT.ai,
+    aiText: LIGHT.aiText,
+    dot: LIGHT.dot,
+    scrim: LIGHT.scrim,
+    orb: { stops: [LIGHT.signal, LIGHT.signal, LIGHT.signal], highlight: LIGHT.signal, decorative: true },
+    skeleton: '#EEF1F7',
   },
   dark: {
-    background: '#141118',
-    backgroundGradient: { angleDeg: 160, stops: ['#1F1520', '#16151F', '#111B19'], positions: [0, 0.55, 1] },
-    surface: '#1D1A22',
-    surfaceSunken: '#100E13',
-    surfaceGlass: { rgb: '#2A2631', alpha: 0.72, blur: 24, border: 'rgba(255, 255, 255, 0.08)', opaqueFallback: '#26222C' },
-    elevated: '#26222C',
-    textPrimary: '#F7F2F5',
-    textSecondary: '#BDB4C2',
-    textTertiary: '#9C93A2',
-    separator: '#332E3A',
-    separatorStrong: '#77707E',
-    accent: '#FF8CB8',
-    accentPressed: '#FFA9CB',
-    accentOn: '#3A0A1F',
-    accentSoft: '#3D1E2D',
-    accentSoftOn: '#FFC2DA',
-    secondary: '#8DC3EA',
-    secondarySoft: '#1C2C3A',
-    secondarySoftOn: '#BFDDF3',
-    success: '#5CD49C',
-    successSoft: '#16291F',
-    warning: '#F3B54A',
-    warningSoft: '#2E2213',
-    danger: '#FF8780',
-    dangerOn: '#3A0705',
-    dangerSoft: '#331717',
-    bubbleUser: '#5B2541',
-    bubbleUserText: '#FFFFFF',
-    bubbleAgent: '#221F28',
-    bubbleAgentText: '#F7F2F5',
-    bubbleAgentBorder: '#332E3A',
-    chip: '#26222C',
-    chipText: '#F7F2F5',
-    chipSelected: '#3D1E2D',
-    chipSelectedText: '#FFC2DA',
-    badge: '#D2333A',
-    badgeText: '#FFFFFF',
-    focus: '#8DC3EA',
-    scrim: 'rgba(0, 0, 0, 0.55)',
-    orb: { stops: ['#C2477E', '#6F5BB8', '#2F8C7E'], highlight: 'rgba(255, 255, 255, 0.55)', decorative: true },
-    skeleton: '#2A2631',
+    background: DARK.bg,
+    backgroundGradient: flat(DARK.bg),
+    surface: DARK.surface,
+    surfaceSunken: DARK.codeBg,
+    surfaceGlass: { rgb: DARK.elevated, alpha: 0.72, blur: 24, border: 'rgba(242, 244, 250, 0.08)', opaqueFallback: DARK.elevated },
+    elevated: DARK.elevated,
+    textPrimary: DARK.text,
+    textSecondary: DARK.textMuted,
+    textTertiary: DARK.textMuted,
+    separator: DARK.border,
+    separatorStrong: DARK.borderStrong,
+    accent: DARK.signal,
+    accentPressed: '#4DD2EE',
+    accentOn: DARK.onSignal,
+    accentSoft: '#191A46',
+    accentSoftOn: DARK.signal,
+    primary: DARK.primary,
+    primaryPressed: DARK.primaryPressed,
+    primaryOn: DARK.onPrimary,
+    secondary: DARK.textMuted,
+    secondarySoft: DARK.border,
+    secondarySoftOn: DARK.text,
+    success: DARK.success,
+    successSoft: '#0E2521',
+    warning: DARK.warning,
+    warningSoft: '#2C2016',
+    danger: DARK.danger,
+    dangerOn: DARK.bg,
+    dangerSoft: '#2C1925',
+    bubbleUser: DARK.primary,
+    bubbleUserText: DARK.onPrimary,
+    bubbleAgent: DARK.surface,
+    bubbleAgentText: DARK.text,
+    bubbleAgentBorder: DARK.border,
+    chip: DARK.elevated,
+    chipText: DARK.text,
+    chipSelected: '#191A46',
+    chipSelectedText: DARK.signal,
+    badge: DARK.dangerFill,
+    badgeText: DARK.onDangerFill,
+    focus: DARK.signal,
+    ai: DARK.ai,
+    aiText: DARK.aiText,
+    dot: DARK.dot,
+    scrim: DARK.scrim,
+    orb: { stops: [DARK.signal, DARK.signal, DARK.signal], highlight: DARK.signal, decorative: true },
+    skeleton: DARK.elevated,
   },
 };
 
@@ -224,10 +255,13 @@ export const PROOFS: readonly (readonly [ColorKey, ProofGround])[] = [
   ['accent', 'surfaceSunken'],
   // A file chip on my own bubble (AttachmentStrip): its name and type caption on the veiled bubble.
   ['bubbleUserText', 'bubbleUserChip'],
+  // Brand v3: the primary fill's label, AI text on every ground it appears on, AI marks (non-text).
+  ['primaryOn', 'primary'], ['aiText', 'background'], ['aiText', 'surface'], ['aiText', 'elevated'],
+  ['aiText', 'secondarySoft'], ['ai', 'background'],
 ];
 
 /** Non-text UI (borders, focus rings) needs 3:1; everything else is text at 4.5:1. */
-export const NON_TEXT_PROOF_KEYS: readonly ColorKey[] = ['separatorStrong', 'focus'];
+export const NON_TEXT_PROOF_KEYS: readonly ColorKey[] = ['separatorStrong', 'focus', 'ai'];
 
 export const space = {
   0: 0, 0.5: 2, 1: 4, 2: 8, 3: 12, 4: 16, 5: 20, 6: 24, 8: 32, 10: 40, 12: 48, 16: 64,
@@ -260,7 +294,7 @@ function shadow(shadowColor: string, shadowOpacity: number, shadowRadius: number
   return { shadowColor, shadowOpacity, shadowRadius, shadowOffset: { width: 0, height: offsetY }, elevation };
 }
 
-const NONE = shadow('#1C1622', 0, 0, 0, 0);
+const NONE = shadow(primitives.ink, 0, 0, 0, 0);
 
 /**
  * e1 cards and chips on the gradient, e2 floating composer / FAB / popovers,
@@ -270,9 +304,9 @@ const NONE = shadow('#1C1622', 0, 0, 0, 0);
 export const elevation: Record<Scheme, Record<'e0' | 'e1' | 'e2' | 'e3', Elevation>> = {
   light: {
     e0: NONE,
-    e1: shadow('#6E1A3B', 0.06, 12, 4, 1),
-    e2: shadow('#6E1A3B', 0.1, 24, 8, 3),
-    e3: shadow('#1C1622', 0.16, 40, 16, 6),
+    e1: shadow(primitives.ink, 0.06, 12, 4, 1),
+    e2: shadow(primitives.ink, 0.1, 24, 8, 3),
+    e3: shadow(primitives.ink, 0.16, 40, 16, 6),
   },
   dark: {
     e0: NONE,
@@ -347,7 +381,7 @@ export const icons = {
 
 /** Tokens a workspace brand pack may change (docs/design-system.md §3.1). Everything else is fixed. */
 export const BRAND_OVERRIDABLE = [
-  'accent', 'accentPressed', 'accentOn', 'accentSoft', 'accentSoftOn',
+  'accent', 'accentPressed', 'accentOn', 'accentSoft', 'accentSoftOn', 'primary', 'primaryPressed', 'primaryOn',
   'bubbleUser', 'bubbleUserText', 'chipSelected', 'chipSelectedText',
 ] as const satisfies readonly ColorKey[];
 

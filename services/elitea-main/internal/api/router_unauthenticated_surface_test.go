@@ -66,6 +66,24 @@ var publicByDesign = map[string]string{
 	// sign-in endpoints and policy — nothing a login page does not show.
 	"/.well-known/elitea-client": "the ADR-0025 discovery document. Anonymous by definition: it is how a client learns how to sign in.",
 
+	// The Elitea-native agent assertion issuer (ADR-0039, issue 1153). A
+	// relying party (AWS STS, GCP WIF, Vault, Keycloak, an MCP server)
+	// fetches them with no credential to verify an assertion. They carry
+	// public keys and URLs only, and are mounted only with governance on
+	// and a relying party configured.
+	"/.well-known/elitea-agent-jwks.json":            "the agent assertion JWKS: public verification keys, no tenant data.",
+	"/agent-issuer/.well-known/openid-configuration": "the agent assertion issuer metadata: issuer and jwks_uri only.",
+
+	// Governed MCP (ADR-0039, issue 1123). An MCP client reads the RFC 9728
+	// metadata of the MCP endpoint before it holds a token (that is how it
+	// learns where to get one), and a remote MCP authorization server reads
+	// Main's Client ID Metadata Document to learn its redirect URI. Both
+	// carry URLs only, not even whether the project exists, and are mounted
+	// only with governance on and governed MCP configured.
+	"/.well-known/oauth-protected-resource/app/{projectID}/mcp":   "the MCP endpoint's RFC 9728 protected resource metadata: URLs only.",
+	"/.well-known/oauth-protected-resource/app/{projectID}/mcp/*": "the same metadata for an MCP endpoint sub-scope.",
+	"/.well-known/elitea-mcp-client.json":                         "Main's OAuth Client ID Metadata Document: public client metadata, no tenant data.",
+
 	// The served API documentation (S251). These three are the static v2.yaml
 	// spec and the page that renders it — the same bytes for every caller,
 	// describing the shape of the API and carrying no tenant data. They are

@@ -4,6 +4,159 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## P6b
+
+* **Policy revision field `asserted_user_identity_modes` (optional).**
+  It lists the identity modes whose agent sessions may carry a user that
+  Elitea asserts from an approved `delegated_background` mandate. Each
+  must also be in `allowed_identity_modes`. Absent means none, which is
+  how every earlier revision behaves, so a user-attended governed run
+  still needs a verified delegation. List `elitea_native` to let a
+  mandate stand in for one. The field is `omitempty`, so stored revisions
+  keep their digests.
+* **elitea-worker (every run, governed or not): a chat turn's final event no
+  longer carries toolkit settings.** The worker copied each toolkit's
+  resolved settings, credentials included, into
+  `response_metadata.application_details.version_details.tools[].settings`
+  on the final `full_message`. That reached the browser and was kept in
+  `elitea_runtime.execution_replay_events` and `execution_replay_state`. The
+  field is dropped now; tool names and ids stay. Rows written before the
+  upgrade still hold it, so rotate any toolkit credential that a user who
+  must not see it could have streamed, and leave the replay tables to their
+  usual pruning.
+* `migrate-references --copy-to vault` accepts a deployment without
+  `SECRETS_MASTER_KEY` only when `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true`,
+  the same rule elitea-main applies at start-up.
+* **elitea-main: credential reference lifecycle (#1124, off by default).**
+  One additive shared migration (0193) adds nullable `staged_by`,
+  `activated_by` and `last_transition_by` (user ids, bigint) and
+  `migrated_from` columns to `elitea_identity.credential_references`, a
+  CHECK that the activator is not the stager, and a unique index on
+  `(tenant_project_id, migrated_from)` over the references that are not
+  retired. Nobody has to act while
+  `ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED` stays `false`.
+* A reference that existed before 0193 has no recorded stager, so it can
+  never be activated. Stage a new one.
+* New admin routes, mounted only with the flag on and gated on
+  `models.agent_identity.bindings.manage` / `.approve` (no new
+  permission): `GET /api/v2/admin/credential_references?project_id=N`,
+  `GET .../{id}`, `POST .../{id}:activate` (two-person), `:retire`,
+  `:attach`, `:detach`, and `PUT` / `DELETE
+  /api/v2/admin/agent_identities/{id}/toolkits/{toolkit_id}`. Attaching
+  changes the toolkit's digest, so pin the toolkit again after every
+  attach or detach.
+* **New subcommand:** `elitea-main credential-governance
+  migrate-references` proposes one credential reference and target
+  binding for each configuration a governed agent needs. It is a dry run
+  by default and writes nothing. `--apply --operator <user id>` stages
+  references (state `staged` only). The operator must be an existing user. `--copy-to vault` copies static
+  secrets to Vault/OpenBao with check-and-set through the secret write
+  ledger, and needs a `<prefix>-credential-migration` role. `--json`
+  prints one line per toolkit. A rerun stages nothing new, except a
+  replacement for a reference that was retired.
+* **Rollback:** an earlier release's migration runner refuses a database
+  that holds 0193. Roll back by turning the flag off, not by downgrading.
+  The embedded docs page "Credential governance runbook" has the
+  procedure.
+
+## Release retention
+
+* **Only the newest releases stay in GHCR.** The new **Release Retention**
+  workflow (admins only, by hand) keeps the newest 10 stable releases and the
+  newest 3 pre-releases of each channel. It deletes every older GitHub
+  release with its tag, images, charts and desktop app. publish.yml now keeps
+  3 pre-releases per channel instead of 14, and a stable release deletes every
+  pre-release cut before it.
+* **Retired packages are deleted:** `elitea-ui`, `elitea-worker-python`,
+  `elitea-deepwiki`, `elitea-inventory`, the old indexer image, and the
+  `charts/nats` and `charts/nats-bootstrap` charts, which the `elitea` chart
+  has carried since v4.71.0.
+* **What to do:** if a deployment pins an image or chart older than the oldest
+  kept release, move it to a kept release before an admin runs the workflow.
+  Nothing else changes.
+
+## Elitea AI brand (guide v3): new default theme
+
+* **elitea-web, the embedded docs and the clients: the default theme is now
+  the Elitea AI brand (brand guide v3).** No migration is added and no
+  setting changes.
+* **Deployments with their own brand pack or `scheme_tokens`** keep their
+  look. A field that you set is not changed.
+* **Deployments on the default** see the new look on the next page load:
+  the Ink (dark) and Paper (light) palettes, indigo for primary actions,
+  cyan for links and focus on dark, the Manrope, Sora and JetBrains Mono
+  typefaces, the LE-03 logo and the product name "Elitea AI". There are no
+  gradients.
+* **What to do:** nothing, unless you want the old look. In that case, set
+  the colours, logo and name in **Admin › Branding** before you upgrade, or
+  import your exported brand package after the upgrade.
+* The embedded docs show the default look in **Admin › Branding**. The
+  brand guide is at <https://elitea-ng.github.io/elitea-platform/brand/>.
+
+## P6a
+
+* **elitea-main: governed credential resolution (#1119, off by default).**
+  Nobody has to act while `ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED`
+  stays `false`; the legacy resolver's output is unchanged. With the flag
+  on, a governed run resolves each toolkit credential only by its exact
+  `credential_reference_id`, in the run's own tenant, with a matching
+  active grant. The resolved list is frozen on the run's security context.
+  A redemption must name a frozen reference. `private` references are
+  refused. No migration is added.
+* **Governed runs in flight at deploy:** a governed run admitted before
+  this release carries no frozen list, so its redemptions are denied. Drain
+  governed runs before you upgrade, or let them fail and run again.
+* **elitea-main: mandate-bound schedules and triggers (#1122, off by
+  default).** One additive tenant migration (0158) adds a nullable
+  `mandate_id` to `pipeline_schedules` and `pipeline_triggers`, and a new
+  `index_schedule_mandates` table. With the flag off the columns stay NULL,
+  the attach routes are not mounted and runs are unchanged.
+* With the flag on, a governed schedule, webhook or index schedule runs
+  only under an attached, active mandate. Without one it is skipped with
+  `MANDATE_REQUIRED` and audited.
+* The new policy revision field `unattended_mandate_kinds` lists the
+  accepted kinds (`autonomous`, `delegated_background`). A revision that
+  lists none refuses every governed schedule and trigger.
+* New admin routes: `PUT` and `DELETE` under
+  `/api/v2/admin/mandate_attachments/...`. They use
+  `models.agent_identity.mandates.manage`.
+* Governed scheduled indexing does not receive the project token and fails
+  closed until #1473.
+* **elitea-main and the Rust worker: governed MCP (#1123, off by
+  default).**
+  * **Inbound:** with `ELITEA_GOVERNED_MCP_INBOUND_ISSUER` and
+    `ELITEA_GOVERNED_MCP_INBOUND_JWKS_URL` set, the MCP endpoint serves
+    RFC 9728 metadata at
+    `/.well-known/oauth-protected-resource/app/{projectID}/mcp`. It accepts
+    tokens only when their audience is the MCP resource.
+  * **Outbound:** with `ELITEA_GOVERNED_MCP_OAUTH_ENABLED`, remote MCP
+    tokens are released only by the broker (`mcp.tools.list` once,
+    `mcp.tool.call` per call). Each call uses a fresh session.
+  * Nested agents and saved pipelines still refuse MCP in a governed run
+    (#1474).
+
+## P5
+
+* **elitea-main: Entra Agent ID provider (#1152, off by default).** Nobody
+  has to act while `ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED` stays
+  `false`, or while no `ELITEA_ENTRA_AGENT_ID_*` value is set. With the flag
+  on, a configured block whose policy revision allows `dedicated_agent`
+  joins the agent identity registry and the reconcile loop. The blueprint
+  authenticates only with a federated token file. Boot refuses
+  `ELITEA_ENTRA_AGENT_ID_CLIENT_SECRET`, `ELITEA_ENTRA_AGENT_ID_CERTIFICATE_FILE`
+  and the `common` or `organizations` tenant. No migration is added.
+* **elitea-main: Elitea-native agent assertions (#1153, off by default).**
+  Nobody has to act while the flag stays `false` or
+  `ELITEA_AGENT_ASSERTION_CONFIG` is unset. With both set and a revision that
+  allows `elitea_native`, Main signs per-run ES256 or RS256 assertions for
+  the configured relying parties. It serves the public keys at
+  `GET /.well-known/elitea-agent-jwks.json` and the issuer metadata at
+  `GET /agent-issuer/.well-known/openid-configuration`; without them both
+  answer 404. Boot refuses a key that reuses the command-signing,
+  code-owner recovery or egress-token key (by key id, file or material).
+* With either provider configured, a governed session for a binding of that
+  provider is no longer denied `provider_not_configured`.
+
 ## P4
 
 * **elitea-main: agent identity reconciliation (#1154, off by default).**

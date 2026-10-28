@@ -1,0 +1,26 @@
+# External-provider doubles for the governed-profile conformance stack
+# (deploy/docker-compose.governed.yml, issue #1124). See main.go.
+#
+# Debian 13 throughout (#1094): the Go builder is golang:1.26-trixie, as for
+# elitea-main and the egress proxy, and the runtime is distroless
+# static-debian13. Standard library only, so the build needs no module
+# download.
+#
+# The TLS chain is minted HERE, at build time, by the binary itself: the same
+# bytes then survive every restart, so the trust bundle the overlay hands Main
+# and the worker cannot go stale while a run is in flight (the deploy/mock-mcp
+# rule). One COPY carries the whole set, so the leaf and the CA always come
+# from one mint, even from a shared layer cache.
+FROM golang:1.26-trixie AS builder
+WORKDIR /src
+COPY go.mod ./
+COPY *.go ./
+RUN CGO_ENABLED=0 GOFLAGS=-trimpath GOWORK=off go build -ldflags="-s -w" -o /out/governed-mocks . \
+ && /out/governed-mocks mint-tls -out /out/tls \
+      -hosts jira.governed.test,sharepoint.governed.test,graph.microsoft.com,login.microsoftonline.com,entra.governed.test,governed-mocks,localhost,127.0.0.1
+
+FROM gcr.io/distroless/static-debian13:nonroot
+COPY --from=builder /out/ /opt/governed-mocks/
+EXPOSE 443 8080
+ENTRYPOINT ["/opt/governed-mocks/governed-mocks"]
+CMD ["serve"]
