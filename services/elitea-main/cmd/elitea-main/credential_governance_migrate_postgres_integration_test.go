@@ -333,7 +333,7 @@ func TestMigrateReferencesRefusesBadUsage(t *testing.T) {
 		{"extra"},
 	} {
 		code, _, _ := runMigrateForTest(t, "postgres://unused", migrateDeps{
-			connect: func(context.Context, string, bool) (*pgxpool.Pool, error) {
+			connect: func(context.Context, string) (*pgxpool.Pool, error) {
 				t.Fatalf("%v connected", args)
 				return nil, nil
 			},

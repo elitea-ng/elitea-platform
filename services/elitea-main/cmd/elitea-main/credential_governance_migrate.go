@@ -44,8 +44,8 @@ package main
 // canonical decimal form, so "007" and "7" are one person to the two-person
 // rule.
 //
-// WHAT IT NEVER DOES. A dry run writes nothing: its pool runs every
-// transaction read-only. --apply writes `staged` references and their target
+// WHAT IT NEVER DOES. A dry run writes nothing: it builds no secret writer
+// or ledger, and settle returns before any store write. --apply writes `staged` references and their target
 // bindings only, with a security audit event each. It never activates,
 // grants, attaches or edits a toolkit: those are the admin API's, by people.
 // No secret value moves unless --copy-to vault is given; then the pgvault
@@ -151,7 +151,7 @@ type migrateSecrets struct {
 
 // migrateDeps are the seams a test replaces.
 type migrateDeps struct {
-	connect func(ctx context.Context, dsn string, readOnly bool) (*pgxpool.Pool, error)
+	connect func(ctx context.Context, dsn string) (*pgxpool.Pool, error)
 	secrets func(lookup func(string) (string, bool), pool *pgxpool.Pool) (migrateSecrets, error)
 	newID   func() string
 }
@@ -160,15 +160,15 @@ func defaultMigrateDeps() migrateDeps {
 	return migrateDeps{connect: connectMigratePool, secrets: migrateSecretsFromEnv, newID: uuid.NewString}
 }
 
-// connectMigratePool opens the pool. A dry run's pool runs every transaction
-// read-only, so no statement of a dry run can write.
-func connectMigratePool(ctx context.Context, dsn string, readOnly bool) (*pgxpool.Pool, error) {
+// connectMigratePool opens the pool. It sets no session parameter: the
+// DATABASE_URL usually names PgBouncer in transaction pooling mode, which
+// refuses a startup parameter such as default_transaction_read_only, and a
+// session-level SET there would leak to other clients. A dry run stays
+// read-only by construction (see settle).
+func connectMigratePool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, err
-	}
-	if readOnly {
-		cfg.ConnConfig.RuntimeParams["default_transaction_read_only"] = "on"
 	}
 	cfg.MaxConns = 4
 	return pgxpool.NewWithConfig(ctx, cfg)
@@ -284,7 +284,7 @@ func runMigrateReferences(ctx context.Context, args []string, lookup func(string
 
 	ctx, cancel := context.WithTimeout(ctx, migrateReferencesRunTimeout)
 	defer cancel()
-	pool, err := deps.connect(ctx, dsn, !opts.apply)
+	pool, err := deps.connect(ctx, dsn)
 	if err != nil {
 		// pgx's error can quote the DSN; say what failed, not with what.
 		_, _ = fmt.Fprintln(stderr, "connect to the platform database (DATABASE_URL) failed")
@@ -677,6 +677,7 @@ func (m *referenceMigration) settle(ctx context.Context, item *migrateItem) erro
 		item.action = migrateExists
 		return nil
 	}
+	// The dry run's last statement: everything below writes.
 	if !m.opts.apply {
 		item.State = string(credentialgrant.ReferenceStaged)
 		item.TargetBindingID, err = m.store.FindTarget(ctx, item.ProjectID, item.ProviderType, item.TargetIdentity)
