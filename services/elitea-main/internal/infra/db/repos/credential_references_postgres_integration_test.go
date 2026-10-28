@@ -3,6 +3,8 @@ package repos
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -244,4 +246,142 @@ func readRefTestSettings(t *testing.T, pool *pgxpool.Pool, toolkit int64) map[st
 	decoded, err := decodeCurrentToolkitJSON(raw, "settings")
 	require.NoError(t, err)
 	return decoded.(map[string]any)
+}
+
+// A retired reference does not hold its migration source: the next staging
+// of the same source is a NEW reference (the runbook's rotation: retire,
+// then stage, activate, attach and pin a replacement), and it is in turn
+// idempotent.
+func TestCredentialReferenceRetiredSourceStagesAReplacement(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	store := NewCredentialReferences(pool, agentIdentityAudit(t))
+	const source = "configuration:77777777-7777-4777-8777-777777777777:pgvault"
+	first := stageRefTest(t, store, source)
+	_, err := store.Transition(ctx, first.Record.ID, CredentialReferenceRetire, "200")
+	require.NoError(t, err)
+
+	_, found, err := store.FindMigrated(ctx, 7, source)
+	require.NoError(t, err)
+	require.False(t, found, "a retired reference is not the source's live reference")
+	replacement := stageRefTest(t, store, source)
+	require.True(t, replacement.Created)
+	require.NotEqual(t, first.Record.ID, replacement.Record.ID)
+	require.Equal(t, credentialgrant.ReferenceStaged, replacement.Record.State)
+	again := stageRefTest(t, store, source)
+	require.False(t, again.Created)
+	require.Equal(t, replacement.Record.ID, again.Record.ID)
+	live, found, err := store.FindMigrated(ctx, 7, source)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, replacement.Record.ID, live.ID)
+	// The database still holds one live reference per source.
+	_, err = pool.Exec(ctx, `UPDATE elitea_identity.credential_references SET state = 'staged' WHERE id = $1::uuid`, first.Record.ID)
+	var pgErr *pgconn.PgError
+	require.True(t, errors.As(err, &pgErr))
+	require.Equal(t, "23505", pgErr.Code)
+}
+
+// The two-person rule compares user ids, not their spelling: "007" is user
+// 7, recorded as 7, and user 7 cannot activate it under either spelling.
+func TestCredentialReferenceTwoPersonRuleComparesCanonicalIDs(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	store := NewCredentialReferences(pool, agentIdentityAudit(t))
+	staged, err := store.StageReference(ctx, StagedReference{
+		TenantProjectID: 7, ProviderType: "jira", TargetIdentity: "https://acme.atlassian.net",
+		Class: credentialgrant.ClassStaticSecret, Backend: "pgvault", Locator: "0123456789abcdef0123456789abcdef",
+		Generation: 1, MigratedFrom: "configuration:88888888-8888-4888-8888-888888888888:pgvault", StagedBy: "007",
+	}, newRefTestID)
+	require.NoError(t, err)
+	require.Equal(t, "7", staged.Record.StagedBy)
+	for _, actor := range []string{"7", "007", " 7 "} {
+		_, err = store.Transition(ctx, staged.Record.ID, CredentialReferenceActivate, actor)
+		require.ErrorIs(t, err, ErrCredentialReferenceSelfActive, actor)
+	}
+	for _, actor := range []string{"alice", "-7", "0", "+8", "99999999999999999999"} {
+		_, err = store.Transition(ctx, staged.Record.ID, CredentialReferenceActivate, actor)
+		require.ErrorIs(t, err, ErrCredentialReferenceActor, actor)
+	}
+	_, err = store.StageReference(ctx, StagedReference{
+		TenantProjectID: 7, ProviderType: "jira", TargetIdentity: "https://acme.atlassian.net",
+		Class: credentialgrant.ClassStaticSecret, Backend: "pgvault", Locator: "x", Generation: 1,
+		MigratedFrom: "mcp:1", StagedBy: "alice",
+	}, newRefTestID)
+	require.ErrorIs(t, err, ErrCredentialReferenceActor)
+	active, err := store.Transition(ctx, staged.Record.ID, CredentialReferenceActivate, "008")
+	require.NoError(t, err)
+	require.Equal(t, "8", active.ActivatedBy)
+	require.Equal(t, "8", active.LastTransitionBy)
+}
+
+// A --copy-to vault reference is staged at generation 0 and cannot be
+// activated until its copy records the version it wrote.
+func TestCredentialReferenceVaultCopyGenerationGatesActivation(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	store := NewCredentialReferences(pool, agentIdentityAudit(t))
+	staged, err := store.StageReference(ctx, StagedReference{
+		TenantProjectID: 7, ProviderType: "jira", TargetIdentity: "https://acme.atlassian.net",
+		Class: credentialgrant.ClassStaticSecret, Backend: "vault", Locator: "elitea/projects/7/credentials/x",
+		MigratedFrom: "configuration:99999999-9999-4999-8999-999999999999:vault", StagedBy: "100",
+	}, newRefTestID)
+	require.NoError(t, err)
+	require.EqualValues(t, 0, staged.Record.Generation)
+	_, err = store.Transition(ctx, staged.Record.ID, CredentialReferenceActivate, "200")
+	require.ErrorIs(t, err, ErrCredentialReferenceIncomplete)
+
+	copied, err := store.SetCopiedGeneration(ctx, staged.Record.ID, 3, "100")
+	require.NoError(t, err)
+	require.EqualValues(t, 3, copied.Generation)
+	again, err := store.SetCopiedGeneration(ctx, staged.Record.ID, 3, "100")
+	require.NoError(t, err, "a concurrent run that recorded the same version")
+	require.EqualValues(t, 3, again.Generation)
+	_, err = store.SetCopiedGeneration(ctx, staged.Record.ID, 4, "100")
+	require.ErrorIs(t, err, ErrCredentialReferenceTransition, "a recorded version never moves")
+	active, err := store.Transition(ctx, staged.Record.ID, CredentialReferenceActivate, "200")
+	require.NoError(t, err)
+	require.EqualValues(t, 3, active.Generation)
+}
+
+// Concurrent stagings of one target identity all succeed and share one
+// target binding. With `ON CONFLICT DO NOTHING ... UNION ALL SELECT` the
+// loser's statement could see neither its own insert nor the winner's row.
+func TestCredentialReferenceConcurrentStagingSharesOneTarget(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	store := NewCredentialReferences(pool, agentIdentityAudit(t))
+	const workers, rounds = 8, 12
+	for round := 0; round < rounds; round++ {
+		identity := fmt.Sprintf("https://acme-%d.atlassian.net", round)
+		var (
+			start = make(chan struct{})
+			wg    sync.WaitGroup
+			errs  = make([]error, workers)
+			ids   = make([]string, workers)
+		)
+		for worker := 0; worker < workers; worker++ {
+			wg.Add(1)
+			go func(worker int) {
+				defer wg.Done()
+				<-start
+				result, err := store.StageReference(ctx, StagedReference{
+					TenantProjectID: 7, ProviderType: "jira", TargetIdentity: identity,
+					Class: credentialgrant.ClassOAuthDelegated, Backend: "pgvault", Locator: "oauth_grant",
+					MigratedFrom: fmt.Sprintf("mcp:%d%02d", round+1, worker), StagedBy: "100",
+				}, newRefTestID)
+				errs[worker], ids[worker] = err, result.Record.TargetBindingID
+			}(worker)
+		}
+		close(start)
+		wg.Wait()
+		for worker := 0; worker < workers; worker++ {
+			require.NoError(t, errs[worker], "round %d worker %d", round, worker)
+			require.Equal(t, ids[0], ids[worker], "round %d: one target binding per identity", round)
+		}
+		var targets int
+		require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM elitea_identity.target_bindings
+WHERE tenant_project_id = 7 AND target_identity = $1`, identity).Scan(&targets))
+		require.Equal(t, 1, targets)
+	}
 }

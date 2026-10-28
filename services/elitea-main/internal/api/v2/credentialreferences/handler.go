@@ -339,10 +339,11 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	case errors.Is(err, credentialgrant.ErrReferenceNotFound), errors.Is(err, repos.ErrToolkitNotFound),
 		errors.Is(err, repos.ErrAgentBindingNotUsable):
 		writeError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, repos.ErrCredentialReferenceSelfActive):
+	case errors.Is(err, repos.ErrCredentialReferenceSelfActive), errors.Is(err, repos.ErrCredentialReferenceActor):
 		writeError(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, repos.ErrCredentialReferenceTransition), errors.Is(err, repos.ErrCredentialReferenceNoStager),
 		errors.Is(err, repos.ErrCredentialReferenceRetired), errors.Is(err, repos.ErrCredentialReferenceTenant),
+		errors.Is(err, repos.ErrCredentialReferenceIncomplete),
 		errors.Is(err, repos.ErrCredentialReferenceProvider), errors.Is(err, repos.ErrToolkitNoConfigurationRef),
 		errors.Is(err, repos.ErrToolkitConfigurationAmbiguous), errors.Is(err, repos.ErrToolkitPrivateConfiguration),
 		errors.Is(err, repos.ErrToolkitAttachedElsewhere):

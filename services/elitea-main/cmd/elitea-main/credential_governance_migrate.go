@@ -34,8 +34,15 @@ package main
 //     URL with no canonical form is skipped (toolkit_not_governable).
 //
 // Toolkits that name one configuration share one reference. The idempotency
-// key is stored as migrated_from (unique per project): "configuration:<uuid>:
-// <backend>" or "mcp:<toolkit id>". A second --apply finds the first's rows.
+// key is stored as migrated_from (unique per project among references that
+// are not retired): "configuration:<uuid>:<backend>" or "mcp:<toolkit id>".
+// A second --apply finds the first's rows; an --apply after a retire stages
+// a replacement. A toolkit whose settings are not a JSON object is reported
+// as skipped (settings_unreadable), never left out.
+//
+// --operator is an auth_core user id that must exist; it is recorded in its
+// canonical decimal form, so "007" and "7" are one person to the two-person
+// rule.
 //
 // WHAT IT NEVER DOES. A dry run writes nothing: its pool runs every
 // transaction read-only. --apply writes `staged` references and their target
@@ -44,7 +51,8 @@ package main
 // No secret value moves unless --copy-to vault is given; then the pgvault
 // value is written to Vault/OpenBao KV v2 with check-and-set version 0
 // through the staged-write ledger (#1113), and the pgvault secret stays,
-// because legacy runs still read it.
+// because legacy runs still read it. The reference is staged first at
+// generation 0 and takes the written version once the copy lands.
 
 import (
 	"bytes"
@@ -241,12 +249,19 @@ func runMigrateReferences(ctx context.Context, args []string, lookup func(string
 	case *project < 0:
 		_, _ = fmt.Fprintln(stderr, "--project must be a project id")
 		return 2
-	case opts.apply && (opts.operator == "" || !allDigits(opts.operator)):
-		_, _ = fmt.Fprintln(stderr, "--apply needs --operator: the numeric auth_core user id of the operator who stages")
-		return 2
 	case !opts.apply && opts.operator != "":
 		_, _ = fmt.Fprintln(stderr, "--operator only applies together with --apply")
 		return 2
+	}
+	if opts.apply {
+		// The two-person rule compares ids: "007" is user 7, so it is
+		// rendered canonically before it is recorded or compared.
+		_, canonical, err := repos.CanonicalUserID(opts.operator)
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, "--apply needs --operator: the numeric auth_core user id of the operator who stages")
+			return 2
+		}
+		opts.operator = canonical
 	}
 	if opts.copyToVault && opts.policyRevision == "" {
 		opts.policyRevision, _ = lookup(profile.EnvPolicyRevision)
@@ -271,6 +286,17 @@ func runMigrateReferences(ctx context.Context, args []string, lookup func(string
 		return 1
 	}
 	defer pool.Close()
+	if opts.apply {
+		known, err := operatorExists(ctx, pool, opts.operator)
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, "migrate-references stopped: read the operator:", err)
+			return 1
+		}
+		if !known {
+			_, _ = fmt.Fprintf(stderr, "--operator %s is not an auth_core user id\n", opts.operator)
+			return 2
+		}
+	}
 	var secrets migrateSecrets
 	if opts.apply && opts.copyToVault {
 		if secrets, err = deps.secrets(lookup, pool); err != nil {
@@ -305,16 +331,16 @@ func runMigrateReferences(ctx context.Context, args []string, lookup func(string
 	return 0
 }
 
-func allDigits(value string) bool {
-	if value == "" || len(value) > 19 {
-		return false
+// operatorExists reports whether the canonical user id names an
+// auth_core user.
+func operatorExists(ctx context.Context, pool *pgxpool.Pool, operator string) (bool, error) {
+	id, _, err := repos.CanonicalUserID(operator)
+	if err != nil {
+		return false, nil
 	}
-	for _, c := range value {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
+	var found bool
+	err = pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.auth_core__user WHERE id = $1)`, id).Scan(&found)
+	return found, err
 }
 
 type referenceMigration struct {
@@ -325,6 +351,9 @@ type referenceMigration struct {
 	secrets  migrateSecrets
 	ledger   *secretstore.Ledger
 	newID    func() string
+	// migrated memoises FindMigrated per project and source for one run:
+	// toolkits sharing a configuration read it once.
+	migrated map[string]repos.CredentialReferenceRecord
 }
 
 func (m *referenceMigration) projects(ctx context.Context) ([]int64, error) {
@@ -376,6 +405,13 @@ type migrateToolkit struct {
 	id          int64
 	toolkitType string
 	settings    map[string]any
+	// unreadable is a settings value that does not decode to an object.
+	unreadable bool
+}
+
+// migrateConfiguration is one row of p_N.configuration.
+type migrateConfiguration struct {
+	uuid, configurationType, data string
 }
 
 // plan reads one project's toolkits and applies the rule. It writes nothing.
@@ -408,7 +444,7 @@ func (m *referenceMigration) plan(ctx context.Context, project int64) ([]migrate
 		decoder := json.NewDecoder(strings.NewReader(raw))
 		decoder.UseNumber()
 		if decoder.Decode(&t.settings) != nil {
-			t.settings = nil
+			t.settings, t.unreadable = nil, true
 		}
 		toolkits = append(toolkits, t)
 	}
@@ -416,9 +452,15 @@ func (m *referenceMigration) plan(ctx context.Context, project int64) ([]migrate
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read toolkits: %w", err)
 	}
+	var configurations map[string]migrateConfiguration
+	if hasConfigurations {
+		if configurations, err = m.configurations(ctx, project, schema); err != nil {
+			return nil, err
+		}
+	}
 	var items []migrateItem
 	for _, t := range toolkits {
-		item, include, err := m.planToolkit(ctx, project, schema, hasConfigurations, t)
+		item, include, err := m.planToolkit(project, configurations, t)
 		if err != nil {
 			return nil, err
 		}
@@ -429,16 +471,48 @@ func (m *referenceMigration) plan(ctx context.Context, project int64) ([]migrate
 	return items, nil
 }
 
+// configurations reads one project's configurations once, keyed by
+// elitea_title (unique per project).
+func (m *referenceMigration) configurations(ctx context.Context, project int64, schema string) (map[string]migrateConfiguration, error) {
+	rows, err := m.pool.Query(ctx, fmt.Sprintf(
+		`SELECT elitea_title, uuid::text, type, data::text FROM %s.configuration WHERE project_id = $1`, schema), project)
+	if err != nil {
+		return nil, fmt.Errorf("read configurations: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]migrateConfiguration{}
+	for rows.Next() {
+		var (
+			title string
+			c     migrateConfiguration
+		)
+		if err := rows.Scan(&title, &c.uuid, &c.configurationType, &c.data); err != nil {
+			return nil, fmt.Errorf("read configurations: %w", err)
+		}
+		out[title] = c
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read configurations: %w", err)
+	}
+	return out, nil
+}
+
 func skip(item migrateItem, reason string) (migrateItem, bool, error) {
 	item.action, item.Reason = migrateSkipped, reason
 	return item, true, nil
 }
 
 // planToolkit applies the rule to one toolkit. include is false for a
-// toolkit that holds no credential the rule knows about.
-func (m *referenceMigration) planToolkit(ctx context.Context, project int64, schema string, hasConfigurations bool, t migrateToolkit) (migrateItem, bool, error) {
+// toolkit that holds no credential the rule knows about. A nil
+// configurations map is a project with no configuration table.
+func (m *referenceMigration) planToolkit(project int64, configurations map[string]migrateConfiguration, t migrateToolkit) (migrateItem, bool, error) {
 	item := migrateItem{ProjectID: project, ToolkitID: t.id, ToolkitType: t.toolkitType, ProviderType: t.toolkitType,
 		Backend: secretstore.BackendPGVault}
+	if t.unreadable {
+		// Never silently absent: the operator must see the toolkit the run
+		// could not judge.
+		return skip(item, "settings_unreadable")
+	}
 	if t.settings == nil {
 		return item, false, nil
 	}
@@ -460,27 +534,16 @@ func (m *referenceMigration) planToolkit(ctx context.Context, project int64, sch
 	if ref.Private {
 		return skip(item, "private_credential_not_governed")
 	}
-	if !hasConfigurations || ref.Title == "" {
+	configuration, found := configurations[ref.Title]
+	if !found || ref.Title == "" {
 		return skip(item, "configuration_not_in_project")
 	}
-	var (
-		configurationType string
-		raw               string
-	)
-	err := m.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT uuid::text, type, data::text FROM %s.configuration WHERE project_id = $1 AND elitea_title = $2`, schema),
-		project, ref.Title).Scan(&item.ConfigurationUUID, &configurationType, &raw)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return skip(item, "configuration_not_in_project")
-	}
-	if err != nil {
-		return item, false, fmt.Errorf("read configuration: %w", err)
-	}
-	if configurationType != t.toolkitType {
+	item.ConfigurationUUID = configuration.uuid
+	if configuration.configurationType != t.toolkitType {
 		return skip(item, "configuration_type_mismatch")
 	}
 	var data map[string]any
-	if json.Unmarshal([]byte(raw), &data) != nil {
+	if json.Unmarshal([]byte(configuration.data), &data) != nil {
 		return skip(item, "configuration_unreadable")
 	}
 	descriptor, ok := m.registry.Descriptor(t.toolkitType)
@@ -488,6 +551,7 @@ func (m *referenceMigration) planToolkit(ctx context.Context, project int64, sch
 		return skip(item, "provider_not_governed")
 	}
 	rawTarget, _ := data[provider.targetField].(string)
+	var err error
 	if item.TargetIdentity, err = descriptor.CanonicalizeTarget(rawTarget); err != nil {
 		return skip(item, "target_not_canonical")
 	}
@@ -557,13 +621,53 @@ func migrateVaultPath(project int64, configurationUUID string) string {
 	return "elitea/projects/" + strconv.FormatInt(project, 10) + "/credentials/" + configurationUUID
 }
 
+// findMigrated is FindMigrated, memoised for the run. A miss is remembered
+// as the zero record.
+func (m *referenceMigration) findMigrated(ctx context.Context, project int64, migratedFrom string) (repos.CredentialReferenceRecord, bool, error) {
+	key := migratedKey(project, migratedFrom)
+	if rec, ok := m.migrated[key]; ok {
+		return rec, rec.ID != "", nil
+	}
+	rec, found, err := m.store.FindMigrated(ctx, project, migratedFrom)
+	if err != nil {
+		return repos.CredentialReferenceRecord{}, false, err
+	}
+	m.remember(project, migratedFrom, rec)
+	return rec, found, nil
+}
+
+func (m *referenceMigration) remember(project int64, migratedFrom string, rec repos.CredentialReferenceRecord) {
+	if m.migrated == nil {
+		m.migrated = map[string]repos.CredentialReferenceRecord{}
+	}
+	m.migrated[migratedKey(project, migratedFrom)] = rec
+}
+
+func migratedKey(project int64, migratedFrom string) string {
+	return strconv.FormatInt(project, 10) + "/" + migratedFrom
+}
+
+// copyPending is a --copy-to vault reference staged at generation 0 whose
+// copy has not completed (a crash between the staging and the write).
+func copyPending(rec repos.CredentialReferenceRecord) bool {
+	return rec.Backend == secretstore.BackendVault && rec.Class == credentialgrant.ClassStaticSecret &&
+		rec.Generation == 0 && rec.State == credentialgrant.ReferenceStaged
+}
+
 // settle looks the unit up and, with --apply, stages it.
+//
+// A --copy-to vault reference is staged FIRST, at generation 0, so the
+// audit decision that authorises the pgvault read, the ledger row and the
+// Vault write all name the id of a reference that exists. The copy then
+// records the version it wrote as the reference's generation (activation
+// refuses a static secret at generation 0). A rerun that finds a reference
+// still at generation 0 completes its copy under that same id.
 func (m *referenceMigration) settle(ctx context.Context, item *migrateItem) error {
-	existing, found, err := m.store.FindMigrated(ctx, item.ProjectID, item.migratedFrom)
+	existing, found, err := m.findMigrated(ctx, item.ProjectID, item.migratedFrom)
 	if err != nil {
 		return err
 	}
-	if found {
+	if found && (!m.opts.apply || !copyPending(existing)) {
 		item.fill(existing)
 		item.action = migrateExists
 		return nil
@@ -574,35 +678,48 @@ func (m *referenceMigration) settle(ctx context.Context, item *migrateItem) erro
 		item.SecretLocation = item.location(m.secrets.mount)
 		return err
 	}
-	staged := repos.StagedReference{
-		TenantProjectID: item.ProjectID, ProviderType: item.ProviderType, TargetIdentity: item.TargetIdentity,
-		Class: credentialgrant.CredentialClass(item.Class), Backend: item.Backend, Locator: item.Locator,
-		Generation: item.Generation, MigratedFrom: item.migratedFrom, StagedBy: m.opts.operator,
-	}
-	if item.Backend == secretstore.BackendVault {
-		staged.ID = m.newID()
-		if staged.Generation, err = m.copyToVault(ctx, *item, staged.ID); err != nil {
+	rec, created := existing, false
+	if !found {
+		staged := repos.StagedReference{
+			TenantProjectID: item.ProjectID, ProviderType: item.ProviderType, TargetIdentity: item.TargetIdentity,
+			Class: credentialgrant.CredentialClass(item.Class), Backend: item.Backend, Locator: item.Locator,
+			Generation: item.Generation, MigratedFrom: item.migratedFrom, StagedBy: m.opts.operator,
+		}
+		if item.Backend == secretstore.BackendVault {
+			staged.Generation = 0
+		}
+		result, err := m.store.StageReference(ctx, staged, m.newID)
+		if err != nil {
 			return err
 		}
+		rec, created = result.Record, result.Created
 	}
-	result, err := m.store.StageReference(ctx, staged, m.newID)
-	if err != nil {
-		return err
+	if copyPending(rec) {
+		version, err := m.copyToVault(ctx, *item, rec.ID)
+		if err != nil {
+			return err
+		}
+		if rec, err = m.store.SetCopiedGeneration(ctx, rec.ID, version, m.opts.operator); err != nil {
+			return err
+		}
+		created = true
 	}
-	item.fill(result.Record)
+	m.remember(item.ProjectID, item.migratedFrom, rec)
+	item.fill(rec)
 	item.action = migrateStaged
-	if !result.Created {
+	if !created {
 		item.action = migrateExists
 	}
 	return nil
 }
 
-// copyToVault copies one pgvault secret to Vault/OpenBao. The audit
-// decision that authorises the read is appended first; its id is the read's
-// StoreContext.DecisionID. The write is check-and-set 0 through the ledger.
-// The path is fixed per configuration, so a rerun after a failure finds the
-// secret it wrote: an equal value is reused at version 1, a different one
-// stops the run.
+// copyToVault copies one pgvault secret to Vault/OpenBao for the staged
+// reference referenceID. The audit decision that authorises the read is
+// appended first; its id is the read's StoreContext.DecisionID. The write is
+// check-and-set 0 through the ledger. The path is fixed per configuration,
+// so a rerun after a failure finds the secret it wrote: on a check-and-set
+// conflict the path's CURRENT version is read, and it is used only when its
+// bytes equal the pgvault value. Anything else stops the run.
 func (m *referenceMigration) copyToVault(ctx context.Context, item migrateItem, referenceID string) (int64, error) {
 	if m.secrets.source == nil || m.secrets.vault == nil || m.ledger == nil {
 		return 0, errors.New("--copy-to vault: the secret stores are not configured")
@@ -624,7 +741,14 @@ func (m *referenceMigration) copyToVault(ctx context.Context, item migrateItem, 
 	destination := secretstore.SecretRef{Backend: secretstore.BackendVault, Mount: m.secrets.mount, Path: item.Locator}
 	version, err := m.ledger.StagedWrite(ctx, m.secrets.vault, sc, destination, source.Value, 0)
 	if errors.Is(err, secretstore.ErrVersionConflict) {
-		written, readErr := m.secrets.vault.Read(ctx, sc, destination, 1)
+		meta, metaErr := m.secrets.vault.Metadata(ctx, sc, destination)
+		if metaErr != nil {
+			return 0, fmt.Errorf("the Vault path already holds a secret whose version could not be read: %w", metaErr)
+		}
+		if meta.CurrentVersion <= 0 {
+			return 0, errors.New("the Vault path already holds a secret with no current version; nothing was overwritten")
+		}
+		written, readErr := m.secrets.vault.Read(ctx, sc, destination, meta.CurrentVersion)
 		if readErr != nil {
 			return 0, fmt.Errorf("the Vault path already holds a secret that could not be read back: %w", readErr)
 		}
@@ -632,7 +756,7 @@ func (m *referenceMigration) copyToVault(ctx context.Context, item migrateItem, 
 		if !bytes.Equal(written.Value.UnsafeBytes(), source.Value.UnsafeBytes()) {
 			return 0, errors.New("the Vault path already holds a different secret; nothing was overwritten")
 		}
-		return 1, nil
+		return meta.CurrentVersion, nil
 	}
 	if err != nil {
 		return 0, fmt.Errorf("write the Vault secret: %w", err)

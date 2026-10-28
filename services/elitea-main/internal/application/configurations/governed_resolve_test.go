@@ -233,6 +233,16 @@ func TestToolkitCredentialRefsReadsStoredReferences(t *testing.T) {
 	if len(refs) != len(want) || refs[0] != want[0] || refs[1] != want[1] {
 		t.Fatalf("refs = %+v", refs)
 	}
+	// The admin attach writes into the field this names; it must be the
+	// field ToolkitCredentialRefs read, in the same order.
+	fields := ToolkitCredentialRefFields(map[string]any{
+		"jira_configuration": map[string]any{"elitea_title": "jira-prod", "private": false},
+		"pgvector":           map[string]any{"elitea_title": "x"},
+		"aha_configuration":  map[string]any{"elitea_title": "mine", "private": true},
+	})
+	if len(fields) != 2 || fields[0] != "aha_configuration" || fields[1] != "jira_configuration" {
+		t.Fatalf("fields = %v", fields)
+	}
 }
 
 // The legacy expansion without the governed mark is unchanged.

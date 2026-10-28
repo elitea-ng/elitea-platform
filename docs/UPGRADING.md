@@ -8,10 +8,11 @@ newest entry is first.
 
 * **elitea-main: credential reference lifecycle (#1124, off by default).**
   One additive shared migration (0193) adds nullable `staged_by`,
-  `activated_by`, `last_transition_by` and `migrated_from` columns to
-  `elitea_identity.credential_references`, a CHECK that the activator is
-  not the stager, and a unique index on `(tenant_project_id,
-  migrated_from)`. Nobody has to act while
+  `activated_by` and `last_transition_by` (user ids, bigint) and
+  `migrated_from` columns to `elitea_identity.credential_references`, a
+  CHECK that the activator is not the stager, and a unique index on
+  `(tenant_project_id, migrated_from)` over the references that are not
+  retired. Nobody has to act while
   `ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED` stays `false`.
 * A reference that existed before 0193 has no recorded stager, so it can
   never be activated. Stage a new one.
@@ -27,10 +28,11 @@ newest entry is first.
   migrate-references` proposes one credential reference and target
   binding for each configuration a governed agent needs. It is a dry run
   by default and writes nothing. `--apply --operator <user id>` stages
-  references (state `staged` only). `--copy-to vault` copies static
+  references (state `staged` only). The operator must be an existing user. `--copy-to vault` copies static
   secrets to Vault/OpenBao with check-and-set through the secret write
   ledger, and needs a `<prefix>-credential-migration` role. `--json`
-  prints one line per toolkit. A rerun stages nothing new.
+  prints one line per toolkit. A rerun stages nothing new, except a
+  replacement for a reference that was retired.
 * **Rollback:** an earlier release's migration runner refuses a database
   that holds 0193. Roll back by turning the flag off, not by downgrading.
   The embedded docs page "Credential governance runbook" has the
