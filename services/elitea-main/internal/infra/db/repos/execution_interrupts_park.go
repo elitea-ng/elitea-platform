@@ -71,8 +71,8 @@ func decodeCurrentAgentFanoutParked(contentJSON, responseMetadata json.RawMessag
 // persistCurrentAgentFanoutParked records the parked response and settles
 // the park in the terminal transaction, under the response row lock the
 // caller already holds (LockCurrentAgentResponseForTerminal), so it
-// serializes with Decide (contract §8). Every pending entry must be a card
-// of this response; the response row keeps the canonical payload for Web to
+// serializes with Decide (contract §8). Every pending entry must be an open
+// (PENDING or DECIDED) card of this response; the response row keeps the canonical payload for Web to
 // reconcile from.
 func persistCurrentAgentFanoutParked(ctx context.Context, tx sqlExecutor, expected outputapp.ExpectedAgentExecution, messageGroupID int64, existingSkills string, terminal currentAgentTerminal) error {
 	parked := terminal.FanoutParked
@@ -95,7 +95,7 @@ SELECT count(*)
 FROM elitea_runtime.execution_interrupts card
 JOIN unnest($3::text[], $4::text[]) AS pending(interrupt_key, interrupt_id)
   ON card.interrupt_key = pending.interrupt_key AND card.interrupt_id = pending.interrupt_id
-WHERE card.root_response_id = $1::uuid AND card.project_id = $2`,
+WHERE card.root_response_id = $1::uuid AND card.project_id = $2 AND card.state IN ('PENDING', 'DECIDED')`,
 		expected.ClientMessageID, projectID, keys, ids).Scan(&matched); err != nil {
 		return fmt.Errorf("check parked interrupt cards: %w", err)
 	}

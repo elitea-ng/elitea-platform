@@ -512,7 +512,13 @@ FROM p_1.chat_message_group WHERE uuid = $1::uuid`, response).Scan(&stored, &str
 	refused := w.newResponse()
 	w.running(refused)
 	own := w.raise(refused, "fanout-interrupt-card-v1.json")
+	// A card of this response that is already closed cannot be answered: a
+	// park listing it would leave nothing answerable (REVIEW-1470 #12).
+	closed := w.raise(refused, "fanout-interrupt-card-v1.map-ask-user.json")
+	w.exec(`UPDATE elitea_runtime.execution_interrupts SET state = 'SUPERSEDED', revision = revision + 1,
+closed_at = clock_timestamp() WHERE root_response_id = $1::uuid AND interrupt_key = $2`, refused, closed)
 	for name, body := range map[string][]byte{
+		"closed card":    parkedPayload(0, [2]string{closed, w.interruptID(refused, closed)}),
 		"foreign card":   parkedPayload(0, [2]string{b, w.interruptID(response, b)}),
 		"unknown id":     parkedPayload(0, [2]string{own, "hitl:not-this-card"}),
 		"seen too far":   parkedPayload(9, [2]string{own, w.interruptID(refused, own)}),
