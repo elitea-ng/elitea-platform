@@ -5,13 +5,15 @@
 // (internal/securityaudit, whose relay offers each batch to an
 // securityaudit.Exporter and keeps the rows pending until the exporter
 // returns nil) and centry.audit_events (the HTTP access audit, tailed by
-// AuditEventsRelay with a persisted id cursor). Both are mapped to one
+// AuditEventsRelay in commit-safe order, with a persisted position per sink). Both are mapped to one
 // versioned envelope, elitea.audit.v1 (libs/jsonschema/audit/v1), and sent
 // to every configured Sink: an OTLP logs collector or a signed webhook.
 //
 // Delivery is at least once. A sink is acknowledged only after the receiver
 // accepted the batch, so killing and restoring a receiver loses nothing; a
-// receiver deduplicates on event_id. Export is asynchronous: it runs in the
+// receiver deduplicates on event_id. A healthy sink is not sent an event
+// again because another sink failed; duplicates come only from a crash or a
+// relay handover between a send and its acknowledgement. Export is asynchronous: it runs in the
 // relays' goroutines and never blocks the request or run that produced the
 // event.
 package auditexport

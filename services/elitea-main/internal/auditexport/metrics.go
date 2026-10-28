@@ -19,8 +19,10 @@ import (
 //   - elitea_audit_export_failed_total{sink,kind}: failed deliveries of a
 //     batch; kind is transient (retried) or permanent (a 400/413/422 answer).
 //   - elitea_audit_export_dead_lettered_total{sink,source}: events given up on
-//     after repeated permanent rejection. The event stays in its source table
-//     and in elitea_runtime.audit_export_dead_letters. Alert on any increase.
+//     after the receiver refused that one event on repeated passes, and (sink
+//     "decode") security outbox records that cannot be decoded. The event
+//     stays in its source table and in
+//     elitea_runtime.audit_export_dead_letters. Alert on any increase.
 //   - elitea_audit_export_backlog{stream}: events not yet delivered.
 //   - elitea_audit_export_lag_seconds{stream}: age of the oldest undelivered event.
 type Metrics struct {
@@ -56,6 +58,14 @@ func (m *Metrics) Register(sink string) {
 	for _, kind := range []string{"transient", "permanent"} {
 		m.failed[[2]string{sink, kind}] += 0
 	}
+}
+
+// RegisterDecodeFailures creates the dead-letter series of security outbox
+// records that cannot be decoded (sink "decode") at 0.
+func (m *Metrics) RegisterDecodeFailures() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deadLettered[[2]string{DecodeSinkName, string(SourceSecurityAudit)}] += 0
 }
 
 func (m *Metrics) addDelivered(sink string, events []Event) {
@@ -124,7 +134,7 @@ func (m *Metrics) WriteText(w io.Writer) error {
 	var b strings.Builder
 	writePairs(&b, "elitea_audit_export_delivered_total", "Events a receiver accepted.", "sink", "source", m.delivered)
 	writePairs(&b, "elitea_audit_export_failed_total", "Failed deliveries of a batch, by kind (transient or permanent).", "sink", "kind", m.failed)
-	writePairs(&b, "elitea_audit_export_dead_lettered_total", "Events given up on after repeated permanent rejection by the receiver.", "sink", "source", m.deadLettered)
+	writePairs(&b, "elitea_audit_export_dead_lettered_total", "Events given up on: refused alone by the receiver on repeated passes, or (sink decode) undecodable.", "sink", "source", m.deadLettered)
 	fmt.Fprintf(&b, "# HELP elitea_audit_export_backlog Audit events not yet delivered, by stream.\n# TYPE elitea_audit_export_backlog gauge\n")
 	for _, stream := range sortedKeys(m.backlog) {
 		fmt.Fprintf(&b, "elitea_audit_export_backlog{stream=%q} %d\n", stream, m.backlog[stream])

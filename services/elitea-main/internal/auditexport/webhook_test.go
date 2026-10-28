@@ -37,10 +37,12 @@ type receiver struct {
 	requests int
 	got      map[string]int // event_id -> deliveries
 	keyIDs   []string
+	// refuse answers this code to any batch holding the event id.
+	refuse map[string]int
 }
 
 func newReceiver(t *testing.T, keys ...SigningKey) *receiver {
-	r := &receiver{t: t, keys: map[string][]byte{}, got: map[string]int{}, now: time.Now}
+	r := &receiver{t: t, keys: map[string][]byte{}, got: map[string]int{}, refuse: map[string]int{}, now: time.Now}
 	for _, k := range keys {
 		r.keys[k.ID] = k.Secret
 	}
@@ -87,6 +89,12 @@ func (r *receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if err := json.Unmarshal(body, &batch); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
+	}
+	for _, e := range batch.Events {
+		if code, ok := r.refuse[e.EventID]; ok {
+			w.WriteHeader(code)
+			return
+		}
 	}
 	r.keyIDs = append(r.keyIDs, req.Header.Get(HeaderKeyID))
 	for _, e := range batch.Events {
@@ -321,41 +329,115 @@ func (m *memoryDeadLetters) RecordDeadLetters(_ context.Context, sink string, ev
 	return nil
 }
 
-func TestPipelineDeadLettersOnlyRepeatedPermanentRejection(t *testing.T) {
+func TestWebhookSplitsARefusedBatchAndDeliversTheNeighbours(t *testing.T) {
+	for _, code := range []int{http.StatusRequestEntityTooLarge, http.StatusBadRequest, http.StatusUnprocessableEntity} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			rcv := newReceiver(t, newKey)
+			events := testEvents(10, 1)
+			bad := events[6]
+			rcv.refuse[bad.EventID] = code
+			srv := httptest.NewServer(rcv)
+			defer srv.Close()
+			sink := newTestWebhook(t, srv.URL, fixedKeys(newKey), nil)
+
+			err := sink.Send(context.Background(), events)
+			var permanent *PermanentError
+			if !errors.As(err, &permanent) || len(permanent.Events) != 1 || permanent.Events[0].EventID != bad.EventID {
+				t.Fatalf("err = %v; want a permanent rejection naming only the bad event", err)
+			}
+			if got := settledCount(err, len(events)); got != 6 {
+				t.Fatalf("settled = %d, want the 6 events before the bad one", got)
+			}
+			for i, e := range events {
+				want := 0
+				if i < 6 {
+					want = 1
+				}
+				if rcv.delivered(e.EventID) != want {
+					t.Fatalf("event %d delivered %d times, want %d", i, rcv.delivered(e.EventID), want)
+				}
+			}
+		})
+	}
+}
+
+// offerLikeTheRelay offers the events from a position that advances by the
+// settled count, the way the audit_events relay does, for a number of passes.
+func offerLikeTheRelay(sink Sink, events []Event, passes int) (next int) {
+	for pass := 0; pass < passes && next < len(events); pass++ {
+		err := sink.Send(context.Background(), events[next:])
+		next += settledCount(err, len(events)-next)
+	}
+	return next
+}
+
+func TestPipelineDeadLettersOnlyTheRefusedEventAndDeliversItsNeighbours(t *testing.T) {
 	rcv := newReceiver(t, newKey)
-	rcv.script(400, 400, 400, 400)
+	events := testEvents(10, 10)
+	bad := events[4]
+	rcv.refuse[bad.EventID] = http.StatusRequestEntityTooLarge
 	srv := httptest.NewServer(rcv)
 	defer srv.Close()
 	metrics := NewMetrics()
 	store := &memoryDeadLetters{}
 	sink := Wrap(newTestWebhook(t, srv.URL, fixedKeys(newKey), nil), PipelineConfig{
-		Metrics: metrics, DeadLetters: store, MaxPermanentAttempts: 4, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Metrics: metrics, DeadLetters: store, MaxPermanentAttempts: 3, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	events := testEvents(2, 10)
-	for attempt := 1; attempt <= 3; attempt++ {
-		if err := sink.Send(context.Background(), events); err == nil {
-			t.Fatalf("attempt %d: a refused batch was acknowledged before the limit", attempt)
+
+	if next := offerLikeTheRelay(sink, events, 2); next != 4 {
+		t.Fatalf("after 2 passes position = %d; the refused event must hold the position before the limit", next)
+	}
+	if len(store.records) != 0 {
+		t.Fatalf("dead-lettered before the limit: %v", store.records)
+	}
+	if next := offerLikeTheRelay(sink, events[4:], 1); next != 6 {
+		t.Fatalf("third pass settled %d of the remaining 6; want all (the refused one dead-lettered)", next)
+	}
+	if len(store.records) != 1 || store.records[0] != "webhook/admin_audit:14/3" {
+		t.Fatalf("dead letters = %v; only the refused event", store.records)
+	}
+	for _, e := range events {
+		want := 1
+		if e.EventID == bad.EventID {
+			want = 0
+		}
+		if rcv.delivered(e.EventID) != want {
+			t.Fatalf("event %s delivered %d times, want %d", e.Ref(), rcv.delivered(e.EventID), want)
 		}
 	}
-	if len(store.records) != 0 || metrics.DeadLettered("webhook", SourceAdminAudit) != 0 {
-		t.Fatal("dead-lettered before the limit")
+	if got := metrics.DeadLettered("webhook", SourceAdminAudit); got != 1 {
+		t.Fatalf("dead_lettered metric = %d, want 1", got)
 	}
-	if err := sink.Send(context.Background(), events); err != nil {
-		t.Fatalf("attempt 4 must dead-letter and acknowledge: %v", err)
+	if got := metrics.Delivered("webhook", SourceAdminAudit); got != 9 {
+		t.Fatalf("delivered metric = %d, want 9", got)
 	}
-	if len(store.records) != 2 || store.records[0] != "webhook/admin_audit:10/4" {
-		t.Fatalf("dead letters = %v", store.records)
-	}
-	if got := metrics.DeadLettered("webhook", SourceAdminAudit); got != 2 {
-		t.Fatalf("dead_lettered metric = %d, want 2", got)
-	}
-	if got := metrics.Failed("webhook", "permanent"); got != 4 {
-		t.Fatalf("failed{permanent} = %d, want 4", got)
+	if got := metrics.Failed("webhook", "permanent"); got != 3 {
+		t.Fatalf("failed{permanent} = %d, want 3", got)
 	}
 	var text strings.Builder
 	_ = metrics.WriteText(&text)
-	if !strings.Contains(text.String(), `elitea_audit_export_dead_lettered_total{sink="webhook",source="admin_audit"} 2`) {
+	if !strings.Contains(text.String(), `elitea_audit_export_dead_lettered_total{sink="webhook",source="admin_audit"} 1`) {
 		t.Fatalf("exposition lacks the dead letter series:\n%s", text.String())
+	}
+}
+
+func TestPipelineCountsRefusalsPerEventNotPerBatch(t *testing.T) {
+	rcv := newReceiver(t, newKey)
+	events := testEvents(6, 1)
+	rcv.refuse[events[2].EventID] = http.StatusBadRequest
+	srv := httptest.NewServer(rcv)
+	defer srv.Close()
+	store := &memoryDeadLetters{}
+	sink := Wrap(newTestWebhook(t, srv.URL, fixedKeys(newKey), nil), PipelineConfig{
+		Metrics: NewMetrics(), DeadLetters: store, MaxPermanentAttempts: 3, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	// The batch behind the refused event grows between passes; the count
+	// still belongs to the refused event.
+	for _, upTo := range []int{4, 5, 6} {
+		_ = sink.Send(context.Background(), events[2:upTo])
+	}
+	if len(store.records) != 1 || store.records[0] != "webhook/admin_audit:3/3" {
+		t.Fatalf("dead letters = %v", store.records)
 	}
 }
 
@@ -445,19 +527,29 @@ func TestKillingAndRestoringTheReceiverLosesNothing(t *testing.T) {
 }
 
 func TestFanoutDoesNotResendToHealthySink(t *testing.T) {
-	healthy := &countingSink{name: "a"}
-	flaky := &countingSink{name: "b", failFirst: 2}
+	healthy := &countingSink{name: "a", got: map[string]int{}}
+	flaky := &countingSink{name: "b", failFirst: 3, got: map[string]int{}}
 	metrics := NewMetrics()
 	fan := Fanout{Wrap(healthy, PipelineConfig{Metrics: metrics}), Wrap(flaky, PipelineConfig{Metrics: metrics})}
-	events := testEvents(2, 1)
-	for i := 0; i < 3; i++ {
-		_ = fan.Send(context.Background(), events)
+	all := testEvents(8, 1)
+	// The security relay re-offers its pending head, and the head grows while
+	// one sink is down.
+	for _, upTo := range []int{2, 4, 6, 8} {
+		_ = fan.Send(context.Background(), all[:upTo])
 	}
-	if healthy.calls != 1 {
-		t.Fatalf("the healthy sink was offered the same batch %d times", healthy.calls)
+	for _, e := range all {
+		if healthy.got[e.EventID] != 1 {
+			t.Fatalf("healthy sink received %s %d times, want once", e.Ref(), healthy.got[e.EventID])
+		}
+		if flaky.got[e.EventID] != 1 {
+			t.Fatalf("flaky sink received %s %d times after recovering, want once", e.Ref(), flaky.got[e.EventID])
+		}
 	}
-	if flaky.calls != 3 {
-		t.Fatalf("flaky sink calls = %d", flaky.calls)
+	if err := fan.Send(context.Background(), all); err != nil {
+		t.Fatalf("everything is settled: %v", err)
+	}
+	if healthy.calls != 4 || flaky.calls != 4 {
+		t.Fatalf("calls healthy=%d flaky=%d; a fully settled batch is not sent again", healthy.calls, flaky.calls)
 	}
 }
 
@@ -465,13 +557,19 @@ type countingSink struct {
 	name      string
 	calls     int
 	failFirst int
+	got       map[string]int
 }
 
 func (c *countingSink) Name() string { return c.name }
-func (c *countingSink) Send(context.Context, []Event) error {
+func (c *countingSink) Send(_ context.Context, events []Event) error {
 	c.calls++
 	if c.calls <= c.failFirst {
 		return errors.New("down")
+	}
+	for _, e := range events {
+		if c.got != nil {
+			c.got[e.EventID]++
+		}
 	}
 	return nil
 }

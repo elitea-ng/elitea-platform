@@ -127,7 +127,7 @@ Elitea POSTs a JSON batch of up to 100 events:
 
 The HMAC is computed over the ASCII timestamp, a dot, and the **exact request body bytes**, with the key named by `X-Elitea-Key-Id`. Verify before you decode the body, compare in constant time, and reject a timestamp more than five minutes from your clock. During a rotation your receiver holds both keys and picks one by the key id.
 
-Answer `2xx` to acknowledge. Any other answer, a timeout, or a connection error makes Elitea send the batch again, with backoff, until it is accepted. Answer `400`, `413` or `422` only for a batch you can never accept: after five such answers for the same batch it is dead-lettered. Redirects are not followed.
+Answer `2xx` to acknowledge. Any other answer, a timeout, or a connection error makes Elitea send the batch again, with backoff, until it is accepted. Answer `400`, `413` or `422` only for content you can never accept: Elitea then splits the batch in halves and sends each half as its own batch (with its own batch id), down to single events, so one bad or oversized event does not hold back the others. A single event refused on five passes is dead-lettered on its own. Redirects are not followed.
 
 <Tabs>
 <Tab title="Python">

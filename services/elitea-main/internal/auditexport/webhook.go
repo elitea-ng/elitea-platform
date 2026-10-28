@@ -131,15 +131,47 @@ type webhookBody struct {
 	Events  []Event `json:"events"`
 }
 
-// Send POSTs the events in batches of BatchSize.
+// Send POSTs the events in order, in batches of BatchSize. A batch the
+// receiver refuses for its content (400, 413 or 422) is split in halves and
+// each half sent again, down to single events, so one malformed or oversized
+// event does not take its neighbours with it. Send stops at the first event
+// that is refused on its own, or at a transient failure, and reports the
+// events delivered before it as a *PartialError; a refused event is named in
+// a *PermanentError.
 func (w *WebhookSink) Send(ctx context.Context, events []Event) error {
+	settled := 0
 	for start := 0; start < len(events); start += w.cfg.BatchSize {
 		end := min(start+w.cfg.BatchSize, len(events))
-		if err := w.sendBatch(ctx, events[start:end]); err != nil {
-			return err
+		n, err := w.deliver(ctx, events[start:end])
+		settled += n
+		if err != nil {
+			return withSettled(settled, err)
 		}
 	}
 	return nil
+}
+
+// deliver sends one batch, bisecting on a content rejection. It returns how
+// many leading events were delivered before the first failure.
+func (w *WebhookSink) deliver(ctx context.Context, events []Event) (int, error) {
+	err := w.sendBatch(ctx, events)
+	if err == nil {
+		return len(events), nil
+	}
+	var permanent *PermanentError
+	if !errors.As(err, &permanent) {
+		return 0, err
+	}
+	if len(events) == 1 {
+		return 0, &PermanentError{Err: permanent.Err, Events: events[:1]}
+	}
+	mid := len(events) / 2
+	n, err := w.deliver(ctx, events[:mid])
+	if err != nil {
+		return n, err
+	}
+	m, err := w.deliver(ctx, events[mid:])
+	return mid + m, err
 }
 
 func (w *WebhookSink) sendBatch(ctx context.Context, events []Event) error {

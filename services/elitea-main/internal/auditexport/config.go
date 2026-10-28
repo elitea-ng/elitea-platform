@@ -192,12 +192,13 @@ func splitList(raw string) []string {
 
 // Service is the running export: the sinks, their metrics and the relays.
 type Service struct {
-	cfg     Config
-	sink    Sink
-	metrics *Metrics
-	db      DB
-	logger  *slog.Logger
-	closers []func(context.Context) error
+	cfg         Config
+	sinks       Fanout
+	deadLetters DeadLetterStore
+	metrics     *Metrics
+	db          DB
+	logger      *slog.Logger
+	closers     []func(context.Context) error
 }
 
 // Deps are the collaborators Build needs.
@@ -226,7 +227,8 @@ func Build(ctx context.Context, cfg Config, deps Deps) (*Service, error) {
 		MaxPermanentAttempts: cfg.MaxPermanentAttempts,
 		Logger:               deps.Logger,
 	}
-	svc := &Service{cfg: cfg, metrics: metrics, db: deps.DB, logger: deps.Logger}
+	metrics.RegisterDecodeFailures()
+	svc := &Service{cfg: cfg, metrics: metrics, db: deps.DB, logger: deps.Logger, deadLetters: pipeline.DeadLetters}
 	var sinks Fanout
 
 	if cfg.OTLPEndpoint != "" {
@@ -272,7 +274,7 @@ func Build(ctx context.Context, cfg Config, deps Deps) (*Service, error) {
 		}
 		sinks = append(sinks, Wrap(sink, pipeline))
 	}
-	svc.sink = sinks
+	svc.sinks = sinks
 	return svc, nil
 }
 
@@ -306,7 +308,7 @@ func (s *Service) Metrics() *Metrics { return s.metrics }
 
 // SecurityExporter is the exporter to give securityaudit.RelayConfig.
 func (s *Service) SecurityExporter() securityaudit.Exporter {
-	return SecurityExporter{Sink: s.sink}
+	return SecurityExporter{Sink: s.sinks, DeadLetters: s.deadLetters, Metrics: s.metrics, Logger: s.logger}
 }
 
 // Run starts the audit_events relay, the backlog monitor and, when
@@ -338,7 +340,7 @@ func (s *Service) Run(ctx context.Context, securityEnabled bool) error {
 		return nil
 	}
 	relay, err := NewAuditEventsRelay(s.db, AuditEventsConfig{
-		Sink: s.sink, FromBeginning: s.cfg.AuditEventsFromBeginning,
+		Sinks: s.sinks, FromBeginning: s.cfg.AuditEventsFromBeginning,
 		Interval: s.cfg.Interval, BatchSize: s.cfg.BatchSize, Logger: s.logger,
 	})
 	if err != nil {
