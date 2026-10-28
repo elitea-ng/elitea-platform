@@ -69,10 +69,10 @@ function cssFor(element: HTMLElement): string {
 }
 
 describe('Artifacts dividers (#6687)', () => {
-  it('the default pack states the design colours for border.artifactDivider', () => {
-    // Gray40 (dark) and Light40 (light) in the design, as RGB channels.
-    expect(channels(DEFAULT_BRAND_PACK.schemes.dark['border.artifactDivider'])).toEqual([38, 43, 52]);
-    expect(channels(DEFAULT_BRAND_PACK.schemes.light['border.artifactDivider'])).toEqual([225, 229, 233]);
+  it('the default pack states the hairline border colours for border.artifactDivider', () => {
+    // Brand guide v3 `border`: Ink #232A45 (dark) and Paper #E2E6F0 (light), as RGB channels.
+    expect(channels(DEFAULT_BRAND_PACK.schemes.dark['border.artifactDivider'])).toEqual([35, 42, 69]);
+    expect(channels(DEFAULT_BRAND_PACK.schemes.light['border.artifactDivider'])).toEqual([226, 230, 240]);
   });
 
   it.each(DIVIDER_FILES)('%s draws its dividers with border.artifactDivider', (file) => {

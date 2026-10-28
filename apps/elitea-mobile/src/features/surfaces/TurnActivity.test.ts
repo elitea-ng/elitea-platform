@@ -61,14 +61,14 @@ it('the timer keeps to a fixed trailing frame, so the title gets the banner widt
   }
 });
 
-it('takes product rose and the app ground per scheme, white on the dimmed lock screen', () => {
+it('takes the signal colour and the app ground per scheme, white on the dimmed lock screen', () => {
   const props = activityProps({ phase: 'working', preview: 'none', conversationTitle: null, approximate: false, startedAt: Date.now() });
   const draw = (env: Record<string, unknown>) => renderWidgetSource<Record<string, WidgetNode | null>>(layouts.get(TURN_ACTIVITY), props, env);
   const tint = (layout: Record<string, WidgetNode | null>) =>
     ((layout.banner!.props.modifiers ?? []) as { modifier: string; args: unknown[] }[]).find((m) => m.modifier === 'activityBackgroundTint')!.args[0];
-  expect(draw({ colorScheme: 'light' }).minimal!.props.color).toBe('#B4306A');
-  expect(draw({ colorScheme: 'dark' }).minimal!.props.color).toBe('#FF8CB8');
+  expect(draw({ colorScheme: 'light' }).minimal!.props.color).toBe('#4A4DE8');
+  expect(draw({ colorScheme: 'dark' }).minimal!.props.color).toBe('#00BFE6');
   expect(draw({ colorScheme: 'dark', isLuminanceReduced: true }).minimal!.props.color).toBe('#FFFFFF');
-  expect(tint(draw({ colorScheme: 'light' }))).toBe('#FBF7F9');
-  expect(tint(draw({ colorScheme: 'dark' }))).toBe('#1D1A22');
+  expect(tint(draw({ colorScheme: 'light' }))).toBe('#FFFFFF');
+  expect(tint(draw({ colorScheme: 'dark' }))).toBe('#12172B');
 });

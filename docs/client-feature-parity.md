@@ -47,7 +47,7 @@ clients generated from it.
 | Nested agents of a local turn run as cloud child turns; a pipeline runs in the cloud from a workspace (contract 1.23) | n-a: the web chat runs nested agents in the cloud runtime already | shipped | n-a: mobile runs no local turns | The desktop offers each nested agent of the turn's agent as a tool that runs it as a hidden cloud child conversation (#1239), followed until it settles, its approve/reject pauses on the approval card, stopped with the turn. A pipeline picked in a workspace runs as a cloud conversation that opens in chat. |
 | Notifications | shipped | shipped | shipped | |
 | Discover public agents | shipped | shipped | shipped | |
-| Workspace brand (ADR-0024 runtime branding) | shipped | shipped | shipped | The default mark and identity are shared: `@elitea/client-core/brand`. |
+| Workspace brand (ADR-0024 runtime branding) | shipped | shipped | shipped | The default mark, identity and brand v3 tokens (`BRAND_TOKENS`, which the mobile theme maps) are shared: `@elitea/client-core/brand`. |
 | Agent, pipeline, toolkit and MCP editors | shipped | shipped | n-a: authoring needs a large screen; the mobile app runs agents and does not edit them | |
 | Create an agent in a conversation (contract 1.28) | shipped | shipped | shipped | ADR-0037. The builder streams a draft, the person reviews and saves it, and it is listed with the other agents at once. Desktop also offers the local branch in a folder session: the session agent writes an `AGENTS.md` behind the approval card. Mobile offers the Elitea branch only and does not edit an agent after it is saved. |
 | Native right panel (inspector) | n-a: the browser layout keeps its in-page panels | shipped | n-a: the phone layout has no side panel | Desktop host UI. |

@@ -505,14 +505,14 @@ export function Composer({
               disabled={!canSend}
               onPress={submit}
               hitSlop={hitSlopFor(SEND_SIZE)}
-              android_ripple={{ color: colors.accentPressed, borderless: true }}
+              android_ripple={{ color: colors.primaryPressed, borderless: true }}
               style={({ pressed }) => [
                 styles.send,
                 canSend
-                  ? { backgroundColor: pressed && uiPlatform === 'ios' ? colors.accentPressed : colors.accent }
+                  ? { backgroundColor: pressed && uiPlatform === 'ios' ? colors.primaryPressed : colors.primary }
                   : { backgroundColor: colors.surfaceSunken, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.separator },
               ]}>
-              <Icon name="send" size={18} color={canSend ? colors.accentOn : colors.textTertiary} weight="bold" scales={false} />
+              <Icon name="send" size={18} color={canSend ? colors.primaryOn : colors.textTertiary} weight="bold" scales={false} />
             </Pressable>
           )}
         </View>

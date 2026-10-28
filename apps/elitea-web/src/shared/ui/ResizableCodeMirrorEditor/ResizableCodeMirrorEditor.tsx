@@ -164,7 +164,7 @@ export function ResizableCodeMirrorEditor({
             {
               opacity: 1,
             },
-          '&:focus-within': { borderColor: theme.vars.palette.primary.main },
+          '&:focus-within': { borderColor: theme.vars.palette.focus.ring },
         })}
       >
         {expandAction && (

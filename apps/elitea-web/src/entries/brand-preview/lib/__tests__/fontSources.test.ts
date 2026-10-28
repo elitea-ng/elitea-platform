@@ -56,7 +56,8 @@ describe('previewFontStylesheet', () => {
     expect(css).toContain('url("./fonts/TenantSans-Regular.woff2")');
   });
 
-  it('is empty for the default pack, which declares no face', () => {
-    expect(previewFontStylesheet(DEFAULT_BRAND_PACK, new Map())).toBe('');
+  it('is empty for a pack that declares no face', () => {
+    const { fontFaces: _omitted, ...typography } = DEFAULT_BRAND_PACK.typography;
+    expect(previewFontStylesheet({ ...DEFAULT_BRAND_PACK, typography }, new Map())).toBe('');
   });
 });

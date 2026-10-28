@@ -5,9 +5,6 @@
 
 import type { ReactNode } from 'react';
 
-/** Named color schemes matching the `resourceCard` palette tokens. */
-type ResourceColorScheme = 'blue' | 'orange' | 'purple' | 'green' | 'pink';
-
 /**
  * A card's DEFAULT link (#891/ELITEA-0972,0973,0974,0975) — shown until an
  * administrator configures the card's `linksKey` (`resolveLinks`,
@@ -38,8 +35,12 @@ export interface ResourceCardConfig {
   readonly Icon: React.ComponentType<{ width?: string; height?: string }>;
   /** API key for the card's link array. */
   readonly linksKey: string;
-  /** Color scheme token mapped to `resourceCard.<scheme>` palette entries. */
-  readonly colorScheme: ResourceColorScheme;
+  /**
+   * Empty-state copy: it names the state and the way out. It is a function
+   * so that `t()` resolves at render time, not at import time. With none,
+   * the page shows a generic "No links yet" message.
+   */
+  readonly emptyMessage?: () => string;
   /** Tour target id consumed by the interactive-tours feature. */
   readonly tourTargetId: string;
   /** Shown until an admin configures `linksKey` themselves — see `ResourceDefaultLink`. Omitted entirely on a card with no real content to default to (#891's Video Library gap; see that card's own comment). */
@@ -50,7 +51,6 @@ export interface ResourceCardConfig {
 export interface ResourceCardProps {
   title: string;
   description: string;
-  colorScheme: ResourceColorScheme;
   tourTargetId: string;
   /** Icon element rendered in the card header. */
   icon: ReactNode;

@@ -303,19 +303,34 @@ type Colors struct {
 	Brand, OnBrand, Ground, Surface, Ink, Muted, Rule string
 }
 
-// defaultColors is the product's light ground; the brand hue replaces Brand.
+// defaultColors is the light "Paper" scheme of the Elitea AI brand (guide v3,
+// libs/ts/client-core/src/brand/tokens.json): Base Indigo with white text for
+// the one action, Ink text on a white card, and neutral surface, muted text
+// and rule colours. The message is flat: no gradient and no glow. The brand
+// hue replaces Brand.
 var defaultColors = Colors{
-	Brand: "#0f7c8c", OnBrand: "#ffffff", Ground: "#f4f6f8", Surface: "#ffffff",
-	Ink: "#1c2230", Muted: "#6f7a83", Rule: "#e1e5ea",
+	Brand: "#4a4de8", OnBrand: "#ffffff", Ground: "#f4f6fb", Surface: "#ffffff",
+	Ink: "#0b0b18", Muted: "#5a6478", Rule: "#e2e6f0",
 }
+
+// defaultProductName is the product name when no pack names one.
+const defaultProductName = "Elitea AI"
+
+// defaultFontFamily is the brand UI face with the usual mail-client
+// fallbacks. Most mail clients do not load web fonts, so the fallbacks are
+// what most readers see.
+const defaultFontFamily = `Manrope, Helvetica Neue, Helvetica, Arial, sans-serif`
+
+// defaultRadius is the brand medium radius (tokens.json `shape.radiusMd`).
+const defaultRadius = 10
 
 // BrandView derives the view from the resolved pack, or the product default
 // when nothing is served.
 func (c *Composer) brandView(ctx context.Context, baseURL string) View {
 	view := View{
-		ProductName: "Elitea",
-		FontFamily:  `Helvetica Neue, Helvetica, Arial, sans-serif`,
-		Radius:      8,
+		ProductName: defaultProductName,
+		FontFamily:  defaultFontFamily,
+		Radius:      defaultRadius,
 		Colors:      defaultColors,
 	}
 	if c.brand == nil {
@@ -333,9 +348,9 @@ func (c *Composer) brandView(ctx context.Context, baseURL string) View {
 // the process booted with.
 func (c *Composer) viewFor(pack *v2branding.Pack, baseURL string) View {
 	view := View{
-		ProductName: "Elitea",
-		FontFamily:  `Helvetica Neue, Helvetica, Arial, sans-serif`,
-		Radius:      8,
+		ProductName: defaultProductName,
+		FontFamily:  defaultFontFamily,
+		Radius:      defaultRadius,
 		Colors:      defaultColors,
 	}
 	if pack == nil {

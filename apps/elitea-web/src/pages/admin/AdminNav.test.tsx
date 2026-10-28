@@ -611,7 +611,7 @@ function contrast(a: string, b: string): number {
   return (high + 0.05) / (low + 0.05);
 }
 
-/** `background.sideBar` is a gradient; both of its stops must clear the bar. */
+/** `background.sideBar` was a gradient (flat since brand guide v3); every stop must clear the bar. */
 function backgroundStops(value: string): string[] {
   return value.match(/#[0-9a-fA-F]{3,8}/g) ?? [value];
 }
@@ -635,7 +635,7 @@ describe('contrast in both schemes', () => {
 
     it(`${scheme}: the focus ring clears 3:1, the non-text bar`, () => {
       for (const stop of stops) {
-        expect(contrast(tokens['primary.main'] ?? '', stop)).toBeGreaterThanOrEqual(3);
+        expect(contrast(tokens['focus.ring'] ?? '', stop)).toBeGreaterThanOrEqual(3);
       }
     });
   }

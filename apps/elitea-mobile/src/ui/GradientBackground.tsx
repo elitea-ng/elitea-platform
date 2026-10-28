@@ -14,9 +14,10 @@ export function gradientPoints(angleDeg: number): { start: { x: number; y: numbe
 }
 
 /**
- * The pastel ground of Home, connect, sign-in, voice and empty states (§1.2): one full-screen
- * gradient that does not scroll. Chat and long reading surfaces use the flat `background`.
- * Reduce Transparency / Increase Contrast draw the flat background instead.
+ * The ground of Home, connect, sign-in, voice and empty states (§1.2): one full-screen layer that
+ * does not scroll. Brand guide v3 has no gradients, so the token's stops are all the flat
+ * `background` (src/design/tokens.ts) and this draws a plain colour; the gradient path stays for
+ * the token's shape. Reduce Transparency / Increase Contrast draw the flat background directly.
  */
 export function GradientBackground({ style, children, gradient, ...rest }: ViewProps & { gradient?: Gradient }) {
   const design = useDesign();

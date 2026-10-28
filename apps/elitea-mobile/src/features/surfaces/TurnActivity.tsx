@@ -14,11 +14,11 @@ export const TURN_ACTIVITY = 'EliteaTurn';
 
 const TurnActivityLayout = (props: TurnActivityProps, environment: LiveActivityEnvironment) => {
   'widget';
-  // product rose per scheme (design-tokens.json accent: light #B4306A, dark #FF8CB8); white on the
-  // dimmed Always-On lock screen. Grounds are the app's own: cream (light) and night surface (dark).
+  // the signal colour per scheme (design-tokens.json accent: light #4A4DE8, dark #00BFE6); white on
+  // the dimmed Always-On lock screen. Grounds are the app's own: Paper (light) and surface (dark).
   const dark = environment.colorScheme === 'dark';
-  const accent = environment.isLuminanceReduced ? '#FFFFFF' : dark ? '#FF8CB8' : '#B4306A';
-  const ground = dark ? '#1D1A22' : '#FBF7F9';
+  const accent = environment.isLuminanceReduced ? '#FFFFFF' : dark ? '#00BFE6' : '#4A4DE8';
+  const ground = dark ? '#12172B' : '#FFFFFF';
   const symbols = {
     working: 'sparkles',
     tool: 'wrench.and.screwdriver.fill',

@@ -25,7 +25,7 @@ export function hitSlopFor(visual: number, on: UiPlatform = uiPlatform): Insets 
 
 /** The pressed overlay (§2.2): textPrimary α .08 in light, white α .10 in dark. */
 export function pressedOverlay(design: Pick<Design, 'scheme'>): string {
-  return design.scheme === 'dark' ? 'rgba(255, 255, 255, 0.10)' : 'rgba(28, 22, 34, 0.08)';
+  return design.scheme === 'dark' ? 'rgba(255, 255, 255, 0.10)' : 'rgba(11, 11, 24, 0.08)';
 }
 
 /** Android ripple in the pressed-overlay colour; iOS draws its own highlight instead. */

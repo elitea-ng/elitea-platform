@@ -88,35 +88,29 @@ impl LoopbackListener {
     }
 }
 
-/// The pages the browser lands on, styled like the deployment's own sign-in
-/// pages (services/elitea-main/.../browserauth/templates/auth.css): the same
-/// tokens, glow backdrop and card, light and dark. Self-contained — the
-/// listener serves nothing else, and the CSP header allows inline style only.
+/// The pages the browser lands on, in the Elitea AI brand v3 tokens
+/// (`libs/ts/client-core/src/brand/tokens.json`): Paper / Ink grounds, flat
+/// surfaces, no gradients, light and dark. Self-contained — the listener serves
+/// nothing else, loads no fonts, and the CSP header allows inline style only.
 const PAGE_STYLE: &str = "<style>\
-:root{color-scheme:light dark;--accent:#c428dd;--page:#f3f7fc;--card:#fff;--text:#0e131d;\
---muted:#545864;--card-border:rgb(61 68 86/12%);--glow-1:var(--accent);--glow-2:#29a3f5;\
---glow-strength:14%;--shadow:0 1px 2px rgb(14 19 29/6%),0 24px 64px -12px rgb(14 19 29/18%);\
---ok:#1b7f4b;--ok-bg:#e8f6ee;--warn:#9e0f0f;--warn-bg:#fdeced}\
-@media (prefers-color-scheme:dark){:root{--accent:#6ae8fa;--page:#0b111b;--card:#181f2a;\
---text:#fff;--muted:#a9b7c1;--card-border:rgb(255 255 255/9%);--glow-2:#dd42bb;--glow-strength:18%;\
---shadow:0 1px 2px rgb(0 0 0/30%),0 32px 80px -16px rgb(0 0 0/65%);--ok:#7ee2a8;\
---ok-bg:rgb(46 160 98/16%);--warn:#ffb3ae;--warn-bg:rgb(215 22 22/14%)}}\
+:root{color-scheme:light dark;--page:#f4f6fb;--card:#fff;--text:#0b0b18;--muted:#5a6478;\
+--card-border:#e2e6f0;--shadow:0 1px 2px rgb(11 11 24/6%),0 4px 16px rgb(11 11 24/6%);\
+--ok:#15803d;--ok-bg:#e8f2ec;--warn:#b91c1c;--warn-bg:#f8e8e8}\
+@media (prefers-color-scheme:dark){:root{--page:#0b0b18;--card:#12172b;--text:#f2f4fa;\
+--muted:#9aa3b8;--card-border:#232a45;--shadow:none;--ok:#22c55e;--ok-bg:#0e2521;\
+--warn:#f87171;--warn-bg:#2c1925}}\
 html,body{min-height:100%}\
 body{margin:0;min-height:100vh;display:grid;place-items:center;padding:56px 16px;box-sizing:border-box;\
-background-color:var(--page);background-image:\
-radial-gradient(340px circle at calc(50% - 350px) calc(50% + 80px),color-mix(in srgb,var(--glow-2) var(--glow-strength),transparent),transparent),\
-radial-gradient(280px circle at calc(50% + 360px) calc(50% - 170px),color-mix(in srgb,var(--glow-1) var(--glow-strength),transparent),transparent),\
-radial-gradient(ellipse 60% 55% at 50% 45%,color-mix(in srgb,var(--glow-1) var(--glow-strength),transparent) 0%,transparent 70%);\
-background-attachment:fixed;color:var(--text);font-size:15px;line-height:1.5;\
-font-family:\"Montserrat\",\"Inter\",system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif}\
+background:var(--page);color:var(--text);font-size:15px;line-height:1.55;\
+font-family:\"Manrope\",system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif}\
 main{width:min(100%,420px);box-sizing:border-box;padding:36px 32px 32px;text-align:center;\
-border:1px solid var(--card-border);border-radius:16px;background:color-mix(in srgb,var(--card) 84%,transparent);\
--webkit-backdrop-filter:blur(20px) saturate(140%);backdrop-filter:blur(20px) saturate(140%);box-shadow:var(--shadow)}\
+border:1px solid var(--card-border);border-radius:14px;background:var(--card);box-shadow:var(--shadow)}\
 .mark{display:grid;place-items:center;width:48px;height:48px;margin:0 auto 20px;border-radius:50%;\
 color:var(--ok);background:var(--ok-bg)}\
 .mark.warn{color:var(--warn);background:var(--warn-bg)}\
 .mark svg{width:24px;height:24px}\
-h1{margin:0 0 8px;font-size:1.5rem;font-weight:600;line-height:1.3}\
+h1{margin:0 0 8px;font-family:\"Sora\",\"Manrope\",system-ui,sans-serif;font-size:1.5rem;font-weight:700;\
+line-height:1.15;letter-spacing:-.02em}\
 p{margin:0;color:var(--muted);font-size:.9375rem}\
 </style>";
 

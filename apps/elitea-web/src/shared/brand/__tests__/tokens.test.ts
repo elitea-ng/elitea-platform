@@ -12,7 +12,7 @@ describe('the default pack', () => {
   it('is schema-valid and identifies itself as the default', () => {
     expect(() => BrandPack.parse(DEFAULT_BRAND_PACK)).not.toThrow();
     expect(DEFAULT_BRAND_PACK.id).toBe('default');
-    expect(DEFAULT_BRAND_PACK.product.name).toBe('Elitea');
+    expect(DEFAULT_BRAND_PACK.product.name).toBe('Elitea AI');
   });
 
   it('carries symmetric scheme records', () => {
@@ -22,8 +22,9 @@ describe('the default pack', () => {
     // 406 at baseline 20b23c42 (was 362 at a55f36cf): the baseline added 44
     // tokens, and both new asymmetric ones carry a symmetry fill (tokens/README.md), which
     // is why the light/dark equality above still holds. 407 with #6687's
-    // `border.artifactDivider` (an addition, see tokens/README.md).
-    expect(light.length).toBe(407);
+    // `border.artifactDivider` (an addition, see tokens/README.md). 408 with
+    // brand guide v3's `focus.ring` (the one keyboard focus colour).
+    expect(light.length).toBe(408);
   });
 
   it('states the mandatory §4.2 roles in both schemes', () => {
@@ -82,6 +83,6 @@ describe('the default pack', () => {
   it('anchors the derivation on a token both schemes state', () => {
     expect(DEFAULT_BRAND_PACK.schemes.light[BRAND_ANCHOR_TOKEN]).toBeDefined();
     expect(DEFAULT_BRAND_PACK.schemes.dark[BRAND_ANCHOR_TOKEN]).toBeDefined();
-    expect(DEFAULT_BRAND_PACK.brand.hue).toBe(DEFAULT_BRAND_PACK.schemes.dark[BRAND_ANCHOR_TOKEN]);
+    expect(DEFAULT_BRAND_PACK.brand.hue.toLowerCase()).toBe(DEFAULT_BRAND_PACK.schemes.dark[BRAND_ANCHOR_TOKEN]?.toLowerCase());
   });
 });

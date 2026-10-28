@@ -69,7 +69,7 @@ export function AgentIcon({
   }
   return (
     <View testID="agent-icon-monogram" accessible={false} style={[frame, styles.center, { backgroundColor: colors.secondarySoft }]}>
-      <Text maxFontSizeMultiplier={1} color={colors.secondarySoftOn} style={[monogramStyle(size, 0.38), styles.monogram]}>
+      <Text maxFontSizeMultiplier={1} color={colors.aiText} style={[monogramStyle(size, 0.38), styles.monogram]}>
         {monogramOf(name)}
       </Text>
     </View>

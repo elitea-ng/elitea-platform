@@ -19,8 +19,9 @@ export const MuiOutlinedInput: EliteaComponents['MuiOutlinedInput'] = {
         borderRadius: shape.radiusMd,
         ...typeScale(theme.typography.bodyMedium),
         color: palette.text.secondary,
+        // Control boundary (brand guide v3, WCAG 1.4.11): borderStrong, ≥3:1.
         '& .MuiOutlinedInput-notchedOutline': {
-          borderColor: palette.border.lines,
+          borderColor: palette.border.hover,
         },
         // The notch is sized by an invisible copy of the label inside the
         // `<legend>`, which MUI renders at a hard-coded `0.75em` of THIS
@@ -35,10 +36,10 @@ export const MuiOutlinedInput: EliteaComponents['MuiOutlinedInput'] = {
           letterSpacing: theme.typography.labelSmall.letterSpacing,
         },
         '&:hover .MuiOutlinedInput-notchedOutline': {
-          borderColor: palette.border.lines,
+          borderColor: palette.border.inputHover,
         },
         '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-          borderColor: palette.primary.main,
+          borderColor: palette.focus.ring,
           borderWidth: '0.0625rem',
         },
         '&.Mui-error .MuiOutlinedInput-notchedOutline': {

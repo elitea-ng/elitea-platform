@@ -13,23 +13,26 @@
  * and semantically the wrong place for a decorative constant unrelated to
  * white-labeling).
  */
+// Brand guide v3: neutrals carry the interface and orange is only the dot, so
+// the per-letter hues (an orange, a purple, a teal…) became six Ink slate
+// steps. Each carries the white initial at 5:1 or better, in both schemes.
 const PROJECT_AVATAR_COLORS: ReadonlyArray<{ letters: string; color: string }> = [
   // oxlint-disable-next-line elitea/no-raw-color -- see file header: fixed decorative avatar palette, not a themed token.
-  { letters: 'ABCD', color: '#eb691e' },
+  { letters: 'ABCD', color: '#3A4466' },
   // oxlint-disable-next-line elitea/no-raw-color -- see file header.
-  { letters: 'EFGH', color: '#3B7DD8' },
+  { letters: 'EFGH', color: '#4A5578' },
   // oxlint-disable-next-line elitea/no-raw-color -- see file header.
-  { letters: 'IJKL', color: '#8E24AA' },
+  { letters: 'IJKL', color: '#2E3654' },
   // oxlint-disable-next-line elitea/no-raw-color -- see file header.
-  { letters: 'MNOP', color: '#00897B' },
+  { letters: 'MNOP', color: '#535D7A' },
   // oxlint-disable-next-line elitea/no-raw-color -- see file header.
-  { letters: 'QRST', color: '#43A047' },
+  { letters: 'QRST', color: '#444E6E' },
   // oxlint-disable-next-line elitea/no-raw-color -- see file header.
-  { letters: 'UVWXYZ', color: '#C5A62A' },
+  { letters: 'UVWXYZ', color: '#5A6478' },
 ];
 
 // oxlint-disable-next-line elitea/no-raw-color -- see file header: fixed decorative fallback, not a themed token.
-const DEFAULT_COLOR = '#757575';
+const DEFAULT_COLOR = '#232A45';
 
 export function projectAvatarColor(projectName: string | undefined): string {
   const letter = (projectName ?? '')[0]?.toUpperCase();
