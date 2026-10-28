@@ -16,11 +16,8 @@ import FolderOpenOutlinedIcon from '@mui/icons-material/FolderOpenOutlined';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import Box from '@mui/material/Box';
 import ButtonBase from '@mui/material/ButtonBase';
-import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
-import ListSubheader from '@mui/material/ListSubheader';
 import Menu from '@mui/material/Menu';
-import MenuItem from '@mui/material/MenuItem';
 import Popover from '@mui/material/Popover';
 import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
@@ -30,6 +27,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { readThreads, threadNames, threadsQueryKey } from '@/features/workspace';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
+import { MenuDivider, MenuHeader, MenuRow, MenuRowText } from '@/shared/ui/native-menu';
 import { ActivityIsland, conversationLink, copyText as copy, selectInspectorShown, ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { PanelToggle } from './sessionParts';
@@ -182,66 +180,66 @@ function Overflow({ conversationId, onIndexSettings, onFork, onCreateAgent, onRe
           <MoreHorizIcon fontSize="inherit" />
         </IconButton>
       </Tooltip>
-      <Menu anchorEl={anchor} open={anchor !== null} onClose={close} slotProps={{ list: { dense: true } }}>
-        <ListSubheader sx={{ lineHeight: '22px', background: 'transparent' }}>{t('workspace.thread.menu', 'Thread')}</ListSubheader>
-        <MenuItem
+      <Menu anchorEl={anchor} open={anchor !== null} onClose={close} slotProps={{ list: { dense: true }, paper: { sx: { minWidth: '13rem' } } }}>
+        <MenuHeader>{t('workspace.thread.menu', 'Thread')}</MenuHeader>
+        <MenuRow
           disabled={conversationId === ''}
           onClick={() => {
             close();
             void navigate({ to: '/chat/$conversationId', params: { conversationId } });
           }}
         >
-          {t('workspace.openInChat', 'Open in chat')}
-        </MenuItem>
-        <MenuItem
+          <MenuRowText>{t('workspace.openInChat', 'Open in chat')}</MenuRowText>
+        </MenuRow>
+        <MenuRow
           disabled={link === null}
           onClick={() => {
             close();
             if (link !== null) copy(link);
           }}
         >
-          {t('workspace.copyLink', 'Copy Link')}
-        </MenuItem>
-        <MenuItem
+          <MenuRowText>{t('workspace.copyLink', 'Copy Link')}</MenuRowText>
+        </MenuRow>
+        <MenuRow
           disabled={conversationId === ''}
           onClick={() => {
             close();
             onRename();
           }}
         >
-          {t('workspace.thread.rename', 'Rename Thread')}
-        </MenuItem>
+          <MenuRowText>{t('workspace.thread.rename', 'Rename Thread')}</MenuRowText>
+        </MenuRow>
         {onFork !== undefined && (
-          <MenuItem
+          <MenuRow
             disabled={conversationId === '' || busy}
             onClick={() => {
               close();
               onFork();
             }}
           >
-            {t('workspace.fork.thread', 'Fork Thread')}
-          </MenuItem>
+            <MenuRowText>{t('workspace.fork.thread', 'Fork Thread')}</MenuRowText>
+          </MenuRow>
         )}
         {onCreateAgent !== undefined && (
-          <MenuItem
+          <MenuRow
             onClick={() => {
               close();
               onCreateAgent();
             }}
           >
-            {t('workspace.createAgent.menu', 'Create Agent…')}
-          </MenuItem>
+            <MenuRowText>{t('workspace.createAgent.menu', 'Create Agent…')}</MenuRowText>
+          </MenuRow>
         )}
-        {onIndexSettings !== undefined && <Divider />}
+        {onIndexSettings !== undefined && <MenuDivider />}
         {onIndexSettings !== undefined && (
-          <MenuItem
+          <MenuRow
             onClick={() => {
               close();
               onIndexSettings();
             }}
           >
-            {t('workspace.index.menu', 'Index settings…')}
-          </MenuItem>
+            <MenuRowText>{t('workspace.index.menu', 'Index settings…')}</MenuRowText>
+          </MenuRow>
         )}
       </Menu>
     </>

@@ -21,15 +21,14 @@ import { useDraggable } from '@dnd-kit/core';
 
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import Box from '@mui/material/Box';
-import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import InputBase from '@mui/material/InputBase';
 import Menu from '@mui/material/Menu';
-import MenuItem from '@mui/material/MenuItem';
 import type { Theme } from '@mui/material/styles';
 
 import type { Conversation } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
+import { MenuDivider, MenuRow, MenuRowText } from '@/shared/ui/native-menu';
 import { activityGlyph, activityTitleBold, useRowActivity } from '@/shared/lib/conversationActivity';
 import { ConversationActivityGlyph } from '@/shared/ui/ConversationActivity';
 import { BaseModal } from '@/shared/ui/BaseModal';
@@ -108,12 +107,12 @@ export function RowMenu({ items, label, testId = 'shell-conversation-more' }: { 
       <IconButton size="small" aria-label={label} aria-haspopup="menu" data-testid={testId} onClick={(event) => setAnchor(event.currentTarget)}>
         <MoreHorizIcon fontSize="inherit" />
       </IconButton>
-      <Menu anchorEl={anchor} open={anchor !== null} onClose={close} slotProps={{ list: { dense: true } }}>
+      <Menu anchorEl={anchor} open={anchor !== null} onClose={close} slotProps={{ list: { dense: true }, paper: { sx: { minWidth: '12rem' } } }}>
         {items.map((item, index) =>
           'separator' in item ? (
-            <Divider key={`separator-${String(index)}`} />
+            <MenuDivider key={`separator-${String(index)}`} />
           ) : 'submenu' in item ? null : (
-            <MenuItem
+            <MenuRow
               key={item.id}
               disabled={item.enabled === false}
               onClick={() => {
@@ -121,8 +120,8 @@ export function RowMenu({ items, label, testId = 'shell-conversation-more' }: { 
                 item.run();
               }}
             >
-              {item.label}
-            </MenuItem>
+              <MenuRowText>{item.label}</MenuRowText>
+            </MenuRow>
           ),
         )}
       </Menu>

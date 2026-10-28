@@ -21,15 +21,13 @@ import { Suspense, useState } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
+import AltRouteOutlinedIcon from '@mui/icons-material/AltRouteOutlined';
 import CheckOutlinedIcon from '@mui/icons-material/CheckOutlined';
 import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import Box from '@mui/material/Box';
-import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
-import ListSubheader from '@mui/material/ListSubheader';
 import Menu from '@mui/material/Menu';
-import MenuItem from '@mui/material/MenuItem';
 import Tooltip from '@mui/material/Tooltip';
 
 import type { Project } from '@/entities/project';
@@ -39,6 +37,7 @@ import { preferWorktree, WorktreesPanel } from '@/features/workspace-worktrees';
 import type { HandoffStatus } from '@/shared/desktop/handoffIpc';
 import { openedFolders, type Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
+import { MenuDivider, MenuHeader, MenuRow, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
 import { ActivityGroupSummary } from '@/shared/ui/ConversationActivity';
 
 import type { ShellAction } from '../lib/shellActions';
@@ -199,45 +198,48 @@ function FolderMenu({ workspace, projects, run, onBind, onRemove }: FolderMenuPr
       >
         <MoreHorizIcon fontSize="inherit" />
       </IconButton>
-      <Menu anchorEl={anchor} open={anchor !== null} onClose={close} slotProps={{ list: { dense: true } }}>
+      <Menu anchorEl={anchor} open={anchor !== null} onClose={close} slotProps={{ list: { dense: true }, paper: { sx: { minWidth: '14rem' } } }}>
         {workspace.is_git && (
-          <MenuItem
+          <MenuRow
             onClick={() => {
               close();
               newWorktreeThread(workspace, run);
             }}
           >
-            {t('desktop.shell.newWorktreeThread', 'New thread in a worktree')}
-          </MenuItem>
+            <MenuRowIcon>
+              <AltRouteOutlinedIcon />
+            </MenuRowIcon>
+            <MenuRowText>{t('desktop.shell.newWorktreeThread', 'New thread in a worktree')}</MenuRowText>
+          </MenuRow>
         )}
-        {workspace.is_git && <Divider />}
-        <ListSubheader>{workspace.project_id === null ? t('desktop.shell.bindProject', 'Project for this folder') : t('desktop.shell.moveToProject', 'Move to project')}</ListSubheader>
+        {workspace.is_git && <MenuDivider />}
+        <MenuHeader>{workspace.project_id === null ? t('desktop.shell.bindProject', 'Project for this folder') : t('desktop.shell.moveToProject', 'Move to project')}</MenuHeader>
         {projects
           .filter((project) => !project.suspended)
           .map((project) => (
-            <MenuItem
+            <MenuRow
               key={project.id}
-              selected={workspace.project_id === project.id}
+              role="menuitemradio"
+              aria-checked={workspace.project_id === project.id}
               onClick={() => {
                 close();
                 onBind(project.id);
               }}
             >
-              <Box component="span" sx={{ width: '1.25rem', display: 'inline-flex' }}>
-                {workspace.project_id === project.id && <CheckOutlinedIcon fontSize="inherit" />}
-              </Box>
-              {project.name}
-            </MenuItem>
+              <MenuRowIcon>{workspace.project_id === project.id && <CheckOutlinedIcon />}</MenuRowIcon>
+              <MenuRowText>{project.name}</MenuRowText>
+            </MenuRow>
           ))}
-        <Divider />
-        <MenuItem
+        <MenuDivider />
+        <MenuRow
           onClick={() => {
             close();
             onRemove();
           }}
         >
-          {t('desktop.shell.removeFolder', 'Remove from sidebar')}
-        </MenuItem>
+          <MenuRowIcon />
+          <MenuRowText>{t('desktop.shell.removeFolder', 'Remove from sidebar')}</MenuRowText>
+        </MenuRow>
       </Menu>
     </>
   );

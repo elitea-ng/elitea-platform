@@ -23,10 +23,7 @@ import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
-import ListItemIcon from '@mui/material/ListItemIcon';
-import ListItemText from '@mui/material/ListItemText';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import type { Theme } from '@mui/material/styles';
@@ -35,6 +32,7 @@ import Typography from '@mui/material/Typography';
 
 import type { InspectorTabId, InspectorTabInfo } from '@/shared/desktop/inspectorSlot';
 import { t } from '@/shared/i18n';
+import { MenuDivider, MenuRow, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
 
 import type { InspectorGroupView } from '../lib/inspectorLayout';
 import { useDesktopLayout } from '../model/desktopLayout.store';
@@ -279,9 +277,14 @@ export function InspectorGroup({ view, infos, offered, visible, other, top, popp
           ))}
       </Menu>
 
-      <Menu anchorEl={moreAnchor} open={moreAnchor !== null} onClose={() => setMoreAnchor(null)} slotProps={{ list: { 'aria-label': t('desktop.inspector.more', 'Inspector options') } }}>
+      <Menu
+        anchorEl={moreAnchor}
+        open={moreAnchor !== null}
+        onClose={() => setMoreAnchor(null)}
+        slotProps={{ list: { dense: true, 'aria-label': t('desktop.inspector.more', 'Inspector options') }, paper: { sx: { minWidth: '13rem' } } }}
+      >
         {offered.map((info) => (
-          <MenuItem
+          <MenuRow
             key={info.id}
             role="menuitemcheckbox"
             aria-checked={visible.has(info.id)}
@@ -291,23 +294,24 @@ export function InspectorGroup({ view, infos, offered, visible, other, top, popp
               layout().showInspector(info.id);
             }}
           >
-            <ListItemIcon>{visible.has(info.id) && <CheckIcon fontSize="small" />}</ListItemIcon>
-            <ListItemText>{info.title}</ListItemText>
-          </MenuItem>
+            <MenuRowIcon>{visible.has(info.id) && <CheckIcon />}</MenuRowIcon>
+            <MenuRowText>{info.title}</MenuRowText>
+          </MenuRow>
         ))}
-        <Divider />
+        <MenuDivider />
         {tabActions(active)
           .filter((action) => action.id !== 'close')
           .map((action) => (
-            <MenuItem
+            <MenuRow
               key={action.id}
               onClick={() => {
                 setMoreAnchor(null);
                 action.run();
               }}
             >
-              {action.label}
-            </MenuItem>
+              <MenuRowIcon />
+              <MenuRowText>{action.label}</MenuRowText>
+            </MenuRow>
           ))}
       </Menu>
     </Box>

@@ -401,19 +401,19 @@ describe('DesktopFrame sidebar layout', () => {
     mount();
     const [app, docs] = await screen.findAllByTestId('shell-folder');
     await user.click(within(app as HTMLElement).getByLabelText('More for app'));
-    await user.click(await screen.findByRole('menuitem', { name: 'Sales' }));
+    await user.click(await screen.findByRole('menuitemradio', { name: 'Sales' }));
     const dialog = await screen.findByTestId('move-folder-dialog');
     expect(within(dialog).getByRole('heading')).toHaveTextContent('Move “app” to Sales?');
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(await screen.findAllByTestId('shell-folder')).toHaveLength(2);
     await user.click(within(app as HTMLElement).getByLabelText('More for app'));
-    await user.click(await screen.findByRole('menuitem', { name: 'Sales' }));
+    await user.click(await screen.findByRole('menuitemradio', { name: 'Sales' }));
     await user.click(within(await screen.findByTestId('move-folder-dialog')).getByRole('button', { name: 'Move' }));
     // Now Sales' folder: it leaves Marketing's sidebar.
     await waitFor(() => expect(screen.getAllByTestId('shell-folder')).toHaveLength(1));
 
     await user.click(within(docs as HTMLElement).getByLabelText('More for docs'));
-    await user.click(await screen.findByRole('menuitem', { name: 'Marketing' }));
+    await user.click(await screen.findByRole('menuitemradio', { name: 'Marketing' }));
     expect(screen.queryByTestId('move-folder-dialog')).toBeNull();
     await waitFor(() => expect(within(screen.getByTestId('shell-folder')).queryByText('No project')).toBeNull());
   });
