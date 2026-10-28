@@ -1,0 +1,176 @@
+package safety
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	safetyapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+)
+
+type fakeService struct {
+	actors   []safetyapp.Actor
+	requests []safetyapp.CreateRequest
+	err      error
+}
+
+func (f *fakeService) Create(_ context.Context, actor safetyapp.Actor, request safetyapp.CreateRequest) (safetyapp.Suspension, error) {
+	f.actors, f.requests = append(f.actors, actor), append(f.requests, request)
+	if f.err != nil {
+		return safetyapp.Suspension{}, f.err
+	}
+	return safetyapp.Suspension{ID: 5, Target: request.Target, Reason: request.Reason, ActorID: actor.UserID,
+		Source: safetyapp.SourceManual, ResumeRequires: safetyapp.ResumeAnyAdmin, CreatedAt: time.Unix(0, 0)}, nil
+}
+
+func (f *fakeService) Resume(_ context.Context, actor safetyapp.Actor, request safetyapp.ResumeRequest) (safetyapp.Suspension, error) {
+	f.actors = append(f.actors, actor)
+	if f.err != nil {
+		return safetyapp.Suspension{}, f.err
+	}
+	now, by := time.Unix(10, 0), actor.UserID
+	return safetyapp.Suspension{ID: request.ID, Target: safetyapp.Target{Scope: safetyapp.ScopePlatform},
+		ResumedAt: &now, ResumedBy: &by}, nil
+}
+
+func (f *fakeService) List(_ context.Context, actor safetyapp.Actor, _ safetyapp.ListFilter) ([]safetyapp.Suspension, error) {
+	f.actors = append(f.actors, actor)
+	return nil, f.err
+}
+
+func router(t *testing.T, service Service) http.Handler {
+	t.Helper()
+	handler, err := NewHandler(service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := chi.NewRouter()
+	r.Get("/admin"+AdminPath, handler.AdminList)
+	r.Post("/admin"+AdminPath, handler.AdminCreate)
+	r.Post("/admin"+AdminResumePath, handler.AdminResume)
+	r.Post("/core"+ProjectPath, handler.ProjectCreate)
+	r.Post("/core"+ProjectResumePath, handler.ProjectResume)
+	return r
+}
+
+func do(t *testing.T, h http.Handler, method, path, body string) (*httptest.ResponseRecorder, audit.Annotation) {
+	t.Helper()
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	ctx, slot := audit.ContextWithAnnotationSlot(request.Context())
+	ctx = auth.ContextWithUser(ctx, auth.User{ID: "42", UserID: "42"})
+	recorder := httptest.NewRecorder()
+	h.ServeHTTP(recorder, request.WithContext(ctx))
+	annotation, _ := slot.Read()
+	return recorder, annotation
+}
+
+func TestAdminCreateAnnotatesTheAuditRecordAndPassesTheConfirmation(t *testing.T) {
+	t.Parallel()
+	service := &fakeService{}
+	recorder, annotation := do(t, router(t, service), http.MethodPost, "/admin/execution_suspensions",
+		`{"scope":"platform","reason":"incident","confirm":"STOP","resume_requires":"two_person"}`)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d %s", recorder.Code, recorder.Body)
+	}
+	if !service.actors[0].PlatformAdmin || service.actors[0].UserID != 42 ||
+		service.requests[0].Confirmation != "STOP" || service.requests[0].ResumeRequires != safetyapp.ResumeTwoPerson {
+		t.Fatalf("actor = %+v, request = %+v", service.actors[0], service.requests[0])
+	}
+	if annotation.Action != AuditActionCreated || annotation.EntityType != "execution_suspension" ||
+		annotation.EntityID == nil || *annotation.EntityID != 5 || annotation.EntityName != "platform" {
+		t.Fatalf("annotation = %+v", annotation)
+	}
+	var body Suspension
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || !body.Active || body.Scope != "platform" {
+		t.Fatalf("body = %s", recorder.Body)
+	}
+}
+
+func TestProjectSurfaceIsBoundToThePathProject(t *testing.T) {
+	t.Parallel()
+	service := &fakeService{}
+	h := router(t, service)
+	recorder, _ := do(t, h, http.MethodPost, "/core/execution_suspensions/prompt_lib/7",
+		`{"scope":"agent","project_id":8,"application_id":3,"reason":"x"}`)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("another project's id: %d", recorder.Code)
+	}
+	recorder, annotation := do(t, h, http.MethodPost, "/core/execution_suspensions/prompt_lib/7",
+		`{"scope":"agent","application_id":3,"reason":"x"}`)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d %s", recorder.Code, recorder.Body)
+	}
+	actor, request := service.actors[0], service.requests[0]
+	if actor.PlatformAdmin || actor.ProjectID != 7 || request.Target.ProjectID != 7 || request.Target.ApplicationID != 3 {
+		t.Fatalf("actor = %+v, target = %+v", actor, request.Target)
+	}
+	if annotation.ProjectID == nil || *annotation.ProjectID != 7 || annotation.EntityName != "agent:3" {
+		t.Fatalf("annotation = %+v", annotation)
+	}
+	recorder, _ = do(t, h, http.MethodPost, "/core/execution_suspensions/prompt_lib/7",
+		`{"scope":"agent","reason":"x"}`)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("an agent stop without application_id: %d", recorder.Code)
+	}
+}
+
+func TestErrorsMapToTypedAnswers(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{safetyapp.ErrConfirmationRequired, http.StatusBadRequest, "confirmation_required"},
+		{safetyapp.ErrResumeForbidden, http.StatusForbidden, "resume_forbidden"},
+		{&safetyapp.AlreadySuspendedError{Existing: safetyapp.Suspension{ID: 3, Target: safetyapp.Target{Scope: safetyapp.ScopePlatform}}}, http.StatusConflict, "already_suspended"},
+		{safetyapp.ErrNotFound, http.StatusNotFound, ""},
+		{safetyapp.ErrNotActive, http.StatusConflict, ""},
+		{safetyapp.ErrScopeForbidden, http.StatusForbidden, ""},
+	}
+	for _, tc := range cases {
+		recorder, annotation := do(t, router(t, &fakeService{err: tc.err}), http.MethodPost,
+			"/admin/execution_suspensions/9:resume", `{"reason":"fixed"}`)
+		if recorder.Code != tc.status {
+			t.Errorf("%v: status = %d, want %d", tc.err, recorder.Code, tc.status)
+		}
+		if tc.code != "" && !strings.Contains(recorder.Body.String(), `"code":"`+tc.code+`"`) {
+			t.Errorf("%v: body = %s", tc.err, recorder.Body)
+		}
+		if annotation.Action != "" {
+			t.Errorf("%v: a refused resume must not be annotated as a resume", tc.err)
+		}
+	}
+	recorder, annotation := do(t, router(t, &fakeService{}), http.MethodPost, "/admin/execution_suspensions/9:resume", "")
+	if recorder.Code != http.StatusOK || annotation.Action != AuditActionResumed {
+		t.Fatalf("resume with no body: %d %+v", recorder.Code, annotation)
+	}
+}
+
+// The router mounts the routes unconditionally; a nil handler answers 503
+// rather than panicking or admitting anything.
+func TestNilHandlerAnswersUnavailable(t *testing.T) {
+	t.Parallel()
+	var handler *Handler
+	r := chi.NewRouter()
+	r.Post("/admin"+AdminPath, handler.AdminCreate)
+	r.Get("/core"+ProjectPath, handler.ProjectList)
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "/admin/execution_suspensions", strings.NewReader(`{}`)),
+		httptest.NewRequest(http.MethodGet, "/core/execution_suspensions/prompt_lib/7", nil),
+	} {
+		recorder := httptest.NewRecorder()
+		r.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s %s: status = %d", request.Method, request.URL.Path, recorder.Code)
+		}
+	}
+}

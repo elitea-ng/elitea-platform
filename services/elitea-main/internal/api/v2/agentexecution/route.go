@@ -16,6 +16,7 @@ import (
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
@@ -619,6 +620,12 @@ func (handler *currentApplicationStartHandler) Continue(writer http.ResponseWrit
 func writeStartError(writer http.ResponseWriter, err error) {
 	var capacity *executionapp.AdmissionCapacityError
 	var governed *agentexecutionapp.GovernedCredentialAdmissionError
+	if status, body, refused := safety.HTTPRefusal(err); refused {
+		// The kill switch (ADR-0041 decision 1): the code and the scope,
+		// never the operator's reason.
+		writeJSON(writer, status, body)
+		return
+	}
 	switch {
 	case errors.As(err, &governed):
 		// A governed run resolves toolkit credentials by exact reference and

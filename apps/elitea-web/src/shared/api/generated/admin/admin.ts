@@ -80,6 +80,10 @@ import type {
   CredentialUseGrantCreate,
   CredentialUseGrantListResponse,
   ErrorResponse,
+  ExecutionSuspension,
+  ExecutionSuspensionCreate,
+  ExecutionSuspensionList,
+  ExecutionSuspensionResume,
   ExternalAgentIdentity,
   ExternalAgentIdentityCreate,
   ExternalAgentIdentityDriftResponse,
@@ -99,6 +103,7 @@ import type {
   ListBrandingPackageVersions200,
   ListCredentialReferencesParams,
   ListCredentialUseGrantsParams,
+  ListExecutionSuspensionsParams,
   ListExternalAgentIdentitiesParams,
   ListExternalAgentIdentityDriftFindingsParams,
   ListLegalHoldsParams,
@@ -4489,6 +4494,750 @@ export function useCancelBackgroundJob<
     kind,
     jobID,
     params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listExecutionSuspensionsResponse200 = {
+  data: ExecutionSuspensionList;
+  status: 200;
+};
+
+export type listExecutionSuspensionsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listExecutionSuspensionsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listExecutionSuspensionsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listExecutionSuspensionsResponseSuccess =
+  listExecutionSuspensionsResponse200 & {
+    headers: Headers;
+  };
+export type listExecutionSuspensionsResponseError = (
+  | listExecutionSuspensionsResponse400
+  | listExecutionSuspensionsResponse401
+  | listExecutionSuspensionsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listExecutionSuspensionsResponse =
+  | listExecutionSuspensionsResponseSuccess
+  | listExecutionSuspensionsResponseError;
+
+export const getListExecutionSuspensionsUrl = (
+  params?: ListExecutionSuspensionsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/execution_suspensions?${stringifiedParams}`
+    : `/admin/execution_suspensions`;
+};
+
+/**
+ * The admin Kill switch page (ADR-0041 decision 1). Every suspension of every scope, newest first. Gated on `safety.suspend` in the administration mode.
+ * @summary List execution suspensions (kill switch)
+ */
+export const listExecutionSuspensions = async (
+  params?: ListExecutionSuspensionsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listExecutionSuspensionsResponse> => {
+  return eliteaFetch<listExecutionSuspensionsResponse>(
+    getListExecutionSuspensionsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListExecutionSuspensionsQueryKey = (
+  params?: ListExecutionSuspensionsParams,
+) => {
+  return [`/admin/execution_suspensions`, ...(params ? [params] : [])] as const;
+};
+
+export const getListExecutionSuspensionsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listExecutionSuspensions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExecutionSuspensionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionSuspensions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListExecutionSuspensionsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listExecutionSuspensions>>
+  > = ({ signal }) =>
+    listExecutionSuspensions(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listExecutionSuspensions>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListExecutionSuspensionsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listExecutionSuspensions>>
+>;
+export type ListExecutionSuspensionsQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListExecutionSuspensions<
+  TData = Awaited<ReturnType<typeof listExecutionSuspensions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params: undefined | ListExecutionSuspensionsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionSuspensions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listExecutionSuspensions>>,
+          TError,
+          Awaited<ReturnType<typeof listExecutionSuspensions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListExecutionSuspensions<
+  TData = Awaited<ReturnType<typeof listExecutionSuspensions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExecutionSuspensionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionSuspensions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listExecutionSuspensions>>,
+          TError,
+          Awaited<ReturnType<typeof listExecutionSuspensions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListExecutionSuspensions<
+  TData = Awaited<ReturnType<typeof listExecutionSuspensions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExecutionSuspensionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionSuspensions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List execution suspensions (kill switch)
+ */
+
+export function useListExecutionSuspensions<
+  TData = Awaited<ReturnType<typeof listExecutionSuspensions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExecutionSuspensionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionSuspensions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListExecutionSuspensionsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createExecutionSuspensionResponse201 = {
+  data: ExecutionSuspension;
+  status: 201;
+};
+
+export type createExecutionSuspensionResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type createExecutionSuspensionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createExecutionSuspensionResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type createExecutionSuspensionResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type createExecutionSuspensionResponseSuccess =
+  createExecutionSuspensionResponse201 & {
+    headers: Headers;
+  };
+export type createExecutionSuspensionResponseError = (
+  | createExecutionSuspensionResponse400
+  | createExecutionSuspensionResponse401
+  | createExecutionSuspensionResponse403
+  | createExecutionSuspensionResponse409
+) & {
+  headers: Headers;
+};
+
+export type createExecutionSuspensionResponse =
+  | createExecutionSuspensionResponseSuccess
+  | createExecutionSuspensionResponseError;
+
+export const getCreateExecutionSuspensionUrl = () => {
+  return `/admin/execution_suspensions`;
+};
+
+/**
+ * The kill switch (ADR-0041 decision 1). Admission refuses every new run the suspension covers with the typed error `execution_suspended`, and the same transaction cancels the in-flight runs it covers (platform, project and agent scopes; `cancelled_runs` gives the count). A toolkit_type suspension refuses calls of that toolkit type at the worker. The platform scope needs `confirm` set to `STOP`. Gated on `safety.suspend` in the administration mode. The audit record of the request carries the action safety.suspension.created.
+ * @summary Suspend execution of an agent, a project, a toolkit type or the platform
+ */
+export const createExecutionSuspension = async (
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createExecutionSuspensionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createExecutionSuspensionResponse>(
+    getCreateExecutionSuspensionUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(executionSuspensionCreate),
+    },
+  );
+};
+
+export const getCreateExecutionSuspensionQueryKey = (
+  executionSuspensionCreate?: ExecutionSuspensionCreate,
+) => {
+  return [
+    "POST",
+    `/admin/execution_suspensions`,
+    executionSuspensionCreate,
+  ] as const;
+};
+
+export const getCreateExecutionSuspensionQueryOptions = <
+  TData = Awaited<ReturnType<typeof createExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateExecutionSuspensionQueryKey(executionSuspensionCreate);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createExecutionSuspension>>
+  > = ({ signal }) =>
+    createExecutionSuspension(executionSuspensionCreate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof createExecutionSuspension>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateExecutionSuspensionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createExecutionSuspension>>
+>;
+export type CreateExecutionSuspensionQueryError = ErrorResponse | N401Response;
+
+export function useCreateExecutionSuspension<
+  TData = Awaited<ReturnType<typeof createExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createExecutionSuspension>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createExecutionSuspension>>,
+          TError,
+          Awaited<ReturnType<typeof createExecutionSuspension>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateExecutionSuspension<
+  TData = Awaited<ReturnType<typeof createExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createExecutionSuspension>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createExecutionSuspension>>,
+          TError,
+          Awaited<ReturnType<typeof createExecutionSuspension>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateExecutionSuspension<
+  TData = Awaited<ReturnType<typeof createExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Suspend execution of an agent, a project, a toolkit type or the platform
+ */
+
+export function useCreateExecutionSuspension<
+  TData = Awaited<ReturnType<typeof createExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateExecutionSuspensionQueryOptions(
+    executionSuspensionCreate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type resumeExecutionSuspensionResponse200 = {
+  data: ExecutionSuspension;
+  status: 200;
+};
+
+export type resumeExecutionSuspensionResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type resumeExecutionSuspensionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type resumeExecutionSuspensionResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type resumeExecutionSuspensionResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type resumeExecutionSuspensionResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type resumeExecutionSuspensionResponseSuccess =
+  resumeExecutionSuspensionResponse200 & {
+    headers: Headers;
+  };
+export type resumeExecutionSuspensionResponseError = (
+  | resumeExecutionSuspensionResponse400
+  | resumeExecutionSuspensionResponse401
+  | resumeExecutionSuspensionResponse403
+  | resumeExecutionSuspensionResponse404
+  | resumeExecutionSuspensionResponse409
+) & {
+  headers: Headers;
+};
+
+export type resumeExecutionSuspensionResponse =
+  | resumeExecutionSuspensionResponseSuccess
+  | resumeExecutionSuspensionResponseError;
+
+export const getResumeExecutionSuspensionUrl = (suspensionId: number) => {
+  return `/admin/execution_suspensions/${suspensionId}:resume`;
+};
+
+/**
+ * Ends an active suspension. Admission accepts new runs again; cancelled runs stay cancelled. The resume rule of the suspension applies: any_admin lets any caller with safety.suspend resume it, governance_role needs a platform administrator, and two_person needs a platform administrator who is not the suspender. The body is empty or has an optional `reason`. The audit record of the request carries the action safety.suspension.resumed.
+ * @summary Resume a suspension
+ */
+export const resumeExecutionSuspension = async (
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<resumeExecutionSuspensionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<resumeExecutionSuspensionResponse>(
+    getResumeExecutionSuspensionUrl(suspensionId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(executionSuspensionResume),
+    },
+  );
+};
+
+export const getResumeExecutionSuspensionQueryKey = (
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+) => {
+  return [
+    "POST",
+    `/admin/execution_suspensions/${suspensionId}:resume`,
+    executionSuspensionResume,
+  ] as const;
+};
+
+export const getResumeExecutionSuspensionQueryOptions = <
+  TData = Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getResumeExecutionSuspensionQueryKey(
+      suspensionId,
+      executionSuspensionResume,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof resumeExecutionSuspension>>
+  > = ({ signal }) =>
+    resumeExecutionSuspension(suspensionId, executionSuspensionResume, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: suspensionId !== null && suspensionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ResumeExecutionSuspensionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof resumeExecutionSuspension>>
+>;
+export type ResumeExecutionSuspensionQueryError = ErrorResponse | N401Response;
+
+export function useResumeExecutionSuspension<
+  TData = Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  suspensionId: number,
+  executionSuspensionResume: undefined | ExecutionSuspensionResume,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+          TError,
+          Awaited<ReturnType<typeof resumeExecutionSuspension>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useResumeExecutionSuspension<
+  TData = Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+          TError,
+          Awaited<ReturnType<typeof resumeExecutionSuspension>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useResumeExecutionSuspension<
+  TData = Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Resume a suspension
+ */
+
+export function useResumeExecutionSuspension<
+  TData = Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getResumeExecutionSuspensionQueryOptions(
+    suspensionId,
+    executionSuspensionResume,
     options,
   );
 

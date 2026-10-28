@@ -288,3 +288,37 @@ fn request(tools: Vec<Value>) -> AgentExecutionRequest {
         },
     }
 }
+
+#[test]
+fn suspended_toolkit_types_use_the_blocked_toolkit_matching_and_win_over_it() {
+    let runtime = json!({
+        "toolkit_security": {
+            "blocked_toolkits": ["Shell", "GitHub"],
+            "suspended_toolkit_types": ["Git Hub", "", "---"]
+        }
+    });
+    let policy =
+        ToolAdmissionPolicy::from_runtime_config(runtime.as_object().expect("runtime object"))
+            .expect("policy with suspended toolkit types");
+
+    for toolkit in ["github", "GitHub", "git-hub", "Git_Hub"] {
+        assert_eq!(
+            policy.toolkit_decision(toolkit),
+            ToolAdmissionDecision::SuspendedToolkit
+        );
+        assert_eq!(
+            policy.tool_decision(toolkit, "read_issue"),
+            ToolAdmissionDecision::SuspendedToolkit
+        );
+    }
+    assert_eq!(
+        policy.toolkit_decision("shell"),
+        ToolAdmissionDecision::BlockedToolkit
+    );
+    assert_eq!(policy.toolkit_decision("jira"), ToolAdmissionDecision::Allowed);
+
+    let malformed = json!({"toolkit_security": {"suspended_toolkit_types": "github"}});
+    assert!(
+        ToolAdmissionPolicy::from_runtime_config(malformed.as_object().expect("object")).is_err()
+    );
+}

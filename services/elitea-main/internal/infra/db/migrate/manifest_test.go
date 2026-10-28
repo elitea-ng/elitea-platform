@@ -834,6 +834,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// Nullable columns only; 0192 is claimed by another branch. No data, no
 	// permission.
 	//
+	// 194: shared/0194_execution_suspensions.sql, the kill switch
+	// (elitea_runtime.execution_suspensions, agent_execution_jobs
+	// .application_id) and the safety.suspend grant to platform and project
+	// admins (ADR-0041 decision 1, #1493). No data.
+	//
 	// 195: shared/0195_retention_policy.sql, retention policy per data class,
 	// legal holds and the conversation attachment cleanup journal (ADR-0042
 	// decision 4, #1495). Seeds the platform defaults (today's behaviour) and

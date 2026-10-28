@@ -1176,9 +1176,23 @@ JOIN (VALUES
     ('super_admin', 'retention.manage'),
     ('super_admin', 'legal_hold.manage'),
     ('admin', 'retention.manage'),
-    ('admin', 'legal_hold.manage')
+    ('admin', 'legal_hold.manage'),
+    -- Issue 1493, the kill switch (ADR-0041 decision 1). Platform
+    -- administrators suspend and resume every scope. Existing databases get
+    -- the grant from migrations/shared/0194_execution_suspensions.sql.
+    ('super_admin', 'safety.suspend'),
+    ('admin', 'safety.suspend')
 ) AS grant_row(role_name, permission) ON grant_row.role_name = role.name
 WHERE role.mode = 'administration'
+ON CONFLICT (role_id, permission) DO NOTHING;
+
+-- Issue 1493: the project admin suspends and resumes an agent or the whole
+-- project (the project-scoped kill switch routes). Existing databases get
+-- the grant from migrations/shared/0194_execution_suspensions.sql.
+INSERT INTO auth_core__role_permission (role_id, permission)
+SELECT role.id, 'safety.suspend'
+FROM auth_core__role AS role
+WHERE role.mode = 'default' AND role.name = 'admin'
 ON CONFLICT (role_id, permission) DO NOTHING;
 
 -- Default-mode grants (issues 246 and 253).

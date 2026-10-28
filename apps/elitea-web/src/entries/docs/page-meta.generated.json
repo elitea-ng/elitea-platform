@@ -25,6 +25,31 @@
     "description": "Set per-project and per-member spend limits, and author the rules the LLM gateway enforces on every call."
   },
   {
+    "slug": "admin/enterprise-controls/audit-evidence-and-retention",
+    "title": "Audit evidence and retention",
+    "description": "How long Elitea keeps conversations, attachments, gateway request logs and audit records, how a platform administrator sets those limits, and how a legal hold stops deletion."
+  },
+  {
+    "slug": "admin/enterprise-controls/evidence-guide",
+    "title": "Evidence guide for auditors",
+    "description": "Where each evidence stream lives, what it records, how long it is kept, how to export it and how to verify it has not been altered."
+  },
+  {
+    "slug": "admin/enterprise-controls/overview",
+    "title": "Enterprise controls",
+    "description": "Every agent-risk control Elitea provides: what it does, whether it is available today, where to configure it, the evidence it produces and what stays with your organisation."
+  },
+  {
+    "slug": "admin/enterprise-controls/runtime-safety",
+    "title": "Runtime safety",
+    "description": "Controls that stop or limit agent execution while it runs. The suspension and kill switch stops one agent, one toolkit type, one project or the whole platform, including runs in flight."
+  },
+  {
+    "slug": "admin/enterprise-controls/shared-responsibility",
+    "title": "Shared responsibility",
+    "description": "What Elitea enforces, what it records, and what deliberately stays with your organisation's own systems — and how the two connect."
+  },
+  {
     "slug": "admin/features-and-configuration",
     "title": "Features and configuration",
     "description": "Feature toggles and the platform configuration sections not covered by their own dedicated admin page."
@@ -85,6 +110,11 @@
     "description": "The off-by-default governed credential profile: the boot flag, policy revisions, the execution security context and governed workers, agent identity bindings, external identities, credential grants, Entra delegation, the credential broker, the Vault/OpenBao secret store and the security audit chain."
   },
   {
+    "slug": "deployment/emergency-stop-runbook",
+    "title": "Emergency stop runbook",
+    "description": "How to stop one agent, a toolkit type, a project or the whole platform during an incident, check that the stop took effect, and resume. Covers who can stop and resume each scope, the 10-second stop target and the daily self-test."
+  },
+  {
     "slug": "deployment/from-scratch",
     "title": "Deploy from scratch",
     "description": "A complete Kubernetes install on an empty cluster: decisions to make first, the external database and object store, every Secret and certificate authority, the edge in front of it, and the first sign-in."
@@ -98,6 +128,11 @@
     "slug": "deployment/gke-argocd",
     "title": "Deploy on GKE with Argo CD",
     "description": "A production GKE install from one Argo CD Application: the Google Cloud preconditions with their commands, secrets in Secret Manager through External Secrets, the GKE Ingress, the first sync, and what to check when it fails."
+  },
+  {
+    "slug": "deployment/hardening-checklist",
+    "title": "Hardening checklist",
+    "description": "The settings a regulated deployment turns on, in order, each with the page that explains it."
   },
   {
     "slug": "deployment/helm-install",
@@ -713,6 +748,11 @@
     "slug": "menus/toolkits",
     "title": "Toolkits",
     "description": "Configure toolkit integrations and MCP servers, organize them with folders, and turn on indexing where a type supports it."
+  },
+  {
+    "slug": "reference/audit-event-schema",
+    "title": "Audit event schema",
+    "description": "The elitea.audit.v1 envelope Elitea sends to your SIEM: fields, an example, webhook signature verification and an OTLP collector configuration."
   },
   {
     "slug": "reference/pipeline-node-reference",

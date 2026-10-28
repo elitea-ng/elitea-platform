@@ -6738,6 +6738,119 @@ components:
           items:
             $ref: '#/components/schemas/Mandate'
 
+    ExecutionSuspension:
+      type: object
+      description: >
+        A kill-switch suspension (ADR-0041 decision 1). It is active while
+        resumed_at is null.
+      required: [id, scope, project_id, application_id, toolkit_type, reason,
+        actor_id, source, resume_requires, created_at, cancelled_runs, active,
+        resumed_at, resumed_by, resume_reason]
+      properties:
+        id: { type: integer, format: int64 }
+        scope:
+          type: string
+          description: One of platform, project, agent, toolkit_type.
+        project_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: Set for the project and agent scopes.
+        application_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: The agent (its application id in its project). Set for the agent scope.
+        toolkit_type:
+          type: string
+          nullable: true
+          description: The canonical toolkit type. Set for the toolkit_type scope.
+        reason: { type: string }
+        actor_id:
+          type: integer
+          format: int64
+          description: The user who suspended. 0 is the scheduled self-test.
+        source:
+          type: string
+          description: One of manual, breaker, certification, self_test.
+        resume_requires:
+          type: string
+          description: One of any_admin, governance_role, two_person.
+        created_at: { type: string, format: date-time }
+        cancelled_runs:
+          type: integer
+          description: The in-flight runs the suspension cancelled when it was created.
+        active: { type: boolean }
+        resumed_at: { type: string, format: date-time, nullable: true }
+        resumed_by: { type: integer, format: int64, nullable: true }
+        resume_reason: { type: string, nullable: true }
+      example:
+        id: 12
+        scope: agent
+        project_id: 7
+        application_id: 31
+        toolkit_type: null
+        reason: The agent sends repeated messages to customers
+        actor_id: 4
+        source: manual
+        resume_requires: any_admin
+        created_at: '2026-10-28T09:15:02Z'
+        cancelled_runs: 2
+        active: true
+        resumed_at: null
+        resumed_by: null
+        resume_reason: null
+
+    ExecutionSuspensionList:
+      type: object
+      required: [suspensions]
+      properties:
+        suspensions:
+          type: array
+          items: { $ref: '#/components/schemas/ExecutionSuspension' }
+
+    ExecutionSuspensionCreate:
+      type: object
+      additionalProperties: false
+      required: [scope, reason]
+      properties:
+        scope:
+          type: string
+          description: >
+            One of platform, project, agent, toolkit_type. The project surface
+            accepts project and agent only.
+        project_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The project of a project or agent suspension. The project surface takes it from the path.
+        application_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The agent of an agent suspension.
+        toolkit_type:
+          type: string
+          description: The toolkit type of a toolkit_type suspension, for example github.
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        resume_requires:
+          type: string
+          description: One of any_admin (the default), governance_role, two_person.
+        confirm:
+          type: string
+          description: Must be STOP for the platform scope.
+
+    ExecutionSuspensionResume:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          maxLength: 1024
+
     CredentialReference:
       type: object
       description: >
@@ -17064,6 +17177,131 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  /admin/execution_suspensions:
+    get:
+      operationId: listExecutionSuspensions
+      summary: List execution suspensions (kill switch)
+      description: >
+        The admin Kill switch page (ADR-0041 decision 1). Every suspension of
+        every scope, newest first. Gated on `safety.suspend` in the
+        administration mode.
+      tags: [admin]
+      parameters:
+        - name: active
+          in: query
+          required: false
+          description: true lists only the active suspensions; false or absent lists all, newest first.
+          schema: { type: boolean }
+        - name: project_id
+          in: query
+          required: false
+          description: Only the agent and project suspensions of this project.
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: The suspensions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutionSuspensionList' }
+        '400':
+          description: A malformed filter
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    post:
+      operationId: createExecutionSuspension
+      summary: Suspend execution of an agent, a project, a toolkit type or the platform
+      description: >
+        The kill switch (ADR-0041 decision 1). Admission refuses every new run
+        the suspension covers with the typed error `execution_suspended`, and
+        the same transaction cancels the in-flight runs it covers (platform,
+        project and agent scopes; `cancelled_runs` gives the count). A
+        toolkit_type suspension refuses calls of that toolkit type at the
+        worker. The platform scope needs `confirm` set to `STOP`. Gated on
+        `safety.suspend` in the administration mode. The audit record of the
+        request carries the action safety.suspension.created.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExecutionSuspensionCreate' }
+      responses:
+        '201':
+          description: The new active suspension
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutionSuspension' }
+        '400':
+          description: A malformed body, an unknown scope, a missing key or reason, or (code confirmation_required) a platform stop without the typed confirmation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks safety.suspend, or this surface may not suspend that scope
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: (code already_suspended) An active suspension already covers this target. The body also carries the existing suspension under `suspension`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/execution_suspensions/{suspension_id}:resume:
+    parameters:
+      - name: suspension_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: resumeExecutionSuspension
+      summary: Resume a suspension
+      description: >
+        Ends an active suspension. Admission accepts new runs again; cancelled
+        runs stay cancelled. The resume rule of the suspension applies:
+        any_admin lets any caller with safety.suspend resume it,
+        governance_role needs a platform administrator, and two_person needs a
+        platform administrator who is not the suspender. The body is empty or
+        has an optional `reason`. The audit record of the request carries the
+        action safety.suspension.resumed.
+      tags: [admin]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExecutionSuspensionResume' }
+      responses:
+        '200':
+          description: The suspension after the resume
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutionSuspension' }
+        '400':
+          description: A malformed suspension id or body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks safety.suspend, or (code resume_forbidden) the resume rule of the suspension does not let this caller resume it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such suspension on this surface
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The suspension was already resumed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
   /admin/platform_routines/administration:
     get:
       operationId: listPlatformRoutines
@@ -22416,6 +22654,121 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /elitea_core/execution_suspensions/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listProjectExecutionSuspensions
+      summary: List the suspensions of a project
+      description: >
+        The agent and project suspensions of this project, newest first.
+        Requires `safety.suspend` in the project (the project admin).
+      tags: [settings]
+      parameters:
+        - name: active
+          in: query
+          required: false
+          description: true lists only the active suspensions; false or absent lists all, newest first.
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: The suspensions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutionSuspensionList' }
+        '400':
+          description: A bad project id or filter
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    post:
+      operationId: createProjectExecutionSuspension
+      summary: Stop an agent of the project, or the whole project
+      description: >
+        The Stop agent action. Scope agent (with application_id) or project
+        only; project_id, if given, must be the project of the path. Admission
+        refuses the covered runs with `execution_suspended` and the in-flight
+        runs are cancelled. Requires `safety.suspend` in the project (the
+        project admin).
+      tags: [settings]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExecutionSuspensionCreate' }
+      responses:
+        '201':
+          description: The new active suspension
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutionSuspension' }
+        '400':
+          description: A malformed body, an unknown scope, a missing key or reason, or (code confirmation_required) a platform stop without the typed confirmation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks safety.suspend, or this surface may not suspend that scope
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: (code already_suspended) An active suspension already covers this target. The body also carries the existing suspension under `suspension`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /elitea_core/execution_suspensions/prompt_lib/{project_id}/{suspension_id}:resume:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: suspension_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: resumeProjectExecutionSuspension
+      summary: Resume a suspension of the project
+      description: >
+        Ends an agent or project suspension of this project. Only a
+        suspension with the resume rule any_admin can be resumed here; the
+        others need a platform administrator in the admin console. Requires
+        `safety.suspend` in the project (the project admin).
+      tags: [settings]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExecutionSuspensionResume' }
+      responses:
+        '200':
+          description: The suspension after the resume
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutionSuspension' }
+        '400':
+          description: A malformed suspension id or body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks safety.suspend, or (code resume_forbidden) the resume rule of the suspension does not let this caller resume it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such suspension on this surface
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The suspension was already resumed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
   /elitea_core/workspace_handoff/prompt_lib/{project_id}/{conversation_uuid}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'

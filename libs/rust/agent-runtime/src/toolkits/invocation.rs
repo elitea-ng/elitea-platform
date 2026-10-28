@@ -232,15 +232,12 @@ impl Tool for PolicyBoundTool {
             retryable = tracing::field::Empty,
         );
         let result = async {
-            if self.policy.tool_decision(&self.toolkit_type, &self.name)
-                != ToolAdmissionDecision::Allowed
-            {
-                return Err(AdkError::new(
-                    ErrorComponent::Guardrail,
-                    ErrorCategory::Forbidden,
-                    "tool.policy.blocked",
-                    "tool execution is not permitted by deployment policy",
-                ));
+            match self.policy.tool_decision(&self.toolkit_type, &self.name) {
+                ToolAdmissionDecision::Allowed => {}
+                ToolAdmissionDecision::SuspendedToolkit => return Err(suspended_tool_error()),
+                ToolAdmissionDecision::BlockedToolkit | ToolAdmissionDecision::BlockedTool => {
+                    return Err(blocked_tool_error());
+                }
             }
 
             validate_json(&arguments, MAX_TOOL_ARGUMENT_BYTES)
@@ -453,4 +450,42 @@ const fn resource_exhausted() -> MaterializedToolsetError {
     MaterializedToolsetError {
         code: MaterializedToolsetErrorCode::ResourceExhausted,
     }
+}
+
+/// The call-time refusal of a blocked toolkit or tool.
+fn blocked_tool_error() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Guardrail,
+        ErrorCategory::Forbidden,
+        "tool.policy.blocked",
+        "tool execution is not permitted by deployment policy",
+    )
+}
+
+/// The call-time refusal of a suspended toolkit type (ADR-0041 decision 1):
+/// the run keeps going, the tool does not run, and the code says why.
+pub(crate) const SUSPENDED_TOOL_ERROR_CODE: &str = "execution_suspended";
+
+fn suspended_tool_error() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Guardrail,
+        ErrorCategory::Forbidden,
+        SUSPENDED_TOOL_ERROR_CODE,
+        "an administrator suspended this toolkit type; the tool does not run",
+    )
+}
+
+/// Bind one tool to `policy` without the materialization filter, so a test
+/// can reach the call-time refusal a dynamically surfaced tool meets.
+#[cfg(test)]
+pub(crate) fn policy_bound_tool_for_test(
+    inner: Arc<dyn Tool>,
+    toolkit_type: &str,
+    policy: Arc<ToolAdmissionPolicy>,
+) -> Result<Arc<dyn Tool>, MaterializedToolsetError> {
+    Ok(Arc::new(PolicyBoundTool::new(
+        inner,
+        Arc::from(toolkit_type),
+        policy,
+    )?))
 }

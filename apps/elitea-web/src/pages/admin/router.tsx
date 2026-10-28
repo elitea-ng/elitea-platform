@@ -85,6 +85,7 @@ const AdminSchedulesTasks = lazyRouteComponent(
 );
 const AdminAppRequests = lazyRouteComponent(() => import('./AppRequests'), 'AdminAppRequests');
 const AdminTasks = lazyRouteComponent(() => import('./Tasks'), 'AdminTasks');
+const AdminKillSwitch = lazyRouteComponent(() => import('./KillSwitch'), 'AdminKillSwitch');
 const AdminServiceDescriptors = lazyRouteComponent(
   () => import('./ServiceDescriptors'),
   'AdminServiceDescriptors',
@@ -173,6 +174,16 @@ const tasksRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/tasks',
   component: AdminTasks,
+});
+
+/**
+ * `/kill-switch` is the execution suspensions (ADR-0041 decision 1). See
+ * `./KillSwitch.tsx`'s header.
+ */
+const killSwitchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/kill-switch',
+  component: AdminKillSwitch,
 });
 
 const appRequestsRoute = createRoute({
@@ -268,6 +279,7 @@ const adminRouteTree = rootRoute.addChildren([
   secretsRoute,
   schedulesRoute,
   tasksRoute,
+  killSwitchRoute,
   appRequestsRoute,
   configurationRoute,
   serviceDescriptorsRoute,

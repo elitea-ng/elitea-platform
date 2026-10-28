@@ -18,6 +18,10 @@ pub enum ToolAdmissionDecision {
     Allowed,
     BlockedToolkit,
     BlockedTool,
+    /// An administrator suspended the toolkit type (ADR-0041 decision 1, the
+    /// `toolkit_type` kill switch scope). It refuses like a blocked toolkit,
+    /// and the call-time refusal names `execution_suspended`.
+    SuspendedToolkit,
 }
 
 /// Stable, data-free configuration failure for one policy generation.
@@ -70,6 +74,10 @@ impl std::error::Error for ToolAdmissionPolicyError {}
 /// the exact generation it admitted, avoiding mutable process-global policy.
 pub struct ToolAdmissionPolicy {
     blocked_toolkits: HashSet<Box<str>>,
+    /// Toolkit types under an active `toolkit_type` suspension, canonical
+    /// keys. Main writes them into the run's frozen `toolkit_guardrails`
+    /// (`suspended_toolkit_types`) at admission.
+    suspended_toolkits: HashSet<Box<str>>,
     blocked_tools: HashMap<Box<str>, HashSet<Box<str>>>,
     sensitive_tools: HashMap<Box<str>, HashSet<Box<str>>>,
     sensitive_company_name: Box<str>,
@@ -188,11 +196,13 @@ impl ToolAdmissionPolicy {
                     | "sensitive_tools"
                     | "sensitive_action_company_name"
                     | "sensitive_action_message_template"
+                    | "suspended_toolkit_types"
             )
         }) {
             return Err(invalid_configuration());
         }
         let blocked_toolkits = parse_string_array(security.get("blocked_toolkits"))?;
+        let suspended_toolkits = parse_string_array(security.get("suspended_toolkit_types"))?;
         let blocked_tools = parse_tool_map(security.get("blocked_tools"))?;
         let sensitive_tools = parse_tool_map(security.get("sensitive_tools"))?;
         let company_name = optional_policy_text(
@@ -203,13 +213,36 @@ impl ToolAdmissionPolicy {
             security.get("sensitive_action_message_template"),
             MAX_POLICY_TEMPLATE_BYTES,
         )?;
-        Self::from_parts(
+        let mut policy = Self::from_parts(
             &blocked_toolkits,
             &blocked_tools,
             &sensitive_tools,
             company_name,
             message_template,
-        )
+        )?;
+        policy.suspend_toolkits(&suspended_toolkits)?;
+        Ok(policy)
+    }
+
+    /// Add toolkit types under an active suspension. The same canonical
+    /// matching as `blocked_toolkits`, and the same identifier budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns resource exhaustion for an over-limit list or identifier.
+    pub fn suspend_toolkits(
+        &mut self,
+        toolkit_types: &[String],
+    ) -> Result<(), ToolAdmissionPolicyError> {
+        if toolkit_types.len() > MAX_POLICY_IDENTIFIERS {
+            return Err(resource_exhausted());
+        }
+        for toolkit in toolkit_types {
+            if let Some(key) = canonical_key(toolkit)? {
+                self.suspended_toolkits.insert(key);
+            }
+        }
+        Ok(())
     }
 
     fn from_parts(
@@ -232,6 +265,7 @@ impl ToolAdmissionPolicy {
         let normalized_sensitive = normalize_tool_map(sensitive_tools)?;
         Ok(Self {
             blocked_toolkits: normalized_toolkits,
+            suspended_toolkits: HashSet::new(),
             blocked_tools: normalized_tools,
             sensitive_tools: normalized_sensitive,
             sensitive_company_name: company_name
@@ -247,9 +281,12 @@ impl ToolAdmissionPolicy {
 
     #[must_use]
     pub fn toolkit_decision(&self, toolkit_type: &str) -> ToolAdmissionDecision {
-        if canonical_runtime_key(toolkit_type)
-            .is_some_and(|key| self.blocked_toolkits.contains(key.as_str()))
-        {
+        let Some(key) = canonical_runtime_key(toolkit_type) else {
+            return ToolAdmissionDecision::Allowed;
+        };
+        if self.suspended_toolkits.contains(key.as_str()) {
+            ToolAdmissionDecision::SuspendedToolkit
+        } else if self.blocked_toolkits.contains(key.as_str()) {
             ToolAdmissionDecision::BlockedToolkit
         } else {
             ToolAdmissionDecision::Allowed
@@ -258,8 +295,9 @@ impl ToolAdmissionPolicy {
 
     #[must_use]
     pub fn tool_decision(&self, toolkit_type: &str, tool_name: &str) -> ToolAdmissionDecision {
-        if self.toolkit_decision(toolkit_type) == ToolAdmissionDecision::BlockedToolkit {
-            return ToolAdmissionDecision::BlockedToolkit;
+        let toolkit = self.toolkit_decision(toolkit_type);
+        if toolkit != ToolAdmissionDecision::Allowed {
+            return toolkit;
         }
         let Some(toolkit_key) = canonical_runtime_key(toolkit_type) else {
             return ToolAdmissionDecision::Allowed;

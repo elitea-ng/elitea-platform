@@ -62,6 +62,8 @@ import type {
   CredentialReferenceListResponse,
   CredentialUseGrant,
   CredentialUseGrantListResponse,
+  ExecutionSuspension,
+  ExecutionSuspensionList,
   ExternalAgentIdentity,
   ExternalAgentIdentityDriftResponse,
   ExternalAgentIdentityListResponse,
@@ -385,6 +387,70 @@ export const getListBackgroundJobsResponseMock = (
 export const getCancelBackgroundJobResponseMock = (
   overrideResponse: Partial<Extract<OkResponse, object>> = {},
 ): OkResponse => ({ ok: faker.datatype.boolean(), ...overrideResponse });
+
+export const getListExecutionSuspensionsResponseMock = (
+  overrideResponse: Partial<Extract<ExecutionSuspensionList, object>> = {},
+): ExecutionSuspensionList => ({
+  suspensions: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: 12,
+    scope: "agent",
+    project_id: 7,
+    application_id: 31,
+    toolkit_type: null,
+    reason: "The agent sends repeated messages to customers",
+    actor_id: 4,
+    source: "manual",
+    resume_requires: "any_admin",
+    created_at: "2026-10-28T09:15:02Z",
+    cancelled_runs: 2,
+    active: true,
+    resumed_at: null,
+    resumed_by: null,
+    resume_reason: null,
+  })),
+  ...overrideResponse,
+});
+
+export const getCreateExecutionSuspensionResponseMock =
+  (): ExecutionSuspension => ({
+    id: 12,
+    scope: "agent",
+    project_id: 7,
+    application_id: 31,
+    toolkit_type: null,
+    reason: "The agent sends repeated messages to customers",
+    actor_id: 4,
+    source: "manual",
+    resume_requires: "any_admin",
+    created_at: "2026-10-28T09:15:02Z",
+    cancelled_runs: 2,
+    active: true,
+    resumed_at: null,
+    resumed_by: null,
+    resume_reason: null,
+  });
+
+export const getResumeExecutionSuspensionResponseMock =
+  (): ExecutionSuspension => ({
+    id: 12,
+    scope: "agent",
+    project_id: 7,
+    application_id: 31,
+    toolkit_type: null,
+    reason: "The agent sends repeated messages to customers",
+    actor_id: 4,
+    source: "manual",
+    resume_requires: "any_admin",
+    created_at: "2026-10-28T09:15:02Z",
+    cancelled_runs: 2,
+    active: true,
+    resumed_at: null,
+    resumed_by: null,
+    resume_reason: null,
+  });
 
 export const getListPlatformRoutinesResponseMock = (
   overrideResponse: Partial<Extract<PlatformRoutineListResponse, object>> = {},
@@ -2978,6 +3044,84 @@ export const getCancelBackgroundJobMockHandler = (
   );
 };
 
+export const getListExecutionSuspensionsMockHandler = (
+  overrideResponse?:
+    | ExecutionSuspensionList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ExecutionSuspensionList> | ExecutionSuspensionList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/execution_suspensions",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListExecutionSuspensionsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateExecutionSuspensionMockHandler = (
+  overrideResponse?:
+    | ExecutionSuspension
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExecutionSuspension> | ExecutionSuspension),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/execution_suspensions",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateExecutionSuspensionResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getResumeExecutionSuspensionMockHandler = (
+  overrideResponse?:
+    | ExecutionSuspension
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExecutionSuspension> | ExecutionSuspension),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/execution_suspensions/:suspensionId\\:resume",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getResumeExecutionSuspensionResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListPlatformRoutinesMockHandler = (
   overrideResponse?:
     | PlatformRoutineListResponse
@@ -4804,6 +4948,9 @@ export const getAdminMock = () => [
   getBulkInviteMembersMockHandler(),
   getListBackgroundJobsMockHandler(),
   getCancelBackgroundJobMockHandler(),
+  getListExecutionSuspensionsMockHandler(),
+  getCreateExecutionSuspensionMockHandler(),
+  getResumeExecutionSuspensionMockHandler(),
   getListPlatformRoutinesMockHandler(),
   getUpdatePlatformRoutineMockHandler(),
   getListRetentionPoliciesMockHandler(),
