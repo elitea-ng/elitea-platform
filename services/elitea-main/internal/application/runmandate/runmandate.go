@@ -125,6 +125,10 @@ type Target struct {
 	ApplicationVersionID int64
 	// Cron is the schedule's expression; empty for a trigger.
 	Cron string
+	// Crons are further expressions the target fires on: the attach of an
+	// index schedule names every per-user schedule of the index, and the
+	// mandate must cover each.
+	Crons []string
 	// Input is the stored run input; nil for a trigger, whose input the
 	// sender writes per call.
 	Input *string
@@ -328,6 +332,10 @@ func InputScope(input string) string {
 }
 
 // Covers reports whether m's resource scopes cover target's cron and input.
+// It fails closed: a mandate restricted to crons covers no target without a
+// cron (a trigger, an index with no schedule), and one restricted to inputs
+// covers no target without a stored input (a trigger, whose sender writes
+// the input per call, and an index schedule).
 func Covers(m mandate.Mandate, target Target) bool {
 	var crons, inputs []string
 	for _, scope := range m.ResourceScopes {
@@ -338,10 +346,21 @@ func Covers(m mandate.Mandate, target Target) bool {
 			inputs = append(inputs, strings.ToLower(scope))
 		}
 	}
-	if len(crons) > 0 && target.Cron != "" && !contains(crons, CronScope(target.Cron)) {
-		return false
+	if len(crons) > 0 {
+		expressions := target.Crons
+		if target.Cron != "" {
+			expressions = append([]string{target.Cron}, expressions...)
+		}
+		if len(expressions) == 0 {
+			return false
+		}
+		for _, expression := range expressions {
+			if !contains(crons, CronScope(expression)) {
+				return false
+			}
+		}
 	}
-	if len(inputs) > 0 && target.Input != nil && !contains(inputs, InputScope(*target.Input)) {
+	if len(inputs) > 0 && (target.Input == nil || !contains(inputs, InputScope(*target.Input))) {
 		return false
 	}
 	return true

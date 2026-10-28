@@ -164,3 +164,44 @@ func TestCoversCronAndInputScopes(t *testing.T) {
 		t.Fatalf("missing = %v", err)
 	}
 }
+
+// A mandate restricted to crons or inputs covers no target that lacks that
+// dimension: a trigger has neither, an index schedule has no input. Refused
+// at attach and at fire.
+func TestScopedMandateFailsClosedOnAMissingDimension(t *testing.T) {
+	trigger := runmandate.Target{
+		Origin: runmandate.OriginPipelineTrigger, TenantProjectID: tenant, ResourceID: "5", ApplicationVersionID: 11,
+	}
+	index := runmandate.Target{
+		Origin: runmandate.OriginIndexSchedule, TenantProjectID: tenant, ResourceID: "12:docs",
+		Crons: []string{"0 * * * *", "30 2 * * *"},
+	}
+	cases := []struct {
+		name   string
+		scopes []string
+		target runmandate.Target
+		want   error
+	}{
+		{"cron-scoped trigger", []string{runmandate.CronScope("0 * * * *")}, trigger, runmandate.ErrScopeMismatch},
+		{"input-scoped trigger", []string{runmandate.InputScope("x")}, trigger, runmandate.ErrScopeMismatch},
+		{"unscoped trigger", nil, trigger, nil},
+		{"input-scoped index", []string{runmandate.InputScope("x")}, index, runmandate.ErrScopeMismatch},
+		{"index with one cron out of scope", []string{runmandate.CronScope("0 * * * *")}, index, runmandate.ErrScopeMismatch},
+		{"index with every cron in scope", []string{runmandate.CronScope("0 * * * *"), runmandate.CronScope("30 2 * * *")}, index, nil},
+		{"cron-scoped index with no schedule", []string{runmandate.CronScope("0 * * * *")},
+			runmandate.Target{Origin: runmandate.OriginIndexSchedule, TenantProjectID: tenant, ResourceID: "12:docs"}, runmandate.ErrScopeMismatch},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := fixture()
+			store.Update("auto", func(m *mandate.Mandate) { m.ResourceScopes = tc.scopes })
+			service := store.Service()
+			if _, err := service.CheckAttach(context.Background(), "auto", tc.target); !errors.Is(err, tc.want) {
+				t.Fatalf("CheckAttach = %v, want %v", err, tc.want)
+			}
+			if _, err := service.Admit(context.Background(), "auto", tc.target); !errors.Is(err, tc.want) {
+				t.Fatalf("Admit = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}

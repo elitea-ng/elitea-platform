@@ -257,6 +257,30 @@ func TestGovernedCronEditKeepsTheMandateAndStaysInScope(t *testing.T) {
 	}
 }
 
+// A mandate restricted to one cron and one input does not cover a webhook
+// call, which has neither: the call is refused, whatever input it sends.
+func TestGovernedInboundTriggerRefusesAScheduleScopedMandate(t *testing.T) {
+	h := newGovernedHarness(t)
+	versionID, tokenID, secret := h.mintTrigger(t, homeProject, homeSchema, "Nightly report", ownerUserID)
+	h.mandates.PutBinding("binding-1", 1, versionID)
+	h.mandates.PutMandate("narrow", 1, mandate.KindAutonomous, "binding-1", 0,
+		runmandate.CronScope("0 3 * * *"), runmandate.InputScope("run it"))
+	if _, err := h.pool.Exec(context.Background(),
+		`UPDATE p_1.pipeline_triggers SET mandate_id = 'narrow' WHERE version_id = $1`, versionID); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []string{`{"input":"run it"}`, `{"input":"anything else"}`} {
+		response := h.do(t, http.MethodPost, inboundTarget(homeProject, tokenID), input,
+			map[string]string{"Authorization": "Bearer " + secret})
+		if response.Code != http.StatusForbidden || decode(t, response)["code"] != runmandate.CodeMandateScopeMismatch {
+			t.Fatalf("input %s: status = %d, body = %s", input, response.Code, response.Body.String())
+		}
+	}
+	if h.start.count() != 0 {
+		t.Fatal("a schedule-scoped mandate started a webhook run")
+	}
+}
+
 func TestGovernedInboundTriggerNeedsAMandate(t *testing.T) {
 	h := newGovernedHarness(t)
 	versionID, tokenID, secret := h.mintTrigger(t, homeProject, homeSchema, "Nightly report", ownerUserID)

@@ -30,6 +30,12 @@ func (s *targetStore) Target(_ context.Context, a repos.MandateAttachment) (runm
 	if a.ProjectID != project {
 		return runmandate.Target{}, repos.ErrAttachmentTargetNotFound
 	}
+	if a.Origin == runmandate.OriginPipelineTrigger {
+		// A trigger has no cron and no stored input.
+		return runmandate.Target{
+			Origin: a.Origin, TenantProjectID: a.ProjectID, ResourceID: "5", ApplicationVersionID: a.VersionID,
+		}, nil
+	}
 	input := "scheduled"
 	return runmandate.Target{
 		Origin: a.Origin, TenantProjectID: a.ProjectID, ResourceID: "3",
@@ -68,6 +74,7 @@ func newServer(t *testing.T) (http.Handler, *targetStore, *runmandatetest.Store)
 	})
 	r.Put("/pipeline_schedules/{projectID}/{versionID}", handler.AttachPipelineSchedule)
 	r.Delete("/pipeline_schedules/{projectID}/{versionID}", handler.DetachPipelineSchedule)
+	r.Put("/pipeline_triggers/{projectID}/{versionID}", handler.AttachPipelineTrigger)
 	return r, store, mandates
 }
 
@@ -123,5 +130,20 @@ func TestAttachRefusesARevokedMandate(t *testing.T) {
 	status, body := call(t, server, http.MethodPut, "/pipeline_schedules/5/11", `{"mandate_id":"auto"}`)
 	if status != http.StatusConflict || body["code"] != runmandate.CodeMandateNotUsable || len(store.attached) != 0 {
 		t.Fatalf("status=%d body=%v", status, body)
+	}
+}
+
+// A mandate scoped to one cron does not cover a webhook trigger, which has no
+// cron: the attach answers MANDATE_SCOPE_MISMATCH rather than letting any
+// call through. An unscoped mandate attaches.
+func TestAttachRefusesACronScopedMandateOnATrigger(t *testing.T) {
+	server, store, _ := newServer(t)
+	status, body := call(t, server, http.MethodPut, "/pipeline_triggers/5/11", `{"mandate_id":"narrow"}`)
+	if status != http.StatusConflict || body["code"] != runmandate.CodeMandateScopeMismatch || len(store.attached) != 0 {
+		t.Fatalf("status=%d body=%v attached=%v", status, body, store.attached)
+	}
+	status, body = call(t, server, http.MethodPut, "/pipeline_triggers/5/11", `{"mandate_id":"auto"}`)
+	if status != http.StatusOK || store.attached["5"] != "auto" {
+		t.Fatalf("unscoped: status=%d body=%v", status, body)
 	}
 }

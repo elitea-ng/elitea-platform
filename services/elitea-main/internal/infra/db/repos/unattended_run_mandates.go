@@ -12,6 +12,7 @@ package repos
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -91,10 +92,16 @@ func (s *UnattendedRunMandates) Target(ctx context.Context, a MandateAttachment)
 			Scan(&id)
 	case runmandate.OriginIndexSchedule:
 		target.ApplicationVersionID = 0
+		var schedules []byte
 		err = s.pool.QueryRow(ctx, fmt.Sprintf(`
-SELECT id FROM %s.elitea_tools
+SELECT id, meta::jsonb -> 'indexes_meta' -> $2::text -> 'schedules' FROM %s.elitea_tools
 WHERE id = $1 AND jsonb_typeof(meta::jsonb -> 'indexes_meta' -> $2::text) = 'object'`, schema),
-			a.ToolkitID, a.IndexName).Scan(&id)
+			a.ToolkitID, a.IndexName).Scan(&id, &schedules)
+		if err == nil {
+			// Every per-user schedule of the index runs under the one
+			// attachment, so the attach checks each cron (#1122).
+			target.Crons, err = indexScheduleCrons(schedules)
+		}
 		target.ResourceID = strconv.FormatInt(a.ToolkitID, 10) + ":" + a.IndexName
 	default:
 		return runmandate.Target{}, ErrAttachmentTargetNotFound
@@ -247,3 +254,27 @@ func (s *UnattendedRunMandates) RecordRunRefusal(ctx context.Context, refusal ru
 // refusalReason is a result code as a reason code: lower case
 // (MANDATE_REQUIRED is mandate_required).
 func refusalReason(code string) string { return strings.ToLower(code) }
+
+// indexScheduleCrons reads the cron of each stored schedule of one index, in
+// key order. No schedules is none; an unreadable schedule is an error, so an
+// attach never passes on a cron it could not see.
+func indexScheduleCrons(raw []byte) ([]string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var schedules map[string]any
+	if err := json.Unmarshal(raw, &schedules); err != nil {
+		return nil, fmt.Errorf("read the index schedules: %w", err)
+	}
+	crons := make([]string, 0, len(schedules))
+	for _, key := range sortedScheduleKeys(schedules) {
+		schedule, err := decodeCurrentStoredSchedule(schedules[key])
+		if err != nil {
+			return nil, fmt.Errorf("read the index schedule %q: %w", key, err)
+		}
+		if schedule.Cron != "" {
+			crons = append(crons, schedule.Cron)
+		}
+	}
+	return crons, nil
+}

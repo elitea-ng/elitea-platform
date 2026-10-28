@@ -10,7 +10,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate/runmandatetest"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/epoch"
+	mandatedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/mandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
@@ -172,6 +174,56 @@ VALUES ($1, 'elitea.credential-profile.governed.v1', $2, $3)`, executionID, revi
 		MandateID: unattendedAutonomous, MandateEpoch: 4,
 	}); !errors.Is(err, ErrRunAuthorityNotUsable) {
 		t.Fatalf("revoked mandate admitted: %v", err)
+	}
+}
+
+// An index schedule's attach target carries every cron of the index's stored
+// schedules, so an attach whose mandate does not cover one of them answers
+// MANDATE_SCOPE_MISMATCH up front instead of being refused at every
+// occurrence (#1122).
+func TestPostgresIndexScheduleTargetReadsItsCrons(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	appender, err := securityaudit.NewPostgresAppender("elitea-main/integration-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO p_1.elitea_tools (id, name, type, owner_id, author_id, meta, created_at) VALUES
+    (941, 'repo', 'github', 1, 1,
+     '{"indexes_meta":{"docs":{"schedules":{"-1":{"cron":"0 3 * * *","enabled":true},"17":{"cron":"30 2 * * *","enabled":true}}},"empty":{}}}',
+     now() AT TIME ZONE 'UTC')`); err != nil {
+		t.Fatal(err)
+	}
+	mandates := NewUnattendedRunMandates(pool, appender)
+	attachment := MandateAttachment{Origin: runmandate.OriginIndexSchedule, ProjectID: 1, ToolkitID: 941, IndexName: "docs", ActorID: 1}
+	target, err := mandates.Target(ctx, attachment)
+	if err != nil || target.ResourceID != "941:docs" || len(target.Crons) != 2 ||
+		target.Crons[0] != "0 3 * * *" || target.Crons[1] != "30 2 * * *" {
+		t.Fatalf("target %+v err=%v", target, err)
+	}
+	empty := attachment
+	empty.IndexName = "empty"
+	emptyTarget, err := mandates.Target(ctx, empty)
+	if err != nil || len(emptyTarget.Crons) != 0 {
+		t.Fatalf("index with no schedules: %+v err=%v", emptyTarget, err)
+	}
+
+	store := runmandatetest.New()
+	store.PutBinding("binding-1", 1, 0)
+	store.PutMandate("one-cron", 1, mandatedomain.KindAutonomous, "binding-1", 0, runmandate.CronScope("0 3 * * *"))
+	store.PutMandate("both-crons", 1, mandatedomain.KindAutonomous, "binding-1", 0,
+		runmandate.CronScope("0 3 * * *"), runmandate.CronScope("30 2 * * *"))
+	service := store.Service()
+	if _, err := service.CheckAttach(ctx, "one-cron", target); !errors.Is(err, runmandate.ErrScopeMismatch) {
+		t.Fatalf("a mandate missing one cron attached: %v", err)
+	}
+	if _, err := service.CheckAttach(ctx, "both-crons", target); err != nil {
+		t.Fatalf("a mandate covering every cron: %v", err)
+	}
+	if _, err := service.CheckAttach(ctx, "one-cron", emptyTarget); !errors.Is(err, runmandate.ErrScopeMismatch) {
+		t.Fatalf("a cron-scoped mandate attached to an index with no schedule: %v", err)
 	}
 }
 
