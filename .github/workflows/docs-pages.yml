@@ -7,7 +7,7 @@ name: Docs and brand guide — GitHub Pages
 # brand guide its identity, and neither links into the other's build. They
 # share one deployment only because a repository has one Pages site, and every
 # deployment replaces the whole site, so both must be in each artifact. This is a SEPARATE
-# deployment target from the `/docs/` nginx location ci-web.yml's `build` job
+# deployment target from the `/docs/` nginx location ci-docs.yml's build
 # proves — Pages has no server, so this build sets DOCS_BASE to the repo's
 # Pages subpath instead of `/docs/`, and the two are never the same artifact.
 #

@@ -26,7 +26,7 @@ export function rehypeBaseLinks({ base }: { base: string }) {
         const href = node.properties['href'];
         if (typeof href === 'string' && /^(https?:|mailto:)/.test(href)) {
           node.properties['target'] = '_blank';
-          node.properties['rel'] = 'noopener';
+          node.properties['rel'] = ['noopener'];
         }
       }
     });

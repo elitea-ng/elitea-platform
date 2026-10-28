@@ -234,8 +234,8 @@ describe('ToolkitTypeSelector', () => {
     // this falls through to the compiled default pack's docsUrl — the
     // embedded docs SPA's same-origin /docs/ path (embedded-docs programme),
     // not an absolute elitea.ai URL as it was before that pack default moved.
-    expect(link).toHaveAttribute('href', docsLink('integrations/mcp/create-and-use-server-stdio'));
-    expect(link).toHaveAttribute('href', '/docs/integrations/mcp/create-and-use-server-stdio');
+    expect(link).toHaveAttribute('href', docsLink('integrations/mcp/remote-mcp'));
+    expect(link).toHaveAttribute('href', '/docs/integrations/mcp/remote-mcp');
     expect(link).toHaveAttribute('target', '_blank');
 
     expect(screen.queryByText('No MCPs found')).not.toBeInTheDocument();

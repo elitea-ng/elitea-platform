@@ -38,12 +38,13 @@ function pageItem(slug: string, label: string): SidebarItem {
   return slug === '' ? { label, link: '/' } : { label, slug };
 }
 
-function groupItem(group: NavGroup): SidebarItem {
+function groupItem(group: NavGroup, collapsed = false): SidebarItem {
   return {
     label: group.title,
+    collapsed,
     items: [
       ...group.pages.map((page) => pageItem(page.slug, page.title)),
-      ...(group.groups ?? []).map((child) => ({ ...groupItem(child), collapsed: true })),
+      ...(group.groups ?? []).map((child) => groupItem(child, true)),
     ],
   };
 }
@@ -54,7 +55,7 @@ function topic(tab: NavTab) {
     label: tab.title,
     link: first === undefined || first.slug === '' ? '/' : `/${first.slug}/`,
     icon: TOPIC_ICONS[tab.title] ?? 'document',
-    items: tab.groups.map(groupItem),
+    items: tab.groups.map((group) => groupItem(group)),
   };
 }
 

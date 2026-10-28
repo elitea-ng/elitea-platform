@@ -40,6 +40,7 @@ const pages = walk(CONTENT).map((file) => {
     description: field('description'),
     h1: [...prose.matchAll(/^#(?!#)\s+(.+)$/gm)].map((m) => m[1]),
     screenshots: [...prose.matchAll(/<Screenshot\s+[^>]*\bid=["']([^"']+)["']/g)].map((m) => m[1]),
+    mermaid: [...body.matchAll(/^```mermaid\n([\s\S]*?)^```/gm)].map((m) => m[1]),
     components: new Set([...prose.replace(/`[^`\n]*`/g, '').matchAll(/<\/?([A-Z][A-Za-z0-9]*)\b/g)].map((m) => m[1])),
   };
 });
@@ -73,6 +74,21 @@ describe('docs content', () => {
     for (const page of pages) {
       const unknown = [...page.components].filter((name) => !COMPONENTS.has(name));
       assert.deepEqual(unknown, [], `${page.slug || 'index'} uses components outside the contract`);
+    }
+  });
+
+  // The browser shows a diagram that does not parse as its source text, so
+  // a syntax error would reach readers with every other check green.
+  it('every mermaid diagram parses', async () => {
+    // Some diagram types sanitise labels while parsing, and DOMPurify has no
+    // DOM in Node; parsing needs no real sanitising, so it passes text through.
+    const { default: purify } = await import('dompurify');
+    Object.assign(purify, { addHook() {}, removeHook() {}, removeHooks() {}, sanitize: (text) => String(text) });
+    const { default: mermaid } = await import('mermaid');
+    const diagrams = pages.flatMap((page) => page.mermaid.map((source) => ({ slug: page.slug, source })));
+    assert.ok(diagrams.length > 0, 'no mermaid diagrams found: the fence pattern no longer matches');
+    for (const { slug, source } of diagrams) {
+      await assert.doesNotReject(mermaid.parse(source), `${slug}: a mermaid diagram does not parse`);
     }
   });
 

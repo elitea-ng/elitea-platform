@@ -45,9 +45,10 @@ A `Screenshot` with an `id` shows `src/screenshots/<id>.webp`. Each id must be i
 
 | Command | What it checks |
 |---|---|
-| `npm run check` | Navigation and files match, front matter, components, screenshot ids and sizes |
+| `npm run check` | Navigation and files match, front matter, components, mermaid syntax, screenshot ids and sizes |
+| `npm run typecheck` | `astro check`: the components, plugins and config type-check |
 | `npm run build` | The site builds |
-| `npm run check:dist` | Every internal link and anchor in `dist/` resolves; every inline script's hash is in the docs Content-Security-Policy |
+| `npm run check:dist` | Every internal link and anchor in `dist/` resolves, no page repeats an id, the web app's hard-coded docs links name real pages, and every inline script's hash is in the docs Content-Security-Policy |
 
 The docs CSP is `nginx/security-headers.conf`, installed in the web image as `docs-security-headers.conf`. When a Starlight upgrade or a new component changes an inline script, run `node scripts/check-dist.mjs --write-csp` after a build to rewrite the hashes, and commit the result.
 

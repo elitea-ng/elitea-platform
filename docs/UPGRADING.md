@@ -11,8 +11,9 @@ newest entry is first.
   docs-only Content-Security-Policy (`docs-security-headers.conf`) that
   allows `'wasm-unsafe-eval'` for the Pagefind search. Page URLs are
   unchanged, except `/docs/integrations/toolkits/testIO_toolkit`, which is
-  now `/docs/integrations/toolkits/testio_toolkit`. A Help Center link an
-  administrator set to the old spelling needs updating. A deployment that
+  now `/docs/integrations/toolkits/testio_toolkit`; the web image's nginx
+  answers the old URL with a 301 to the new one (GitHub Pages cannot). A
+  deployment that
   replaces the image's nginx config must route `/docs/` the way
   `apps/elitea-web/nginx/spa.conf` does: static files with
   `try_files $uri $uri/ =404`, not a fallback to one HTML shell.

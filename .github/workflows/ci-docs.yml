@@ -10,6 +10,8 @@ on:
   pull_request:
     paths:
       - "apps/elitea-docs/**"
+      # check:dist also resolves the web app's hard-coded links into the docs.
+      - "apps/elitea-web/src/**"
       # The palette the diagrams are drawn in.
       - "libs/ts/client-core/src/brand/tokens.json"
       # The nginx locations that serve the built site.
@@ -32,7 +34,7 @@ permissions:
 
 jobs:
   docs:
-    name: Content checks, build, links and CSP
+    name: Content checks, types, build, links and CSP
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -58,6 +60,8 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Content checks (nav, front matter, components, screenshots)
         run: npm run check
+      - name: Type check (astro check)
+        run: npm run typecheck
       - name: Build (Pagefind indexes the built pages)
         run: npm run build
       - name: Every link and anchor resolves; every inline script is in the CSP

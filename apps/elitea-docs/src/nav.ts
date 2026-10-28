@@ -18,13 +18,9 @@
  * later docs wave (local development environment, production Kubernetes
  * deployment) — see nav.L.json / nav.P.json in that wave's staging batch.
  *
- * The tree itself lives one file per tab under `nav/` — each tab's own data
- * kept growing (most recently Development and Deployment) until the whole
- * thing crossed the §3.5 400-line file-length budget (`check-budgets.mjs`).
- * Splitting it here, rather than waiving the budget, keeps every future
- * wave's addition scoped to one small file instead of growing this one
- * without bound — see `nav/*.ts` (data) and `nav-types.ts` (the shared
- * `NavPage`/`NavGroup`/`NavTab` shapes both this file and `nav/*.ts` import).
+ * The tree itself lives one file per tab under `nav/` (data) and
+ * `nav-types.ts` (the shared `NavPage`/`NavGroup`/`NavTab` shapes), so a
+ * new page touches one small file.
  */
 import { adminTab } from './nav/admin';
 import { deploymentTab } from './nav/deployment';
@@ -33,7 +29,7 @@ import { gettingStartedTab } from './nav/getting-started';
 import { guidesTab } from './nav/guides';
 import { homeTab } from './nav/home';
 import { integrationsTab } from './nav/integrations';
-import type { NavGroup, NavPage, NavTab } from './nav-types';
+import type { NavTab } from './nav-types';
 
 export type { NavGroup, NavPage, NavTab } from './nav-types';
 
@@ -46,17 +42,3 @@ export const nav: readonly NavTab[] = [
   deploymentTab,
   adminTab,
 ];
-
-/** Every page in the tree, in nav (document) order, depth-first: a group's
- * own pages before its nested groups'. */
-export function flattenNav(tabs: readonly NavTab[] = nav): NavPage[] {
-  const pages: NavPage[] = [];
-  const walkGroup = (group: NavGroup): void => {
-    pages.push(...group.pages);
-    for (const child of group.groups ?? []) walkGroup(child);
-  };
-  for (const tab of tabs) {
-    for (const group of tab.groups) walkGroup(group);
-  }
-  return pages;
-}

@@ -180,10 +180,10 @@ function resolveSearchPlaceholder(isApplication: boolean, isMCP: boolean): strin
 }
 
 /**
- * Baseline: `ToolkitTypeSelector.jsx:178`'s doc URL. The page path is the
- * baseline's; the origin is the brand pack's (`docsLink`, ADR-0024 WP8).
+ * The Remote MCP toolkit page (the baseline linked a stdio page this
+ * platform never had); the origin is the brand pack's (`docsLink`, ADR-0024 WP8).
  */
-const MCP_CREATION_DOCS_PATH = 'integrations/mcp/create-and-use-server-stdio';
+const MCP_CREATION_DOCS_PATH = 'integrations/mcp/remote-mcp';
 
 const mcpEmptyStateLinkSx: SxProps<Theme> = { textDecoration: 'underline', '&:hover': { cursor: 'pointer', textDecoration: 'underline' } };
 

@@ -8,12 +8,10 @@
 ---
 
 <script>
-  import tokens from '../../../../libs/ts/client-core/src/brand/tokens.json';
+  type Tokens = typeof import('../../../../libs/ts/client-core/src/brand/tokens.json');
 
-  type Scheme = (typeof tokens.schemes)['light'];
-
-  function themeFor(dark: boolean) {
-    const s: Scheme = tokens.schemes[dark ? 'dark' : 'light'];
+  function themeFor(tokens: Tokens, dark: boolean) {
+    const s = tokens.schemes[dark ? 'dark' : 'light'];
     const font = tokens.typography.ui.stack;
     return {
       startOnLoad: false,
@@ -54,8 +52,13 @@
     const figures = [...document.querySelectorAll<HTMLElement>('figure.docs-mermaid')];
     if (figures.length === 0) return;
     const run = ++rendering;
-    const { default: mermaid } = await import('mermaid');
-    mermaid.initialize(themeFor(document.documentElement.dataset['theme'] === 'dark'));
+    // Only a page with a diagram loads mermaid and the brand tokens.
+    const [{ default: mermaid }, { default: tokens }] = await Promise.all([
+      import('mermaid'),
+      import('../../../../libs/ts/client-core/src/brand/tokens.json'),
+    ]);
+    if (run !== rendering) return;
+    mermaid.initialize(themeFor(tokens, document.documentElement.dataset['theme'] === 'dark'));
     for (const [index, figure] of figures.entries()) {
       const source = figure.querySelector('pre.docs-mermaid__source')?.textContent ?? '';
       try {
@@ -68,6 +71,7 @@
         figure.append(diagram);
         figure.dataset['rendered'] = 'true';
       } catch {
+        if (run !== rendering) return;
         figure.dataset['rendered'] = 'error';
       }
     }

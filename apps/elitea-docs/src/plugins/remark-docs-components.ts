@@ -37,9 +37,10 @@ const source = Object.entries(IMPORTS)
   .join('\n');
 
 export function remarkDocsComponents() {
-  const estree = parse(source, { ecmaVersion: 'latest', sourceType: 'module' });
   return (tree: Root, file: { path?: string }) => {
     if (!file.path?.endsWith('.mdx')) return;
+    // A fresh tree per file: the MDX compiler rewrites these nodes in place.
+    const estree = parse(source, { ecmaVersion: 'latest', sourceType: 'module' });
     // mdast has no type for an MDX ESM node; this is the shape remark-mdx parses.
     (tree.children as unknown[]).unshift({ type: 'mdxjsEsm', value: source, data: { estree } });
   };

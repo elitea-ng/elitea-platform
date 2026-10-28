@@ -177,8 +177,9 @@ describe('nginx/spa.conf', () => {
       // The docs site (apps/elitea-docs, served under /docs/) is a separate
       // static build with its own inline scripts, so its locations carry its
       // own header set (apps/elitea-docs/nginx/security-headers.conf, installed
-      // as docs-security-headers.conf). A head may carry a modifier (`= /docs/…`).
-      const path = head.replace(/^[=~^*]+\s*/, '');
+      // as docs-security-headers.conf). A head may carry a modifier
+      // (`= /docs/…`) or be a regex (`~ ^/docs/…`).
+      const path = head.replace(/^(?:[=~^*]+\s*)+/, '');
       const snippet = path.startsWith('/docs/') ? 'docs-security-headers.conf' : 'security-headers.conf';
       expect(body).toContain(`include /etc/nginx/snippets/${snippet};`);
     },
