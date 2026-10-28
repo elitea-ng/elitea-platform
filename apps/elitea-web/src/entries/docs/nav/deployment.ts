@@ -34,6 +34,7 @@ export const deploymentTab: NavTab = {
         { kind: 'page', slug: 'deployment/scaling', title: 'Scaling' },
         { kind: 'page', slug: 'deployment/credential-governance', title: 'Enterprise credential governance' },
         { kind: 'page', slug: 'deployment/credential-governance-runbook', title: 'Credential governance runbook' },
+        { kind: 'page', slug: 'deployment/hardening-checklist', title: 'Hardening checklist' },
       ],
     },
   ],
