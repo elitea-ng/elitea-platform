@@ -1,7 +1,7 @@
 /**
  * Webhooks settings content (#876) — the management UI for the outbound
  * project webhook registry that, until this issue, was API-only. See
- * `apps/elitea-web/src/entries/docs/content/how-tos/credentials-toolkits/
+ * `apps/elitea-docs/src/content/docs/how-tos/credentials-toolkits/
  * webhooks-and-triggers.mdx`'s "Webhook API" section, which this replaces
  * the "Not available yet" note under.
  *

@@ -22,6 +22,9 @@ import { PipelineNodeTypes, PipelineNodeTypeNames } from '../constants/flowEdito
 const DEPRECATED_TIP = 'This node is deprecated and will be removed in a future version. ';
 const VIEW_MIGRATION_GUIDE_TEXT = 'View Migration Guide';
 
+/** The docs section on deprecated node types; there is no per-type migration page. */
+const DEPRECATED_NODES_DOCS = '/docs/how-tos/pipelines/nodes/overview#deprecated-node-types';
+
 /** One `DeprecatedTips[type]` entry -- spreads directly onto `shared/ui/TextWithLink`'s props (`text`/`linkText`/`linkUrl`). */
 export interface DeprecatedTip {
   readonly text: string;
@@ -29,37 +32,37 @@ export interface DeprecatedTip {
   readonly linkUrl: string;
 }
 
-/** `deprecated.constants.js:6-37` verbatim -- one migration-guide tooltip per deprecated node type. */
+/** `deprecated.constants.js:6-37` -- one migration-guide tooltip per deprecated node type, all linking the one docs section. */
 export const DeprecatedTips: Readonly<Partial<Record<string, DeprecatedTip>>> = {
   [PipelineNodeTypes.Condition]: {
     text: DEPRECATED_TIP,
     linkText: VIEW_MIGRATION_GUIDE_TEXT,
-    linkUrl: '/docs/how-tos/pipelines/condition-node-migration',
+    linkUrl: DEPRECATED_NODES_DOCS,
   },
   [PipelineNodeTypes.Tool]: {
     text: DEPRECATED_TIP,
     linkText: VIEW_MIGRATION_GUIDE_TEXT,
-    linkUrl: '/docs/how-tos/pipelines/tool-node-migration',
+    linkUrl: DEPRECATED_NODES_DOCS,
   },
   [PipelineNodeTypes.Function]: {
     text: DEPRECATED_TIP,
     linkText: VIEW_MIGRATION_GUIDE_TEXT,
-    linkUrl: '/docs/how-tos/pipelines/function-node-migration',
+    linkUrl: DEPRECATED_NODES_DOCS,
   },
   [PipelineNodeTypes.Pipeline]: {
     text: DEPRECATED_TIP,
     linkText: VIEW_MIGRATION_GUIDE_TEXT,
-    linkUrl: '/docs/how-tos/pipelines/pipeline-node-migration',
+    linkUrl: DEPRECATED_NODES_DOCS,
   },
   [PipelineNodeTypes.Loop]: {
     text: DEPRECATED_TIP,
     linkText: VIEW_MIGRATION_GUIDE_TEXT,
-    linkUrl: '/docs/how-tos/pipelines/loop-node-migration',
+    linkUrl: DEPRECATED_NODES_DOCS,
   },
   [PipelineNodeTypes.LoopFromTool]: {
     text: DEPRECATED_TIP,
     linkText: VIEW_MIGRATION_GUIDE_TEXT,
-    linkUrl: '/docs/how-tos/pipelines/loop-node-migration',
+    linkUrl: DEPRECATED_NODES_DOCS,
   },
 };
 

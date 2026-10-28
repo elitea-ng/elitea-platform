@@ -1,0 +1,29 @@
+---
+/**
+ * A committed screenshot (src/screenshots/<id>.webp, captured by
+ * apps/elitea-web/scripts/docs-shots.ts from shots.manifest.ts). The file is
+ * served as is: it is already a sized, compressed webp.
+ */
+interface Props {
+  id: string;
+  alt: string;
+}
+
+const images = import.meta.glob<string>('../screenshots/*.webp', { eager: true, query: '?url', import: 'default' });
+
+const { id, alt } = Astro.props;
+const src = images[`../screenshots/${id}.webp`];
+---
+
+{
+  src === undefined ? (
+    <div class="docs-screenshot docs-screenshot--missing not-content">
+      <span>{alt}</span>
+      <span class="docs-screenshot__pending">screenshot pending ({id})</span>
+    </div>
+  ) : (
+    <figure class="docs-screenshot not-content">
+      <img src={src} alt={alt} loading="lazy" decoding="async" />
+    </figure>
+  )
+}

@@ -3,7 +3,7 @@
  * `.d.ts` of its own (verified: `node_modules/tiptap-markdown/dist/` holds
  * only the two bundles + sourcemaps). Typed narrowly to what
  * `./DocumentEditor.tsx` actually calls, the same "declare only the surface
- * this app uses" approach as `src/entries/docs/mdx.d.ts` for `*.mdx`.
+ * this app uses" approach.
  *
  * `editor.storage.markdown` is typed via `@tiptap/core`'s own declared
  * augmentation point (the pattern its other storage-bearing extensions, e.g.

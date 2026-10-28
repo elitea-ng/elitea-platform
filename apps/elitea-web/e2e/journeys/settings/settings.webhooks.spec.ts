@@ -4,7 +4,7 @@
  * Before this issue the outbound project webhook registry
  * (`internal/api/webhook/handler.go`'s five routes, mounted at
  * `/webhooks/prompt_lib/{projectID}`) was API-only — see
- * `entries/docs/content/how-tos/credentials-toolkits/webhooks-and-triggers.mdx`'s
+ * `apps/elitea-docs/src/content/docs/how-tos/credentials-toolkits/webhooks-and-triggers.mdx`'s
  * "Webhook API" section, which carried a "Not available yet" note until this
  * change. This journey exercises the new `/settings/webhooks` page end to
  * end and cross-checks every write against the server, the same "assert via
