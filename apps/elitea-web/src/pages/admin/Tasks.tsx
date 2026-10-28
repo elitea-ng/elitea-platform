@@ -84,7 +84,7 @@ export function AdminTasks(props: AdminTasksProps = {}): ReactNode {
   const [pendingCancel, setPendingCancel] = useState<AdminTaskRow>();
 
   return (
-    <DrawerPage>
+    <DrawerPage sx={{ padding: '1rem 1.5rem' }}>
       <Typography variant="headingLarge" component="h1" sx={titleSx}>
         {t('pages.admin.tasks.title', 'Tasks')}
       </Typography>

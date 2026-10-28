@@ -70,7 +70,7 @@ export function AdminKillSwitch(props: AdminKillSwitchProps = {}): ReactNode {
   };
 
   return (
-    <DrawerPage>
+    <DrawerPage sx={{ padding: '1rem 1.5rem' }}>
       <Typography variant="headingLarge" component="h1" sx={titleSx}>
         {t('pages.admin.killSwitch.title', 'Kill switch')}
       </Typography>
