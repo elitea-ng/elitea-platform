@@ -182,7 +182,6 @@ func (w *world) bindAgent(ctx context.Context, t *testing.T, applicationID, vers
 		"tenant_project_id": w.cfg.Project, "application_id": applicationID, "application_version_id": versionID,
 		"definition_digest": sha(fmt.Sprintf("governed-conformance/%d/%d", applicationID, versionID)),
 		"mode":              "elitea_native", "external_agent_identity_id": externalID,
-		"workload_identity": "spiffe://elitea.standalone/ns/default/sa/agent-worker",
 	}, http.StatusCreated).Object(t)
 	bindingID := textOf(t, binding, "id")
 	approved := w.approver.do(ctx, t, http.MethodPost, "/api/v2/admin/agent_identities/"+bindingID+":approve", map[string]any{}, http.StatusOK).Object(t)
