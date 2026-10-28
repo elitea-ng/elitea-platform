@@ -14,7 +14,13 @@ require (
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0
 )
 
-require github.com/robfig/cron/v3 v3.0.1 // indirect
+require (
+	github.com/robfig/cron/v3 v3.0.1 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.22.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.22.0 // indirect
+	go.opentelemetry.io/otel/log v0.22.0 // indirect
+	go.opentelemetry.io/otel/sdk/log v0.22.0 // indirect
+)
 
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect

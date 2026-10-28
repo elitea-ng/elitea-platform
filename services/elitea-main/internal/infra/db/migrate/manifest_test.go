@@ -833,7 +833,23 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// activator and migration source of credential references (#1124).
 	// Nullable columns only; 0192 is claimed by another branch. No data, no
 	// permission.
-	require.EqualValues(t, 193, Head(shared))
+	//
+	// 194: shared/0194_execution_suspensions.sql, the kill switch
+	// (elitea_runtime.execution_suspensions, agent_execution_jobs
+	// .application_id) and the safety.suspend grant to platform and project
+	// admins (ADR-0041 decision 1, #1493). No data.
+	//
+	// 195: shared/0195_retention_policy.sql, retention policy per data class,
+	// legal holds and the conversation attachment cleanup journal (ADR-0042
+	// decision 4, #1495). Seeds the platform defaults (today's behaviour) and
+	// grants retention.manage and legal_hold.manage to super_admin and admin.
+	//
+	// 196: shared/0196_audit_export.sql, the SIEM audit export's id cursor
+	// (elitea_runtime.audit_export_cursors) and dead-letter list
+	// (audit_export_dead_letters), one position per (stream, sink), and
+	// centry.audit_events.export_txid so the relay reads in commit order
+	// (#1494). No data, no permission.
+	require.EqualValues(t, 196, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

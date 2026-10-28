@@ -826,7 +826,15 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // staging a reference from scratch, and repinAgentIdentityBinding, the
 // re-pin of a binding to its version's computed definition digest. Admin
 // routes are not in the manifest, so its count is unchanged.
-const GENERATED_OPERATION_COUNT = 399;
+// 399 -> 406 (issue 1495, ADR-0042 decision 4): listRetentionPolicies,
+// setPlatformRetentionPolicy, set/deleteProjectRetentionOverride,
+// listLegalHolds, createLegalHold and releaseLegalHold, the data retention
+// and legal hold admin API. Admin routes are not in the manifest, so its
+// count is unchanged.
+// 406 -> 412 (issue 1493, ADR-0041): list/create/resumeExecutionSuspension
+// and list/create/resumeProjectExecutionSuspension, the kill switch of the
+// admin console and of the agent page.
+const GENERATED_OPERATION_COUNT = 412;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1054,8 +1062,12 @@ const GENERATED_OPERATION_COUNT = 399;
  * workspaceHandoff.setPullRequestCredential, and
  * configurations.listForPullRequests (the GitHub or GitLab configurations it is
  * chosen from), the cloud notice of the web chat (pages/chat). Generated.
+ *
+ * 288 -> 291 (issue 1493, ADR-0041 decision 1):
+ * settings.list/create/resumeProjectExecutionSuspension, the Stop agent
+ * action of the agent page (features/kill-switch). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 288;
+const MANIFEST_ENTRY_COUNT = 291;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

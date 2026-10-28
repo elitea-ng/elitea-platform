@@ -23,5 +23,16 @@ export const adminTab: NavTab = {
         { kind: 'page', slug: 'admin/audit-trail', title: 'Audit trail' },
       ],
     },
+    {
+      kind: 'group',
+      title: 'Enterprise controls',
+      pages: [
+        { kind: 'page', slug: 'admin/enterprise-controls/overview', title: 'Control catalogue' },
+        { kind: 'page', slug: 'admin/enterprise-controls/shared-responsibility', title: 'Shared responsibility' },
+        { kind: 'page', slug: 'admin/enterprise-controls/runtime-safety', title: 'Runtime safety' },
+        { kind: 'page', slug: 'admin/enterprise-controls/audit-evidence-and-retention', title: 'Audit evidence and retention' },
+        { kind: 'page', slug: 'admin/enterprise-controls/evidence-guide', title: 'Evidence guide for auditors' },
+      ],
+    },
   ],
 };

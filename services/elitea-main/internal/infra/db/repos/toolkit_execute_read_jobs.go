@@ -181,6 +181,10 @@ func (r *ToolkitExecuteReadJobsRepository) AdmitToolkitExecuteRead(
 	var outcome executionapp.AdmissionOutcome
 	var capacityError *executionapp.AdmissionCapacityError
 	err = r.store.WithinTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite}, func(tx sqlExecutor) error {
+		// The kill switch's fence (safety/fence.go), first.
+		if err := fenceSuspendedAdmission(ctx, tx); err != nil {
+			return err
+		}
 		queries, err := runtimeSQLCQueries(tx)
 		if err != nil {
 			return err

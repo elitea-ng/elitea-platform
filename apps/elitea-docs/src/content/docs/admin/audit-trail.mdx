@@ -29,6 +29,42 @@ A second view mode, alongside events, shows execution traces and their individua
 
 From the Users page's row menu, the activity drawer filters this same audit data to one account — useful when investigating a specific person's actions rather than browsing the whole trail. See [Users and roles](/admin/users-and-roles).
 
+## Export to your SIEM
+
+Audit Trail is the place to look; it is not where evidence should be kept. The hash chain on security audit events makes tampering detectable, but immutability and long retention belong to your SIEM or WORM store. Elitea sends two streams there, in one versioned envelope, [`elitea.audit.v1`](/reference/audit-event-schema):
+
+- **Security audit events** from the governed security audit outbox (credential decisions, grant, binding, mandate and delegation changes). These exist when enterprise credential governance is on. Each carries its position in the tamper-evident chain.
+- **The audit trail on this page** (`centry.audit_events`): one event per completed request, scheduled job or admin task.
+
+Two transports are built in, and you can use either or both:
+
+| Transport | Use it when | Set |
+|---|---|---|
+| **OTLP logs** | Your collector or SIEM speaks OpenTelemetry | `ELITEA_AUDIT_EXPORT_OTLP_ENDPOINT` |
+| **Signed webhook** | You run your own receiver, or a SIEM with an HTTP intake | `ELITEA_AUDIT_EXPORT_WEBHOOK_URL` and `ELITEA_AUDIT_EXPORT_WEBHOOK_KEYS_FILE` |
+
+With neither set, export is off, no relay starts and nothing dials out. The full list of settings is in [Post-install configuration](/deployment/configuration#export-audit-evidence-to-a-siem), and the field-by-field schema, a sample event, signature verification and a collector configuration are in the [audit event schema reference](/reference/audit-event-schema).
+
+### What the export guarantees
+
+- **At least once.** A row is marked exported, or a receiver's position in the audit trail advances, only after that receiver accepted it. If your receiver is down, nothing is lost: events wait and are sent in order when it returns. Deduplicate on `event_id`.
+- **No row is skipped.** The audit trail is read in commit order: a row is exported only once every transaction that could still add an earlier row has finished. A long-running database write transaction therefore delays export (the lag alert shows it) rather than letting a late row slip past.
+- **Each receiver has its own position.** With both transports on, a receiver that is down does not make the healthy one receive the same events again; when it returns it resumes from where it stopped.
+- **Asynchronous.** Export runs in background relays. It never slows or fails the request or run that produced the event, and it holds no database transaction open while it calls your receiver.
+- **Outages do not drop evidence.** When the webhook receiver refuses a batch as malformed or too large (HTTP 400, 413 or 422), Elitea splits it in halves and sends each again, down to single events, so the other events in the batch are delivered. Only a single event the receiver refuses on its own, on five passes, is dead-lettered, by itself. A receiver that is down, rate limiting, or rejecting your credentials (401, 403, 404, 429, 5xx) is never dead-lettered; the lag alert fires instead. A security audit record that cannot be decoded is dead-lettered alone (sink `decode`) and the rest of its batch is sent. A dead-lettered event is still in its source table and is also listed in `elitea_runtime.audit_export_dead_letters`.
+- **Retention never outruns the export.** While audit export is on, the audit trail retention sweep in elitea-scheduler does not delete a row that has not yet reached every receiver, however old it is. If you switch the export off, delete its positions (`DELETE FROM elitea_runtime.audit_export_cursors WHERE stream = 'admin_audit'`) so retention resumes; the scheduler logs a warning while it is holding rows back for a position that has not moved within the retention window.
+- **Egress is guarded.** A webhook receiver on a private or loopback address is refused unless `ELITEA_AUDIT_EXPORT_EGRESS_ALLOWLIST` names it. Redirects are never followed.
+
+### What it does not do
+
+- It does not make the stored events immutable, and it does not retain them for you. Keeping them is your SIEM's job; the shared-responsibility split is in the enterprise controls section.
+- Existing audit trail history is not replayed by default. Export starts at the newest row when you turn it on; a row still being written at that exact moment may count as history. Set `ELITEA_AUDIT_EXPORT_AUDIT_EVENTS_FROM` to `beginning` before the first start to send the whole table.
+- Audit trail rows are not chained yet, so the `chain` object is present only on security audit events.
+
+### Watch it
+
+elitea-main serves Prometheus metrics for the export on port 9464 (`ELITEA_AUDIT_EXPORT_METRICS_ADDR`): `elitea_audit_export_lag_seconds`, `elitea_audit_export_backlog`, and the `delivered`, `failed` and `dead_lettered` counters. The chart ships a PodMonitor and three alerts, `EliteaAuditExportLag`, `EliteaAuditExportBacklog` and `EliteaAuditExportDeadLettered`, wherever the Prometheus Operator API is served.
+
 <Note>
 This page has no write path of any kind. An audit trail the product could edit would not be one.
 </Note>

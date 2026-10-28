@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -307,12 +308,98 @@ UPDATE elitea_runtime.security_audit_outbox
    SET exported_at = clock_timestamp()
  WHERE seq = ANY($1) AND exported_at IS NULL`
 
+// exportBatchUnlockedSQL is exportBatchSQL without the row lock: the
+// session-level stage lock already makes this relay the only exporter.
+const exportBatchUnlockedSQL = `
+SELECT seq, partition_key, partition_seq, event_id::text, event_type, event::text, prev_hash, hash, created_at
+  FROM elitea_runtime.security_audit_outbox
+ WHERE exported_at IS NULL AND stored_at IS NOT NULL
+ ORDER BY seq
+ LIMIT $1`
+
+// connAcquirer is the slice of *pgxpool.Pool that lets ExportBatch hold a
+// session-level stage lock on one connection without an open transaction.
+type connAcquirer interface {
+	Acquire(ctx context.Context) (*pgxpool.Conn, error)
+}
+
 // ExportBatch runs one export-stage batch and returns the rows it exported.
-// An exporter error rolls the batch back: the rows stay unexported.
+// An exporter error leaves the rows unexported.
+//
+// The send to the exporter (a SIEM, possibly slow, with its own retries) runs
+// with NO transaction open (#1504 review): a transaction held across it would
+// pin a pool connection for up to the export timeout and be killed by
+// idle_in_transaction_session_timeout mid-send, after the receiver accepted
+// the batch, so the batch would be sent again on every pass. With a pool, the
+// pass holds a session-level advisory lock on one connection, reads, sends,
+// then marks; the mark is idempotent (exported_at IS NULL).
 func (r *Relay) ExportBatch(ctx context.Context) (int, error) {
 	if r.exporter == nil {
 		return 0, nil
 	}
+	if pool, ok := r.db.(connAcquirer); ok {
+		return r.exportBatchOnConn(ctx, pool)
+	}
+	return r.exportBatchInTx(ctx)
+}
+
+func (r *Relay) exportBatchOnConn(ctx context.Context, pool connAcquirer) (int, error) {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("security audit export: acquire: %w", err)
+	}
+	defer conn.Release()
+	var locked bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, stageLockKey("export")).Scan(&locked); err != nil {
+		return 0, fmt.Errorf("security audit export: advisory lock: %w", err)
+	}
+	if !locked {
+		return 0, nil
+	}
+	defer func() {
+		// A failed unlock (a dead connection) releases the lock with the session.
+		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, stageLockKey("export"))
+	}()
+	rows, err := conn.Query(ctx, exportBatchUnlockedSQL, r.batch)
+	if err != nil {
+		return 0, fmt.Errorf("security audit export: %w", err)
+	}
+	records, err := scanRecords(rows)
+	if err != nil {
+		return 0, fmt.Errorf("security audit export: %w", err)
+	}
+	if len(records) == 0 {
+		return 0, nil
+	}
+	if err := r.export(ctx, records); err != nil {
+		return 0, err
+	}
+	if _, err := conn.Exec(ctx, markExportedSQL, recordSeqs(records)); err != nil {
+		return 0, fmt.Errorf("security audit export: mark: %w", err)
+	}
+	return len(records), nil
+}
+
+func (r *Relay) export(ctx context.Context, records []Record) error {
+	exportCtx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	if err := r.exporter.Export(exportCtx, records); err != nil {
+		return fmt.Errorf("security audit export: exporter %s: %w", r.exporter.Name(), err)
+	}
+	return nil
+}
+
+func recordSeqs(records []Record) []int64 {
+	seqs := make([]int64, len(records))
+	for i, record := range records {
+		seqs[i] = record.Seq
+	}
+	return seqs
+}
+
+// exportBatchInTx is the path for a TxStarter that is not a pool (test
+// doubles): the whole pass in one transaction under the stage's xact lock.
+func (r *Relay) exportBatchInTx(ctx context.Context) (int, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("security audit export: begin: %w", err)
@@ -332,17 +419,10 @@ func (r *Relay) ExportBatch(ctx context.Context) (int, error) {
 	if len(records) == 0 {
 		return 0, nil
 	}
-	exportCtx, cancel := context.WithTimeout(ctx, r.timeout)
-	err = r.exporter.Export(exportCtx, records)
-	cancel()
-	if err != nil {
-		return 0, fmt.Errorf("security audit export: exporter %s: %w", r.exporter.Name(), err)
+	if err := r.export(ctx, records); err != nil {
+		return 0, err
 	}
-	seqs := make([]int64, len(records))
-	for i, record := range records {
-		seqs[i] = record.Seq
-	}
-	if _, err := tx.Exec(ctx, markExportedSQL, seqs); err != nil {
+	if _, err := tx.Exec(ctx, markExportedSQL, recordSeqs(records)); err != nil {
 		return 0, fmt.Errorf("security audit export: mark: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

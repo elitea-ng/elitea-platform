@@ -17,6 +17,7 @@ import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalance
 import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
+import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
 import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
@@ -29,6 +30,7 @@ import PolicyOutlinedIcon from '@mui/icons-material/PolicyOutlined';
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
 import SecurityOutlinedIcon from '@mui/icons-material/SecurityOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import StopCircleOutlinedIcon from '@mui/icons-material/StopCircleOutlined';
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
 import VpnKeyOutlinedIcon from '@mui/icons-material/VpnKeyOutlined';
 
@@ -254,6 +256,14 @@ export function navGroups(): readonly AdminNavGroup[] {
           anyPermission: ['models.admin.audit_trail.view'],
         },
         {
+          id: 'retention',
+          path: '/retention',
+          label: t('pages.admin.nav.retention', 'Data retention'),
+          icon: GavelOutlinedIcon,
+          // Shared migration 0195 grants both to super_admin and admin.
+          anyPermission: ['retention.manage', 'legal_hold.manage'],
+        },
+        {
           id: 'tasks',
           path: '/tasks',
           label: t('pages.admin.nav.tasks', 'Tasks'),
@@ -263,6 +273,16 @@ export function navGroups(): readonly AdminNavGroup[] {
           // (legacy/plugins/admin/module.py:392-421). Shared migration 0060
           // grants it, so this item cannot disappear for want of a grant.
           anyPermission: ['runtime.plugins'],
+        },
+        {
+          id: 'kill-switch',
+          path: '/kill-switch',
+          label: t('pages.admin.nav.killSwitch', 'Kill switch'),
+          icon: StopCircleOutlinedIcon,
+          // The permission every suspension route is gated on server-side
+          // (`central("safety.suspend")`); shared migration 0194 grants it to
+          // the administration `admin` and `super_admin` roles.
+          anyPermission: ['safety.suspend'],
         },
         {
           id: 'schedules',

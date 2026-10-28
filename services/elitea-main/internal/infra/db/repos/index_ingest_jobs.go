@@ -101,6 +101,10 @@ func (r *IndexIngestJobsRepository) AdmitIndexIngest(ctx context.Context, admiss
 			_ = tx.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
+	// The kill switch's fence (safety/fence.go), first.
+	if err := fenceSuspendedAdmission(ctx, pgxExecutor{queryer: tx}); err != nil {
+		return indexingapp.AdmissionOutcome{}, err
+	}
 	txQueries := sqlcgen.New(tx)
 	if err := txQueries.EnsureRuntimeAdmissionPolicy(ctx, sqlcgen.EnsureRuntimeAdmissionPolicyParams{
 		CapabilityID:   executiondomain.IndexIngestCapability,

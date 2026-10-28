@@ -361,3 +361,57 @@ func TestAMaintenanceWindowLeavesTheTableAlone(t *testing.T) {
 		t.Errorf("after the window the table holds %v, want only the recent row", surviving)
 	}
 }
+
+// auditExportMigrationPath is elitea-main's migration that adds the export
+// order column and the export positions, applied for real for the same reason
+// as bootstrapDDLPath.
+const auditExportMigrationPath = "../../../elitea-main/migrations/shared/0196_audit_export.sql"
+
+// TestRetentionNeverDeletesRowsTheSIEMExportHasNotDelivered: with audit export
+// on, an expired row after the slowest sink's position survives until the
+// export has passed it, and goes on the next pass after that.
+func TestRetentionNeverDeletesRowsTheSIEMExportHasNotDelivered(t *testing.T) {
+	t.Parallel()
+
+	pool := newAuditPool(t)
+	sweeper := newTestSweeper(t, pool, openGate, Config{RetentionDays: 30, BatchSize: 100, MaxBatchesPerPass: 10}, time.Now().UTC())
+	expired := time.Now().UTC().Add(-60 * 24 * time.Hour)
+	insertAuditRow(t, pool, expired, "expired before 0196", "export")
+
+	migration, err := os.ReadFile(filepath.Clean(auditExportMigrationPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), string(migration)); err != nil {
+		t.Fatalf("apply 0196: %v", err)
+	}
+	delivered := insertAuditRow(t, pool, expired, "expired, exported", "export")
+	pending := insertAuditRow(t, pool, expired, "expired, not yet exported", "export")
+
+	// Two sinks; the slower one has delivered up to `delivered`.
+	if _, err := pool.Exec(context.Background(), `
+INSERT INTO elitea_runtime.audit_export_cursors (stream, sink, last_txid, last_id)
+SELECT 'admin_audit', 'webhook', export_txid, id FROM centry.audit_events WHERE id = $1
+UNION ALL
+SELECT 'admin_audit', 'otlp', export_txid, id FROM centry.audit_events WHERE id = $2`, delivered, pending); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := sweeper.Sweep(context.Background())
+	if err != nil || stats.HeldForExport == nil || stats.Deleted != 2 {
+		t.Fatalf("export on: stats=%+v err=%v; want the pre-0196 and the delivered rows deleted", stats, err)
+	}
+	surviving := survivingActions(t, pool)
+	if !surviving["expired, not yet exported"] || surviving["expired, exported"] || surviving["expired before 0196"] {
+		t.Fatalf("surviving = %v", surviving)
+	}
+
+	// The export catches up; the next pass removes the row.
+	if _, err := pool.Exec(context.Background(), `
+UPDATE elitea_runtime.audit_export_cursors c SET last_txid = e.export_txid, last_id = e.id
+  FROM centry.audit_events e WHERE e.id = $1`, pending); err != nil {
+		t.Fatal(err)
+	}
+	if stats, err := sweeper.Sweep(context.Background()); err != nil || stats.Deleted != 1 {
+		t.Fatalf("after catch-up: stats=%+v err=%v", stats, err)
+	}
+}

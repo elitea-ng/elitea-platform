@@ -12,6 +12,7 @@
 {{- $vectorPeers := and .Values.main.runtime.enabled .Values.vector.enabled }}
 {{- $egressAuditPeers := and .Values.main.runtime.enabled (include "elitea-egress-proxy.auditEnabled" .) }}
 {{- $httpPeers := or $np.main.ingressFrom $np.main.extraIngressFrom $np.probeFrom }}
+{{- $metricsPeers := $np.main.metricsFrom }}
 # Ingress to the elitea-main pods. Only the sources listed here may open a
 # connection; every other in-cluster source is refused.
 #
@@ -26,6 +27,8 @@
 #                ModelService, ArtifactObjectService, InternalToolService.
 #   control      elitea-vector, on the control listener only, for token
 #                introspection (ADR-0031), when vector is enabled.
+#   audit metrics networkPolicies.main.metricsFrom, on main.auditExport.metrics
+#                .port only: the scraper of the SIEM audit export's /metrics.
 #
 # Kubelet probes are not subject to the policy on the CNIs this chart is tested
 # with; networkPolicies.probeFrom is for those that apply it to them.
@@ -42,7 +45,7 @@ spec:
       {{- include "elitea-main.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
-  {{- if or $httpPeers $runtimePeers $platformPeers $vectorPeers $egressAuditPeers }}
+  {{- if or $httpPeers $runtimePeers $platformPeers $vectorPeers $egressAuditPeers $metricsPeers }}
   ingress:
   {{- end }}
     {{- if $httpPeers }}
@@ -92,6 +95,13 @@ spec:
           protocol: TCP
       from:
         {{- include "elitea.netpol.peer" (dict "ctx" . "labels" (include "elitea-vector.selectorLabels" .)) | nindent 8 }}
+    {{- end }}
+    {{- if $metricsPeers }}
+    - ports:
+        - port: {{ .Values.main.auditExport.metrics.port }}
+          protocol: TCP
+      from:
+        {{- toYaml $metricsPeers | nindent 8 }}
     {{- end }}
     {{- if $egressAuditPeers }}
     # The egress proxy, on the control listener only, for its run summaries

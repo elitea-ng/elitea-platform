@@ -1156,6 +1156,9 @@ nats:
                     # The governed-credential invalidation fan-out between
                     # main replicas (#1121): reference-only, advisory.
                     - "elitea.rt.v1.security.invalidation"
+                    # The kill switch's suspension fan-out between main
+                    # replicas (#1493): ids only, advisory.
+                    - "elitea.rt.v1.safety.suspension"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_VALIDATE"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_AGENT"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_INDEX"
@@ -1189,6 +1192,7 @@ nats:
                     - "_INBOX_elitea-main-runtime.>"
                     - "elitea.rt.v1.replay.wake"
                     - "elitea.rt.v1.security.invalidation"
+                    - "elitea.rt.v1.safety.suspension"
 
             # elitea-nats-bootstrap-runtime: creates and reconciles RUNTIME's
             # three command streams and their per-route durable pull
@@ -2102,6 +2106,9 @@ networkPolicies:
     # clients that reach a NodePort / LoadBalancer Service directly). Not
     # required by any guard.
     extraIngressFrom: []
+    # The scraper of the audit export's /metrics port (main.auditExport.metrics
+    # .port), for example the Prometheus pods. Empty admits nobody to it.
+    metricsFrom: []
   web:
     # More peers on elitea-web's port 80 besides elitea-main, which relays every
     # browser request for /app and /docs. Normally empty: a peer listed here
@@ -3010,6 +3017,47 @@ main:
     ELITEA_SECRETSTORE_VAULT_TOKEN_FILE: ""
     ELITEA_SECRETSTORE_VAULT_NAMESPACE: ""        # Vault Enterprise only
     ELITEA_SECRETSTORE_VAULT_READINESS_SCOPE: ""
+
+    # --- SIEM audit export (ADR-0042 decision 3, #1494) -----------------------
+    # Sends the security audit events and the admin audit trail
+    # (centry.audit_events) to the customer's SIEM as one versioned envelope,
+    # elitea.audit.v1. Both endpoints empty (the default): export is off, no
+    # relay starts and nothing dials out. Set either or both; delivery is at
+    # least once, so a receiver deduplicates on event_id. Read in
+    # internal/auditexport/config.go; reference: /docs reference/audit-event-schema.
+    #
+    # OTLP logs. HTTP: the collector's BASE URL (the path /v1/logs is appended).
+    # gRPC: host:port, or a URL whose scheme picks TLS (https) or plaintext.
+    ELITEA_AUDIT_EXPORT_OTLP_ENDPOINT: ""
+    ELITEA_AUDIT_EXPORT_OTLP_PROTOCOL: "http"     # http | grpc
+    # Absolute path of a JSON object of request headers (an API key for a
+    # hosted SIEM), from the Secret main.auditExport.secretName mounts.
+    ELITEA_AUDIT_EXPORT_OTLP_HEADERS_FILE: ""
+    # Signed webhook: https URL (http only when the allowlist below names the
+    # receiver). The keys file is required with it:
+    #   {"keys":[{"id":"2026-10","secret":"<32+ chars>","created":"2026-10-01T00:00:00Z"}]}
+    # The key with the latest "created" signs; up to two keys may be listed
+    # while a rotation is in progress.
+    ELITEA_AUDIT_EXPORT_WEBHOOK_URL: ""
+    ELITEA_AUDIT_EXPORT_WEBHOOK_KEYS_FILE: ""
+    # egresslib grammar, like ELITEA_WEBHOOK_EGRESS_ALLOWLIST: a receiver on a
+    # private address (10.0.0.0/8, an IP, localhost) must be named here. Link-
+    # local, multicast, reserved and cloud-metadata addresses stay refused.
+    ELITEA_AUDIT_EXPORT_EGRESS_ALLOWLIST: ""
+    # "true" | "false": also export centry.audit_events (default true).
+    ELITEA_AUDIT_EXPORT_AUDIT_EVENTS: "true"
+    # "now" (default) starts at the newest audit_events row; "beginning"
+    # replays the whole table on the first run.
+    ELITEA_AUDIT_EXPORT_AUDIT_EVENTS_FROM: "now"
+    ELITEA_AUDIT_EXPORT_BATCH_SIZE: "200"
+    ELITEA_AUDIT_EXPORT_INTERVAL: "5s"
+    # A batch the receiver refuses as malformed (400, 413, 422) this many times
+    # is dead-lettered. An outage or a wrong credential never is.
+    ELITEA_AUDIT_EXPORT_MAX_PERMANENT_ATTEMPTS: "5"
+    # Plain-HTTP /metrics for the export (lag, backlog, delivered, failed,
+    # dead-lettered). Empty disables the listener; the PodMonitor and the
+    # alert rules scrape this port (main.auditExport.metrics.port).
+    ELITEA_AUDIT_EXPORT_METRICS_ADDR: ":9464"
     # Elitea-native agent assertions (#1153): Main signs a short-lived,
     # per-run JWT for one relying party (AWS STS, GCP WIF, Keycloak, Vault
     # JWT, MCP). Read ONLY with the flag above on and a revision that allows
@@ -3994,6 +4042,34 @@ main:
   agentAssertion:
     keysSecret: ""
     mountPath: /etc/elitea/agent-assertion
+
+  # SIEM audit export (#1494). The settings are the ELITEA_AUDIT_EXPORT_* keys
+  # of main.env above; this block mounts the Secret that holds the webhook
+  # signing keys and the OTLP headers, and shapes the monitoring.
+  auditExport:
+    # A Secret with the files the ELITEA_AUDIT_EXPORT_*_FILE variables name,
+    # for example keys webhook-keys.json and otlp-headers.json. Mounted
+    # read-only at mountPath. Empty mounts nothing.
+    secretName: ""
+    mountPath: /etc/elitea/audit-export
+    metrics:
+      # The port ELITEA_AUDIT_EXPORT_METRICS_ADDR listens on.
+      port: 9464
+      # Rendered only where monitoring.coreos.com/v1 exists and an exporter is
+      # configured (ELITEA_AUDIT_EXPORT_OTLP_ENDPOINT or _WEBHOOK_URL). Without
+      # a scrape path an alert could never fire, so the rules need the
+      # PodMonitor.
+      podMonitor:
+        enabled: true
+        interval: 30s
+        labels: {}
+      prometheusRule:
+        enabled: true
+        labels: {}
+        # EliteaAuditExportLag: the oldest undelivered event is older than this.
+        lagSeconds: 900
+        # EliteaAuditExportBacklog: more undelivered events than this.
+        backlogEvents: 10000
 
   # Kubernetes execution path for the versioned migration corpus
   # (services/elitea-main/migrations/{shared,tenant}, applied by the separate

@@ -81,6 +81,10 @@ import type {
   CredentialUseGrantCreate,
   CredentialUseGrantListResponse,
   ErrorResponse,
+  ExecutionSuspension,
+  ExecutionSuspensionCreate,
+  ExecutionSuspensionList,
+  ExecutionSuspensionResume,
   ExternalAgentIdentity,
   ExternalAgentIdentityCreate,
   ExternalAgentIdentityDriftResponse,
@@ -90,14 +94,20 @@ import type {
   GlobalUserInviteResult,
   ImportBrandingPackageBody,
   ImportBrandingPackageParams,
+  LegalHold,
+  LegalHoldCreate,
+  LegalHoldListResponse,
+  LegalHoldRelease,
   ListAdminPublishedAgentsParams,
   ListAgentIdentityBindingsParams,
   ListBackgroundJobsParams,
   ListBrandingPackageVersions200,
   ListCredentialReferencesParams,
   ListCredentialUseGrantsParams,
+  ListExecutionSuspensionsParams,
   ListExternalAgentIdentitiesParams,
   ListExternalAgentIdentityDriftFindingsParams,
+  ListLegalHoldsParams,
   ListMandatesParams,
   ListNativeDevicesAdministrationParams,
   Mandate,
@@ -136,6 +146,10 @@ import type {
   ProjectRequestCreate,
   PublishedAgentsListing,
   RemoveUserModeRoleParams,
+  RetentionOverrideUpdate,
+  RetentionPolicy,
+  RetentionPolicyListResponse,
+  RetentionPolicyUpdate,
   Role,
   RoleListParams,
   SendBrandingTestEmail200,
@@ -4492,6 +4506,750 @@ export function useCancelBackgroundJob<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type listExecutionSuspensionsResponse200 = {
+  data: ExecutionSuspensionList;
+  status: 200;
+};
+
+export type listExecutionSuspensionsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listExecutionSuspensionsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listExecutionSuspensionsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listExecutionSuspensionsResponseSuccess =
+  listExecutionSuspensionsResponse200 & {
+    headers: Headers;
+  };
+export type listExecutionSuspensionsResponseError = (
+  | listExecutionSuspensionsResponse400
+  | listExecutionSuspensionsResponse401
+  | listExecutionSuspensionsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listExecutionSuspensionsResponse =
+  | listExecutionSuspensionsResponseSuccess
+  | listExecutionSuspensionsResponseError;
+
+export const getListExecutionSuspensionsUrl = (
+  params?: ListExecutionSuspensionsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/execution_suspensions?${stringifiedParams}`
+    : `/admin/execution_suspensions`;
+};
+
+/**
+ * The admin Kill switch page (ADR-0041 decision 1). Every suspension of every scope, newest first. Gated on `safety.suspend` in the administration mode.
+ * @summary List execution suspensions (kill switch)
+ */
+export const listExecutionSuspensions = async (
+  params?: ListExecutionSuspensionsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listExecutionSuspensionsResponse> => {
+  return eliteaFetch<listExecutionSuspensionsResponse>(
+    getListExecutionSuspensionsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListExecutionSuspensionsQueryKey = (
+  params?: ListExecutionSuspensionsParams,
+) => {
+  return [`/admin/execution_suspensions`, ...(params ? [params] : [])] as const;
+};
+
+export const getListExecutionSuspensionsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listExecutionSuspensions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExecutionSuspensionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionSuspensions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListExecutionSuspensionsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listExecutionSuspensions>>
+  > = ({ signal }) =>
+    listExecutionSuspensions(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listExecutionSuspensions>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListExecutionSuspensionsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listExecutionSuspensions>>
+>;
+export type ListExecutionSuspensionsQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListExecutionSuspensions<
+  TData = Awaited<ReturnType<typeof listExecutionSuspensions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params: undefined | ListExecutionSuspensionsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionSuspensions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listExecutionSuspensions>>,
+          TError,
+          Awaited<ReturnType<typeof listExecutionSuspensions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListExecutionSuspensions<
+  TData = Awaited<ReturnType<typeof listExecutionSuspensions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExecutionSuspensionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionSuspensions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listExecutionSuspensions>>,
+          TError,
+          Awaited<ReturnType<typeof listExecutionSuspensions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListExecutionSuspensions<
+  TData = Awaited<ReturnType<typeof listExecutionSuspensions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExecutionSuspensionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionSuspensions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List execution suspensions (kill switch)
+ */
+
+export function useListExecutionSuspensions<
+  TData = Awaited<ReturnType<typeof listExecutionSuspensions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExecutionSuspensionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionSuspensions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListExecutionSuspensionsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createExecutionSuspensionResponse201 = {
+  data: ExecutionSuspension;
+  status: 201;
+};
+
+export type createExecutionSuspensionResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type createExecutionSuspensionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createExecutionSuspensionResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type createExecutionSuspensionResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type createExecutionSuspensionResponseSuccess =
+  createExecutionSuspensionResponse201 & {
+    headers: Headers;
+  };
+export type createExecutionSuspensionResponseError = (
+  | createExecutionSuspensionResponse400
+  | createExecutionSuspensionResponse401
+  | createExecutionSuspensionResponse403
+  | createExecutionSuspensionResponse409
+) & {
+  headers: Headers;
+};
+
+export type createExecutionSuspensionResponse =
+  | createExecutionSuspensionResponseSuccess
+  | createExecutionSuspensionResponseError;
+
+export const getCreateExecutionSuspensionUrl = () => {
+  return `/admin/execution_suspensions`;
+};
+
+/**
+ * The kill switch (ADR-0041 decision 1). Admission refuses every new run the suspension covers with the typed error `execution_suspended`, and the same transaction cancels the in-flight runs it covers (platform, project and agent scopes; `cancelled_runs` gives the count). A toolkit_type suspension cancels nothing: new runs and new tool calls through admission are refused, and runs already in flight keep the toolkit until they end. The platform scope needs `confirm` set to `STOP`. Gated on `safety.suspend` in the administration mode. The audit record of the request carries the action safety.suspension.created.
+ * @summary Suspend execution of an agent, a project, a toolkit type or the platform
+ */
+export const createExecutionSuspension = async (
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createExecutionSuspensionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createExecutionSuspensionResponse>(
+    getCreateExecutionSuspensionUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(executionSuspensionCreate),
+    },
+  );
+};
+
+export const getCreateExecutionSuspensionQueryKey = (
+  executionSuspensionCreate?: ExecutionSuspensionCreate,
+) => {
+  return [
+    "POST",
+    `/admin/execution_suspensions`,
+    executionSuspensionCreate,
+  ] as const;
+};
+
+export const getCreateExecutionSuspensionQueryOptions = <
+  TData = Awaited<ReturnType<typeof createExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateExecutionSuspensionQueryKey(executionSuspensionCreate);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createExecutionSuspension>>
+  > = ({ signal }) =>
+    createExecutionSuspension(executionSuspensionCreate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof createExecutionSuspension>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateExecutionSuspensionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createExecutionSuspension>>
+>;
+export type CreateExecutionSuspensionQueryError = ErrorResponse | N401Response;
+
+export function useCreateExecutionSuspension<
+  TData = Awaited<ReturnType<typeof createExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createExecutionSuspension>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createExecutionSuspension>>,
+          TError,
+          Awaited<ReturnType<typeof createExecutionSuspension>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateExecutionSuspension<
+  TData = Awaited<ReturnType<typeof createExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createExecutionSuspension>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createExecutionSuspension>>,
+          TError,
+          Awaited<ReturnType<typeof createExecutionSuspension>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateExecutionSuspension<
+  TData = Awaited<ReturnType<typeof createExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Suspend execution of an agent, a project, a toolkit type or the platform
+ */
+
+export function useCreateExecutionSuspension<
+  TData = Awaited<ReturnType<typeof createExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateExecutionSuspensionQueryOptions(
+    executionSuspensionCreate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type resumeExecutionSuspensionResponse200 = {
+  data: ExecutionSuspension;
+  status: 200;
+};
+
+export type resumeExecutionSuspensionResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type resumeExecutionSuspensionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type resumeExecutionSuspensionResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type resumeExecutionSuspensionResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type resumeExecutionSuspensionResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type resumeExecutionSuspensionResponseSuccess =
+  resumeExecutionSuspensionResponse200 & {
+    headers: Headers;
+  };
+export type resumeExecutionSuspensionResponseError = (
+  | resumeExecutionSuspensionResponse400
+  | resumeExecutionSuspensionResponse401
+  | resumeExecutionSuspensionResponse403
+  | resumeExecutionSuspensionResponse404
+  | resumeExecutionSuspensionResponse409
+) & {
+  headers: Headers;
+};
+
+export type resumeExecutionSuspensionResponse =
+  | resumeExecutionSuspensionResponseSuccess
+  | resumeExecutionSuspensionResponseError;
+
+export const getResumeExecutionSuspensionUrl = (suspensionId: number) => {
+  return `/admin/execution_suspensions/${suspensionId}:resume`;
+};
+
+/**
+ * Ends an active suspension. Admission accepts new runs again; cancelled runs stay cancelled. The resume rule of the suspension applies: any_admin lets any caller with safety.suspend resume it, governance_role needs a platform administrator, and two_person needs a platform administrator who is not the suspender. The body is empty or has an optional `reason`. The audit record of the request carries the action safety.suspension.resumed.
+ * @summary Resume a suspension
+ */
+export const resumeExecutionSuspension = async (
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<resumeExecutionSuspensionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<resumeExecutionSuspensionResponse>(
+    getResumeExecutionSuspensionUrl(suspensionId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(executionSuspensionResume),
+    },
+  );
+};
+
+export const getResumeExecutionSuspensionQueryKey = (
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+) => {
+  return [
+    "POST",
+    `/admin/execution_suspensions/${suspensionId}:resume`,
+    executionSuspensionResume,
+  ] as const;
+};
+
+export const getResumeExecutionSuspensionQueryOptions = <
+  TData = Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getResumeExecutionSuspensionQueryKey(
+      suspensionId,
+      executionSuspensionResume,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof resumeExecutionSuspension>>
+  > = ({ signal }) =>
+    resumeExecutionSuspension(suspensionId, executionSuspensionResume, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: suspensionId !== null && suspensionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ResumeExecutionSuspensionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof resumeExecutionSuspension>>
+>;
+export type ResumeExecutionSuspensionQueryError = ErrorResponse | N401Response;
+
+export function useResumeExecutionSuspension<
+  TData = Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  suspensionId: number,
+  executionSuspensionResume: undefined | ExecutionSuspensionResume,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+          TError,
+          Awaited<ReturnType<typeof resumeExecutionSuspension>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useResumeExecutionSuspension<
+  TData = Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+          TError,
+          Awaited<ReturnType<typeof resumeExecutionSuspension>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useResumeExecutionSuspension<
+  TData = Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Resume a suspension
+ */
+
+export function useResumeExecutionSuspension<
+  TData = Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getResumeExecutionSuspensionQueryOptions(
+    suspensionId,
+    executionSuspensionResume,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type listPlatformRoutinesResponse200 = {
   data: PlatformRoutineListResponse;
   status: 200;
@@ -4957,6 +5715,1690 @@ export function useUpdatePlatformRoutine<
   const queryOptions = getUpdatePlatformRoutineQueryOptions(
     id,
     platformRoutineUpdate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listRetentionPoliciesResponse200 = {
+  data: RetentionPolicyListResponse;
+  status: 200;
+};
+
+export type listRetentionPoliciesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listRetentionPoliciesResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listRetentionPoliciesResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type listRetentionPoliciesResponseSuccess =
+  listRetentionPoliciesResponse200 & {
+    headers: Headers;
+  };
+export type listRetentionPoliciesResponseError = (
+  | listRetentionPoliciesResponse401
+  | listRetentionPoliciesResponse403
+  | listRetentionPoliciesResponse503
+) & {
+  headers: Headers;
+};
+
+export type listRetentionPoliciesResponse =
+  listRetentionPoliciesResponseSuccess | listRetentionPoliciesResponseError;
+
+export const getListRetentionPoliciesUrl = () => {
+  return `/admin/retention/policies`;
+};
+
+/**
+ * The admin Data retention page (ADR-0042 decision 4). Platform rows first, then project overrides. Gated on `retention.manage`.
+ * @summary List the retention policy of every data class
+ */
+export const listRetentionPolicies = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listRetentionPoliciesResponse> => {
+  return eliteaFetch<listRetentionPoliciesResponse>(
+    getListRetentionPoliciesUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListRetentionPoliciesQueryKey = () => {
+  return [`/admin/retention/policies`] as const;
+};
+
+export const getListRetentionPoliciesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listRetentionPolicies>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof listRetentionPolicies>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListRetentionPoliciesQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listRetentionPolicies>>
+  > = ({ signal }) => listRetentionPolicies({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listRetentionPolicies>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListRetentionPoliciesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listRetentionPolicies>>
+>;
+export type ListRetentionPoliciesQueryError =
+  N401Response | N403Response | ErrorResponse;
+
+export function useListRetentionPolicies<
+  TData = Awaited<ReturnType<typeof listRetentionPolicies>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listRetentionPolicies>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRetentionPolicies>>,
+          TError,
+          Awaited<ReturnType<typeof listRetentionPolicies>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListRetentionPolicies<
+  TData = Awaited<ReturnType<typeof listRetentionPolicies>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listRetentionPolicies>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRetentionPolicies>>,
+          TError,
+          Awaited<ReturnType<typeof listRetentionPolicies>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListRetentionPolicies<
+  TData = Awaited<ReturnType<typeof listRetentionPolicies>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listRetentionPolicies>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the retention policy of every data class
+ */
+
+export function useListRetentionPolicies<
+  TData = Awaited<ReturnType<typeof listRetentionPolicies>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listRetentionPolicies>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListRetentionPoliciesQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type setPlatformRetentionPolicyResponse200 = {
+  data: RetentionPolicy;
+  status: 200;
+};
+
+export type setPlatformRetentionPolicyResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type setPlatformRetentionPolicyResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type setPlatformRetentionPolicyResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type setPlatformRetentionPolicyResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type setPlatformRetentionPolicyResponseSuccess =
+  setPlatformRetentionPolicyResponse200 & {
+    headers: Headers;
+  };
+export type setPlatformRetentionPolicyResponseError = (
+  | setPlatformRetentionPolicyResponse400
+  | setPlatformRetentionPolicyResponse401
+  | setPlatformRetentionPolicyResponse403
+  | setPlatformRetentionPolicyResponse503
+) & {
+  headers: Headers;
+};
+
+export type setPlatformRetentionPolicyResponse =
+  | setPlatformRetentionPolicyResponseSuccess
+  | setPlatformRetentionPolicyResponseError;
+
+export const getSetPlatformRetentionPolicyUrl = (dataClass: string) => {
+  return `/admin/retention/policies/${dataClass}`;
+};
+
+/**
+ * Replaces the platform row. Takes effect on the enforcing sweep's next pass. Gated on `retention.manage`; audited as `retention.policy.update`.
+ * @summary Set the platform bounds of one data class
+ */
+export const setPlatformRetentionPolicy = async (
+  dataClass: string,
+  retentionPolicyUpdate: RetentionPolicyUpdate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<setPlatformRetentionPolicyResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<setPlatformRetentionPolicyResponse>(
+    getSetPlatformRetentionPolicyUrl(dataClass),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(retentionPolicyUpdate),
+    },
+  );
+};
+
+export const getSetPlatformRetentionPolicyQueryKey = (
+  dataClass: string,
+  retentionPolicyUpdate?: RetentionPolicyUpdate,
+) => {
+  return [
+    "PUT",
+    `/admin/retention/policies/${dataClass}`,
+    retentionPolicyUpdate,
+  ] as const;
+};
+
+export const getSetPlatformRetentionPolicyQueryOptions = <
+  TData = Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  dataClass: string,
+  retentionPolicyUpdate: RetentionPolicyUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSetPlatformRetentionPolicyQueryKey(dataClass, retentionPolicyUpdate);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof setPlatformRetentionPolicy>>
+  > = ({ signal }) =>
+    setPlatformRetentionPolicy(dataClass, retentionPolicyUpdate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: dataClass !== null && dataClass !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SetPlatformRetentionPolicyQueryResult = NonNullable<
+  Awaited<ReturnType<typeof setPlatformRetentionPolicy>>
+>;
+export type SetPlatformRetentionPolicyQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useSetPlatformRetentionPolicy<
+  TData = Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  dataClass: string,
+  retentionPolicyUpdate: RetentionPolicyUpdate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
+          TError,
+          Awaited<ReturnType<typeof setPlatformRetentionPolicy>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetPlatformRetentionPolicy<
+  TData = Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  dataClass: string,
+  retentionPolicyUpdate: RetentionPolicyUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
+          TError,
+          Awaited<ReturnType<typeof setPlatformRetentionPolicy>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetPlatformRetentionPolicy<
+  TData = Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  dataClass: string,
+  retentionPolicyUpdate: RetentionPolicyUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Set the platform bounds of one data class
+ */
+
+export function useSetPlatformRetentionPolicy<
+  TData = Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  dataClass: string,
+  retentionPolicyUpdate: RetentionPolicyUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSetPlatformRetentionPolicyQueryOptions(
+    dataClass,
+    retentionPolicyUpdate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type setProjectRetentionOverrideResponse200 = {
+  data: RetentionPolicy;
+  status: 200;
+};
+
+export type setProjectRetentionOverrideResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type setProjectRetentionOverrideResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type setProjectRetentionOverrideResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type setProjectRetentionOverrideResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type setProjectRetentionOverrideResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type setProjectRetentionOverrideResponseSuccess =
+  setProjectRetentionOverrideResponse200 & {
+    headers: Headers;
+  };
+export type setProjectRetentionOverrideResponseError = (
+  | setProjectRetentionOverrideResponse400
+  | setProjectRetentionOverrideResponse401
+  | setProjectRetentionOverrideResponse403
+  | setProjectRetentionOverrideResponse404
+  | setProjectRetentionOverrideResponse503
+) & {
+  headers: Headers;
+};
+
+export type setProjectRetentionOverrideResponse =
+  | setProjectRetentionOverrideResponseSuccess
+  | setProjectRetentionOverrideResponseError;
+
+export const getSetProjectRetentionOverrideUrl = (
+  dataClass: string,
+  projectId: number,
+) => {
+  return `/admin/retention/policies/${dataClass}/projects/${projectId}`;
+};
+
+/**
+ * Refused unless the platform row allows overrides and the value lies inside its bounds. Gated on `retention.manage`; audited as `retention.override.set`.
+ * @summary Set a project's own maximum age for one data class
+ */
+export const setProjectRetentionOverride = async (
+  dataClass: string,
+  projectId: number,
+  retentionOverrideUpdate: RetentionOverrideUpdate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<setProjectRetentionOverrideResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<setProjectRetentionOverrideResponse>(
+    getSetProjectRetentionOverrideUrl(dataClass, projectId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(retentionOverrideUpdate),
+    },
+  );
+};
+
+export const getSetProjectRetentionOverrideQueryKey = (
+  dataClass: string,
+  projectId: number,
+  retentionOverrideUpdate?: RetentionOverrideUpdate,
+) => {
+  return [
+    "PUT",
+    `/admin/retention/policies/${dataClass}/projects/${projectId}`,
+    retentionOverrideUpdate,
+  ] as const;
+};
+
+export const getSetProjectRetentionOverrideQueryOptions = <
+  TData = Awaited<ReturnType<typeof setProjectRetentionOverride>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  dataClass: string,
+  projectId: number,
+  retentionOverrideUpdate: RetentionOverrideUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setProjectRetentionOverride>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSetProjectRetentionOverrideQueryKey(
+      dataClass,
+      projectId,
+      retentionOverrideUpdate,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof setProjectRetentionOverride>>
+  > = ({ signal }) =>
+    setProjectRetentionOverride(dataClass, projectId, retentionOverrideUpdate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      dataClass !== null &&
+      dataClass !== undefined &&
+      projectId !== null &&
+      projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof setProjectRetentionOverride>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SetProjectRetentionOverrideQueryResult = NonNullable<
+  Awaited<ReturnType<typeof setProjectRetentionOverride>>
+>;
+export type SetProjectRetentionOverrideQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useSetProjectRetentionOverride<
+  TData = Awaited<ReturnType<typeof setProjectRetentionOverride>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  dataClass: string,
+  projectId: number,
+  retentionOverrideUpdate: RetentionOverrideUpdate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setProjectRetentionOverride>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setProjectRetentionOverride>>,
+          TError,
+          Awaited<ReturnType<typeof setProjectRetentionOverride>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetProjectRetentionOverride<
+  TData = Awaited<ReturnType<typeof setProjectRetentionOverride>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  dataClass: string,
+  projectId: number,
+  retentionOverrideUpdate: RetentionOverrideUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setProjectRetentionOverride>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setProjectRetentionOverride>>,
+          TError,
+          Awaited<ReturnType<typeof setProjectRetentionOverride>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetProjectRetentionOverride<
+  TData = Awaited<ReturnType<typeof setProjectRetentionOverride>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  dataClass: string,
+  projectId: number,
+  retentionOverrideUpdate: RetentionOverrideUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setProjectRetentionOverride>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Set a project's own maximum age for one data class
+ */
+
+export function useSetProjectRetentionOverride<
+  TData = Awaited<ReturnType<typeof setProjectRetentionOverride>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  dataClass: string,
+  projectId: number,
+  retentionOverrideUpdate: RetentionOverrideUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setProjectRetentionOverride>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSetProjectRetentionOverrideQueryOptions(
+    dataClass,
+    projectId,
+    retentionOverrideUpdate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteProjectRetentionOverrideResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteProjectRetentionOverrideResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteProjectRetentionOverrideResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteProjectRetentionOverrideResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type deleteProjectRetentionOverrideResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type deleteProjectRetentionOverrideResponseSuccess =
+  deleteProjectRetentionOverrideResponse204 & {
+    headers: Headers;
+  };
+export type deleteProjectRetentionOverrideResponseError = (
+  | deleteProjectRetentionOverrideResponse401
+  | deleteProjectRetentionOverrideResponse403
+  | deleteProjectRetentionOverrideResponse404
+  | deleteProjectRetentionOverrideResponse503
+) & {
+  headers: Headers;
+};
+
+export type deleteProjectRetentionOverrideResponse =
+  | deleteProjectRetentionOverrideResponseSuccess
+  | deleteProjectRetentionOverrideResponseError;
+
+export const getDeleteProjectRetentionOverrideUrl = (
+  dataClass: string,
+  projectId: number,
+) => {
+  return `/admin/retention/policies/${dataClass}/projects/${projectId}`;
+};
+
+/**
+ * The platform value applies again. Gated on `retention.manage`; audited as `retention.override.delete`.
+ * @summary Remove a project's override
+ */
+export const deleteProjectRetentionOverride = async (
+  dataClass: string,
+  projectId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteProjectRetentionOverrideResponse> => {
+  return eliteaFetch<deleteProjectRetentionOverrideResponse>(
+    getDeleteProjectRetentionOverrideUrl(dataClass, projectId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteProjectRetentionOverrideQueryKey = (
+  dataClass: string,
+  projectId: number,
+) => {
+  return [
+    "DELETE",
+    `/admin/retention/policies/${dataClass}/projects/${projectId}`,
+  ] as const;
+};
+
+export const getDeleteProjectRetentionOverrideQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  dataClass: string,
+  projectId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeleteProjectRetentionOverrideQueryKey(dataClass, projectId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteProjectRetentionOverride>>
+  > = ({ signal }) =>
+    deleteProjectRetentionOverride(dataClass, projectId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      dataClass !== null &&
+      dataClass !== undefined &&
+      projectId !== null &&
+      projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteProjectRetentionOverrideQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteProjectRetentionOverride>>
+>;
+export type DeleteProjectRetentionOverrideQueryError =
+  N401Response | N403Response | ErrorResponse;
+
+export function useDeleteProjectRetentionOverride<
+  TData = Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  dataClass: string,
+  projectId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
+          TError,
+          Awaited<ReturnType<typeof deleteProjectRetentionOverride>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteProjectRetentionOverride<
+  TData = Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  dataClass: string,
+  projectId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
+          TError,
+          Awaited<ReturnType<typeof deleteProjectRetentionOverride>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteProjectRetentionOverride<
+  TData = Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  dataClass: string,
+  projectId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove a project's override
+ */
+
+export function useDeleteProjectRetentionOverride<
+  TData = Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  dataClass: string,
+  projectId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteProjectRetentionOverrideQueryOptions(
+    dataClass,
+    projectId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listLegalHoldsResponse200 = {
+  data: LegalHoldListResponse;
+  status: 200;
+};
+
+export type listLegalHoldsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listLegalHoldsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listLegalHoldsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listLegalHoldsResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type listLegalHoldsResponseSuccess = listLegalHoldsResponse200 & {
+  headers: Headers;
+};
+export type listLegalHoldsResponseError = (
+  | listLegalHoldsResponse400
+  | listLegalHoldsResponse401
+  | listLegalHoldsResponse403
+  | listLegalHoldsResponse503
+) & {
+  headers: Headers;
+};
+
+export type listLegalHoldsResponse =
+  listLegalHoldsResponseSuccess | listLegalHoldsResponseError;
+
+export const getListLegalHoldsUrl = (params?: ListLegalHoldsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/legal_holds?${stringifiedParams}`
+    : `/admin/legal_holds`;
+};
+
+/**
+ * Newest first, at most 1000. `active=true` drops released holds. Gated on `legal_hold.manage`.
+ * @summary List legal holds
+ */
+export const listLegalHolds = async (
+  params?: ListLegalHoldsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listLegalHoldsResponse> => {
+  return eliteaFetch<listLegalHoldsResponse>(getListLegalHoldsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListLegalHoldsQueryKey = (params?: ListLegalHoldsParams) => {
+  return [`/admin/legal_holds`, ...(params ? [params] : [])] as const;
+};
+
+export const getListLegalHoldsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listLegalHolds>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListLegalHoldsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listLegalHolds>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListLegalHoldsQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listLegalHolds>>> = ({
+    signal,
+  }) => listLegalHolds(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listLegalHolds>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListLegalHoldsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listLegalHolds>>
+>;
+export type ListLegalHoldsQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListLegalHolds<
+  TData = Awaited<ReturnType<typeof listLegalHolds>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params: undefined | ListLegalHoldsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listLegalHolds>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listLegalHolds>>,
+          TError,
+          Awaited<ReturnType<typeof listLegalHolds>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListLegalHolds<
+  TData = Awaited<ReturnType<typeof listLegalHolds>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListLegalHoldsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listLegalHolds>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listLegalHolds>>,
+          TError,
+          Awaited<ReturnType<typeof listLegalHolds>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListLegalHolds<
+  TData = Awaited<ReturnType<typeof listLegalHolds>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListLegalHoldsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listLegalHolds>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List legal holds
+ */
+
+export function useListLegalHolds<
+  TData = Awaited<ReturnType<typeof listLegalHolds>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListLegalHoldsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listLegalHolds>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListLegalHoldsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createLegalHoldResponse201 = {
+  data: LegalHold;
+  status: 201;
+};
+
+export type createLegalHoldResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type createLegalHoldResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createLegalHoldResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createLegalHoldResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type createLegalHoldResponseSuccess = createLegalHoldResponse201 & {
+  headers: Headers;
+};
+export type createLegalHoldResponseError = (
+  | createLegalHoldResponse400
+  | createLegalHoldResponse401
+  | createLegalHoldResponse403
+  | createLegalHoldResponse503
+) & {
+  headers: Headers;
+};
+
+export type createLegalHoldResponse =
+  createLegalHoldResponseSuccess | createLegalHoldResponseError;
+
+export const getCreateLegalHoldUrl = () => {
+  return `/admin/legal_holds`;
+};
+
+/**
+ * Suspends deletion of every conversation the hold covers, by the retention sweep and by a user's own delete (409). Gated on `legal_hold.manage`; audited as `legal_hold.create`.
+ * @summary Place a legal hold
+ */
+export const createLegalHold = async (
+  legalHoldCreate: LegalHoldCreate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createLegalHoldResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createLegalHoldResponse>(getCreateLegalHoldUrl(), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(legalHoldCreate),
+  });
+};
+
+export const getCreateLegalHoldQueryKey = (
+  legalHoldCreate?: LegalHoldCreate,
+) => {
+  return ["POST", `/admin/legal_holds`, legalHoldCreate] as const;
+};
+
+export const getCreateLegalHoldQueryOptions = <
+  TData = Awaited<ReturnType<typeof createLegalHold>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  legalHoldCreate: LegalHoldCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createLegalHold>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getCreateLegalHoldQueryKey(legalHoldCreate);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof createLegalHold>>> = ({
+    signal,
+  }) => createLegalHold(legalHoldCreate, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof createLegalHold>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateLegalHoldQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createLegalHold>>
+>;
+export type CreateLegalHoldQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useCreateLegalHold<
+  TData = Awaited<ReturnType<typeof createLegalHold>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  legalHoldCreate: LegalHoldCreate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createLegalHold>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createLegalHold>>,
+          TError,
+          Awaited<ReturnType<typeof createLegalHold>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateLegalHold<
+  TData = Awaited<ReturnType<typeof createLegalHold>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  legalHoldCreate: LegalHoldCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createLegalHold>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createLegalHold>>,
+          TError,
+          Awaited<ReturnType<typeof createLegalHold>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateLegalHold<
+  TData = Awaited<ReturnType<typeof createLegalHold>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  legalHoldCreate: LegalHoldCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createLegalHold>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Place a legal hold
+ */
+
+export function useCreateLegalHold<
+  TData = Awaited<ReturnType<typeof createLegalHold>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  legalHoldCreate: LegalHoldCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createLegalHold>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateLegalHoldQueryOptions(legalHoldCreate, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type releaseLegalHoldResponse200 = {
+  data: LegalHold;
+  status: 200;
+};
+
+export type releaseLegalHoldResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type releaseLegalHoldResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type releaseLegalHoldResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type releaseLegalHoldResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type releaseLegalHoldResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type releaseLegalHoldResponseSuccess = releaseLegalHoldResponse200 & {
+  headers: Headers;
+};
+export type releaseLegalHoldResponseError = (
+  | releaseLegalHoldResponse401
+  | releaseLegalHoldResponse403
+  | releaseLegalHoldResponse404
+  | releaseLegalHoldResponse409
+  | releaseLegalHoldResponse503
+) & {
+  headers: Headers;
+};
+
+export type releaseLegalHoldResponse =
+  releaseLegalHoldResponseSuccess | releaseLegalHoldResponseError;
+
+export const getReleaseLegalHoldUrl = (id: number) => {
+  return `/admin/legal_holds/${id}/release`;
+};
+
+/**
+ * Deletion of what the hold covered resumes on the next sweep. A hold is released once. Gated on `legal_hold.manage`; audited as `legal_hold.release`.
+ * @summary Release a legal hold
+ */
+export const releaseLegalHold = async (
+  id: number,
+  legalHoldRelease?: LegalHoldRelease,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<releaseLegalHoldResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<releaseLegalHoldResponse>(getReleaseLegalHoldUrl(id), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(legalHoldRelease),
+  });
+};
+
+export const getReleaseLegalHoldQueryKey = (
+  id: number,
+  legalHoldRelease?: LegalHoldRelease,
+) => {
+  return [
+    "POST",
+    `/admin/legal_holds/${id}/release`,
+    legalHoldRelease,
+  ] as const;
+};
+
+export const getReleaseLegalHoldQueryOptions = <
+  TData = Awaited<ReturnType<typeof releaseLegalHold>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  id: number,
+  legalHoldRelease?: LegalHoldRelease,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof releaseLegalHold>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getReleaseLegalHoldQueryKey(id, legalHoldRelease);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof releaseLegalHold>>
+  > = ({ signal }) =>
+    releaseLegalHold(id, legalHoldRelease, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof releaseLegalHold>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ReleaseLegalHoldQueryResult = NonNullable<
+  Awaited<ReturnType<typeof releaseLegalHold>>
+>;
+export type ReleaseLegalHoldQueryError =
+  N401Response | N403Response | ErrorResponse;
+
+export function useReleaseLegalHold<
+  TData = Awaited<ReturnType<typeof releaseLegalHold>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  id: number,
+  legalHoldRelease: undefined | LegalHoldRelease,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof releaseLegalHold>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof releaseLegalHold>>,
+          TError,
+          Awaited<ReturnType<typeof releaseLegalHold>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useReleaseLegalHold<
+  TData = Awaited<ReturnType<typeof releaseLegalHold>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  id: number,
+  legalHoldRelease?: LegalHoldRelease,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof releaseLegalHold>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof releaseLegalHold>>,
+          TError,
+          Awaited<ReturnType<typeof releaseLegalHold>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useReleaseLegalHold<
+  TData = Awaited<ReturnType<typeof releaseLegalHold>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  id: number,
+  legalHoldRelease?: LegalHoldRelease,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof releaseLegalHold>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Release a legal hold
+ */
+
+export function useReleaseLegalHold<
+  TData = Awaited<ReturnType<typeof releaseLegalHold>>,
+  TError = N401Response | N403Response | ErrorResponse,
+>(
+  id: number,
+  legalHoldRelease?: LegalHoldRelease,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof releaseLegalHold>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getReleaseLegalHoldQueryOptions(
+    id,
+    legalHoldRelease,
     options,
   );
 

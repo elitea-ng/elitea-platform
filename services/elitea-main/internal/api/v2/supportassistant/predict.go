@@ -39,6 +39,7 @@ import (
 	"github.com/google/uuid"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -271,6 +272,12 @@ func (h *Handler) Predict(w http.ResponseWriter, r *http.Request) {
 			"conversation_uuid", conversationUUID,
 			"participant_id", participantID,
 			"err", err)
+		if status, body, refused := safety.HTTPRefusal(err); refused {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_ = json.NewEncoder(w).Encode(body)
+			return
+		}
 		apierr.WriteStatus(w, http.StatusBadGateway, "failed to start the support agent")
 		return
 	}

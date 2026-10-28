@@ -142,8 +142,14 @@ func containsString(values []string, want string) bool {
 // unreadable configuration store must degrade to — see NewPolicy's callers.
 type Policy struct {
 	blockedToolkits map[string]struct{}
-	blockedTools    map[string]map[string]struct{}
-	sensitiveTools  map[string]map[string]struct{}
+	// suspendedToolkits are the toolkit types under an active toolkit_type
+	// suspension (ADR-0041 decision 1, the kill switch). Canonical keys. They
+	// are not blocked here: the catalogue keeps listing them and the freeze
+	// keeps them. They travel to the worker in Runtime(), which refuses the
+	// tool call with execution_suspended.
+	suspendedToolkits map[string]struct{}
+	blockedTools      map[string]map[string]struct{}
+	sensitiveTools    map[string]map[string]struct{}
 
 	// companyName and messageTemplate are carried verbatim, NOT canonicalised:
 	// they are display copy, not match keys.
@@ -208,7 +214,39 @@ func normalizeToolMapping(mapping map[string][]string) map[string]map[string]str
 // Empty reports whether this policy would refuse nothing at all. Callers on hot
 // paths use it to skip the walk entirely.
 func (p Policy) Empty() bool {
-	return len(p.blockedToolkits) == 0 && len(p.blockedTools) == 0 && len(p.sensitiveTools) == 0
+	return len(p.blockedToolkits) == 0 && len(p.blockedTools) == 0 && len(p.sensitiveTools) == 0 &&
+		len(p.suspendedToolkits) == 0
+}
+
+// WithSuspendedToolkits returns a copy of p that also carries the toolkit
+// types under an active suspension. Values are canonicalised; values that
+// canonicalise to "" are dropped.
+func (p Policy) WithSuspendedToolkits(toolkitTypes []string) Policy {
+	if len(toolkitTypes) == 0 {
+		return p
+	}
+	suspended := make(map[string]struct{}, len(p.suspendedToolkits)+len(toolkitTypes))
+	for key := range p.suspendedToolkits {
+		suspended[key] = struct{}{}
+	}
+	for _, raw := range toolkitTypes {
+		if key := CanonicalKey(raw); key != "" {
+			suspended[key] = struct{}{}
+		}
+	}
+	p.suspendedToolkits = suspended
+	return p
+}
+
+// ToolkitSuspended reports whether a toolkit type is under an active
+// suspension.
+func (p Policy) ToolkitSuspended(toolkitType string) bool {
+	key := CanonicalKey(toolkitType)
+	if key == "" {
+		return false
+	}
+	_, suspended := p.suspendedToolkits[key]
+	return suspended
 }
 
 // ToolkitBlocked reports whether an entire toolkit TYPE is disabled.
@@ -395,6 +433,10 @@ type RuntimePolicy struct {
 	SensitiveTools  map[string][]string `json:"sensitive_tools"`
 	CompanyName     string              `json:"sensitive_action_company_name"`
 	MessageTemplate string              `json:"sensitive_action_message_template"`
+	// SuspendedToolkitTypes are the canonical toolkit types under an active
+	// suspension. Omitted when empty, so a run admitted with no suspension
+	// carries the same bytes as before the kill switch existed.
+	SuspendedToolkitTypes []string `json:"suspended_toolkit_types,omitempty"`
 }
 
 // Runtime projects the policy for transport.
@@ -419,12 +461,18 @@ type RuntimePolicy struct {
 func (p Policy) Runtime() RuntimePolicy {
 	blockedToolkits := p.BlockedToolkits()
 	sort.Strings(blockedToolkits)
+	var suspended []string
+	for key := range p.suspendedToolkits {
+		suspended = append(suspended, key)
+	}
+	sort.Strings(suspended)
 	return RuntimePolicy{
-		BlockedToolkits: blockedToolkits,
-		BlockedTools:    sortedToolMapping(p.blockedTools),
-		SensitiveTools:  sortedToolMapping(p.sensitiveTools),
-		CompanyName:     p.CompanyName(),
-		MessageTemplate: p.MessageTemplate(),
+		SuspendedToolkitTypes: suspended,
+		BlockedToolkits:       blockedToolkits,
+		BlockedTools:          sortedToolMapping(p.blockedTools),
+		SensitiveTools:        sortedToolMapping(p.sensitiveTools),
+		CompanyName:           p.CompanyName(),
+		MessageTemplate:       p.MessageTemplate(),
 	}
 }
 

@@ -440,6 +440,11 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			_ = tx.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
+	// The kill switch's fence (safety/fence.go), first so this transaction
+	// holds nothing while a suspension commits.
+	if err := fenceSuspendedAdmission(ctx, pgxExecutor{queryer: tx}); err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
 	txQueries := sqlcgen.New(tx)
 	currentProjectID := int64(0)
 	if admission.CurrentTurn != nil {
@@ -586,6 +591,16 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 	); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert agent execution binding: %w", err)
 	}
+	// The run's agent, so an agent suspension (shared 0194, the kill switch)
+	// can find and cancel it. An ad hoc chat has none and keeps NULL.
+	if applicationID := admission.ApplicationID(); applicationID > 0 {
+		if _, err := tx.Exec(ctx, `
+UPDATE elitea_runtime.agent_execution_jobs SET application_id = $3
+WHERE execution_id = $1 AND generation = $2`,
+			admission.Record.Job.ID, int64(admission.Record.Job.Generation), applicationID); err != nil {
+			return executionapp.AdmissionOutcome{}, fmt.Errorf("record the run's agent: %w", err)
+		}
+	}
 	if admission.CurrentTurn != nil {
 		if err := insertCurrentApplicationTurn(
 			ctx,
@@ -654,7 +669,7 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert agent command outbox: %w", err)
 	}
 	facts := recordFacts(admission.Record, timing.AdmittedAt, agentApplicationVersionID(admission))
-	facts.applicationID, facts.governed = agentApplicationID(admission), admission.GovernedCredentials
+	facts.applicationID, facts.governed = admission.ApplicationID(), admission.GovernedCredentials
 	if _, err := admitExecutionProfile(ctx, tx, pgxRows(tx), r.policy.CredentialProfile, agentAdmissionPin(admission),
 		facts); err != nil {
 		return executionapp.AdmissionOutcome{}, err
@@ -740,6 +755,15 @@ func resetCurrentAgentResponse(
 	projectID, ok := narrowRowID(turn.ProjectID)
 	if !ok {
 		return executionapp.ErrInvalidAdmission
+	}
+	// A legal hold (ADR-0042 decision 4) keeps the answer this reset would
+	// delete and the question an edit would overwrite.
+	held, err := conversationHeldByUUID(ctx, tx, turn.ProjectID, turn.ConversationUUID)
+	if err != nil {
+		return err
+	}
+	if held {
+		return agentexecutionapp.ErrConversationLegalHold
 	}
 	// Read BEFORE the reset strips the answer's cloud markers: whether this
 	// regenerate rewinds a handed-off thread's cloud ref (decision 7).
@@ -1454,19 +1478,6 @@ func agentApplicationVersionID(admission agentexecutionapp.Admission) int64 {
 		return admission.CurrentRegenerateTurn.ApplicationVersionID
 	case admission.CurrentContinueTurn != nil:
 		return admission.CurrentContinueTurn.ApplicationVersionID
-	}
-	return 0
-}
-
-// agentApplicationID is agentApplicationVersionID's application.
-func agentApplicationID(admission agentexecutionapp.Admission) int64 {
-	switch {
-	case admission.CurrentTurn != nil:
-		return admission.CurrentTurn.ApplicationID
-	case admission.CurrentRegenerateTurn != nil:
-		return admission.CurrentRegenerateTurn.ApplicationID
-	case admission.CurrentContinueTurn != nil:
-		return admission.CurrentContinueTurn.ApplicationID
 	}
 	return 0
 }

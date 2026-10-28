@@ -124,6 +124,14 @@ filled at an older epoch. Advisory: every cache hit and redemption re-checks
 the epochs in PostgreSQL, so a lost message costs latency only. Workers are
 denied the subject (`elitea.rt.v1.>`).
 
+The kill switch's suspension fan-out (#1493, ADR-0041 decision 1) is core
+NATS on `elitea.rt.v1.safety.suspension`: after a suspension is created or
+resumed, Main publishes `{"v":1,"origin","kind":"suspension","id"}` (no
+reason, no tenant data), and every replica drops its cached list of active
+suspensions, so its admission gate reads the table again. Advisory: each
+replica also reloads after at most 10 seconds, so a lost message costs that
+delay only. Workers are denied the subject (`elitea.rt.v1.>`).
+
 ## Consumers and workers
 
 One durable pull consumer per stream, created by the bootstrap. Workers bind
@@ -330,7 +338,7 @@ creates or updates one, or creates a consumer.
 
 | NATS user (URI SAN `spiffe://elitea.internal/nats/<id>`) | Account | Grants |
 | --- | --- | --- |
-| `elitea-main-runtime` (elitea-main's runtime plane) | RUNTIME | publish `elitea.rt.v1.{validate,agent,index}.d.*`; stream info and direct get on the three streams; consumer info on their durables; publish and subscribe `elitea.rt.v1.replay.wake` and `elitea.rt.v1.security.invalidation`; inbox `_INBOX_elitea-main-runtime.>`. Denied: `$KV.>`, `$JS.ACK.>`, `MSG.NEXT`, stream and consumer admin |
+| `elitea-main-runtime` (elitea-main's runtime plane) | RUNTIME | publish `elitea.rt.v1.{validate,agent,index}.d.*`; stream info and direct get on the three streams; consumer info on their durables; publish and subscribe `elitea.rt.v1.replay.wake`, `elitea.rt.v1.security.invalidation` and `elitea.rt.v1.safety.suspension`; inbox `_INBOX_elitea-main-runtime.>`. Denied: `$KV.>`, `$JS.ACK.>`, `MSG.NEXT`, stream and consumer admin |
 | `elitea-nats-bootstrap-runtime` (the `nats-bootstrap` hook Job, short-lived certificate) | RUNTIME | creates and reconciles the three streams and their durables (`bootstrap_runtime` in `bootstrap.sh`); no delete or purge |
 | `elitea-worker` (Rust and Python workers) | WORKER | `JS.RUNTIME.API.CONSUMER.{INFO,MSG.NEXT}` and `$JS.ACK` on each stream's own durable only (the imports); dead-letter KV puts and the bucket's stream info; inbox `_INBOX_elitea-worker.>`. No stream info on the command streams (elitea-main verifies those). Denied: `elitea.rt.v1.>`, stream and consumer admin |
 | `elitea-nats-bootstrap-worker` (the hook Job) | WORKER | creates and reconciles the dead-letter bucket (`bootstrap_worker`); no delete or purge |

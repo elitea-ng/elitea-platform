@@ -3,6 +3,7 @@ package platformconfig
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -32,13 +33,48 @@ func LoadGuardrails(ctx context.Context, pool *pgxpool.Pool) (guardrails.Policy,
 	if err != nil {
 		return guardrails.Policy{}, err
 	}
+	suspended, err := loadSuspendedToolkitTypes(ctx, pool)
+	if err != nil {
+		return guardrails.Policy{}, err
+	}
 	return guardrails.NewPolicy(guardrails.PolicyInput{
 		BlockedToolkits: values.Strings(KeyBlockedToolkits),
 		BlockedTools:    values.StringLists(KeyBlockedTools),
 		SensitiveTools:  values.StringLists(KeySensitiveTools),
 		CompanyName:     values.String(KeySensitiveActionCompanyName, ""),
 		MessageTemplate: values.String(KeySensitiveActionMessageTemplate, ""),
-	}), nil
+	}).WithSuspendedToolkits(suspended), nil
+}
+
+// loadSuspendedToolkitTypes reads the toolkit types under an active
+// toolkit_type suspension (shared 0194, ADR-0041 decision 1). The rows hold
+// canonical keys already. Read with the rest of the policy, uncached, for
+// the same reason the policy is: a suspension must reach the next frozen
+// run, not the next deployment. The partial unique index keeps the scan to
+// the active rows.
+func loadSuspendedToolkitTypes(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
+	if pool == nil { // no store, as in Load: nothing is suspended
+		return nil, nil
+	}
+	rows, err := pool.Query(ctx, `
+SELECT scope_key FROM elitea_runtime.execution_suspensions
+WHERE scope = 'toolkit_type' AND resumed_at IS NULL AND scope_key IS NOT NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("read suspended toolkit types: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("read suspended toolkit types: %w", err)
+		}
+		out = append(out, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read suspended toolkit types: %w", err)
+	}
+	return out, nil
 }
 
 // GuardrailPolicyAdapter is the single implementation of the policy source that

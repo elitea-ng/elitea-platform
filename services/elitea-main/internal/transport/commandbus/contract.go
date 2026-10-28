@@ -107,6 +107,12 @@ const ReplayWakeSubject = SubjectRoot + ".replay.wake"
 // redemption re-checks the epochs in PostgreSQL.
 const SecurityInvalidationSubject = SubjectRoot + ".security.invalidation"
 
+// SafetySuspensionSubject is the core NATS subject of the advisory kill
+// switch invalidation between elitea-main replicas (ADR-0041 decision 1,
+// #1493): a suspension id, nothing else. A replica that misses one reloads
+// its admission snapshot within safety.DefaultMaxAge anyway.
+const SafetySuspensionSubject = SubjectRoot + ".safety.suspension"
+
 // Consumer and redelivery timing.
 const (
 	// AckWait is the consumer's redelivery timer: twice the 30s claim lease,

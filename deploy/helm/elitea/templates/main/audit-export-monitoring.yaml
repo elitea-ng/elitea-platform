@@ -1,0 +1,90 @@
+{{- if and .Values.main.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+{{- /* The SIEM audit export's scrape path and alert rules (ADR-0042 decision 3,
+       #1494). They render with the Prometheus Operator API and only when an
+       exporter is configured: with none, elitea-main serves no /metrics, and a
+       PodMonitor would scrape a closed port (a target that is always down). A
+       rule renders only with the PodMonitor, because an alert over a metric
+       nothing scrapes could never fire. */ -}}
+{{- $export := .Values.main.auditExport }}
+{{- $env := .Values.main.env | default dict }}
+{{- $configured := or (index $env "ELITEA_AUDIT_EXPORT_OTLP_ENDPOINT") (index $env "ELITEA_AUDIT_EXPORT_WEBHOOK_URL") }}
+{{- $podMonitor := and $configured $export.metrics.podMonitor.enabled }}
+{{- if $podMonitor }}
+# Scrapes the audit export's GET /metrics (main.auditExport.metrics.port).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "elitea-main.fullname" . }}-audit-export
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "elitea-main.labels" . | nindent 4 }}
+    {{- with $export.metrics.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "elitea-main.selectorLabels" . | nindent 6 }}
+  podMetricsEndpoints:
+    - port: audit-metrics
+      path: /metrics
+      interval: {{ $export.metrics.podMonitor.interval }}
+---
+{{- end }}
+{{- if and $podMonitor $export.metrics.prometheusRule.enabled }}
+{{- $lag := include "elitea.integer" (dict "field" "main.auditExport.metrics.prometheusRule.lagSeconds" "value" $export.metrics.prometheusRule.lagSeconds "min" 1) }}
+{{- $backlog := include "elitea.integer" (dict "field" "main.auditExport.metrics.prometheusRule.backlogEvents" "value" $export.metrics.prometheusRule.backlogEvents "min" 1) }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "elitea-main.fullname" . }}-audit-export
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "elitea-main.labels" . | nindent 4 }}
+    {{- with $export.metrics.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: elitea-audit-export
+      rules:
+        # The oldest undelivered audit event is older than the threshold: the
+        # receiver is down, refusing the credential, or too slow. Nothing is
+        # lost (the events wait in their source tables and are re-sent), but
+        # the SIEM is behind. A stream is "security_audit" or "admin_audit".
+        - alert: EliteaAuditExportLag
+          expr: max by (stream) (elitea_audit_export_lag_seconds) > {{ $lag }}
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Audit export to the SIEM is behind on {{ "{{" }} $labels.stream {{ "}}" }}"
+            description: "The oldest undelivered {{ "{{" }} $labels.stream {{ "}}" }} event is {{ "{{" }} $value | humanizeDuration {{ "}}" }} old. Check elitea_audit_export_failed_total{kind=\"transient\"}, the receiver and, for a webhook, the key file; elitea-main's WARN log \"audit events relay pass failed\" names the sink's error."
+        # The count of undelivered events keeps growing.
+        - alert: EliteaAuditExportBacklog
+          expr: max by (stream) (elitea_audit_export_backlog) > {{ $backlog }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ "{{" }} $value {{ "}}" }} audit events are waiting for export on {{ "{{" }} $labels.stream {{ "}}" }}"
+            description: "More than {{ $backlog }} events are undelivered. No event is dropped: the security audit outbox and centry.audit_events keep them, and the relays send them in order once the receiver accepts."
+        # A batch the receiver refused as malformed five times (400, 413 or
+        # 422) was dead-lettered so it stops blocking the stream. The events
+        # remain in their source tables and in
+        # elitea_runtime.audit_export_dead_letters; an operator must decide.
+        # Series exist at 0 from the first scrape, so increase() sees the
+        # first dead letter; the `unless ... offset` arm catches a series that
+        # appears late (a restart between scrapes).
+        - alert: EliteaAuditExportDeadLettered
+          expr: |
+            (sum by (sink, source) (increase(elitea_audit_export_dead_lettered_total[15m])) > 0)
+            or
+            (sum by (sink, source) (elitea_audit_export_dead_lettered_total unless elitea_audit_export_dead_lettered_total offset 15m) > 0)
+          labels:
+            severity: critical
+          annotations:
+            summary: "Audit events were dead-lettered by the {{ "{{" }} $labels.sink {{ "}}" }} export"
+            description: "The {{ "{{" }} $labels.sink {{ "}}" }} receiver permanently refused {{ "{{" }} $labels.source {{ "}}" }} events. Read elitea_runtime.audit_export_dead_letters (source_ref, reason, event) and the ERROR log \"batch dead-lettered\"; the events are also still in their source tables."
+{{- end }}
+{{- end }}

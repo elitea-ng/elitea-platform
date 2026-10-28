@@ -50,6 +50,7 @@ import (
 	projectinfoapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
 	v2projects "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projects"
 	promptcontextreadsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
+	v2retention "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/retention"
 	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
@@ -329,7 +330,20 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		"profile", string(credentialAdmission.Profile()),
 		"policy_revision", credentialRevision.ID,
 		"continuation_guard", credentialAdmission.ContinuationGuard())
-	if err := startSecurityAuditRelay(ctx, credentialAdmission, credentialRevision, pool, logger); err != nil {
+	auditExport, closeAuditExport, err := auditExportAtBoot(ctx, os.LookupEnv, credentialAdmission, pool, logger)
+	if err != nil {
+		return err
+	}
+	if closeAuditExport != nil {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := closeAuditExport(shutdownCtx); runErr == nil && err != nil {
+				runErr = fmt.Errorf("shut down audit export: %w", err)
+			}
+		}()
+	}
+	if err := startSecurityAuditRelay(ctx, credentialAdmission, credentialRevision, pool, logger, securityAuditExporter(auditExport)); err != nil {
 		return err
 	}
 	// agentIdentity.Broker opens the run-scoped agent session at a governed
@@ -372,6 +386,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			logger.Warn("could not flush the audit trail on shutdown", "err", flushErr)
 		}
 	}()
+
+	// The kill switch (ADR-0041 decision 1, #1493): one admission gate per
+	// replica, shared by the runtime admission stores and the suspend and
+	// resume routes, and its scheduled self-test.
+	executionSuspensions, err := newKillSwitch(pool, logger)
+	if err != nil {
+		return err
+	}
+	if err := startKillSwitchSelfTest(ctx, pool, executionSuspensions, auditRecorder, logger); err != nil {
+		return err
+	}
 
 	// The domain-events Publisher — #876's second half. Every producer that
 	// wires it (pipeline run admission, agent version publish/unpublish,
@@ -2073,6 +2098,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			CredentialProfile:                credentialAdmission,
 			CredentialBroker:                 runtimeCredentialBroker,
 			SecurityInvalidations:            securityInvalidations,
+			ExecutionSuspensions:             executionSuspensions.gate,
 			IndexScheduleMandates:            governedTriggers.IndexMandates,
 			IndexScheduleMandateGate:         governedTriggers.IndexGate,
 			ControlPool:                      runtimePools.Control,
@@ -2796,12 +2822,20 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		logger.Info("browser edge enabled", "web_upstream", webUpstream.String())
 	}
 
+	// Conversation retention (ADR-0042 decision 4, #1495): deletes nothing
+	// until an administrator sets a maximum age for conversations.
+	if err := startConversationRetention(ctx, pool, objectStore, logger); err != nil {
+		return fmt.Errorf("compose conversation retention: %w", err)
+	}
+
 	r := api.NewRouter(api.RouterConfig{
+		RetentionAdmin:                v2retention.NewHandler(dbrepos.NewRetentionPolicyRepo(pool)),
 		AgentIdentityAdmin:            agentIdentity.Admin,
 		CredentialGrantsAdmin:         credentialGrantsAdminHandler,
 		CredentialProbe:               credentialProbeHandler,
 		CredentialConsent:             providerOAuthGoverned.Consent,
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
+		ExecutionSuspensions:          executionSuspensions.handler,
 		MandateAttachments:            governedTriggers.Attachments,
 		CredentialReferencesAdmin:     credentialReferencesHandler,
 		AgentAssertionWellKnown:       eliteaNative.WellKnown,
