@@ -12,7 +12,8 @@ Taken from the current platform (EliteaUI + elitea-sdk parallel tool calls and H
   runs a saved pipeline (or a saved agent, see FU-246). The node joins the branch results into its output key
   (`append`, `keyed`, `merge`) with On Error `continue` (failed branches land as typed failed entries) or `stop`.
 - A branch that asks the user (`ask_user`), needs a sensitive-tool approval (HITL approve/reject) or a delegated
-  authorization raises its own card. Cards from several branches are open at the same time; each is answered on its
+  authorization raises its own card. A delegated-authorization card can be skipped; `authorize` from the card is
+  refused typed until it carries its credential reference end to end (FU-250). Cards from several branches are open at the same time; each is answered on its
   own, in any order, from any tab, and the run continues each answered branch without waiting for the others.
 - The parked response shows one accordion per member and its open cards; a card answered in one tab disappears from
   every other tab; a reload shows the same state from the server.
@@ -76,26 +77,34 @@ lost-wake PG tests, the ledger claim-mode PG test, the member-failure PG test, t
 
 | Mechanism | Path | Proving test | Measured |
 |---|---|---|---|
-| At most two parent appends per activation visit (no O(children) parent writes) | `src/agents/graph/parallel.rs` | `parallel_tests.rs` `each_activation_visit_appends_at_most_two_parent_rows` | 2 |
-| Bounded admission: 16 branches, concurrency 8, 16 open cards; limit and limit+1 | agent-runtime `graph/fanout/plan.rs`, `runner.rs` | `plan_tests.rs` `child_count_limit_and_limit_plus_one`, `runner_tests.rs` `concurrency_limit_and_limit_plus_one`, `open_cards_limit_and_limit_plus_one`; `parallel_tests.rs` `sixteen_branches_and_concurrency_eight_are_the_limits`, `sixteen_open_cards_park_and_a_seventeenth_fails_typed` | exact |
-| Bounded results: child result, joined result 8 MiB, join entry | `plan.rs` | `plan_tests.rs` `*_limit_and_limit_plus_one`; `parallel_tests.rs` `a_joined_result_at_eight_mib_lands_and_one_byte_more_fails_typed` | exact |
-| Each child resumed once whatever the answer order | runner | `runner_tests.rs` `sixteen_cards_answered_in_reverse_resume_each_child_once` | 16 × 1 |
-| Fetch bounded (16 entries, entry size) | Main `domain/executioninterrupt/limits.go` | `TestFetchAtSixteenEntries`, `TestFetchEntryAtLimitAndLimitPlusOne` | exact |
+| At most two parent appends per activation visit (no O(children) parent writes) | `services/elitea-worker-rust/src/state/postgres_checkpointer/parallel_append.rs:25` (`append_after`) | `parallel_tests.rs:2556` `each_activation_visit_appends_at_most_two_parent_rows` | 2 |
+| Bounded admission: 16 branches, concurrency 8, 16 open cards; limit and limit+1 | `libs/rust/agent-runtime/src/graph/fanout/plan.rs:198`, `runner.rs:349` (concurrency), `runner.rs:460` (open cards) | `plan_tests.rs` `child_count_limit_and_limit_plus_one`, `runner_tests.rs` `concurrency_limit_and_limit_plus_one`, `open_cards_limit_and_limit_plus_one`; `parallel_tests.rs:584`, `:1535` | exact |
+| Bounded results: child result, joined result 8 MiB, join entry | `plan.rs:228`, `plan.rs:253` | `plan_tests.rs:172-235`; `parallel_tests.rs:2793` | exact |
+| A fetch over 16 decisions is a typed ledger fault, never a truncation (REVIEW-1470 #7) | `runner.rs:611` | `runner_tests.rs` `a_fetch_at_its_bound_applies_and_one_more_is_a_typed_ledger_fault` | 16 applied / 17 refused |
+| Each child resumed once whatever the answer order | `runner.rs:619` (`apply_decisions`) | `runner_tests.rs` `sixteen_cards_answered_in_reverse_resume_each_child_once` | 16 × 1 |
+| Fetch bounded (16 entries, entry size) | `services/elitea-main/internal/domain/executioninterrupt/limits.go:29` | `TestFetchAtSixteenEntries`, `TestFetchEntryAtLimitAndLimitPlusOne` | exact |
+| Decision latency (contract §11, p95 ≤ 150 ms) | `services/elitea-main/internal/infra/db/repos/execution_interrupts.go:323` (`Decide`, one transaction, statement budget 13) | `TestDecideLatencyBudget`, `TestDecideSingleTransaction` | p50 4.2–4.3 ms, p95 5.7–6.7 ms, p99 7.9–11.5 ms (3 rounds × 200, real PG, 2026-10-28) |
+| Fan-out fetches on one Worker session do not serialize (share locks on session and command rows) (REVIEW-1470 #6) | `services/elitea-main/internal/infra/db/repos/agent_claim_authority.go:64` | `TestClaimAuthorityLetsFetchesOnOneSessionRunSideBySide` (fails with the old `FOR UPDATE`) | no wait |
 | Composition check (FU-249 adds one string per version read, no new query) | Main `applicationcomposition` | existing read-budget tests (`TestEachVersionIsReadAtMostOnceWithinTheHopBudget`) unchanged | unchanged |
-| One shared project event stream per tab (the ledger no longer opens a second connection) | Web `useInterruptLedger.ts` | `useInterruptLedger.test.tsx` shared-connection test | 1 connection |
-| SSE flushed at once behind the compression group | Main `middleware/otel.go` | `TestOtelMiddleware_AnEventStreamBehindCompressFlushesAtOnce` | first frame immediate |
+| One shared project event stream per tab (the ledger no longer opens a second connection) | `apps/elitea-web/src/features/chat-messages/model/useInterruptLedger.ts:167` | `useInterruptLedger.test.tsx` shared-connection test | 1 connection |
+| SSE flushed at once behind the compression group | `services/elitea-main/internal/api/middleware/otel.go` | `TestOtelMiddleware_AnEventStreamBehindCompressFlushesAtOnce` | first frame immediate |
 
-Performance follow-ups (not in this PR): a progress coalescer for live member text, and retiring the last wake row at
-the run's terminal (cosmetic: the row stays ADMITTED, nothing re-admits it).
+Parked wake ≤ 5 s and other tab ≤ 3 s (contract §11) are browser-observed; see the browser section.
+Performance follow-ups (not in this PR): a progress coalescer for live member text; caching a held decision by child
+checkpoint id instead of re-reading it each tick (REVIEW-1470 #14); `maxLiveAudience = 256`
+(`execution_interrupts_wiring.go:217`) — a larger conversation gets no live copy and reconciles on the next stream
+re-open or visibility change (REVIEW-1470 #15).
 
 ## Durability
 
 | Mechanism | Path | Proving test |
 |---|---|---|
-| Card durable before the run parks; decision and wake job commit together under the response-row lock | Main `execution_interrupts.go`, `execution_interrupt_wakes.go` | `TestDecideVersusParkAdmitsExactlyOneWakeJob`, `TestParkSettlementAndDecisionAdmitExactlyOneWake`, `TestLostAdmitIsSweptExactlyOnce`, `TestTwoSweepersAndDuplicateSubmitsAdmitOnce` |
-| Child receipts appended atomically under the writer fence; stable child identity across claims and executions | `src/state/postgres_checkpointer/parallel_append.rs`, `parallel_checkpoint.rs` | `parallel_tests.rs`, `postgres_checkpointer_tests.rs` |
-| A decision is ACKed with the child checkpoint it was applied on; an ACK from a superseded claim is refused | runner `apply_decisions`, Main `Ack` | `TestOldClaimAckRefusedAfterTakeover`, `runner_tests.rs` |
-| A wake lost before its first root save re-enters its park (`RecoveryFrontier::WakePark`) | `src/agents/session.rs:1646`, `src/agents/pipeline.rs` | `postgres_a_wake_lost_before_its_first_root_save_recovers_as_the_wake` |
+| Card durable before the run parks; decision and wake job commit together under the response-row lock | `execution_interrupts.go:323` (`Decide`), `execution_interrupts_wiring.go:355` (`insertWake`), `:407` (`settleParkedResponse`) | `TestDecideVersusParkAdmitsExactlyOneWakeJob`, `TestParkSettlementAndDecisionAdmitExactlyOneWake`, `TestLostAdmitIsSweptExactlyOnce`, `TestTwoSweepersAndDuplicateSubmitsAdmitOnce` |
+| A wake that parks again holding a decision (a child with two cards) records the park; the next decision wakes it (REVIEW-1470 #1) | `execution_interrupts_wiring.go:444` | `TestAWakeThatParksAgainWithAHeldDecisionRecordsThePark` (fails without the fix) |
+| Child receipts appended atomically under the writer fence; stable child identity across claims and executions | `services/elitea-worker-rust/src/state/postgres_checkpointer/parallel_append.rs:25` | `parallel_tests.rs`, `postgres_checkpointer_tests.rs` |
+| Decision crash seams on real PostgreSQL: after fetch, after apply, before ACK, before join, after a child receipt, a two-claim race, a zombie claim's save | runner `fetch_and_apply` (`runner.rs:598`), ACK `runner.rs:587` | `services/elitea-worker-rust/src/state/postgres_checkpointer_tests/fanout_resume.rs:1114,1119,1124,1129,1137,1201,1257` |
+| A decision is ACKed with the child checkpoint it was applied on; an ACK from a superseded claim is refused | `runner.rs:587`, Main `execution_interrupts.go:574` (`Ack`) | `TestOldClaimAckRefusedAfterTakeover` |
+| A wake lost before its first root save re-enters its park, and only the park its parked execution wrote (REVIEW-1470 #5) | `services/elitea-worker-rust/src/agents/session.rs:1616` (`RecoveryFrontier::WakePark`), `graph/fanout_wake.rs:103` (`is_parked_writer`) | `postgres_a_wake_lost_before_its_first_root_save_recovers_as_the_wake`; `a_wake_never_enters_a_frontier_another_execution_wrote`, `only_the_parked_execution_is_the_parked_writer` |
 | An answered child resumed past its pause is never parked again on it: a receipt records its own checkpoint; a carried copy means "resumed" | `src/agents/graph/parallel_checkpoint.rs:425`, `parallel.rs:933` | `postgres_a_wake_lost_mid_model_resumes_the_answered_child` |
 | The ledger serves a model-checkpoint reclaim (same ordinary claim) | Main `agent_claim_authority.go:28` | `TestTheLedgerAcceptsAnOrdinaryClaimFirstOrModelCheckpointReclaimed` |
 
@@ -103,18 +112,22 @@ the run's terminal (cosmetic: the row stays ADMITTED, nothing re-admits it).
 
 | Mechanism | Path | Proving test |
 |---|---|---|
-| A member's failure fails its branch (failed join entry), never the run, under On Error `continue`; `stop` fails the node | `node_events.rs`, `graph/application.rs` | `postgres_a_member_whose_tool_cannot_run_fails_its_branch_not_the_run` |
-| Typed readable failures: `graph.fanout.child_tool_unavailable` (FU-248), `graph.fanout.agent_pause_unsupported` (FU-246), `graph.fanout.child_kind_unsupported` (FU-247), `graph.fanout.parallel_in_child_pipeline` (FU-249), `graph.fanout.may_have_started` | `parallel.rs`, `compiler.rs` | PG and unit tests named in each follow-up below |
-| Production Parallel without the claim's decision ledger is refused typed | `session.rs` `fanout_decisions_unavailable` | `postgres_production_parallel_without_the_decision_ledger_is_refused_typed` |
-| Lease loss stops the runner (control stop, never a business failure); Stop and Regenerate close open cards | runner, Main `CancelAllForResponse` | `TestStopAndRegenerateCloseCardsWithResolvedFrames`, runner lease tests |
-| A resolved card is never shown again when re-announced; a parked response re-reads its cards each park | Web `chatStreamFanoutFrames.ts`, `useInterruptLedger.ts` | Web tests for both |
+| A member's failure fails its branch (failed join entry), never the run, under On Error `continue`; `stop` fails the node | `src/agents/graph/parallel.rs:1303` (child outcome), agent-runtime `runner.rs` admission | `postgres_a_member_whose_tool_cannot_run_fails_its_branch_not_the_run` |
+| A run that ends without parking closes its cards: PENDING → CANCELLED, DECIDED → SUPERSEDED, audited with the run's claim, resolved frames; a later decision gets 409 (REVIEW-1470 #2) | Main `execution_interrupts_run_end.go:57,71,96`, Decide check `execution_interrupts.go:323`, sweep kicked after settlement (`runtimecomposition/composition.go`) | `TestARunThatEndsWithoutParkingClosesItsCards`, `TestADecisionAfterTheRunEndedClosesTheCardsAndIsRefused`, `TestAParkedOrWakingRunKeepsItsCards` |
+| A wake that cannot run ends the response readably: cards CANCELLED, `fanout_parked_v1` removed, `graph.fanout.wake_failed.<code>` with a support reference; capacity and unavailable refusals give their attempt back (REVIEW-1470 #3) | `execution_interrupt_wakes.go:200` (`FailFanoutWake`), `:279` (`DeferFanoutWake`), admitter `fanout_wake_admitter.go:119` | `TestAFailedWakeClosesTheCardsAndEndsTheResponseReadably`, `TestCapacityRefusalsNeverExhaustAWake` (21 refusals, then admitted), `TestFanoutWakeAdmitterMapsRefusalsToTypedFailures` |
+| A park lists only open cards (REVIEW-1470 #12) | `execution_interrupts_park.go:98` | `TestParkedTerminalSettlesInTheTerminalTransaction` "closed card" |
+| `authorize` refused typed until it carries its credential reference (FU-250, REVIEW-1470 #8) | `services/elitea-main/internal/api/v2/agentexecution/interrupts.go:134` | `TestExecutionInterruptDecisionStrictAdmission` "authorize (FU-250)" |
+| Typed readable failures: `graph.fanout.child_tool_unavailable` (FU-248), `graph.fanout.agent_pause_unsupported` (FU-246), `graph.fanout.child_kind_unsupported` (FU-247), `graph.fanout.parallel_in_child_pipeline` (FU-249), `graph.fanout.may_have_started`, `graph.fanout.ledger_fault` | `parallel.rs`, `compiler.rs`, `runner.rs:611` | PG and unit tests named in each follow-up below |
+| Production Parallel without the claim's decision ledger is refused typed | `session.rs:2110` (`fanout_decisions_unavailable`) | `postgres_production_parallel_without_the_decision_ledger_is_refused_typed` |
+| Lease loss stops the runner (control stop, never a business failure); Stop and Regenerate close open cards | `parallel.rs:1896`, Main `execution_interrupts.go:671` (`CancelAllForResponse`) | `TestStopAndRegenerateCloseCardsWithResolvedFrames`, runner lease tests |
+| A resolved card is never shown again when re-announced; a parked response re-reads its cards each park and on every stream re-open; one malformed list entry refuses the list (REVIEW-1470 #10, #11) | `apps/elitea-web/src/features/chat-messages/model/useInterruptLedger.ts:156`, `lib/interruptLedger.ts` (`readInterruptList`) | `useInterruptLedger.test.tsx` re-open test, `interruptLedger.test.ts` |
 
 ## Security
 
 | Category (`rules/security.md`) | Applies | How it was checked |
 |---|---|---|
 | Identity from verified credentials | yes (private routes) | The private ledger routes take the claim from the verified mTLS workload certificate and the claim/fence headers (`fenceFromClaim`); `TestFetchAndAckRefuseStaleFences` (wrong fence, identity, claim). |
-| Object-level authorization | yes | Public route matrix `TestExecutionInterruptPublicRouteAuthorizationMatrix` (owner, member, foreign project, other user, unauthenticated, token vs session); the ledger matrix (NONE and AGENT_MODEL_CHECKPOINT accepted; NODE_RECOVERY running and suspended, model-checkpoint suspended, foreign projection, stale fence, released, expired lease, expired/revoked session, past deadline, terminal output, lost actor permission refused). Live frames reach conversation readers only (`TestStream_InterruptFramesReachOnlyConversationReaders`). The 2026-10-27 widening is limited to the recovery label of the same live, fenced ordinary claim; desired state stays RUNNING; no other predicate changed. |
+| Object-level authorization | yes | Public route matrix `TestExecutionInterruptPublicRouteAuthorizationMatrix` (owner, member, foreign project, other user, unauthenticated, token vs session); the ledger matrix (NONE and AGENT_MODEL_CHECKPOINT accepted; NODE_RECOVERY running and suspended, model-checkpoint suspended, foreign projection, stale fence, released, expired lease, expired/revoked session, past deadline, terminal output, lost actor permission refused). Live frames reach conversation readers only (`TestStream_InterruptFramesReachOnlyConversationReaders`). The 2026-10-27 widening is limited to the recovery label of the same live, fenced ordinary claim; desired state stays RUNNING. The shared claim SQL also carries `j.actor_id ~ '^[1-9][0-9]{0,17}$'` (`agent_claim_authority.go:59`, from `779ed912f`), which now gates node recovery too: it only tightens the rule. Session and command rows are share-locked (REVIEW-1470 #6); revocation and retirement still wait for them. |
 | Input bounds and strict schemas | yes | Cards, decisions, ACKs and fetch canonicalised and size-bounded (limits tests above); `fanout_wake_v1` admitted only with an empty input and no other HITL field (`a_pipeline_wake_is_admitted_with_its_empty_input_and_only_its_marker`, `TestSubmitRefusesAMalformedWakeTurn`, `TestBrowserContinuationCannotSelectFanoutWake`). |
 | Injection | yes (SQL) | Parameterised only; the claim modes are a bound `text[]`. |
 | Egress | no new outbound calls | — |
@@ -142,10 +155,15 @@ Worker × P13, browser × P13, gap 18):
 | Web × reload, second tab | R | ledger read on mount and at each park, shared stream | browser chats 16, 18, 19, 24, 27 |
 | Map | — | still production-gated (G-WORKER-09 narrowed to Map and pod replacement) | — |
 
-A PG test that drives a Worker reclaim against Main's real ledger in one test was not practical (two services in two
-languages; the Worker tests use the in-process test ledger). The proof is the pair: Main's ledger PG matrix (a
-model-checkpoint claim fetches and ACKs) and the Worker's lost-wake PG tests on the production recovery path, joined by
-the browser rerun on the deployed stack (chat 27).
+The Worker's decision seams run on real PostgreSQL (`fanout_resume.rs:1114-1257`: after fetch, after apply, before
+ACK, before join, after a child receipt, a two-claim race, a zombie save) with the in-process ledger; Main's ledger has
+its own real-PG matrix (settle, decide, fetch, ACK, close, wake). One test driving a Worker reclaim against Main's real
+ledger was not practical (two services, two languages): the proof is that pair plus the browser rerun on images built
+from the final head (see the browser section).
+
+NATS × P13 and PostgreSQL × P13 stay `R·U` in `recovery-guarantees.md`: a lost live frame (NATS) is recovered by the
+Web reconcile on every stream re-open, park and visibility change (REVIEW-1470 #10), and the ledger is the durable
+record; a PostgreSQL failover during a decision is covered by the same transactions but has no failover test.
 
 ## Browser evidence (real Chrome, stack `fanpar`, production profile, verify-profile 50/0)
 
@@ -195,6 +213,9 @@ refused the model-checkpoint reclaim (473c27f27), the answered child was parked 
 - Main: retire the last wake row at the run's terminal (stays ADMITTED, cosmetic).
 - Main: steering (`agent_steering.go:445`) accepts only `NONE` claims; check whether a model-checkpoint reclaim should
   consume steering (not used by the fan-out runner).
+- FU-250: `authorize` on a fan-out delegated-auth card carries its credential reference (refused typed until then).
+- FU-251: a NODE_RECOVERY claim that reaches a Parallel node ends typed instead of a lease-lost control stop.
+- Cache a held decision by child checkpoint id instead of re-reading it each tick (REVIEW-1470 #14).
 - Live member text coalescer (performance).
 - Kubernetes pod replacement for P13; Map (G-WORKER-09).
 - Governance (ADR-0039, merged from main on 2026-10-27): a fan-out wake admission records no application version in
