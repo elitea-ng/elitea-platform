@@ -34,6 +34,8 @@ Configuration holds the sections Features does not: some editable directly here,
 
 <Accordion title="Guardrails (editable here)">
 Blocked toolkit types (a blocked type cannot be listed or created, and is stripped from every agent before it runs — existing toolkits of that type stay visible so an administrator can review and delete them, but stop working); blocked individual tools within an otherwise-allowed toolkit; tools that require the user to authorize each call ("sensitive action" tools, matched per toolkit or with `*` for every toolkit); the company name and message template shown in that authorization dialog.
+
+These settings travel with every run, governed or not, and replace the worker's own `--toolkit-security-config` file for that run, even when they are empty. The file applies only to a run that carries no guardrails, so set sensitive tools here, not in the worker's file.
 </Accordion>
 
 <Accordion title="Banner (editable here)">

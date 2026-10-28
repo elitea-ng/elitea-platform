@@ -207,7 +207,7 @@ func gov005(ctx context.Context, t *testing.T, w *world) {
 
 // gov006: revocation reaches a run that is already admitted.
 func gov006(ctx context.Context, t *testing.T, w *world) {
-	// A sensitive call (add_comments, worker-toolkit-security.json) pauses
+	// A sensitive call (add_comments, markSensitiveTools) pauses
 	// before the credential is redeemed; the revocation lands in the pause.
 	duringPause := func(t *testing.T, label string, revoke func(agent governedAgent)) {
 		agent := w.governedAgent(ctx, t, agentSpec{Label: label, MandateFor: []*persona{w.user}})

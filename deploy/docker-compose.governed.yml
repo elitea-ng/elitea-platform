@@ -213,11 +213,6 @@ services:
   elitea-worker:
     environment:
       ELITEA_WORKER_GOVERNED_CONTEXT: "${ELITEA_GOVERNED_WORKER:-${ELITEA_GOVERNED_FLAG:-true}}"
-    volumes:
-      # The base set plus `jira.add_comments` as a sensitive tool: a governed
-      # Jira write pauses for approval, which is how the revocation and
-      # rollback cases hold a pinned run between two steps.
-      - ./governed/worker-toolkit-security.json:/run/elitea/toolkit-security.json:ro
     depends_on:
       governed-mocks:
         condition: service_healthy

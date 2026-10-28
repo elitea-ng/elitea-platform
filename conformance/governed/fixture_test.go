@@ -38,7 +38,25 @@ func newWorld(ctx context.Context, t *testing.T, phase string) *world {
 	if w.admin.UserID == w.approver.UserID {
 		t.Fatal("the admin and the approver are the same account; every two-person step would be refused")
 	}
+	w.markSensitiveTools(ctx, t)
 	return w
+}
+
+// markSensitiveTools makes Jira's add_comments a sensitive tool, so every
+// governed add_comments call pauses on a HITL decision (GOV-006, ROLLBACK).
+//
+// It has to be the platform guardrails section, not the worker's
+// --toolkit-security-config file: elitea-main sends this section with every
+// turn (resolveToolkitGuardrails), and the worker treats a per-run policy as
+// authoritative even when it is empty (policy_for_guardrails), so the file is
+// only the fallback for a command that carries none. The save is a per-key
+// upsert and idempotent, so every phase writes it again.
+func (w *world) markSensitiveTools(ctx context.Context, t *testing.T) {
+	t.Helper()
+	w.admin.do(ctx, t, http.MethodPut, "/api/v2/admin/plugin_config_values/administration/guardrails",
+		map[string]any{"values": map[string]any{"sensitive_tools": map[string]any{
+			"*": []string{"delete_file", "remove_index"}, "jira": []string{"add_comments"},
+		}}}, http.StatusOK)
 }
 
 func (w *world) p() string { return strconv.FormatInt(w.cfg.Project, 10) }
@@ -590,8 +608,15 @@ func (w *world) interrupt(ctx context.Context, t *testing.T, as *persona, fixtur
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Minute)
 	defer cancel()
 	var paused pausedRun
+	var seen []map[string]any
+	defer func() {
+		if t.Failed() {
+			t.Logf("last messages seen: %s", summarizeMessages(seen))
+		}
+	}()
 	eventually(ctx, t, 2*time.Second, "the run to pause on a HITL decision", func() bool {
-		for _, message := range w.messages(ctx, t, as, fixture) {
+		seen = w.messages(ctx, t, as, fixture)
+		for _, message := range seen {
 			pending, _ := metadataOf(message)["hitl_interrupt"].(map[string]any)
 			if pending == nil {
 				continue
