@@ -1168,7 +1168,15 @@ JOIN (VALUES
     ('super_admin', 'projects.projects.project.create'),
     ('super_admin', 'projects.projects.project.delete'),
     ('admin', 'projects.projects.project.create'),
-    ('admin', 'projects.projects.project.delete')
+    ('admin', 'projects.projects.project.delete'),
+    -- Issue 1495 (ADR-0042 decision 4): the retention policy and legal hold
+    -- admin pages. Administration mode only, super_admin and admin only; the
+    -- same grants land on existing databases through
+    -- migrations/shared/0195_retention_policy.sql.
+    ('super_admin', 'retention.manage'),
+    ('super_admin', 'legal_hold.manage'),
+    ('admin', 'retention.manage'),
+    ('admin', 'legal_hold.manage')
 ) AS grant_row(role_name, permission) ON grant_row.role_name = role.name
 WHERE role.mode = 'administration'
 ON CONFLICT (role_id, permission) DO NOTHING;

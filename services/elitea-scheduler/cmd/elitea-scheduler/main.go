@@ -24,6 +24,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/maintenance"
 	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/nativeauthretention"
 	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/pricesync"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/retentionpolicy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/securityauditretention"
 	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/syncretention"
 )
@@ -131,12 +132,18 @@ func main() {
 	//
 	// maintenanceSwitch.Active is the SAME gate the sync sweep consults, not
 	// a second reading of the switch — see internal/maintenance.
-	auditSweeper, auditErr := auditretention.New(pool, maintenanceSwitch.Active, auditretention.Config{
+	//
+	// The window follows the administrator's retention policy for
+	// `admin_audit` (ADR-0042 decision 4, elitea-main shared 0195) once it is
+	// saved; until then AUDIT_RETENTION_DAYS applies, exactly as before. With
+	// a policy reader the sweeper always starts: AUDIT_RETENTION_DAYS<=0 then
+	// deletes nothing until a policy sets a maximum.
+	auditSweeper, auditErr := auditretention.NewWithPolicy(pool, maintenanceSwitch.Active, auditretention.Config{
 		RetentionDays:     cfg.AuditRetentionDays,
 		Interval:          cfg.AuditRetentionInterval,
 		BatchSize:         cfg.AuditRetentionBatchSize,
 		MaxBatchesPerPass: cfg.AuditRetentionMaxBatches,
-	}, logger)
+	}, retentionpolicy.NewReader(pool, retentionpolicy.ClassAdminAudit), logger)
 	switch {
 	case errors.Is(auditErr, auditretention.ErrDisabled):
 		slog.Warn("audit retention sweep is OFF (AUDIT_RETENTION_DAYS<=0); "+
@@ -160,11 +167,13 @@ func main() {
 	// Security audit outbox retention (elitea-main shared 0183, #1114):
 	// deletes only outbox rows that are exported, older than the window and
 	// present in the append-only durable store. Default: no deletion
-	// (SECURITY_AUDIT_OUTBOX_RETENTION_DAYS unset or 0).
+	// (SECURITY_AUDIT_OUTBOX_RETENTION_DAYS unset or 0, and no saved
+	// `security_audit` retention policy, ADR-0042 decision 4).
 	if secAuditCfg, secAuditErr := securityauditretention.ConfigFromEnv(os.LookupEnv); secAuditErr != nil {
 		slog.Error("security audit outbox retention did not start", "err", secAuditErr)
-	} else if secAuditSweeper, secAuditErr := securityauditretention.New(
-		pool, maintenanceSwitch.Active, secAuditCfg, logger,
+	} else if secAuditSweeper, secAuditErr := securityauditretention.NewWithPolicy(
+		pool, maintenanceSwitch.Active, secAuditCfg,
+		retentionpolicy.NewReader(pool, retentionpolicy.ClassSecurityAudit), logger,
 	); errors.Is(secAuditErr, securityauditretention.ErrDisabled) {
 		slog.Info("security audit outbox retention is off; exported outbox rows are kept")
 	} else if secAuditErr != nil {

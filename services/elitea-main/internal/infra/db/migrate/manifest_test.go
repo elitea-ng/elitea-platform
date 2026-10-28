@@ -833,7 +833,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// activator and migration source of credential references (#1124).
 	// Nullable columns only; 0192 is claimed by another branch. No data, no
 	// permission.
-	require.EqualValues(t, 193, Head(shared))
+	//
+	// 195: shared/0195_retention_policy.sql, retention policy per data class,
+	// legal holds and the conversation attachment cleanup journal (ADR-0042
+	// decision 4, #1495). Seeds the platform defaults (today's behaviour) and
+	// grants retention.manage and legal_hold.manage to super_admin and admin.
+	// 0194 is claimed by another branch.
+	require.EqualValues(t, 195, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

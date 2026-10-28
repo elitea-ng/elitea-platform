@@ -50,6 +50,7 @@ import (
 	projectinfoapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
 	v2projects "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projects"
 	promptcontextreadsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
+	v2retention "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/retention"
 	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
@@ -2785,7 +2786,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		logger.Info("browser edge enabled", "web_upstream", webUpstream.String())
 	}
 
+	// Conversation retention (ADR-0042 decision 4, #1495): deletes nothing
+	// until an administrator sets a maximum age for conversations.
+	if err := startConversationRetention(ctx, pool, objectStore, logger); err != nil {
+		return fmt.Errorf("compose conversation retention: %w", err)
+	}
+
 	r := api.NewRouter(api.RouterConfig{
+		RetentionAdmin:                v2retention.NewHandler(dbrepos.NewRetentionPolicyRepo(pool)),
 		AgentIdentityAdmin:            agentIdentity.Admin,
 		CredentialGrantsAdmin:         credentialGrantsAdminHandler,
 		CredentialProbe:               credentialProbeHandler,

@@ -6412,6 +6412,126 @@ components:
           type: string
           maxLength: 64
 
+    RetentionPolicy:
+      type: object
+      description: >
+        One row of the retention policy (ADR-0042 decision 4). A platform row
+        (`project_id` null) sets the bounds of a data class: `min_age_days` is
+        the shortest maximum a project override may set and `max_age_days` the
+        platform maximum (null keeps forever). A project override sets only
+        its own `max_age_days`, inside those bounds. `data_class` is one of
+        conversation, attachment, gateway_request_log, admin_audit or
+        security_audit.
+      required: [data_class, project_id, min_age_days, max_age_days,
+        allow_project_override, overrides_supported, floor_days, enforced_by,
+        updated_by, updated_at]
+      properties:
+        data_class: { type: string }
+        project_id: { type: integer, format: int64, nullable: true }
+        min_age_days: { type: integer }
+        max_age_days:
+          type: integer
+          nullable: true
+          description: Null keeps the data forever.
+        allow_project_override: { type: boolean }
+        overrides_supported:
+          type: boolean
+          description: Whether this data class takes project overrides at all.
+        floor_days:
+          type: integer
+          description: The shortest maximum the enforcing sweep accepts.
+        enforced_by:
+          type: string
+          description: What applies the maximum of this data class.
+        updated_by:
+          type: integer
+          format: int64
+          nullable: true
+          description: Null on a seeded row nobody has edited.
+        updated_at: { type: string, format: date-time }
+
+    RetentionPolicyListResponse:
+      type: object
+      required: [policies]
+      properties:
+        policies:
+          type: array
+          items:
+            $ref: '#/components/schemas/RetentionPolicy'
+
+    RetentionPolicyUpdate:
+      type: object
+      additionalProperties: false
+      description: >
+        The platform row of one data class. An absent or null `max_age_days`
+        keeps the data forever; an absent `min_age_days` is 0.
+      properties:
+        min_age_days: { type: integer, minimum: 0 }
+        max_age_days: { type: integer, minimum: 1, nullable: true }
+        allow_project_override: { type: boolean }
+
+    RetentionOverrideUpdate:
+      type: object
+      additionalProperties: false
+      description: >
+        A project's own maximum age. It must lie inside the platform row's
+        bounds; null keeps forever, which only fits a platform row that also
+        keeps forever.
+      properties:
+        max_age_days: { type: integer, minimum: 1, nullable: true }
+
+    LegalHold:
+      type: object
+      description: >
+        A legal hold. While `active` it suspends every deletion of the
+        conversations it covers. `scope` is project (names `project_id`),
+        agent (names `project_id` and `agent_id`, the agent's own project) or
+        user (names `user_id`, the conversation owner).
+      required: [id, scope, project_id, agent_id, user_id, reason, active,
+        created_by, created_at, released_by, released_at, release_reason]
+      properties:
+        id: { type: integer, format: int64 }
+        scope: { type: string }
+        project_id: { type: integer, format: int64, nullable: true }
+        agent_id: { type: integer, format: int64, nullable: true }
+        user_id: { type: integer, format: int64, nullable: true }
+        reason: { type: string }
+        active: { type: boolean }
+        created_by: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        released_by: { type: integer, format: int64, nullable: true }
+        released_at: { type: string, format: date-time, nullable: true }
+        release_reason: { type: string, nullable: true }
+
+    LegalHoldListResponse:
+      type: object
+      required: [holds]
+      properties:
+        holds:
+          type: array
+          items:
+            $ref: '#/components/schemas/LegalHold'
+
+    LegalHoldCreate:
+      type: object
+      additionalProperties: false
+      required: [scope, reason]
+      description: >
+        `scope` is project, agent or user; name exactly the ids that scope
+        needs (see LegalHold).
+      properties:
+        scope: { type: string }
+        project_id: { type: integer, format: int64, minimum: 1 }
+        agent_id: { type: integer, format: int64, minimum: 1 }
+        user_id: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+
+    LegalHoldRelease:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: { type: string, maxLength: 2000 }
+
     AgentIdentityBinding:
       type: object
       description: >
@@ -17020,6 +17140,254 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '503':
           description: This deployment has no routine registry configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/retention/policies:
+    get:
+      operationId: listRetentionPolicies
+      summary: List the retention policy of every data class
+      description: >
+        The admin Data retention page (ADR-0042 decision 4). Platform rows
+        first, then project overrides. Gated on `retention.manage`.
+      tags: [admin]
+      responses:
+        '200':
+          description: Every platform row and project override
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionPolicyListResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: This deployment has no retention policy store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/retention/policies/{data_class}:
+    parameters:
+      - name: data_class
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      operationId: setPlatformRetentionPolicy
+      summary: Set the platform bounds of one data class
+      description: >
+        Replaces the platform row. Takes effect on the enforcing sweep's next
+        pass. Gated on `retention.manage`; audited as
+        `retention.policy.update`.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetentionPolicyUpdate'
+      responses:
+        '200':
+          description: The row as stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionPolicy'
+        '400':
+          description: >
+            An unknown data class, a maximum below the class floor or the
+            minimum, keep forever on the gateway log, a maximum on attachments,
+            or project overrides on a class that takes none
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: This deployment has no retention policy store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/retention/policies/{data_class}/projects/{project_id}:
+    parameters:
+      - name: data_class
+        in: path
+        required: true
+        schema: { type: string }
+      - name: project_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    put:
+      operationId: setProjectRetentionOverride
+      summary: Set a project's own maximum age for one data class
+      description: >
+        Refused unless the platform row allows overrides and the value lies
+        inside its bounds. Gated on `retention.manage`; audited as
+        `retention.override.set`.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetentionOverrideUpdate'
+      responses:
+        '200':
+          description: The override as stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionPolicy'
+        '400':
+          description: Outside the platform bounds, or overrides are not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such project or data class
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: This deployment has no retention policy store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    delete:
+      operationId: deleteProjectRetentionOverride
+      summary: Remove a project's override
+      description: >
+        The platform value applies again. Gated on `retention.manage`;
+        audited as `retention.override.delete`.
+      tags: [admin]
+      responses:
+        '204':
+          description: Removed
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No override for this project and data class
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: This deployment has no retention policy store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/legal_holds:
+    get:
+      operationId: listLegalHolds
+      summary: List legal holds
+      description: >
+        Newest first, at most 1000. `active=true` drops released holds. Gated
+        on `legal_hold.manage`.
+      tags: [admin]
+      parameters:
+        - name: active
+          in: query
+          required: false
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: The holds
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegalHoldListResponse'
+        '400':
+          description: active is not a boolean
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: This deployment has no retention policy store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    post:
+      operationId: createLegalHold
+      summary: Place a legal hold
+      description: >
+        Suspends deletion of every conversation the hold covers, by the
+        retention sweep and by a user's own delete (409). Gated on
+        `legal_hold.manage`; audited as `legal_hold.create`.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LegalHoldCreate'
+      responses:
+        '201':
+          description: The hold as stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegalHold'
+        '400':
+          description: An unknown scope, the wrong ids for the scope, or no reason
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: This deployment has no retention policy store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/legal_holds/{id}/release:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    post:
+      operationId: releaseLegalHold
+      summary: Release a legal hold
+      description: >
+        Deletion of what the hold covered resumes on the next sweep. A hold is
+        released once. Gated on `legal_hold.manage`; audited as
+        `legal_hold.release`.
+      tags: [admin]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LegalHoldRelease'
+      responses:
+        '200':
+          description: The released hold
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegalHold'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such hold
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The hold is already released
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: This deployment has no retention policy store
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
