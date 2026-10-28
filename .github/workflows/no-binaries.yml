@@ -556,7 +556,7 @@ jobs:
       - name: The build-once contract and the CI-image prune policy hold
         run: |
           set -euo pipefail
-          for suite in stack-images.test.mjs prune-ci-images.test.mjs prune-prereleases.test.mjs; do
+          for suite in stack-images.test.mjs prune-ci-images.test.mjs prune-prereleases.test.mjs prune-releases.test.mjs; do
             expected="$(grep -c '^test(' "scripts/ci/${suite}")"
             [ "${expected}" -ge 5 ] || { echo "::error::${suite}: found ${expected} scenario(s), expected at least 5"; exit 1; }
             # Capture the status: under `set -e` a failing command substitution

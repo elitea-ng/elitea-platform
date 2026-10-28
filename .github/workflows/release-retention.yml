@@ -1,0 +1,110 @@
+name: Release Retention
+
+# Cuts the releases down to the newest few, with the images and charts each
+# one published, the cosign signatures and attestations under them, and every
+# container package nothing publishes any more. The policy lives in
+# scripts/ci/prune-releases.mjs, run through actions/github-script.
+#
+# WHO. Repository admins only: the first job refuses anyone else, whoever
+# dispatched or re-ran the run. Deleting a release, or a package, cannot be
+# undone.
+#
+# WHEN. By hand only, from main. publish.yml's `prune` job already deletes
+# pre-releases on its own (the newest PRERELEASE_KEEP per channel stay, and a
+# stable release takes every pre-release cut before it); stable releases go
+# only here. Leave dry_run on first, read the log, then run it again with
+# dry_run off. A workflow token gets 1,000 API calls an hour, so a long run
+# waits out the limit and stops cleanly before the job times out: run it
+# again and it carries on where it stopped.
+
+on:
+  workflow_dispatch:
+    inputs:
+      keep_releases:
+        description: Stable releases to keep, newest first.
+        type: number
+        default: 10
+      keep_prereleases:
+        description: Pre-releases to keep per channel (nightly, dev), of those cut after the newest stable release.
+        type: number
+        default: 3
+      delete_retired:
+        description: Also delete the container packages no workflow publishes any more (the dry run lists them).
+        type: boolean
+        default: false
+      dry_run:
+        description: List what would be deleted, delete nothing.
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  admin:
+    name: Refuse anyone but an admin
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # Pinned to the v9.0.0 commit, as ci-image-cleanup.yml pins it.
+      - name: Check the actor and the triggering actor
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        with:
+          script: |
+            for (const username of new Set([process.env.ACTOR, process.env.TRIGGERING_ACTOR])) {
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ ...context.repo, username });
+              if (data.permission !== "admin") {
+                core.setFailed(`${username} has ${data.permission} on this repository; release retention needs admin`);
+                return;
+              }
+            }
+
+  prune:
+    name: Prune releases, images and charts
+    needs: admin
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      # Deletes releases and tags.
+      contents: write
+      # Deletes versions of, and whole, packages this repository published.
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: The policy still refuses what it must
+        run: node --test --test-reporter=spec scripts/ci/prune-releases.test.mjs scripts/ci/prune-prereleases.test.mjs
+      - name: Prune
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          KEEP_RELEASES: ${{ inputs.keep_releases }}
+          KEEP_PRERELEASES: ${{ inputs.keep_prereleases }}
+          DELETE_RETIRED: ${{ inputs.delete_retired == true }}
+          DRY_RUN: ${{ inputs.dry_run != false }}
+          ORG: ${{ github.repository_owner }}
+        with:
+          script: |
+            const { main } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/prune-releases.mjs`);
+            const code = await main({
+              github,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              org: process.env.ORG,
+              keepReleases: Number(process.env.KEEP_RELEASES),
+              keepPrereleases: Number(process.env.KEEP_PRERELEASES),
+              deleteRetired: process.env.DELETE_RETIRED === "true",
+              dryRun: process.env.DRY_RUN === "true",
+              // Stop 20 minutes before the job's timeout, so the log says where it stopped.
+              deadline: Date.now() + 330 * 60 * 1000,
+            });
+            if (code !== 0) core.setFailed(`scripts/ci/prune-releases.mjs exited ${code}`);
