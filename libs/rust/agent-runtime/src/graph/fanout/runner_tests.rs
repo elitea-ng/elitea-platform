@@ -277,6 +277,8 @@ struct FakeLedger {
     fetch_times: Mutex<Vec<Instant>>,
     lease_lost: AtomicBool,
     revision: AtomicUsize,
+    /// The next this-many fetches answer `Unavailable` (Main down).
+    unavailable: AtomicUsize,
 }
 
 impl FakeLedger {
@@ -316,6 +318,15 @@ impl DecisionSource for FakeLedger {
         self.fetch_times.lock().expect("times").push(Instant::now());
         if self.lease_lost.load(Ordering::SeqCst) {
             return Err(DecisionError::LeaseLost);
+        }
+        if self
+            .unavailable
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(DecisionError::Unavailable);
         }
         Ok(DecisionBatch {
             decisions: self.decided.lock().expect("decided").clone(),
@@ -957,6 +968,84 @@ async fn delegated_auth_applies_only_at_the_park_boundary() {
     assert_eq!(harness.children.received(0)[1], vec!["ik-0-1-auth"]);
 }
 
+/// REVIEW-1470 delta C: a wake whose restore and final fetches both answer
+/// `Unavailable` (Main restarting) never parks on a ledger it has not read: it
+/// retries, applies the decision once Main is back, and parks again having
+/// seen the current revision.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wake_never_parks_before_one_fetch_succeeds() {
+    let mut harness = Harness::new(three_asking());
+    harness
+        .runner(3, OnError::Continue)
+        .run()
+        .await
+        .expect("run");
+    harness.ledger.decide("ik-1-1-ask");
+    harness.replace_process();
+    harness.ledger.unavailable.store(2, Ordering::SeqCst);
+    let woken = harness
+        .runner(3, OnError::Continue)
+        .run()
+        .await
+        .expect("the wake parks once the ledger answers");
+    let RunnerOutcome::Parked {
+        decision_revision_seen,
+        ..
+    } = &woken
+    else {
+        panic!("expected a park, got {woken:?}");
+    };
+    assert_eq!(
+        *decision_revision_seen, 1,
+        "the park reports the revision it read"
+    );
+    assert_eq!(parked(&woken), vec!["ik-0-1-ask", "ik-2-1-ask"]);
+    assert_eq!(
+        harness.children.runs(1),
+        2,
+        "the answered child resumed once"
+    );
+    assert!(
+        harness.ledger.fetches() >= 4,
+        "{} fetches",
+        harness.ledger.fetches()
+    );
+}
+
+/// A ledger that stays unavailable until the activation deadline ends the run
+/// typed instead of parking with a revision it never read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_ledger_unavailable_until_the_deadline_is_a_typed_failure_not_a_park() {
+    let mut harness = Harness::new(three_asking());
+    harness
+        .runner(3, OnError::Continue)
+        .run()
+        .await
+        .expect("run");
+    harness.ledger.decide("ik-1-1-ask");
+    harness.replace_process();
+    harness
+        .ledger
+        .unavailable
+        .store(usize::MAX, Ordering::SeqCst);
+    let deadline = Instant::now() + Duration::from_millis(700);
+    let woken = harness
+        .runner_with(
+            3,
+            OnError::Continue,
+            Some(deadline),
+            ChildPermits::default(),
+        )
+        .run()
+        .await;
+    assert_eq!(woken.err(), Some(FanoutRunError::LedgerUnavailable));
+    assert_eq!(
+        harness.children.runs(1),
+        1,
+        "nothing ran without the decision"
+    );
+}
+
 /// A fetch at its bound (16 decisions) is applied; one decision more is a
 /// typed ledger fault, never a silent truncation (REVIEW-1470 #7).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1009,6 +1098,7 @@ fn every_fanout_code_is_in_the_dotted_graph_fanout_grammar() {
         FanoutRunError::CorruptChild.to_string(),
         FanoutRunError::FrameUndelivered.to_string(),
         FanoutRunError::LedgerFault.to_string(),
+        FanoutRunError::LedgerUnavailable.to_string(),
         DecisionError::Unavailable.to_string(),
         DecisionError::LeaseLost.to_string(),
     ];

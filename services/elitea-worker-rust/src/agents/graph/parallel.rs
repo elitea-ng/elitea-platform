@@ -1927,6 +1927,10 @@ fn runner_error(error: FanoutRunError, fault: Option<GraphError>) -> GraphError 
             "graph.parallel.ledger_fault",
             "the decision ledger returned more decisions than its bound",
         ),
+        FanoutRunError::LedgerUnavailable => parallel_error(
+            "graph.parallel.ledger_unavailable",
+            "the decision ledger could not be read before the parallel node could park",
+        ),
     }
 }
 

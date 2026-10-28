@@ -274,7 +274,19 @@ pub enum FanoutRunError {
     /// invariant breach, never a silent truncation.
     #[error("graph.fanout.ledger_fault")]
     LedgerFault,
+    /// No fetch of this execution succeeded before the activation deadline
+    /// (or the park-fetch bound): the run never parks on a ledger it has not
+    /// read, since a park must report the decision revision it saw.
+    #[error("graph.fanout.ledger_unavailable")]
+    LedgerUnavailable,
 }
+
+/// The longest a run waits for its first successful fetch before parking,
+/// when its activation has no earlier deadline.
+const MAX_PARK_FETCH_WAIT: Duration = Duration::from_secs(120);
+/// First retry delay of that wait; it doubles up to `PARK_FETCH_RETRY_CAP`.
+const PARK_FETCH_RETRY_START: Duration = Duration::from_millis(250);
+const PARK_FETCH_RETRY_CAP: Duration = Duration::from_secs(5);
 
 enum Slot {
     Queued(Vec<FetchedDecision>),
@@ -330,6 +342,9 @@ struct Loop {
     /// Decisions for a child that is running: re-examined when it pauses.
     held: BTreeMap<String, FetchedDecision>,
     revision_seen: u64,
+    /// At least one fetch of this execution succeeded: only then is
+    /// `revision_seen` a revision this execution actually read.
+    fetched: bool,
     admission_open: bool,
     tick: Option<Tick>,
 }
@@ -377,6 +392,7 @@ impl FanoutRunner {
             delivered: BTreeSet::new(),
             held: BTreeMap::new(),
             revision_seen: 0,
+            fetched: false,
             admission_open: true,
             tick: None,
         };
@@ -418,6 +434,9 @@ impl FanoutRunner {
                 // Final fetch before parking; continue only if it made a
                 // child runnable (an ACK alone never spins this loop).
                 self.fetch_and_apply(&mut state, false).await?;
+                if !state.fetched {
+                    self.fetch_until_read(&mut state).await?;
+                }
                 if has_queued(&state) {
                     continue;
                 }
@@ -592,6 +611,33 @@ impl FanoutRunner {
         }
     }
 
+    /// Retry the fetch with bounded backoff until one succeeds, the
+    /// activation deadline (at most `MAX_PARK_FETCH_WAIT`) passes, or the run
+    /// is stopped. A run never parks on a ledger it has not read: its park
+    /// reports the decision revision it saw, and Main settles the park on it.
+    async fn fetch_until_read(&self, state: &mut Loop) -> Result<(), FanoutRunError> {
+        let bound = Instant::now() + MAX_PARK_FETCH_WAIT;
+        let until = self
+            .config
+            .deadline
+            .map_or(bound, |deadline| deadline.min(bound));
+        let mut delay = PARK_FETCH_RETRY_START;
+        while !state.fetched {
+            let now = Instant::now();
+            if now >= until {
+                return Err(FanoutRunError::LedgerUnavailable);
+            }
+            tokio::select! {
+                biased;
+                () = self.stop.fired() => return Err(FanoutRunError::Cancelled),
+                () = tokio::time::sleep_until((now + delay).min(until)) => {}
+            }
+            self.fetch_and_apply(state, false).await?;
+            delay = (delay * 2).min(PARK_FETCH_RETRY_CAP);
+        }
+        Ok(())
+    }
+
     /// One claim-fenced fetch and apply. `true` when it changed what can run.
     /// `restore`: the immediate fetch of an execution that restored open
     /// cards, the only fetch that delivers park-boundary (auth) decisions.
@@ -605,6 +651,7 @@ impl FanoutRunner {
             Err(DecisionError::Unavailable) => return Ok(false),
             Err(DecisionError::LeaseLost) => return Err(FanoutRunError::LeaseLost),
         };
+        state.fetched = true;
         state.revision_seen = state.revision_seen.max(batch.decision_revision);
         let mut decisions = batch.decisions;
         if decisions.len() > MAX_FETCH_DECISIONS {
