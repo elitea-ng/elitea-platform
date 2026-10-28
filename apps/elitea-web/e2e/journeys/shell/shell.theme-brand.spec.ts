@@ -340,11 +340,12 @@ test('J30 (default): with no served pack the compiled logo, favicon and brand fa
     ['JetBrains Mono', 'jetbrains-mono'],
   ] as const) {
     expect(fontCss).toContain(`font-family:"${family}"`);
-    expect(fontCss).toContain(`url("./brand/fonts/${file}.woff2") format("woff2")`);
+    // The pack's `./brand/fonts/…` is anchored to the app basename
+    // (`BrandDocumentHead.tsx`), so the face loads the same from any route depth.
+    expect(fontCss).toContain(`url("/app/brand/fonts/${file}.woff2") format("woff2")`);
   }
-  // The relative face URL resolves from a deep path too (same alias as the favicon).
-  const deepFont = await page.request.get(BASE_URL + '/app/chat/deep/brand/fonts/manrope.woff2');
-  expect(deepFont.status()).toBe(200);
+  const face = await page.request.get(BASE_URL + '/app/brand/fonts/manrope.woff2');
+  expect(face.status()).toBe(200);
 
   // First paint: the static script stamped the scheme before the bundle ran.
   expect(await readScheme(page)).toBe('dark');
