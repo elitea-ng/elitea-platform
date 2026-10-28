@@ -2049,7 +2049,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: docs-shots
-          path: apps/elitea-web/src/entries/docs/content/img/*.webp
+          path: apps/elitea-docs/src/screenshots/*.webp
           if-no-files-found: warn
           retention-days: 14
 

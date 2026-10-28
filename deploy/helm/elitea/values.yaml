@@ -2866,7 +2866,7 @@ main:
     # A "Secret token (Bearer)" client gives one secret for the identity
     # provider's "Secret token" field. An "OAuth2 client credentials" client
     # gives a client identifier and a client secret. See
-    # apps/elitea-web/src/entries/docs/content/admin/authentication.mdx.
+    # apps/elitea-docs/src/content/docs/admin/authentication.mdx.
     #
     # Maintenance mode does NOT pause SCIM: a SCIM client has no administration
     # permissions, so the maintenance gate does not apply to it. Pause

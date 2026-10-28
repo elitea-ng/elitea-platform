@@ -200,6 +200,7 @@ updates:
     directories:
       - /apps/elitea-web
       - /apps/elitea-desktop
+      - /apps/elitea-docs
       - /scripts/ci
     multi-ecosystem-group: weekly
     patterns: ["*"]

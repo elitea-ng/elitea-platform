@@ -2142,7 +2142,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// omission: it admits only callers whose administration permissions
 	// resolve, and a SCIM client has none. A push during a maintenance window
 	// is therefore answered as on any other day. The SCIM documentation
-	// (apps/elitea-web/src/entries/docs/content/admin/authentication.mdx) and
+	// (apps/elitea-docs/src/content/docs/admin/authentication.mdx) and
 	// the Helm values comment say so; an operator who must freeze the
 	// directory pauses provisioning in the identity provider.
 	var (

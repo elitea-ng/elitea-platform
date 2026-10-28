@@ -1,0 +1,27 @@
+---
+import { withBase } from '../plugins/rehype-base-links';
+import { iconSvg } from './icons';
+
+interface Props {
+  title: string;
+  icon?: string;
+  href?: string;
+}
+
+const { title, icon, href } = Astro.props;
+const external = href !== undefined && /^(https?:|mailto:)/.test(href);
+const target = href === undefined ? undefined : withBase(href, import.meta.env.BASE_URL);
+const Tag = target === undefined ? 'div' : 'a';
+---
+
+<Tag
+  class:list={['docs-card', { 'docs-card--link': target !== undefined }]}
+  href={target}
+  target={external ? '_blank' : undefined}
+  rel={external ? 'noopener' : undefined}
+>
+  {icon !== undefined && <span class="docs-card__icon" set:html={iconSvg(icon, 22)} />}
+  <p class="docs-card__title">{title}</p>
+  {Astro.slots.has('default') && <div class="docs-card__body"><slot /></div>}
+  {target !== undefined && <span class="docs-card__arrow" aria-hidden="true" set:html={iconSvg(external ? 'arrow-up-right' : 'arrow-right', 16)} />}
+</Tag>
