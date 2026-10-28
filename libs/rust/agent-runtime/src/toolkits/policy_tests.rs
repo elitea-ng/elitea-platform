@@ -315,7 +315,10 @@ fn suspended_toolkit_types_use_the_blocked_toolkit_matching_and_win_over_it() {
         policy.toolkit_decision("shell"),
         ToolAdmissionDecision::BlockedToolkit
     );
-    assert_eq!(policy.toolkit_decision("jira"), ToolAdmissionDecision::Allowed);
+    assert_eq!(
+        policy.toolkit_decision("jira"),
+        ToolAdmissionDecision::Allowed
+    );
 
     let malformed = json!({"toolkit_security": {"suspended_toolkit_types": "github"}});
     assert!(

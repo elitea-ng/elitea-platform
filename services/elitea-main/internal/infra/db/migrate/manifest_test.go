@@ -846,7 +846,9 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	//
 	// 196: shared/0196_audit_export.sql, the SIEM audit export's id cursor
 	// (elitea_runtime.audit_export_cursors) and dead-letter list
-	// (audit_export_dead_letters) (#1494). No data, no permission.
+	// (audit_export_dead_letters), one position per (stream, sink), and
+	// centry.audit_events.export_txid so the relay reads in commit order
+	// (#1494). No data, no permission.
 	require.EqualValues(t, 196, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)

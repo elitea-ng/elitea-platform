@@ -53,6 +53,9 @@ func LoadGuardrails(ctx context.Context, pool *pgxpool.Pool) (guardrails.Policy,
 // run, not the next deployment. The partial unique index keeps the scan to
 // the active rows.
 func loadSuspendedToolkitTypes(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
+	if pool == nil { // no store, as in Load: nothing is suspended
+		return nil, nil
+	}
 	rows, err := pool.Query(ctx, `
 SELECT scope_key FROM elitea_runtime.execution_suspensions
 WHERE scope = 'toolkit_type' AND resumed_at IS NULL AND scope_key IS NOT NULL`)

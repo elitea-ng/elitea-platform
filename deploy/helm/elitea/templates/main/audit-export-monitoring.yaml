@@ -1,12 +1,14 @@
 {{- if and .Values.main.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
 {{- /* The SIEM audit export's scrape path and alert rules (ADR-0042 decision 3,
-       #1494). They render with the Prometheus Operator API, whether or not an
-       exporter is configured: with none, elitea-main serves no /metrics, the
-       series do not exist, and no alert can fire. A rule renders only with
-       the PodMonitor, because an alert over a metric nothing scrapes could
-       never fire. */ -}}
+       #1494). They render with the Prometheus Operator API and only when an
+       exporter is configured: with none, elitea-main serves no /metrics, and a
+       PodMonitor would scrape a closed port (a target that is always down). A
+       rule renders only with the PodMonitor, because an alert over a metric
+       nothing scrapes could never fire. */ -}}
 {{- $export := .Values.main.auditExport }}
-{{- $podMonitor := $export.metrics.podMonitor.enabled }}
+{{- $env := .Values.main.env | default dict }}
+{{- $configured := or (index $env "ELITEA_AUDIT_EXPORT_OTLP_ENDPOINT") (index $env "ELITEA_AUDIT_EXPORT_WEBHOOK_URL") }}
+{{- $podMonitor := and $configured $export.metrics.podMonitor.enabled }}
 {{- if $podMonitor }}
 # Scrapes the audit export's GET /metrics (main.auditExport.metrics.port).
 apiVersion: monitoring.coreos.com/v1

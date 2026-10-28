@@ -4055,8 +4055,10 @@ main:
     metrics:
       # The port ELITEA_AUDIT_EXPORT_METRICS_ADDR listens on.
       port: 9464
-      # Rendered only where monitoring.coreos.com/v1 exists. Without a scrape
-      # path an alert could never fire, so the rules need the PodMonitor.
+      # Rendered only where monitoring.coreos.com/v1 exists and an exporter is
+      # configured (ELITEA_AUDIT_EXPORT_OTLP_ENDPOINT or _WEBHOOK_URL). Without
+      # a scrape path an alert could never fire, so the rules need the
+      # PodMonitor.
       podMonitor:
         enabled: true
         interval: 30s
