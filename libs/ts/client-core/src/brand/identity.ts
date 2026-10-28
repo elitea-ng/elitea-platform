@@ -13,7 +13,7 @@
  */
 
 /** The product name and short name of the default pack. */
-export const DEFAULT_PRODUCT = { name: 'Elitea', shortName: 'Elitea' } as const;
+export const DEFAULT_PRODUCT = { name: 'Elitea AI', shortName: 'Elitea' } as const;
 
-/** The default pack's `brand.hue`: the one scheme-independent brand colour. */
-export const DEFAULT_BRAND_HUE = '#6ae8fa';
+/** The default pack's `brand.hue`: the one scheme-independent brand colour (Base Indigo). */
+export const DEFAULT_BRAND_HUE = '#4a4de8';

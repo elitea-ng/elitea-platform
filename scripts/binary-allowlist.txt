@@ -124,3 +124,14 @@ apps/elitea-desktop/doc-extract-sidecar/tests/fixtures/*.xlsx
 apps/elitea-desktop/doc-extract-sidecar/tests/fixtures/*.pptx
 apps/elitea-desktop/doc-extract-sidecar/tests/fixtures/*.docx
 apps/elitea-desktop/doc-extract-sidecar/tests/fixtures/*.odt
+
+# Elitea AI brand typefaces (brand guide v3): Sora, Manrope and JetBrains Mono,
+# latin subset, variable weight, SIL OFL 1.1 (licence texts beside them).
+# Self-hosted because the app's font policy is same-origin only
+# (src/shared/brand/fontFaces.ts) and the desktop app must work offline.
+apps/elitea-web/public/brand/fonts/*.woff2
+
+# The brand guide site (brand/, published to GitHub Pages at /brand/): the
+# LE-03 icon pack's master rasters, offered as downloads. Exact directory.
+brand/assets/icons/*.png
+brand/assets/icons/*.ico
