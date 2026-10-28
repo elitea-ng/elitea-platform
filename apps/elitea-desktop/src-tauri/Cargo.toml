@@ -21,11 +21,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 url = "2"
-sha2 = "0.10"
-base64 = "0.22"
+sha2 = "0.11"
+base64 = "0.23"
 bytes = "1"
 percent-encoding = "2"
-rand = "0.9"
+rand = "0.10"
 # `io-std`: the ACP agent mode's stdio transport (src/acp).
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "time", "sync"] }
 # The one HTTP client (src/net.rs): host calls and the webview's fetch share its pool.
@@ -38,7 +38,7 @@ async-trait = "0.1.92"
 futures = { version = "0.3.34", default-features = false, features = ["std", "async-await"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 uuid = { version = "1", features = ["v4"] }
-similar = { version = "2", default-features = false, features = ["text"] }
+similar = { version = "3", default-features = false, features = ["text"] }
 shlex = "2"
 # The D0 local agent turn (ADR-0029, src/d0): the shared runtime's host
 # interface and instruction authority, the local tool family, and the /llm

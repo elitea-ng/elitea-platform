@@ -18,7 +18,7 @@ sandbox-supervisor = ["dep:adk-sandbox", "dep:x509-parser", "dep:kube", "dep:k8s
 graph-shaping-bench = []
 
 [dependencies]
-adk-anthropic = "=2.2.0"
+adk-anthropic = "=2.3.0"
 adk-sandbox = { version = "=2.2.0", optional = true, default-features = false, features = ["workspace-docker"] }
 adk-runner = { version = "=2.2.0", default-features = false, features = ["context-compaction"] }
 adk-rust = { version = "=2.2.0", default-features = false, features = ["agents", "runner", "sessions", "models", "anthropic", "graph", "tools", "mcp-http"] }
@@ -102,11 +102,11 @@ futures-util = { version = "=0.3.34", optional = true, default-features = false,
 http = "=1.5.0"
 http-body-util = "=0.1.5"
 hmac = "=0.13.0"
-hyper = { version = "=1.11.1", default-features = false, features = ["client", "http1", "http2"] }
+hyper = { version = "=1.12.0", default-features = false, features = ["client", "http1", "http2"] }
 hyper-util = { version = "=0.1.21", default-features = false, features = ["client-legacy", "http1", "http2", "tokio"] }
 kube = { version = "=4.2.0", optional = true, default-features = false, features = ["client", "rustls-tls", "ring", "ws"] }
 k8s-openapi = { version = "=0.28.0", optional = true, features = ["v1_32"] }
-minijinja = { version = "=2.24.0", default-features = false, features = ["builtins", "fuel", "serde"] }
+minijinja = { version = "=3.0.3", default-features = false, features = ["builtins", "fuel", "serde"] }
 opentelemetry = { version = "=0.33.0", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "=0.33.0", default-features = false, features = ["http-proto", "reqwest-client", "reqwest-rustls", "trace"] }
 opentelemetry_sdk = { version = "=0.33.0", default-features = false, features = ["trace", "rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime"] }
@@ -115,18 +115,18 @@ prost = "=0.14.4"
 reqwest = { version = "=0.12.28", default-features = false, features = ["http2", "json", "multipart", "rustls-tls-native-roots", "stream"] }
 reqwest-mcp = { package = "reqwest", version = "=0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
 ring = "=0.17.14"
-rmcp = { version = "=3.5.0", default-features = false, features = ["auth"] }
+rmcp = { version = "=3.7.0", default-features = false, features = ["auth"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }
 rustix = { version = "=1.1.5", features = ["fs", "process"] }
 serde = { version = "1.0.228", features = ["derive"] }
-sha2 = "=0.10.9"
-serde_json = { version = "=1.0.151", features = ["arbitrary_precision", "raw_value"] }
+sha2 = "=0.11.1"
+serde_json = { version = "=1.0.154", features = ["arbitrary_precision", "raw_value"] }
 serde_yaml_ng = "=0.10.0"
 sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "mysql", "chrono", "bigdecimal", "json", "uuid"] }
 subtle = "=2.6.1"
 tempfile = "=3.27.0"
 thiserror = "=2.0.21"
-tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "=1.54.1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "=0.1.19", features = ["net"] }
 tonic = { version = "=0.14.6", features = ["tls-ring"] }
 tonic-prost = "=0.14.6"
@@ -136,13 +136,13 @@ tracing-opentelemetry = { version = "=0.34.0", default-features = false }
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "registry", "smallvec", "std", "tracing-log"] }
 # Already locked through adk-runner, which names root invocations `inv-<uuid v4>`; nested
 # agent children use the same scheme so an invocation id never repeats across processes.
-uuid = { version = "=1.24.0", default-features = false, features = ["v4"] }
+uuid = { version = "=1.29.0", default-features = false, features = ["v4"] }
 x509-parser = { version = "=0.18.1", optional = true, default-features = false }
-zeroize = "=1.9.0"
-toml = { version = "=1.1.6", default-features = false, features = ["parse", "serde", "std"] }
+zeroize = "=1.9.1"
+toml = { version = "=1.1.8", default-features = false, features = ["parse", "serde", "std"] }
 
 [build-dependencies]
-protoc-bin-vendored = "=3.2.0"
+protoc-bin-vendored = "=3.3.0"
 tonic-prost-build = "=0.14.6"
 
 [[bench]]
@@ -164,7 +164,7 @@ elitea-platform-rpc = { path = "../../libs/rust/platform-rpc", features = ["test
 # A throwaway runtime CA and workload certificates for the content-listener
 # and sandbox code-owner TLS tests (#1359 U4).
 rcgen = { version = "=0.14.10", default-features = false, features = ["ring", "pem"] }
-tokio = { version = "=1.53.1", features = ["test-util"] }
+tokio = { version = "=1.54.1", features = ["test-util"] }
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -24,7 +24,7 @@ elitea-graph-algos = { path = "../graph-algos", default-features = false }
 # The graph's node and edge order is insertion order (graph.json, search ties).
 indexmap = { version = "2.14.2", features = ["serde"] }
 # Entity ids are Python's md5 prefix; file hashes its sha256.
-md-5 = "0.10.6"
+md-5 = "0.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
 # Default features only, so the desktop host can link this crate without
 # `preserve_order` (ADR-0029 decision 2). The engine turns `preserve_order`
@@ -32,7 +32,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 # Python engine's byte for byte; built alone, a map's keys come out sorted
 # (the order-dependent handlers are listed in tests/retrieval_tools.rs).
 serde_json = "1.0.151"
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 # The current-thread runtime of the synchronous `ingest_tree`, and document
 # extraction off the caller's threads.
 tokio = { version = "1.53.1", features = ["rt"] }

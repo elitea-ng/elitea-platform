@@ -15,7 +15,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 # both features on themselves (engine-core and the others), so their
 # builds are unchanged.
 serde_json = "1.0.151"
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 thiserror = "2.0.20"
 # `spawn_blocking`: a source's walks and reads run off the async workers
 # (`blocking`). The same line every crate that links this one already has.

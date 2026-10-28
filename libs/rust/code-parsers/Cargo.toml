@@ -21,7 +21,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 # builds are unchanged; this crate's own tests run with both (the
 # dev-dependency below).
 serde_json = "1.0.151"
-tree-sitter = "=0.27.0"
+tree-sitter = "=0.27.1"
 # The C# grammar `tree_sitter_language_pack` 1.16.1 builds (its
 # language_definitions.json: master at this rev, 4 commits after v0.23.5 with
 # C# 14 support; ABI 15, 8495 parse states, 26 fields, 545 node kinds). The

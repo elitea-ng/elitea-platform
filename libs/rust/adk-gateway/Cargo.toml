@@ -9,7 +9,7 @@ publish.workspace = true
 [dependencies]
 # Tilde, not caret: adk breaks its API between minors, and the worker pins
 # =2.2.0 with patches of its own (libs/rust/vendor, patched into the worker and this workspace).
-adk-core = { version = "~2.2.0", default-features = false }
+adk-core = { version = "~2.3.0", default-features = false }
 elitea-engine-core = { path = "../engine-core" }
 elitea-model-client = { path = "../model-client" }
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }

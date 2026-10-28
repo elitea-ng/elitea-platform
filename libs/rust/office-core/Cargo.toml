@@ -17,7 +17,7 @@ zavora-xlsx = { version = "=0.1.2", default-features = false }
 # The platform's own zip (services/elitea-doc-extractor pins the same version).
 # `deflate` is what the lock already resolves for it (flate2 + zlib-rs).
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
-quick-xml = "0.41.0"
+quick-xml = "0.42.0"
 # Decode and downscale for render copies only. The same png/jpeg/gif feature
 # set the renderers (svg2pdf) already link, so the lock does not change.
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif"] }
@@ -25,7 +25,7 @@ thiserror = "2.0.21"
 # The rasteriser the pptx renderer already links (zavora-slide-render), named
 # directly for `svg_to_png` (ADR-0033). Text only: no raster-image decoders and
 # no system fonts, so the lock does not change.
-resvg = { version = "0.45.1", default-features = false, features = ["text"] }
+resvg = { version = "0.49.0", default-features = false, features = ["text"] }
 
 [dev-dependencies]
 # A safe-to-use counting allocator for the hostile-corpus memory ceiling
