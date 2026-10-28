@@ -348,10 +348,7 @@ func (r *ExecutionInterruptRepository) Decide(ctx context.Context, input domain.
 		var decisionRevision int64
 		var ended bool
 		var claimID string
-		err := tx.QueryRow(ctx, `SELECT response.decision_revision,`+runEndedColumnsSQL+`
-FROM elitea_runtime.execution_interrupt_responses response`+latestExecutionSQL+`
-WHERE response.root_response_id = $1::uuid AND response.project_id = $2
-FOR UPDATE OF response`, selector.ResponseMessageID, selector.ProjectID).Scan(&decisionRevision, &ended, &claimID)
+		err := tx.QueryRow(ctx, runEndedSQL, selector.ResponseMessageID, selector.ProjectID).Scan(&decisionRevision, &ended, &claimID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.ErrNotFound
 		}

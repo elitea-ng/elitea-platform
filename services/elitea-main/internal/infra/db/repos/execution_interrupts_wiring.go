@@ -133,6 +133,17 @@ type interruptResolvedFrame struct {
 // caller hands it to ExecutionInterruptSignals after its transaction commits,
 // so open tabs read the frames without waiting for the replay poll. A frame
 // that already existed (a replayed write) produces no notice.
+// resolvedFrameBindingSQL reads the response's latest binding and its
+// conversation's readers (index agent_execution_jobs_client_message).
+var resolvedFrameBindingSQL = `
+SELECT binding.execution_id, binding.generation, binding.client_stream_id, binding.client_execution_generation, binding.sio_event,
+       ` + conversationReadersSQL("binding.client_stream_id") + `
+FROM elitea_runtime.agent_execution_jobs binding
+JOIN elitea_runtime.execution_jobs job USING (execution_id, generation)
+WHERE binding.client_message_id = $1 AND job.projection_project_id = $2 AND job.resource_project_id = $2
+ORDER BY job.admitted_at DESC, binding.generation DESC, binding.execution_id DESC
+LIMIT 1`
+
 func emitInterruptResolved(ctx context.Context, tx sqlExecutor, projectID int64, rootResponseID string, resolved []domain.Resolved) (resolvedNotice, error) {
 	if len(resolved) == 0 {
 		return resolvedNotice{}, nil
@@ -142,14 +153,7 @@ func emitInterruptResolved(ctx context.Context, tx sqlExecutor, projectID int64,
 	var generation int64
 	// The conversation's readers ride on the same statement (no extra round
 	// trip): the live project-plane copy goes to them only.
-	err := tx.QueryRow(ctx, `
-SELECT binding.execution_id, binding.generation, binding.client_stream_id, binding.client_execution_generation, binding.sio_event,
-       `+conversationReadersSQL("binding.client_stream_id")+`
-FROM elitea_runtime.agent_execution_jobs binding
-JOIN elitea_runtime.execution_jobs job USING (execution_id, generation)
-WHERE binding.client_message_id = $1 AND job.projection_project_id = $2 AND job.resource_project_id = $2
-ORDER BY job.admitted_at DESC, binding.generation DESC, binding.execution_id DESC
-LIMIT 1`, rootResponseID, projectID).Scan(&executionID, &generation, &streamID, &executionGeneration, &sioEvent, &notice.audience)
+	err := tx.QueryRow(ctx, resolvedFrameBindingSQL, rootResponseID, projectID).Scan(&executionID, &generation, &streamID, &executionGeneration, &sioEvent, &notice.audience)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return resolvedNotice{}, domain.ErrLedgerFault
 	}

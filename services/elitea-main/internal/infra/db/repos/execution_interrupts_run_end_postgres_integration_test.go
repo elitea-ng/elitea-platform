@@ -4,6 +4,7 @@ package repos
 // real PostgreSQL (fanout-interrupt-decisions §5, §8a; REVIEW-1470 #2, #3).
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -246,4 +247,95 @@ func TestClaimAuthorityLetsFetchesOnOneSessionRunSideBySide(t *testing.T) {
 WHERE workload_session_id = $1`, session); err == nil || !strings.Contains(err.Error(), "lock timeout") {
 		t.Fatalf("a revocation did not wait for the held claim authority: %v", err)
 	}
+}
+
+// seedBindings adds n agent runs bound to other responses, so the planner
+// sees a realistic agent_execution_jobs table (one row per agent turn, no
+// retention).
+func (h *interruptHarness) seedBindings(n int) {
+	h.t.Helper()
+	h.seedExecution("bulk")
+	h.exec(`
+INSERT INTO elitea_runtime.execution_jobs (
+    execution_id, generation, command_id, tenant_id, resource_project_id,
+    projection_project_id, actor_id, principal_ref, capability_id,
+    capability_version, input_bundle_id, request_digest, idempotency_scope,
+    idempotency_key, state, desired_state, admitted_at
+) SELECT md5('bulk-' || i), 1, 'command-bulk-' || i, '1', 1, 1, '8', 'user:8', 'agent.execute.application.v1',
+    '1', 'bundle-bulk', decode(repeat('ef', 32), 'hex'), 'execution-interrupts', 'idempotency-bulk-' || i,
+    'RUNNING', 'RUNNING', clock_timestamp()
+FROM generate_series(1, $1) AS i`, n)
+	h.exec(`
+INSERT INTO elitea_runtime.agent_execution_jobs (
+    execution_id, generation, capability_id, input_bundle_id, request_entry_id,
+    client_stream_id, client_message_id, client_execution_generation, sio_event
+) SELECT md5('bulk-' || i), 1, 'agent.execute.application.v1', 'bundle-bulk', 'request',
+    'stream-' || (i % 500), gen_random_uuid()::text, '1', 'chat_predict'
+FROM generate_series(1, $1) AS i`, n)
+	h.exec(`ANALYZE elitea_runtime.agent_execution_jobs`)
+	h.exec(`ANALYZE elitea_runtime.execution_jobs`)
+}
+
+type planNode struct {
+	NodeType     string     `json:"Node Type"`
+	RelationName string     `json:"Relation Name"`
+	IndexName    string     `json:"Index Name"`
+	Plans        []planNode `json:"Plans"`
+}
+
+func walkPlan(node planNode, visit func(planNode)) {
+	visit(node)
+	for _, child := range node.Plans {
+		walkPlan(child, visit)
+	}
+}
+
+// TestRunLookupsByResponseUseTheClientMessageIndex (REVIEW-1470 delta A): on
+// a table of 12k agent runs, Decide's run-end read, the stranded-card sweep
+// and the resolved-frame writer find the response's runs through
+// agent_execution_jobs_client_message, never a sequential scan, and decide
+// latency stays within its budget.
+func TestRunLookupsByResponseUseTheClientMessageIndex(t *testing.T) {
+	h := newInterruptHarness(t)
+	h.seedBindings(12000)
+	response := h.newResponse()
+	h.bindLiveClaim(response)
+	h.raise(response, "fanout-interrupt-card-v1.json")
+	h.settleJob(response, "FAILED")
+	h.exec(`ANALYZE elitea_runtime.execution_interrupts`)
+	for name, query := range map[string]struct {
+		sql  string
+		args []any
+	}{
+		"decide run-end read":   {runEndedSQL, []any{response, int64(1)}},
+		"stranded-card sweep":   {strandedCandidatesSQL, []any{strandedCardsBatch}},
+		"resolved-frame writer": {resolvedFrameBindingSQL, []any{response, int64(1)}},
+	} {
+		var raw []byte
+		err := h.repo.projects.WithinProjectTx(t.Context(), 1, interruptWriteTx, func(tx sqlExecutor) error {
+			return tx.QueryRow(t.Context(), `EXPLAIN (FORMAT JSON) `+query.sql, query.args...).Scan(&raw)
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var plans []struct {
+			Plan planNode `json:"Plan"`
+		}
+		if err := json.Unmarshal(raw, &plans); err != nil || len(plans) != 1 {
+			t.Fatalf("%s: plan %s: %v", name, raw, err)
+		}
+		indexed := false
+		walkPlan(plans[0].Plan, func(node planNode) {
+			if node.RelationName == "agent_execution_jobs" && node.NodeType == "Seq Scan" {
+				t.Errorf("%s scans agent_execution_jobs sequentially:\n%s", name, raw)
+			}
+			if node.IndexName == "agent_execution_jobs_client_message" {
+				indexed = true
+			}
+		})
+		if !indexed {
+			t.Errorf("%s does not use agent_execution_jobs_client_message:\n%s", name, raw)
+		}
+	}
+	assertDecideLatencyBudget(t, h)
 }

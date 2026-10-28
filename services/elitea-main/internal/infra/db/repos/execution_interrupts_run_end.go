@@ -50,6 +50,36 @@ LEFT JOIN LATERAL (
   LIMIT 1
 ) latest ON TRUE`
 
+// strandedCandidatesSQL finds responses with open cards whose run ended
+// without parking. Driven by the open-card partial index; a parked response
+// or one with a queued wake is not a candidate; the latest run is found by
+// agent_execution_jobs_client_message.
+const strandedCandidatesSQL = `
+SELECT DISTINCT card.root_response_id::text, card.project_id
+FROM elitea_runtime.execution_interrupts card
+JOIN elitea_runtime.execution_interrupt_responses response ON response.root_response_id = card.root_response_id
+WHERE card.state IN ('PENDING', 'DECIDED') AND response.parked_execution_id IS NULL
+  AND NOT EXISTS (SELECT 1 FROM elitea_runtime.execution_interrupt_wakes wake
+                  WHERE wake.root_response_id = card.root_response_id AND wake.state = 'QUEUED')
+  AND EXISTS (
+    SELECT 1 FROM (
+      SELECT job.state
+      FROM elitea_runtime.agent_execution_jobs binding
+      JOIN elitea_runtime.execution_jobs job USING (execution_id, generation)
+      WHERE binding.client_message_id = card.root_response_id::text
+      ORDER BY job.admitted_at DESC, binding.generation DESC, binding.execution_id DESC
+      LIMIT 1) latest
+    WHERE latest.state IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'QUARANTINED'))
+ORDER BY 1
+LIMIT $1`
+
+// runEndedSQL is Decide's locking read: the response's decision revision and
+// whether its run ended without parking (index agent_execution_jobs_client_message).
+const runEndedSQL = `SELECT response.decision_revision,` + runEndedColumnsSQL + `
+FROM elitea_runtime.execution_interrupt_responses response` + latestExecutionSQL + `
+WHERE response.root_response_id = $1::uuid AND response.project_id = $2
+FOR UPDATE OF response`
+
 // closeCardsAtRunEnd closes the open cards of a response whose run ended
 // without parking (runEndedColumnsSQL). The caller holds the
 // chat_message_group response row lock and the execution_interrupt_responses
@@ -102,26 +132,7 @@ func (r *ExecutionInterruptRepository) CloseStrandedCards(ctx context.Context) (
 		projectID  int64
 	}
 	var candidates []candidate
-	// Driven by the open-card partial index; a parked response or one with a
-	// queued wake is not a candidate.
-	rows, err := r.shared.Query(ctx, `
-SELECT DISTINCT card.root_response_id::text, card.project_id
-FROM elitea_runtime.execution_interrupts card
-JOIN elitea_runtime.execution_interrupt_responses response ON response.root_response_id = card.root_response_id
-WHERE card.state IN ('PENDING', 'DECIDED') AND response.parked_execution_id IS NULL
-  AND NOT EXISTS (SELECT 1 FROM elitea_runtime.execution_interrupt_wakes wake
-                  WHERE wake.root_response_id = card.root_response_id AND wake.state = 'QUEUED')
-  AND EXISTS (
-    SELECT 1 FROM (
-      SELECT job.state
-      FROM elitea_runtime.agent_execution_jobs binding
-      JOIN elitea_runtime.execution_jobs job USING (execution_id, generation)
-      WHERE binding.client_message_id = card.root_response_id::text
-      ORDER BY job.admitted_at DESC, binding.generation DESC, binding.execution_id DESC
-      LIMIT 1) latest
-    WHERE latest.state IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'QUARANTINED'))
-ORDER BY 1
-LIMIT $1`, strandedCardsBatch)
+	rows, err := r.shared.Query(ctx, strandedCandidatesSQL, strandedCardsBatch)
 	if err != nil {
 		return 0, fmt.Errorf("find stranded cards: %w", err)
 	}

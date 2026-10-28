@@ -1143,7 +1143,13 @@ func TestDecideSingleTransaction(t *testing.T) {
 // the host: the test runs three rounds and asserts the best round's p95, so a
 // transient load spike does not fail it while a slow decision path does.
 func TestDecideLatencyBudget(t *testing.T) {
-	h := newInterruptHarness(t)
+	assertDecideLatencyBudget(t, newInterruptHarness(t))
+}
+
+// assertDecideLatencyBudget measures three rounds of 200 sequential decisions
+// on h and fails when the best round's p95 exceeds 150 ms.
+func assertDecideLatencyBudget(t *testing.T, h *interruptHarness) {
+	t.Helper()
 	const decisions = 200
 	best := time.Duration(1<<63 - 1)
 	for round := range 3 {

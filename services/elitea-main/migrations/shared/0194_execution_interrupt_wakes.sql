@@ -82,3 +82,10 @@ CREATE INDEX execution_interrupt_wakes_wake_execution
 CREATE INDEX execution_interrupts_open_by_conversation
     ON elitea_runtime.execution_interrupts (project_id, conversation_id)
     WHERE state IN ('PENDING', 'DECIDED');
+
+-- Decide, the stranded-card sweep and the resolved-frame writer look up the
+-- runs bound to one response by client_message_id alone; the admission index
+-- leads with client_stream_id. Plain CREATE INDEX (0067 convention): the
+-- ledgered runner applies each migration in one transaction.
+CREATE INDEX agent_execution_jobs_client_message
+    ON elitea_runtime.agent_execution_jobs (client_message_id, generation, execution_id);
