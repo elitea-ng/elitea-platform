@@ -59,7 +59,8 @@ PM-7, PM-8, PM-11, PM-12 and the named gaps are FU-255 to FU-261 in `FOLLOWUPS-2
   - locally, PM-1's crash child outlived the approval, and PM-6's third branch failed before its drop.
 
   The fix: the member that could finish first now answers only once the cards are decided
-  (`TestModelGatewayOutcome::ResponseAfter`), and PM-6's dropped first process keeps that call in flight (`Pending`).
+  (`TestModelGatewayOutcome::Gated`, the same mechanism #1531 added on `main` for the two FU-246 tests), and PM-6's
+  dropped first process keeps that call in flight (`Pending`).
   The module then passed 5 of 5 runs at 16 test threads (34 passed each, 0 skipped); before, 2 of 3 runs failed.
 
 ## Changed paths
@@ -104,8 +105,8 @@ PM-7, PM-8, PM-11, PM-12 and the named gaps are FU-255 to FU-261 in `FOLLOWUPS-2
     - `apps/elitea-web/src/features/chat-messages/lib/convertMessagesToChatHistory.ts:313`.
 - **PM-6:** `src/agents/pipeline_fanout_effect_pg_tests.rs` (`run_until_first_card` `:603`, its test and its
   negative control).
-- **Tests only:** `src/transport/openai_compatible_facade.rs` (`#[cfg(test)]` replies `ResponseAfter` and
-  `ResponseForRequestAfter`, answered once a test's gate opens).
+- **Tests only:** `src/transport/openai_compatible_facade.rs` (`#[cfg(test)]` reply `ResponseForRequestAfter`, the
+  routed form of `main`'s `Gated`, answered once a test's gate opens).
 - **PM-10:** 18 locale files; `fanout-inline-llm-branches-20261028.md`.
 
 ## Tests
