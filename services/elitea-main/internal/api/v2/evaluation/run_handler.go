@@ -71,7 +71,18 @@ func (h *RunHandler) List(w http.ResponseWriter, r *http.Request) {
 	if runs == nil {
 		runs = []Run{}
 	}
+	for index := range runs {
+		runs[index] = withoutFrozenAgent(runs[index])
+	}
 	writeJSON(w, http.StatusOK, runListResponse{Rows: runs, Total: len(runs)})
+}
+
+// withoutFrozenAgent drops the frozen agent (SnapshotAgent) from a run on
+// the wire. It holds the agent's instructions, which the run read
+// permission does not grant; the version and release reads do.
+func withoutFrozenAgent(run Run) Run {
+	run.Snapshot.Agent = nil
+	return run
 }
 
 func (h *RunHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -81,15 +92,15 @@ func (h *RunHandler) Get(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, run)
+	writeJSON(w, http.StatusOK, withoutFrozenAgent(run))
 }
 
-// Start builds the run's SNAPSHOT and queues the job.
+// Start builds the run's SNAPSHOT and queues the job (RunStarter).
 //
-// The snapshot is built HERE and not in the repository, because it encodes
-// product rules — an `ai` binding takes the dimension's own default weight and
-// target, and a `code` dimension is refused with a named reason — and those
-// rules belong where a handler test can reach them.
+// The snapshot is built in this package and not in the repository, because
+// it encodes product rules — an `ai` binding takes the dimension's own
+// default weight and target, and a `code` dimension is refused with a named
+// reason — and those rules belong where a handler test can reach them.
 func (h *RunHandler) Start(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 
@@ -103,57 +114,11 @@ func (h *RunHandler) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The cases are read through the SAME project id the route is scoped to.
-	// A dataset id belonging to another project resolves against p_<this
-	// project> and simply is not found, which is the cross-project refusal:
-	// there is no path by which a caller reaches another tenant's schema,
-	// because the schema name comes from the URL segment the membership
-	// middleware already bound to the caller.
-	cases, err := h.runs.DatasetCases(r.Context(), projectID, input.DatasetID)
+	created, err := NewRunStarter(h.runs, h.dimensions, h.orchestrator).
+		Start(r.Context(), projectID, input, callerUserID(r), nil)
 	if err != nil {
 		apierr.Write(w, err)
 		return
-	}
-	if len(cases) == 0 {
-		apierr.Write(w, apierr.BadRequest("this dataset has no cases: add at least one before starting a run"))
-		return
-	}
-	// Excluded cases stay in the dataset and out of the run. The filter is
-	// applied HERE, before the snapshot, so the snapshot is the list the
-	// orchestrator executes and a toggle after the start cannot change it.
-	cases = activeCases(cases)
-	if len(cases) == 0 {
-		apierr.Write(w, errAllCasesExcluded)
-		return
-	}
-
-	snapshot, err := h.buildSnapshot(r.Context(), projectID, input.DimensionIDs, cases)
-	if err != nil {
-		apierr.Write(w, err)
-		return
-	}
-
-	created, err := h.runs.CreateRun(r.Context(), projectID, Run{
-		DatasetID:            input.DatasetID,
-		ApplicationID:        input.ApplicationID,
-		ApplicationVersionID: input.ApplicationVersionID,
-		TriggerType:          input.TriggerType,
-		CreatedBy:            callerUserID(r),
-		Status:               RunStatusCreated,
-		ExecutionMode:        ExecutionModePredictBlocking,
-		Snapshot:             snapshot,
-		Progress:             RunProgress{Done: 0, Total: len(cases)},
-	})
-	if err != nil {
-		apierr.Write(w, err)
-		return
-	}
-
-	// The row is written FIRST and enqueued SECOND. If the process dies
-	// between the two, the recovery sweep finds a `created` row and runs it;
-	// enqueueing first would leave a job with no row for the worker to claim.
-	if h.orchestrator != nil {
-		h.orchestrator.Enqueue(RunRef{ProjectID: projectID, RunID: created.ID})
 	}
 	writeJSON(w, http.StatusCreated, created)
 }
@@ -182,13 +147,14 @@ func activeCases(cases []DatasetCase) []DatasetCase {
 }
 
 // buildSnapshot freezes the dimensions a run is scored against.
-func (h *RunHandler) buildSnapshot(
+func buildSnapshot(
 	ctx context.Context,
+	dimensions Repository,
 	projectID string,
 	dimensionIDs []string,
 	cases []DatasetCase,
 ) (RunSnapshot, error) {
-	library, err := h.dimensions.List(ctx, projectID, ListFilter{IncludePlatform: true})
+	library, err := dimensions.List(ctx, projectID, ListFilter{IncludePlatform: true})
 	if err != nil {
 		return RunSnapshot{}, err
 	}
@@ -287,7 +253,7 @@ func (h *RunHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	if h.orchestrator != nil {
 		h.orchestrator.Cancel(RunRef{ProjectID: projectID, RunID: runID})
 	}
-	writeJSON(w, http.StatusOK, cancelled)
+	writeJSON(w, http.StatusOK, withoutFrozenAgent(cancelled))
 }
 
 // scorecardResponse is the READ-ONLY scorecard.
@@ -370,7 +336,7 @@ func (h *RunHandler) Results(w http.ResponseWriter, r *http.Request) {
 		results = []RunResult{}
 	}
 	writeJSON(w, http.StatusOK, scorecardResponse{
-		Run:           run,
+		Run:           withoutFrozenAgent(run),
 		Results:       results,
 		HeadlineScore: run.HeadlineScore,
 		Total:         total,

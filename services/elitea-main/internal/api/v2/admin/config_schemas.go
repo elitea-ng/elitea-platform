@@ -289,6 +289,7 @@ func configSections() []map[string]any {
 		workerEgressSection(),
 		runCapsSection(),
 		sessionPolicySection(),
+		agentLifecycleSection(),
 		webSearchSection(),
 		resourcesSection(),
 		dedicatedBannerSection(),

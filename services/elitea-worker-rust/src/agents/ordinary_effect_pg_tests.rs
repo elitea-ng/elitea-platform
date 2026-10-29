@@ -25,7 +25,7 @@
 
 use super::*;
 use crate::agents::pipeline_tests::restart_pg_tests::{
-    CHECKPOINT_MIGRATION, PHASE_DEADLINE, connect, run_phase,
+    CHECKPOINT_MIGRATION, PHASE_DEADLINE, connect, run_probed_phase,
 };
 use crate::agents::runtime::{AssembledNativeAgentInvocation, AuthorizedNativeAssembly};
 use crate::protocol::control::test_session_authority_for_claim;
@@ -115,7 +115,7 @@ async fn run_scenario(scenario: &str) {
             .env(SCENARIO_ENV, scenario)
             .env(PHASE_ENV, phase)
             .env(PENDING_ENV, &pending);
-        let output = run_phase(phase, command);
+        let output = run_probed_phase(&db, phase, command).await;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         if *exit != 0 {

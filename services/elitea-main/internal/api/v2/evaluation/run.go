@@ -128,11 +128,27 @@ type SnapshotCase struct {
 	OrderIndex int    `json:"order_index"`
 }
 
+// SnapshotAgent is the agent turn's instructions and model, frozen when the
+// run starts.
+//
+// Only the release gate (internal/releasegate) writes it. A gate run must
+// measure the definition the gate names: the candidate as it was when the
+// gate started, or the current release's definition. The version row can
+// change after that (a draft is saved, or a version is edited after an
+// unpublish), and the run would then measure a different agent. A run with
+// no frozen agent reads the version row when it executes, as before.
+type SnapshotAgent struct {
+	Instructions string `json:"instructions"`
+	ModelName    string `json:"model_name"`
+}
+
 // RunSnapshot is `eval_runs.snapshot`. Its JSON shape is the reference's.
 type RunSnapshot struct {
 	Cases      []SnapshotCase               `json:"cases"`
 	Dimensions map[string]SnapshotDimension `json:"dimensions"`
 	Bindings   []SnapshotBinding            `json:"bindings"`
+	// Agent is the frozen agent turn input, or nil (see SnapshotAgent).
+	Agent *SnapshotAgent `json:"agent,omitempty"`
 }
 
 // Run is one stored run row.

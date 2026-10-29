@@ -249,6 +249,11 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
 		return
 	}
+	// The agent lifecycle tier table's floors (ADR-0040 decision 3).
+	if reason := validateAgentLifecycleValues(section.id, body.Values); reason != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+		return
+	}
 
 	principal, _ := auth.UserFromContext(r.Context())
 	author := principal.Email

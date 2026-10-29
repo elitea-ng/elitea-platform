@@ -28,7 +28,8 @@
 //! a lease expires; every other submission is another execution.
 
 use super::restart_pg_tests::{
-    CHECKPOINT_MIGRATION, PHASE_DEADLINE, authorized_turn, connect, model_requests, run_phase,
+    CHECKPOINT_MIGRATION, PHASE_DEADLINE, authorized_turn, connect, model_requests,
+    run_probed_phase,
 };
 use super::*;
 use crate::state::postgres_session_tests::{IsolatedPostgres, install_schema};
@@ -98,7 +99,7 @@ async fn run_scenario(scenario: &str) {
             .env(SCENARIO_ENV, scenario)
             .env(PHASE_ENV, phase)
             .env(PENDING_ENV, &pending);
-        let output = run_phase(phase, command);
+        let output = run_probed_phase(&db, phase, command).await;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         if *exit != 0 {

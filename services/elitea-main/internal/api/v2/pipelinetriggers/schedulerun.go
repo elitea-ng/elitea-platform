@@ -264,7 +264,11 @@ func (h *Handler) fireSchedule(
 		// CHECK has no "suspended" value, so the row says failed and the
 		// detail says why; the next tick tries again.
 		result.Skipped++
-		record(resultFailed, "skipped: an administrator suspended execution ("+safety.ErrorCode+")", "")
+		code := safety.ErrorCode
+		if suspended, ok := safety.AsSuspended(err); ok {
+			code = suspended.Code()
+		}
+		record(resultFailed, "skipped: an administrator suspended execution ("+code+")", "")
 	case governedStartRefusal(err) != "":
 		result.Skipped++
 		_, detail := mandateSkip(governedStartRefusal(err))

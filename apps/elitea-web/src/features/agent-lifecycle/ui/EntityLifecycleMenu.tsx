@@ -4,6 +4,7 @@ import { useState } from 'react';
 import CallSplitOutlinedIcon from '@mui/icons-material/CallSplitOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
+import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import LinkOutlinedIcon from '@mui/icons-material/LinkOutlined';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
@@ -60,6 +61,8 @@ export interface EntityLifecycleMenuProps {
   readonly onDelete?: () => void;
   /** Opens the release history (agents only; a pipeline has no releases). */
   readonly onReleaseHistory?: () => void;
+  /** Opens the governance dialog: registry, change requests, attestations (agents only). */
+  readonly onGovernance?: () => void;
   /** Distinguishes the agent and pipeline copies of this menu in the DOM. */
   readonly testIdPrefix: string;
 }
@@ -75,6 +78,7 @@ export function EntityLifecycleMenu({
   onExport,
   onDelete,
   onReleaseHistory,
+  onGovernance,
   testIdPrefix,
 }: EntityLifecycleMenuProps): ReactNode {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
@@ -163,6 +167,15 @@ export function EntityLifecycleMenu({
           >
             <HistoryOutlinedIcon sx={iconSx} />
             {t('features.agentLifecycle.menu.releaseHistory', 'Release history')}
+          </MenuItem>
+        )}
+        {onGovernance !== undefined && (
+          <MenuItem
+            data-testid={`${testIdPrefix}-governance-menuitem`}
+            onClick={run(onGovernance)}
+          >
+            <GavelOutlinedIcon sx={iconSx} />
+            {t('features.agentLifecycle.menu.governance', 'Governance')}
           </MenuItem>
         )}
         {onExport !== undefined && (

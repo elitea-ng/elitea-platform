@@ -54,7 +54,20 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  AgentAttestation,
+  AgentAttestationCreate,
+  AgentAttestationList,
   AgentCategoriesResponse,
+  AgentChangeApproval,
+  AgentChangeApprovalOutcome,
+  AgentChangeRequest,
+  AgentChangeRequestCreate,
+  AgentChangeRequestList,
+  AgentGateOverride,
+  AgentLifecycleReason,
+  AgentLifecycleRefusal,
+  AgentRegistryRecord,
+  AgentRegistryUpdate,
   AgentSchemaResponse,
   ApplicationCreateRequest,
   ApplicationCreatedResponse,
@@ -118,6 +131,7 @@ import type {
   InvalidClientVersionError,
   InvalidClientVersionResponse,
   InvalidQueryParameterError,
+  ListAgentAttestationsParams,
   ListApplicationsParams,
   ListEvalDatasetsParams,
   ListEvalRunsParams,
@@ -160,6 +174,12 @@ import type {
   PublishValidationFailedResponse,
   PublishValidationResult,
   RecommendationsResponse,
+  ReleaseGate,
+  ReleaseGateList,
+  ReleaseGateRefusal,
+  ReleaseGateSuite,
+  ReleaseGateSuiteList,
+  ReleaseGateSuiteRequest,
   ResolvedApplicationVersion,
   RunPipelineInboundTriggerParams,
   SaveApplicationNewVersionBody,
@@ -4238,7 +4258,7 @@ export const getRollbackApplicationReleaseUrl = (
 };
 
 /**
- * Points the agent's published release at this release. A run that names no release then executes it. The release must be published (not withdrawn), must not already be the published release, and its toolkit pins must still match the live toolkits and configurations. The audit trail records application_release.rolled_back. Requires `models.applications.publish.post`.
+ * Points the agent's published release at this release. A run that names no release then executes it. The release must be published (not withdrawn), must not already be the published release, and its toolkit pins must still match the live toolkits and configurations. The audit trail records application_release.rolled_back. Requires `models.applications.publish.post`; for an agent whose risk tier needs approval (ADR-0040), also `models.applications.governance`.
  * @summary Roll the agent back to an earlier release
  */
 export const rollbackApplicationRelease = async (
@@ -4491,6 +4511,3835 @@ export function useRollbackApplicationRelease<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type getAgentRegistryResponse200 = {
+  data: AgentRegistryRecord;
+  status: 200;
+};
+
+export type getAgentRegistryResponse400 = {
+  data: AgentLifecycleRefusal;
+  status: 400;
+};
+
+export type getAgentRegistryResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAgentRegistryResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getAgentRegistryResponse404 = {
+  data: AgentLifecycleRefusal;
+  status: 404;
+};
+
+export type getAgentRegistryResponseSuccess = getAgentRegistryResponse200 & {
+  headers: Headers;
+};
+export type getAgentRegistryResponseError = (
+  | getAgentRegistryResponse400
+  | getAgentRegistryResponse401
+  | getAgentRegistryResponse403
+  | getAgentRegistryResponse404
+) & {
+  headers: Headers;
+};
+
+export type getAgentRegistryResponse =
+  getAgentRegistryResponseSuccess | getAgentRegistryResponseError;
+
+export const getGetAgentRegistryUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/agent_registry/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * The agent's governance record (ADR-0040 decision 1): owners, risk tier, intended and out-of-scope use, data classes and certification state. An agent without a record gets one on this read (tier low, uncertified). Requires `models.applications.versions.get`.
+ * @summary Read the registry record of an agent
+ */
+export const getAgentRegistry = async (
+  projectId: string,
+  applicationId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAgentRegistryResponse> => {
+  return eliteaFetch<getAgentRegistryResponse>(
+    getGetAgentRegistryUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAgentRegistryQueryKey = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return [
+    `/elitea_core/agent_registry/prompt_lib/${projectId}/${applicationId}`,
+  ] as const;
+};
+
+export const getGetAgentRegistryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAgentRegistry>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentRegistry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetAgentRegistryQueryKey(projectId, applicationId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAgentRegistry>>
+  > = ({ signal }) =>
+    getAgentRegistry(projectId, applicationId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentRegistry>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAgentRegistryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAgentRegistry>>
+>;
+export type GetAgentRegistryQueryError =
+  AgentLifecycleRefusal | N401Response | N403Response;
+
+export function useGetAgentRegistry<
+  TData = Awaited<ReturnType<typeof getAgentRegistry>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentRegistry>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentRegistry>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentRegistry>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentRegistry<
+  TData = Awaited<ReturnType<typeof getAgentRegistry>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentRegistry>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentRegistry>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentRegistry>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentRegistry<
+  TData = Awaited<ReturnType<typeof getAgentRegistry>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentRegistry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read the registry record of an agent
+ */
+
+export function useGetAgentRegistry<
+  TData = Awaited<ReturnType<typeof getAgentRegistry>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentRegistry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAgentRegistryQueryOptions(
+    projectId,
+    applicationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateAgentRegistryResponse200 = {
+  data: AgentRegistryRecord;
+  status: 200;
+};
+
+export type updateAgentRegistryResponse400 = {
+  data: AgentLifecycleRefusal;
+  status: 400;
+};
+
+export type updateAgentRegistryResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateAgentRegistryResponse403 = {
+  data: AgentLifecycleRefusal;
+  status: 403;
+};
+
+export type updateAgentRegistryResponse404 = {
+  data: AgentLifecycleRefusal;
+  status: 404;
+};
+
+export type updateAgentRegistryResponseSuccess =
+  updateAgentRegistryResponse200 & {
+    headers: Headers;
+  };
+export type updateAgentRegistryResponseError = (
+  | updateAgentRegistryResponse400
+  | updateAgentRegistryResponse401
+  | updateAgentRegistryResponse403
+  | updateAgentRegistryResponse404
+) & {
+  headers: Headers;
+};
+
+export type updateAgentRegistryResponse =
+  updateAgentRegistryResponseSuccess | updateAgentRegistryResponseError;
+
+export const getUpdateAgentRegistryUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/agent_registry/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * Changes the owners, risk tier, uses or data classes. Only an owner or a holder of `models.applications.governance` can edit; an agent with no owner accepts any caller the route admits. Raising the tier needs an owner or the governance role; lowering it needs the governance role. A tier change is written to the security audit outbox as agent.registry.tier_changed. Requires `models.applications.publish.post`.
+ * @summary Edit the registry record of an agent
+ */
+export const updateAgentRegistry = async (
+  projectId: string,
+  applicationId: number,
+  agentRegistryUpdate: AgentRegistryUpdate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateAgentRegistryResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<updateAgentRegistryResponse>(
+    getUpdateAgentRegistryUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentRegistryUpdate),
+    },
+  );
+};
+
+export const getUpdateAgentRegistryQueryKey = (
+  projectId: string,
+  applicationId: number,
+  agentRegistryUpdate?: AgentRegistryUpdate,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/agent_registry/prompt_lib/${projectId}/${applicationId}`,
+    agentRegistryUpdate,
+  ] as const;
+};
+
+export const getUpdateAgentRegistryQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateAgentRegistry>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  agentRegistryUpdate: AgentRegistryUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateAgentRegistry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateAgentRegistryQueryKey(
+      projectId,
+      applicationId,
+      agentRegistryUpdate,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof updateAgentRegistry>>
+  > = ({ signal }) =>
+    updateAgentRegistry(projectId, applicationId, agentRegistryUpdate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateAgentRegistry>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateAgentRegistryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateAgentRegistry>>
+>;
+export type UpdateAgentRegistryQueryError =
+  AgentLifecycleRefusal | N401Response;
+
+export function useUpdateAgentRegistry<
+  TData = Awaited<ReturnType<typeof updateAgentRegistry>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  agentRegistryUpdate: AgentRegistryUpdate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateAgentRegistry>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateAgentRegistry>>,
+          TError,
+          Awaited<ReturnType<typeof updateAgentRegistry>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateAgentRegistry<
+  TData = Awaited<ReturnType<typeof updateAgentRegistry>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  agentRegistryUpdate: AgentRegistryUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateAgentRegistry>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateAgentRegistry>>,
+          TError,
+          Awaited<ReturnType<typeof updateAgentRegistry>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateAgentRegistry<
+  TData = Awaited<ReturnType<typeof updateAgentRegistry>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  agentRegistryUpdate: AgentRegistryUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateAgentRegistry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Edit the registry record of an agent
+ */
+
+export function useUpdateAgentRegistry<
+  TData = Awaited<ReturnType<typeof updateAgentRegistry>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  agentRegistryUpdate: AgentRegistryUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateAgentRegistry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateAgentRegistryQueryOptions(
+    projectId,
+    applicationId,
+    agentRegistryUpdate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type markAgentDueResponse200 = {
+  data: AgentRegistryRecord;
+  status: 200;
+};
+
+export type markAgentDueResponse400 = {
+  data: AgentLifecycleRefusal;
+  status: 400;
+};
+
+export type markAgentDueResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type markAgentDueResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type markAgentDueResponse404 = {
+  data: AgentLifecycleRefusal;
+  status: 404;
+};
+
+export type markAgentDueResponse409 = {
+  data: AgentLifecycleRefusal;
+  status: 409;
+};
+
+export type markAgentDueResponseSuccess = markAgentDueResponse200 & {
+  headers: Headers;
+};
+export type markAgentDueResponseError = (
+  | markAgentDueResponse400
+  | markAgentDueResponse401
+  | markAgentDueResponse403
+  | markAgentDueResponse404
+  | markAgentDueResponse409
+) & {
+  headers: Headers;
+};
+
+export type markAgentDueResponse =
+  markAgentDueResponseSuccess | markAgentDueResponseError;
+
+export const getMarkAgentDueUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/agent_registry/prompt_lib/${projectId}/${applicationId}/mark_due`;
+};
+
+/**
+ * For an external tool (an API token): a certified agent becomes due, with the reason recorded as its state reason. A due, lapsed or suspended agent is answered as it is. Written to the security audit outbox as agent.certification.due. Requires `lifecycle.registry.mark_due`.
+ * @summary Set a certified agent to due for recertification
+ */
+export const markAgentDue = async (
+  projectId: string,
+  applicationId: number,
+  agentLifecycleReason: AgentLifecycleReason,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<markAgentDueResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<markAgentDueResponse>(
+    getMarkAgentDueUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentLifecycleReason),
+    },
+  );
+};
+
+export const getMarkAgentDueQueryKey = (
+  projectId: string,
+  applicationId: number,
+  agentLifecycleReason?: AgentLifecycleReason,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_registry/prompt_lib/${projectId}/${applicationId}/mark_due`,
+    agentLifecycleReason,
+  ] as const;
+};
+
+export const getMarkAgentDueQueryOptions = <
+  TData = Awaited<ReturnType<typeof markAgentDue>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  agentLifecycleReason: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof markAgentDue>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getMarkAgentDueQueryKey(projectId, applicationId, agentLifecycleReason);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof markAgentDue>>> = ({
+    signal,
+  }) =>
+    markAgentDue(projectId, applicationId, agentLifecycleReason, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof markAgentDue>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type MarkAgentDueQueryResult = NonNullable<
+  Awaited<ReturnType<typeof markAgentDue>>
+>;
+export type MarkAgentDueQueryError =
+  AgentLifecycleRefusal | N401Response | N403Response;
+
+export function useMarkAgentDue<
+  TData = Awaited<ReturnType<typeof markAgentDue>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  agentLifecycleReason: AgentLifecycleReason,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof markAgentDue>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof markAgentDue>>,
+          TError,
+          Awaited<ReturnType<typeof markAgentDue>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMarkAgentDue<
+  TData = Awaited<ReturnType<typeof markAgentDue>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  agentLifecycleReason: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof markAgentDue>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof markAgentDue>>,
+          TError,
+          Awaited<ReturnType<typeof markAgentDue>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMarkAgentDue<
+  TData = Awaited<ReturnType<typeof markAgentDue>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  agentLifecycleReason: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof markAgentDue>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Set a certified agent to due for recertification
+ */
+
+export function useMarkAgentDue<
+  TData = Awaited<ReturnType<typeof markAgentDue>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  agentLifecycleReason: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof markAgentDue>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getMarkAgentDueQueryOptions(
+    projectId,
+    applicationId,
+    agentLifecycleReason,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listAgentChangeRequestsResponse200 = {
+  data: AgentChangeRequestList;
+  status: 200;
+};
+
+export type listAgentChangeRequestsResponse400 = {
+  data: AgentLifecycleRefusal;
+  status: 400;
+};
+
+export type listAgentChangeRequestsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listAgentChangeRequestsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listAgentChangeRequestsResponseSuccess =
+  listAgentChangeRequestsResponse200 & {
+    headers: Headers;
+  };
+export type listAgentChangeRequestsResponseError = (
+  | listAgentChangeRequestsResponse400
+  | listAgentChangeRequestsResponse401
+  | listAgentChangeRequestsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listAgentChangeRequestsResponse =
+  listAgentChangeRequestsResponseSuccess | listAgentChangeRequestsResponseError;
+
+export const getListAgentChangeRequestsUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * The agent's change requests, newest first, at most 500 (ADR-0040 decision 3). Requires `models.applications.versions.get`.
+ * @summary List the change requests of an agent
+ */
+export const listAgentChangeRequests = async (
+  projectId: string,
+  applicationId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listAgentChangeRequestsResponse> => {
+  return eliteaFetch<listAgentChangeRequestsResponse>(
+    getListAgentChangeRequestsUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListAgentChangeRequestsQueryKey = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return [
+    `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}`,
+  ] as const;
+};
+
+export const getListAgentChangeRequestsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAgentChangeRequests>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentChangeRequests>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListAgentChangeRequestsQueryKey(projectId, applicationId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAgentChangeRequests>>
+  > = ({ signal }) =>
+    listAgentChangeRequests(projectId, applicationId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAgentChangeRequests>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAgentChangeRequestsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAgentChangeRequests>>
+>;
+export type ListAgentChangeRequestsQueryError =
+  AgentLifecycleRefusal | N401Response | N403Response;
+
+export function useListAgentChangeRequests<
+  TData = Awaited<ReturnType<typeof listAgentChangeRequests>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentChangeRequests>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentChangeRequests>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentChangeRequests>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentChangeRequests<
+  TData = Awaited<ReturnType<typeof listAgentChangeRequests>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentChangeRequests>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentChangeRequests>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentChangeRequests>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentChangeRequests<
+  TData = Awaited<ReturnType<typeof listAgentChangeRequests>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentChangeRequests>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the change requests of an agent
+ */
+
+export function useListAgentChangeRequests<
+  TData = Awaited<ReturnType<typeof listAgentChangeRequests>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentChangeRequests>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListAgentChangeRequestsQueryOptions(
+    projectId,
+    applicationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createAgentChangeRequestResponse201 = {
+  data: AgentChangeRequest;
+  status: 201;
+};
+
+export type createAgentChangeRequestResponse400 = {
+  data: AgentLifecycleRefusal;
+  status: 400;
+};
+
+export type createAgentChangeRequestResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createAgentChangeRequestResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createAgentChangeRequestResponse404 = {
+  data: AgentLifecycleRefusal;
+  status: 404;
+};
+
+export type createAgentChangeRequestResponse409 = {
+  data: AgentLifecycleRefusal;
+  status: 409;
+};
+
+export type createAgentChangeRequestResponseSuccess =
+  createAgentChangeRequestResponse201 & {
+    headers: Headers;
+  };
+export type createAgentChangeRequestResponseError = (
+  | createAgentChangeRequestResponse400
+  | createAgentChangeRequestResponse401
+  | createAgentChangeRequestResponse403
+  | createAgentChangeRequestResponse404
+  | createAgentChangeRequestResponse409
+) & {
+  headers: Headers;
+};
+
+export type createAgentChangeRequestResponse =
+  | createAgentChangeRequestResponseSuccess
+  | createAgentChangeRequestResponseError;
+
+export const getCreateAgentChangeRequestUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * A release change request names a draft version and the version name it is published under. A recertification change request certifies the agent's published release again with no definition change. An agent has at most one open (draft or submitted) change request. A tier that needs no approval publishes directly instead. Requires `models.applications.publish.post`.
+ * @summary Create a draft change request
+ */
+export const createAgentChangeRequest = async (
+  projectId: string,
+  applicationId: number,
+  agentChangeRequestCreate: AgentChangeRequestCreate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createAgentChangeRequestResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createAgentChangeRequestResponse>(
+    getCreateAgentChangeRequestUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentChangeRequestCreate),
+    },
+  );
+};
+
+export const getCreateAgentChangeRequestQueryKey = (
+  projectId: string,
+  applicationId: number,
+  agentChangeRequestCreate?: AgentChangeRequestCreate,
+) => {
+  return [
+    "POST",
+    `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}`,
+    agentChangeRequestCreate,
+  ] as const;
+};
+
+export const getCreateAgentChangeRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof createAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  agentChangeRequestCreate: AgentChangeRequestCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateAgentChangeRequestQueryKey(
+      projectId,
+      applicationId,
+      agentChangeRequestCreate,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createAgentChangeRequest>>
+  > = ({ signal }) =>
+    createAgentChangeRequest(
+      projectId,
+      applicationId,
+      agentChangeRequestCreate,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof createAgentChangeRequest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateAgentChangeRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createAgentChangeRequest>>
+>;
+export type CreateAgentChangeRequestQueryError =
+  AgentLifecycleRefusal | N401Response | N403Response;
+
+export function useCreateAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof createAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  agentChangeRequestCreate: AgentChangeRequestCreate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createAgentChangeRequest>>,
+          TError,
+          Awaited<ReturnType<typeof createAgentChangeRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof createAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  agentChangeRequestCreate: AgentChangeRequestCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createAgentChangeRequest>>,
+          TError,
+          Awaited<ReturnType<typeof createAgentChangeRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof createAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  agentChangeRequestCreate: AgentChangeRequestCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Create a draft change request
+ */
+
+export function useCreateAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof createAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  agentChangeRequestCreate: AgentChangeRequestCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateAgentChangeRequestQueryOptions(
+    projectId,
+    applicationId,
+    agentChangeRequestCreate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAgentChangeRequestResponse200 = {
+  data: AgentChangeRequest;
+  status: 200;
+};
+
+export type getAgentChangeRequestResponse400 = {
+  data: AgentLifecycleRefusal;
+  status: 400;
+};
+
+export type getAgentChangeRequestResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAgentChangeRequestResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getAgentChangeRequestResponse404 = {
+  data: AgentLifecycleRefusal;
+  status: 404;
+};
+
+export type getAgentChangeRequestResponseSuccess =
+  getAgentChangeRequestResponse200 & {
+    headers: Headers;
+  };
+export type getAgentChangeRequestResponseError = (
+  | getAgentChangeRequestResponse400
+  | getAgentChangeRequestResponse401
+  | getAgentChangeRequestResponse403
+  | getAgentChangeRequestResponse404
+) & {
+  headers: Headers;
+};
+
+export type getAgentChangeRequestResponse =
+  getAgentChangeRequestResponseSuccess | getAgentChangeRequestResponseError;
+
+export const getGetAgentChangeRequestUrl = (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+) => {
+  return `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}/${changeRequestId}`;
+};
+
+/**
+ * The change request with its approvals and the state of its release gate. Requires `models.applications.versions.get`.
+ * @summary Read one change request
+ */
+export const getAgentChangeRequest = async (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAgentChangeRequestResponse> => {
+  return eliteaFetch<getAgentChangeRequestResponse>(
+    getGetAgentChangeRequestUrl(projectId, applicationId, changeRequestId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAgentChangeRequestQueryKey = (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+) => {
+  return [
+    `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}/${changeRequestId}`,
+  ] as const;
+};
+
+export const getGetAgentChangeRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetAgentChangeRequestQueryKey(projectId, applicationId, changeRequestId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAgentChangeRequest>>
+  > = ({ signal }) =>
+    getAgentChangeRequest(projectId, applicationId, changeRequestId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      changeRequestId !== null &&
+      changeRequestId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentChangeRequest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAgentChangeRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAgentChangeRequest>>
+>;
+export type GetAgentChangeRequestQueryError =
+  AgentLifecycleRefusal | N401Response | N403Response;
+
+export function useGetAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof getAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentChangeRequest>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentChangeRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof getAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentChangeRequest>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentChangeRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof getAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read one change request
+ */
+
+export function useGetAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof getAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAgentChangeRequestQueryOptions(
+    projectId,
+    applicationId,
+    changeRequestId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type submitAgentChangeRequestResponse200 = {
+  data: AgentChangeRequest;
+  status: 200;
+};
+
+export type submitAgentChangeRequestResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type submitAgentChangeRequestResponse403 = {
+  data: AgentLifecycleRefusal;
+  status: 403;
+};
+
+export type submitAgentChangeRequestResponse404 = {
+  data: AgentLifecycleRefusal;
+  status: 404;
+};
+
+export type submitAgentChangeRequestResponse409 = {
+  data: AgentLifecycleRefusal;
+  status: 409;
+};
+
+export type submitAgentChangeRequestResponseSuccess =
+  submitAgentChangeRequestResponse200 & {
+    headers: Headers;
+  };
+export type submitAgentChangeRequestResponseError = (
+  | submitAgentChangeRequestResponse401
+  | submitAgentChangeRequestResponse403
+  | submitAgentChangeRequestResponse404
+  | submitAgentChangeRequestResponse409
+) & {
+  headers: Headers;
+};
+
+export type submitAgentChangeRequestResponse =
+  | submitAgentChangeRequestResponseSuccess
+  | submitAgentChangeRequestResponseError;
+
+export const getSubmitAgentChangeRequestUrl = (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+) => {
+  return `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}/${changeRequestId}/submit`;
+};
+
+/**
+ * The author submits the draft. A release candidate passes every publish check first (the publish route's refusals apply), the release gate starts, and the tier's approval requirement is recorded. Written to the security audit outbox as agent.change.submitted. Requires `models.applications.publish.post`.
+ * @summary Submit a draft change request
+ */
+export const submitAgentChangeRequest = async (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<submitAgentChangeRequestResponse> => {
+  return eliteaFetch<submitAgentChangeRequestResponse>(
+    getSubmitAgentChangeRequestUrl(projectId, applicationId, changeRequestId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getSubmitAgentChangeRequestQueryKey = (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+) => {
+  return [
+    "POST",
+    `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}/${changeRequestId}/submit`,
+  ] as const;
+};
+
+export const getSubmitAgentChangeRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof submitAgentChangeRequest>>,
+  TError = N401Response | AgentLifecycleRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof submitAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSubmitAgentChangeRequestQueryKey(
+      projectId,
+      applicationId,
+      changeRequestId,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof submitAgentChangeRequest>>
+  > = ({ signal }) =>
+    submitAgentChangeRequest(projectId, applicationId, changeRequestId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      changeRequestId !== null &&
+      changeRequestId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof submitAgentChangeRequest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SubmitAgentChangeRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof submitAgentChangeRequest>>
+>;
+export type SubmitAgentChangeRequestQueryError =
+  N401Response | AgentLifecycleRefusal;
+
+export function useSubmitAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof submitAgentChangeRequest>>,
+  TError = N401Response | AgentLifecycleRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof submitAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof submitAgentChangeRequest>>,
+          TError,
+          Awaited<ReturnType<typeof submitAgentChangeRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSubmitAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof submitAgentChangeRequest>>,
+  TError = N401Response | AgentLifecycleRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof submitAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof submitAgentChangeRequest>>,
+          TError,
+          Awaited<ReturnType<typeof submitAgentChangeRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSubmitAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof submitAgentChangeRequest>>,
+  TError = N401Response | AgentLifecycleRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof submitAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Submit a draft change request
+ */
+
+export function useSubmitAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof submitAgentChangeRequest>>,
+  TError = N401Response | AgentLifecycleRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof submitAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSubmitAgentChangeRequestQueryOptions(
+    projectId,
+    applicationId,
+    changeRequestId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type approveAgentChangeRequestResponse200 = {
+  data: AgentChangeApprovalOutcome;
+  status: 200;
+};
+
+export type approveAgentChangeRequestResponse400 = {
+  data: AgentLifecycleRefusal;
+  status: 400;
+};
+
+export type approveAgentChangeRequestResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type approveAgentChangeRequestResponse403 = {
+  data: AgentLifecycleRefusal;
+  status: 403;
+};
+
+export type approveAgentChangeRequestResponse404 = {
+  data: AgentLifecycleRefusal;
+  status: 404;
+};
+
+export type approveAgentChangeRequestResponse409 = {
+  data: AgentLifecycleRefusal;
+  status: 409;
+};
+
+export type approveAgentChangeRequestResponseSuccess =
+  approveAgentChangeRequestResponse200 & {
+    headers: Headers;
+  };
+export type approveAgentChangeRequestResponseError = (
+  | approveAgentChangeRequestResponse400
+  | approveAgentChangeRequestResponse401
+  | approveAgentChangeRequestResponse403
+  | approveAgentChangeRequestResponse404
+  | approveAgentChangeRequestResponse409
+) & {
+  headers: Headers;
+};
+
+export type approveAgentChangeRequestResponse =
+  | approveAgentChangeRequestResponseSuccess
+  | approveAgentChangeRequestResponseError;
+
+export const getApproveAgentChangeRequestUrl = (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+) => {
+  return `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}/${changeRequestId}/approve`;
+};
+
+/**
+ * Records the caller's approval. The author cannot approve. Approval is refused while the release gate is pending or failed (not overridden), while a mandatory attestation is missing, expired or revoked, and after the candidate changed since submission. The final required approval publishes a release candidate through the publish path (the release is recorded) or certifies the published release again, in the same transaction, and certifies the agent. Written to the security audit outbox as agent.change.approved, and on the final approval agent.change.published and agent.certification.certified. Requires `models.applications.publish.post`.
+ * @summary Approve a submitted change request
+ */
+export const approveAgentChangeRequest = async (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentChangeApproval?: AgentChangeApproval,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<approveAgentChangeRequestResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<approveAgentChangeRequestResponse>(
+    getApproveAgentChangeRequestUrl(projectId, applicationId, changeRequestId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentChangeApproval),
+    },
+  );
+};
+
+export const getApproveAgentChangeRequestQueryKey = (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentChangeApproval?: AgentChangeApproval,
+) => {
+  return [
+    "POST",
+    `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}/${changeRequestId}/approve`,
+    agentChangeApproval,
+  ] as const;
+};
+
+export const getApproveAgentChangeRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof approveAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentChangeApproval?: AgentChangeApproval,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getApproveAgentChangeRequestQueryKey(
+      projectId,
+      applicationId,
+      changeRequestId,
+      agentChangeApproval,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof approveAgentChangeRequest>>
+  > = ({ signal }) =>
+    approveAgentChangeRequest(
+      projectId,
+      applicationId,
+      changeRequestId,
+      agentChangeApproval,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      changeRequestId !== null &&
+      changeRequestId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof approveAgentChangeRequest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ApproveAgentChangeRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof approveAgentChangeRequest>>
+>;
+export type ApproveAgentChangeRequestQueryError =
+  AgentLifecycleRefusal | N401Response;
+
+export function useApproveAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof approveAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentChangeApproval: undefined | AgentChangeApproval,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveAgentChangeRequest>>,
+          TError,
+          Awaited<ReturnType<typeof approveAgentChangeRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof approveAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentChangeApproval?: AgentChangeApproval,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveAgentChangeRequest>>,
+          TError,
+          Awaited<ReturnType<typeof approveAgentChangeRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof approveAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentChangeApproval?: AgentChangeApproval,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Approve a submitted change request
+ */
+
+export function useApproveAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof approveAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentChangeApproval?: AgentChangeApproval,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getApproveAgentChangeRequestQueryOptions(
+    projectId,
+    applicationId,
+    changeRequestId,
+    agentChangeApproval,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type rejectAgentChangeRequestResponse200 = {
+  data: AgentChangeRequest;
+  status: 200;
+};
+
+export type rejectAgentChangeRequestResponse400 = {
+  data: AgentLifecycleRefusal;
+  status: 400;
+};
+
+export type rejectAgentChangeRequestResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type rejectAgentChangeRequestResponse403 = {
+  data: AgentLifecycleRefusal;
+  status: 403;
+};
+
+export type rejectAgentChangeRequestResponse404 = {
+  data: AgentLifecycleRefusal;
+  status: 404;
+};
+
+export type rejectAgentChangeRequestResponse409 = {
+  data: AgentLifecycleRefusal;
+  status: 409;
+};
+
+export type rejectAgentChangeRequestResponseSuccess =
+  rejectAgentChangeRequestResponse200 & {
+    headers: Headers;
+  };
+export type rejectAgentChangeRequestResponseError = (
+  | rejectAgentChangeRequestResponse400
+  | rejectAgentChangeRequestResponse401
+  | rejectAgentChangeRequestResponse403
+  | rejectAgentChangeRequestResponse404
+  | rejectAgentChangeRequestResponse409
+) & {
+  headers: Headers;
+};
+
+export type rejectAgentChangeRequestResponse =
+  | rejectAgentChangeRequestResponseSuccess
+  | rejectAgentChangeRequestResponseError;
+
+export const getRejectAgentChangeRequestUrl = (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+) => {
+  return `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}/${changeRequestId}/reject`;
+};
+
+/**
+ * A reviewer other than the author rejects, with a reason. Written to the security audit outbox as agent.change.rejected. Requires `models.applications.publish.post`.
+ * @summary Reject a submitted change request
+ */
+export const rejectAgentChangeRequest = async (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentLifecycleReason: AgentLifecycleReason,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<rejectAgentChangeRequestResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<rejectAgentChangeRequestResponse>(
+    getRejectAgentChangeRequestUrl(projectId, applicationId, changeRequestId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentLifecycleReason),
+    },
+  );
+};
+
+export const getRejectAgentChangeRequestQueryKey = (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentLifecycleReason?: AgentLifecycleReason,
+) => {
+  return [
+    "POST",
+    `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}/${changeRequestId}/reject`,
+    agentLifecycleReason,
+  ] as const;
+};
+
+export const getRejectAgentChangeRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof rejectAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentLifecycleReason: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rejectAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRejectAgentChangeRequestQueryKey(
+      projectId,
+      applicationId,
+      changeRequestId,
+      agentLifecycleReason,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof rejectAgentChangeRequest>>
+  > = ({ signal }) =>
+    rejectAgentChangeRequest(
+      projectId,
+      applicationId,
+      changeRequestId,
+      agentLifecycleReason,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      changeRequestId !== null &&
+      changeRequestId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof rejectAgentChangeRequest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RejectAgentChangeRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof rejectAgentChangeRequest>>
+>;
+export type RejectAgentChangeRequestQueryError =
+  AgentLifecycleRefusal | N401Response;
+
+export function useRejectAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof rejectAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentLifecycleReason: AgentLifecycleReason,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rejectAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof rejectAgentChangeRequest>>,
+          TError,
+          Awaited<ReturnType<typeof rejectAgentChangeRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRejectAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof rejectAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentLifecycleReason: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rejectAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof rejectAgentChangeRequest>>,
+          TError,
+          Awaited<ReturnType<typeof rejectAgentChangeRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRejectAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof rejectAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentLifecycleReason: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rejectAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Reject a submitted change request
+ */
+
+export function useRejectAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof rejectAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentLifecycleReason: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rejectAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRejectAgentChangeRequestQueryOptions(
+    projectId,
+    applicationId,
+    changeRequestId,
+    agentLifecycleReason,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type withdrawAgentChangeRequestResponse200 = {
+  data: AgentChangeRequest;
+  status: 200;
+};
+
+export type withdrawAgentChangeRequestResponse400 = {
+  data: AgentLifecycleRefusal;
+  status: 400;
+};
+
+export type withdrawAgentChangeRequestResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type withdrawAgentChangeRequestResponse403 = {
+  data: AgentLifecycleRefusal;
+  status: 403;
+};
+
+export type withdrawAgentChangeRequestResponse404 = {
+  data: AgentLifecycleRefusal;
+  status: 404;
+};
+
+export type withdrawAgentChangeRequestResponse409 = {
+  data: AgentLifecycleRefusal;
+  status: 409;
+};
+
+export type withdrawAgentChangeRequestResponseSuccess =
+  withdrawAgentChangeRequestResponse200 & {
+    headers: Headers;
+  };
+export type withdrawAgentChangeRequestResponseError = (
+  | withdrawAgentChangeRequestResponse400
+  | withdrawAgentChangeRequestResponse401
+  | withdrawAgentChangeRequestResponse403
+  | withdrawAgentChangeRequestResponse404
+  | withdrawAgentChangeRequestResponse409
+) & {
+  headers: Headers;
+};
+
+export type withdrawAgentChangeRequestResponse =
+  | withdrawAgentChangeRequestResponseSuccess
+  | withdrawAgentChangeRequestResponseError;
+
+export const getWithdrawAgentChangeRequestUrl = (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+) => {
+  return `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}/${changeRequestId}/withdraw`;
+};
+
+/**
+ * The author, or a holder of `models.applications.governance`, withdraws. Written to the security audit outbox as agent.change.withdrawn. Requires `models.applications.publish.post`.
+ * @summary Withdraw a draft or submitted change request
+ */
+export const withdrawAgentChangeRequest = async (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentLifecycleReason?: AgentLifecycleReason,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<withdrawAgentChangeRequestResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<withdrawAgentChangeRequestResponse>(
+    getWithdrawAgentChangeRequestUrl(projectId, applicationId, changeRequestId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentLifecycleReason),
+    },
+  );
+};
+
+export const getWithdrawAgentChangeRequestQueryKey = (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentLifecycleReason?: AgentLifecycleReason,
+) => {
+  return [
+    "POST",
+    `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}/${changeRequestId}/withdraw`,
+    agentLifecycleReason,
+  ] as const;
+};
+
+export const getWithdrawAgentChangeRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof withdrawAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentLifecycleReason?: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof withdrawAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getWithdrawAgentChangeRequestQueryKey(
+      projectId,
+      applicationId,
+      changeRequestId,
+      agentLifecycleReason,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof withdrawAgentChangeRequest>>
+  > = ({ signal }) =>
+    withdrawAgentChangeRequest(
+      projectId,
+      applicationId,
+      changeRequestId,
+      agentLifecycleReason,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      changeRequestId !== null &&
+      changeRequestId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof withdrawAgentChangeRequest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type WithdrawAgentChangeRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof withdrawAgentChangeRequest>>
+>;
+export type WithdrawAgentChangeRequestQueryError =
+  AgentLifecycleRefusal | N401Response;
+
+export function useWithdrawAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof withdrawAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentLifecycleReason: undefined | AgentLifecycleReason,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof withdrawAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof withdrawAgentChangeRequest>>,
+          TError,
+          Awaited<ReturnType<typeof withdrawAgentChangeRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useWithdrawAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof withdrawAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentLifecycleReason?: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof withdrawAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof withdrawAgentChangeRequest>>,
+          TError,
+          Awaited<ReturnType<typeof withdrawAgentChangeRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useWithdrawAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof withdrawAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentLifecycleReason?: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof withdrawAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Withdraw a draft or submitted change request
+ */
+
+export function useWithdrawAgentChangeRequest<
+  TData = Awaited<ReturnType<typeof withdrawAgentChangeRequest>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentLifecycleReason?: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof withdrawAgentChangeRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getWithdrawAgentChangeRequestQueryOptions(
+    projectId,
+    applicationId,
+    changeRequestId,
+    agentLifecycleReason,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type overrideAgentChangeRequestGateResponse200 = {
+  data: AgentChangeRequest;
+  status: 200;
+};
+
+export type overrideAgentChangeRequestGateResponse400 = {
+  data: AgentLifecycleRefusal;
+  status: 400;
+};
+
+export type overrideAgentChangeRequestGateResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type overrideAgentChangeRequestGateResponse403 = {
+  data: AgentLifecycleRefusal;
+  status: 403;
+};
+
+export type overrideAgentChangeRequestGateResponse404 = {
+  data: AgentLifecycleRefusal;
+  status: 404;
+};
+
+export type overrideAgentChangeRequestGateResponse409 = {
+  data: AgentLifecycleRefusal;
+  status: 409;
+};
+
+export type overrideAgentChangeRequestGateResponseSuccess =
+  overrideAgentChangeRequestGateResponse200 & {
+    headers: Headers;
+  };
+export type overrideAgentChangeRequestGateResponseError = (
+  | overrideAgentChangeRequestGateResponse400
+  | overrideAgentChangeRequestGateResponse401
+  | overrideAgentChangeRequestGateResponse403
+  | overrideAgentChangeRequestGateResponse404
+  | overrideAgentChangeRequestGateResponse409
+) & {
+  headers: Headers;
+};
+
+export type overrideAgentChangeRequestGateResponse =
+  | overrideAgentChangeRequestGateResponseSuccess
+  | overrideAgentChangeRequestGateResponseError;
+
+export const getOverrideAgentChangeRequestGateUrl = (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+) => {
+  return `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}/${changeRequestId}/gate_override`;
+};
+
+/**
+ * A governance role holder who is not the author accepts the failed release gate, with a reason of 1 to 200 characters. The gate stays failed with the override stored beside it; approval still needs the tier's approvers. Written to the security audit outbox as agent.change.gate_overridden. Requires `models.applications.governance`.
+ * @summary Override the failed release gate of a change request
+ */
+export const overrideAgentChangeRequestGate = async (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentGateOverride: AgentGateOverride,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<overrideAgentChangeRequestGateResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<overrideAgentChangeRequestGateResponse>(
+    getOverrideAgentChangeRequestGateUrl(
+      projectId,
+      applicationId,
+      changeRequestId,
+    ),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentGateOverride),
+    },
+  );
+};
+
+export const getOverrideAgentChangeRequestGateQueryKey = (
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentGateOverride?: AgentGateOverride,
+) => {
+  return [
+    "POST",
+    `/elitea_core/change_requests/prompt_lib/${projectId}/${applicationId}/${changeRequestId}/gate_override`,
+    agentGateOverride,
+  ] as const;
+};
+
+export const getOverrideAgentChangeRequestGateQueryOptions = <
+  TData = Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentGateOverride: AgentGateOverride,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getOverrideAgentChangeRequestGateQueryKey(
+      projectId,
+      applicationId,
+      changeRequestId,
+      agentGateOverride,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>
+  > = ({ signal }) =>
+    overrideAgentChangeRequestGate(
+      projectId,
+      applicationId,
+      changeRequestId,
+      agentGateOverride,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      changeRequestId !== null &&
+      changeRequestId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type OverrideAgentChangeRequestGateQueryResult = NonNullable<
+  Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>
+>;
+export type OverrideAgentChangeRequestGateQueryError =
+  AgentLifecycleRefusal | N401Response;
+
+export function useOverrideAgentChangeRequestGate<
+  TData = Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentGateOverride: AgentGateOverride,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>,
+          TError,
+          Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useOverrideAgentChangeRequestGate<
+  TData = Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentGateOverride: AgentGateOverride,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>,
+          TError,
+          Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useOverrideAgentChangeRequestGate<
+  TData = Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentGateOverride: AgentGateOverride,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Override the failed release gate of a change request
+ */
+
+export function useOverrideAgentChangeRequestGate<
+  TData = Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>,
+  TError = AgentLifecycleRefusal | N401Response,
+>(
+  projectId: string,
+  applicationId: number,
+  changeRequestId: number,
+  agentGateOverride: AgentGateOverride,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof overrideAgentChangeRequestGate>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getOverrideAgentChangeRequestGateQueryOptions(
+    projectId,
+    applicationId,
+    changeRequestId,
+    agentGateOverride,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listAgentAttestationsResponse200 = {
+  data: AgentAttestationList;
+  status: 200;
+};
+
+export type listAgentAttestationsResponse400 = {
+  data: AgentLifecycleRefusal;
+  status: 400;
+};
+
+export type listAgentAttestationsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listAgentAttestationsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listAgentAttestationsResponseSuccess =
+  listAgentAttestationsResponse200 & {
+    headers: Headers;
+  };
+export type listAgentAttestationsResponseError = (
+  | listAgentAttestationsResponse400
+  | listAgentAttestationsResponse401
+  | listAgentAttestationsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listAgentAttestationsResponse =
+  listAgentAttestationsResponseSuccess | listAgentAttestationsResponseError;
+
+export const getListAgentAttestationsUrl = (
+  projectId: string,
+  params?: ListAgentAttestationsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/agent_attestations/prompt_lib/${projectId}?${stringifiedParams}`
+    : `/elitea_core/agent_attestations/prompt_lib/${projectId}`;
+};
+
+/**
+ * The project's attestations, newest first, at most 500, optionally of one subject (ADR-0040 decision 6). Requires `models.applications.versions.get`.
+ * @summary List the attestations of a project
+ */
+export const listAgentAttestations = async (
+  projectId: string,
+  params?: ListAgentAttestationsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listAgentAttestationsResponse> => {
+  return eliteaFetch<listAgentAttestationsResponse>(
+    getListAgentAttestationsUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListAgentAttestationsQueryKey = (
+  projectId: string,
+  params?: ListAgentAttestationsParams,
+) => {
+  return [
+    `/elitea_core/agent_attestations/prompt_lib/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListAgentAttestationsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAgentAttestations>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListAgentAttestationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentAttestations>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListAgentAttestationsQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAgentAttestations>>
+  > = ({ signal }) =>
+    listAgentAttestations(projectId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAgentAttestations>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAgentAttestationsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAgentAttestations>>
+>;
+export type ListAgentAttestationsQueryError =
+  AgentLifecycleRefusal | N401Response | N403Response;
+
+export function useListAgentAttestations<
+  TData = Awaited<ReturnType<typeof listAgentAttestations>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  params: undefined | ListAgentAttestationsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentAttestations>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentAttestations>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentAttestations>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentAttestations<
+  TData = Awaited<ReturnType<typeof listAgentAttestations>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListAgentAttestationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentAttestations>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentAttestations>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentAttestations>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentAttestations<
+  TData = Awaited<ReturnType<typeof listAgentAttestations>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListAgentAttestationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentAttestations>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the attestations of a project
+ */
+
+export function useListAgentAttestations<
+  TData = Awaited<ReturnType<typeof listAgentAttestations>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListAgentAttestationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentAttestations>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListAgentAttestationsQueryOptions(
+    projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type recordAgentAttestationResponse201 = {
+  data: AgentAttestation;
+  status: 201;
+};
+
+export type recordAgentAttestationResponse400 = {
+  data: AgentLifecycleRefusal;
+  status: 400;
+};
+
+export type recordAgentAttestationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type recordAgentAttestationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type recordAgentAttestationResponse404 = {
+  data: AgentLifecycleRefusal;
+  status: 404;
+};
+
+export type recordAgentAttestationResponseSuccess =
+  recordAgentAttestationResponse201 & {
+    headers: Headers;
+  };
+export type recordAgentAttestationResponseError = (
+  | recordAgentAttestationResponse400
+  | recordAgentAttestationResponse401
+  | recordAgentAttestationResponse403
+  | recordAgentAttestationResponse404
+) & {
+  headers: Headers;
+};
+
+export type recordAgentAttestationResponse =
+  recordAgentAttestationResponseSuccess | recordAgentAttestationResponseError;
+
+export const getRecordAgentAttestationUrl = (projectId: string) => {
+  return `/elitea_core/agent_attestations/prompt_lib/${projectId}`;
+};
+
+/**
+ * Records an external review of an agent, a release, a toolkit or an index, for example by a GRC tool with an API token. An agent or a release subject must exist in the project. A valid attestation satisfies a mandatory attestation kind of the agent's tier. Written to the security audit outbox as agent.attestation.recorded. Requires `lifecycle.attestations.write`.
+ * @summary Record an attestation
+ */
+export const recordAgentAttestation = async (
+  projectId: string,
+  agentAttestationCreate: AgentAttestationCreate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<recordAgentAttestationResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<recordAgentAttestationResponse>(
+    getRecordAgentAttestationUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentAttestationCreate),
+    },
+  );
+};
+
+export const getRecordAgentAttestationQueryKey = (
+  projectId: string,
+  agentAttestationCreate?: AgentAttestationCreate,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_attestations/prompt_lib/${projectId}`,
+    agentAttestationCreate,
+  ] as const;
+};
+
+export const getRecordAgentAttestationQueryOptions = <
+  TData = Awaited<ReturnType<typeof recordAgentAttestation>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  agentAttestationCreate: AgentAttestationCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof recordAgentAttestation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRecordAgentAttestationQueryKey(projectId, agentAttestationCreate);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof recordAgentAttestation>>
+  > = ({ signal }) =>
+    recordAgentAttestation(projectId, agentAttestationCreate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof recordAgentAttestation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RecordAgentAttestationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof recordAgentAttestation>>
+>;
+export type RecordAgentAttestationQueryError =
+  AgentLifecycleRefusal | N401Response | N403Response;
+
+export function useRecordAgentAttestation<
+  TData = Awaited<ReturnType<typeof recordAgentAttestation>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  agentAttestationCreate: AgentAttestationCreate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof recordAgentAttestation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof recordAgentAttestation>>,
+          TError,
+          Awaited<ReturnType<typeof recordAgentAttestation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRecordAgentAttestation<
+  TData = Awaited<ReturnType<typeof recordAgentAttestation>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  agentAttestationCreate: AgentAttestationCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof recordAgentAttestation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof recordAgentAttestation>>,
+          TError,
+          Awaited<ReturnType<typeof recordAgentAttestation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRecordAgentAttestation<
+  TData = Awaited<ReturnType<typeof recordAgentAttestation>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  agentAttestationCreate: AgentAttestationCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof recordAgentAttestation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Record an attestation
+ */
+
+export function useRecordAgentAttestation<
+  TData = Awaited<ReturnType<typeof recordAgentAttestation>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  agentAttestationCreate: AgentAttestationCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof recordAgentAttestation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRecordAgentAttestationQueryOptions(
+    projectId,
+    agentAttestationCreate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type revokeAgentAttestationResponse200 = {
+  data: AgentAttestation;
+  status: 200;
+};
+
+export type revokeAgentAttestationResponse400 = {
+  data: AgentLifecycleRefusal;
+  status: 400;
+};
+
+export type revokeAgentAttestationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type revokeAgentAttestationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type revokeAgentAttestationResponse404 = {
+  data: AgentLifecycleRefusal;
+  status: 404;
+};
+
+export type revokeAgentAttestationResponseSuccess =
+  revokeAgentAttestationResponse200 & {
+    headers: Headers;
+  };
+export type revokeAgentAttestationResponseError = (
+  | revokeAgentAttestationResponse400
+  | revokeAgentAttestationResponse401
+  | revokeAgentAttestationResponse403
+  | revokeAgentAttestationResponse404
+) & {
+  headers: Headers;
+};
+
+export type revokeAgentAttestationResponse =
+  revokeAgentAttestationResponseSuccess | revokeAgentAttestationResponseError;
+
+export const getRevokeAgentAttestationUrl = (
+  projectId: string,
+  attestationId: number,
+) => {
+  return `/elitea_core/agent_attestations/prompt_lib/${projectId}/${attestationId}/revoke`;
+};
+
+/**
+ * A revoked attestation no longer satisfies a mandatory kind. Written to the security audit outbox as agent.attestation.revoked. Requires `lifecycle.attestations.write`.
+ * @summary Revoke an attestation
+ */
+export const revokeAgentAttestation = async (
+  projectId: string,
+  attestationId: number,
+  agentLifecycleReason?: AgentLifecycleReason,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<revokeAgentAttestationResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<revokeAgentAttestationResponse>(
+    getRevokeAgentAttestationUrl(projectId, attestationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentLifecycleReason),
+    },
+  );
+};
+
+export const getRevokeAgentAttestationQueryKey = (
+  projectId: string,
+  attestationId: number,
+  agentLifecycleReason?: AgentLifecycleReason,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_attestations/prompt_lib/${projectId}/${attestationId}/revoke`,
+    agentLifecycleReason,
+  ] as const;
+};
+
+export const getRevokeAgentAttestationQueryOptions = <
+  TData = Awaited<ReturnType<typeof revokeAgentAttestation>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  attestationId: number,
+  agentLifecycleReason?: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeAgentAttestation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRevokeAgentAttestationQueryKey(
+      projectId,
+      attestationId,
+      agentLifecycleReason,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof revokeAgentAttestation>>
+  > = ({ signal }) =>
+    revokeAgentAttestation(projectId, attestationId, agentLifecycleReason, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      attestationId !== null &&
+      attestationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof revokeAgentAttestation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RevokeAgentAttestationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof revokeAgentAttestation>>
+>;
+export type RevokeAgentAttestationQueryError =
+  AgentLifecycleRefusal | N401Response | N403Response;
+
+export function useRevokeAgentAttestation<
+  TData = Awaited<ReturnType<typeof revokeAgentAttestation>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  attestationId: number,
+  agentLifecycleReason: undefined | AgentLifecycleReason,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeAgentAttestation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeAgentAttestation>>,
+          TError,
+          Awaited<ReturnType<typeof revokeAgentAttestation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeAgentAttestation<
+  TData = Awaited<ReturnType<typeof revokeAgentAttestation>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  attestationId: number,
+  agentLifecycleReason?: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeAgentAttestation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeAgentAttestation>>,
+          TError,
+          Awaited<ReturnType<typeof revokeAgentAttestation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeAgentAttestation<
+  TData = Awaited<ReturnType<typeof revokeAgentAttestation>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  attestationId: number,
+  agentLifecycleReason?: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeAgentAttestation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Revoke an attestation
+ */
+
+export function useRevokeAgentAttestation<
+  TData = Awaited<ReturnType<typeof revokeAgentAttestation>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  attestationId: number,
+  agentLifecycleReason?: AgentLifecycleReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeAgentAttestation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRevokeAgentAttestationQueryOptions(
+    projectId,
+    attestationId,
+    agentLifecycleReason,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type listVersionRevisionsResponse200 = {
   data: VersionRevisionList;
   status: 200;
@@ -4727,6 +8576,1009 @@ export function useListVersionRevisions<
     projectId,
     applicationId,
     versionId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listReleaseGateSuitesResponse200 = {
+  data: ReleaseGateSuiteList;
+  status: 200;
+};
+
+export type listReleaseGateSuitesResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listReleaseGateSuitesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listReleaseGateSuitesResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listReleaseGateSuitesResponseSuccess =
+  listReleaseGateSuitesResponse200 & {
+    headers: Headers;
+  };
+export type listReleaseGateSuitesResponseError = (
+  | listReleaseGateSuitesResponse400
+  | listReleaseGateSuitesResponse401
+  | listReleaseGateSuitesResponse403
+) & {
+  headers: Headers;
+};
+
+export type listReleaseGateSuitesResponse =
+  listReleaseGateSuitesResponseSuccess | listReleaseGateSuitesResponseError;
+
+export const getListReleaseGateSuitesUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/release_gate_suites/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * The evaluation datasets of the agent that are marked as release gate suites, with their pass criteria. dataset_missing marks a suite whose dataset was deleted. Requires `models.applications.evaluation.dataset.read`.
+ * @summary List the release gate suites of an agent
+ */
+export const listReleaseGateSuites = async (
+  projectId: string,
+  applicationId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listReleaseGateSuitesResponse> => {
+  return eliteaFetch<listReleaseGateSuitesResponse>(
+    getListReleaseGateSuitesUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListReleaseGateSuitesQueryKey = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return [
+    `/elitea_core/release_gate_suites/prompt_lib/${projectId}/${applicationId}`,
+  ] as const;
+};
+
+export const getListReleaseGateSuitesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listReleaseGateSuites>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listReleaseGateSuites>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListReleaseGateSuitesQueryKey(projectId, applicationId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listReleaseGateSuites>>
+  > = ({ signal }) =>
+    listReleaseGateSuites(projectId, applicationId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listReleaseGateSuites>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListReleaseGateSuitesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listReleaseGateSuites>>
+>;
+export type ListReleaseGateSuitesQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListReleaseGateSuites<
+  TData = Awaited<ReturnType<typeof listReleaseGateSuites>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listReleaseGateSuites>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listReleaseGateSuites>>,
+          TError,
+          Awaited<ReturnType<typeof listReleaseGateSuites>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListReleaseGateSuites<
+  TData = Awaited<ReturnType<typeof listReleaseGateSuites>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listReleaseGateSuites>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listReleaseGateSuites>>,
+          TError,
+          Awaited<ReturnType<typeof listReleaseGateSuites>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListReleaseGateSuites<
+  TData = Awaited<ReturnType<typeof listReleaseGateSuites>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listReleaseGateSuites>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the release gate suites of an agent
+ */
+
+export function useListReleaseGateSuites<
+  TData = Awaited<ReturnType<typeof listReleaseGateSuites>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listReleaseGateSuites>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListReleaseGateSuitesQueryOptions(
+    projectId,
+    applicationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type putReleaseGateSuiteResponse200 = {
+  data: ReleaseGateSuite;
+  status: 200;
+};
+
+export type putReleaseGateSuiteResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type putReleaseGateSuiteResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type putReleaseGateSuiteResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type putReleaseGateSuiteResponse404 = {
+  data: ReleaseGateRefusal;
+  status: 404;
+};
+
+export type putReleaseGateSuiteResponse409 = {
+  data: ReleaseGateRefusal;
+  status: 409;
+};
+
+export type putReleaseGateSuiteResponseSuccess =
+  putReleaseGateSuiteResponse200 & {
+    headers: Headers;
+  };
+export type putReleaseGateSuiteResponseError = (
+  | putReleaseGateSuiteResponse400
+  | putReleaseGateSuiteResponse401
+  | putReleaseGateSuiteResponse403
+  | putReleaseGateSuiteResponse404
+  | putReleaseGateSuiteResponse409
+) & {
+  headers: Headers;
+};
+
+export type putReleaseGateSuiteResponse =
+  putReleaseGateSuiteResponseSuccess | putReleaseGateSuiteResponseError;
+
+export const getPutReleaseGateSuiteUrl = (
+  projectId: string,
+  applicationId: number,
+  datasetId: number,
+) => {
+  return `/elitea_core/release_gate_suites/prompt_lib/${projectId}/${applicationId}/${datasetId}`;
+};
+
+/**
+ * Marks an evaluation dataset of the agent (or a project dataset of no agent) as a release gate suite, with one pass criterion per dimension (at most 5), or unmarks it with release_gate false. A gate runs every gate suite against the candidate version, and the regression suite (and every suite with a no_worse_than criterion) against the current release as well. An agent has at most one regression suite and 10 gate suites. A gate already started keeps the suites it started with. Requires `models.applications.evaluation.dataset.update` and `models.applications.publish.post`. For an agent whose risk tier needs approval (ADR-0040), a change that loosens the gate (unmark a suite, unset regression, remove a criterion or change its kind, lower min_score, raise max_drop) also requires `models.applications.governance`; adding or tightening does not.
+ * @summary Mark or unmark a dataset as a release gate suite
+ */
+export const putReleaseGateSuite = async (
+  projectId: string,
+  applicationId: number,
+  datasetId: number,
+  releaseGateSuiteRequest: ReleaseGateSuiteRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<putReleaseGateSuiteResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<putReleaseGateSuiteResponse>(
+    getPutReleaseGateSuiteUrl(projectId, applicationId, datasetId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(releaseGateSuiteRequest),
+    },
+  );
+};
+
+export const getPutReleaseGateSuiteQueryKey = (
+  projectId: string,
+  applicationId: number,
+  datasetId: number,
+  releaseGateSuiteRequest?: ReleaseGateSuiteRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/release_gate_suites/prompt_lib/${projectId}/${applicationId}/${datasetId}`,
+    releaseGateSuiteRequest,
+  ] as const;
+};
+
+export const getPutReleaseGateSuiteQueryOptions = <
+  TData = Awaited<ReturnType<typeof putReleaseGateSuite>>,
+  TError = ErrorResponse | N401Response | ReleaseGateRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  datasetId: number,
+  releaseGateSuiteRequest: ReleaseGateSuiteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof putReleaseGateSuite>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getPutReleaseGateSuiteQueryKey(
+      projectId,
+      applicationId,
+      datasetId,
+      releaseGateSuiteRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof putReleaseGateSuite>>
+  > = ({ signal }) =>
+    putReleaseGateSuite(
+      projectId,
+      applicationId,
+      datasetId,
+      releaseGateSuiteRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      datasetId !== null &&
+      datasetId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof putReleaseGateSuite>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type PutReleaseGateSuiteQueryResult = NonNullable<
+  Awaited<ReturnType<typeof putReleaseGateSuite>>
+>;
+export type PutReleaseGateSuiteQueryError =
+  ErrorResponse | N401Response | ReleaseGateRefusal;
+
+export function usePutReleaseGateSuite<
+  TData = Awaited<ReturnType<typeof putReleaseGateSuite>>,
+  TError = ErrorResponse | N401Response | ReleaseGateRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  datasetId: number,
+  releaseGateSuiteRequest: ReleaseGateSuiteRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof putReleaseGateSuite>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof putReleaseGateSuite>>,
+          TError,
+          Awaited<ReturnType<typeof putReleaseGateSuite>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePutReleaseGateSuite<
+  TData = Awaited<ReturnType<typeof putReleaseGateSuite>>,
+  TError = ErrorResponse | N401Response | ReleaseGateRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  datasetId: number,
+  releaseGateSuiteRequest: ReleaseGateSuiteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof putReleaseGateSuite>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof putReleaseGateSuite>>,
+          TError,
+          Awaited<ReturnType<typeof putReleaseGateSuite>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePutReleaseGateSuite<
+  TData = Awaited<ReturnType<typeof putReleaseGateSuite>>,
+  TError = ErrorResponse | N401Response | ReleaseGateRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  datasetId: number,
+  releaseGateSuiteRequest: ReleaseGateSuiteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof putReleaseGateSuite>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Mark or unmark a dataset as a release gate suite
+ */
+
+export function usePutReleaseGateSuite<
+  TData = Awaited<ReturnType<typeof putReleaseGateSuite>>,
+  TError = ErrorResponse | N401Response | ReleaseGateRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  datasetId: number,
+  releaseGateSuiteRequest: ReleaseGateSuiteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof putReleaseGateSuite>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getPutReleaseGateSuiteQueryOptions(
+    projectId,
+    applicationId,
+    datasetId,
+    releaseGateSuiteRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listReleaseGatesResponse200 = {
+  data: ReleaseGateList;
+  status: 200;
+};
+
+export type listReleaseGatesResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listReleaseGatesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listReleaseGatesResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listReleaseGatesResponseSuccess = listReleaseGatesResponse200 & {
+  headers: Headers;
+};
+export type listReleaseGatesResponseError = (
+  | listReleaseGatesResponse400
+  | listReleaseGatesResponse401
+  | listReleaseGatesResponse403
+) & {
+  headers: Headers;
+};
+
+export type listReleaseGatesResponse =
+  listReleaseGatesResponseSuccess | listReleaseGatesResponseError;
+
+export const getListReleaseGatesUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/release_gates/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * The release gates of the agent, newest first (at most 50): change gates of candidate versions and scheduled re-evaluations of the current release. A pending gate whose runs finished is evaluated before it is answered. Requires `models.applications.evaluation.run.read`.
+ * @summary List the release gates of an agent
+ */
+export const listReleaseGates = async (
+  projectId: string,
+  applicationId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listReleaseGatesResponse> => {
+  return eliteaFetch<listReleaseGatesResponse>(
+    getListReleaseGatesUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListReleaseGatesQueryKey = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return [
+    `/elitea_core/release_gates/prompt_lib/${projectId}/${applicationId}`,
+  ] as const;
+};
+
+export const getListReleaseGatesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listReleaseGates>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listReleaseGates>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListReleaseGatesQueryKey(projectId, applicationId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listReleaseGates>>
+  > = ({ signal }) =>
+    listReleaseGates(projectId, applicationId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listReleaseGates>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListReleaseGatesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listReleaseGates>>
+>;
+export type ListReleaseGatesQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListReleaseGates<
+  TData = Awaited<ReturnType<typeof listReleaseGates>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listReleaseGates>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listReleaseGates>>,
+          TError,
+          Awaited<ReturnType<typeof listReleaseGates>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListReleaseGates<
+  TData = Awaited<ReturnType<typeof listReleaseGates>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listReleaseGates>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listReleaseGates>>,
+          TError,
+          Awaited<ReturnType<typeof listReleaseGates>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListReleaseGates<
+  TData = Awaited<ReturnType<typeof listReleaseGates>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listReleaseGates>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the release gates of an agent
+ */
+
+export function useListReleaseGates<
+  TData = Awaited<ReturnType<typeof listReleaseGates>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listReleaseGates>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListReleaseGatesQueryOptions(
+    projectId,
+    applicationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getReleaseGateResponse200 = {
+  data: ReleaseGate;
+  status: 200;
+};
+
+export type getReleaseGateResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type getReleaseGateResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getReleaseGateResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getReleaseGateResponse404 = {
+  data: ReleaseGateRefusal;
+  status: 404;
+};
+
+export type getReleaseGateResponseSuccess = getReleaseGateResponse200 & {
+  headers: Headers;
+};
+export type getReleaseGateResponseError = (
+  | getReleaseGateResponse400
+  | getReleaseGateResponse401
+  | getReleaseGateResponse403
+  | getReleaseGateResponse404
+) & {
+  headers: Headers;
+};
+
+export type getReleaseGateResponse =
+  getReleaseGateResponseSuccess | getReleaseGateResponseError;
+
+export const getGetReleaseGateUrl = (
+  projectId: string,
+  applicationId: number,
+  gateId: number,
+) => {
+  return `/elitea_core/release_gates/prompt_lib/${projectId}/${applicationId}/${gateId}`;
+};
+
+/**
+ * The gate with its evaluation runs, the result per suite and dimension, the typed failures (a regression lists the cases that passed on the current release and fail on the candidate) and the override. A gate is pending until every run is terminal; an errored, cancelled or deleted run fails it. Requires `models.applications.evaluation.run.read`.
+ * @summary Read one release gate of an agent
+ */
+export const getReleaseGate = async (
+  projectId: string,
+  applicationId: number,
+  gateId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getReleaseGateResponse> => {
+  return eliteaFetch<getReleaseGateResponse>(
+    getGetReleaseGateUrl(projectId, applicationId, gateId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetReleaseGateQueryKey = (
+  projectId: string,
+  applicationId: number,
+  gateId: number,
+) => {
+  return [
+    `/elitea_core/release_gates/prompt_lib/${projectId}/${applicationId}/${gateId}`,
+  ] as const;
+};
+
+export const getGetReleaseGateQueryOptions = <
+  TData = Awaited<ReturnType<typeof getReleaseGate>>,
+  TError = ErrorResponse | N401Response | N403Response | ReleaseGateRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  gateId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getReleaseGate>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetReleaseGateQueryKey(projectId, applicationId, gateId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getReleaseGate>>> = ({
+    signal,
+  }) =>
+    getReleaseGate(projectId, applicationId, gateId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      gateId !== null &&
+      gateId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getReleaseGate>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetReleaseGateQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getReleaseGate>>
+>;
+export type GetReleaseGateQueryError =
+  ErrorResponse | N401Response | N403Response | ReleaseGateRefusal;
+
+export function useGetReleaseGate<
+  TData = Awaited<ReturnType<typeof getReleaseGate>>,
+  TError = ErrorResponse | N401Response | N403Response | ReleaseGateRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  gateId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getReleaseGate>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getReleaseGate>>,
+          TError,
+          Awaited<ReturnType<typeof getReleaseGate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetReleaseGate<
+  TData = Awaited<ReturnType<typeof getReleaseGate>>,
+  TError = ErrorResponse | N401Response | N403Response | ReleaseGateRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  gateId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getReleaseGate>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getReleaseGate>>,
+          TError,
+          Awaited<ReturnType<typeof getReleaseGate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetReleaseGate<
+  TData = Awaited<ReturnType<typeof getReleaseGate>>,
+  TError = ErrorResponse | N401Response | N403Response | ReleaseGateRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  gateId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getReleaseGate>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read one release gate of an agent
+ */
+
+export function useGetReleaseGate<
+  TData = Awaited<ReturnType<typeof getReleaseGate>>,
+  TError = ErrorResponse | N401Response | N403Response | ReleaseGateRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  gateId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getReleaseGate>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetReleaseGateQueryOptions(
+    projectId,
+    applicationId,
+    gateId,
     options,
   );
 

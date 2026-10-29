@@ -46,7 +46,13 @@ import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
 import type {
+  AgentAttestation,
+  AgentAttestationList,
   AgentCategoriesResponse,
+  AgentChangeApprovalOutcome,
+  AgentChangeRequest,
+  AgentChangeRequestList,
+  AgentRegistryRecord,
   AgentSchemaResponse,
   ApplicationCreatedResponse,
   ApplicationDetail,
@@ -94,6 +100,10 @@ import type {
   PublishSuccessResponse,
   PublishValidationResult,
   RecommendationsResponse,
+  ReleaseGate,
+  ReleaseGateList,
+  ReleaseGateSuite,
+  ReleaseGateSuiteList,
   ResolvedApplicationVersion,
   TrendingAuthor,
   UnpublishResponse,
@@ -1228,6 +1238,408 @@ export const getRollbackApplicationReleaseResponseMock =
     reason: "v3 answers in the wrong language",
   });
 
+export const getGetAgentRegistryResponseMock = (): AgentRegistryRecord => ({
+  project_id: 12,
+  application_id: 31,
+  application_name: "Refund assistant",
+  business_owner_id: 4,
+  technical_owner_id: 7,
+  risk_tier: "high",
+  intended_use: "Answers refund policy questions for support staff.",
+  out_of_scope_use: "Decides refunds.",
+  data_classes: ["customer_pii"],
+  certification_state: "certified",
+  certified_release_id: 9,
+  certified_at: "2026-10-29T09:00:00Z",
+  recertify_by: "2027-04-27T09:00:00Z",
+  state_reason: "",
+  state_changed_at: "2026-10-29T09:00:00Z",
+  suspension_id: null,
+  updated_at: "2026-10-29T09:00:00Z",
+});
+
+export const getUpdateAgentRegistryResponseMock = (): AgentRegistryRecord => ({
+  project_id: 12,
+  application_id: 31,
+  application_name: "Refund assistant",
+  business_owner_id: 4,
+  technical_owner_id: 7,
+  risk_tier: "high",
+  intended_use: "Answers refund policy questions for support staff.",
+  out_of_scope_use: "Decides refunds.",
+  data_classes: ["customer_pii"],
+  certification_state: "certified",
+  certified_release_id: 9,
+  certified_at: "2026-10-29T09:00:00Z",
+  recertify_by: "2027-04-27T09:00:00Z",
+  state_reason: "",
+  state_changed_at: "2026-10-29T09:00:00Z",
+  suspension_id: null,
+  updated_at: "2026-10-29T09:00:00Z",
+});
+
+export const getMarkAgentDueResponseMock = (): AgentRegistryRecord => ({
+  project_id: 12,
+  application_id: 31,
+  application_name: "Refund assistant",
+  business_owner_id: 4,
+  technical_owner_id: 7,
+  risk_tier: "high",
+  intended_use: "Answers refund policy questions for support staff.",
+  out_of_scope_use: "Decides refunds.",
+  data_classes: ["customer_pii"],
+  certification_state: "certified",
+  certified_release_id: 9,
+  certified_at: "2026-10-29T09:00:00Z",
+  recertify_by: "2027-04-27T09:00:00Z",
+  state_reason: "",
+  state_changed_at: "2026-10-29T09:00:00Z",
+  suspension_id: null,
+  updated_at: "2026-10-29T09:00:00Z",
+});
+
+export const getListAgentChangeRequestsResponseMock = (
+  overrideResponse: Partial<Extract<AgentChangeRequestList, object>> = {},
+): AgentChangeRequestList => ({
+  total: faker.number.int(),
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: 5,
+    application_id: 31,
+    kind: "release",
+    state: "submitted",
+    risk_tier: "high",
+    candidate_version_id: 88,
+    candidate_revision_id: 412,
+    version_name: "2.1",
+    category: "",
+    summary: "Adds the refund window lookup tool.",
+    proposed_by: 7,
+    self_approved: false,
+    required_approvals: 1,
+    required_governance_approvals: 1,
+    gate_id: 14,
+    gate: { id: 14, state: "passed", failures: [], overridden: false },
+    override_reason: "",
+    overridden_by: null,
+    overridden_at: null,
+    current_release_id: 9,
+    release_id: null,
+    decided_by: null,
+    decided_at: null,
+    decision_reason: "",
+    created_at: "2026-10-29T09:00:00Z",
+    submitted_at: "2026-10-29T09:05:00Z",
+    published_at: null,
+    approvals: [],
+  })),
+  ...overrideResponse,
+});
+
+export const getCreateAgentChangeRequestResponseMock =
+  (): AgentChangeRequest => ({
+    id: 5,
+    application_id: 31,
+    kind: "release",
+    state: "submitted",
+    risk_tier: "high",
+    candidate_version_id: 88,
+    candidate_revision_id: 412,
+    version_name: "2.1",
+    category: "",
+    summary: "Adds the refund window lookup tool.",
+    proposed_by: 7,
+    self_approved: false,
+    required_approvals: 1,
+    required_governance_approvals: 1,
+    gate_id: 14,
+    gate: { id: 14, state: "passed", failures: [], overridden: false },
+    override_reason: "",
+    overridden_by: null,
+    overridden_at: null,
+    current_release_id: 9,
+    release_id: null,
+    decided_by: null,
+    decided_at: null,
+    decision_reason: "",
+    created_at: "2026-10-29T09:00:00Z",
+    submitted_at: "2026-10-29T09:05:00Z",
+    published_at: null,
+    approvals: [],
+  });
+
+export const getGetAgentChangeRequestResponseMock = (): AgentChangeRequest => ({
+  id: 5,
+  application_id: 31,
+  kind: "release",
+  state: "submitted",
+  risk_tier: "high",
+  candidate_version_id: 88,
+  candidate_revision_id: 412,
+  version_name: "2.1",
+  category: "",
+  summary: "Adds the refund window lookup tool.",
+  proposed_by: 7,
+  self_approved: false,
+  required_approvals: 1,
+  required_governance_approvals: 1,
+  gate_id: 14,
+  gate: { id: 14, state: "passed", failures: [], overridden: false },
+  override_reason: "",
+  overridden_by: null,
+  overridden_at: null,
+  current_release_id: 9,
+  release_id: null,
+  decided_by: null,
+  decided_at: null,
+  decision_reason: "",
+  created_at: "2026-10-29T09:00:00Z",
+  submitted_at: "2026-10-29T09:05:00Z",
+  published_at: null,
+  approvals: [],
+});
+
+export const getSubmitAgentChangeRequestResponseMock =
+  (): AgentChangeRequest => ({
+    id: 5,
+    application_id: 31,
+    kind: "release",
+    state: "submitted",
+    risk_tier: "high",
+    candidate_version_id: 88,
+    candidate_revision_id: 412,
+    version_name: "2.1",
+    category: "",
+    summary: "Adds the refund window lookup tool.",
+    proposed_by: 7,
+    self_approved: false,
+    required_approvals: 1,
+    required_governance_approvals: 1,
+    gate_id: 14,
+    gate: { id: 14, state: "passed", failures: [], overridden: false },
+    override_reason: "",
+    overridden_by: null,
+    overridden_at: null,
+    current_release_id: 9,
+    release_id: null,
+    decided_by: null,
+    decided_at: null,
+    decision_reason: "",
+    created_at: "2026-10-29T09:00:00Z",
+    submitted_at: "2026-10-29T09:05:00Z",
+    published_at: null,
+    approvals: [],
+  });
+
+export const getApproveAgentChangeRequestResponseMock = (
+  overrideResponse: Partial<Extract<AgentChangeApprovalOutcome, object>> = {},
+): AgentChangeApprovalOutcome => ({
+  change_request: {
+    id: 5,
+    application_id: 31,
+    kind: "release",
+    state: "submitted",
+    risk_tier: "high",
+    candidate_version_id: 88,
+    candidate_revision_id: 412,
+    version_name: "2.1",
+    category: "",
+    summary: "Adds the refund window lookup tool.",
+    proposed_by: 7,
+    self_approved: false,
+    required_approvals: 1,
+    required_governance_approvals: 1,
+    gate_id: 14,
+    gate: { id: 14, state: "passed", failures: [], overridden: false },
+    override_reason: "",
+    overridden_by: null,
+    overridden_at: null,
+    current_release_id: 9,
+    release_id: null,
+    decided_by: null,
+    decided_at: null,
+    decision_reason: "",
+    created_at: "2026-10-29T09:00:00Z",
+    submitted_at: "2026-10-29T09:05:00Z",
+    published_at: null,
+    approvals: [],
+  },
+  complete: faker.datatype.boolean(),
+  published: faker.helpers.arrayElement([
+    {
+      version_id: faker.number.int(),
+      release_id: faker.helpers.arrayElement([faker.number.int(), null]),
+      version_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    },
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getRejectAgentChangeRequestResponseMock =
+  (): AgentChangeRequest => ({
+    id: 5,
+    application_id: 31,
+    kind: "release",
+    state: "submitted",
+    risk_tier: "high",
+    candidate_version_id: 88,
+    candidate_revision_id: 412,
+    version_name: "2.1",
+    category: "",
+    summary: "Adds the refund window lookup tool.",
+    proposed_by: 7,
+    self_approved: false,
+    required_approvals: 1,
+    required_governance_approvals: 1,
+    gate_id: 14,
+    gate: { id: 14, state: "passed", failures: [], overridden: false },
+    override_reason: "",
+    overridden_by: null,
+    overridden_at: null,
+    current_release_id: 9,
+    release_id: null,
+    decided_by: null,
+    decided_at: null,
+    decision_reason: "",
+    created_at: "2026-10-29T09:00:00Z",
+    submitted_at: "2026-10-29T09:05:00Z",
+    published_at: null,
+    approvals: [],
+  });
+
+export const getWithdrawAgentChangeRequestResponseMock =
+  (): AgentChangeRequest => ({
+    id: 5,
+    application_id: 31,
+    kind: "release",
+    state: "submitted",
+    risk_tier: "high",
+    candidate_version_id: 88,
+    candidate_revision_id: 412,
+    version_name: "2.1",
+    category: "",
+    summary: "Adds the refund window lookup tool.",
+    proposed_by: 7,
+    self_approved: false,
+    required_approvals: 1,
+    required_governance_approvals: 1,
+    gate_id: 14,
+    gate: { id: 14, state: "passed", failures: [], overridden: false },
+    override_reason: "",
+    overridden_by: null,
+    overridden_at: null,
+    current_release_id: 9,
+    release_id: null,
+    decided_by: null,
+    decided_at: null,
+    decision_reason: "",
+    created_at: "2026-10-29T09:00:00Z",
+    submitted_at: "2026-10-29T09:05:00Z",
+    published_at: null,
+    approvals: [],
+  });
+
+export const getOverrideAgentChangeRequestGateResponseMock =
+  (): AgentChangeRequest => ({
+    id: 5,
+    application_id: 31,
+    kind: "release",
+    state: "submitted",
+    risk_tier: "high",
+    candidate_version_id: 88,
+    candidate_revision_id: 412,
+    version_name: "2.1",
+    category: "",
+    summary: "Adds the refund window lookup tool.",
+    proposed_by: 7,
+    self_approved: false,
+    required_approvals: 1,
+    required_governance_approvals: 1,
+    gate_id: 14,
+    gate: { id: 14, state: "passed", failures: [], overridden: false },
+    override_reason: "",
+    overridden_by: null,
+    overridden_at: null,
+    current_release_id: 9,
+    release_id: null,
+    decided_by: null,
+    decided_at: null,
+    decision_reason: "",
+    created_at: "2026-10-29T09:00:00Z",
+    submitted_at: "2026-10-29T09:05:00Z",
+    published_at: null,
+    approvals: [],
+  });
+
+export const getListAgentAttestationsResponseMock = (
+  overrideResponse: Partial<Extract<AgentAttestationList, object>> = {},
+): AgentAttestationList => ({
+  total: faker.number.int(),
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: 3,
+    kind: "model_risk",
+    custom_kind: "",
+    subject_type: "agent",
+    subject_id: "31",
+    attester: "Model Risk Committee",
+    attester_user_id: null,
+    valid_until: "2027-10-29T00:00:00Z",
+    evidence_url: "https://grc.example.com/reviews/1182",
+    note: "",
+    recorded_by: 4,
+    created_at: "2026-10-29T09:00:00Z",
+    revoked_at: null,
+    revoked_by: null,
+    revoke_reason: "",
+    valid: true,
+  })),
+  ...overrideResponse,
+});
+
+export const getRecordAgentAttestationResponseMock = (): AgentAttestation => ({
+  id: 3,
+  kind: "model_risk",
+  custom_kind: "",
+  subject_type: "agent",
+  subject_id: "31",
+  attester: "Model Risk Committee",
+  attester_user_id: null,
+  valid_until: "2027-10-29T00:00:00Z",
+  evidence_url: "https://grc.example.com/reviews/1182",
+  note: "",
+  recorded_by: 4,
+  created_at: "2026-10-29T09:00:00Z",
+  revoked_at: null,
+  revoked_by: null,
+  revoke_reason: "",
+  valid: true,
+});
+
+export const getRevokeAgentAttestationResponseMock = (): AgentAttestation => ({
+  id: 3,
+  kind: "model_risk",
+  custom_kind: "",
+  subject_type: "agent",
+  subject_id: "31",
+  attester: "Model Risk Committee",
+  attester_user_id: null,
+  valid_until: "2027-10-29T00:00:00Z",
+  evidence_url: "https://grc.example.com/reviews/1182",
+  note: "",
+  recorded_by: 4,
+  created_at: "2026-10-29T09:00:00Z",
+  revoked_at: null,
+  revoked_by: null,
+  revoke_reason: "",
+  valid: true,
+});
+
 export const getListVersionRevisionsResponseMock = (
   overrideResponse: Partial<Extract<VersionRevisionList, object>> = {},
 ): VersionRevisionList => ({
@@ -1262,6 +1674,201 @@ export const getListVersionRevisionsResponseMock = (
     ],
   })),
   ...overrideResponse,
+});
+
+export const getListReleaseGateSuitesResponseMock =
+  (): ReleaseGateSuiteList => ({
+    total: 1,
+    rows: [
+      {
+        application_id: 31,
+        dataset_id: 4,
+        release_gate: true,
+        regression: true,
+        criteria: [{ dimension_id: "7", kind: "threshold", min_score: 70 }],
+        reevaluate_every_days: null,
+        updated_by: 4,
+        updated_at: "2026-10-29T09:00:00Z",
+        dataset_missing: false,
+      },
+    ],
+  });
+
+export const getPutReleaseGateSuiteResponseMock = (): ReleaseGateSuite => ({
+  application_id: 31,
+  dataset_id: 4,
+  release_gate: true,
+  regression: true,
+  criteria: [{ dimension_id: "7", kind: "threshold", min_score: 70 }],
+  reevaluate_every_days: 30,
+  updated_by: 4,
+  updated_at: "2026-10-29T09:00:00Z",
+  dataset_missing: false,
+});
+
+export const getListReleaseGatesResponseMock = (
+  overrideResponse: Partial<Extract<ReleaseGateList, object>> = {},
+): ReleaseGateList => ({
+  total: faker.number.int(),
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: 12,
+    application_id: 31,
+    kind: "change",
+    candidate_version_id: 41,
+    current_release_id: 7,
+    baseline_version_id: 40,
+    state: "failed",
+    suites: [
+      {
+        application_id: 31,
+        dataset_id: 4,
+        release_gate: true,
+        regression: true,
+        criteria: [{ dimension_id: "7", kind: "threshold", min_score: 70 }],
+        reevaluate_every_days: null,
+        updated_by: 4,
+        updated_at: "2026-10-29T09:00:00Z",
+        dataset_missing: false,
+      },
+    ],
+    runs: [
+      {
+        dataset_id: 4,
+        role: "candidate",
+        application_version_id: 41,
+        eval_run_id: 90,
+        reused: false,
+      },
+      {
+        dataset_id: 4,
+        role: "baseline",
+        application_version_id: 40,
+        eval_run_id: 91,
+        reused: false,
+      },
+    ],
+    outcome: [
+      {
+        dataset_id: 4,
+        regression: true,
+        criteria: [
+          {
+            dimension_id: "7",
+            kind: "threshold",
+            min_score: 70,
+            status: "passed",
+            score: 75,
+            baseline: null,
+            required: 70,
+          },
+        ],
+        regressed_cases: [
+          { case_id: "18", name: "And Rust?", dimension_ids: ["7"] },
+        ],
+      },
+    ],
+    failures: [
+      {
+        code: "gate_regression",
+        dataset_id: 4,
+        eval_run_id: 90,
+        cases: [{ case_id: "18", name: "And Rust?", dimension_ids: ["7"] }],
+        message:
+          "1 case(s) passed on the current release and fail on the candidate",
+      },
+    ],
+    created_by: 4,
+    created_at: "2026-10-29T09:10:00Z",
+    evaluated_at: "2026-10-29T09:14:00Z",
+    override: {
+      actor_id: 6,
+      reason: "Case 18 asks about a retired product",
+      at: "2026-10-29T09:30:00Z",
+    },
+    blocks: false,
+  })),
+  ...overrideResponse,
+});
+
+export const getGetReleaseGateResponseMock = (): ReleaseGate => ({
+  id: 12,
+  application_id: 31,
+  kind: "change",
+  candidate_version_id: 41,
+  current_release_id: 7,
+  baseline_version_id: 40,
+  state: "failed",
+  suites: [
+    {
+      application_id: 31,
+      dataset_id: 4,
+      release_gate: true,
+      regression: true,
+      criteria: [{ dimension_id: "7", kind: "threshold", min_score: 70 }],
+      reevaluate_every_days: null,
+      updated_by: 4,
+      updated_at: "2026-10-29T09:00:00Z",
+      dataset_missing: false,
+    },
+  ],
+  runs: [
+    {
+      dataset_id: 4,
+      role: "candidate",
+      application_version_id: 41,
+      eval_run_id: 90,
+      reused: false,
+    },
+    {
+      dataset_id: 4,
+      role: "baseline",
+      application_version_id: 40,
+      eval_run_id: 91,
+      reused: false,
+    },
+  ],
+  outcome: [
+    {
+      dataset_id: 4,
+      regression: true,
+      criteria: [
+        {
+          dimension_id: "7",
+          kind: "threshold",
+          min_score: 70,
+          status: "passed",
+          score: 75,
+          baseline: null,
+          required: 70,
+        },
+      ],
+      regressed_cases: [
+        { case_id: "18", name: "And Rust?", dimension_ids: ["7"] },
+      ],
+    },
+  ],
+  failures: [
+    {
+      code: "gate_regression",
+      dataset_id: 4,
+      eval_run_id: 90,
+      cases: [{ case_id: "18", name: "And Rust?", dimension_ids: ["7"] }],
+      message:
+        "1 case(s) passed on the current release and fail on the candidate",
+    },
+  ],
+  created_by: 4,
+  created_at: "2026-10-29T09:10:00Z",
+  evaluated_at: "2026-10-29T09:14:00Z",
+  override: {
+    actor_id: 6,
+    reason: "Case 18 asks about a retired product",
+    at: "2026-10-29T09:30:00Z",
+  },
+  blocks: false,
 });
 
 export const getResolveApplicationVersionResponseMock = (
@@ -6644,6 +7251,370 @@ export const getRollbackApplicationReleaseMockHandler = (
   );
 };
 
+export const getGetAgentRegistryMockHandler = (
+  overrideResponse?:
+    | AgentRegistryRecord
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentRegistryRecord> | AgentRegistryRecord),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_registry/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentRegistryResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpdateAgentRegistryMockHandler = (
+  overrideResponse?:
+    | AgentRegistryRecord
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<AgentRegistryRecord> | AgentRegistryRecord),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/agent_registry/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpdateAgentRegistryResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getMarkAgentDueMockHandler = (
+  overrideResponse?:
+    | AgentRegistryRecord
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentRegistryRecord> | AgentRegistryRecord),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_registry/prompt_lib/:projectId/:applicationId/mark_due",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getMarkAgentDueResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListAgentChangeRequestsMockHandler = (
+  overrideResponse?:
+    | AgentChangeRequestList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentChangeRequestList> | AgentChangeRequestList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/change_requests/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAgentChangeRequestsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateAgentChangeRequestMockHandler = (
+  overrideResponse?:
+    | AgentChangeRequest
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentChangeRequest> | AgentChangeRequest),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/change_requests/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateAgentChangeRequestResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAgentChangeRequestMockHandler = (
+  overrideResponse?:
+    | AgentChangeRequest
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentChangeRequest> | AgentChangeRequest),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/change_requests/prompt_lib/:projectId/:applicationId/:changeRequestId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentChangeRequestResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSubmitAgentChangeRequestMockHandler = (
+  overrideResponse?:
+    | AgentChangeRequest
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentChangeRequest> | AgentChangeRequest),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/change_requests/prompt_lib/:projectId/:applicationId/:changeRequestId/submit",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSubmitAgentChangeRequestResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getApproveAgentChangeRequestMockHandler = (
+  overrideResponse?:
+    | AgentChangeApprovalOutcome
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentChangeApprovalOutcome> | AgentChangeApprovalOutcome),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/change_requests/prompt_lib/:projectId/:applicationId/:changeRequestId/approve",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getApproveAgentChangeRequestResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRejectAgentChangeRequestMockHandler = (
+  overrideResponse?:
+    | AgentChangeRequest
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentChangeRequest> | AgentChangeRequest),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/change_requests/prompt_lib/:projectId/:applicationId/:changeRequestId/reject",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRejectAgentChangeRequestResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getWithdrawAgentChangeRequestMockHandler = (
+  overrideResponse?:
+    | AgentChangeRequest
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentChangeRequest> | AgentChangeRequest),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/change_requests/prompt_lib/:projectId/:applicationId/:changeRequestId/withdraw",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getWithdrawAgentChangeRequestResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getOverrideAgentChangeRequestGateMockHandler = (
+  overrideResponse?:
+    | AgentChangeRequest
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentChangeRequest> | AgentChangeRequest),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/change_requests/prompt_lib/:projectId/:applicationId/:changeRequestId/gate_override",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getOverrideAgentChangeRequestGateResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListAgentAttestationsMockHandler = (
+  overrideResponse?:
+    | AgentAttestationList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentAttestationList> | AgentAttestationList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_attestations/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAgentAttestationsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRecordAgentAttestationMockHandler = (
+  overrideResponse?:
+    | AgentAttestation
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentAttestation> | AgentAttestation),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_attestations/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRecordAgentAttestationResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRevokeAgentAttestationMockHandler = (
+  overrideResponse?:
+    | AgentAttestation
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentAttestation> | AgentAttestation),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_attestations/prompt_lib/:projectId/:attestationId/revoke",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRevokeAgentAttestationResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListVersionRevisionsMockHandler = (
   overrideResponse?:
     | VersionRevisionList
@@ -6663,6 +7634,110 @@ export const getListVersionRevisionsMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getListVersionRevisionsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListReleaseGateSuitesMockHandler = (
+  overrideResponse?:
+    | ReleaseGateSuiteList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ReleaseGateSuiteList> | ReleaseGateSuiteList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/release_gate_suites/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListReleaseGateSuitesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getPutReleaseGateSuiteMockHandler = (
+  overrideResponse?:
+    | ReleaseGateSuite
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<ReleaseGateSuite> | ReleaseGateSuite),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/release_gate_suites/prompt_lib/:projectId/:applicationId/:datasetId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getPutReleaseGateSuiteResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListReleaseGatesMockHandler = (
+  overrideResponse?:
+    | ReleaseGateList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ReleaseGateList> | ReleaseGateList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/release_gates/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListReleaseGatesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetReleaseGateMockHandler = (
+  overrideResponse?:
+    | ReleaseGate
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ReleaseGate> | ReleaseGate),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/release_gates/prompt_lib/:projectId/:applicationId/:gateId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetReleaseGateResponseMock(),
         { status: 200 },
       );
     },
@@ -8406,7 +9481,25 @@ export const getApplicationsMock = () => [
   getListApplicationReleasesMockHandler(),
   getGetApplicationReleaseMockHandler(),
   getRollbackApplicationReleaseMockHandler(),
+  getGetAgentRegistryMockHandler(),
+  getUpdateAgentRegistryMockHandler(),
+  getMarkAgentDueMockHandler(),
+  getListAgentChangeRequestsMockHandler(),
+  getCreateAgentChangeRequestMockHandler(),
+  getGetAgentChangeRequestMockHandler(),
+  getSubmitAgentChangeRequestMockHandler(),
+  getApproveAgentChangeRequestMockHandler(),
+  getRejectAgentChangeRequestMockHandler(),
+  getWithdrawAgentChangeRequestMockHandler(),
+  getOverrideAgentChangeRequestGateMockHandler(),
+  getListAgentAttestationsMockHandler(),
+  getRecordAgentAttestationMockHandler(),
+  getRevokeAgentAttestationMockHandler(),
   getListVersionRevisionsMockHandler(),
+  getListReleaseGateSuitesMockHandler(),
+  getPutReleaseGateSuiteMockHandler(),
+  getListReleaseGatesMockHandler(),
+  getGetReleaseGateMockHandler(),
   getResolveApplicationVersionMockHandler(),
   getPredictLLMMockHandler(),
   getGenerateApplicationDraftMockHandler(),

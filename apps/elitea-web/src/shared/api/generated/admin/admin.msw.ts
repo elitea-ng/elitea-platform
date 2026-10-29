@@ -48,6 +48,7 @@ import type { RequestHandlerOptions } from "msw";
 import type {
   AgentIdentityBinding,
   AgentIdentityBindingListResponse,
+  AgentRegistryList,
   AgentToolkitPin,
   BackgroundJobListResponse,
   BrandingAsset,
@@ -388,6 +389,39 @@ export const getListBackgroundJobsResponseMock = (
 export const getCancelBackgroundJobResponseMock = (
   overrideResponse: Partial<Extract<OkResponse, object>> = {},
 ): OkResponse => ({ ok: faker.datatype.boolean(), ...overrideResponse });
+
+export const getListAdminAgentRegistryResponseMock = (
+  overrideResponse: Partial<Extract<AgentRegistryList | string, object>> = {},
+): AgentRegistryList | string =>
+  faker.helpers.arrayElement([
+    {
+      total: faker.number.int(),
+      rows: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        project_id: 12,
+        application_id: 31,
+        application_name: "Refund assistant",
+        business_owner_id: 4,
+        technical_owner_id: 7,
+        risk_tier: "high",
+        intended_use: "Answers refund policy questions for support staff.",
+        out_of_scope_use: "Decides refunds.",
+        data_classes: ["customer_pii"],
+        certification_state: "certified",
+        certified_release_id: 9,
+        certified_at: "2026-10-29T09:00:00Z",
+        recertify_by: "2027-04-27T09:00:00Z",
+        state_reason: "",
+        state_changed_at: "2026-10-29T09:00:00Z",
+        suspension_id: null,
+        updated_at: "2026-10-29T09:00:00Z",
+      })),
+      ...overrideResponse,
+    },
+    faker.word.sample(),
+  ]);
 
 export const getListExecutionSuspensionsResponseMock = (
   overrideResponse: Partial<Extract<ExecutionSuspensionList, object>> = {},
@@ -3144,6 +3178,37 @@ export const getCancelBackgroundJobMockHandler = (
   );
 };
 
+export const getListAdminAgentRegistryMockHandler = (
+  overrideResponse?:
+    | AgentRegistryList
+    | string
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentRegistryList | string> | AgentRegistryList | string),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/agent_registry",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      const resolvedBody =
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAdminAgentRegistryResponseMock();
+      return typeof resolvedBody === "string"
+        ? HttpResponse.text(resolvedBody, {
+            status: 200,
+            headers: { "Content-Type": "text/csv" },
+          })
+        : HttpResponse.json(resolvedBody, { status: 200 });
+    },
+    options,
+  );
+};
+
 export const getListExecutionSuspensionsMockHandler = (
   overrideResponse?:
     | ExecutionSuspensionList
@@ -5126,6 +5191,7 @@ export const getAdminMock = () => [
   getBulkInviteMembersMockHandler(),
   getListBackgroundJobsMockHandler(),
   getCancelBackgroundJobMockHandler(),
+  getListAdminAgentRegistryMockHandler(),
   getListExecutionSuspensionsMockHandler(),
   getCreateExecutionSuspensionMockHandler(),
   getResumeExecutionSuspensionMockHandler(),

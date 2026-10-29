@@ -26,6 +26,7 @@ import { useEvaluationPermissions } from '../model/useEvaluationPermissions';
 import { DatasetCasesPanel } from './DatasetCasesPanel';
 import { DatasetCreateDialog } from './DatasetCreateDialog';
 import { EvaluationStatus } from './EvaluationStatus';
+import { ReleaseGateSuiteSection } from './ReleaseGateSuiteSection';
 
 const rootSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '0.5rem' };
 const headerSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', justifyContent: 'space-between' };
@@ -182,6 +183,15 @@ export function EvaluationDatasetsView(props: EvaluationDatasetsViewProps): Reac
           onDeleteDataset={() => {
             mutations.remove.mutate(selectedId, { onSuccess: () => setSelectedId(undefined) });
           }}
+        />
+      )}
+
+      {selectedId !== undefined && applicationId !== undefined && (
+        <ReleaseGateSuiteSection
+          projectId={projectId}
+          applicationId={applicationId}
+          datasetId={selectedId}
+          canEdit={permissions.canUpdateDatasets}
         />
       )}
 

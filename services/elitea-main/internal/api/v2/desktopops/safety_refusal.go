@@ -15,7 +15,7 @@ import (
 // could not be read. It reports false for every other error.
 func writeSafetyRefusal(writer http.ResponseWriter, err error) bool {
 	if suspended, ok := safety.AsSuspended(err); ok {
-		desktopwire.WriteError(writer, http.StatusConflict, safety.ErrorCode, suspended.Message())
+		desktopwire.WriteError(writer, http.StatusConflict, suspended.Code(), suspended.Message())
 		return true
 	}
 	if errors.Is(err, safety.ErrStateUnavailable) {

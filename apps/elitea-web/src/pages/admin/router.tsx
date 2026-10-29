@@ -95,6 +95,7 @@ const AdminGatewayGovernance = lazyRouteComponent(
   () => import('./GatewayGovernance'),
   'AdminGatewayGovernance',
 );
+const AdminAgentRegistry = lazyRouteComponent(() => import('./AgentRegistry'), 'AdminAgentRegistry');
 const AdminBudgets = lazyRouteComponent(() => import('./Budgets'), 'AdminBudgets');
 const AdminBranding = lazyRouteComponent(() => import('./Branding'), 'AdminBranding');
 const AdminEmail = lazyRouteComponent(() => import('./Email'), 'AdminEmail');
@@ -237,6 +238,12 @@ const governanceRoute = createRoute({
  * screen behind them, and the only writer of `gateway.project_budget`'s
  * `budget_period` and `nats_fail_mode` columns.
  */
+const agentRegistryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/agent-registry',
+  component: AdminAgentRegistry,
+});
+
 const budgetsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/budgets',
@@ -286,6 +293,7 @@ const adminRouteTree = rootRoute.addChildren([
   toolkitTypesRoute,
   featuresRoute,
   governanceRoute,
+  agentRegistryRoute,
   budgetsRoute,
 ]);
 

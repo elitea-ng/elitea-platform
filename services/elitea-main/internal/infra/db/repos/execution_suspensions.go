@@ -242,6 +242,31 @@ func (r *ExecutionSuspensionRepository) CreateSuspension(
 		return safety.Suspension{}, fmt.Errorf("begin suspension: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	created, err := r.CreateSuspensionTx(ctx, tx, s)
+	if err != nil {
+		return safety.Suspension{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			existing, findErr := r.activeFor(ctx, r.pool, s.Target)
+			if findErr == nil {
+				return safety.Suspension{}, &safety.AlreadySuspendedError{Existing: existing}
+			}
+		}
+		return safety.Suspension{}, fmt.Errorf("commit suspension: %w", err)
+	}
+	return created, nil
+}
+
+// CreateSuspensionTx is CreateSuspension in the caller's transaction, so a
+// caller commits the suspension with its own evidence (the recertification
+// pass's audit event) or not at all. The exclusive admission fence is its
+// first statement; the caller must not hold row locks an admission waits
+// on. A concurrent duplicate surfaces as 23505 at the caller's commit.
+func (r *ExecutionSuspensionRepository) CreateSuspensionTx(
+	ctx context.Context, tx pgx.Tx, s safety.NewSuspension,
+) (safety.Suspension, error) {
 	if _, err := tx.Exec(ctx, suspensionFenceLockSQL, safety.AdmissionFenceLockName); err != nil {
 		return safety.Suspension{}, fmt.Errorf("take the admission fence: %w", err)
 	}
@@ -291,16 +316,6 @@ RETURNING `+suspensionColumns,
 			created.ID, created.CancelledRuns); err != nil {
 			return safety.Suspension{}, fmt.Errorf("record the cancelled runs: %w", err)
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			existing, findErr := r.activeFor(ctx, r.pool, s.Target)
-			if findErr == nil {
-				return safety.Suspension{}, &safety.AlreadySuspendedError{Existing: existing}
-			}
-		}
-		return safety.Suspension{}, fmt.Errorf("commit suspension: %w", err)
 	}
 	return created, nil
 }

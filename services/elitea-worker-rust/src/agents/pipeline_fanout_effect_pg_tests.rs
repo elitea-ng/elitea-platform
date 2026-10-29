@@ -285,6 +285,37 @@ fn saved_runtime_with3(
     second: Option<Value>,
     third: Option<Value>,
 ) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
+    saved_runtime_on(
+        outcomes,
+        details,
+        second,
+        third,
+        test_model_gateway_config(),
+    )
+}
+
+/// [`saved_runtime`] for a script holding gated replies (`Gated`,
+/// `ResponseForRequestAfter`). A gated reply waits for the test to decide a
+/// card from its frame, which on a loaded runner can take longer than the
+/// fake's 1 s header deadline; that deadline would turn the test's own
+/// reaction time into a failed branch, so the gated script is bounded by the
+/// test instead (#1532).
+fn gated_saved_runtime(
+    outcomes: Vec<TestModelGatewayOutcome>,
+    details: Value,
+) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
+    let mut config = test_model_gateway_config();
+    config.response_header_timeout = Duration::from_secs(60);
+    saved_runtime_on(outcomes, details, None, None, config)
+}
+
+fn saved_runtime_on(
+    outcomes: Vec<TestModelGatewayOutcome>,
+    details: Value,
+    second: Option<Value>,
+    third: Option<Value>,
+    gateway_config: crate::transport::openai_compatible_facade::ModelGatewayConfig,
+) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
     let runtime = RuntimeContextClient::with_rpc(
         crate::transport::input_content::content_fake::Routes(SavedAgentVersions {
             details,
@@ -301,8 +332,8 @@ fn saved_runtime_with3(
         },
     )
     .expect("saved-version runtime-context fixture");
-    let (gateway, captured) = test_model_gateway_client(outcomes, test_model_gateway_config())
-        .expect("scripted model gateway");
+    let (gateway, captured) =
+        test_model_gateway_client(outcomes, gateway_config).expect("scripted model gateway");
     (
         Arc::new(PlatformClient::new(Arc::new(runtime))),
         Arc::new(ModelFacade::from_gateway(gateway)),
@@ -318,7 +349,28 @@ fn assembler(
     connector: Arc<dyn McpConnector>,
     details: Value,
 ) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
-    let (platform, model_facade, captured) = saved_runtime(outcomes, details);
+    assembler_on(pool, saved_runtime(outcomes, details), connector)
+}
+
+/// [`assembler`] over a [`gated_saved_runtime`] script.
+fn gated_assembler(
+    pool: &sqlx::PgPool,
+    outcomes: Vec<TestModelGatewayOutcome>,
+    connector: Arc<dyn McpConnector>,
+    details: Value,
+) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
+    assembler_on(pool, gated_saved_runtime(outcomes, details), connector)
+}
+
+fn assembler_on(
+    pool: &sqlx::PgPool,
+    (platform, model_facade, captured): (
+        Arc<PlatformClient>,
+        Arc<ModelFacade>,
+        CapturedModelRequests,
+    ),
+    connector: Arc<dyn McpConnector>,
+) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
     let assembler = PipelineNativeAgentAssembler::postgres(
         pool.clone(),
         SessionLimits::default(),
@@ -773,7 +825,7 @@ async fn postgres_fanout_agent_branches_approve_and_reject_their_own_calls() {
     // park on a final fetch that ran before this test saw the cards.
     let decided = Arc::new(tokio::sync::Notify::new());
     let decisions = AtomicUsize::new(0);
-    let (platform, model_facade, captured) = saved_runtime(
+    let (platform, model_facade, captured) = gated_saved_runtime(
         vec![
             TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
             TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
@@ -856,7 +908,7 @@ async fn postgres_fanout_agent_branch_asks_and_resumes_with_the_answer() {
     // the runner's final fetch finds no decision and parks, and the answer
     // is never delivered live.
     let decided = Arc::new(tokio::sync::Notify::new());
-    let (assembler, captured) = assembler(
+    let (assembler, captured) = gated_assembler(
         &db.pool,
         vec![
             TestModelGatewayOutcome::Response(pipeline_text_response("first done")),
@@ -1251,7 +1303,7 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
     let early_decided = Arc::new(tokio::sync::Notify::new());
     let deny_decided = Arc::new(tokio::sync::Notify::new());
     let early = AtomicUsize::new(0);
-    let (platform, model_facade, captured) = saved_runtime(
+    let (platform, model_facade, captured) = gated_saved_runtime(
         vec![
             TestModelGatewayOutcome::ResponseForRequest {
                 marker: "Work on ask",
@@ -3321,7 +3373,7 @@ async fn postgres_fanout_effect_child() {
             // once the card is approved: the approval is taken live, never
             // after the activation parked.
             let decided = Arc::new(tokio::sync::Notify::new());
-            let (platform, model_facade, _) = saved_runtime(
+            let (platform, model_facade, _) = gated_saved_runtime(
                 vec![
                     TestModelGatewayOutcome::Response(pipeline_text_response("first done")),
                     TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),

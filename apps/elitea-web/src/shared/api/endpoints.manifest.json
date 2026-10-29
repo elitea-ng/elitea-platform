@@ -3436,6 +3436,166 @@
       "responseSchema": "ExecutionSuspension",
       "fixture": null,
       "usedBy": ["features/kill-switch"]
+    },
+    {
+      "id": "applications.getAgentRegistry",
+      "method": "GET",
+      "path": "/elitea_core/agent_registry/prompt_lib/{project_id}/{application_id}",
+      "operationId": "getAgentRegistry",
+      "source": "generated",
+      "responseSchema": "AgentRegistryRecord",
+      "fixture": null,
+      "usedBy": ["features/agent-lifecycle"]
+    },
+    {
+      "id": "applications.updateAgentRegistry",
+      "method": "PUT",
+      "path": "/elitea_core/agent_registry/prompt_lib/{project_id}/{application_id}",
+      "operationId": "updateAgentRegistry",
+      "source": "generated",
+      "responseSchema": "AgentRegistryRecord",
+      "fixture": null,
+      "usedBy": ["features/agent-lifecycle"]
+    },
+    {
+      "id": "applications.listAgentChangeRequests",
+      "method": "GET",
+      "path": "/elitea_core/change_requests/prompt_lib/{project_id}/{application_id}",
+      "operationId": "listAgentChangeRequests",
+      "source": "generated",
+      "responseSchema": "AgentChangeRequestList",
+      "fixture": null,
+      "usedBy": ["features/agent-lifecycle"]
+    },
+    {
+      "id": "applications.createAgentChangeRequest",
+      "method": "POST",
+      "path": "/elitea_core/change_requests/prompt_lib/{project_id}/{application_id}",
+      "operationId": "createAgentChangeRequest",
+      "source": "generated",
+      "responseSchema": "AgentChangeRequest",
+      "fixture": null,
+      "usedBy": ["features/agent-lifecycle"]
+    },
+    {
+      "id": "applications.getAgentChangeRequest",
+      "method": "GET",
+      "path": "/elitea_core/change_requests/prompt_lib/{project_id}/{application_id}/{change_request_id}",
+      "operationId": "getAgentChangeRequest",
+      "source": "generated",
+      "responseSchema": "AgentChangeRequest",
+      "fixture": null,
+      "usedBy": ["features/agent-lifecycle"]
+    },
+    {
+      "id": "applications.submitAgentChangeRequest",
+      "method": "POST",
+      "path": "/elitea_core/change_requests/prompt_lib/{project_id}/{application_id}/{change_request_id}/submit",
+      "operationId": "submitAgentChangeRequest",
+      "source": "generated",
+      "responseSchema": "AgentChangeRequest",
+      "fixture": null,
+      "usedBy": ["features/agent-lifecycle"]
+    },
+    {
+      "id": "applications.approveAgentChangeRequest",
+      "method": "POST",
+      "path": "/elitea_core/change_requests/prompt_lib/{project_id}/{application_id}/{change_request_id}/approve",
+      "operationId": "approveAgentChangeRequest",
+      "source": "generated",
+      "responseSchema": "AgentChangeApprovalOutcome",
+      "fixture": null,
+      "usedBy": ["features/agent-lifecycle"]
+    },
+    {
+      "id": "applications.rejectAgentChangeRequest",
+      "method": "POST",
+      "path": "/elitea_core/change_requests/prompt_lib/{project_id}/{application_id}/{change_request_id}/reject",
+      "operationId": "rejectAgentChangeRequest",
+      "source": "generated",
+      "responseSchema": "AgentChangeRequest",
+      "fixture": null,
+      "usedBy": ["features/agent-lifecycle"]
+    },
+    {
+      "id": "applications.withdrawAgentChangeRequest",
+      "method": "POST",
+      "path": "/elitea_core/change_requests/prompt_lib/{project_id}/{application_id}/{change_request_id}/withdraw",
+      "operationId": "withdrawAgentChangeRequest",
+      "source": "generated",
+      "responseSchema": "AgentChangeRequest",
+      "fixture": null,
+      "usedBy": ["features/agent-lifecycle"]
+    },
+    {
+      "id": "applications.overrideAgentChangeRequestGate",
+      "method": "POST",
+      "path": "/elitea_core/change_requests/prompt_lib/{project_id}/{application_id}/{change_request_id}/gate_override",
+      "operationId": "overrideAgentChangeRequestGate",
+      "source": "generated",
+      "responseSchema": "AgentChangeRequest",
+      "fixture": null,
+      "usedBy": ["features/agent-lifecycle"]
+    },
+    {
+      "id": "applications.listAgentAttestations",
+      "method": "GET",
+      "path": "/elitea_core/agent_attestations/prompt_lib/{project_id}",
+      "operationId": "listAgentAttestations",
+      "source": "generated",
+      "responseSchema": "AgentAttestationList",
+      "fixture": null,
+      "usedBy": ["features/agent-lifecycle"]
+    },
+    {
+      "id": "applications.recordAgentAttestation",
+      "method": "POST",
+      "path": "/elitea_core/agent_attestations/prompt_lib/{project_id}",
+      "operationId": "recordAgentAttestation",
+      "source": "generated",
+      "responseSchema": "AgentAttestation",
+      "fixture": null,
+      "usedBy": ["features/agent-lifecycle"]
+    },
+    {
+      "id": "applications.revokeAgentAttestation",
+      "method": "POST",
+      "path": "/elitea_core/agent_attestations/prompt_lib/{project_id}/{attestation_id}/revoke",
+      "operationId": "revokeAgentAttestation",
+      "source": "generated",
+      "responseSchema": "AgentAttestation",
+      "fixture": null,
+      "usedBy": ["features/agent-lifecycle"]
+    },
+    {
+      "id": "applications.getReleaseGate",
+      "method": "GET",
+      "path": "/elitea_core/release_gates/prompt_lib/{project_id}/{application_id}/{gate_id}",
+      "operationId": "getReleaseGate",
+      "source": "generated",
+      "responseSchema": "ReleaseGate",
+      "fixture": null,
+      "usedBy": ["features/agent-lifecycle"]
+    },
+    {
+      "id": "applications.listReleaseGateSuites",
+      "method": "GET",
+      "path": "/elitea_core/release_gate_suites/prompt_lib/{project_id}/{application_id}",
+      "operationId": "listReleaseGateSuites",
+      "source": "generated",
+      "responseSchema": "ReleaseGateSuiteList",
+      "fixture": null,
+      "usedBy": ["features/agent-evaluation"]
+    },
+    {
+      "id": "applications.putReleaseGateSuite",
+      "method": "PUT",
+      "path": "/elitea_core/release_gate_suites/prompt_lib/{project_id}/{application_id}/{dataset_id}",
+      "operationId": "putReleaseGateSuite",
+      "source": "generated",
+      "responseSchema": "ReleaseGateSuite",
+      "fixture": null,
+      "usedBy": ["features/agent-evaluation"]
     }
   ]
 }

@@ -518,7 +518,14 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 	}
 
 	version := AgentVersion{}
-	if run.ApplicationVersionID != nil {
+	if frozen := run.Snapshot.Agent; frozen != nil {
+		// A release gate run froze the agent at start (SnapshotAgent): the
+		// version row may have changed since, and is not read.
+		version = AgentVersion{Instructions: frozen.Instructions, ModelName: frozen.ModelName}
+		if run.ApplicationVersionID != nil {
+			version.ID = *run.ApplicationVersionID
+		}
+	} else if run.ApplicationVersionID != nil {
 		version, err = o.repo.AgentVersion(ctx, ref.ProjectID, *run.ApplicationVersionID)
 		if err != nil {
 			return fmt.Errorf("the agent version could not be read: %w", err)
