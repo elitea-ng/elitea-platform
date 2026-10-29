@@ -53,6 +53,7 @@ export const MandateRefusal = zod.object({
       "MANDATE_TENANT_MISMATCH",
       "MANDATE_KIND_NOT_ALLOWED",
       "MANDATE_BINDING_MISMATCH",
+      "MANDATE_RELEASE_ROLLED_BACK",
     ])
     .describe("The machine-readable reason a mandate cannot run the target."),
 });

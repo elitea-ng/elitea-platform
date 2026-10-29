@@ -65,6 +65,11 @@ import type {
   ApplicationRelationList,
   ApplicationRelationUpdateRequest,
   ApplicationRelationUpdatedResponse,
+  ApplicationReleaseDetail,
+  ApplicationReleaseList,
+  ApplicationReleaseRefusal,
+  ApplicationReleaseRollback,
+  ApplicationReleaseRollbackRequest,
   ApplicationUpdateRequest,
   ApplicationUpdatedResponse,
   ApplicationVersionDetail,
@@ -167,6 +172,7 @@ import type {
   UploadApplicationIconBody,
   UploadedIconsList,
   ValidateForPublishRequest,
+  VersionRevisionList,
   VersionValidatorResponse,
   VersionWriteRequest,
 } from "../model";
@@ -3670,6 +3676,1057 @@ export function useGetEvalScorecard<
     projectId,
     runId,
     params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listApplicationReleasesResponse200 = {
+  data: ApplicationReleaseList;
+  status: 200;
+};
+
+export type listApplicationReleasesResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listApplicationReleasesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listApplicationReleasesResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listApplicationReleasesResponseSuccess =
+  listApplicationReleasesResponse200 & {
+    headers: Headers;
+  };
+export type listApplicationReleasesResponseError = (
+  | listApplicationReleasesResponse400
+  | listApplicationReleasesResponse401
+  | listApplicationReleasesResponse403
+) & {
+  headers: Headers;
+};
+
+export type listApplicationReleasesResponse =
+  listApplicationReleasesResponseSuccess | listApplicationReleasesResponseError;
+
+export const getListApplicationReleasesUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/application_releases/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * The releases of the agent, newest first (at most 500). Each publish records one immutable release, addressed by the digest of its definition. A release stays after its version is unpublished, with state withdrawn. is_published_release marks the release the agent runs when a run names no release. Requires `models.applications.versions.get`.
+ * @summary List the releases of an agent
+ */
+export const listApplicationReleases = async (
+  projectId: string,
+  applicationId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listApplicationReleasesResponse> => {
+  return eliteaFetch<listApplicationReleasesResponse>(
+    getListApplicationReleasesUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListApplicationReleasesQueryKey = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return [
+    `/elitea_core/application_releases/prompt_lib/${projectId}/${applicationId}`,
+  ] as const;
+};
+
+export const getListApplicationReleasesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listApplicationReleases>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listApplicationReleases>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListApplicationReleasesQueryKey(projectId, applicationId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listApplicationReleases>>
+  > = ({ signal }) =>
+    listApplicationReleases(projectId, applicationId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listApplicationReleases>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListApplicationReleasesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listApplicationReleases>>
+>;
+export type ListApplicationReleasesQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListApplicationReleases<
+  TData = Awaited<ReturnType<typeof listApplicationReleases>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listApplicationReleases>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listApplicationReleases>>,
+          TError,
+          Awaited<ReturnType<typeof listApplicationReleases>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListApplicationReleases<
+  TData = Awaited<ReturnType<typeof listApplicationReleases>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listApplicationReleases>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listApplicationReleases>>,
+          TError,
+          Awaited<ReturnType<typeof listApplicationReleases>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListApplicationReleases<
+  TData = Awaited<ReturnType<typeof listApplicationReleases>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listApplicationReleases>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the releases of an agent
+ */
+
+export function useListApplicationReleases<
+  TData = Awaited<ReturnType<typeof listApplicationReleases>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listApplicationReleases>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListApplicationReleasesQueryOptions(
+    projectId,
+    applicationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getApplicationReleaseResponse200 = {
+  data: ApplicationReleaseDetail;
+  status: 200;
+};
+
+export type getApplicationReleaseResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type getApplicationReleaseResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getApplicationReleaseResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getApplicationReleaseResponse404 = {
+  data: ApplicationReleaseRefusal;
+  status: 404;
+};
+
+export type getApplicationReleaseResponseSuccess =
+  getApplicationReleaseResponse200 & {
+    headers: Headers;
+  };
+export type getApplicationReleaseResponseError = (
+  | getApplicationReleaseResponse400
+  | getApplicationReleaseResponse401
+  | getApplicationReleaseResponse403
+  | getApplicationReleaseResponse404
+) & {
+  headers: Headers;
+};
+
+export type getApplicationReleaseResponse =
+  getApplicationReleaseResponseSuccess | getApplicationReleaseResponseError;
+
+export const getGetApplicationReleaseUrl = (
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+) => {
+  return `/elitea_core/application_releases/prompt_lib/${projectId}/${applicationId}/${releaseId}`;
+};
+
+/**
+ * The release with its definition (toolkit settings removed: they can hold credentials), one pin per toolkit (identifiers and SHA-256 digests only), and the changes against the release before it. Requires `models.applications.version.details`.
+ * @summary Read one release of an agent
+ */
+export const getApplicationRelease = async (
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getApplicationReleaseResponse> => {
+  return eliteaFetch<getApplicationReleaseResponse>(
+    getGetApplicationReleaseUrl(projectId, applicationId, releaseId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetApplicationReleaseQueryKey = (
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+) => {
+  return [
+    `/elitea_core/application_releases/prompt_lib/${projectId}/${applicationId}/${releaseId}`,
+  ] as const;
+};
+
+export const getGetApplicationReleaseQueryOptions = <
+  TData = Awaited<ReturnType<typeof getApplicationRelease>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | ApplicationReleaseRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getApplicationRelease>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetApplicationReleaseQueryKey(projectId, applicationId, releaseId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getApplicationRelease>>
+  > = ({ signal }) =>
+    getApplicationRelease(projectId, applicationId, releaseId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      releaseId !== null &&
+      releaseId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getApplicationRelease>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetApplicationReleaseQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getApplicationRelease>>
+>;
+export type GetApplicationReleaseQueryError =
+  ErrorResponse | N401Response | N403Response | ApplicationReleaseRefusal;
+
+export function useGetApplicationRelease<
+  TData = Awaited<ReturnType<typeof getApplicationRelease>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | ApplicationReleaseRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getApplicationRelease>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApplicationRelease>>,
+          TError,
+          Awaited<ReturnType<typeof getApplicationRelease>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetApplicationRelease<
+  TData = Awaited<ReturnType<typeof getApplicationRelease>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | ApplicationReleaseRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getApplicationRelease>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getApplicationRelease>>,
+          TError,
+          Awaited<ReturnType<typeof getApplicationRelease>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetApplicationRelease<
+  TData = Awaited<ReturnType<typeof getApplicationRelease>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | ApplicationReleaseRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getApplicationRelease>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read one release of an agent
+ */
+
+export function useGetApplicationRelease<
+  TData = Awaited<ReturnType<typeof getApplicationRelease>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | ApplicationReleaseRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getApplicationRelease>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetApplicationReleaseQueryOptions(
+    projectId,
+    applicationId,
+    releaseId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type rollbackApplicationReleaseResponse200 = {
+  data: ApplicationReleaseRollback;
+  status: 200;
+};
+
+export type rollbackApplicationReleaseResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type rollbackApplicationReleaseResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type rollbackApplicationReleaseResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type rollbackApplicationReleaseResponse404 = {
+  data: ApplicationReleaseRefusal;
+  status: 404;
+};
+
+export type rollbackApplicationReleaseResponse409 = {
+  data: ApplicationReleaseRefusal;
+  status: 409;
+};
+
+export type rollbackApplicationReleaseResponseSuccess =
+  rollbackApplicationReleaseResponse200 & {
+    headers: Headers;
+  };
+export type rollbackApplicationReleaseResponseError = (
+  | rollbackApplicationReleaseResponse400
+  | rollbackApplicationReleaseResponse401
+  | rollbackApplicationReleaseResponse403
+  | rollbackApplicationReleaseResponse404
+  | rollbackApplicationReleaseResponse409
+) & {
+  headers: Headers;
+};
+
+export type rollbackApplicationReleaseResponse =
+  | rollbackApplicationReleaseResponseSuccess
+  | rollbackApplicationReleaseResponseError;
+
+export const getRollbackApplicationReleaseUrl = (
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+) => {
+  return `/elitea_core/application_releases/prompt_lib/${projectId}/${applicationId}/${releaseId}/rollback`;
+};
+
+/**
+ * Points the agent's published release at this release. A run that names no release then executes it. The release must be published (not withdrawn), must not already be the published release, and its toolkit pins must still match the live toolkits and configurations. The audit trail records application_release.rolled_back. Requires `models.applications.publish.post`.
+ * @summary Roll the agent back to an earlier release
+ */
+export const rollbackApplicationRelease = async (
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+  applicationReleaseRollbackRequest?: ApplicationReleaseRollbackRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<rollbackApplicationReleaseResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<rollbackApplicationReleaseResponse>(
+    getRollbackApplicationReleaseUrl(projectId, applicationId, releaseId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(applicationReleaseRollbackRequest),
+    },
+  );
+};
+
+export const getRollbackApplicationReleaseQueryKey = (
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+  applicationReleaseRollbackRequest?: ApplicationReleaseRollbackRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/application_releases/prompt_lib/${projectId}/${applicationId}/${releaseId}/rollback`,
+    applicationReleaseRollbackRequest,
+  ] as const;
+};
+
+export const getRollbackApplicationReleaseQueryOptions = <
+  TData = Awaited<ReturnType<typeof rollbackApplicationRelease>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | ApplicationReleaseRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+  applicationReleaseRollbackRequest?: ApplicationReleaseRollbackRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rollbackApplicationRelease>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRollbackApplicationReleaseQueryKey(
+      projectId,
+      applicationId,
+      releaseId,
+      applicationReleaseRollbackRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof rollbackApplicationRelease>>
+  > = ({ signal }) =>
+    rollbackApplicationRelease(
+      projectId,
+      applicationId,
+      releaseId,
+      applicationReleaseRollbackRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      releaseId !== null &&
+      releaseId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof rollbackApplicationRelease>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RollbackApplicationReleaseQueryResult = NonNullable<
+  Awaited<ReturnType<typeof rollbackApplicationRelease>>
+>;
+export type RollbackApplicationReleaseQueryError =
+  ErrorResponse | N401Response | N403Response | ApplicationReleaseRefusal;
+
+export function useRollbackApplicationRelease<
+  TData = Awaited<ReturnType<typeof rollbackApplicationRelease>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | ApplicationReleaseRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+  applicationReleaseRollbackRequest:
+    undefined | ApplicationReleaseRollbackRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rollbackApplicationRelease>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof rollbackApplicationRelease>>,
+          TError,
+          Awaited<ReturnType<typeof rollbackApplicationRelease>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRollbackApplicationRelease<
+  TData = Awaited<ReturnType<typeof rollbackApplicationRelease>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | ApplicationReleaseRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+  applicationReleaseRollbackRequest?: ApplicationReleaseRollbackRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rollbackApplicationRelease>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof rollbackApplicationRelease>>,
+          TError,
+          Awaited<ReturnType<typeof rollbackApplicationRelease>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRollbackApplicationRelease<
+  TData = Awaited<ReturnType<typeof rollbackApplicationRelease>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | ApplicationReleaseRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+  applicationReleaseRollbackRequest?: ApplicationReleaseRollbackRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rollbackApplicationRelease>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Roll the agent back to an earlier release
+ */
+
+export function useRollbackApplicationRelease<
+  TData = Awaited<ReturnType<typeof rollbackApplicationRelease>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | ApplicationReleaseRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  releaseId: number,
+  applicationReleaseRollbackRequest?: ApplicationReleaseRollbackRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rollbackApplicationRelease>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRollbackApplicationReleaseQueryOptions(
+    projectId,
+    applicationId,
+    releaseId,
+    applicationReleaseRollbackRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listVersionRevisionsResponse200 = {
+  data: VersionRevisionList;
+  status: 200;
+};
+
+export type listVersionRevisionsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listVersionRevisionsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listVersionRevisionsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listVersionRevisionsResponseSuccess =
+  listVersionRevisionsResponse200 & {
+    headers: Headers;
+  };
+export type listVersionRevisionsResponseError = (
+  | listVersionRevisionsResponse400
+  | listVersionRevisionsResponse401
+  | listVersionRevisionsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listVersionRevisionsResponse =
+  listVersionRevisionsResponseSuccess | listVersionRevisionsResponseError;
+
+export const getListVersionRevisionsUrl = (
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+) => {
+  return `/elitea_core/version_revisions/prompt_lib/${projectId}/${applicationId}/${versionId}`;
+};
+
+/**
+ * Every save of the version appends one revision: the saved fields, the user, the time and the changes against the revision before it (at most 500, newest first). Revision 1 of kind baseline is the state the first save found. A save that changes nothing appends nothing. Toolkit and skill attachments are not in a revision; a release pins them. Requires `models.applications.versions.get`.
+ * @summary List the draft revisions of a version
+ */
+export const listVersionRevisions = async (
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listVersionRevisionsResponse> => {
+  return eliteaFetch<listVersionRevisionsResponse>(
+    getListVersionRevisionsUrl(projectId, applicationId, versionId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListVersionRevisionsQueryKey = (
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+) => {
+  return [
+    `/elitea_core/version_revisions/prompt_lib/${projectId}/${applicationId}/${versionId}`,
+  ] as const;
+};
+
+export const getListVersionRevisionsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listVersionRevisions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listVersionRevisions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListVersionRevisionsQueryKey(projectId, applicationId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listVersionRevisions>>
+  > = ({ signal }) =>
+    listVersionRevisions(projectId, applicationId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listVersionRevisions>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListVersionRevisionsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listVersionRevisions>>
+>;
+export type ListVersionRevisionsQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListVersionRevisions<
+  TData = Awaited<ReturnType<typeof listVersionRevisions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listVersionRevisions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listVersionRevisions>>,
+          TError,
+          Awaited<ReturnType<typeof listVersionRevisions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListVersionRevisions<
+  TData = Awaited<ReturnType<typeof listVersionRevisions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listVersionRevisions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listVersionRevisions>>,
+          TError,
+          Awaited<ReturnType<typeof listVersionRevisions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListVersionRevisions<
+  TData = Awaited<ReturnType<typeof listVersionRevisions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listVersionRevisions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the draft revisions of a version
+ */
+
+export function useListVersionRevisions<
+  TData = Awaited<ReturnType<typeof listVersionRevisions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listVersionRevisions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListVersionRevisionsQueryOptions(
+    projectId,
+    applicationId,
+    versionId,
     options,
   );
 

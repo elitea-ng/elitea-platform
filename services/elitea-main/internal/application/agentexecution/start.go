@@ -112,6 +112,11 @@ type CurrentApplicationTarget struct {
 	ChatHistory          json.RawMessage
 	InternalTools        json.RawMessage
 	OriginalSource       *scope.SourceReference
+	// Release is the agent release the run executes (release.go); nil for
+	// a run of a draft, of a version published before releases existed, or
+	// of the catalogue. When set, VersionDetails and SourceVersionDetails
+	// are the release's definition.
+	Release *ReleaseRun
 }
 
 type CurrentApplicationResolver interface {
@@ -173,6 +178,11 @@ type CurrentApplicationStartRequest struct {
 	// visibility (CurrentProjectSkillResolver) and never takes skill text
 	// from the request. Empty for every turn that picked none.
 	ProjectSkillIDs []int64
+	// ReleaseID names the agent release to execute (ADR-0040 decision 2):
+	// a release of the target participant's application, published or
+	// withdrawn. Zero runs the participant's version, which is the
+	// application's published release when that version is published.
+	ReleaseID int64
 	// projectSkills is ProjectSkillIDs, read and frozen by the service for
 	// this one turn. Unexported so no caller can hand the service skill
 	// content of its own.
@@ -186,7 +196,7 @@ func (request CurrentApplicationStartRequest) Validate() error {
 		!validCurrentAgentInput(request.UserInput, request.AllowEmptyUserInput) ||
 		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
 		!validCurrentMCPTokens(request.MCPTokens) ||
-		!validProjectSkillIDs(request.ProjectSkillIDs) {
+		!validProjectSkillIDs(request.ProjectSkillIDs) || request.ReleaseID < 0 {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -373,6 +383,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		SIOEvent:        "chat_predict",
 		Input:           input,
 		TriggerOrigin:   request.TriggerOrigin,
+		Release:         target.Release.Clone(),
 		CurrentTurn: &CurrentApplicationTurn{
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID:     request.ConversationUUID,

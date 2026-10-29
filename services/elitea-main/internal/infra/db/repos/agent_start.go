@@ -13,6 +13,7 @@ import (
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -32,6 +33,10 @@ type CurrentAgentStartRepository struct {
 	// registered (WithCloudExecutor). Until then a handed-off Local work
 	// thread stays fenced: a web turn would run without the workspace.
 	cloudExecutor bool
+	// releases resolves the agent release a run executes (ADR-0040
+	// decision 2, resolveRunRelease). The pool constructor sets it; the
+	// stub stores of the unit tests answer no release queries.
+	releases bool
 }
 
 // WithCloudExecutor opens the Local work fence for threads the cloud
@@ -51,7 +56,12 @@ func NewCurrentAgentStartRepository(
 	if err != nil {
 		return nil, err
 	}
-	return newCurrentAgentStartRepository(projects, catalogueProjectID)
+	repository, err := newCurrentAgentStartRepository(projects, catalogueProjectID)
+	if err != nil {
+		return nil, err
+	}
+	repository.releases = true
+	return repository, nil
 }
 
 func newCurrentAgentStartRepository(
@@ -407,6 +417,11 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 								"the turn runs in nor the published catalogue; an agent private to " +
 								"another project cannot be chatted with from this one")
 					}
+					if request.ReleaseID > 0 {
+						// Releases are recorded in the project that
+						// publishes; a catalogue agent has none here.
+						return agentrelease.ErrNotFound
+					}
 					if !json.Valid(variables) || !json.Valid(chatHistory) ||
 						!json.Valid(internalTools) {
 						return agentexecutionapp.UnsupportedCurrentAgentStart(
@@ -454,6 +469,24 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 					}
 					return fmt.Errorf("validate current application nesting: %w", validationErr)
 				}
+				var release *agentexecutionapp.ReleaseRun
+				switch {
+				case repository.releases:
+					run, releaseDetails, releaseErr := resolveRunRelease(
+						ctx, tx, func() int64 { return int64(repository.catalogueProjectID) },
+						request.ProjectID, int64(row.ApplicationID), int64(row.ApplicationVersionID),
+						versionDetails, request.ReleaseID,
+					)
+					if releaseErr != nil {
+						return releaseErr
+					}
+					release = run
+					if releaseDetails != nil {
+						versionDetails = json.RawMessage(releaseDetails)
+					}
+				case request.ReleaseID > 0:
+					return agentrelease.ErrNotFound
+				}
 				sourceVersionDetails := bytes.Clone(versionDetails)
 				versionDetails, queryErr = materializeCurrentApplicationVersionNestedSkills(
 					ctx,
@@ -477,6 +510,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 					SourceVersionDetails: sourceVersionDetails,
 					ChatHistory:          chatHistory,
 					InternalTools:        internalTools,
+					Release:              release,
 				}
 				return nil
 			},

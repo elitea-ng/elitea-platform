@@ -5,6 +5,7 @@ go 1.26.9
 require (
 	cel.dev/cel-go v0.32.0
 	github.com/aws/aws-sdk-go-v2 v1.47.1
+	github.com/bytedance/sonic v1.15.3-0.20260730064818-2a36d6da63e2
 	github.com/coder/websocket v1.8.15
 	github.com/elitea-ng/elitea-platform/libs/go/egresslib v0.0.0-00010101000000-000000000000
 	github.com/elitea-ng/elitea-platform/libs/go/natsconn v0.0.0-00010101000000-000000000000
@@ -51,7 +52,6 @@ require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.2.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
-	github.com/bytedance/sonic v1.15.3-0.20260730064818-2a36d6da63e2 // indirect
 	github.com/bytedance/sonic/loader v0.5.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect

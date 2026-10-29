@@ -33,6 +33,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
@@ -360,11 +361,26 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, body)
 		return
 	}
-	switch {
-	case governedStartRefused(err):
-		record(http.StatusForbidden, projectID, trigger.CreatedBy, trigger.VersionID, runmandate.CodeMandateNotUsable)
+	if status, body, refused := agentrelease.HTTPRefusal(err); refused {
+		// The application's published release was rolled back to a
+		// release whose pins no longer match (ADR-0040 decision 2).
+		code, _ := body["code"].(string)
+		record(status, projectID, trigger.CreatedBy, trigger.VersionID, code)
+		writeJSON(w, status, body)
+		return
+	}
+	switch code := governedStartRefusal(err); {
+	case code == runmandate.CodeMandateReleaseRolledBack:
+		record(http.StatusForbidden, projectID, trigger.CreatedBy, trigger.VersionID, code)
 		writeJSON(w, http.StatusForbidden, map[string]any{
-			"error": "this trigger has no usable mandate", "code": runmandate.CodeMandateNotUsable,
+			"error": "this trigger's mandate does not bind the agent's current release: " + releaseRolledBackAdvice,
+			"code":  code,
+		})
+		return
+	case code != "":
+		record(http.StatusForbidden, projectID, trigger.CreatedBy, trigger.VersionID, code)
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error": "this trigger has no usable mandate", "code": code,
 		})
 		return
 	case errors.Is(err, ErrRunForbidden):

@@ -134,6 +134,33 @@ VALUES ($1, 'elitea.credential-profile.governed.v1', $2, $3)`, executionID, revi
 		t.Fatalf("autonomous context: %+v", got)
 	}
 
+	// After a rollback (ADR-0040 decision 2) the run executes the release's
+	// version row (9) while the mandate binds the trigger's version (4): a
+	// typed refusal, not "not usable", because the mandate is fine. A run
+	// whose release version IS the mandate's binding version is admitted.
+	admitRelease := func(executionID string, versionID, bindingVersionID int64) error {
+		t.Helper()
+		exec(`
+INSERT INTO elitea_runtime.execution_admission_profiles (execution_id, profile, policy_revision_id, policy_digest)
+VALUES ($1, 'elitea.credential-profile.governed.v1', $2, $3)`, executionID, revision.ID, revision.Digest[:])
+		runCtx := securitycontext.WithRunAuthority(ctx, securitycontext.RunAuthority{MandateID: unattendedAutonomous, MandateEpoch: 3})
+		return pgx.BeginFunc(runCtx, pool, func(tx pgx.Tx) error {
+			_, err := recordSecurityContext(runCtx, tx, pgxRows(tx), executionID, securityContextFacts{
+				tenantProjectID: 7, applicationVersionID: versionID, bindingVersionID: bindingVersionID, admittedAt: now,
+			})
+			return err
+		})
+	}
+	if err := admitRelease("unattended-rolled-back", 4, 9); !errors.Is(err, ErrRunAuthorityReleaseRolledBack) {
+		t.Fatalf("a rolled-back release under the trigger version's mandate: %v", err)
+	}
+	if errors.Is(ErrRunAuthorityReleaseRolledBack, ErrRunAuthorityNotUsable) {
+		t.Fatal("the rollback refusal must be its own error")
+	}
+	if err := admitRelease("unattended-release-version", 9, 4); err != nil {
+		t.Fatalf("a run whose release version is the mandate's binding version: %v", err)
+	}
+
 	// A mandate that moved since the fire-time check refuses the admission.
 	if _, err := admit("unattended-stale", "", securitycontext.RunAuthority{
 		MandateID: unattendedAutonomous, MandateEpoch: 2,

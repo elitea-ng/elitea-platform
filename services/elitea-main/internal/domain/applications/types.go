@@ -145,6 +145,11 @@ type Version struct {
 	// CopySkillsFromVersionID is a create-version option, not stored metadata.
 	// Zero disables copying. The repository requires the same application and tenant.
 	CopySkillsFromVersionID int32 `json:"-"`
+
+	// EditorID is the user who saves an UPDATE, recorded as the author of
+	// the version revision the save appends (ADR-0040 decision 2). It is a
+	// write option, not a column: zero records a revision with no author.
+	EditorID int64 `json:"-"`
 }
 
 // VersionFieldSet marks which string-valued columns a version write carries.

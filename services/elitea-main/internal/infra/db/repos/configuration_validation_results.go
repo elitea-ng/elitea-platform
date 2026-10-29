@@ -155,7 +155,7 @@ func (r *ConfigurationValidationResultsRepository) ProjectConfigurationValidatio
 			}
 			if errors.Is(loadErr, pgx.ErrNoRows) {
 				if insertResult.CancellationRejected {
-					if err := materializeCanonicalCancellation(ctx, tx, record, false); err != nil {
+					if err := materializeCanonicalCancellation(ctx, tx, record, false, false); err != nil {
 						return err
 					}
 					cancellationWon = true
@@ -366,6 +366,7 @@ func (r *RuntimeFailureResultsRepository) ProjectRuntimeFailure(ctx context.Cont
 				if insertResult.CancellationRejected {
 					if err := materializeCanonicalCancellation(
 						ctx, tx, record, projection.CapabilityID == executiondomain.IndexIngestCapability,
+						agentExecutionCapability(projection.CapabilityID),
 					); err != nil {
 						return err
 					}
@@ -384,7 +385,23 @@ func (r *RuntimeFailureResultsRepository) ProjectRuntimeFailure(ctx context.Cont
 			}
 			return loadErr
 		}
-		cursor, err := appendReplayEvent(ctx, tx, record, replayEventRuntimeFailure, projection.BrowserData)
+		// A run Main cancelled at a run cap shows CAP_REACHED, not a quiet
+		// stop (cap_reached_presentation.go). The durable outcome stays
+		// CANCELLED.
+		browserData := projection.BrowserData
+		capReached := false
+		if projection.Frame.Failure.Code == "CANCELLED" && agentExecutionCapability(projection.CapabilityID) {
+			capReached, err = cancelledAtCap(ctx, tx, record.ExecutionID, record.Generation)
+			if err != nil {
+				return err
+			}
+			if capReached {
+				if browserData, err = capReachedBrowserData(); err != nil {
+					return err
+				}
+			}
+		}
+		cursor, err := appendReplayEvent(ctx, tx, record, replayEventRuntimeFailure, browserData)
 		if err != nil {
 			return err
 		}
@@ -397,7 +414,11 @@ func (r *RuntimeFailureResultsRepository) ProjectRuntimeFailure(ctx context.Cont
 		}); err != nil {
 			return err
 		}
-		if err := persistCurrentAgentRuntimeTerminal(
+		if capReached {
+			if err := presentCapReachedAgentResponse(ctx, tx, record); err != nil {
+				return err
+			}
+		} else if err := persistCurrentAgentRuntimeTerminal(
 			ctx,
 			tx,
 			projectID,
@@ -691,6 +712,7 @@ func materializeCanonicalCancellation(
 	tx sqlExecutor,
 	source outputRecord,
 	persistIndexMeta bool,
+	agentRun bool,
 ) error {
 	cancelled, browserData, err := canonicalCancellationOutput(source)
 	if err != nil {
@@ -718,6 +740,23 @@ func materializeCanonicalCancellation(
 			return persistCurrentIndexMetaTerminalIntent(ctx, tx, existing)
 		}
 		return nil
+	}
+	// An agent run Main cancelled at a run cap shows CAP_REACHED
+	// (cap_reached_presentation.go). Only agent runs are capped, so no other
+	// run pays the read.
+	capReached := false
+	if agentRun {
+		if capReached, err = cancelledAtCap(ctx, tx, cancelled.ExecutionID, cancelled.Generation); err != nil {
+			return err
+		}
+	}
+	if capReached {
+		if browserData, err = capReachedBrowserData(); err != nil {
+			return err
+		}
+		if err := presentCapReachedAgentResponse(ctx, tx, cancelled); err != nil {
+			return err
+		}
 	}
 	if _, err := appendReplayEvent(ctx, tx, cancelled, replayEventRuntimeFailure, browserData); err != nil {
 		return err

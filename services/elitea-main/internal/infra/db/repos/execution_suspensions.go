@@ -22,12 +22,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/protobuf/proto"
+
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
@@ -63,10 +68,14 @@ const cancellableJobPredicate = `j.desired_state IN ('RUNNING', 'SUSPENDED')
 //   - project: every job whose resource or projection project is the one.
 //   - agent: every agent job admitted for that agent of that project
 //     (agent_execution_jobs.application_id, written at admission since 0194).
-//   - toolkit_type: none. A toolkit run is one bounded synchronous call and
-//     its job row does not name its type; an agent run's tool calls are
-//     refused by the worker through the run's frozen guardrails. See the
-//     runtime-safety page for what that leaves open.
+//   - toolkit_type: every job whose recorded toolkit types
+//     (execution_jobs.toolkit_types, written at admission since 0201)
+//     contain the canonical key: an agent run whose frozen toolkit set (its
+//     sub-agents' included) has the type, and a direct toolkit run of the
+//     type. A run admitted before 0201 has no record; backfillToolkitTypes
+//     reads an agent run's from its stored input first, in the same
+//     transaction. A non-agent job with no record names no type and is not
+//     cancelled.
 func suspensionCancelSQL(target safety.Target) (string, []any, bool) {
 	switch target.Scope {
 	case safety.ScopePlatform:
@@ -83,8 +92,86 @@ WHERE a.execution_id = j.execution_id AND a.generation = j.generation
   AND a.application_id = $2::bigint
   AND j.resource_project_id = $1::bigint
   AND ` + cancellableJobPredicate, []any{target.ProjectID, target.ApplicationID}, true
+	case safety.ScopeToolkitType:
+		key := guardrails.CanonicalKey(target.ToolkitType)
+		if key == "" {
+			return "", nil, false
+		}
+		return `UPDATE elitea_runtime.execution_jobs AS j SET desired_state = 'CANCELLED'
+WHERE j.toolkit_types @> ARRAY[$1::text]
+  AND ` + cancellableJobPredicate, []any{key}, true
 	}
 	return "", nil, false
+}
+
+// legacyToolkitTypesSQL reads the stored input of every in-flight agent run
+// that has no toolkit_types record (admitted before shared 0201). The input
+// is the request entry the worker reads (agent_execution_jobs
+// .request_entry_id). FOR UPDATE OF j holds the rows until the backfill and
+// the cancel in the same transaction.
+const legacyToolkitTypesSQL = `SELECT j.execution_id, j.generation, j.capability_id, e.content_bytes
+FROM elitea_runtime.execution_jobs AS j
+JOIN elitea_runtime.agent_execution_jobs AS a
+  ON a.execution_id = j.execution_id AND a.generation = j.generation
+JOIN elitea_runtime.input_bundle_entries AS e
+  ON e.input_bundle_id = a.input_bundle_id AND e.entry_id = a.request_entry_id
+WHERE j.toolkit_types IS NULL
+  AND j.capability_id IN ('agent.execute.application.v1', 'agent.execute.adhoc.v1')
+  AND ` + cancellableJobPredicate + `
+FOR UPDATE OF j`
+
+// backfillToolkitTypes records the toolkit types of the in-flight agent runs
+// admitted before shared 0201, from their stored input, so the
+// toolkit_type cancel that follows sees them. Only the run's OWN frozen
+// toolkit set is read (agentexecution.FrozenToolkitTypes): a sub-agent's
+// toolkits of such a run are not found, and the worker's call-time refusal
+// does not cover them either. An input that cannot be read is recorded as
+// no toolkit and logged; it is never guessed.
+func backfillToolkitTypes(ctx context.Context, tx pgx.Tx) error {
+	rows, err := tx.Query(ctx, legacyToolkitTypesSQL)
+	if err != nil {
+		return fmt.Errorf("read the toolkit sets of runs admitted before 0201: %w", err)
+	}
+	type legacyRun struct {
+		executionID string
+		generation  int64
+		types       []string
+	}
+	var runs []legacyRun
+	for rows.Next() {
+		var (
+			run        legacyRun
+			capability string
+			content    []byte
+		)
+		if err := rows.Scan(&run.executionID, &run.generation, &capability, &content); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan a run admitted before 0201: %w", err)
+		}
+		input := &runtimev1.AgentExecutionInputV1{}
+		if err := proto.Unmarshal(content, input); err != nil {
+			slog.WarnContext(ctx, "the stored input of an in-flight run cannot be read for its toolkit types",
+				"execution_id", run.executionID)
+			run.types = []string{}
+		} else if run.types, err = agentexecutionapp.FrozenToolkitTypes(capability, input); err != nil {
+			slog.WarnContext(ctx, "the frozen toolkit set of an in-flight run cannot be read",
+				"execution_id", run.executionID)
+			run.types = []string{}
+		}
+		runs = append(runs, run)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read the toolkit sets of runs admitted before 0201: %w", err)
+	}
+	for _, run := range runs {
+		if _, err := tx.Exec(ctx, `UPDATE elitea_runtime.execution_jobs SET toolkit_types = $3::text[]
+WHERE execution_id = $1 AND generation = $2 AND toolkit_types IS NULL`,
+			run.executionID, run.generation, run.types); err != nil {
+			return fmt.Errorf("record the toolkit types of a run admitted before 0201: %w", err)
+		}
+	}
+	return nil
 }
 
 // admissionFenceLockSQL takes the admission fence (safety/fence.go) shared:
@@ -189,6 +276,11 @@ RETURNING `+suspensionColumns,
 		return safety.Suspension{}, fmt.Errorf("insert suspension: %w", err)
 	}
 
+	if s.Target.Scope == safety.ScopeToolkitType {
+		if err := backfillToolkitTypes(ctx, tx); err != nil {
+			return safety.Suspension{}, err
+		}
+	}
 	if statement, args, ok := suspensionCancelSQL(s.Target); ok {
 		tag, err := tx.Exec(ctx, statement, args...)
 		if err != nil {

@@ -39,7 +39,7 @@ When a suspension is created, the platform does these steps:
 
    A scheduled pipeline run that is refused is recorded as `failed` with the detail `skipped: an administrator suspended execution (execution_suspended)`.
 
-2. **Runs in flight are cancelled (agent, project and platform scopes).** In the same database transaction that saves the suspension, the platform sets the desired state of each covered run to `CANCELLED`. This is the same cancel that the admin **Tasks** page uses. The worker stops the run at its next lease renewal. The `cancelled_runs` field of the suspension gives the number of runs it cancelled. A platform suspension cancels every run in flight. A `toolkit_type` suspension cancels nothing, and its `cancelled_runs` is always 0. A run that is being admitted while the suspension is saved is either refused or cancelled: admission and the suspension are serialised in the database, so no run escapes both.
+2. **Runs in flight are cancelled.** In the same database transaction that saves the suspension, the platform sets the desired state of each covered run to `CANCELLED`. This is the same cancel that the admin **Tasks** page uses. The worker stops the run at its next lease renewal. The `cancelled_runs` field of the suspension gives the number of runs it cancelled. A platform suspension cancels every run in flight. A `toolkit_type` suspension cancels every run in flight that holds a toolkit of that type, including toolkits of the run's sub-agents: each run records its toolkit types when it is admitted. A run that is being admitted while the suspension is saved is either refused or cancelled: admission and the suspension are serialised in the database, so no run escapes both.
 
 3. **Toolkit calls are refused at the worker.** For the `toolkit_type` scope, the suspended types are frozen into the guardrail policy of each new run. The worker removes the tools of a suspended type from the agent's tool set, and it refuses a call of that type with the code `execution_suspended`. Standalone toolkit tool calls of that type are refused at admission.
 
@@ -53,7 +53,8 @@ A suspension stays active until it is resumed. Resuming lets new runs start agai
 #### Limits
 
 - An agent suspension cancels only the runs that were admitted after migration 0194, because older runs do not record their agent. The project and platform scopes cancel all runs.
-- A `toolkit_type` suspension does not change a run that was already in flight when the suspension was created, because that run froze its policy at admission. To stop such runs too, also suspend their project or the platform.
+- A run admitted before migration 0201 did not record its toolkit types. A `toolkit_type` suspension reads them from the run's stored input, which names only the run's own toolkits, not those of its sub-agents. To be sure that such a run stops, also suspend its project or the platform.
+- A suspension, like a run cap, takes effect at the run's next lease renewal, not instantly.
 - A cancelled run ends with the state `cancelled`, not with `execution_suspended`.
 - Desktop local agent loops run on the user's computer. A suspension refuses their next cloud-side turn, but it does not stop a loop that is running locally.
 
@@ -126,3 +127,33 @@ The self-test writes a `schedule` event with the action `safety.kill_switch.self
 - Monitor `elitea_kill_switch_selftest_last_success_timestamp` and the `safety.kill_switch.selftest` audit events.
 - Keep the [emergency stop runbook](/deployment/emergency-stop-runbook) in your incident procedure, and practise it.
 - After you resume, start again the runs that were cancelled, if they are still necessary.
+
+## Whole-run time cap
+
+### The risk
+
+The worker limits the time of each turn of a run, but a long autonomous run can continue for many turns. Without a limit on the whole run, a looping agent can keep running and spending for days.
+
+### What is enforced
+
+Under **Configuration › Run Caps**, a platform administrator (permission `configuration.governance`) sets **Maximum Run Time (seconds)**: 0 (off, the default), or 60 to 604800 (7 days). It applies to agent runs.
+
+The time counts from the run's original start. A resumed run keeps that start, so time spent waiting for a human approval counts too. The main service checks the cap whenever the worker renews the run's lease or reads its desired state. A run past the cap is cancelled with the reason `cap_reached`, and the worker stops it on the same call. When the cap is off, the check adds no database query.
+
+The run ends with the state `cancelled`. Its event and the agent's answer carry a typed error:
+
+```json
+{ "code": "CAP_REACHED", "cap": "max_wall_seconds", "retryable": false }
+```
+
+The answer is marked as an error, so the user sees why the run stopped. The metric `elitea.runtime.run_caps.reached` with the label `cap=max_wall_seconds` counts the runs stopped by the cap.
+
+#### Limits
+
+- The cap is one platform-wide value. Caps per agent or per project, and caps on tool calls, spend and records read, are planned ([issue 1498](https://github.com/elitea-ng/elitea-platform/issues/1498)).
+- The cap takes effect at the next lease renewal, so a run can pass it by up to one renewal interval.
+
+### Customer responsibility
+
+- Choose a cap that is longer than your longest legitimate run, including the time that people take to approve steps.
+- Alert on `elitea.runtime.run_caps.reached` if a stopped run needs attention.
