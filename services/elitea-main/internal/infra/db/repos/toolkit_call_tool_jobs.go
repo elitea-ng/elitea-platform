@@ -277,7 +277,12 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 	}
 	// Commit command bytes with admission. A replacement process needs no caller state.
 	if r.preparer != nil {
-		envelope, err := r.prepareAdmissionEnvelope(ctx, admission, timing.Deadline, securityContext)
+		// The command is prepared before the commit, so the worker egress
+		// policy reads the input entries and security context this
+		// transaction just wrote through it (a pool connection cannot see
+		// them yet). A refused policy rolls the whole admission back and the
+		// caller answers the refusal; nothing of the run is left behind.
+		envelope, err := r.prepareAdmissionEnvelope(withWorkerEgressTx(ctx, tx), admission, timing.Deadline, securityContext)
 		if err != nil {
 			return executionapp.AdmissionOutcome{}, err
 		}

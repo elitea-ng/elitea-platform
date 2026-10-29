@@ -1,8 +1,11 @@
 //! Public OAuth discovery runs at the guard, never as an authorization grant.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
+
+use crate::egress::RunEgress;
 
 use super::{
     DelegatedAuthorizationRequirement, MAX_AUTH_METADATA_BYTES, valid_identity, valid_string_list,
@@ -94,7 +97,14 @@ impl DelegatedAuthorizationRequirement {
     }
 
     /// Fetch only public endpoints. Do not fetch a token or call the toolkit.
-    pub async fn resolve_public_metadata(&self) -> Self {
+    ///
+    /// The fetch runs under `egress`, the run's policy (#1490): the
+    /// metadata URL comes from the server's `WWW-Authenticate` challenge, so
+    /// a host outside the run's allowlist is refused (discovery falls back as
+    /// for any unreachable host) and the host reached or refused lands in the
+    /// run's own ledger. The caller passes the run explicitly: discovery runs
+    /// after the tool call, outside any egress scope.
+    pub async fn resolve_public_metadata(&self, egress: &Arc<RunEgress>) -> Self {
         let Some(metadata) = self.resource_metadata().and_then(Value::as_object) else {
             return self.clone();
         };
@@ -106,7 +116,11 @@ impl DelegatedAuthorizationRequirement {
         let Some(url) = self.resource_metadata_url() else {
             return self.clone();
         };
-        let discovered = tokio::time::timeout(DISCOVERY_TIMEOUT, fetch_metadata(url)).await;
+        let discovered = tokio::time::timeout(
+            DISCOVERY_TIMEOUT,
+            crate::egress::scope(Arc::clone(egress), fetch_metadata(url)),
+        )
+        .await;
         let Some(server) = discovered.ok().flatten() else {
             tracing::warn!(
                 event = "delegated_auth_discovery_unavailable",
@@ -148,17 +162,20 @@ impl DelegatedAuthorizationRequirement {
 }
 
 async fn fetch_metadata(url: &str) -> Option<Value> {
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+    use crate::egress::BuildForRun as _;
+    // Bound to the run in scope, which `resolve_public_metadata` sets
+    // (#1490): a metadata host outside its egress allowlist is refused and
+    // counted, and discovery falls back as for any unreachable host.
+    let client = crate::egress::client_builder()
         .timeout(DISCOVERY_TIMEOUT)
+        .build_for_run()
+        .ok()?;
+    let request = client
+        .request(reqwest::Method::GET, reqwest::Url::parse(url).ok()?)
+        .header("accept", "application/json")
         .build()
         .ok()?;
-    let mut response = client
-        .get(url)
-        .header("accept", "application/json")
-        .send()
-        .await
-        .ok()?;
+    let mut response = client.execute(request).await.ok()?;
     if !response.status().is_success()
         || response
             .content_length()
@@ -354,6 +371,50 @@ mod tests {
             assert_eq!(resolved.resource_metadata().unwrap()["toolkit_id"], "12");
             assert!(!resolved.same_authority(&base.with_toolkit_id(Some(13))));
         }
+    }
+
+    /// #1490 review: discovery GETs a URL the MCP server's challenge named,
+    /// after the tool call and outside any egress scope. It runs under the
+    /// run it is handed: a host the run's allowlist leaves out is refused
+    /// and counted in THAT run's ledger, whatever scope surrounds the call.
+    #[tokio::test]
+    async fn discovery_runs_under_the_runs_egress_and_lands_in_its_ledger() {
+        use crate::egress::{HostCount, PublicPolicy};
+
+        let settings = json!({"client_id": "public-client", "scopes": ["read"]});
+        let requirement = DelegatedAuthorizationRequirement::new(
+            "docs".into(),
+            "mcp".into(),
+            "https://api.example.test".into(),
+            Some("https://login.example.test/.well-known/oauth-authorization-server".into()),
+            None,
+        )
+        .unwrap()
+        .with_configured_oauth("https://login.example.test", settings.as_object().unwrap())
+        .unwrap();
+        let run = RunEgress::new(PublicPolicy::allowlist(["api.example.test"]).unwrap());
+        // An open scope around the call must not widen the run's policy.
+        let outer = RunEgress::open();
+        let resolved = crate::egress::scope(
+            Arc::clone(&outer),
+            requirement.resolve_public_metadata(&run),
+        )
+        .await;
+        assert!(
+            resolved == requirement,
+            "a refused host leaves the requirement as it was"
+        );
+        let summary = run.summary();
+        assert_eq!(
+            summary.refused,
+            vec![HostCount {
+                host: "login.example.test".into(),
+                port: 443,
+                count: 1,
+            }]
+        );
+        assert_eq!(summary.reached, Vec::<HostCount>::new());
+        assert!(outer.summary().is_empty());
     }
 
     #[test]

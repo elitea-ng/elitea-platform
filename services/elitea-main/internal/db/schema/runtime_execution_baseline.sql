@@ -116,6 +116,9 @@ CREATE TABLE elitea_runtime.command_outbox (
     retired_at timestamptz,
     retirement_code text,
     last_visibility_at timestamptz,
+    -- shared/0197_command_outbox_refusal.sql
+    refusal_code text,
+    refusal_message text,
     FOREIGN KEY (execution_id, generation)
         REFERENCES elitea_runtime.execution_jobs(execution_id, generation),
     UNIQUE (execution_id, generation)

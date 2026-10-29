@@ -103,6 +103,11 @@ func toReport(r *runtimev1.ReportRunSummaryRequestV1) (app.Report, error) {
 	switch {
 	case !validID(r.GetReplicaId()):
 		return app.Report{}, errors.New("the replica id is malformed")
+	case app.IsWorkerReplica(r.GetReplicaId()):
+		// A worker's own row, "worker:<command id>"
+		// (RuntimeControlService.ReportEgressSummary); a proxy replica cannot
+		// overwrite it.
+		return app.Report{}, errors.New("the replica id is reserved")
 	case !validID(r.GetExecutionId()):
 		return app.Report{}, errors.New("the execution id is malformed")
 	case r.GetProjectId() <= 0:
@@ -118,27 +123,43 @@ func toReport(r *runtimev1.ReportRunSummaryRequestV1) (app.Report, error) {
 		TokenExpiresAt: time.Unix(r.GetTokenExpiresAtUnix(), 0),
 		Connections:    r.GetConnections(), BytesUp: r.GetBytesUp(), BytesDown: r.GetBytesDown(), OtherHosts: r.GetOtherHosts(),
 	}
-	// A host entry that does not hold up (the proxy records what a sandbox
-	// asked for, which may be junk) is counted, not trusted: the rest of the
-	// report still lands.
-	for _, h := range r.GetHostsReached() {
-		if !validText(h.GetHost(), maxHostBytes) || h.GetPort() == 0 || h.GetPort() > 65535 ||
-			h.GetConnections() < 0 || h.GetBytesUp() < 0 || h.GetBytesDown() < 0 {
-			report.OtherHosts++
-			continue
-		}
-		report.HostsReached = append(report.HostsReached, app.HostReached{Host: h.GetHost(), Port: int(h.GetPort()),
-			Connections: h.GetConnections(), BytesUp: h.GetBytesUp(), BytesDown: h.GetBytesDown()})
-	}
-	for _, h := range r.GetHostsRefused() {
-		// A refusal can name a host the proxy could not parse; its port may
-		// be 0.
-		if !validText(h.GetHost(), maxHostBytes) || h.GetPort() > 65535 || !validText(h.GetReason(), maxReasonBytes) || h.GetCount() < 0 {
-			report.OtherHosts++
-			continue
-		}
-		report.HostsRefused = append(report.HostsRefused, app.HostRefused{Host: h.GetHost(), Port: int(h.GetPort()),
-			Reason: h.GetReason(), Count: h.GetCount()})
-	}
+	var junk int64
+	report.HostsReached, report.HostsRefused, junk = Hosts(r.GetHostsReached(), r.GetHostsRefused())
+	report.OtherHosts += junk
 	return report, nil
 }
+
+// Hosts converts a report's host lists. A host entry that does not hold up
+// (the proxy records what a sandbox asked for, and a worker what a tool asked
+// for, which may be junk) is counted in junk, not trusted: the rest of the
+// report still lands. The caller bounds the list lengths.
+func Hosts(reached []*runtimev1.EgressHostReachedV1, refused []*runtimev1.EgressHostRefusedV1) ([]app.HostReached, []app.HostRefused, int64) {
+	var (
+		outReached []app.HostReached
+		outRefused []app.HostRefused
+		junk       int64
+	)
+	for _, h := range reached {
+		if !validText(h.GetHost(), maxHostBytes) || h.GetPort() == 0 || h.GetPort() > 65535 ||
+			h.GetConnections() < 0 || h.GetBytesUp() < 0 || h.GetBytesDown() < 0 {
+			junk++
+			continue
+		}
+		outReached = append(outReached, app.HostReached{Host: h.GetHost(), Port: int(h.GetPort()),
+			Connections: h.GetConnections(), BytesUp: h.GetBytesUp(), BytesDown: h.GetBytesDown()})
+	}
+	for _, h := range refused {
+		// A refusal can name a host that could not be parsed; its port may
+		// be 0.
+		if !validText(h.GetHost(), maxHostBytes) || h.GetPort() > 65535 || !validText(h.GetReason(), maxReasonBytes) || h.GetCount() < 0 {
+			junk++
+			continue
+		}
+		outRefused = append(outRefused, app.HostRefused{Host: h.GetHost(), Port: int(h.GetPort()),
+			Reason: h.GetReason(), Count: h.GetCount()})
+	}
+	return outReached, outRefused, junk
+}
+
+// MaxHosts bounds one report's host lists.
+const MaxHosts = maxHosts

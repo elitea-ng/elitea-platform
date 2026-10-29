@@ -72,6 +72,10 @@ func (r *CommandOutboxRepository) RetireNoAuthorityIndexIngest(ctx context.Conte
 				return err
 			}
 			if retired {
+				// A refused command (shared 0197) reports its refusal.
+				if candidate.RefusalMessage, err = outboxRefusalMessage(ctx, tx, candidate.OutboxID); err != nil {
+					return err
+				}
 				if err := persistCurrentIndexMetaRetirementIntent(ctx, tx, candidate); err != nil {
 					return err
 				}
@@ -107,6 +111,8 @@ func currentIndexActivityRetirement(
 	message := "The execution deadline was exceeded before worker authority was granted."
 	if candidate.DesiredState == string(runtimedomain.DesiredCancelled) {
 		message = "Execution was cancelled."
+	} else if candidate.RefusalMessage != "" {
+		message = candidate.RefusalMessage
 	}
 	return currentIndexActivityTerminal{
 		ExecutionID: candidate.ExecutionID,
@@ -172,6 +178,10 @@ func persistCurrentIndexRetirementNotification(
 	if candidate.Generation <= 0 {
 		return errors.New("index retirement generation is invalid")
 	}
+	message := "The execution deadline was exceeded before worker authority was granted."
+	if candidate.RefusalMessage != "" {
+		message = candidate.RefusalMessage
+	}
 	return persistCurrentIndexTerminalNotification(
 		ctx,
 		tx,
@@ -182,7 +192,7 @@ func persistCurrentIndexRetirementNotification(
 		},
 		outputapp.IndexIngestSummary{
 			Status:        outputapp.IndexIngestStatusError,
-			Message:       "The execution deadline was exceeded before worker authority was granted.",
+			Message:       message,
 			TerminalState: outputapp.IndexIngestTerminalFailed,
 		},
 	)

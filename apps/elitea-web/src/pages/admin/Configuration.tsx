@@ -149,6 +149,7 @@ import { LLM_PROXY_MANAGED_SURFACE } from './api/adminLlmProxyApi';
 import { MCP_SERVERS_MANAGED_SURFACE } from './api/adminMcpServersApi';
 import { NATIVE_CLIENTS_MANAGED_SURFACE } from './api/adminNativeClientsApi';
 import { ConfigurationSectionForm } from './ConfigurationSectionForm';
+import { WorkerEgressHostsPanel } from './WorkerEgressHostsPanel';
 import { useAdminConfigurationPage, type AdminConfigurationPageState } from './useAdminConfigurationPage';
 
 /**
@@ -188,6 +189,15 @@ const MANAGED_SECTION_EDITORS: Readonly<Record<string, ComponentType>> = {
  */
 const SECTION_ID_EDITORS: Readonly<Record<string, ComponentType>> = {
   branding: BrandingSectionCard,
+};
+
+/**
+ * A panel rendered UNDER a section's ordinary form, keyed on the section id:
+ * data the form's fields are about but cannot show. Worker Egress shows the
+ * hosts reached, so an operator can seed the allowlist before switching mode.
+ */
+const SECTION_ID_EXTRAS: Readonly<Record<string, ComponentType>> = {
+  worker_egress: WorkerEgressHostsPanel,
 };
 
 function managedEditorFor(
@@ -243,7 +253,17 @@ function SectionBody({ state }: { readonly state: AdminConfigurationPageState })
     );
   }
 
-  return <SectionForm state={state} />;
+  return (
+    <>
+      <SectionForm state={state} />
+      <SectionExtra id={state.activeSection.id} />
+    </>
+  );
+}
+
+function SectionExtra({ id }: { readonly id: string | undefined }) {
+  const Extra = id === undefined ? undefined : SECTION_ID_EXTRAS[id];
+  return Extra === undefined ? null : <Extra />;
 }
 
 /**

@@ -469,6 +469,7 @@ fn scan_signed_command_envelope(raw: &[u8]) -> Result<(), ProtocolError> {
 fn scan_agent_worker_command(raw: &[u8]) -> Result<(), ProtocolError> {
     let fields = scan_message(raw, Schema::WorkerCommand)?;
     scan_security_context_reference(&fields)?;
+    scan_egress_policy(&fields)?;
     let input_reference = fields.length_field(16, "the input bundle reference is missing")?;
     let input_fields = scan_message(input_reference, Schema::InputBundleReference)?;
     let input_digest = input_fields.length_field(3, "the input bundle digest is missing")?;
@@ -483,6 +484,7 @@ fn scan_agent_worker_command(raw: &[u8]) -> Result<(), ProtocolError> {
 fn scan_toolkit_execute_read_worker_command(raw: &[u8]) -> Result<(), ProtocolError> {
     let fields = scan_message(raw, Schema::WorkerCommand)?;
     scan_security_context_reference(&fields)?;
+    scan_egress_policy(&fields)?;
     let input_reference = fields.length_field(16, "the input bundle reference is missing")?;
     let input_fields = scan_message(input_reference, Schema::InputBundleReference)?;
     let input_digest = input_fields.length_field(3, "the input bundle digest is missing")?;
@@ -535,6 +537,17 @@ fn scan_security_context_reference(fields: &ScannedFields<'_>) -> Result<(), Pro
     Ok(())
 }
 
+/// Field 66 (ADR-0044 decision 2, #1490): the policy admits no unknown field.
+fn scan_egress_policy(fields: &ScannedFields<'_>) -> Result<(), ProtocolError> {
+    if fields.contains(66) {
+        scan_message(
+            fields.length_field(66, "the worker egress policy is missing")?,
+            Schema::WorkerEgressPolicy,
+        )?;
+    }
+    Ok(())
+}
+
 fn validate_agent_command(command: &WorkerCommandV1) -> Result<AgentExecutionKind, ProtocolError> {
     if command.protocol_revision != PROTOCOL_REVISION || command.limits_revision != LIMITS_REVISION
     {
@@ -557,6 +570,7 @@ fn validate_agent_command(command: &WorkerCommandV1) -> Result<AgentExecutionKin
     validate_command_strings(command, input, agent)?;
     validate_command_invariants(command, input, agent)?;
     super::security_context::SecurityContextReference::from_command(command)?;
+    super::egress::policy_from_command(command)?;
     Ok(kind)
 }
 
@@ -672,6 +686,7 @@ fn validate_toolkit_execute_read_command(
     }
     validate_common_command_invariants(command, input, "the toolkit root identity is malformed")?;
     super::security_context::SecurityContextReference::from_command(command)?;
+    super::egress::policy_from_command(command)?;
     Ok(kind)
 }
 

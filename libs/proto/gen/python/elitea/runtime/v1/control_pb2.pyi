@@ -1,5 +1,6 @@
 from elitea.runtime.v1 import common_pb2 as _common_pb2
 from elitea.runtime.v1 import compiled_code_pb2 as _compiled_code_pb2
+from elitea.runtime.v1 import egress_audit_pb2 as _egress_audit_pb2
 from elitea.runtime.v1 import envelope_pb2 as _envelope_pb2
 from elitea.runtime.v1 import errors_pb2 as _errors_pb2
 from elitea.runtime.v1 import input_pb2 as _input_pb2
@@ -325,3 +326,23 @@ class ClaimSteeringMessagesResponseV1(_message.Message):
     messages: _containers.RepeatedCompositeFieldContainer[SteeringMessageV1]
     rejection: _errors_pb2.RuntimeErrorV1
     def __init__(self, messages: _Optional[_Iterable[_Union[SteeringMessageV1, _Mapping]]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+
+class ReportEgressSummaryRequestV1(_message.Message):
+    __slots__ = ("identity", "fence", "hosts_reached", "hosts_refused", "other_hosts")
+    IDENTITY_FIELD_NUMBER: _ClassVar[int]
+    FENCE_FIELD_NUMBER: _ClassVar[int]
+    HOSTS_REACHED_FIELD_NUMBER: _ClassVar[int]
+    HOSTS_REFUSED_FIELD_NUMBER: _ClassVar[int]
+    OTHER_HOSTS_FIELD_NUMBER: _ClassVar[int]
+    identity: _common_pb2.ExecutionIdentityV1
+    fence: _common_pb2.ExecutionFenceV1
+    hosts_reached: _containers.RepeatedCompositeFieldContainer[_egress_audit_pb2.EgressHostReachedV1]
+    hosts_refused: _containers.RepeatedCompositeFieldContainer[_egress_audit_pb2.EgressHostRefusedV1]
+    other_hosts: int
+    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., hosts_reached: _Optional[_Iterable[_Union[_egress_audit_pb2.EgressHostReachedV1, _Mapping]]] = ..., hosts_refused: _Optional[_Iterable[_Union[_egress_audit_pb2.EgressHostRefusedV1, _Mapping]]] = ..., other_hosts: _Optional[int] = ...) -> None: ...
+
+class ReportEgressSummaryResponseV1(_message.Message):
+    __slots__ = ("rejection",)
+    REJECTION_FIELD_NUMBER: _ClassVar[int]
+    rejection: _errors_pb2.RuntimeErrorV1
+    def __init__(self, rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...

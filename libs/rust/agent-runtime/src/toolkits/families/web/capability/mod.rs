@@ -431,6 +431,18 @@ where
             error: ProviderError::RateLimited { retry_after_secs },
             ..
         }) => Err(CallEnd::RateLimited { retry_after_secs }),
+        // A refused host is named (#1490): the refusal the call met carries
+        // the host and port, never the URL.
+        Err(ProviderFailure {
+            error: ProviderError::HostNotAllowed,
+            ..
+        }) => Err(CallEnd::error(
+            ProviderError::HostNotAllowed.code(),
+            &crate::egress::call_refusal().map_or_else(
+                || ProviderError::HostNotAllowed.message().to_owned(),
+                |refused| refused.message(),
+            ),
+        )),
         Err(failure) => Err(CallEnd::error(
             failure.error.code(),
             failure.error.message(),

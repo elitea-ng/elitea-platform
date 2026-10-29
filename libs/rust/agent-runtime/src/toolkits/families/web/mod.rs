@@ -135,6 +135,8 @@ pub(crate) struct WebState {
     meter: Option<Arc<dyn Meter>>,
     /// Extra fetch ports a test origin listens on; production has none.
     extra_fetch_ports: Vec<u16>,
+    /// The run's public egress policy (#1490).
+    pub(crate) egress: Arc<crate::egress::RunEgress>,
 }
 
 impl WebState {
@@ -387,7 +389,12 @@ pub(crate) fn build_web_with(
             },
             |host| (Arc::clone(&host.lookup), host.user_agent.clone()),
         );
-        DirectFetcher::new(lookup, parts.fetch_permits.clone(), user_agent)
+        DirectFetcher::new(
+            lookup,
+            parts.fetch_permits.clone(),
+            user_agent,
+            Arc::clone(policy.egress()),
+        )
     });
     let mut offered = Vec::new();
     if serves(Capability::WebSearch) {
@@ -403,6 +410,7 @@ pub(crate) fn build_web_with(
         direct,
         meter: parts.host.map(|host| Arc::clone(&host.meter)),
         extra_fetch_ports: parts.extra_fetch_ports.clone(),
+        egress: Arc::clone(policy.egress()),
     });
     assemble(
         toolkit_name,
@@ -434,6 +442,7 @@ pub(crate) fn build_host_intel_with(
         direct: None,
         meter: parts.host.map(|host| Arc::clone(&host.meter)),
         extra_fetch_ports: Vec::new(),
+        egress: Arc::clone(policy.egress()),
     });
     assemble(
         toolkit_name,

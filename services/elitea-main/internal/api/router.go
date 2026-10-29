@@ -76,6 +76,7 @@ import (
 	toolkitrun "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	v2toolkits "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	v2tracing "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/tracing"
+	v2workeregress "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/workeregress"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webedge"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/artifactbootstrap"
@@ -2913,6 +2914,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(holdManage).Post("/legal_holds/{id}/release", retentionAdmin.ReleaseHold)
 				}
 
+				// The hosts runs reached and were refused (ADR-0044 decision 2,
+				// issue 1490), to seed a worker egress allowlist. The worker
+				// egress settings' own permission. Unconditional: no pool
+				// answers 503.
+				r.With(central(v2workeregress.Permission)).
+					Get("/worker_egress/hosts", newWorkerEgressHostsHandler(cfg.Pool).Hosts)
+
 				// Agent identity bindings and mandates (ADR-0039, issue 1112).
 				// Mounted only with the governance flag on. Shared 0181 grants
 				// the four permissions. Listing needs manage OR approve, so an
@@ -5565,3 +5573,12 @@ func newProjectCloudExecutorHandler(pool *pgxpool.Pool) *v2projectcloudexecutor.
 
 // safetyPermission is the kill switch's grant (shared 0194).
 const safetyPermission = safetyapp.Permission
+
+// newWorkerEgressHostsHandler reads the stored egress summaries; no pool
+// answers 503 rather than mounting a typed-nil store.
+func newWorkerEgressHostsHandler(pool *pgxpool.Pool) *v2workeregress.Handler {
+	if pool == nil {
+		return v2workeregress.NewHandler(nil)
+	}
+	return v2workeregress.NewHandler(dbrepos.NewEgressRunSummaries(pool))
+}

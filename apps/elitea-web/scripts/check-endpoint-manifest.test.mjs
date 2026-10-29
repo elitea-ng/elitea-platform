@@ -834,7 +834,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 406 -> 412 (issue 1493, ADR-0041): list/create/resumeExecutionSuspension
 // and list/create/resumeProjectExecutionSuspension, the kill switch of the
 // admin console and of the agent page.
-const GENERATED_OPERATION_COUNT = 412;
+// 412 -> 413 (issue 1490, ADR-0044 decision 2): listWorkerEgressHosts, the
+// admin view of the hosts runs reached, to seed a worker egress allowlist.
+// Admin routes are not in the manifest, so its count is unchanged.
+const GENERATED_OPERATION_COUNT = 413;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

@@ -16,6 +16,7 @@ What is enforced:
 - A maximum age per data class. Data older than the maximum is deleted in bounded batches.
 - Platform bounds. A project may set its own maximum for conversations only, and only inside the platform bounds.
 - Legal hold on a project, an agent or a user. While a hold is active, the retention sweep skips every conversation it covers. A user's change that would remove or overwrite content of such a conversation is refused with HTTP 409: deleting the conversation, clearing its messages, deleting a message, deleting its attachments, moving message text into a canvas, and regenerating or editing a message.
+- Stopping a run is never refused because of a hold: stop is a safety control. Without a hold, a run stopped before it wrote any answer is removed together with its question. On a held conversation the stop keeps the question and records the turn with an empty, stopped answer, so the record still shows what was asked.
 
 What is not enforced:
 

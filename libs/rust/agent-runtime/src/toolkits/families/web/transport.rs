@@ -14,6 +14,7 @@ use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER};
 use reqwest::{Request, StatusCode};
 
 use super::meter::FailureClass;
+use crate::egress::BuildForRun as _;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_mins(1);
@@ -46,6 +47,8 @@ pub(crate) enum ProviderError {
     DomainRefused,
     /// A fetch host resolves only to addresses egress refuses.
     AddressRefused,
+    /// The host is not on this run's egress allowlist (#1490).
+    HostNotAllowed,
     TooManyRedirects,
     /// A fetched page is not text, JSON or XHTML.
     UnsupportedContent,
@@ -67,6 +70,7 @@ impl ProviderError {
             Self::UrlRefused => "url_not_allowed",
             Self::DomainRefused => "domain_not_allowed",
             Self::AddressRefused => "address_not_allowed",
+            Self::HostNotAllowed => crate::egress::EGRESS_HOST_NOT_ALLOWED,
             Self::TooManyRedirects => "too_many_redirects",
             Self::UnsupportedContent => "unsupported_content_type",
         }
@@ -90,6 +94,7 @@ impl ProviderError {
             Self::AddressRefused => {
                 "that host resolves to a private, local or metadata address, which may not be fetched"
             }
+            Self::HostNotAllowed => "the host is not on this run's egress allowlist",
             Self::TooManyRedirects => "the page redirected more than five times",
             Self::UnsupportedContent => {
                 "only text, HTML, XHTML and JSON pages can be fetched (PDF is not supported)"
@@ -101,9 +106,11 @@ impl ProviderError {
     /// whether the provider was reached and charges for the outcome.
     pub(crate) const fn failure_class(self) -> FailureClass {
         match self {
-            Self::EgressRefused | Self::UrlRefused | Self::DomainRefused | Self::AddressRefused => {
-                FailureClass::NotReached
-            }
+            Self::EgressRefused
+            | Self::UrlRefused
+            | Self::DomainRefused
+            | Self::AddressRefused
+            | Self::HostNotAllowed => FailureClass::NotReached,
             Self::AuthFailed | Self::RateLimited { .. } | Self::BadRequest => FailureClass::Refused,
             Self::NotFound => FailureClass::TargetFailed,
             Self::Timeout
@@ -270,7 +277,8 @@ pub(crate) fn map_reqwest(error: &reqwest::Error) -> ProviderError {
 /// refusing any request whose origin the adapter did not declare or the
 /// deployment allowlist does not admit.
 pub(crate) struct PinnedTransport {
-    http: reqwest::Client,
+    /// Bound to the run (#1490) for its ledger; see [`Transport::send`].
+    http: crate::egress::HttpClient,
     origins: &'static [&'static str],
     egress: Arc<Allowlist>,
 }
@@ -281,14 +289,13 @@ impl PinnedTransport {
         egress: Arc<Allowlist>,
         user_agent: &str,
     ) -> Result<Self, ProviderError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
-            .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(4)
             .user_agent(user_agent)
-            .build()
+            .build_for_run()
             .map_err(|_| ProviderError::Unavailable)?;
         Ok(Self {
             http,
@@ -312,12 +319,16 @@ pub(crate) fn origin_admitted(url: &reqwest::Url, origins: &[&str], egress: &All
 #[async_trait]
 impl Transport for PinnedTransport {
     async fn send(&self, request: Request, max_bytes: usize) -> Result<HttpAnswer, ProviderError> {
+        // The adapter's exact, compiled-in origin, admitted by the operator's
+        // deployment allowlist: a worker-configured endpoint, not one the run
+        // chose, so the run's egress allowlist (#1490) does not apply — Main
+        // cannot know it. It is still recorded as reached.
         if !origin_admitted(request.url(), self.origins, &self.egress) {
             return Err(ProviderError::EgressRefused);
         }
         let response = self
             .http
-            .execute(request)
+            .execute_operator_origin(request)
             .await
             .map_err(|error| map_reqwest(&error.without_url()))?;
         read_answer(response, max_bytes).await

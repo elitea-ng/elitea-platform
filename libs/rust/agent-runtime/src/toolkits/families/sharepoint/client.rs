@@ -13,6 +13,7 @@ use reqwest::header::{
 use reqwest::{Method, Request, StatusCode, Url};
 use serde_json::{Map, Value, json};
 
+use crate::egress::BuildForRun as _;
 use crate::toolkits::DelegatedAuthorizationRequirement;
 
 use super::config::SharePointClientConfig;
@@ -399,7 +400,7 @@ pub(in crate::toolkits) trait SharePointTransport: Send + Sync {
 }
 
 struct ReqwestSharePointTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -499,7 +500,7 @@ impl SharePointTransport for ReqwestSharePointTransport {
 /// protocol-level retries are off: a change is sent exactly once, and a
 /// request that may have reached Graph is never silently sent again.
 fn base_client_builder() -> reqwest::ClientBuilder {
-    reqwest::Client::builder()
+    crate::egress::client_builder()
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .connect_timeout(CONNECT_TIMEOUT)
@@ -516,7 +517,7 @@ fn base_client_builder() -> reqwest::ClientBuilder {
 pub(in crate::toolkits) fn plain_http_transport() -> Arc<dyn SharePointTransport> {
     let http = base_client_builder()
         .no_proxy()
-        .build()
+        .build_for_run()
         .expect("plain HTTP test client");
     Arc::new(ReqwestSharePointTransport { http })
 }
@@ -533,7 +534,7 @@ impl SharePointClient {
     pub(crate) fn new(config: SharePointClientConfig) -> Result<Self, SharePointClientError> {
         let http = base_client_builder()
             .https_only(true)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             config,

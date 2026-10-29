@@ -28,19 +28,25 @@ const MAX_CONFIRMED_TOOLS: usize = 1_024;
 /// Commands produced before protocol field 38 retain the startup fallback.
 /// An explicit object is authoritative even when empty, so a policy change can
 /// take effect on the next run without mutating process-global state.
+///
+/// The generation is bound to the execution's public egress policy (#1490),
+/// so every tool it admits and every client built under it uses that policy.
 pub(crate) fn policy_for_guardrails(
     guardrails: Option<&Map<String, Value>>,
     fallback: &Arc<ToolAdmissionPolicy>,
+    egress: &Arc<elitea_agent_runtime::egress::RunEgress>,
 ) -> Result<Arc<ToolAdmissionPolicy>, NativeAgentAssemblyError> {
     let Some(guardrails) = guardrails else {
-        return Ok(Arc::clone(fallback));
+        return Ok(Arc::new(
+            fallback.as_ref().clone().with_egress(Arc::clone(egress)),
+        ));
     };
     let runtime = Map::from_iter([(
         "toolkit_security".to_owned(),
         Value::Object(guardrails.clone()),
     )]);
     ToolAdmissionPolicy::from_runtime_config(&runtime)
-        .map(Arc::new)
+        .map(|policy| Arc::new(policy.with_egress(Arc::clone(egress))))
         .map_err(|error| match error.code() {
             crate::toolkits::ToolAdmissionPolicyErrorCode::InvalidConfiguration => {
                 invalid_configuration()
@@ -577,11 +583,12 @@ mod tests {
     }
 
     #[test]
-    fn absent_guardrails_reuse_fallback_but_explicit_empty_clears_it() {
+    fn absent_guardrails_keep_the_fallback_rules_but_explicit_empty_clears_them() {
         let fallback = policy(json!({"sensitive_tools": {"*": ["delete_file"]}}));
 
-        let absent = policy_for_guardrails(None, &fallback).expect("absent policy");
-        assert!(Arc::ptr_eq(&absent, &fallback));
+        let open = elitea_agent_runtime::egress::RunEgress::open();
+        let absent = policy_for_guardrails(None, &fallback, &open).expect("absent policy");
+        assert!(Arc::ptr_eq(absent.egress(), &open), "bound to the run");
         assert!(
             absent
                 .sensitive_tool("artifact", "files", "delete_file")
@@ -589,7 +596,7 @@ mod tests {
         );
 
         let empty = Map::new();
-        let resolved = policy_for_guardrails(Some(&empty), &fallback).expect("empty policy");
+        let resolved = policy_for_guardrails(Some(&empty), &fallback, &open).expect("empty policy");
         assert!(!Arc::ptr_eq(&resolved, &fallback));
         assert!(
             resolved
@@ -609,7 +616,13 @@ mod tests {
         .expect("guardrails object")
         .clone();
 
-        let resolved = policy_for_guardrails(Some(&guardrails), &fallback).expect("command policy");
+        let egress = elitea_agent_runtime::egress::RunEgress::new(
+            elitea_agent_runtime::egress::PublicPolicy::allowlist(["api.example.com"])
+                .expect("policy"),
+        );
+        let resolved =
+            policy_for_guardrails(Some(&guardrails), &fallback, &egress).expect("command policy");
+        assert!(Arc::ptr_eq(resolved.egress(), &egress), "bound to the run");
         assert_ne!(
             resolved.toolkit_decision("sharepoint"),
             crate::toolkits::ToolAdmissionDecision::Allowed

@@ -191,7 +191,7 @@ type Config struct {
 	// Empty leaves the service unregistered.
 	EgressAuditClients []string
 	// EgressAuditRetention is how long the stored per-turn summaries are
-	// kept (ELITEA_EGRESS_AUDIT_RETENTION_DAYS, default 7, at most 365).
+	// kept (ELITEA_EGRESS_AUDIT_RETENTION_DAYS, default 30, at most 365).
 	// Zero takes the default.
 	EgressAuditRetention time.Duration
 

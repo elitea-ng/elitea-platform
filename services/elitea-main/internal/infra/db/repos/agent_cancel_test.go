@@ -78,7 +78,9 @@ func TestCurrentAgentCancelRepositoryProjectsRetainedSalvagedAndDeletedResponses
 	} {
 		t.Run(name, func(t *testing.T) {
 			executor := &currentAgentCancelExecutorStub{
-				scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{{values: []any{int64(9)}}}},
+				// The turn's conversation, then the legal hold probe (#1507):
+				// no hold table, so the stop is not kept for a hold.
+				scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{{values: []any{int64(9)}}, {values: []any{false}}}},
 				cancelRow: sqlcgen.CancelCurrentAgentExecutionRow{
 					ResponseMessageGroupID: 51,
 					QuestionMessageGroupID: &questionID,
@@ -242,5 +244,46 @@ func TestCurrentAgentCancelRepositoryTreatsAVanishedProjectionAsReplay(t *testin
 				t.Fatalf("replay params=%+v", executor.replayParams)
 			}
 		})
+	}
+}
+
+// A stop never fails because the legal hold cannot be read (#1507): the
+// lookup runs under a savepoint that is rolled back, and the turn is kept
+// (KeepHeld), the safe direction.
+func TestCurrentAgentCancelKeepsTheTurnWhenTheHoldLookupFails(t *testing.T) {
+	questionID := int32(41)
+	executor := &currentAgentCancelExecutorStub{
+		// The turn's conversation, then a failed legal hold probe.
+		scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{
+			{values: []any{int64(9)}}, {err: errors.New("simulated hold lookup failure")},
+		}},
+		cancelRow: sqlcgen.CancelCurrentAgentExecutionRow{
+			ResponseMessageGroupID: 51, QuestionMessageGroupID: &questionID,
+			ExecutionID: "execution-1", Generation: 1,
+			ClientExecutionGeneration: "20000000-0000-4000-8000-000000000035",
+		},
+		projection: sqlcgen.ProjectCurrentAgentStopRow{Retained: true},
+	}
+	repository, err := newCurrentAgentCancelRepository(&currentAgentCancelProjectStoreStub{executor: executor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := repository.CancelCurrentAgent(t.Context(), agentexecutionapp.CurrentAgentCancelRequest{
+		ProjectID: 2, ActorUserID: 7,
+		ResponseMessageID: "10000000-0000-4000-8000-000000000035",
+	})
+	if err != nil || outcome.Deleted {
+		t.Fatalf("outcome=%+v err=%v", outcome, err)
+	}
+	if !executor.projectParams.KeepHeld {
+		t.Fatal("a failed hold lookup did not keep the turn")
+	}
+	var savepoint, rolledBack bool
+	for _, call := range executor.execCalls {
+		savepoint = savepoint || call.sql == "SAVEPOINT stop_legal_hold_lookup"
+		rolledBack = rolledBack || call.sql == "ROLLBACK TO SAVEPOINT stop_legal_hold_lookup"
+	}
+	if !savepoint || !rolledBack {
+		t.Fatalf("the failed lookup was not isolated by a savepoint: %+v", executor.execCalls)
 	}
 }

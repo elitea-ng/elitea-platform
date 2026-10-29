@@ -249,10 +249,20 @@ impl Tool for PolicyBoundTool {
             // top-level fields before dispatch. Nested values remain untouched.
             arguments.retain(|_, value| !value.is_null());
 
-            self.inner
-                .execute(context, Value::Object(arguments))
-                .await
-                .map_err(|error| sanitize_tool_error(&error))
+            // The call runs under the run's egress policy (#1490): a host
+            // the policy refused fails the call as `egress_host_not_allowed`
+            // naming it, whatever error the family mapped the refusal to.
+            let (result, refused) = crate::egress::attributed(
+                Arc::clone(self.policy.egress()),
+                self.inner.execute(context, Value::Object(arguments)),
+            )
+            .await;
+            result.map_err(|error| {
+                refused.map_or_else(
+                    || sanitize_tool_error(&error),
+                    |refused| refused.tool_error(),
+                )
+            })
         }
         .instrument(span.clone())
         .await;

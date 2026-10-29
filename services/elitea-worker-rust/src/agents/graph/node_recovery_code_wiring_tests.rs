@@ -323,6 +323,14 @@ impl RuntimeControlService for FakeControl {
             "not part of the Code attempt fixture",
         ))
     }
+    async fn report_egress_summary(
+        &self,
+        _: Request<pb::ReportEgressSummaryRequestV1>,
+    ) -> Result<Response<pb::ReportEgressSummaryResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
+    }
     async fn remove_index(
         &self,
         _: Request<pb::RemoveIndexRequestV1>,
