@@ -84,20 +84,20 @@ func TestRunMemoryToolkitsIncludeSubAgentsRecursively(t *testing.T) {
 		    {"id":9,"type":"memory","settings":{}},
 		    {"id":40,"type":"application","settings":{"application_id":31,"application_version_id":41}}]}}`)},
 	}
-	got, err := service.runMemoryToolkits(context.Background(), request)
+	got, _, err := service.runToolkitSet(context.Background(), request)
 	if err != nil || !slices.Equal(got, []int64{5, 6, 9}) {
 		t.Fatalf("run memory toolkits = %v, %v; want [5 6 9]", got, err)
 	}
 	request.Input = &runtimev1.AgentExecutionInputV1{Application: []byte(`{"version_details":{"tools":[
 	    {"type":"application","settings":{"application_id":99,"application_version_id":99}}]}}`)}
-	if _, err := service.runMemoryToolkits(context.Background(), request); err == nil {
+	if _, _, err := service.runToolkitSet(context.Background(), request); err == nil {
 		t.Fatal("an unreadable sub-agent did not fail the admission")
 	}
 	// Without the reader only the run's own toolkits count.
 	request.Input = &runtimev1.AgentExecutionInputV1{Application: []byte(`{"version_details":{"tools":[
 	    {"id":9,"type":"memory","settings":{}},
 	    {"type":"application","settings":{"application_id":31,"application_version_id":41}}]}}`)}
-	if got, err := (&AdmissionService{}).runMemoryToolkits(context.Background(), request); err != nil || !slices.Equal(got, []int64{9}) {
+	if got, _, err := (&AdmissionService{}).runToolkitSet(context.Background(), request); err != nil || !slices.Equal(got, []int64{9}) {
 		t.Fatalf("without a reader = %v, %v", got, err)
 	}
 }

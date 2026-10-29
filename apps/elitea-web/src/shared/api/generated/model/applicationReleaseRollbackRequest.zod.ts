@@ -42,7 +42,7 @@
  */
 import * as zod from "zod";
 
-export const applicationReleaseRollbackRequestReasonMax = 1024;
+export const applicationReleaseRollbackRequestReasonMax = 200;
 
 export const ApplicationReleaseRollbackRequest = zod.object({
   reason: zod
@@ -50,7 +50,7 @@ export const ApplicationReleaseRollbackRequest = zod.object({
     .max(applicationReleaseRollbackRequestReasonMax)
     .optional()
     .describe(
-      "Why the agent is rolled back. Stored with the published release pointer.",
+      "Why the agent is rolled back, at most 200 characters (a longer reason is refused with 400). Stored with the published release pointer and in the application_release.rolled_back audit event.\n",
     ),
 });
 

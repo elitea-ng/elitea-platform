@@ -3865,7 +3865,10 @@ components:
             `agent.execute.application.v1`. A release that is not a release
             of the agent answers 404 `release_not_found`; a release whose
             pinned toolkits or configurations changed answers 409
-            `release_toolkit_drifted` (ApplicationReleaseRefusal).
+            `release_toolkit_drifted`; a withdrawn release of an agent with
+            sub-agents answers 409 `release_withdrawn_dependencies_removed`,
+            because the unpublish removed the sub-agent copies its publish
+            made (ApplicationReleaseRefusal).
 
     ChatRegenerateRequest:
       type: object
@@ -6793,6 +6796,7 @@ components:
             - MANDATE_TENANT_MISMATCH
             - MANDATE_KIND_NOT_ALLOWED
             - MANDATE_BINDING_MISMATCH
+            - MANDATE_RELEASE_ROLLED_BACK
     MandateCreate:
       type: object
       additionalProperties: false
@@ -7055,8 +7059,11 @@ components:
       properties:
         reason:
           type: string
-          maxLength: 1024
-          description: Why the agent is rolled back. Stored with the published release pointer.
+          maxLength: 200
+          description: >
+            Why the agent is rolled back, at most 200 characters (a longer
+            reason is refused with 400). Stored with the published release
+            pointer and in the application_release.rolled_back audit event.
       example:
         reason: v3 answers in the wrong language
 
@@ -7106,7 +7113,7 @@ components:
         code:
           type: string
           enum: [release_not_found, release_toolkit_drifted, application_not_published,
-            release_already_published, release_withdrawn]
+            release_already_published, release_withdrawn, release_withdrawn_dependencies_removed]
         message: { type: string }
         reason:
           type: string
@@ -10217,9 +10224,10 @@ components:
         release_id:
           type: string
           description: >
-            The release this publish recorded (listApplicationReleases).
-            Absent when no release could be recorded; the publish itself
-            stands.
+            The release this publish recorded (listApplicationReleases), in
+            the publish transaction: a publish whose release cannot be
+            recorded fails whole with 500. Absent only when the deployment
+            records no releases.
         public_version_id: { type: string }
         version_name: { type: string }
         source_version_id:
@@ -23584,7 +23592,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ApplicationReleaseRollback' }
         '400':
-          description: A bad id, a malformed body, or a reason longer than 1024 characters
+          description: A bad id, a malformed body, or a reason longer than 200 characters
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

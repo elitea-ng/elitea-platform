@@ -1380,13 +1380,31 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Embed sub-agents: clone application_tools of type 'application'
+	// recursively, in the publish transaction. The release below pins the
+	// embedded copies, so they commit with it or not at all.
+	if err := h.embedSubAgents(ctx, tx, s, projectID, versionID, cloneID); err != nil {
+		slog.ErrorContext(ctx, "publish: embed the sub-agents", "schema", s, "version_id", cloneID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent sub-agents"})
+		return
+	}
+
+	// The release of this publish (ADR-0040 decision 2), recorded last in
+	// the same transaction, so its digest is the definition a run reads and
+	// a publish never commits without its release: a failure here answers
+	// 500 and leaves the agent as it was, and a retry publishes again.
+	releaseID, err := h.recordPublishedRelease(ctx, tx, r, projectID, appID, cloneID, versionID, body.VersionName)
+	if err != nil {
+		slog.ErrorContext(ctx, "publish: record the agent release",
+			"project_id", projectID, "application_id", appID, "version_id", cloneID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to record the agent release"})
+		return
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent"})
 		return
 	}
-
-	// Embed sub-agents: clone application_tools of type 'application' recursively
-	h.embedSubAgents(ctx, s, projectID, versionID, cloneID)
 
 	// `public_agent_id` and `public_version_id` name the rows in the AUTHOR's
 	// schema, which is what they have always named and what
@@ -1415,10 +1433,8 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		response["catalog_agent_id"] = strconv.Itoa(twin.ApplicationID)
 		response["catalog_version_id"] = strconv.Itoa(twin.VersionID)
 	}
-	// The release of this publish (ADR-0040 decision 2), recorded after
-	// the sub-agents are embedded so its digest is the definition a run
-	// reads. Omitted when no release was recorded.
-	if releaseID, recorded := h.recordPublishedRelease(r, projectID, appID, cloneID, versionID, body.VersionName); recorded {
+	// Omitted only when the deployment records no releases.
+	if releaseID > 0 {
 		response["release_id"] = strconv.FormatInt(releaseID, 10)
 	}
 	if h.events != nil {
@@ -1449,8 +1465,8 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 // the two halves of this function now agree on what an embedded copy is. A
 // reference whose version cannot be read leaves the application alone: an
 // orphaned copy costs storage, and the alternative costs somebody their agent.
-func (h *Handler) deleteEmbeddedSubAgents(ctx context.Context, schema string, versionID string) {
-	refs, err := listApplicationToolReferences(ctx, h.pool, schema, versionID)
+func (h *Handler) deleteEmbeddedSubAgents(ctx context.Context, q relationQuerier, schema string, versionID string) {
+	refs, err := listApplicationToolReferences(ctx, q, schema, versionID)
 	if err != nil {
 		return
 	}
@@ -1460,7 +1476,7 @@ func (h *Handler) deleteEmbeddedSubAgents(ctx context.Context, schema string, ve
 			continue
 		}
 		var refStatus string
-		if statusErr := h.pool.QueryRow(ctx, fmt.Sprintf(
+		if statusErr := q.QueryRow(ctx, fmt.Sprintf(
 			`SELECT COALESCE(status, '') FROM %s.application_versions WHERE id = $1`, schema),
 			ref.VersionID).Scan(&refStatus); statusErr != nil {
 			continue
@@ -1490,17 +1506,17 @@ func (h *Handler) deleteEmbeddedSubAgents(ctx context.Context, schema string, ve
 		// writes exactly that status on every copy it makes, at every level, and
 		// nothing else does.
 		var eVerID string
-		_ = h.pool.QueryRow(ctx, fmt.Sprintf(
+		_ = q.QueryRow(ctx, fmt.Sprintf(
 			`SELECT id FROM %s.application_versions WHERE application_id = $1 AND status = 'embedded' LIMIT 1`, schema), eAppID).Scan(&eVerID) // failure leaves eVerID empty, safe
 		if eVerID == "" {
 			continue
 		}
 		// Recursively delete sub-agents of this embedded agent
-		h.deleteEmbeddedSubAgents(ctx, schema, eVerID)
+		h.deleteEmbeddedSubAgents(ctx, q, schema, eVerID)
 		// Delete in FK-safe order: tool references → versions → application.
 		// The reference cleanup walks the embedded app's versions so each
 		// mapping is removed before its tool row is considered orphaned.
-		versionRows, versionErr := h.pool.Query(ctx, fmt.Sprintf(
+		versionRows, versionErr := q.Query(ctx, fmt.Sprintf(
 			`SELECT id FROM %s.application_versions WHERE application_id = $1`, schema), eAppID)
 		if versionErr == nil {
 			var embeddedVersionIDs []string
@@ -1512,61 +1528,77 @@ func (h *Handler) deleteEmbeddedSubAgents(ctx context.Context, schema string, ve
 			}
 			versionRows.Close()
 			for _, embeddedVersionID := range embeddedVersionIDs {
-				_, _ = deleteApplicationToolReferences(ctx, h.pool, schema, embeddedVersionID, "", "")
+				_, _ = deleteApplicationToolReferences(ctx, q, schema, embeddedVersionID, "", "")
 			}
 		}
-		_, _ = h.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.application_versions WHERE application_id = $1`, schema), eAppID)
-		_, _ = h.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.applications WHERE id = $1`, schema), eAppID)
+		_, _ = q.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.application_versions WHERE application_id = $1`, schema), eAppID)
+		_, _ = q.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.applications WHERE id = $1`, schema), eAppID)
 	}
 	// Clean up the sub-agent references on this version itself
-	_, _ = deleteApplicationToolReferences(ctx, h.pool, schema, versionID, "", "")
+	_, _ = deleteApplicationToolReferences(ctx, q, schema, versionID, "", "")
 }
 
 // embedSubAgents clones application-type tools from sourceVersionID onto targetVersionID.
 // For each sub-agent tool, it creates a new embedded application+version, copies the
 // tool and skill attachments of that sub-agent onto the embedded version, and links it.
-func (h *Handler) embedSubAgents(ctx context.Context, schema, projectID string, sourceVersionID string, targetVersionID int) {
-	h.embedSubAgentsRecursive(ctx, schema, projectID, sourceVersionID, targetVersionID, 0)
+//
+// q is the publish transaction. Every copy is part of the publish: the
+// release the publish records pins the embedded copies, so a failed copy
+// fails the publish instead of publishing an agent that lost a sub-agent
+// (it used to run on the pool after the commit, with failures logged only).
+func (h *Handler) embedSubAgents(ctx context.Context, q relationQuerier, schema, projectID string, sourceVersionID string, targetVersionID int) error {
+	return h.embedSubAgentsRecursive(ctx, q, schema, projectID, sourceVersionID, targetVersionID, 0)
 }
 
-func (h *Handler) embedSubAgentsRecursive(ctx context.Context, schema, projectID string, sourceVersionID string, targetVersionID int, depth int) {
+func (h *Handler) embedSubAgentsRecursive(ctx context.Context, q relationQuerier, schema, projectID string, sourceVersionID string, targetVersionID int, depth int) error {
 	if depth > 5 {
-		return
+		return nil
 	}
 
 	// Look up the parent published app ID (the application that owns targetVersionID)
 	var parentAppID int
-	_ = h.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT application_id FROM %s.application_versions WHERE id = $1`, schema), targetVersionID).Scan(&parentAppID) // failure leaves parentAppID=0
+	if err := q.QueryRow(ctx, fmt.Sprintf(
+		`SELECT application_id FROM %s.application_versions WHERE id = $1`, schema), targetVersionID).Scan(&parentAppID); err != nil {
+		return fmt.Errorf("read the parent of version %d: %w", targetVersionID, err)
+	}
 
-	refs, err := listApplicationToolReferences(ctx, h.pool, schema, sourceVersionID)
+	refs, err := listApplicationToolReferences(ctx, q, schema, sourceVersionID)
 	if err != nil {
-		slog.ErrorContext(ctx, "embed_sub_agents: sub-agent reference read failed",
-			"schema", schema, "source_version_id", sourceVersionID, "err", err)
-		return
+		return fmt.Errorf("read the sub-agent references of version %s: %w", sourceVersionID, err)
+	}
+
+	ownerProjectID, err := strconv.Atoi(projectID)
+	if err != nil && len(refs) > 0 {
+		return fmt.Errorf("project id %q is not a number: %w", projectID, err)
 	}
 
 	for _, ref := range refs {
-		// Skip pipeline sub-agents — they cannot be published/embedded
+		// Skip pipeline sub-agents — they cannot be published/embedded —
+		// and a reference whose version is gone: there is nothing to copy,
+		// as before this ran in the publish transaction.
 		var subAgentType string
-		_ = h.pool.QueryRow(ctx, fmt.Sprintf(
-			`SELECT COALESCE(agent_type, '') FROM %s.application_versions WHERE id = $1`, schema), ref.VersionID).Scan(&subAgentType) // failure leaves subAgentType empty
+		err := q.QueryRow(ctx, fmt.Sprintf(
+			`SELECT COALESCE(agent_type, '') FROM %s.application_versions WHERE id = $1`, schema), ref.VersionID).Scan(&subAgentType)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("read sub-agent version %s: %w", ref.VersionID, err)
+		}
 		if subAgentType == "pipeline" {
 			continue
 		}
 
 		// Clone the sub-agent application
 		var embeddedAppID int
-		err = h.pool.QueryRow(ctx, fmt.Sprintf(`
+		if err := q.QueryRow(ctx, fmt.Sprintf(`
 			INSERT INTO %s.applications (name, description, owner_id, created_at, updated_at)
 			SELECT name, description, owner_id, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC'
 			FROM %s.applications WHERE id = $1
-			RETURNING id`, schema, schema), ref.ApplicationID).Scan(&embeddedAppID)
-		if err != nil {
-			slog.ErrorContext(ctx, "embed_sub_agents: sub-agent application clone failed",
-				"schema", schema, "source_application_id", ref.ApplicationID,
-				"parent_version_id", targetVersionID, "err", err)
+			RETURNING id`, schema, schema), ref.ApplicationID).Scan(&embeddedAppID); errors.Is(err, pgx.ErrNoRows) {
 			continue
+		} else if err != nil {
+			return fmt.Errorf("clone sub-agent application %s: %w", ref.ApplicationID, err)
 		}
 
 		// Clone the sub-agent version as 'embedded', adding source and parent metadata.
@@ -1574,7 +1606,7 @@ func (h *Handler) embedSubAgentsRecursive(ctx context.Context, schema, projectID
 		// from schema: schema is a quoted identifier, so trimming the "p_"
 		// prefix off it would leave the quotes in source_project_id.
 		var embeddedVerID int
-		err = h.pool.QueryRow(ctx, fmt.Sprintf(`
+		if err := q.QueryRow(ctx, fmt.Sprintf(`
 			INSERT INTO %s.application_versions
 				(application_id, name, status, author_id, llm_settings, instructions,
 				 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, created_at)
@@ -1592,29 +1624,17 @@ func (h *Handler) embedSubAgentsRecursive(ctx context.Context, schema, projectID
 			FROM %s.application_versions WHERE id = $2
 			RETURNING id`, schema, schema),
 			embeddedAppID, ref.VersionID, ref.VersionID, ref.ApplicationID, projectID,
-			strconv.Itoa(parentAppID), strconv.Itoa(targetVersionID)).Scan(&embeddedVerID)
-		if err != nil {
-			slog.ErrorContext(ctx, "embed_sub_agents: sub-agent version clone failed",
-				"schema", schema, "source_version_id", ref.VersionID,
-				"parent_version_id", targetVersionID, "err", err)
-			continue
+			strconv.Itoa(parentAppID), strconv.Itoa(targetVersionID)).Scan(&embeddedVerID); err != nil {
+			return fmt.Errorf("clone sub-agent version %s: %w", ref.VersionID, err)
 		}
 
 		// Clone entity_tool_mapping for the embedded version.
-		//
-		// The copy stays outside the publish transaction, because the publish
-		// committed before embedSubAgents ran. Its error is logged rather than
-		// discarded: the publish cannot be withdrawn, so the caller keeps its 200,
-		// and the log is the only channel that can report the loss. See the
-		// pull request for issue #406 for the full reasoning.
-		if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
+		if _, err := q.Exec(ctx, fmt.Sprintf(`
 			INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at)
 			SELECT $2, $3, entity_type, tool_id, selected_tools, now() AT TIME ZONE 'UTC'
 			FROM %s.entity_tool_mapping WHERE entity_version_id = $1`, schema, schema),
 			ref.VersionID, embeddedVerID, embeddedAppID); err != nil {
-			slog.ErrorContext(ctx, "embed_sub_agents: tool attachment copy failed",
-				"schema", schema, "source_version_id", ref.VersionID,
-				"embedded_version_id", embeddedVerID, "err", err)
+			return fmt.Errorf("copy the tool attachments of sub-agent version %s: %w", ref.VersionID, err)
 		}
 
 		// Clone entity_skill_mapping for the embedded version. The embed copied
@@ -1630,40 +1650,37 @@ func (h *Handler) embedSubAgentsRecursive(ctx context.Context, schema, projectID
 		// (internal/db/queries/agent_chat.sql:132). `skill_version_id` rides along
 		// because the same read LEFT JOINs it for the skill instructions — dropping
 		// it embeds a named skill with an empty body.
-		if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
+		if _, err := q.Exec(ctx, fmt.Sprintf(`
 			INSERT INTO %s.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
 			SELECT $2, entity_type, skill_id, skill_version_id, now() AT TIME ZONE 'UTC'
 			FROM %s.entity_skill_mapping WHERE entity_version_id = $1`, schema, schema),
 			ref.VersionID, embeddedVerID); err != nil {
-			slog.ErrorContext(ctx, "embed_sub_agents: skill attachment copy failed",
-				"schema", schema, "source_version_id", ref.VersionID,
-				"embedded_version_id", embeddedVerID, "err", err)
+			return fmt.Errorf("copy the skill attachments of sub-agent version %s: %w", ref.VersionID, err)
 		}
 
 		// Link the embedded copy onto the published version through the real
 		// pair of tables. The author is the embedded version's own author and
 		// the owner is the project, mirroring the attach path.
 		var embeddedAuthorID int
-		_ = h.pool.QueryRow(ctx, fmt.Sprintf(
+		if err := q.QueryRow(ctx, fmt.Sprintf(
 			`SELECT COALESCE(author_id, 0) FROM %s.application_versions WHERE id = $1`, schema),
-			embeddedVerID).Scan(&embeddedAuthorID) // failure leaves 0; the link is still written
-		ownerProjectID, ownerErr := strconv.Atoi(projectID)
-		if ownerErr != nil {
-			slog.ErrorContext(ctx, "embed_sub_agents: sub-agent link skipped, project id is not a number",
-				"project_id", projectID, "err", ownerErr)
-		} else if err := insertApplicationToolReference(
-			ctx, h.pool, schema, int64(targetVersionID), ref.Name,
+			embeddedVerID).Scan(&embeddedAuthorID); err != nil {
+			return fmt.Errorf("read embedded version %d: %w", embeddedVerID, err)
+		}
+		if err := insertApplicationToolReference(
+			ctx, q, schema, int64(targetVersionID), ref.Name,
 			int64(embeddedAppID), int64(embeddedVerID),
 			ownerProjectID, embeddedAuthorID,
 		); err != nil {
-			slog.ErrorContext(ctx, "embed_sub_agents: sub-agent link failed",
-				"schema", schema, "parent_version_id", targetVersionID,
-				"embedded_version_id", embeddedVerID, "err", err)
+			return fmt.Errorf("link embedded version %d: %w", embeddedVerID, err)
 		}
 
 		// Recursively embed sub-agents of this sub-agent
-		h.embedSubAgentsRecursive(ctx, schema, projectID, ref.VersionID, embeddedVerID, depth+1)
+		if err := h.embedSubAgentsRecursive(ctx, q, schema, projectID, ref.VersionID, embeddedVerID, depth+1); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
@@ -1693,81 +1710,108 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 	var meta map[string]any
 	_ = json.Unmarshal([]byte(metaStr), &meta) // DB jsonb column; malformed means nil meta
 
-	// The catalogue rows this unpublish must also take down. Collected per
-	// branch below and removed once, after the source revert, so that a
-	// failure to reach the catalogue is reported rather than swallowed: an
-	// agent that stays in ELITEA Catalog after its author unpublished it is
-	// the one outcome this route may not answer 200 for.
+	// The catalogue rows this unpublish must also take down, and the
+	// releases it withdraws, are the reverted versions collected per branch
+	// below.
+	//
+	// ONE TRANSACTION. The embedded copies' removal, the revert to draft,
+	// the catalogue removal and the release withdrawal commit together or
+	// not at all. They used to run one after the other on the pool, so a
+	// failed catalogue removal or release withdrawal answered 500 after the
+	// revert had committed: the version was a draft, its release stayed
+	// published and the head pointed at it, and the retry answered 409
+	// "version is not published" — nothing could repair it. Now a failure
+	// leaves the version published and a retry runs the whole unpublish.
 	var revertedVersionIDs []int
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to unpublish agent"})
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op once Commit has run
 
 	switch status {
 	case "published", "embedded":
-		h.deleteEmbeddedSubAgents(ctx, s, versionID)
+		h.deleteEmbeddedSubAgents(ctx, tx, s, versionID)
 
 		// Revert to draft
-		_, _ = h.pool.Exec(ctx, fmt.Sprintf(
-			`UPDATE %s.application_versions SET status = 'draft' WHERE id = $1`, s), versionID) // best-effort revert
-		// …and give the release name back. The reverted row used to keep it,
-		// which spent the name for good (issue 854).
-		h.releaseWithdrawnVersionName(ctx, s, versionID)
+		if _, err := tx.Exec(ctx, fmt.Sprintf(
+			`UPDATE %s.application_versions SET status = 'draft' WHERE id = $1`, s), versionID); err != nil {
+			slog.ErrorContext(ctx, "unpublish: revert to draft", "schema", s, "version_id", versionID, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to unpublish agent"})
+			return
+		}
 		if numericVersionID, convErr := strconv.Atoi(versionID); convErr == nil {
 			revertedVersionIDs = append(revertedVersionIDs, numericVersionID)
 		}
 	case "draft":
 		// Unpublish via the source draft version: find all published clones and delete them
 		var appID int
-		_ = h.pool.QueryRow(ctx, fmt.Sprintf(
+		_ = tx.QueryRow(ctx, fmt.Sprintf(
 			`SELECT application_id FROM %s.application_versions WHERE id = $1`, s), versionID).Scan(&appID) // failure leaves appID=0
-		var hasPublished bool
-		_ = h.pool.QueryRow(ctx, fmt.Sprintf(
-			`SELECT EXISTS(SELECT 1 FROM %s.application_versions WHERE application_id = $1 AND status IN ('published', 'embedded') AND id != $2)`, s), appID, versionID).Scan(&hasPublished) // failure leaves hasPublished=false
-		if !hasPublished {
+		pubRows, err := tx.Query(ctx, fmt.Sprintf(
+			`SELECT id FROM %s.application_versions WHERE application_id = $1 AND status IN ('published','embedded') AND id != $2`, s), appID, versionID)
+		if err != nil {
+			slog.ErrorContext(ctx, "unpublish: read the published versions", "schema", s, "version_id", versionID, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to unpublish agent"})
+			return
+		}
+		var pubVerIDs []string
+		for pubRows.Next() {
+			var pvid string
+			if pubRows.Scan(&pvid) != nil {
+				continue
+			}
+			pubVerIDs = append(pubVerIDs, pvid)
+		}
+		pubRows.Close()
+		if len(pubVerIDs) == 0 {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "version is not published"})
 			return
 		}
-		pubRows, _ := h.pool.Query(ctx, fmt.Sprintf(
-			`SELECT id FROM %s.application_versions WHERE application_id = $1 AND status IN ('published','embedded') AND id != $2`, s), appID, versionID)
-		if pubRows != nil {
-			var pubVerIDs []string
-			for pubRows.Next() {
-				var pvid string
-				if pubRows.Scan(&pvid) != nil {
-					continue
-				}
-				pubVerIDs = append(pubVerIDs, pvid)
-			}
-			pubRows.Close()
-			for _, pvid := range pubVerIDs {
-				h.deleteEmbeddedSubAgents(ctx, s, pvid)
-				if numericVersionID, convErr := strconv.Atoi(pvid); convErr == nil {
-					revertedVersionIDs = append(revertedVersionIDs, numericVersionID)
-				}
+		for _, pvid := range pubVerIDs {
+			h.deleteEmbeddedSubAgents(ctx, tx, s, pvid)
+			if numericVersionID, convErr := strconv.Atoi(pvid); convErr == nil {
+				revertedVersionIDs = append(revertedVersionIDs, numericVersionID)
 			}
 		}
-		_, _ = h.pool.Exec(ctx, fmt.Sprintf(
-			`UPDATE %s.application_versions SET status = 'draft' WHERE application_id = $1 AND status IN ('published', 'embedded')`, s), appID) // best-effort revert
-		// Each reverted clone gives its release name back, one at a time: the
-		// replacement names are per-row and the counter has to see the names
-		// the previous rename wrote (issue 854).
-		for _, revertedID := range revertedVersionIDs {
-			h.releaseWithdrawnVersionName(ctx, s, strconv.Itoa(revertedID))
+		if _, err := tx.Exec(ctx, fmt.Sprintf(
+			`UPDATE %s.application_versions SET status = 'draft' WHERE application_id = $1 AND status IN ('published', 'embedded')`, s), appID); err != nil {
+			slog.ErrorContext(ctx, "unpublish: revert to draft", "schema", s, "application_id", appID, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to unpublish agent"})
+			return
 		}
 	default:
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "version is not published"})
 		return
 	}
 
-	if err := removeCatalogTwins(ctx, h.pool, projectID, revertedVersionIDs); err != nil {
+	if err := removeCatalogTwins(ctx, tx, projectID, revertedVersionIDs); err != nil {
 		slog.ErrorContext(ctx, "unpublish: catalog twin removal failed", "project_id", projectID, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove the agent from the catalog"})
 		return
 	}
 	// The releases of the reverted versions are withdrawn: they stay
-	// readable and run by id, and stop being the published release.
-	if err := h.withdrawReleases(r, projectID, revertedVersionIDs); err != nil {
+	// readable, and stop being the published release.
+	if err := h.withdrawReleases(ctx, tx, r, projectID, revertedVersionIDs); err != nil {
 		slog.ErrorContext(ctx, "unpublish: withdraw the agent releases", "project_id", projectID, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to withdraw the agent release"})
 		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.ErrorContext(ctx, "unpublish: commit", "project_id", projectID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to unpublish agent"})
+		return
+	}
+
+	// …and give the release names back, one at a time, after the commit:
+	// the rename is best effort (unpublish_name_release.go), it retries a
+	// name a concurrent withdrawal took, and the replacement names are
+	// per-row, so the counter has to see the names the previous rename
+	// wrote (issue 854). The reverted row used to keep its name, which
+	// spent the name for good.
+	for _, revertedID := range revertedVersionIDs {
+		h.releaseWithdrawnVersionName(ctx, s, strconv.Itoa(revertedID))
 	}
 
 	if h.events != nil {

@@ -364,18 +364,12 @@ const (
 	maxNestedMemoryVersions = 100
 )
 
-// runMemoryToolkits is the run's memory toolkits: its own (memoryToolkitIDs)
-// and, with WithNestedMemoryToolkits, those of every sub-agent its frozen
-// toolkit set names, read from the run's project. A read failure fails the
-// admission: the execution is never stored with a guessed set.
-func (s *AdmissionService) runMemoryToolkits(ctx context.Context, request SubmitRequest) ([]int64, error) {
-	ids, _, err := s.runToolkitSet(ctx, request)
-	return ids, err
-}
-
-// runToolkitSet is runMemoryToolkits that also answers the canonical
-// toolkit types of the same set (Admission.ToolkitTypes): the run's own
-// entries and, with WithNestedMemoryToolkits, its sub-agents'.
+// runToolkitSet is the run's memory toolkits and the canonical toolkit
+// types of the same set (Admission.ToolkitTypes): its own entries
+// (memoryToolkitIDs) and, with WithNestedMemoryToolkits, those of every
+// sub-agent its frozen toolkit set names, read from the run's project. A
+// read failure fails the admission: the execution is never stored with a
+// guessed set.
 func (s *AdmissionService) runToolkitSet(ctx context.Context, request SubmitRequest) ([]int64, []string, error) {
 	raw, err := frozenToolkitsRaw(request.CapabilityID, request.Input)
 	if err != nil {

@@ -97,8 +97,15 @@ var (
 	// ErrAlreadyHead refuses a rollback to the release already published.
 	ErrAlreadyHead = errors.New("the release is already the published release")
 	// ErrWithdrawn refuses a rollback to a withdrawn release: its version
-	// was unpublished. It still runs by id.
+	// was unpublished. It still runs by id, unless
+	// ErrWithdrawnDependenciesRemoved.
 	ErrWithdrawn = errors.New("the release is withdrawn")
+	// ErrWithdrawnDependenciesRemoved refuses a run of a withdrawn release
+	// whose sub-agents are gone: the publish embedded private copies of the
+	// agent's sub-agents and pinned them, and the unpublish deleted those
+	// copies with their toolkit rows. The release's definition can no
+	// longer be put back together, so it cannot run.
+	ErrWithdrawnDependenciesRemoved = errors.New("the withdrawn release's sub-agent copies were removed when it was unpublished")
 	// ErrDefinitionUnreadable is a stored definition that does not decode.
 	ErrDefinitionUnreadable = errors.New("the release definition is not readable")
 )

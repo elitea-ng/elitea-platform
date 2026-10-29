@@ -53,6 +53,7 @@ export const ApplicationReleaseRefusal = zod
       "application_not_published",
       "release_already_published",
       "release_withdrawn",
+      "release_withdrawn_dependencies_removed",
     ]),
     message: zod.string(),
     reason: zod

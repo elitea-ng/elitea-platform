@@ -49,8 +49,10 @@ const (
 // AuditActionRolledBack is the audit action of a rollback.
 const AuditActionRolledBack = "application_release.rolled_back"
 
-// maxReasonLength bounds the rollback reason (the column CHECK).
-const maxReasonLength = 1024
+// maxReasonLength bounds the rollback reason in characters (the column
+// CHECK). It keeps the reason whole in the audit event's entity name,
+// which the audit store clamps at 256 bytes (rollbackEntityName).
+const maxReasonLength = 200
 
 // maxRollbackBody bounds the rollback request body.
 const maxRollbackBody = 8 << 10
@@ -212,7 +214,7 @@ func (h *Handler) Rollback(w http.ResponseWriter, r *http.Request) {
 	}
 	body.Reason = strings.TrimSpace(body.Reason)
 	if utf8.RuneCountInString(body.Reason) > maxReasonLength {
-		apierr.WriteStatus(w, http.StatusBadRequest, "the reason is longer than 1024 characters")
+		apierr.WriteStatus(w, http.StatusBadRequest, "the reason is longer than 200 characters")
 		return
 	}
 	outcome, err := h.store.Rollback(r.Context(), projectID, applicationID, releaseID, actorID, body.Reason)
@@ -300,7 +302,7 @@ func writeError(ctx context.Context, w http.ResponseWriter, err error) {
 		writeCode(w, http.StatusConflict, "release_already_published", "The release is already the published release.")
 	case errors.Is(err, agentrelease.ErrWithdrawn):
 		writeCode(w, http.StatusConflict, "release_withdrawn",
-			"The release was withdrawn when its version was unpublished. It runs by id, but it cannot be the published release.")
+			"The release was withdrawn when its version was unpublished. It cannot be the published release.")
 	case errors.Is(err, agentrelease.ErrDefinitionUnreadable):
 		slog.ErrorContext(ctx, "agent releases: unreadable release definition", "error", err)
 		apierr.WriteStatus(w, http.StatusInternalServerError, "could not read the release")

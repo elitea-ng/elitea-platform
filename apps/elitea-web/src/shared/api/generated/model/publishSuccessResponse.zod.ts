@@ -49,7 +49,7 @@ export const PublishSuccessResponse = zod
       .string()
       .optional()
       .describe(
-        "The release this publish recorded (listApplicationReleases). Absent when no release could be recorded; the publish itself stands.\n",
+        "The release this publish recorded (listApplicationReleases), in the publish transaction: a publish whose release cannot be recorded fails whole with 500. Absent only when the deployment records no releases.\n",
       ),
     public_version_id: zod.string(),
     version_name: zod.string(),

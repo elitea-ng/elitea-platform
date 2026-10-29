@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS elitea_lifecycle.application_release_heads (
     pointed_at         timestamptz NOT NULL DEFAULT clock_timestamp(),
     -- publish | unpublish | rollback: what moved the pointer last.
     cause              text NOT NULL CHECK (cause IN ('publish', 'unpublish', 'rollback')),
-    reason             text NOT NULL DEFAULT '' CHECK (length(reason) <= 1024),
+    reason             text NOT NULL DEFAULT '' CHECK (length(reason) <= 200),
     PRIMARY KEY (tenant_project_id, application_id),
     CONSTRAINT application_release_heads_release_same_application
         FOREIGN KEY (release_id, tenant_project_id, application_id)

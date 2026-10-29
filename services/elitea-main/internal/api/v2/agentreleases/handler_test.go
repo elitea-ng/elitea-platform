@@ -86,6 +86,22 @@ func TestRollbackAnnotatesTheAuditRecord(t *testing.T) {
 	}
 }
 
+// A reason at the 200-character limit is accepted and survives whole in
+// the audit entity name, which the audit store clamps at 256 bytes.
+func TestRollbackReasonAtTheLimitFitsTheAuditName(t *testing.T) {
+	reason := strings.Repeat("r", maxReasonLength)
+	store := &fakeStore{}
+	recorder, slot := serve(t, NewHandler(store), http.MethodPost,
+		"/application_releases/prompt_lib/7/2147483647/5/rollback", `{"reason":"`+reason+`"}`, true)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body)
+	}
+	annotation, ok := slot.Read()
+	if !ok || !strings.HasSuffix(annotation.EntityName, " reason: "+reason) || len(annotation.EntityName) > 256 {
+		t.Fatalf("entity name %q (%d bytes)", annotation.EntityName, len(annotation.EntityName))
+	}
+}
+
 func TestRollbackRefusals(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -101,7 +117,7 @@ func TestRollbackRefusals(t *testing.T) {
 		{"already head", agentrelease.ErrAlreadyHead, "", true, http.StatusConflict, "release_already_published"},
 		{"withdrawn", agentrelease.ErrWithdrawn, "", true, http.StatusConflict, "release_withdrawn"},
 		{"unknown field", nil, `{"why":"x"}`, true, http.StatusBadRequest, ""},
-		{"reason too long", nil, `{"reason":"` + strings.Repeat("é", 1025) + `"}`, true, http.StatusBadRequest, ""},
+		{"reason too long", nil, `{"reason":"` + strings.Repeat("é", 201) + `"}`, true, http.StatusBadRequest, ""},
 		{"no user", nil, "", false, http.StatusUnauthorized, ""},
 	}
 	for _, c := range cases {

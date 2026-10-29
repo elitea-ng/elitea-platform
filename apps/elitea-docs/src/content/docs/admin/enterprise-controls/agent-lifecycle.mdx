@@ -19,15 +19,15 @@ An agent's behaviour comes from its instructions, model settings, tools and tool
 - the SHA-256 **definition digest** of that definition;
 - a **pin** for each attached toolkit: the hash of its stored settings and of the settings the agent saw, the agent's tool selection, and, for each configuration it references, the configuration's id, project and the hash of its data. Credential reference ids are pinned. Secret values are never stored.
 
-A database trigger refuses any change to a release except marking it withdrawn. Publishing the same version again returns the same release.
+A database trigger refuses any change to a release except marking it withdrawn. Publishing the same version again returns the same release. The release is recorded in the publish's own transaction, together with the copies of the agent's sub-agents: if it cannot be recorded, the publish fails with HTTP 500 and nothing is published.
 
-**One release is current.** Each agent has one current release, which a run executes when it does not name a release. A publish makes its release current. An unpublish marks the releases of that version as **withdrawn** and makes the newest release that is still published current, if there is one.
+**One release is current.** Each agent has one current release, which a run executes when it does not name a release. A publish makes its release current. An unpublish marks the releases of that version as **withdrawn** and makes the newest release that is still published current, if there is one. This happens in the same transaction as the revert to draft: if the releases cannot be withdrawn, the unpublish fails and the version stays published, so you can retry it.
 
 **Published versions are read-only.** A published version cannot be changed in place, through any route. To change an agent, edit a draft and publish it.
 
 **Every draft save is a revision.** Each save of a version records a revision with its number, author, time, a snapshot and a JSON diff of what changed. The first save of a version also records a baseline. A save that changes nothing records no revision.
 
-**Runs record their release.** A run of a published agent records the id of the release it executes (`agent_execution_jobs.release_id`). A run can also name a release explicitly (`release_id` on the chat start body); it then executes that release, even a withdrawn one.
+**Runs record their release.** A run of a published agent records the id of the release it executes (`agent_execution_jobs.release_id`). A run can also name a release explicitly (`release_id` on the chat start body); it then executes that release, even a withdrawn one, unless the agent has sub-agents (see Limits).
 
 **Rollback re-points the current release.** A user with the permission to publish (`models.applications.publish.post`) can make an earlier published release current again. New runs then execute that release. Runs already in progress keep the release they started with.
 
@@ -36,6 +36,8 @@ A database trigger refuses any change to a release except marking it withdrawn. 
 #### Limits
 
 - When the **current** release is the agent's live published version and one of its toolkits was edited after the publish, the run is not refused. It runs the live version and records no release id. Toolkits are shared and edited in place, and refusing every run of every agent that uses an edited toolkit would stop production. Publish the agent again to record a release with the new settings.
+- A withdrawn release of an agent with sub-agents cannot run. A publish makes private copies of the agent's sub-agents and pins them in the release, and unpublishing deletes those copies. A run that names such a release is refused with HTTP 409 `release_withdrawn_dependencies_removed`. Run the agent's current release, or publish the agent again.
+- A rollback stops the agent's mandate-bound inbound triggers. With credential governance on, a trigger runs under a mandate whose agent binding binds the version the trigger names. After a rollback, a run of that version executes the earlier release's version, which the mandate does not bind, so the trigger answers HTTP 403 with the code `MANDATE_RELEASE_ROLLED_BACK`. The run is refused rather than run under a mandate that never approved that definition. To resume, roll the agent forward to the release of the trigger's version, or point the trigger at the release's version and attach a mandate bound to that version.
 - A configuration that resolves per user (a private configuration reference) is pinned by its path and title only.
 - Sub-agents' versions and skill content are read when the run starts. They are not pinned in the parent's release.
 - Revisions cover the version's own fields. Toolkit and skill attachments are covered by the release pins.
@@ -52,10 +54,10 @@ The same data is available with the API:
 | --- | --- | --- |
 | `GET /api/v2/elitea_core/application_releases/prompt_lib/{project_id}/{application_id}` | `models.applications.versions.get` | Every release, newest first |
 | `GET /api/v2/elitea_core/application_releases/prompt_lib/{project_id}/{application_id}/{release_id}` | `models.applications.version.details` | One release with its definition, pins and changes against the release before it |
-| `POST /api/v2/elitea_core/application_releases/prompt_lib/{project_id}/{application_id}/{release_id}/rollback` | `models.applications.publish.post` | Body `{"reason": "..."}`; answers the releases it moved from and to |
+| `POST /api/v2/elitea_core/application_releases/prompt_lib/{project_id}/{application_id}/{release_id}/rollback` | `models.applications.publish.post` | Body `{"reason": "..."}` (at most 200 characters); answers the releases it moved from and to |
 | `GET /api/v2/elitea_core/version_revisions/prompt_lib/{project_id}/{application_id}/{version_id}` | `models.applications.versions.get` | The version's revisions with their diffs |
 
-A rollback is refused with 404 `release_not_found`, or 409 with `application_not_published`, `release_already_published`, `release_withdrawn` or `release_toolkit_drifted`.
+A rollback is refused with 400 when the reason is longer than 200 characters, with 404 `release_not_found`, or with 409 and `application_not_published`, `release_already_published`, `release_withdrawn` or `release_toolkit_drifted`.
 
 ### Evidence
 
@@ -77,7 +79,7 @@ A rollback is refused with 404 `release_not_found`, or 409 with `application_not
   }
   ```
 
-  `entity_id` is the release that became current. The reason is cut at 256 characters with the rest of the name.
+  `entity_id` is the release that became current. The reason is at most 200 characters, so a reason in ASCII is always kept whole in `entity_name`. The audit store keeps at most 256 bytes of the name, so a long reason in a non-Latin script can be cut.
 
 ### Customer responsibility
 

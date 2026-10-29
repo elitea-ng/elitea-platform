@@ -369,11 +369,18 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, body)
 		return
 	}
-	switch {
-	case governedStartRefused(err):
-		record(http.StatusForbidden, projectID, trigger.CreatedBy, trigger.VersionID, runmandate.CodeMandateNotUsable)
+	switch code := governedStartRefusal(err); {
+	case code == runmandate.CodeMandateReleaseRolledBack:
+		record(http.StatusForbidden, projectID, trigger.CreatedBy, trigger.VersionID, code)
 		writeJSON(w, http.StatusForbidden, map[string]any{
-			"error": "this trigger has no usable mandate", "code": runmandate.CodeMandateNotUsable,
+			"error": "this trigger's mandate does not bind the agent's current release: " + releaseRolledBackAdvice,
+			"code":  code,
+		})
+		return
+	case code != "":
+		record(http.StatusForbidden, projectID, trigger.CreatedBy, trigger.VersionID, code)
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error": "this trigger has no usable mandate", "code": code,
 		})
 		return
 	case errors.Is(err, ErrRunForbidden):

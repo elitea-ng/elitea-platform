@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	agentapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
@@ -419,5 +421,175 @@ func TestAgentReleases_AdmissionRecordsTheRelease(t *testing.T) {
 		case releaseID > 0 && (stored == nil || *stored != releaseID):
 			t.Fatalf("release run recorded %v, want %d", stored, releaseID)
 		}
+	}
+}
+
+// countingExecutor counts the statements sent through it.
+type countingExecutor struct {
+	sqlExecutor
+	statements int
+}
+
+func (c *countingExecutor) Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
+	c.statements++
+	return c.sqlExecutor.Exec(ctx, sql, arguments...)
+}
+
+func (c *countingExecutor) QueryRow(ctx context.Context, sql string, args ...any) sqlRow {
+	c.statements++
+	return c.sqlExecutor.QueryRow(ctx, sql, args...)
+}
+
+func (c *countingExecutor) Query(ctx context.Context, sql string, args ...any) (sqlRows, error) {
+	c.statements++
+	return c.sqlExecutor.Query(ctx, sql, args...)
+}
+
+// TestAgentReleases_PinsAreVerifiedInBatches: a release with several
+// toolkits and configurations, one of them resolved in the catalogue
+// project, is pinned and verified with a fixed number of statements (one
+// for the toolkit rows, two per schema for the configurations), and each
+// drift still names its toolkit.
+func TestAgentReleases_PinsAreVerifiedInBatches(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedAgentReleaseFixture(t, pool)
+	store, resolver := newReleaseTestStores(t, pool)
+	if _, err := pool.Exec(t.Context(), `
+CREATE SCHEMA p_99;
+CREATE TABLE p_99.configuration (LIKE p_1.configuration INCLUDING DEFAULTS);
+INSERT INTO p_99.configuration (uuid, project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source, author_id, created_at)
+VALUES ('0d4f1c2b-3a5e-4f60-8b7a-9c8d7e6f5a41', 99, 'Jira', 'catalogue-jira', 'jira', 'credentials',
+        '{"token":"catalogue"}'::jsonb, '{}'::jsonb, true, true, 'user', 11, now() AT TIME ZONE 'UTC');
+INSERT INTO p_1.configuration (uuid, project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source, author_id, created_at)
+VALUES ('1e5a2d3c-4b6f-4071-9c8b-ad9e8f7a6b52', 1, 'Git', 'team-git', 'github', 'credentials',
+        '{"token":"git"}'::jsonb, '{}'::jsonb, false, true, 'user', 11, now() AT TIME ZONE 'UTC');
+INSERT INTO p_1.elitea_tools (id, type, name, description, settings, author_id, meta, created_at) VALUES
+    (52, 'jira', 'jira', '', '{"jira_configuration":{"elitea_title":"catalogue-jira","private":false}}'::jsonb, 11, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
+    (53, 'github', 'git', '', '{"git_configuration":{"elitea_title":"team-git","private":false},"aha":{"elitea_title":"team-aha","private":false},"gone":{"elitea_title":"nowhere","private":false}}'::jsonb, 11, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
+    (54, 'memory', 'mem', '', '{}'::jsonb, 11, '{}'::jsonb, now() AT TIME ZONE 'UTC');
+INSERT INTO p_1.entity_tool_mapping (tool_id, entity_id, entity_version_id, entity_type) VALUES
+    (52, 31, 41, 'agent'), (53, 31, 41, 'agent'), (54, 31, 41, 'agent');`); err != nil {
+		t.Fatal(err)
+	}
+	release := releaseTestPublish(t, pool, store, 41, 141, "batch")
+	if len(release.ToolkitPins) != 4 {
+		t.Fatalf("pins = %+v", release.ToolkitPins)
+	}
+	byTitle := map[string]agentrelease.ConfigurationPin{}
+	for _, pin := range release.ToolkitPins {
+		for _, configuration := range pin.Configurations {
+			byTitle[configuration.Title] = configuration
+		}
+	}
+	if got := byTitle["catalogue-jira"]; got.ProjectID != 99 || got.ConfigurationUUID != "0d4f1c2b-3a5e-4f60-8b7a-9c8d7e6f5a41" {
+		t.Fatalf("catalogue configuration pin = %+v", got)
+	}
+	if got := byTitle["team-git"]; got.ProjectID != 1 || got.ConfigurationUUID == "" || got.DataSHA256 == "" {
+		t.Fatalf("project configuration pin = %+v", got)
+	}
+	if got := byTitle["nowhere"]; got.ConfigurationUUID != "" {
+		t.Fatalf("unresolved configuration pin = %+v", got)
+	}
+
+	verify := func() (int, error) {
+		t.Helper()
+		var (
+			statements int
+			verifyErr  error
+		)
+		err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+			counter := &countingExecutor{sqlExecutor: pgxExecutor{queryer: tx}}
+			verifyErr = verifyReleasePins(t.Context(), counter, store.publicProjectID, 1, release.ToolkitPins, map[int]any{})
+			statements = counter.statements
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return statements, verifyErr
+	}
+	statements, err := verify()
+	if err != nil {
+		t.Fatalf("verify the fresh release: %v", err)
+	}
+	// One for the toolkits, to_regclass and SELECT for project 1, the same
+	// for the catalogue project: never one per toolkit or configuration.
+	if statements != 5 {
+		t.Fatalf("verify sent %d statements, want 5", statements)
+	}
+	// The release still runs by id.
+	if _, err := releaseTestResolve(t, resolver, release.ID); err != nil {
+		t.Fatalf("run the release by id: %v", err)
+	}
+
+	var drift *agentrelease.DriftError
+	if _, err := pool.Exec(t.Context(), `UPDATE p_99.configuration SET data = '{"token":"rotated"}'::jsonb`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verify(); !errors.As(err, &drift) || drift.ToolkitID != 52 || drift.Reason != agentrelease.DriftConfigurationChanged {
+		t.Fatalf("catalogue configuration changed: %v", err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+UPDATE p_99.configuration SET data = '{"token":"catalogue"}'::jsonb;
+INSERT INTO p_1.configuration (uuid, project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source, author_id, created_at)
+VALUES ('2f6b3e4d-5c70-4182-ad9c-be0f9a8b7c63', 1, 'Now', 'nowhere', 'github', 'credentials',
+        '{}'::jsonb, '{}'::jsonb, false, true, 'user', 11, now() AT TIME ZONE 'UTC');`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verify(); !errors.As(err, &drift) || drift.ToolkitID != 53 || drift.Reason != agentrelease.DriftConfigurationChanged {
+		t.Fatalf("a reference that resolved to none now resolves: %v", err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+DELETE FROM p_1.configuration WHERE elitea_title = 'nowhere';
+DELETE FROM p_1.entity_tool_mapping WHERE tool_id = 54;
+DELETE FROM p_1.elitea_tools WHERE id = 54;`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verify(); !errors.As(err, &drift) || drift.ToolkitID != 54 || drift.Reason != agentrelease.DriftToolkitMissing {
+		t.Fatalf("a deleted toolkit: %v", err)
+	}
+}
+
+// TestAgentReleases_WithdrawnReleaseWithRemovedSubAgentsIsRefused: an
+// unpublish deletes the embedded sub-agent copies the publish made, with
+// their toolkit rows (eliteacore deleteEmbeddedSubAgents), so a withdrawn
+// release that pinned one cannot be put back together. A run of it by id is
+// refused with its own code, not as a toolkit drift.
+func TestAgentReleases_WithdrawnReleaseWithRemovedSubAgentsIsRefused(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedAgentReleaseFixture(t, pool)
+	store, resolver := newReleaseTestStores(t, pool)
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO p_1.elitea_tools (id, type, name, description, settings, author_id, meta, created_at)
+VALUES (55, 'application', 'helper', '', '{"application_id":31,"application_version_id":41}'::jsonb, 11, '{}'::jsonb, now() AT TIME ZONE 'UTC');`); err != nil {
+		t.Fatal(err)
+	}
+	release := releaseTestPublish(t, pool, store, 41, 141, "with-sub-agent")
+	// The publish linked the embedded copy onto the published row only.
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO p_1.entity_tool_mapping (tool_id, entity_id, entity_version_id, entity_type) VALUES (55, 31, 141, 'agent');`); err != nil {
+		t.Fatal(err)
+	}
+	release = releaseTestPublish(t, pool, store, 141, 142, "with-sub-agent-2")
+	if len(release.ToolkitPins) != 2 || release.ToolkitPins[1].Type != "application" {
+		t.Fatalf("pins = %+v", release.ToolkitPins)
+	}
+	// A withdrawn release whose toolkits are all there still runs by id.
+	releaseTestUnpublish(t, pool, store, 142)
+	if _, err := releaseTestResolve(t, resolver, release.ID); err != nil {
+		t.Fatalf("run the withdrawn release by id: %v", err)
+	}
+	// The unpublish's cleanup: the embedded copy's reference goes.
+	if _, err := pool.Exec(t.Context(), `
+DELETE FROM p_1.entity_tool_mapping WHERE tool_id = 55;
+DELETE FROM p_1.elitea_tools WHERE id = 55;`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := releaseTestResolve(t, resolver, release.ID)
+	if !errors.Is(err, agentrelease.ErrWithdrawnDependenciesRemoved) {
+		t.Fatalf("run a withdrawn release whose sub-agent copy was removed: %v", err)
+	}
+	if status, body, ok := agentrelease.HTTPRefusal(err); !ok || status != 409 || body["code"] != agentrelease.WithdrawnDependenciesRemovedCode {
+		t.Fatalf("refusal = %d %v %v", status, body, ok)
 	}
 }

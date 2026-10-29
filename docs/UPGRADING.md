@@ -22,10 +22,25 @@ newest entry is first.
   database) fails every save until it is migrated.
 * **New 409 answers on run start:** `release_toolkit_drifted` when a run
   names a release (or the agent was rolled back to one) whose toolkit
-  settings or configurations changed since it was published, and the
-  rollback refusals `application_not_published`,
-  `release_already_published`, `release_withdrawn`. A run of the live
-  published version is never refused for drift.
+  settings or configurations changed since it was published, and
+  `release_withdrawn_dependencies_removed` when a run names a withdrawn
+  release of an agent with sub-agents (unpublish deletes the sub-agent
+  copies its publish made). The rollback refusals are
+  `application_not_published`, `release_already_published`,
+  `release_withdrawn`, and 400 for a reason longer than 200 characters. A
+  run of the live published version is never refused for drift.
+* **Publish and unpublish are all-or-nothing.** A publish now embeds the
+  sub-agent copies and records the release in its own transaction: a
+  failed copy or release answers 500 and publishes nothing (a failed
+  sub-agent copy used to answer 200 with the loss only in the log). An
+  unpublish reverts the version, removes the Catalog copy and withdraws its
+  releases in one transaction: a failure leaves the version published and
+  the retry works.
+* **Rollback and mandate-bound triggers.** With credential governance on,
+  an inbound trigger of an agent that was rolled back answers 403
+  `MANDATE_RELEASE_ROLLED_BACK`: its mandate binds the trigger's version,
+  not the release's. Roll the agent forward, or point the trigger at the
+  release's version with a mandate bound to it.
 
 ## Session policy, whole-run cap and the toolkit-type stop (#1496, #1498)
 

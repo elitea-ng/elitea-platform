@@ -2,10 +2,11 @@ package repos
 
 // Agent releases (ADR-0040 decision 2, issue #1492, shared 0198).
 //
-// Publish records a release after the publish commits (RecordRelease): the
-// published version's canonical definition with every toolkit's settings
-// removed, its definition digest (#1462) and one pin per toolkit. Unpublish
-// withdraws the releases of the reverted versions (WithdrawVersions).
+// Publish records a release in the publish transaction (RecordPublishedTx):
+// the published version's canonical definition with every toolkit's
+// settings removed, its definition digest (#1462) and one pin per toolkit.
+// Unpublish withdraws the releases of the reverted versions in the
+// unpublish transaction (WithdrawVersionsTx).
 // Rollback re-points the application's published release at an earlier one
 // (Rollback).
 //
@@ -34,6 +35,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicproject"
 )
@@ -75,13 +77,54 @@ func (s *AgentReleases) RecordRelease(ctx context.Context, request RecordRelease
 	if s == nil || s.projects == nil {
 		return agentrelease.Release{}, errors.New("agent releases: no database")
 	}
+	var recorded agentrelease.Release
+	err := s.projects.WithinProjectTx(ctx, request.ProjectID, pgx.TxOptions{IsoLevel: pgx.RepeatableRead}, func(tx sqlExecutor) error {
+		var err error
+		recorded, err = s.recordRelease(ctx, tx, request)
+		return err
+	})
+	if err != nil {
+		return agentrelease.Release{}, err
+	}
+	return recorded, nil
+}
+
+// RecordPublishedTx is RecordRelease inside the publish handler's own
+// transaction (eliteacore.ReleaseRecorder): the release commits with the
+// publish or not at all. It binds the transaction to the project's schema
+// (a transaction-local search path) before it reads the version.
+func (s *AgentReleases) RecordPublishedTx(ctx context.Context, tx pgx.Tx, projectID, applicationID, versionID, sourceVersionID int64, name string, actorID int64) (int64, error) {
+	if s == nil {
+		return 0, errors.New("agent releases: no database")
+	}
+	if err := tenant.BindProject(ctx, tx, tenant.Project{ID: projectID}); err != nil {
+		return 0, fmt.Errorf("agent releases: %w", err)
+	}
+	release, err := s.recordRelease(ctx, pgxExecutor{queryer: tx}, RecordReleaseRequest{
+		ProjectID: projectID, ApplicationID: applicationID, VersionID: versionID,
+		SourceVersionID: sourceVersionID, Name: name, ActorID: actorID,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return release.ID, nil
+}
+
+// recordRelease is RecordRelease's body in the caller's transaction.
+func (s *AgentReleases) recordRelease(ctx context.Context, tx sqlExecutor, request RecordReleaseRequest) (agentrelease.Release, error) {
 	application, applicationOK := currentAgentDatabaseID(request.ApplicationID)
 	version, versionOK := currentAgentDatabaseID(request.VersionID)
 	if request.ProjectID <= 0 || !applicationOK || !versionOK || strings.TrimSpace(request.Name) == "" {
 		return agentrelease.Release{}, errors.New("agent releases: invalid release request")
 	}
 	var recorded agentrelease.Release
-	err := s.projects.WithinProjectTx(ctx, request.ProjectID, pgx.TxOptions{IsoLevel: pgx.RepeatableRead}, func(tx sqlExecutor) error {
+	err := func() error {
+		// The pinned toolkit rows are read twice (the projection, then the
+		// pins): share-lock them first, so an edit cannot land between the
+		// two reads in a READ COMMITTED publish transaction.
+		if err := lockVersionToolkits(ctx, tx, request.ProjectID, request.ApplicationID, request.VersionID); err != nil {
+			return err
+		}
 		queries, ok := tx.(currentApplicationVersionQuerier)
 		if !ok {
 			return errors.New("agent releases: the version query is unavailable")
@@ -149,24 +192,34 @@ SET release_id = EXCLUDED.release_id, pointed_by = EXCLUDED.pointed_by,
 		}
 		recorded, err = readRelease(ctx, tx, request.ProjectID, request.ApplicationID, id, true)
 		return err
-	})
+	}()
 	if err != nil {
 		return agentrelease.Release{}, err
 	}
 	return recorded, nil
 }
 
-// RecordPublished is RecordRelease in the shape the publish handler calls
-// (eliteacore.ReleaseRecorder).
-func (s *AgentReleases) RecordPublished(ctx context.Context, projectID, applicationID, versionID, sourceVersionID int64, name string, actorID int64) (int64, error) {
-	release, err := s.RecordRelease(ctx, RecordReleaseRequest{
-		ProjectID: projectID, ApplicationID: applicationID, VersionID: versionID,
-		SourceVersionID: sourceVersionID, Name: name, ActorID: actorID,
-	})
+// lockVersionToolkits share-locks the toolkit rows attached to a version.
+func lockVersionToolkits(ctx context.Context, tx sqlExecutor, projectID, applicationID, versionID int64) error {
+	schemaName, err := tenantschema.QuoteInt(projectID)
 	if err != nil {
-		return 0, err
+		return err
 	}
-	return release.ID, nil
+	rows, err := tx.Query(ctx, fmt.Sprintf(`
+SELECT tool.id
+FROM %[1]s.entity_tool_mapping AS mapping
+JOIN %[1]s.elitea_tools AS tool ON tool.id = mapping.tool_id
+WHERE mapping.entity_version_id = $1 AND mapping.entity_id = $2 AND mapping.entity_type = 'agent'
+ORDER BY tool.id
+FOR SHARE OF tool`, schemaName), versionID, applicationID)
+	if err != nil {
+		return fmt.Errorf("agent releases: lock the toolkit attachments: %w", err)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("agent releases: lock the toolkit attachments: %w", err)
+	}
+	return nil
 }
 
 // releaseToolkitRow is one toolkit attachment of a version, in the order
@@ -224,6 +277,17 @@ func (s *AgentReleases) pinToolkits(ctx context.Context, tx sqlExecutor, project
 	if len(toolkits) != agentrelease.ToolCount(definition) {
 		return nil, errors.New("agent releases: the toolkit attachments changed while the release was recorded")
 	}
+	references := make([][]agentrelease.ConfigurationReference, len(toolkits))
+	var titles []string
+	for index, toolkit := range toolkits {
+		stored, _ := agentrelease.DecodeObject(toolkit.settings)
+		references[index] = agentrelease.ConfigurationReferences(stored)
+		titles = appendSharedTitles(titles, references[index])
+	}
+	configurations, err := s.lookupConfigurations(ctx, tx, projectID, titles)
+	if err != nil {
+		return nil, err
+	}
 	pins := make([]agentrelease.ToolkitPin, 0, len(toolkits))
 	for index, toolkit := range toolkits {
 		if id, ok := agentrelease.ToolkitID(definition, index); !ok || id != toolkit.toolkitID {
@@ -252,17 +316,13 @@ func (s *AgentReleases) pinToolkits(ctx context.Context, tx sqlExecutor, project
 			Configurations:         []agentrelease.ConfigurationPin{},
 			CredentialReferenceIDs: []string{},
 		}
-		stored, _ := agentrelease.DecodeObject(toolkit.settings)
-		for _, reference := range agentrelease.ConfigurationReferences(stored) {
+		for _, reference := range references[index] {
 			configuration := agentrelease.ConfigurationPin{
 				Path: reference.Path, Title: reference.Title, Private: reference.Private,
 				CredentialReferenceID: reference.CredentialReferenceID,
 			}
 			if !reference.Private {
-				found, err := s.lookupConfiguration(ctx, tx, projectID, reference.Title)
-				if err != nil {
-					return nil, err
-				}
+				found := configurations[reference.Title]
 				configuration.ConfigurationUUID = found.uuid
 				configuration.ProjectID = found.projectID
 				configuration.DataSHA256 = found.dataSHA256
@@ -286,59 +346,94 @@ type releaseConfiguration struct {
 	dataSHA256 string
 }
 
-// lookupConfiguration resolves a non-private configuration reference the
-// way the configurations expansion does: the run's project first, then a
-// shared row of the public project.
-func (s *AgentReleases) lookupConfiguration(ctx context.Context, tx sqlExecutor, projectID int64, title string) (releaseConfiguration, error) {
-	found, ok, err := readConfigurationByTitle(ctx, tx, projectID, title, false)
-	if err != nil || ok {
-		return found, err
+// appendSharedTitles adds the titles of the non-private references to
+// titles, each once.
+func appendSharedTitles(titles []string, references []agentrelease.ConfigurationReference) []string {
+	for _, reference := range references {
+		if !reference.Private && !containsText(titles, reference.Title) {
+			titles = append(titles, reference.Title)
+		}
+	}
+	return titles
+}
+
+// lookupConfigurations resolves non-private configuration references by
+// title the way the configurations expansion does: the run's project
+// first, then a shared row of the public project. A title that resolves
+// to no row is absent from the answer (its zero value has no uuid). It
+// sends at most two statements per schema, whatever the number of titles.
+func (s *AgentReleases) lookupConfigurations(ctx context.Context, tx sqlExecutor, projectID int64, titles []string) (map[string]releaseConfiguration, error) {
+	found := map[string]releaseConfiguration{}
+	if len(titles) == 0 {
+		return found, nil
+	}
+	if err := readConfigurationsByTitle(ctx, tx, projectID, titles, false, found); err != nil {
+		return nil, err
 	}
 	public := int64(0)
 	if s.publicProjectID != nil {
 		public = s.publicProjectID()
 	}
 	if public <= 0 || public == projectID {
-		return releaseConfiguration{}, nil
+		return found, nil
 	}
-	found, _, err = readConfigurationByTitle(ctx, tx, public, title, true)
-	return found, err
+	var missing []string
+	for _, title := range titles {
+		if _, ok := found[title]; !ok {
+			missing = append(missing, title)
+		}
+	}
+	if len(missing) == 0 {
+		return found, nil
+	}
+	if err := readConfigurationsByTitle(ctx, tx, public, missing, true, found); err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
-// readConfigurationByTitle is FindCurrentConfigurationByEliteaTitle against
-// one named project schema. A project with no configuration table holds no
+// readConfigurationsByTitle is FindCurrentConfigurationByEliteaTitle for
+// several titles against one named project schema, one row per title,
+// written into found. A project with no configuration table holds no
 // configuration.
-func readConfigurationByTitle(ctx context.Context, tx sqlExecutor, projectID int64, title string, sharedOnly bool) (releaseConfiguration, bool, error) {
+func readConfigurationsByTitle(ctx context.Context, tx sqlExecutor, projectID int64, titles []string, sharedOnly bool, found map[string]releaseConfiguration) error {
 	schemaName, err := tenantschema.QuoteInt(projectID)
 	if err != nil {
-		return releaseConfiguration{}, false, err
+		return err
 	}
 	var exists bool
 	if err := tx.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, schemaName+".configuration").Scan(&exists); err != nil {
-		return releaseConfiguration{}, false, fmt.Errorf("agent releases: find the configuration table: %w", err)
+		return fmt.Errorf("agent releases: find the configuration table: %w", err)
 	}
 	if !exists {
-		return releaseConfiguration{}, false, nil
+		return nil
 	}
-	var (
-		found releaseConfiguration
-		data  string
-	)
-	err = tx.QueryRow(ctx, fmt.Sprintf(`
-SELECT uuid::text, project_id, COALESCE(data::text, 'null')
+	rows, err := tx.Query(ctx, fmt.Sprintf(`
+SELECT DISTINCT ON (elitea_title) elitea_title, uuid::text, project_id, COALESCE(data::text, 'null')
 FROM %s.configuration
-WHERE project_id = $1 AND elitea_title = $2 AND (NOT $3::boolean OR shared = true)
-LIMIT 1`, schemaName), projectID, title, sharedOnly).Scan(&found.uuid, &found.projectID, &data)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return releaseConfiguration{}, false, nil
-	}
+WHERE project_id = $1 AND elitea_title = ANY($2::text[]) AND (NOT $3::boolean OR shared = true)
+ORDER BY elitea_title`, schemaName), projectID, titles, sharedOnly)
 	if err != nil {
-		return releaseConfiguration{}, false, fmt.Errorf("agent releases: read a configuration: %w", err)
+		return fmt.Errorf("agent releases: read the configurations: %w", err)
 	}
-	if found.dataSHA256, err = agentrelease.CanonicalSHA256([]byte(data)); err != nil {
-		return releaseConfiguration{}, false, fmt.Errorf("agent releases: digest a configuration: %w", err)
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			title, data string
+			row         releaseConfiguration
+		)
+		if err := rows.Scan(&title, &row.uuid, &row.projectID, &data); err != nil {
+			return fmt.Errorf("agent releases: read a configuration: %w", err)
+		}
+		if row.dataSHA256, err = agentrelease.CanonicalSHA256([]byte(data)); err != nil {
+			return fmt.Errorf("agent releases: digest a configuration: %w", err)
+		}
+		found[title] = row
 	}
-	return found, true, nil
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("agent releases: read the configurations: %w", err)
+	}
+	return nil
 }
 
 // releaseColumns is the projection of one release row; `r` is the release,
@@ -415,34 +510,52 @@ func (s *AgentReleases) WithdrawVersions(ctx context.Context, projectID int64, v
 		return nil
 	}
 	return s.projects.WithinProjectTx(ctx, projectID, pgx.TxOptions{}, func(tx sqlExecutor) error {
-		rows, err := tx.Query(ctx, `
+		return withdrawVersions(ctx, tx, projectID, versionIDs, actorID)
+	})
+}
+
+// WithdrawVersionsTx is WithdrawVersions inside the unpublish handler's
+// own transaction (eliteacore.ReleaseRecorder): the withdrawal commits with
+// the revert to draft or not at all.
+func (s *AgentReleases) WithdrawVersionsTx(ctx context.Context, tx pgx.Tx, projectID int64, versionIDs []int64, actorID int64) error {
+	if s == nil {
+		return errors.New("agent releases: no database")
+	}
+	if projectID <= 0 || len(versionIDs) == 0 {
+		return nil
+	}
+	return withdrawVersions(ctx, pgxExecutor{queryer: tx}, projectID, versionIDs, actorID)
+}
+
+// withdrawVersions is WithdrawVersions' body in the caller's transaction.
+func withdrawVersions(ctx context.Context, tx sqlExecutor, projectID int64, versionIDs []int64, actorID int64) error {
+	rows, err := tx.Query(ctx, `
 UPDATE elitea_lifecycle.application_releases
 SET state = 'withdrawn', withdrawn_at = clock_timestamp(), withdrawn_by = $3
 WHERE tenant_project_id = $1 AND application_version_id = ANY($2::bigint[]) AND state = 'published'
 RETURNING application_id`, projectID, versionIDs, nullablePositive(actorID))
-		if err != nil {
+	if err != nil {
+		return fmt.Errorf("agent releases: withdraw: %w", err)
+	}
+	applications := map[int64]bool{}
+	for rows.Next() {
+		var application int64
+		if err := rows.Scan(&application); err != nil {
+			rows.Close()
 			return fmt.Errorf("agent releases: withdraw: %w", err)
 		}
-		applications := map[int64]bool{}
-		for rows.Next() {
-			var application int64
-			if err := rows.Scan(&application); err != nil {
-				rows.Close()
-				return fmt.Errorf("agent releases: withdraw: %w", err)
-			}
-			applications[application] = true
+		applications[application] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("agent releases: withdraw: %w", err)
+	}
+	for application := range applications {
+		if err := repointAfterWithdrawal(ctx, tx, projectID, application, actorID); err != nil {
+			return err
 		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("agent releases: withdraw: %w", err)
-		}
-		for application := range applications {
-			if err := repointAfterWithdrawal(ctx, tx, projectID, application, actorID); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // repointAfterWithdrawal keeps the published release pointing at a release
@@ -702,7 +815,11 @@ LIMIT $4`, projectID, applicationID, versionID, maxReleaseListRows)
 //
 //   - explicitID > 0: that release of the application, published or
 //     withdrawn; another application's release is ErrNotFound. A pin that
-//     no longer matches refuses the run (DriftError).
+//     no longer matches refuses the run (DriftError). A withdrawn release
+//     whose sub-agent toolkit row is gone is
+//     ErrWithdrawnDependenciesRemoved: the unpublish deleted the embedded
+//     sub-agent copies the publish made, and their toolkit rows with them
+//     (eliteacore deleteEmbeddedSubAgents).
 //   - otherwise, for a version whose status is `published`: its newest
 //     published release R. When the application's published release was
 //     rolled back to a release older than R, the run executes that older
@@ -725,13 +842,13 @@ func resolveRunRelease(ctx context.Context, tx sqlExecutor, publicProjectID func
 		run := &agentexecutionapp.ReleaseRun{ID: release.ID, ApplicationVersionID: release.ApplicationVersionID, DefinitionDigest: release.DefinitionDigest}
 		if liveIsRelease(projectID, applicationID, versionID, liveProjection, release) {
 			if err := verifyReleasePins(ctx, tx, publicProjectID, projectID, release.ToolkitPins, nil); err != nil {
-				return nil, nil, err
+				return nil, nil, withdrawnRefusal(release, err)
 			}
 			return run, nil, nil
 		}
 		details, err := reconstructRelease(ctx, tx, publicProjectID, release)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, withdrawnRefusal(release, err)
 		}
 		return run, details, nil
 	}
@@ -790,6 +907,25 @@ LIMIT 1`, projectID, applicationID, versionID).Scan(&ownID, &headID)
 	return &agentexecutionapp.ReleaseRun{ID: release.ID, ApplicationVersionID: release.ApplicationVersionID, DefinitionDigest: release.DefinitionDigest}, nil, nil
 }
 
+// withdrawnRefusal names the refusal of a withdrawn release whose missing
+// toolkit is a sub-agent reference: the embedded copy the unpublish
+// removed, not a drift the caller can repair by restoring a toolkit.
+func withdrawnRefusal(release agentrelease.Release, err error) error {
+	var drift *agentrelease.DriftError
+	if release.State != agentrelease.StateWithdrawn || !errors.As(err, &drift) || drift.Reason != agentrelease.DriftToolkitMissing {
+		return err
+	}
+	for _, pin := range release.ToolkitPins {
+		if pin.ToolkitID == drift.ToolkitID && pin.Type == subAgentToolkitType {
+			return fmt.Errorf("%w: toolkit %d", agentrelease.ErrWithdrawnDependenciesRemoved, pin.ToolkitID)
+		}
+	}
+	return err
+}
+
+// subAgentToolkitType is the toolkit type of a sub-agent reference.
+const subAgentToolkitType = "application"
+
 // liveIsRelease reports whether the version row the run read is the
 // release: the same row with the same definition digest.
 func liveIsRelease(projectID, applicationID, versionID int64, liveProjection []byte, release agentrelease.Release) bool {
@@ -842,7 +978,9 @@ func reconstructRelease(ctx context.Context, tx sqlExecutor, publicProjectID fun
 
 // verifyReleasePins checks every pin against the live toolkit row and the
 // configurations its references resolve to. projected, when not nil,
-// receives each toolkit's projected settings by pin index.
+// receives each toolkit's projected settings by pin index. It runs inside
+// the start transaction, so it reads in batches: one statement for every
+// pinned toolkit row and at most two per schema for every configuration.
 func verifyReleasePins(ctx context.Context, tx sqlExecutor, publicProjectID func() int64, projectID int64, pins []agentrelease.ToolkitPin, projected map[int]any) error {
 	if len(pins) == 0 {
 		return nil
@@ -851,16 +989,29 @@ func verifyReleasePins(ctx context.Context, tx sqlExecutor, publicProjectID func
 	if err != nil {
 		return err
 	}
-	lookup := &AgentReleases{publicProjectID: publicProjectID}
+	ids := make([]int64, 0, len(pins))
+	var titles []string
 	for _, pin := range pins {
-		var settings string
-		err := tx.QueryRow(ctx, fmt.Sprintf(`
-SELECT COALESCE(settings::text, 'null') FROM %s.elitea_tools WHERE id = $1`, schemaName), pin.ToolkitID).Scan(&settings)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return &agentrelease.DriftError{ToolkitID: pin.ToolkitID, Reason: agentrelease.DriftToolkitMissing}
+		ids = append(ids, pin.ToolkitID)
+		for _, configuration := range pin.Configurations {
+			if !configuration.Private && !containsText(titles, configuration.Title) {
+				titles = append(titles, configuration.Title)
+			}
 		}
-		if err != nil {
-			return fmt.Errorf("agent releases: read toolkit %d: %w", pin.ToolkitID, err)
+	}
+	settingsByID, err := readToolkitSettings(ctx, tx, schemaName, ids)
+	if err != nil {
+		return err
+	}
+	lookup := &AgentReleases{publicProjectID: publicProjectID}
+	configurations, err := lookup.lookupConfigurations(ctx, tx, projectID, titles)
+	if err != nil {
+		return err
+	}
+	for _, pin := range pins {
+		settings, ok := settingsByID[pin.ToolkitID]
+		if !ok {
+			return &agentrelease.DriftError{ToolkitID: pin.ToolkitID, Reason: agentrelease.DriftToolkitMissing}
 		}
 		storedSHA, err := agentrelease.CanonicalSHA256([]byte(settings))
 		if err != nil || storedSHA != pin.SettingsSHA256 {
@@ -882,10 +1033,7 @@ SELECT COALESCE(settings::text, 'null') FROM %s.elitea_tools WHERE id = $1`, sch
 				// Resolved in the runner's personal project at run time.
 				continue
 			}
-			found, err := lookup.lookupConfiguration(ctx, tx, projectID, configuration.Title)
-			if err != nil {
-				return err
-			}
+			found := configurations[configuration.Title]
 			switch {
 			case configuration.ConfigurationUUID == "" && found.uuid == "":
 			case configuration.ConfigurationUUID != "" && found.uuid == "":
@@ -897,6 +1045,32 @@ SELECT COALESCE(settings::text, 'null') FROM %s.elitea_tools WHERE id = $1`, sch
 		}
 	}
 	return nil
+}
+
+// readToolkitSettings reads the stored settings of the toolkit rows ids
+// name, in one statement. A row that is gone is absent from the answer.
+func readToolkitSettings(ctx context.Context, tx sqlExecutor, schemaName string, ids []int64) (map[int64]string, error) {
+	rows, err := tx.Query(ctx, fmt.Sprintf(`
+SELECT id, COALESCE(settings::text, 'null') FROM %s.elitea_tools WHERE id = ANY($1::bigint[])`, schemaName), ids)
+	if err != nil {
+		return nil, fmt.Errorf("agent releases: read the pinned toolkits: %w", err)
+	}
+	defer rows.Close()
+	settings := make(map[int64]string, len(ids))
+	for rows.Next() {
+		var (
+			id    int64
+			value string
+		)
+		if err := rows.Scan(&id, &value); err != nil {
+			return nil, fmt.Errorf("agent releases: read a pinned toolkit: %w", err)
+		}
+		settings[id] = value
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("agent releases: read the pinned toolkits: %w", err)
+	}
+	return settings, nil
 }
 
 // projectStoredSettings is the projected settings of a stored settings
