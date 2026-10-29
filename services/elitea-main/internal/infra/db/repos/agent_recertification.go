@@ -441,6 +441,3 @@ RETURNING id`, key.projectID, agentRef(key.applicationID),
 	}
 	return len(keys), nil
 }
-
-// lifecycleClock lets a test move the pass's clock.
-func (s *AgentLifecycle) lifecycleClock(now func() time.Time) { s.now = now }
