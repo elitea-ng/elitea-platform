@@ -834,12 +834,12 @@ where
                             error = %error,
                             error_code = error.code().as_str(),
                             upstream_error_code = error.upstream_code(),
-                            failure_reason = model_failure(error.upstream_code()).safe_message(),
+                            failure_reason = stream_failure(&error).safe_message(),
                             failure_diagnostic = %error.diagnostic_detail(),
                             "native agent event stream failed"
                         );
                         return NativeStreamOutcome::Failure(
-                            failure.unwrap_or_else(|| model_failure(error.upstream_code())),
+                            failure.unwrap_or_else(|| stream_failure(&error)),
                         );
                     }
                 };
@@ -1586,6 +1586,16 @@ where
             tracing::warn!(event = "agent_assembly_authorization_notice_unpublished");
             Some(false)
         }
+    }
+}
+
+/// The terminal of a failed event stream: a fixed Parallel resource-bound
+/// refusal keeps its typed limit (PM-3); anything else maps its upstream code.
+fn stream_failure(error: &crate::agents::runtime::NativeAgentRuntimeError) -> RuntimeFailureKind {
+    if error.parallel_resource_exhausted() {
+        RuntimeFailureKind::ResourceExhausted
+    } else {
+        model_failure(error.upstream_code())
     }
 }
 
