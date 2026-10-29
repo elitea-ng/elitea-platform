@@ -51,6 +51,41 @@ test("COPY and ADD sources are inputs; --from, heredocs and URLs are not", () =>
   }
 });
 
+test("a build target reads only the stages it runs", () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, "deploy", ".e2e-paths-test-"));
+  try {
+    const file = path.join(dir, "Containerfile");
+    fs.writeFileSync(
+      file,
+      [
+        "FROM node AS app-builder",
+        "COPY app/ /app/",
+        "FROM node AS docs-builder",
+        "COPY docs/ /docs/",
+        "FROM node AS assets",
+        "COPY assets/ /assets/",
+        "FROM nginx AS spa",
+        "COPY --from=app-builder /app/dist /html",
+        "COPY --from=assets /assets /html/assets",
+        "COPY spa.conf /etc/nginx/",
+        "FROM spa",
+        "COPY --from=docs-builder /docs/dist /html/docs",
+      ].join("\n"),
+    );
+    const rel = path.relative(ROOT, dir);
+    const read = (target) => [...containerfileInputs(dir, file, target)].sort();
+    // The default (last) stage reaches every stage through FROM spa and --from.
+    assert.deepEqual(read(undefined), [`${rel}/Containerfile`, `${rel}/app`, `${rel}/assets`, `${rel}/docs`, `${rel}/spa.conf`]);
+    // `spa` never runs docs-builder, so docs/ is not its input.
+    assert.deepEqual(read("spa"), [`${rel}/Containerfile`, `${rel}/app`, `${rel}/assets`, `${rel}/spa.conf`]);
+    assert.deepEqual(read("docs-builder"), [`${rel}/Containerfile`, `${rel}/docs`]);
+    // A target the file does not have is an error, not an empty read.
+    assert.throws(() => read("nope"), /has no stage 'nope'/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("script references are scripts/ paths ending .sh, .py or .mjs", () => {
   const text = 'run: bash scripts/ci/x.sh && node "${GITHUB_WORKSPACE}/scripts/ci/y.mjs" scripts/z.py scripts/ci/notes.md';
   assert.deepEqual([...scriptReferences(text)].sort(), ["scripts/ci/x.sh", "scripts/ci/y.mjs", "scripts/z.py"]);

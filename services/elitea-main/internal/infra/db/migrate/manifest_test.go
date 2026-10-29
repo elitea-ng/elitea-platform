@@ -834,13 +834,29 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// Nullable columns only; 0192 is claimed by another branch. No data, no
 	// permission.
 	//
-	// 194: shared/0194_execution_interrupt_wakes.sql, park and wake for the
+	// 194: shared/0194_execution_suspensions.sql, the kill switch
+	// (elitea_runtime.execution_suspensions, agent_execution_jobs
+	// .application_id) and the safety.suspend grant to platform and project
+	// admins (ADR-0041 decision 1, #1493). No data.
+	//
+	// 195: shared/0195_retention_policy.sql, retention policy per data class,
+	// legal holds and the conversation attachment cleanup journal (ADR-0042
+	// decision 4, #1495). Seeds the platform defaults (today's behaviour) and
+	// grants retention.manage and legal_hold.manage to super_admin and admin.
+	//
+	// 196: shared/0196_audit_export.sql, the SIEM audit export's id cursor
+	// (elitea_runtime.audit_export_cursors) and dead-letter list
+	// (audit_export_dead_letters), one position per (stream, sink), and
+	// centry.audit_events.export_txid so the relay reads in commit order
+	// (#1494). No data, no permission.
+	//
+	// 197: shared/0197_execution_interrupt_wakes.sql, park and wake for the
 	// per-interrupt decision ledger (fanout-interrupt-decisions v1.1 §8): the
 	// park columns on execution_interrupt_responses and
 	// elitea_runtime.execution_interrupt_wakes with the partial unique index
 	// "one active continuation per response", and the open-card index a new
 	// turn supersedes through. No data, no permission.
-	require.EqualValues(t, 194, Head(shared))
+	require.EqualValues(t, 197, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/elitea-ng/elitea-platform/libs/go/routines"
 	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
+	safetyapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/emailsettings"
 	"net/http"
 	"net/url"
@@ -63,6 +64,8 @@ import (
 	v2projectinfo "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
 	v2projects "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projects"
 	v2promptcontextreads "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
+	v2retention "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/retention"
+	v2safety "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/safety"
 	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
 	v2skillpublish "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skillpublish"
@@ -714,6 +717,12 @@ type RouterConfig struct {
 	// API (ADR-0039, issue 1151). Set, like AgentIdentityAdmin, only with the
 	// credential governance flag on; nil mounts none of its routes.
 	ExternalAgentIdentityAdmin *v2agentidentity.ExternalHandler
+	// ExecutionSuspensions serves the kill switch (ADR-0041 decision 1,
+	// issue 1493): the admin console's suspend/resume of every scope and the
+	// project admin's suspend/resume of one agent or the project. The
+	// composition root builds it over the same gate the runtime admission
+	// checks. The routes are always mounted; nil answers 503 on each.
+	ExecutionSuspensions *v2safety.Handler
 	// MandateAttachments serves the routes that attach a mandate to a
 	// pipeline schedule, pipeline trigger or index schedule (ADR-0039, issue
 	// 1122). Set only with the credential governance flag on; nil mounts
@@ -724,6 +733,9 @@ type RouterConfig struct {
 	// 1124). Set only with the credential governance flag on; nil mounts
 	// none of its routes.
 	CredentialReferencesAdmin *v2credentialreferences.Handler
+	// RetentionAdmin serves the admin Data retention and Legal holds routes
+	// (ADR-0042 decision 4, issue 1495). nil mounts none of them.
+	RetentionAdmin *v2retention.Handler
 	// AgentAssertionWellKnown serves the Elitea-native agent assertion JWKS
 	// and issuer metadata (ADR-0039, issue 1153). The composition root sets
 	// it only with the credential governance flag on and at least one
@@ -2130,7 +2142,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// omission: it admits only callers whose administration permissions
 	// resolve, and a SCIM client has none. A push during a maintenance window
 	// is therefore answered as on any other day. The SCIM documentation
-	// (apps/elitea-web/src/entries/docs/content/admin/authentication.mdx) and
+	// (apps/elitea-docs/src/content/docs/admin/authentication.mdx) and
 	// the Helm values comment say so; an operator who must freeze the
 	// directory pauses provisioning in the identity provider.
 	var (
@@ -2884,6 +2896,23 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(central("configuration.scheduling.schedules.edit")).
 					Put("/platform_routines/administration/{id}", adminHandler.UpdatePlatformRoutine)
 
+				// Data retention and legal holds (ADR-0042 decision 4, issue
+				// 1495). Shared 0195 grants both permissions to super_admin
+				// and admin. Writes are audited by the /api/v2/admin/ surface
+				// and annotated by the handler.
+				if cfg.RetentionAdmin != nil {
+					retentionAdmin := cfg.RetentionAdmin
+					retentionManage := central(v2retention.PermissionRetentionManage)
+					holdManage := central(v2retention.PermissionLegalHoldManage)
+					r.With(retentionManage).Get("/retention/policies", retentionAdmin.ListPolicies)
+					r.With(retentionManage).Put("/retention/policies/{dataClass}", retentionAdmin.SetPlatformPolicy)
+					r.With(retentionManage).Put("/retention/policies/{dataClass}/projects/{projectID}", retentionAdmin.SetProjectOverride)
+					r.With(retentionManage).Delete("/retention/policies/{dataClass}/projects/{projectID}", retentionAdmin.DeleteProjectOverride)
+					r.With(holdManage).Get("/legal_holds", retentionAdmin.ListHolds)
+					r.With(holdManage).Post("/legal_holds", retentionAdmin.CreateHold)
+					r.With(holdManage).Post("/legal_holds/{id}/release", retentionAdmin.ReleaseHold)
+				}
+
 				// Agent identity bindings and mandates (ADR-0039, issue 1112).
 				// Mounted only with the governance flag on. Shared 0181 grants
 				// the four permissions. Listing needs manage OR approve, so an
@@ -2985,6 +3014,19 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(externalManage).Post("/external_agent_identities/{id}:suspend", externalIdentities.SuspendExternalIdentity)
 					r.With(externalManage).Post("/external_agent_identities/{id}:resume", externalIdentities.ResumeExternalIdentity)
 					r.With(externalManage).Post("/external_agent_identities/{id}:retire", externalIdentities.RetireExternalIdentity)
+				}
+
+				// The kill switch (ADR-0041 decision 1, issue 1493): every
+				// scope, behind safety.suspend in the administration mode
+				// (shared 0194). The platform scope also needs the typed
+				// "STOP" in the body. Mounted unconditionally: a nil handler
+				// answers 503, so a composition without it fails visibly.
+				{
+					suspensions := cfg.ExecutionSuspensions
+					suspend := central(safetyPermission)
+					r.With(suspend).Get(v2safety.AdminPath, suspensions.AdminList)
+					r.With(suspend).Post(v2safety.AdminPath, suspensions.AdminCreate)
+					r.With(suspend).Post(v2safety.AdminResumePath, suspensions.AdminResume)
 				}
 
 				// Regular app admin endpoints (with projectID)
@@ -4589,6 +4631,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// (internal/api/v2/configurations/project_settings_access.go),
 				// so there is no personal-project exception here.
 				projectCloudExecutor := newProjectCloudExecutorHandler(cfg.Pool)
+				// The project admin's kill switch (ADR-0041 decision 1):
+				// one agent of the project, or the whole project. Resolved
+				// in the project, so the project admin's safety.suspend
+				// grant (shared 0194) reaches it. Unconditional, like the
+				// admin routes: a nil handler answers 503.
+				{
+					suspensions := cfg.ExecutionSuspensions
+					suspend := projectPermission(safetyPermission)
+					r.With(suspend).Get(v2safety.ProjectPath, suspensions.ProjectList)
+					r.With(suspend).Post(v2safety.ProjectPath, suspensions.ProjectCreate)
+					r.With(suspend).Post(v2safety.ProjectResumePath, suspensions.ProjectResume)
+				}
 				r.With(requireProjectContextView).Get(v2projectcloudexecutor.ProjectPath, projectCloudExecutor.Get)
 				r.With(projectPermission(v2configs.ProjectSettingsEditPermission)).
 					Put(v2projectcloudexecutor.ProjectPath, projectCloudExecutor.Put)
@@ -5508,3 +5562,6 @@ func newProjectCloudExecutorHandler(pool *pgxpool.Pool) *v2projectcloudexecutor.
 	}
 	return v2projectcloudexecutor.NewHandler(service)
 }
+
+// safetyPermission is the kill switch's grant (shared 0194).
+const safetyPermission = safetyapp.Permission

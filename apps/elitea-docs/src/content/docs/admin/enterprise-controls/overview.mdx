@@ -1,0 +1,87 @@
+---
+title: "Enterprise controls"
+description: "Every agent-risk control Elitea provides: what it does, whether it is available today, where to configure it, the evidence it produces and what stays with your organisation."
+---
+
+This section is for security, risk and compliance reviewers, and for the operators who run Elitea for them. For each control, the table below states:
+
+- what the platform does;
+- whether it is **Available**, **Partial** (available with the stated limits) or **Planned** (with the tracking issue);
+- where to configure it;
+- what your organisation keeps.
+
+We keep the table truthful. A control is listed as Available only once it has shipped in a release. A Partial row states what is missing.
+
+<Note title="How to read the status">
+**Available**: shipped and documented.
+**Partial**: shipped with the limits stated in the row.
+**Planned**: accepted design, with a public tracking issue; not in the product yet.
+</Note>
+
+Related pages:
+
+- [Shared responsibility](/admin/enterprise-controls/shared-responsibility) — what Elitea deliberately leaves to your own systems, and how it integrates with them.
+- [Evidence guide for auditors](/admin/enterprise-controls/evidence-guide) — where each evidence stream lives and how to verify it.
+- [Hardening checklist](/deployment/hardening-checklist) — the settings a regulated deployment turns on.
+
+## Identity, access and trust
+
+| Control | What Elitea does | Status | Configure | Your organisation |
+| --- | --- | --- | --- | --- |
+| Service and worker authentication | Every internal hop is gRPC over mutual TLS. Worker commands are signed, and each worker holds a workload identity. | Available | [Helm install](/deployment/helm-install) | Certificate authority policy |
+| Agent identity and least privilege | With credential governance on, each agent runs under its own identity. Every credential use must pass independent checks: binding, an exact grant, operation scope, and delegation or mandate. With it off, agents use the invoking user's credentials. | Partial (off by default) | [Credential governance](/deployment/credential-governance) | Identity provider (Entra ID or Elitea-native assertions) |
+| Credential use approval | Credential use grants need an approver who is not the proposer. This is enforced in code and in the database. | Partial (governed profile only) | [Credential governance](/deployment/credential-governance) | Who may approve |
+| Tool allow-list | Administrators allow, block or restrict toolkit types per project, and can block individual tools. | Partial: the catalogue is open until rows exist. Default-deny mode is planned in [issue 1501](https://github.com/elitea-ng/elitea-platform/issues/1501). | [App requests and toolkit types](/admin/app-requests-and-toolkit-types) | Which tools are approved |
+| Connector approval | New toolkit types and MCP servers would require an approved request before use. | Planned ([issue 1501](https://github.com/elitea-ng/elitea-platform/issues/1501)) | — | The architecture review behind an approval |
+| Domain and egress allow-lists | Private, link-local and cloud-metadata addresses are always refused. Sandbox and code-runner traffic uses per-project host allow-lists. Public egress from agent tools is not yet restricted. | Partial ([issue 1490](https://github.com/elitea-ng/elitea-platform/issues/1490)) | [Configuration](/deployment/configuration) | Network policy at your perimeter |
+| Multi-agent delegation | Nested agents and pipelines are bounded in size. A callee does not yet narrow its grants to its caller's, and calls to remote agents carry no signed delegation. | Planned ([issue 1501](https://github.com/elitea-ng/elitea-platform/issues/1501)) | — | — |
+| User sessions | Browser sessions have an absolute expiry, an idle timeout and server-side revocation. | Partial: no administrator bounds yet ([issue 1496](https://github.com/elitea-ng/elitea-platform/issues/1496)) | [Authentication](/admin/authentication) | Your identity provider's session policy |
+| User provisioning and roles | SSO (OIDC and SAML) and SCIM provisioning, with roles per project. | Available | [Authentication](/admin/authentication), [Users and roles](/admin/users-and-roles) | Joiner, mover and leaver processes |
+| Access review evidence | Members and roles can be listed per project. A cross-project entitlement export is planned. | Partial ([issue 1501](https://github.com/elitea-ng/elitea-platform/issues/1501)) | [Users and roles](/admin/users-and-roles) | Review campaigns in your identity governance tool |
+| Credential review | Personal access tokens expire, with notices before expiry. Credential grants carry an expiry. An inventory of every credential with its last use is planned. | Partial ([issue 1501](https://github.com/elitea-ng/elitea-platform/issues/1501)) | [Secrets](/admin/secrets) | Rotation in your secret manager |
+| Permission trimming | A report comparing granted and used permissions is planned. | Planned ([issue 1501](https://github.com/elitea-ng/elitea-platform/issues/1501)) | — | Acting on the report |
+
+## Runtime safety
+
+| Control | What Elitea does | Status | Configure | Your organisation |
+| --- | --- | --- | --- | --- |
+| Kill switch | Suspend one agent, one toolkit type, one project or the whole platform. Agent, project and platform stops cancel the runs already in flight, and nothing restarts until someone with authority resumes it. A daily self-test proves the switch works. | Partial: a toolkit-type stop refuses new runs and new tool calls, but runs already in flight keep the toolkit until they end ([issue 1498](https://github.com/elitea-ng/elitea-platform/issues/1498)) | [Runtime safety](/admin/enterprise-controls/runtime-safety), [Emergency stop runbook](/deployment/emergency-stop-runbook) | Who may stop and resume |
+| Spend caps | Project budgets are hard ceilings: further model calls are refused once a budget is reached. | Available | [Budgets and LLM governance](/admin/budgets-and-governance) | Budget amounts |
+| Per-run caps | The number of model turns per run is bounded by the agent's step limit. Caps on tool calls, spend, records read and whole-run duration are planned. | Partial ([issue 1498](https://github.com/elitea-ng/elitea-platform/issues/1498)) | Agent settings | Thresholds |
+| Throttles | Rate limits per project and model at the LLM gateway. Limits per agent and per user are planned. | Partial ([issue 1498](https://github.com/elitea-ng/elitea-platform/issues/1498)) | [Budgets and LLM governance](/admin/budgets-and-governance) | Thresholds |
+| Circuit breaker | Dependency breakers protect the platform. An agent-level breaker that trips on error rate, spend or repeated failure, and then waits for a person to resume it, is planned. | Planned ([issue 1498](https://github.com/elitea-ng/elitea-platform/issues/1498)) | — | Thresholds; on-call routing |
+| Human approval of sensitive actions | Administrators list sensitive tools, and those tools always pause for approval. Agent authors cannot remove the approval. Pipelines can place a human-in-the-loop node. A policy by risk tier and tool category, with every decision recorded in the audit trail, is planned. | Partial ([issue 1491](https://github.com/elitea-ng/elitea-platform/issues/1491), [issue 1498](https://github.com/elitea-ng/elitea-platform/issues/1498)) | [Sensitive action authorization](/how-tos/chat-conversations/sensitive-action-authorization-guardrail) | Which actions need approval, and the business thresholds |
+| Staged execution | Pipelines split work into nodes, with human-in-the-loop and decision nodes between them. Requiring a checkpoint before risky steps is planned. | Partial ([issue 1498](https://github.com/elitea-ng/elitea-platform/issues/1498)) | [Pipeline node reference](/reference/pipeline-node-reference) | Which flows must be staged |
+
+## Lifecycle and change control
+
+| Control | What Elitea does | Status | Configure | Your organisation |
+| --- | --- | --- | --- | --- |
+| Version control | Agents have named versions you can compare. A published version cannot be edited. A per-edit history with author and diff is planned. | Partial ([issue 1492](https://github.com/elitea-ng/elitea-platform/issues/1492)) | [Entity versioning](/how-tos/agents-pipelines/entity-versioning) | — |
+| Change control | Publishing is one step today. Change requests with approvers by risk tier are planned. | Planned ([issue 1497](https://github.com/elitea-ng/elitea-platform/issues/1497)) | [Publishing](/how-tos/agents-pipelines/publishing) | Your change-management policy |
+| Rollback | You can switch to an older version by hand. One-step rollback to an earlier immutable release is planned. | Partial ([issue 1492](https://github.com/elitea-ng/elitea-platform/issues/1492)) | [Entity versioning](/how-tos/agents-pipelines/entity-versioning) | Rollback criteria |
+| Pre-release evaluation and regression testing | Agent evaluation runs test datasets with scoring dimensions and an LLM judge. A gate that blocks release on failing results is planned. | Partial ([issue 1497](https://github.com/elitea-ng/elitea-platform/issues/1497)) | Agent evaluation | Test cases and pass criteria |
+| Agent registry and recertification | An inventory of every agent with its owner, risk tier and certification state, plus recertification on a schedule, on material change and on evaluation regression, is planned. | Planned ([issue 1497](https://github.com/elitea-ng/elitea-platform/issues/1497)) | — | Risk classification; the reviews themselves |
+| External reviews (architecture, legal, model risk, data owner) | These would be recorded as typed attestations with an expiry, and required by risk tier before release. | Planned ([issue 1497](https://github.com/elitea-ng/elitea-platform/issues/1497)) | — | Performing the reviews |
+
+## Audit, evidence and data
+
+| Control | What Elitea does | Status | Configure | Your organisation |
+| --- | --- | --- | --- | --- |
+| Administrative audit trail | State-changing and refused requests on admin and security routes are recorded and can be searched. | Available | [Audit trail](/admin/audit-trail) | — |
+| Tamper-evident security audit | Identity, credential and governance decisions are written to an append-only, hash-chained log that you can verify. | Partial (governed profile events only) | [Credential governance](/deployment/credential-governance) | — |
+| Export to your SIEM | Audit evidence is sent in one versioned schema over OpenTelemetry logs or a signed webhook. | Available | [Audit trail](/admin/audit-trail), [Audit event schema](/reference/audit-event-schema) | Immutable storage; correlation and alerting |
+| Retention and legal hold | Administrators set a maximum age per data class, enforced by scheduled sweeps. A legal hold on a project, an agent or a user suspends deletion. | Available | [Audit evidence and retention](/admin/enterprise-controls/audit-evidence-and-retention) | Your records-retention schedule |
+| Step logging and output audit trail | Runs record execution events, and every model call is logged with its run id. A chained per-step record covering each model call, tool call, retrieval and approval, tied to the exact agent release, is planned. | Partial ([issue 1499](https://github.com/elitea-ng/elitea-platform/issues/1499)) | — | — |
+| Retrieval logging | Records of which sources a search returned and how the answer used them are planned. | Planned ([issue 1499](https://github.com/elitea-ng/elitea-platform/issues/1499)) | — | — |
+| Monitoring | Prometheus metrics from every service, with alert rules for platform health. Per-agent dashboards are planned. | Partial ([issue 1499](https://github.com/elitea-ng/elitea-platform/issues/1499)) | [Operations](/deployment/operations) | Alert routing; anomaly detection |
+| LLM gateway | All model traffic from agents, DeepWiki and Inventory goes through the platform's gateway, which handles model allow-lists, budgets, rate limits and per-request logs. | Available | [LLM proxy](/admin/llm-proxy) | Approved models and providers |
+
+## Content
+
+| Control | What Elitea does | Status | Configure | Your organisation |
+| --- | --- | --- | --- | --- |
+| Content guardrails | Input and output inspection at the gateway is planned, with built-in detectors and adapters to the classifier you choose. | Planned ([issue 1500](https://github.com/elitea-ng/elitea-platform/issues/1500)) | — | Classifier choice and category taxonomy |
+| Format enforcement | Agents can request structured output from providers that support it. Validation of output contracts on agents and pipeline nodes is planned. | Partial ([issue 1500](https://github.com/elitea-ng/elitea-platform/issues/1500)) | — | — |
+| AI disclosure | Chat clearly shows agent output as AI output. A disclosure marker on messages that agents send to outside systems, and a platform-wide instruction preamble, are planned. | Partial ([issue 1500](https://github.com/elitea-ng/elitea-platform/issues/1500)) | — | Disclosure wording per jurisdiction |
+| Confidence communication | Elitea does not attach model-reported confidence scores, because they are not calibrated. Answers based on retrieval show citations. Agents can be given a required confidence field, which evaluation measures; grounding indicators are planned. | Partial ([issue 1500](https://github.com/elitea-ng/elitea-platform/issues/1500)) | — | Whether a use case needs a stated confidence |

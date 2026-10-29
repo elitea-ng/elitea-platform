@@ -48,6 +48,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 )
 
 /* ── harness ───────────────────────────────────────────────────────────── */
@@ -666,6 +667,10 @@ func newFlagsPool(t *testing.T) *pgxpool.Pool {
 			PRIMARY KEY (section, key)
 		);`); err != nil {
 		t.Fatalf("create centry.platform_config: %v", err)
+	}
+	// The guardrail read behind blocked_toolkits also reads suspensions.
+	if err := dbtest.InstallSuspensionTable(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 	return pool
 }

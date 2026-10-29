@@ -85,12 +85,27 @@ const ITEMS = [
     path: '/admin/app/toolkits',
   },
   { id: 'audit', label: 'Audit Trail', heading: 'Audit Trail', path: '/admin/app/audit' },
+  // Data retention and Kill switch render for this persona because shared
+  // migrations 0195 (`retention.manage`, `legal_hold.manage`) and 0194
+  // (`safety.suspend`) grant them to the administration `admin` role.
+  {
+    id: 'retention',
+    label: 'Data retention',
+    heading: 'Data retention',
+    path: '/admin/app/retention',
+  },
   // Tasks is the platform's OWN background jobs (`pages/admin/Tasks.tsx`).
   // The nav gate is `runtime.plugins` in administration
   // mode, granted by shared migration 0060, so this item renders for every
   // persona that reaches this nav at all. Listed in NAV ORDER so the page the
   // loop leaves behind for `checkA11y` stays the one it always was.
   { id: 'tasks', label: 'Tasks', heading: 'Tasks', path: '/admin/app/tasks' },
+  {
+    id: 'kill-switch',
+    label: 'Kill switch',
+    heading: 'Kill switch',
+    path: '/admin/app/kill-switch',
+  },
   {
     id: 'schedules',
     label: 'Schedules & Tasks',
@@ -136,12 +151,12 @@ adminTest('J37: the landing page offers a nav, and marks the page it is showing'
 
 adminTest('J37b: every one of the admin pages is reachable by CLICKING the nav', async ({ page }) => {
   /*
-   * THIRTEEN PAGES AND AN AXE PASS, in one test, on purpose: "the nav reaches
+   * EVERY ADMIN PAGE AND AN AXE PASS, in one test, on purpose: "the nav reaches
    * every page" is one claim, and splitting it per item would let a nav that
-   * forgets an item still report twelve greens.
+   * forgets an item still report the rest green.
    *
    * The default 30 s budget is for a test that opens ONE screen. This one loads
-   * thirteen admin routes, each with its own listing request, and then runs the
+   * every admin route, each with its own listing request, and then runs the
    * accessibility pass over the last of them. On webkit it reached the final
    * item, `Budgets`, and ran out of time inside `checkA11y` — the timing the
    * indexing journey already hit for the same reason. The budget names what the

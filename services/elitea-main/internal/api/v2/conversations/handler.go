@@ -1240,7 +1240,16 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 // legacy runtime wrote). A missing record is not an error: the bytes are
 // deleted by ref, and the record delete simply matches nothing.
 func (h *Handler) deleteAttachmentObjects(ctx context.Context, projectIDStr string, attachments []AttachmentRef) error {
-	if h.store == nil || h.attachments == nil {
+	return DeleteStoredAttachments(ctx, h.store, h.attachments, projectIDStr, attachments)
+}
+
+// DeleteStoredAttachments is deleteAttachmentObjects without the handler: the
+// user's delete and the conversation retention journal drain
+// (internal/application/conversationretention) remove stored attachment bytes
+// and their records through this one function. A nil store or attachment
+// store means nothing could have been stored, and nothing is done.
+func DeleteStoredAttachments(ctx context.Context, store storage.ObjectStore, attachmentStore AttachmentStore, projectIDStr string, attachments []AttachmentRef) error {
+	if store == nil || attachmentStore == nil {
 		// Nothing could have been stored in a deployment with no object store;
 		// same degradation writeAttachmentBytes and DeleteAttachments apply.
 		return nil
@@ -1289,7 +1298,7 @@ func (h *Handler) deleteAttachmentObjects(ctx context.Context, projectIDStr stri
 	sort.Strings(buckets)
 	for _, bucket := range buckets {
 		bucketRefs := refs[bucket]
-		result, err := h.store.DeleteBatch(ctx, bucketRefs)
+		result, err := store.DeleteBatch(ctx, bucketRefs)
 		if err != nil {
 			return apierr.Internal("delete attachment bytes: " + err.Error())
 		}
@@ -1297,14 +1306,14 @@ func (h *Handler) deleteAttachmentObjects(ctx context.Context, projectIDStr stri
 			return apierr.Internal(fmt.Sprintf("delete attachment bytes: %d of %d objects failed, first %q: %v",
 				len(result.Failed), len(bucketRefs), result.Failed[0].Key, result.Failed[0].Err))
 		}
-		bucketID, err := h.attachments.LookupAttachmentBucket(ctx, projectID, bucket)
+		bucketID, err := attachmentStore.LookupAttachmentBucket(ctx, projectID, bucket)
 		if errors.Is(err, storage.ErrNotFound) {
 			continue
 		}
 		if err != nil {
 			return apierr.Internal("lookup attachment bucket: " + err.Error())
 		}
-		if err := h.attachments.DeleteAttachmentObjects(ctx, bucketID, byBucket[bucket]); err != nil {
+		if err := attachmentStore.DeleteAttachmentObjects(ctx, bucketID, byBucket[bucket]); err != nil {
 			return apierr.Internal("delete attachment metadata: " + err.Error())
 		}
 	}
@@ -1892,12 +1901,33 @@ func (h *Handler) AddAttachments(w http.ResponseWriter, r *http.Request) {
 // bytes at the same moment (legacy/plugins/elitea_core/api/v2/
 // attachments.py:240, `mc.remove_file(bucket_name, filename)`); this is that
 // parity baseline.
+// LegalHoldReader reports whether an active legal hold covers a
+// conversation. *repos.ConversationsRepo implements it.
+type LegalHoldReader interface {
+	ConversationHeld(ctx context.Context, projectID, conversationID string) (bool, error)
+}
+
 func (h *Handler) DeleteAttachments(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeConversation(w, r) {
 		return
 	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
+
+	// A legal hold keeps the files a held transcript carries (ADR-0042
+	// decision 4). Asked BEFORE the bytes go: the repository's own refusal
+	// comes after them, too late to keep anything.
+	if holds, ok := h.repo.(LegalHoldReader); ok {
+		held, err := holds.ConversationHeld(r.Context(), projectID, conversationID)
+		if err != nil {
+			apierr.Write(w, err)
+			return
+		}
+		if held {
+			apierr.Write(w, apierr.Conflict("conversation is under legal hold and cannot be changed"))
+			return
+		}
+	}
 
 	// Bytes first, meta last. If the byte delete fails we must NOT strip the
 	// meta: the meta is the only thing left in the product that names those

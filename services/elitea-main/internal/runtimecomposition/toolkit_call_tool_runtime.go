@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"log/slog"
 	"time"
 
@@ -85,6 +86,7 @@ func newCurrentToolkitCallToolRuntime(
 	policy repos.ToolkitCallToolDispatchPolicy,
 	deadline time.Duration,
 	records *repos.ToolCallRecordsRepository,
+	suspensions *safety.Gate,
 	logger *slog.Logger,
 	resolverOptions ...toolkitcalltoolapp.ResolverOption,
 ) (*currentToolkitCallToolRuntime, error) {
@@ -123,7 +125,7 @@ func newCurrentToolkitCallToolRuntime(
 	if err != nil {
 		return nil, fmt.Errorf("construct tool-run jobs repository: %w", err)
 	}
-	admissions, err := toolkitcalltoolapp.NewAdmissionService(jobs, inputs, nil, currentRuntimeID)
+	admissions, err := toolkitcalltoolapp.NewAdmissionService(guardToolkitCallTool(jobs, suspensions), inputs, nil, currentRuntimeID)
 	if err != nil {
 		return nil, fmt.Errorf("construct tool-run admission service: %w", err)
 	}

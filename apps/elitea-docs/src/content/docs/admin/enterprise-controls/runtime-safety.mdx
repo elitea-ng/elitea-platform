@@ -1,0 +1,128 @@
+---
+title: "Runtime safety"
+description: "Controls that stop or limit agent execution while it runs. The suspension and kill switch stops one agent, one toolkit type, one project or the whole platform. Agent, project and platform suspensions also cancel the runs in flight."
+---
+
+Runtime safety controls act on agent execution while it runs, not on configuration. This page describes the controls of ADR-0041.
+
+## Suspension and kill switch
+
+### The risk
+
+An agent can start to do damage after it is deployed. For example, it can send repeated messages to customers, call a toolkit with a leaked credential, or use a large part of the budget in a loop. Deleting the agent or editing its configuration is too slow, and it does not stop the runs that are in flight. An operator must be able to stop the execution immediately, at the correct scope, and start it again when the incident is closed.
+
+### What is enforced
+
+A **suspension** has one of four scopes:
+
+| Scope | What it stops | Who can create it |
+| --- | --- | --- |
+| `agent` | Every run of one agent in its project | A project admin of that project, or a platform administrator |
+| `project` | Every run in one project: agent chats, pipeline runs, index runs, direct toolkit runs | A project admin of that project, or a platform administrator |
+| `toolkit_type` | Every call of one toolkit type (for example `github`) on the platform | A platform administrator |
+| `platform` | Every run on the platform | A platform administrator, who must also type `STOP` |
+
+When a suspension is created, the platform does these steps:
+
+1. **Admission refuses new runs.** Every path that starts or continues a run checks the active suspensions before it writes anything: a chat turn, a continue or regenerate, a pipeline trigger or schedule, an index run, a direct toolkit run, a toolkit tool call, a desktop child turn, and the support assistant. A covered run is refused with HTTP 409 and the typed error `execution_suspended`. The error names the scope, but not the reason:
+
+   ```json
+   {
+     "error": "An administrator stopped this agent.",
+     "code": "execution_suspended",
+     "message": "An administrator stopped this agent.",
+     "scope": "agent",
+     "scope_key": "31",
+     "suspension_id": 12
+   }
+   ```
+
+   A scheduled pipeline run that is refused is recorded as `failed` with the detail `skipped: an administrator suspended execution (execution_suspended)`.
+
+2. **Runs in flight are cancelled (agent, project and platform scopes).** In the same database transaction that saves the suspension, the platform sets the desired state of each covered run to `CANCELLED`. This is the same cancel that the admin **Tasks** page uses. The worker stops the run at its next lease renewal. The `cancelled_runs` field of the suspension gives the number of runs it cancelled. A platform suspension cancels every run in flight. A `toolkit_type` suspension cancels nothing, and its `cancelled_runs` is always 0. A run that is being admitted while the suspension is saved is either refused or cancelled: admission and the suspension are serialised in the database, so no run escapes both.
+
+3. **Toolkit calls are refused at the worker.** For the `toolkit_type` scope, the suspended types are frozen into the guardrail policy of each new run. The worker removes the tools of a suspended type from the agent's tool set, and it refuses a call of that type with the code `execution_suspended`. Standalone toolkit tool calls of that type are refused at admission.
+
+Each replica of the main service keeps a copy of the active suspensions. A change is sent to all replicas on the NATS subject `elitea.rt.v1.safety.suspension`, and each replica also reads the table again after 10 seconds at most, so a lost message does not extend the 10-second stop target. If a replica cannot read the table:
+
+- with a copy that it read before, it keeps that copy and tries again after one second;
+- with no copy (for example, just after it started), it refuses every run with HTTP 503 `suspension_state_unavailable`. It does not admit a run that a suspension could cover.
+
+A suspension stays active until it is resumed. Resuming lets new runs start again. Runs that were cancelled stay cancelled; start them again if necessary.
+
+#### Limits
+
+- An agent suspension cancels only the runs that were admitted after migration 0194, because older runs do not record their agent. The project and platform scopes cancel all runs.
+- A `toolkit_type` suspension does not change a run that was already in flight when the suspension was created, because that run froze its policy at admission. To stop such runs too, also suspend their project or the platform.
+- A cancelled run ends with the state `cancelled`, not with `execution_suspended`.
+- Desktop local agent loops run on the user's computer. A suspension refuses their next cloud-side turn, but it does not stop a loop that is running locally.
+
+### Configure and use
+
+**Stop one agent.** Open the agent, then select **Stop agent** next to **Delete**. Type the reason, then select **Stop agent** in the dialog. The page then shows **Agent stopped** with **Resume agent**. If the whole project is suspended, the page shows **Project stopped**.
+
+**Every scope.** Open **Admin › Kill switch**. The page lists the active suspensions and refreshes every ten seconds. Select **Suspend**, then select the scope, the target, the reason, and who can resume it. To stop the whole platform, select the scope **Platform** and type `STOP`. Select **Resume** on a row to end that suspension. Turn on **Show resumed suspensions** to see the history.
+
+**API.** The same operations are available with a personal API token:
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /api/v2/admin/execution_suspensions?active=true` | List the suspensions (filter `project_id` is optional) |
+| `POST /api/v2/admin/execution_suspensions` | Create a suspension of any scope |
+| `POST /api/v2/admin/execution_suspensions/{id}:resume` | Resume a suspension |
+| `GET /api/v2/elitea_core/execution_suspensions/prompt_lib/{project_id}` | List the suspensions of a project |
+| `POST /api/v2/elitea_core/execution_suspensions/prompt_lib/{project_id}` | Suspend an agent of the project, or the project |
+| `POST /api/v2/elitea_core/execution_suspensions/prompt_lib/{project_id}/{id}:resume` | Resume a suspension of the project |
+
+The body of a create is `{"scope", "project_id", "application_id", "toolkit_type", "reason", "resume_requires", "confirm"}`. Only the fields of the scope are necessary. `project_id` and `application_id` must be between 1 and 2147483647; any other value is refused with 400. A second suspension of the same target is refused with 409 `already_suspended`, and the answer includes the active suspension.
+
+**Self-test.** The routine `main.kill_switch_selftest` runs once a day by default. It suspends a synthetic agent, checks that admission refuses it within the stop target of 10 seconds, resumes it, and checks that admission accepts it again. It does not stage a real run. It does not run while maintenance mode is on. Change its schedule, or turn it off, in **Admin › Schedules & Tasks**. Each pass writes an audit event. A successful pass sets the Prometheus gauge `elitea_kill_switch_selftest_last_success_timestamp` (Unix seconds). Alert when the gauge is older than two schedule periods.
+
+### Roles
+
+The permission `safety.suspend` controls every route. Migration 0194 grants it to:
+
+- the platform roles `super_admin` and `admin` (the administration mode): every scope, on the admin routes;
+- the project role `admin` (the default mode), and each saved project `admin` role: the `agent` and `project` scopes of that project, on the project routes.
+
+Each suspension has a **resume rule**:
+
+| `resume_requires` | Who can resume |
+| --- | --- |
+| `any_admin` (default) | Any caller with `safety.suspend` on a surface that can see the suspension |
+| `governance_role` | A platform administrator only |
+| `two_person` | A platform administrator who is not the person who created the suspension. The database also enforces this rule. |
+
+A project admin can resume only an `any_admin` suspension of their own project. A suspension made by a platform administrator for a project is visible on the project routes, but its rule can keep the project admin from resuming it.
+
+### Evidence
+
+Every create and resume is written to the audit trail (`centry.audit_events`) as part of the request record. The action is `safety.suspension.created` or `safety.suspension.resumed`, the entity type is `execution_suspension`, and the entity name is the scope and its key. Example:
+
+```json
+{
+  "timestamp": "2026-10-28T09:15:02.418Z",
+  "user_id": 4,
+  "user_email": "ops@example.com",
+  "project_id": 7,
+  "event_type": "api",
+  "action": "safety.suspension.created",
+  "http_method": "POST",
+  "http_route": "/api/v2/elitea_core/execution_suspensions/prompt_lib/{projectID}",
+  "status_code": 201,
+  "is_error": false,
+  "entity_type": "execution_suspension",
+  "entity_id": 12,
+  "entity_name": "agent:31"
+}
+```
+
+The self-test writes a `schedule` event with the action `safety.kill_switch.selftest`, for example the entity name `refused=true resumed=true stop_latency_ms=3`, and `is_error` set when a pass fails. The table `elitea_runtime.execution_suspensions` keeps every suspension with its reason, the user who created it, the time, the number of runs it cancelled, and who resumed it, when, and why. Rows are not deleted.
+
+### Customer responsibility
+
+- Decide who in your organization can stop and resume execution, and give `safety.suspend` only to those people. Remove it from project roles if only the platform team may stop agents.
+- Use `two_person` for platform suspensions if your change process needs a second approver to restart production.
+- Monitor `elitea_kill_switch_selftest_last_success_timestamp` and the `safety.kill_switch.selftest` audit events.
+- Keep the [emergency stop runbook](/deployment/emergency-stop-runbook) in your incident procedure, and practise it.
+- After you resume, start again the runs that were cancelled, if they are still necessary.

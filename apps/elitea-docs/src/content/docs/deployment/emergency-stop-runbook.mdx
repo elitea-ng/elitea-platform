@@ -1,0 +1,118 @@
+---
+title: "Emergency stop runbook"
+description: "How to stop one agent, a toolkit type, a project or the whole platform during an incident, check that the stop took effect, and resume. Covers who can stop and resume each scope, the 10-second stop target and the daily self-test."
+---
+
+This runbook is the operator procedure for the kill switch. [Runtime safety](/admin/enterprise-controls/runtime-safety#suspension-and-kill-switch) explains what a suspension does. This page says what to do, in what order, and what to check. The commands assume an administrator's personal API token in `$TOKEN` and the platform URL in `$ELITEA` (for example `https://elitea.example.com`).
+
+## Who can stop and resume
+
+| Scope | Who can stop | Who can resume |
+| --- | --- | --- |
+| One agent | A project admin of its project, or a platform administrator | The suspension's resume rule decides (see below) |
+| One project | A project admin of the project, or a platform administrator | The suspension's resume rule decides |
+| One toolkit type | A platform administrator | The suspension's resume rule decides |
+| The whole platform | A platform administrator, who types `STOP` | The suspension's resume rule decides |
+
+All of them need the permission `safety.suspend`. The resume rule is chosen when the suspension is created:
+
+- `any_admin`: any caller with `safety.suspend` who can see the suspension. A project admin sees only the suspensions of their own project.
+- `governance_role`: a platform administrator only.
+- `two_person`: a platform administrator who is **not** the person who created the suspension.
+
+For a platform stop, use `two_person` unless only one administrator is available.
+
+## Choose the scope
+
+Use the narrowest scope that stops the damage:
+
+1. One agent misbehaves: suspend the **agent**.
+2. A toolkit or its credential is compromised (for example a leaked GitHub token): suspend the **toolkit type**. New runs and new tool calls through admission are refused; runs already in flight keep the toolkit until they end. If they must stop too, also suspend their project.
+3. A whole project is affected, or you do not know which agent is the cause: suspend the **project**.
+4. The incident is platform-wide, or you cannot find the scope fast enough: suspend the **platform**.
+
+## Stop
+
+<Steps>
+<Step title="Suspend">
+In the UI: on the agent's page select **Stop agent**, or open **Admin › Kill switch** and select **Suspend**. Type a reason that names the incident.
+
+With the API, for one agent (project 7, agent 31):
+
+```bash
+curl -sS -X POST "$ELITEA/api/v2/elitea_core/execution_suspensions/prompt_lib/7" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"scope":"agent","application_id":31,"reason":"INC-42: repeated customer e-mails"}'
+```
+
+For the whole platform:
+
+```bash
+curl -sS -X POST "$ELITEA/api/v2/admin/execution_suspensions" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"scope":"platform","reason":"INC-42","resume_requires":"two_person","confirm":"STOP"}'
+```
+
+The answer is the new suspension. `cancelled_runs` is the number of runs in flight that it cancelled. It is always 0 for a toolkit type: that scope cancels no run. A 409 `already_suspended` means a suspension of that target is already active; the answer includes it.
+</Step>
+<Step title="Check that new runs are refused">
+Start a run that the suspension covers, for example a chat with the agent. It must be refused with HTTP 409 and the code `execution_suspended`. Every replica refuses within 10 seconds (the stop target): the change is sent on NATS at once, and each replica also reads the table again after 10 seconds at most, in case a message is lost.
+</Step>
+<Step title="Check that runs in flight stopped">
+Open **Admin › Tasks** and filter on the kind and the status `RUNNING`. The covered runs show `CANCELLING`, then `CANCELLED` when their worker renews its lease. A worker that does not renew its lease loses it, and the run does not continue. Skip this step for a toolkit type: its runs in flight are not cancelled.
+</Step>
+<Step title="Record the evidence">
+Open **Admin › Audit Trail** and find the action `safety.suspension.created`. Keep the suspension id with the incident record.
+</Step>
+</Steps>
+
+## Resume
+
+<Steps>
+<Step title="Confirm the cause is fixed">
+Do not resume until the cause is removed: the agent's configuration is corrected, the credential is rotated, or the incident owner agrees.
+</Step>
+<Step title="Resume">
+In the UI: select **Resume agent** on the agent's page, or **Resume** on the row in **Admin › Kill switch**. With the API:
+
+```bash
+curl -sS -X POST "$ELITEA/api/v2/admin/execution_suspensions/12:resume" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"reason":"INC-42 closed: agent prompt fixed"}'
+```
+
+A 403 `resume_forbidden` means the resume rule does not let you resume it. For `two_person`, ask a second platform administrator.
+</Step>
+<Step title="Restart what is necessary">
+Resuming does not restart the runs that were cancelled. Start them again if they are still necessary. Scheduled pipeline runs that were refused during the suspension are recorded as `failed`; they run again at their next scheduled time.
+</Step>
+</Steps>
+
+## If the state cannot be read
+
+If a replica cannot read the suspensions table and has no earlier copy (for example, it started while the database was unavailable), it refuses every run with HTTP 503 `suspension_state_unavailable`. This is intentional: the replica does not admit a run that a suspension could cover. It recovers by itself when the database is available again. A replica that has an earlier copy keeps it and tries again every second.
+
+## Daily self-test
+
+The routine `main.kill_switch_selftest` checks the switch once a day by default. It suspends a synthetic agent (project 0, agent 0, which no real run uses), checks that admission refuses it within 10 seconds, resumes it, and checks that admission accepts it again. It does not run while maintenance mode is on. Change the schedule or turn it off in **Admin › Schedules & Tasks**.
+
+Each pass writes an audit event with the action `safety.kill_switch.selftest` and the event type `schedule`. For example:
+
+```json
+{
+  "event_type": "schedule",
+  "action": "safety.kill_switch.selftest",
+  "entity_type": "execution_suspension",
+  "entity_id": 87,
+  "entity_name": "refused=true resumed=true stop_latency_ms=3",
+  "is_error": false
+}
+```
+
+A successful pass also sets the Prometheus gauge `elitea_kill_switch_selftest_last_success_timestamp` to the Unix time of the pass. Alert on it, for example:
+
+```promql
+time() - max(elitea_kill_switch_selftest_last_success_timestamp) > 2 * 86400
+```
+
+If a pass fails, the routine resumes its own synthetic suspension before it ends. Find the cause in the audit event and in the elitea-main log line `kill switch self-test failed`.

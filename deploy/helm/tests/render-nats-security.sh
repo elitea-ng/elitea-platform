@@ -457,6 +457,9 @@ check("elitea-main-runtime subscribes the replay wake-up (its replicas carry it)
 check("elitea-main-runtime publishes and subscribes the governed-credential invalidation fan-out (#1121)",
       "elitea.rt.v1.security.invalidation" in rt_main.get("allow", []) and
       "elitea.rt.v1.security.invalidation" in users.get(URI("elitea-main-runtime"), {}).get("subscribe", {}).get("allow", []))
+check("elitea-main-runtime publishes and subscribes the kill switch's suspension fan-out (#1493)",
+      "elitea.rt.v1.safety.suspension" in rt_main.get("allow", []) and
+      "elitea.rt.v1.safety.suspension" in users.get(URI("elitea-main-runtime"), {}).get("subscribe", {}).get("allow", []))
 check("elitea-main-runtime may not pull or ack a command",
       not [p for p in rt_main.get("allow", []) if p.startswith(("$JS.ACK", "$JS.API.CONSUMER.MSG.NEXT"))] and "$JS.ACK.>" in rt_main.get("deny", []))
 check("elitea-worker may not publish a command or the wake-up (denied, not merely unlisted)",

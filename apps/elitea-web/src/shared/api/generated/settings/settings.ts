@@ -57,7 +57,12 @@ import type {
   BatchEntitySettingsRequest,
   EntitySettingsUpdateResponse,
   ErrorResponse,
+  ExecutionSuspension,
+  ExecutionSuspensionCreate,
+  ExecutionSuspensionList,
+  ExecutionSuspensionResume,
   GenerateProjectContextDraftRequest,
+  ListProjectExecutionSuspensionsParams,
   N400Response,
   N401Response,
   N403Response,
@@ -591,6 +596,810 @@ export function useSetProjectCloudExecutor<
   const queryOptions = getSetProjectCloudExecutorQueryOptions(
     projectId,
     projectCloudExecutorSwitchUpdate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listProjectExecutionSuspensionsResponse200 = {
+  data: ExecutionSuspensionList;
+  status: 200;
+};
+
+export type listProjectExecutionSuspensionsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listProjectExecutionSuspensionsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listProjectExecutionSuspensionsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listProjectExecutionSuspensionsResponseSuccess =
+  listProjectExecutionSuspensionsResponse200 & {
+    headers: Headers;
+  };
+export type listProjectExecutionSuspensionsResponseError = (
+  | listProjectExecutionSuspensionsResponse400
+  | listProjectExecutionSuspensionsResponse401
+  | listProjectExecutionSuspensionsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listProjectExecutionSuspensionsResponse =
+  | listProjectExecutionSuspensionsResponseSuccess
+  | listProjectExecutionSuspensionsResponseError;
+
+export const getListProjectExecutionSuspensionsUrl = (
+  projectId: string,
+  params?: ListProjectExecutionSuspensionsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/execution_suspensions/prompt_lib/${projectId}?${stringifiedParams}`
+    : `/elitea_core/execution_suspensions/prompt_lib/${projectId}`;
+};
+
+/**
+ * The agent and project suspensions of this project, newest first. Requires `safety.suspend` in the project (the project admin).
+ * @summary List the suspensions of a project
+ */
+export const listProjectExecutionSuspensions = async (
+  projectId: string,
+  params?: ListProjectExecutionSuspensionsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listProjectExecutionSuspensionsResponse> => {
+  return eliteaFetch<listProjectExecutionSuspensionsResponse>(
+    getListProjectExecutionSuspensionsUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListProjectExecutionSuspensionsQueryKey = (
+  projectId: string,
+  params?: ListProjectExecutionSuspensionsParams,
+) => {
+  return [
+    `/elitea_core/execution_suspensions/prompt_lib/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListProjectExecutionSuspensionsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listProjectExecutionSuspensions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListProjectExecutionSuspensionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listProjectExecutionSuspensions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListProjectExecutionSuspensionsQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listProjectExecutionSuspensions>>
+  > = ({ signal }) =>
+    listProjectExecutionSuspensions(projectId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listProjectExecutionSuspensions>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListProjectExecutionSuspensionsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listProjectExecutionSuspensions>>
+>;
+export type ListProjectExecutionSuspensionsQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListProjectExecutionSuspensions<
+  TData = Awaited<ReturnType<typeof listProjectExecutionSuspensions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  params: undefined | ListProjectExecutionSuspensionsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listProjectExecutionSuspensions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listProjectExecutionSuspensions>>,
+          TError,
+          Awaited<ReturnType<typeof listProjectExecutionSuspensions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListProjectExecutionSuspensions<
+  TData = Awaited<ReturnType<typeof listProjectExecutionSuspensions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListProjectExecutionSuspensionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listProjectExecutionSuspensions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listProjectExecutionSuspensions>>,
+          TError,
+          Awaited<ReturnType<typeof listProjectExecutionSuspensions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListProjectExecutionSuspensions<
+  TData = Awaited<ReturnType<typeof listProjectExecutionSuspensions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListProjectExecutionSuspensionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listProjectExecutionSuspensions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the suspensions of a project
+ */
+
+export function useListProjectExecutionSuspensions<
+  TData = Awaited<ReturnType<typeof listProjectExecutionSuspensions>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListProjectExecutionSuspensionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listProjectExecutionSuspensions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListProjectExecutionSuspensionsQueryOptions(
+    projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createProjectExecutionSuspensionResponse201 = {
+  data: ExecutionSuspension;
+  status: 201;
+};
+
+export type createProjectExecutionSuspensionResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type createProjectExecutionSuspensionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createProjectExecutionSuspensionResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type createProjectExecutionSuspensionResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type createProjectExecutionSuspensionResponseSuccess =
+  createProjectExecutionSuspensionResponse201 & {
+    headers: Headers;
+  };
+export type createProjectExecutionSuspensionResponseError = (
+  | createProjectExecutionSuspensionResponse400
+  | createProjectExecutionSuspensionResponse401
+  | createProjectExecutionSuspensionResponse403
+  | createProjectExecutionSuspensionResponse409
+) & {
+  headers: Headers;
+};
+
+export type createProjectExecutionSuspensionResponse =
+  | createProjectExecutionSuspensionResponseSuccess
+  | createProjectExecutionSuspensionResponseError;
+
+export const getCreateProjectExecutionSuspensionUrl = (projectId: string) => {
+  return `/elitea_core/execution_suspensions/prompt_lib/${projectId}`;
+};
+
+/**
+ * The Stop agent action. Scope agent (with application_id) or project only; project_id, if given, must be the project of the path. Admission refuses the covered runs with `execution_suspended` and the in-flight runs are cancelled. Requires `safety.suspend` in the project (the project admin).
+ * @summary Stop an agent of the project, or the whole project
+ */
+export const createProjectExecutionSuspension = async (
+  projectId: string,
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createProjectExecutionSuspensionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createProjectExecutionSuspensionResponse>(
+    getCreateProjectExecutionSuspensionUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(executionSuspensionCreate),
+    },
+  );
+};
+
+export const getCreateProjectExecutionSuspensionQueryKey = (
+  projectId: string,
+  executionSuspensionCreate?: ExecutionSuspensionCreate,
+) => {
+  return [
+    "POST",
+    `/elitea_core/execution_suspensions/prompt_lib/${projectId}`,
+    executionSuspensionCreate,
+  ] as const;
+};
+
+export const getCreateProjectExecutionSuspensionQueryOptions = <
+  TData = Awaited<ReturnType<typeof createProjectExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  projectId: string,
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createProjectExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateProjectExecutionSuspensionQueryKey(
+      projectId,
+      executionSuspensionCreate,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createProjectExecutionSuspension>>
+  > = ({ signal }) =>
+    createProjectExecutionSuspension(projectId, executionSuspensionCreate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof createProjectExecutionSuspension>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateProjectExecutionSuspensionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createProjectExecutionSuspension>>
+>;
+export type CreateProjectExecutionSuspensionQueryError =
+  ErrorResponse | N401Response;
+
+export function useCreateProjectExecutionSuspension<
+  TData = Awaited<ReturnType<typeof createProjectExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  projectId: string,
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createProjectExecutionSuspension>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createProjectExecutionSuspension>>,
+          TError,
+          Awaited<ReturnType<typeof createProjectExecutionSuspension>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateProjectExecutionSuspension<
+  TData = Awaited<ReturnType<typeof createProjectExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  projectId: string,
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createProjectExecutionSuspension>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createProjectExecutionSuspension>>,
+          TError,
+          Awaited<ReturnType<typeof createProjectExecutionSuspension>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateProjectExecutionSuspension<
+  TData = Awaited<ReturnType<typeof createProjectExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  projectId: string,
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createProjectExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Stop an agent of the project, or the whole project
+ */
+
+export function useCreateProjectExecutionSuspension<
+  TData = Awaited<ReturnType<typeof createProjectExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  projectId: string,
+  executionSuspensionCreate: ExecutionSuspensionCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createProjectExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateProjectExecutionSuspensionQueryOptions(
+    projectId,
+    executionSuspensionCreate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type resumeProjectExecutionSuspensionResponse200 = {
+  data: ExecutionSuspension;
+  status: 200;
+};
+
+export type resumeProjectExecutionSuspensionResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type resumeProjectExecutionSuspensionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type resumeProjectExecutionSuspensionResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type resumeProjectExecutionSuspensionResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type resumeProjectExecutionSuspensionResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type resumeProjectExecutionSuspensionResponseSuccess =
+  resumeProjectExecutionSuspensionResponse200 & {
+    headers: Headers;
+  };
+export type resumeProjectExecutionSuspensionResponseError = (
+  | resumeProjectExecutionSuspensionResponse400
+  | resumeProjectExecutionSuspensionResponse401
+  | resumeProjectExecutionSuspensionResponse403
+  | resumeProjectExecutionSuspensionResponse404
+  | resumeProjectExecutionSuspensionResponse409
+) & {
+  headers: Headers;
+};
+
+export type resumeProjectExecutionSuspensionResponse =
+  | resumeProjectExecutionSuspensionResponseSuccess
+  | resumeProjectExecutionSuspensionResponseError;
+
+export const getResumeProjectExecutionSuspensionUrl = (
+  projectId: string,
+  suspensionId: number,
+) => {
+  return `/elitea_core/execution_suspensions/prompt_lib/${projectId}/${suspensionId}:resume`;
+};
+
+/**
+ * Ends an agent or project suspension of this project. Only a suspension with the resume rule any_admin can be resumed here; the others need a platform administrator in the admin console. Requires `safety.suspend` in the project (the project admin).
+ * @summary Resume a suspension of the project
+ */
+export const resumeProjectExecutionSuspension = async (
+  projectId: string,
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<resumeProjectExecutionSuspensionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<resumeProjectExecutionSuspensionResponse>(
+    getResumeProjectExecutionSuspensionUrl(projectId, suspensionId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(executionSuspensionResume),
+    },
+  );
+};
+
+export const getResumeProjectExecutionSuspensionQueryKey = (
+  projectId: string,
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+) => {
+  return [
+    "POST",
+    `/elitea_core/execution_suspensions/prompt_lib/${projectId}/${suspensionId}:resume`,
+    executionSuspensionResume,
+  ] as const;
+};
+
+export const getResumeProjectExecutionSuspensionQueryOptions = <
+  TData = Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  projectId: string,
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getResumeProjectExecutionSuspensionQueryKey(
+      projectId,
+      suspensionId,
+      executionSuspensionResume,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>
+  > = ({ signal }) =>
+    resumeProjectExecutionSuspension(
+      projectId,
+      suspensionId,
+      executionSuspensionResume,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      suspensionId !== null &&
+      suspensionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ResumeProjectExecutionSuspensionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>
+>;
+export type ResumeProjectExecutionSuspensionQueryError =
+  ErrorResponse | N401Response;
+
+export function useResumeProjectExecutionSuspension<
+  TData = Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  projectId: string,
+  suspensionId: number,
+  executionSuspensionResume: undefined | ExecutionSuspensionResume,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>,
+          TError,
+          Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useResumeProjectExecutionSuspension<
+  TData = Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  projectId: string,
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>,
+          TError,
+          Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useResumeProjectExecutionSuspension<
+  TData = Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  projectId: string,
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Resume a suspension of the project
+ */
+
+export function useResumeProjectExecutionSuspension<
+  TData = Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>,
+  TError = ErrorResponse | N401Response,
+>(
+  projectId: string,
+  suspensionId: number,
+  executionSuspensionResume?: ExecutionSuspensionResume,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeProjectExecutionSuspension>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getResumeProjectExecutionSuspensionQueryOptions(
+    projectId,
+    suspensionId,
+    executionSuspensionResume,
     options,
   );
 

@@ -73,6 +73,7 @@ function AdminRoutePending() {
  */
 const AdminUsers = lazyRouteComponent(() => import('./Users'), 'AdminUsers');
 const AdminAuditTrail = lazyRouteComponent(() => import('./AuditTrail'), 'AdminAuditTrail');
+const AdminRetention = lazyRouteComponent(() => import('./Retention'), 'AdminRetention');
 const AdminRoles = lazyRouteComponent(() => import('./Roles'), 'AdminRoles');
 const AdminProjects = lazyRouteComponent(() => import('./Projects'), 'AdminProjects');
 const AdminSecrets = lazyRouteComponent(() => import('./Secrets'), 'AdminSecrets');
@@ -84,6 +85,7 @@ const AdminSchedulesTasks = lazyRouteComponent(
 );
 const AdminAppRequests = lazyRouteComponent(() => import('./AppRequests'), 'AdminAppRequests');
 const AdminTasks = lazyRouteComponent(() => import('./Tasks'), 'AdminTasks');
+const AdminKillSwitch = lazyRouteComponent(() => import('./KillSwitch'), 'AdminKillSwitch');
 const AdminServiceDescriptors = lazyRouteComponent(
   () => import('./ServiceDescriptors'),
   'AdminServiceDescriptors',
@@ -120,6 +122,13 @@ const auditTrailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/audit',
   component: AdminAuditTrail,
+});
+
+// Data retention and legal holds (ADR-0042 decision 4, issue 1495).
+const retentionRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/retention',
+  component: AdminRetention,
 });
 
 const rolesRoute = createRoute({
@@ -165,6 +174,16 @@ const tasksRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/tasks',
   component: AdminTasks,
+});
+
+/**
+ * `/kill-switch` is the execution suspensions (ADR-0041 decision 1). See
+ * `./KillSwitch.tsx`'s header.
+ */
+const killSwitchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/kill-switch',
+  component: AdminKillSwitch,
 });
 
 const appRequestsRoute = createRoute({
@@ -254,11 +273,13 @@ const adminRouteTree = rootRoute.addChildren([
   indexRoute,
   usersRoute,
   auditTrailRoute,
+  retentionRoute,
   rolesRoute,
   projectsRoute,
   secretsRoute,
   schedulesRoute,
   tasksRoute,
+  killSwitchRoute,
   appRequestsRoute,
   configurationRoute,
   serviceDescriptorsRoute,
