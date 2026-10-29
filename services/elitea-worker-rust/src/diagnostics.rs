@@ -340,24 +340,36 @@ impl Extractor for CommandTraceHeaders<'_> {
 /// Provider, model, or tool code can panic with request data, so the worker
 /// replaces that hook instead of treating a redacted task error as sufficient.
 /// Repeated calls are harmless.
+///
+/// In the unit-test binary the hook is process-wide: one test installing it
+/// would otherwise strip the message from every later panic, test assertions
+/// included, and print its line straight to stderr past libtest's per-test
+/// capture. There it also runs the hook it replaced (the default), so a
+/// failing test keeps its full message in its own captured output.
 pub fn install_redacted_panic_hook() {
     PANIC_HOOK.call_once(|| {
-        std::panic::set_hook(Box::new(|information| {
-            let mut stderr = io::stderr().lock();
-            match information.location().and_then(|location| {
-                panic_source_label(location.file()).map(|source| (source, location.line()))
-            }) {
-                Some((source, line)) => {
-                    let _ignored = writeln!(
-                        stderr,
-                        "elitea worker task panicked; payload redacted; source={source}:{line}"
-                    );
-                }
-                None => {
-                    let _ignored =
-                        stderr.write_all(b"elitea worker task panicked; details redacted\n");
+        #[cfg(test)]
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |information| {
+            {
+                let mut stderr = io::stderr().lock();
+                match information.location().and_then(|location| {
+                    panic_source_label(location.file()).map(|source| (source, location.line()))
+                }) {
+                    Some((source, line)) => {
+                        let _ignored = writeln!(
+                            stderr,
+                            "elitea worker task panicked; payload redacted; source={source}:{line}"
+                        );
+                    }
+                    None => {
+                        let _ignored =
+                            stderr.write_all(b"elitea worker task panicked; details redacted\n");
+                    }
                 }
             }
+            #[cfg(test)]
+            previous(information);
         }));
     });
 }

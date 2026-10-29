@@ -29,7 +29,9 @@
 //! The same three cases run with inline LLM branches (T-2A D1): each branch is
 //! an `llm` node offered the same MCP tool, with its own model checkpoint.
 
-use super::restart_pg_tests::{CHECKPOINT_MIGRATION, connect, model_requests, run_phase};
+use super::restart_pg_tests::{
+    CHECKPOINT_MIGRATION, connect, model_requests, run_probed_phase, run_until_model_requests,
+};
 use super::*;
 use crate::protocol::control::test_session_authority_for_reclaim;
 use crate::state::postgres_session_tests::{IsolatedPostgres, install_schema};
@@ -509,7 +511,7 @@ async fn scenario_for(url: &str, kind: &str, mode: &str, on_error: &str) {
             .env(MODE_ENV, mode)
             .env(KIND_ENV, kind)
             .env(PHASE_ENV, phase);
-        let output = run_phase(phase, command);
+        let output = run_probed_phase(&db, phase, command).await;
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert_eq!(
             output.status.code(),
@@ -1594,18 +1596,9 @@ async fn postgres_a_wake_lost_inside_a_child_pipeline_resumes_the_answered_branc
         ))
         .await
         .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
-    // Dropped inside the gateway's 1 s header timeout: the process is gone.
-    let outcome =
-        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
-    assert!(
-        outcome.is_err(),
-        "branch a waits in its model call: {outcome:?}"
-    );
-    assert_eq!(
-        model_requests(&lost_requests),
-        1,
-        "branch a's step was in flight"
-    );
+    // Dropped as soon as the model call is in flight (branch a waits in its model call),
+    // inside the gateway's 1 s header timeout: the process is gone.
+    run_until_model_requests(run_collecting(invocation), &lost_requests, 1).await;
 
     let (woken, captured) = assembler(
         &db.pool,
@@ -1685,13 +1678,9 @@ async fn postgres_a_child_pipeline_lost_outside_a_parallel_is_not_resumed() {
         ))
         .await
         .unwrap_or_else(|error| panic!("assemble the child run: {error}"));
-    let outcome =
-        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
-    assert!(
-        outcome.is_err(),
-        "the child waits in its model call: {outcome:?}"
-    );
-    assert_eq!(model_requests(&lost_requests), 1);
+    // Dropped as soon as the model call is in flight (the child waits in its model call),
+    // inside the gateway's 1 s header timeout: the process is gone.
+    run_until_model_requests(run_collecting(invocation), &lost_requests, 1).await;
 
     let (again, _) = assembler(
         &db.pool,
@@ -1951,13 +1940,9 @@ async fn postgres_a_wake_lost_mid_model_resumes_the_answered_agent_branch() {
         ))
         .await
         .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
-    let outcome =
-        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
-    assert!(
-        outcome.is_err(),
-        "the answered member's Agent waits in its model call: {outcome:?}"
-    );
-    assert_eq!(model_requests(&lost_requests), 1);
+    // Dropped as soon as the model call is in flight (the answered member's Agent waits in its model call),
+    // inside the gateway's 1 s header timeout: the process is gone.
+    run_until_model_requests(run_collecting(invocation), &lost_requests, 1).await;
 
     let (woken, captured) = assembler(
         &db.pool,
@@ -2037,18 +2022,9 @@ async fn postgres_a_wake_lost_mid_model_resumes_the_answered_child() {
         ))
         .await
         .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
-    // Dropped inside the gateway's 1 s header timeout: the process is gone.
-    let outcome =
-        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
-    assert!(
-        outcome.is_err(),
-        "the answered child waits in its model call: {outcome:?}"
-    );
-    assert_eq!(
-        model_requests(&lost_requests),
-        1,
-        "the answered child's step was in flight"
-    );
+    // Dropped as soon as the model call is in flight (the answered child waits in its model call),
+    // inside the gateway's 1 s header timeout: the process is gone.
+    run_until_model_requests(run_collecting(invocation), &lost_requests, 1).await;
 
     let (woken, captured) = assembler(
         &db.pool,
