@@ -133,6 +133,29 @@ func TestPipelineDepthAdmitsTheLimitAndRefusesOneMore(t *testing.T) {
 	expect(t, check(t, pipelineChain(applicationcomposition.MaxPipelineDepth+1, false), 1), applicationcomposition.BoundPipelineDepth)
 }
 
+// PM-2: an inline LLM Parallel branch needs a checkpoint path one level below
+// its pipeline, so a Parallel of inline branches in the deepest pipeline is
+// refused as an Agent node there is; one level up it saves.
+func TestInlineLLMBranchesInTheDeepestPipelineAreRefused(t *testing.T) {
+	withBranches := func(levels int) fakeSource {
+		source := pipelineChain(levels, false)
+		last := int64(levels) + 1
+		deepest := source[last]
+		deepest.LLMBranches = 2
+		deepest.ParallelNode = "gather"
+		source[last] = deepest
+		return source
+	}
+	violation := check(t, withBranches(applicationcomposition.MaxPipelineDepth), 1)
+	expect(t, violation, applicationcomposition.BoundPipelineDepth)
+	if !strings.Contains(violation.Error(), `Parallel node "gather"`) {
+		t.Fatalf("the refusal names the Parallel node: %s", violation)
+	}
+	if violation := check(t, withBranches(applicationcomposition.MaxPipelineDepth-1), 1); violation != nil {
+		t.Fatalf("one level up the inline branches save: %v", violation)
+	}
+}
+
 // scopeChain is the Worker's scope_chain: each scope is a pipeline whose Agent
 // node runs an agent that carries the next pipeline as a tool.
 func scopeChain(scopes int) fakeSource {

@@ -1010,6 +1010,11 @@ impl PipelineDefinition {
         })
     }
 
+    /// Whether the definition holds a node `id` (PM-2 recovery walk).
+    pub(crate) fn has_node(&self, id: &str) -> bool {
+        self.nodes.iter().any(|node| node.id() == id)
+    }
+
     /// The pending Agent nodes of a recovery frontier (FU-249): each one's
     /// child frontier is proven separately.
     pub(crate) fn application_frontier_nodes<'a>(&self, pending: &'a [String]) -> Vec<&'a str> {

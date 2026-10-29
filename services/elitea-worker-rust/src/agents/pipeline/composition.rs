@@ -313,8 +313,13 @@ fn collect_paths(
             )?;
         }
     }
-    // An inline LLM Parallel branch runs in its own checkpoint family too.
+    // An inline LLM Parallel branch runs in its own checkpoint family too, one
+    // level below its pipeline: at the deepest level it is refused as an Agent
+    // node is (PM-2; Main's save check refuses the same).
     for node_id in definition.parallel_llm_branch_ids() {
+        if depth == MAX_PIPELINE_COMPOSITION_DEPTH {
+            return Err(composition_exhausted(bound::PIPELINE_DEPTH));
+        }
         let path = if prefix.is_empty() {
             node_id.to_owned()
         } else {
@@ -338,6 +343,28 @@ const fn composition_exhausted(detail: &'static str) -> NativeAgentAssemblyError
         ),
         detail,
     )
+}
+
+/// One level of the frozen composition, as a recovery walk descends it (PM-2).
+impl crate::agents::session::FrozenRecoveryLevel for BTreeMap<String, Arc<AdmittedSavedPipeline>> {
+    fn admitted_aliases(&self) -> BTreeSet<String> {
+        self.keys().cloned().collect()
+    }
+
+    fn child(
+        &self,
+        alias: &str,
+    ) -> Option<(
+        &PipelineDefinition,
+        &dyn crate::agents::session::FrozenRecoveryLevel,
+    )> {
+        self.get(alias).map(|child| {
+            (
+                child.profile.definition(),
+                &child.children as &dyn crate::agents::session::FrozenRecoveryLevel,
+            )
+        })
+    }
 }
 
 pub(super) fn composition_definitions(

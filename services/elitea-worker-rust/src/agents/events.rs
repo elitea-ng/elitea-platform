@@ -1232,7 +1232,7 @@ impl AgentEventProjector {
             return Ok(batch);
         }
         if let Some(tier) = inline_member_tier(event)? {
-            return self.project_inline_member(event, tier);
+            return self.project_inline_member(event, &tier);
         }
         if let Some(projected) = super::pipeline::scoped_applications::project_root_scope_event(
             event,
@@ -1532,7 +1532,7 @@ impl AgentEventProjector {
     fn project_inline_member(
         &mut self,
         event: &Event,
-        tier: AgentPathTier,
+        tier: &AgentPathTier,
     ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
         if !self.descendants.contains_key(&tier.call_id) {
             // The branch is a node of this pipeline graph: its projector is a
@@ -1560,7 +1560,7 @@ impl AgentEventProjector {
         let member = self
             .descendants
             .get_mut(&tier.call_id)
-            .filter(|member| member.tier == tier)
+            .filter(|member| member.tier == *tier)
             .ok_or_else(AgentEventProjectionError::invalid_state)?;
         let mut child = event.clone();
         child.provider_metadata.remove(FANOUT_INLINE_MEMBER_KEY);

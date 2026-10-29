@@ -222,6 +222,8 @@ struct SavedAgentVersions {
     /// A second saved participant (application 5, version 6), when a test
     /// mixes two kinds of branch.
     second: Option<Value>,
+    /// A third saved version (application 7, version 8): PM-2 depth 3.
+    third: Option<Value>,
 }
 
 #[tonic::async_trait]
@@ -241,6 +243,14 @@ impl crate::transport::input_content::content_fake::ContextRoutes for SavedAgent
             json!({"schema_version":"elitea.runtime.application-version.v1","project_id":17,
                 "application_id":5,"version_id":6,"version_details":second,
                 "frozen_definition_sha256":"cd".repeat(32)})
+        } else if let Some(third) = self
+            .third
+            .as_ref()
+            .filter(|_| call.route.ends_with("/7/versions/8"))
+        {
+            json!({"schema_version":"elitea.runtime.application-version.v1","project_id":17,
+                "application_id":7,"version_id":8,"version_details":third,
+                "frozen_definition_sha256":"ef".repeat(32)})
         } else if call.route.ends_with("/3/versions/4") {
             json!({"schema_version":"elitea.runtime.application-version.v1","project_id":17,
                 "application_id":3,"version_id":4,"version_details":self.details,
@@ -266,10 +276,20 @@ fn saved_runtime_with(
     details: Value,
     second: Option<Value>,
 ) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
+    saved_runtime_with3(outcomes, details, second, None)
+}
+
+fn saved_runtime_with3(
+    outcomes: Vec<TestModelGatewayOutcome>,
+    details: Value,
+    second: Option<Value>,
+    third: Option<Value>,
+) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
     let runtime = RuntimeContextClient::with_rpc(
         crate::transport::input_content::content_fake::Routes(SavedAgentVersions {
             details,
             second,
+            third,
         }),
         RuntimeContextConfig {
             origin: "https://content.internal".to_owned(),
@@ -328,6 +348,92 @@ fn claim(
     )
 }
 
+/// [`assembler`] serving a second saved version (application 5, version 6).
+fn assembler_with(
+    pool: &sqlx::PgPool,
+    outcomes: Vec<TestModelGatewayOutcome>,
+    details: Value,
+    second: Value,
+) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
+    let (platform, model_facade, captured) = saved_runtime_with(outcomes, details, Some(second));
+    let assembler = PipelineNativeAgentAssembler::postgres(
+        pool.clone(),
+        SessionLimits::default(),
+        CheckpointLimits::default(),
+        Arc::new(
+            ToolAdmissionPolicy::new(&[], &std::collections::BTreeMap::new())
+                .expect("empty tool policy"),
+        ),
+        platform,
+        model_facade,
+    )
+    .with_mcp_connector(pipeline_connector())
+    .with_fixed_parallel_for_tests();
+    (assembler, captured)
+}
+
+/// [`assembler_with`] serving a third saved version (application 7, version 8).
+fn assembler_with3(
+    pool: &sqlx::PgPool,
+    outcomes: Vec<TestModelGatewayOutcome>,
+    versions: [Value; 3],
+) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
+    let [details, second, third] = versions;
+    let (platform, model_facade, captured) =
+        saved_runtime_with3(outcomes, details, Some(second), Some(third));
+    let assembler = PipelineNativeAgentAssembler::postgres(
+        pool.clone(),
+        SessionLimits::default(),
+        CheckpointLimits::default(),
+        Arc::new(
+            ToolAdmissionPolicy::new(&[], &std::collections::BTreeMap::new())
+                .expect("empty tool policy"),
+        ),
+        platform,
+        model_facade,
+    )
+    .with_mcp_connector(pipeline_connector())
+    .with_fixed_parallel_for_tests();
+    (assembler, captured)
+}
+
+/// PM-2 depth 3: the second middle pipeline (application 5, version 6),
+/// whose Agent node `deeper` runs application 7, version 8.
+fn second_middle_pipeline() -> Value {
+    let mut middle = middle_pipeline();
+    middle["instructions"] = json!(
+        middle["instructions"]
+            .as_str()
+            .expect("middle instructions")
+            .replace("entry_point: inner", "entry_point: deeper")
+            .replace("  - id: inner\n", "  - id: deeper\n")
+            .replace("tool: inner-flow", "tool: deep-flow")
+    );
+    middle["tools"][0]["name"] = json!("deep-flow");
+    middle["tools"][0]["toolkit_name"] = json!("deep-flow");
+    middle["tools"][0]["settings"] = json!({"application_id": 7, "application_version_id": 8});
+    middle
+}
+
+/// PM-2: the saved pipeline the root's Agent node runs, whose own Agent node
+/// `inner` runs a second saved pipeline (application 5, version 6).
+fn middle_pipeline() -> Value {
+    json!({
+        "agent_type": "pipeline",
+        "instructions": "state:\n  input: str\n  messages: list\n  answer: str\nentry_point: inner\nnodes:\n  - id: inner\n    type: agent\n    tool: inner-flow\n    input_mapping:\n      task: {type: fixed, value: 'Pick the colours'}\n    output: [answer, messages]\n    transition: END\n",
+        "meta": {}, "variables": [],
+        "tools": [{
+            "id": 45, "type": "application", "name": "inner-flow",
+            "description": "Holds the Parallel.", "author_id": 11,
+            "settings": {"application_id": 5, "application_version_id": 6},
+            "meta": {}, "created_at": "2026-08-21T10:00:00Z", "toolkit_name": "inner-flow",
+            "author": null, "agent_type": "pipeline", "online": null, "icon_meta": null,
+            "variables": [], "is_pinned": false, "indexes_count": null
+        }],
+        "llm_settings": null
+    })
+}
+
 /// A reclaim as production runs it with model-checkpoint recovery on: inspect
 /// the root, authorize the evidence, assemble the checkpoint, and release the
 /// Runner only for the authorized frontier.
@@ -345,7 +451,15 @@ async fn recovered(
         Arc::new(TestStateWriterLease::current()),
     )
     .await
-    .map_err(|error| format!("inspect: {error}"))?;
+    .map_err(|error| {
+        format!(
+            "inspect: {error} [{}]",
+            error.cause().map_or(
+                "",
+                elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code
+            )
+        )
+    })?;
     let (authorizer, control) = crate::protocol::control::test_checkpoint_authorizer(
         execution,
         GENERATION,
@@ -364,7 +478,15 @@ async fn recovered(
             AuthorizedNativeCommandBinding::fixture_for_execution(execution),
         ))
         .await
-        .map_err(|error| format!("assemble the checkpoint: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "assemble the checkpoint: {error} [{}]",
+                error.cause().map_or(
+                    "",
+                    elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code
+                )
+            )
+        })?;
     let (_, _, _, _, permit) = authorization.into_lifecycle_parts();
     pending
         .authorize_lifecycle(permit)
@@ -496,6 +618,34 @@ async fn run_until_first_card(
                 let metadata: Value =
                     serde_json::from_slice(&frame.response_metadata).expect("card frame metadata");
                 return metadata["interrupt_card_v1"].clone();
+            }
+        }
+    }
+}
+
+/// Run until the first model request is in flight, then drop the run there:
+/// the process is lost mid model call. Waits for the request itself, never a
+/// fixed time, so a loaded machine cannot drop the run before its call.
+async fn lose_at_first_model_request(
+    invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
+    captured: &CapturedModelRequests,
+) {
+    let run = run_collecting(invocation);
+    tokio::pin!(run);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        tokio::select! {
+            outcome = &mut run => {
+                panic!("the run ended before its model call was in flight: {outcome:?}");
+            }
+            () = tokio::time::sleep(Duration::from_millis(10)) => {
+                if model_requests(captured) >= 1 {
+                    return;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "no model request within 30 s"
+                );
             }
         }
     }
@@ -1794,12 +1944,7 @@ async fn postgres_a_wake_lost_inside_a_child_pipeline_resumes_the_answered_branc
         .await
         .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
     // Dropped inside the gateway's 1 s header timeout: the process is gone.
-    let outcome =
-        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
-    assert!(
-        outcome.is_err(),
-        "branch a waits in its model call: {outcome:?}"
-    );
+    lose_at_first_model_request(invocation, &lost_requests).await;
     assert_eq!(
         model_requests(&lost_requests),
         1,
@@ -1850,10 +1995,452 @@ async fn postgres_a_wake_lost_inside_a_child_pipeline_resumes_the_answered_branc
     db.pool.close().await;
 }
 
+/// PM-2: a Parallel two Agent-node levels down (root → `delegate` → saved P1
+/// → `inner` → saved P2 holding the Parallel). Park, answer `a`, lose the wake
+/// while `a`'s resumed model call is in flight: the reclaim walks the frozen
+/// levels to the parked occurrence and resumes `a` from its model checkpoint
+/// once (R); `b` and `c` are re-raised and park again.
+#[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // One scenario: park, answer, lose the wake, recover, assert in order.
+async fn postgres_a_wake_lost_two_agent_levels_down_resumes_the_answered_branch() {
+    const WAKE_EXECUTION: &str = "execution-grandchild-fanout-wake";
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let (first, _) = assembler_with(
+        &db.pool,
+        (0..3)
+            .map(|_| TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()))
+            .collect(),
+        middle_pipeline(),
+        parallel_child_pipeline(),
+    );
+    let request = child_parallel_request();
+    let invocation = first
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "assemble the grandchild fan-out: {error} {:?}",
+                error
+                    .cause()
+                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
+            )
+        });
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .expect("the grandchild's Parallel parks the run");
+    assert_eq!(cards.len(), 3, "{cards:?}");
+    let parked_keys = cards
+        .iter()
+        .map(|card| {
+            card["interrupt_key"]
+                .as_str()
+                .expect("a card key")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    ledger.decide(&parked_keys[0], "answer", Some("Staging"));
+
+    let (lost, lost_requests) = assembler_with(
+        &db.pool,
+        vec![TestModelGatewayOutcome::Pending],
+        middle_pipeline(),
+        parallel_child_pipeline(),
+    );
+    let wake = child_parallel_wake();
+    let invocation = lost
+        .with_fanout_decisions_for_tests(ledger.client(2))
+        .assemble(AuthorizedNativeAssembly::from_authorized(
+            &wake,
+            test_runtime_context_authority(),
+            test_session_authority_for_reclaim(WAKE_EXECUTION, GENERATION, 2),
+            Arc::new(TestStateWriterLease::current()),
+            AuthorizedNativeCommandBinding::fixture_for_execution(WAKE_EXECUTION),
+        ))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
+    lose_at_first_model_request(invocation, &lost_requests).await;
+    assert_eq!(
+        model_requests(&lost_requests),
+        1,
+        "branch a's step was in flight"
+    );
+
+    let (woken, captured) = assembler_with(
+        &db.pool,
+        vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+            "staging it is",
+        ))],
+        middle_pipeline(),
+        parallel_child_pipeline(),
+    );
+    let woken = woken.with_fanout_decisions_for_tests(ledger.client(3));
+    let invocation = recovered(&woken, &wake, WAKE_EXECUTION, 3)
+        .await
+        .unwrap_or_else(|error| panic!("the lost wake two levels down recovers: {error}"));
+    let (members, cards) = run_collecting(invocation)
+        .await
+        .expect("the recovered wake finishes branch a and parks again");
+    assert_eq!(
+        model_requests(&captured),
+        1,
+        "only branch a's step: {members:?}"
+    );
+    assert!(
+        members
+            .iter()
+            .any(|member| member["fanout_v1"]["member"] == "a" && member["status"] == "end"),
+        "{members:?}"
+    );
+    let keys = cards
+        .iter()
+        .filter_map(|card| card["interrupt_key"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        keys,
+        [parked_keys[1].as_str(), parked_keys[2].as_str()],
+        "{cards:?}"
+    );
+    db.pool.close().await;
+}
+
+/// PM-2: park the grandchild's Parallel two levels down, answer `a`, and lose
+/// the wake mid model call in `a`. Returns the wake request and the model
+/// requests the lost wake made.
+async fn lost_wake_two_levels(
+    pool: &sqlx::PgPool,
+    ledger: &Arc<crate::agents::graph::fanout_test_ledger::TestLedger>,
+    execution: &str,
+) -> super::super::request::AgentExecutionRequest {
+    let (first, _) = assembler_with(
+        pool,
+        (0..3)
+            .map(|_| TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()))
+            .collect(),
+        middle_pipeline(),
+        parallel_child_pipeline(),
+    );
+    let request = child_parallel_request();
+    let invocation = first
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the grandchild fan-out: {error}"));
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .expect("the grandchild's Parallel parks the run");
+    ledger.decide(
+        cards[0]["interrupt_key"].as_str().expect("a card key"),
+        "answer",
+        Some("Staging"),
+    );
+    let (lost, lost_requests) = assembler_with(
+        pool,
+        vec![TestModelGatewayOutcome::Pending],
+        middle_pipeline(),
+        parallel_child_pipeline(),
+    );
+    let wake = child_parallel_wake();
+    let invocation = lost
+        .with_fanout_decisions_for_tests(ledger.client(2))
+        .assemble(AuthorizedNativeAssembly::from_authorized(
+            &wake,
+            test_runtime_context_authority(),
+            test_session_authority_for_reclaim(execution, GENERATION, 2),
+            Arc::new(TestStateWriterLease::current()),
+            AuthorizedNativeCommandBinding::fixture_for_execution(execution),
+        ))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
+    lose_at_first_model_request(invocation, &lost_requests).await;
+    wake
+}
+
+/// PM-2: reclaim a lost two-level wake after `tamper`, serving `middle` as the
+/// frozen middle pipeline; the assembly-time walk must refuse with `cause`
+/// before any model call or tool runs (F, nothing resumed).
+async fn refused_two_levels_down(middle: Value, cause: &str, tamper: &str) {
+    const WAKE_EXECUTION: &str = "execution-grandchild-refused";
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let wake = lost_wake_two_levels(&db.pool, &ledger, WAKE_EXECUTION).await;
+    if !tamper.is_empty() {
+        let changed = sqlx::query(tamper)
+            .execute(&db.pool)
+            .await
+            .expect("tamper the stored frontier")
+            .rows_affected();
+        assert_ne!(changed, 0, "the tamper changed nothing: {tamper}");
+    }
+    let (again, captured) = assembler_with(
+        &db.pool,
+        vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+            "never",
+        ))],
+        middle,
+        parallel_child_pipeline(),
+    );
+    let again = again.with_fanout_decisions_for_tests(ledger.client(3));
+    let Err(refusal) = recovered(&again, &wake, WAKE_EXECUTION, 3).await else {
+        panic!("the refused frontier must not be recovered ({cause})");
+    };
+    // Refused before anything resumes: by the pre-assembly inspect where the
+    // structure alone shows it, else by the assembly-time walk.
+    assert!(
+        (refusal.starts_with("inspect:") || refusal.starts_with("assemble the checkpoint:"))
+            && refusal.contains(&format!("[{cause}]")),
+        "{refusal}"
+    );
+    assert_eq!(
+        model_requests(&captured),
+        0,
+        "no model call after the refusal"
+    );
+    db.pool.close().await;
+}
+
+/// PM-2 (option A trust argument): the evidence Main authorizes binds the
+/// root and the first-level child; deeper rows rely on the claim's exclusive
+/// writer lease from inspect to assembly. A newer claim taking over between
+/// claim 3's inspect and its assembly fences claim 3 out: its assembly is
+/// refused and nothing it would write changes.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_takeover_between_inspect_and_assembly_fences_the_older_claim() {
+    const WAKE_EXECUTION: &str = "execution-grandchild-takeover";
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let wake = lost_wake_two_levels(&db.pool, &ledger, WAKE_EXECUTION).await;
+    let (older, captured) = assembler_with(
+        &db.pool,
+        vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+            "never",
+        ))],
+        middle_pipeline(),
+        parallel_child_pipeline(),
+    );
+    let older = older.with_fanout_decisions_for_tests(ledger.client(3));
+    // Claim 3 inspects the frontier.
+    crate::agents::runtime::NativeAgentAssembler::inspect_checkpoint(
+        &older,
+        &wake,
+        &AuthorizedNativeCommandBinding::fixture_for_execution(WAKE_EXECUTION),
+        test_session_authority_for_reclaim(WAKE_EXECUTION, GENERATION, 3),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("claim 3 inspects the frontier");
+    let rows = |pool: sqlx::PgPool| async move {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints")
+            .fetch_one(&pool)
+            .await
+            .expect("count checkpoint rows")
+    };
+    // Claim 4 takes the execution over before claim 3 assembles.
+    let (newer, _) = assembler_with(
+        &db.pool,
+        Vec::new(),
+        middle_pipeline(),
+        parallel_child_pipeline(),
+    );
+    crate::agents::runtime::NativeAgentAssembler::inspect_checkpoint(
+        &newer,
+        &wake,
+        &AuthorizedNativeCommandBinding::fixture_for_execution(WAKE_EXECUTION),
+        test_session_authority_for_reclaim(WAKE_EXECUTION, GENERATION, 4),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("claim 4 takes over and inspects");
+    let before = rows(db.pool.clone()).await;
+    let assembled = older
+        .assemble_checkpoint(AuthorizedNativeAssembly::from_authorized(
+            &wake,
+            test_runtime_context_authority(),
+            test_session_authority_for_reclaim(WAKE_EXECUTION, GENERATION, 3),
+            Arc::new(TestStateWriterLease::current()),
+            AuthorizedNativeCommandBinding::fixture_for_execution(WAKE_EXECUTION),
+        ))
+        .await;
+    assert!(
+        assembled.is_err(),
+        "the fenced claim 3 must not assemble after claim 4 took over"
+    );
+    assert_eq!(rows(db.pool.clone()).await, before, "claim 3 wrote nothing");
+    assert_eq!(model_requests(&captured), 0);
+    db.pool.close().await;
+}
+
+/// PM-2 depth 3: root → `delegate` → P1 → `inner` → P2 → `deeper` → P3 holding
+/// a Parallel of inline LLM branches. A branch needs a checkpoint path one
+/// level below P3, past the composition depth, so the run is refused typed at
+/// assembly as a composition bound (readable `APPLICATION_COMPOSITION_INVALID`,
+/// as Main refuses it at save) before any model call; never an opaque failure.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_parallel_three_agent_levels_down_is_refused_typed() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let (first, captured) = assembler_with3(
+        &db.pool,
+        vec![TestModelGatewayOutcome::Response(
+            pipeline_ask_user_call_response(),
+        )],
+        [
+            middle_pipeline(),
+            second_middle_pipeline(),
+            parallel_child_pipeline(),
+        ],
+    );
+    let request = child_parallel_request();
+    let Err(error) = first
+        .with_fanout_decisions_for_tests(
+            crate::agents::graph::fanout_test_ledger::TestLedger::new().client(1),
+        )
+        .assemble(claim(&request, 1))
+        .await
+    else {
+        panic!("a Parallel three Agent-node levels down must be refused");
+    };
+    assert!(
+        crate::agents::application_tools::is_composition_bound(&error),
+        "a typed composition bound, not an opaque failure: {error} {:?}",
+        error
+            .cause()
+            .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
+    );
+    assert_eq!(
+        model_requests(&captured),
+        0,
+        "refused before any model call"
+    );
+    db.pool.close().await;
+}
+
+/// The latest grandchild row lost its Agent-node activation stamp.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_two_levels_down_a_grandchild_row_without_its_activation_stamp_is_refused() {
+    refused_two_levels_down(
+        middle_pipeline(),
+        "pipeline.recovery.child_unstamped",
+        "UPDATE elitea_runtime.agent_graph_checkpoints \
+         SET metadata = (metadata::jsonb - 'elitea.pipeline.application-activation.v1')::text \
+         WHERE thread_id LIKE '%/delegate/inner'",
+    )
+    .await;
+}
+
+/// The middle level's frontier is not a single recovery-supported Agent node.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_two_levels_down_a_middle_frontier_that_is_not_one_agent_node_is_refused() {
+    refused_two_levels_down(
+        middle_pipeline(),
+        "pipeline.recovery.child_frontier_unsupported",
+        "UPDATE elitea_runtime.agent_graph_checkpoints \
+         SET pending_nodes = '[\"inner\", \"inner\"]' \
+         WHERE thread_id LIKE '%/delegate' AND thread_id NOT LIKE '%/delegate/%' \
+           AND pending_nodes::text LIKE '%inner%'",
+    )
+    .await;
+}
+
+/// The frozen middle pipeline no longer holds the stored frontier node.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_two_levels_down_a_middle_pipeline_whose_frozen_definition_differs_is_refused() {
+    let mut middle = middle_pipeline();
+    middle["instructions"] = json!(
+        middle["instructions"]
+            .as_str()
+            .expect("middle instructions")
+            .replace("entry_point: inner", "entry_point: inner_v2")
+            .replace("  - id: inner\n", "  - id: inner_v2\n")
+    );
+    refused_two_levels_down(middle, "pipeline.recovery.child_definition_mismatch", "").await;
+}
+
+/// PM-2: the walk reaches a frozen saved pipeline two levels down, but that
+/// grandchild was lost mid model call in an ordinary node (no Parallel): the
+/// assembly-time walk refuses the frontier and nothing is resumed blind.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_grandchild_lost_outside_a_parallel_is_not_resumed() {
+    const EXECUTION_LOST: &str = "execution-grandchild-lost";
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let (lost, lost_requests) = assembler_with(
+        &db.pool,
+        vec![TestModelGatewayOutcome::Pending],
+        middle_pipeline(),
+        asking_pipeline(),
+    );
+    let request = child_parallel_request();
+    let invocation = lost
+        .assemble(AuthorizedNativeAssembly::from_authorized(
+            &request,
+            test_runtime_context_authority(),
+            test_session_authority_for_reclaim(EXECUTION_LOST, GENERATION, 1),
+            Arc::new(TestStateWriterLease::current()),
+            AuthorizedNativeCommandBinding::fixture_for_execution(EXECUTION_LOST),
+        ))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the grandchild run: {error}"));
+    lose_at_first_model_request(invocation, &lost_requests).await;
+    assert_eq!(model_requests(&lost_requests), 1);
+
+    let (again, _) = assembler_with(&db.pool, Vec::new(), middle_pipeline(), asking_pipeline());
+    let Err(refusal) = recovered(&again, &request, EXECUTION_LOST, 2).await else {
+        panic!("a grandchild outside a Parallel must not be recovered blind");
+    };
+    // The assembly-time walk reaches the grandchild and refuses its frontier.
+    assert!(refusal.starts_with("assemble the checkpoint:"), "{refusal}");
+    db.pool.close().await;
+}
+
 /// FU-249: recovery resumes an Agent node's saved child only where the child
 /// is parked inside a fixed Parallel occurrence. A child lost mid model call
-/// in an ordinary node (here its LLM node) is not resumed blind: the inspect
-/// refuses the frontier and the run ends typed, as before.
+/// in an ordinary node (here its LLM node) is not resumed blind: the
+/// assembly-time walk refuses the frontier and the run ends typed, as before.
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_a_child_pipeline_lost_outside_a_parallel_is_not_resumed() {
     const EXECUTION_LOST: &str = "execution-child-lost";
@@ -1884,12 +2471,7 @@ async fn postgres_a_child_pipeline_lost_outside_a_parallel_is_not_resumed() {
         ))
         .await
         .unwrap_or_else(|error| panic!("assemble the child run: {error}"));
-    let outcome =
-        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
-    assert!(
-        outcome.is_err(),
-        "the child waits in its model call: {outcome:?}"
-    );
+    lose_at_first_model_request(invocation, &lost_requests).await;
     assert_eq!(model_requests(&lost_requests), 1);
 
     let (again, _) = assembler(
@@ -1901,7 +2483,9 @@ async fn postgres_a_child_pipeline_lost_outside_a_parallel_is_not_resumed() {
     let Err(refusal) = recovered(&again, &request, EXECUTION_LOST, 2).await else {
         panic!("a child outside a Parallel must not be recovered blind");
     };
-    assert!(refusal.starts_with("inspect:"), "{refusal}");
+    // PM-2: the pre-assembly inspect sees one pending child node; the
+    // assembly-time walk against the frozen definitions refuses it.
+    assert!(refusal.starts_with("assemble the checkpoint:"), "{refusal}");
     db.pool.close().await;
 }
 
@@ -2150,12 +2734,7 @@ async fn postgres_a_wake_lost_mid_model_resumes_the_answered_agent_branch() {
         ))
         .await
         .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
-    let outcome =
-        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
-    assert!(
-        outcome.is_err(),
-        "the answered member's Agent waits in its model call: {outcome:?}"
-    );
+    lose_at_first_model_request(invocation, &lost_requests).await;
     assert_eq!(model_requests(&lost_requests), 1);
 
     let (woken, captured) = assembler(
@@ -2237,12 +2816,7 @@ async fn postgres_a_wake_lost_mid_model_resumes_the_answered_child() {
         .await
         .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
     // Dropped inside the gateway's 1 s header timeout: the process is gone.
-    let outcome =
-        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
-    assert!(
-        outcome.is_err(),
-        "the answered child waits in its model call: {outcome:?}"
-    );
+    lose_at_first_model_request(invocation, &lost_requests).await;
     assert_eq!(
         model_requests(&lost_requests),
         1,

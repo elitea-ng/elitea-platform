@@ -561,6 +561,13 @@ func (w *walker) walkPipeline(ctx context.Context, pipeline Version, p path, com
 		return depthViolation(strings.Join(append(append([]string(nil), p.trail...),
 			"Agent node "+label(pipeline.AgentNodes[0].ID)), " → "))
 	}
+	// PM-2: an inline LLM Parallel branch needs a checkpoint path one level
+	// below its pipeline, so at the deepest level it is refused as an Agent
+	// node is (the Worker's collect_paths refuses the same).
+	if composition == MaxPipelineDepth && pipeline.LLMBranches > 0 {
+		return depthViolation(strings.Join(append(append([]string(nil), p.trail...),
+			"Parallel node "+label(pipeline.ParallelNode)), " → "))
+	}
 	if composition == 0 {
 		paths := 0
 		if err := w.checkpointPaths(ctx, pipeline, 0, &paths, map[Identity]bool{}); err != nil {

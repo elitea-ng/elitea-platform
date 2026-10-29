@@ -11,7 +11,8 @@ use ring::digest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const ACTIVATION_METADATA_KEY: &str = "elitea.pipeline.application-activation.v1";
+/// The metadata key of an Agent node activation stamp on its child rows.
+pub const ACTIVATION_METADATA_KEY: &str = "elitea.pipeline.application-activation.v1";
 const ACTIVATION_SCHEMA: &str = "elitea.pipeline.application-activation.v1";
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
