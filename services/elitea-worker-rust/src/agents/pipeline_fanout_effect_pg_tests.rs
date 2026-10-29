@@ -548,9 +548,8 @@ async fn scenario_for(url: &str, kind: &str, mode: &str, on_error: &str) {
             // a read-only batch or a model call leaves a replayable one instead.
             assert_eq!(
                 tool_boundaries(&db.pool, "claim-1").await.len(),
-                usize::from(mode == "effect")
+                usize::from(matches!(mode, "effect" | "approved_effect"))
             );
-            // (c) two branches of the same saved Agent: two model-scope sessions.
             let sessions = sqlx::query_scalar::<_, String>(
                 "SELECT DISTINCT session_id FROM elitea_runtime.agent_session_events \
                  WHERE session_id LIKE 'elitea-model-%' AND writer_claim_id = 'claim-1'",
@@ -558,9 +557,11 @@ async fn scenario_for(url: &str, kind: &str, mode: &str, on_error: &str) {
             .fetch_all(&db.pool)
             .await
             .expect("read child model-scope sessions");
+            // (c) two branches of the same saved Agent: distinct model-scope
+            // sessions; an approved member's decided step adds its own.
             assert_eq!(
                 sessions.len(),
-                2,
+                if mode == "approved_effect" { 3 } else { 2 },
                 "first and second branch own distinct model-scope sessions: {sessions:?}"
             );
         } else {
@@ -586,6 +587,19 @@ async fn postgres_effectful_fanout_child_may_have_started_stops_the_node() {
         return;
     };
     scenario(&url, "effect", "stop").await;
+}
+
+/// PM-1: a saved Agent member's sensitive call is approved on its card and is
+/// in flight when the process dies. The replacement Worker never dispatches it
+/// again: the branch ends typed `graph.fanout.may_have_started` (C), the tool
+/// ran once, and the other branches still run.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_an_approved_agent_member_call_in_flight_at_a_crash_ends_typed() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    scenario(&url, "approved_effect", "continue").await;
 }
 
 /// FU-246: two saved Agent members need a sensitive-tool approval; each raises
@@ -2352,6 +2366,45 @@ async fn postgres_fanout_effect_child() {
         _ => request(&on_error),
     };
     match std::env::var(PHASE_ENV).expect("phase").as_str() {
+        "crash" if mode == "approved_effect" => {
+            let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+            let (platform, model_facade, _) = saved_runtime(
+                // `third` runs while `second` waits on its card.
+                vec![
+                    TestModelGatewayOutcome::Response(pipeline_text_response("first done")),
+                    TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
+                    TestModelGatewayOutcome::Response(pipeline_text_response("third done")),
+                ],
+                effectful_agent(),
+            );
+            let invocation = PipelineNativeAgentAssembler::postgres(
+                pool.clone(),
+                SessionLimits::default(),
+                CheckpointLimits::default(),
+                sensitive_pipeline_mcp_policy(),
+                platform,
+                model_facade,
+            )
+            .with_mcp_connector(Arc::new(CrashingMcpConnector {
+                pool: pool.clone(),
+                read_only: false,
+            }))
+            .with_fixed_parallel_for_tests()
+            .with_fanout_decisions_for_tests(ledger.client(1))
+            .assemble(claim(&request, 1))
+            .await
+            .expect("crash: assemble the fan-out pipeline");
+            // The approved call exits this process; reaching the end is the failure.
+            let outcome = run_deciding(invocation, &|card| {
+                let key = card["interrupt_key"].as_str().expect("card key");
+                match (card["fanout_v1"]["member"].as_str(), card["kind"].as_str()) {
+                    (Some("second"), Some("tool_guard")) => ledger.decide(key, "approve", None),
+                    other => panic!("crash: unexpected card {other:?}"),
+                }
+            })
+            .await;
+            panic!("crash: the process outlived the approved call: {outcome:?}");
+        }
         "crash" => {
             let second = if mode == "mid_model" {
                 TestModelGatewayOutcome::ExitProcess(CRASH_EXIT_CODE)
@@ -2385,7 +2438,7 @@ async fn postgres_fanout_effect_child() {
             let outcome = run_to_end(invocation).await;
             panic!("crash: the process outlived its crash point: {outcome:?}");
         }
-        "recover" if mode != "effect" => {
+        "recover" if !matches!(mode.as_str(), "effect" | "approved_effect") => {
             let tool_calls = Arc::new(AtomicUsize::new(0));
             let (assembler, captured) = assembler(
                 &pool,
@@ -2464,18 +2517,36 @@ async fn postgres_fanout_effect_child() {
         }
         "recover" => {
             let tool_calls = Arc::new(AtomicUsize::new(0));
-            let (assembler, captured) = assembler(
-                &pool,
-                vec![TestModelGatewayOutcome::Response(pipeline_text_response(
-                    "third done",
-                ))],
-                Arc::new(PipelineMcpConnector {
-                    connections: Arc::new(AtomicUsize::new(0)),
-                    tool_calls: Arc::clone(&tool_calls),
-                    read_only: false,
-                }),
-                effectful_agent(),
-            );
+            let connector = Arc::new(PipelineMcpConnector {
+                connections: Arc::new(AtomicUsize::new(0)),
+                tool_calls: Arc::clone(&tool_calls),
+                read_only: false,
+            });
+            let outcomes = vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+                "third done",
+            ))];
+            let (assembler, captured) = if mode == "approved_effect" {
+                // The approved call's run under the same sensitive-tool policy.
+                let (platform, model_facade, captured) = saved_runtime(outcomes, effectful_agent());
+                (
+                    PipelineNativeAgentAssembler::postgres(
+                        pool.clone(),
+                        SessionLimits::default(),
+                        CheckpointLimits::default(),
+                        sensitive_pipeline_mcp_policy(),
+                        platform,
+                        model_facade,
+                    )
+                    .with_mcp_connector(connector)
+                    .with_fixed_parallel_for_tests()
+                    .with_fanout_decisions_for_tests(
+                        crate::agents::graph::fanout_test_ledger::TestLedger::new().client(2),
+                    ),
+                    captured,
+                )
+            } else {
+                assembler(&pool, outcomes, connector, effectful_agent())
+            };
             let invocation = recovered(&assembler, &request, EXECUTION, 2)
                 .await
                 .unwrap_or_else(|error| {
@@ -2500,14 +2571,19 @@ async fn postgres_fanout_effect_child() {
                         )
                     })
                     .collect::<Vec<_>>();
-                assert_eq!(
-                    statuses,
-                    ["second:start", "second:failed", "third:start", "third:end"]
-                );
+                // An approved member waited on its card while `third` ran and
+                // ended before the crash: `third` is served from its receipt.
+                let approved = mode == "approved_effect";
+                let expected: &[&str] = if approved {
+                    &["second:start", "second:failed"]
+                } else {
+                    &["second:start", "second:failed", "third:start", "third:end"]
+                };
+                assert_eq!(statuses, expected);
                 assert_eq!(
                     model_requests(&captured),
-                    1,
-                    "recover: only `third` calls the model"
+                    usize::from(!approved),
+                    "recover: only `third` calls the model, unless it already ended"
                 );
                 let entries = joined(&pool).await.expect("joined entries");
                 assert_eq!(entries.len(), 3, "{entries:?}");
