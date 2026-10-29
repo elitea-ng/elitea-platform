@@ -97,9 +97,16 @@ func (WorkerCommandTypeV1) EnumDescriptor() ([]byte, []int) {
 	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{0}
 }
 
-// How a worker treats public hosts (ADR-0044 decision 2). Private, link-local,
-// metadata and reserved addresses stay refused by the SSRF guard in every
-// mode; this only narrows what is public.
+// How a worker treats public hosts (ADR-0044 decision 2). The policy narrows
+// which HOSTS a run may reach; it never widens the SSRF rule. Where the SSRF
+// guard applies (web_fetch and every redirect hop), private, link-local,
+// metadata and reserved addresses stay refused in every mode. Toolkit
+// clients (Jira, Confluence, GitHub, ...) never had the SSRF guard, because
+// they reach operator-approved on-prem hosts; for them this policy is the
+// only egress check. Endpoints the operator configured for the worker itself
+// (web-search provider origins admitted by ELITEA_WEB_EGRESS_ALLOWLIST) are
+// not judged by this policy, since Main cannot list them, but they are still
+// reported as reached.
 type WorkerEgressModeV1 int32
 
 const (
@@ -200,9 +207,9 @@ type WorkerCommandV1 struct {
 	// unchanged.
 	SecurityContextRef *ExecutionSecurityContextReferenceV1 `protobuf:"bytes,65,opt,name=security_context_ref,json=securityContextRef,proto3" json:"security_context_ref,omitempty"`
 	// The public egress policy for this command's outbound HTTP (ADR-0044
-	// decision 2, #1490). Absent means open: public hosts are unrestricted and
-	// only the SSRF rules apply. Main omits it while the platform's
-	// worker_egress mode is open, so commands are unchanged byte for byte.
+	// decision 2, #1490). Absent means open: public hosts are unrestricted.
+	// Main omits it while the platform's worker_egress mode is open, so
+	// commands are unchanged byte for byte.
 	EgressPolicy  *WorkerEgressPolicyV1 `protobuf:"bytes,66,opt,name=egress_policy,json=egressPolicy,proto3" json:"egress_policy,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

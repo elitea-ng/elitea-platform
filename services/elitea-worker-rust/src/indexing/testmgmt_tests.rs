@@ -144,6 +144,7 @@ async fn run(
         &harness.runtime,
         IndexRun {
             command: &command(NS, expected),
+            egress: elitea_agent_runtime::egress::RunEgress::open(),
             toolkit_configuration: configuration.to_string().as_bytes(),
             tool_parameters: parameters.to_string().as_bytes(),
             parsed: None,

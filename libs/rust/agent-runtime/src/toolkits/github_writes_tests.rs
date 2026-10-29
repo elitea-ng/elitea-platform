@@ -2739,6 +2739,7 @@ mod open_pull_request {
             )],
             Arc::new(Source(source)),
             audit.clone(),
+            crate::egress::RunEgress::open(),
         )
         .expect("a bound GitHub toolkit offers the tool");
         let readonly: Arc<dyn ReadonlyContext> = context();
@@ -2889,7 +2890,8 @@ mod open_pull_request {
                 None,
                 Vec::new(),
                 Arc::new(Source(Ok(diff("")))),
-                Arc::new(Audit::default())
+                Arc::new(Audit::default()),
+                crate::egress::RunEgress::open(),
             )
             .is_none(),
             "without a bound GitHub toolkit the tool is absent"
@@ -2945,6 +2947,7 @@ mod open_pull_request {
             Vec::new(),
             Arc::new(Source(source)),
             audit.clone(),
+            crate::egress::RunEgress::open(),
         )
         .expect("a thread credential offers the tool");
         let readonly: Arc<dyn ReadonlyContext> = context();

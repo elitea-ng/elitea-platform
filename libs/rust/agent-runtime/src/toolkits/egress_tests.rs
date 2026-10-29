@@ -141,3 +141,46 @@ async fn web_fetch_refuses_a_host_outside_the_allowlist_on_every_hop() {
         .collect();
     assert_eq!(refused, ["metadata.example.com", "other.example.com"]);
 }
+
+/// A provider origin the operator configured (the adapter's compiled-in
+/// origin, admitted by the deployment's allowlist) is not judged by the
+/// run's allowlist, which Main cannot fill with it; an origin the adapter did
+/// not declare is still refused.
+#[tokio::test]
+async fn an_operator_configured_provider_origin_is_not_judged_by_the_run_allowlist() {
+    use super::families::web::transport::{PinnedTransport, ProviderError, Transport as _};
+
+    // Nothing listens on port 1: an admitted request fails to connect.
+    const ORIGINS: &[&str] = &["https://127.0.0.1:1"];
+    let run = RunEgress::new(PublicPolicy::allowlist(["other.example"]).expect("policy"));
+    let deployment = Arc::new(elitea_egress_guard::Allowlist::parse(["127.0.0.1"]).expect("list"));
+    let transport = crate::egress::scope(Arc::clone(&run), async {
+        PinnedTransport::new(ORIGINS, deployment, "test").expect("transport")
+    })
+    .await;
+    let send = |target: &str| {
+        reqwest::Request::new(
+            reqwest::Method::GET,
+            reqwest::Url::parse(target).expect("url"),
+        )
+    };
+    let error = transport
+        .send(send("https://127.0.0.1:1/search"), 1024)
+        .await
+        .expect_err("nothing listens");
+    assert!(
+        !matches!(
+            error,
+            ProviderError::HostNotAllowed | ProviderError::EgressRefused
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        transport
+            .send(send("https://127.0.0.1:2/search"), 1024)
+            .await
+            .expect_err("undeclared"),
+        ProviderError::EgressRefused
+    );
+    assert_eq!(run.summary().refused, []);
+}

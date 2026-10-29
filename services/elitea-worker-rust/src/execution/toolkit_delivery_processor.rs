@@ -1050,6 +1050,8 @@ where
             lease: &probe,
             deadline_unix_millis: command.deadline_unix_millis,
             now_unix_millis: &now,
+            // Reported before the command settles, like an agent run's.
+            egress: crate::protocol::egress::run_egress(command),
         };
         // The run owns the store effects: it is awaited to its end and
         // observes Stop, the deadline and lease loss itself, between

@@ -17,6 +17,8 @@ use elitea_connectors::transport::{
 use serde_json::{Map, Value, json};
 use zeroize::Zeroizing;
 
+use crate::egress::{PublicPolicy, RunEgress};
+
 use super::workspace_pull_request::{
     BranchPushed, CredentialUnavailable, DiffUnavailable, ForgeKind, PreparedPush,
     PullRequestAudit, PullRequestOpened, PullRequestTarget, PushPack, PushUnavailable,
@@ -325,6 +327,16 @@ impl Rig {
         targets: Vec<PullRequestTarget>,
         source: Source,
     ) -> Self {
+        Self::under(forge, thread, targets, source, RunEgress::open()).await
+    }
+
+    async fn under(
+        forge: &Arc<Forge>,
+        thread: Option<Arc<Credential>>,
+        targets: Vec<PullRequestTarget>,
+        source: Source,
+        egress: Arc<RunEgress>,
+    ) -> Self {
         let audit = Arc::new(Audit::default());
         let source = Arc::new(source);
         let transport: Arc<dyn Transport> = forge.clone();
@@ -336,6 +348,7 @@ impl Rig {
             push: Some(source.clone()),
             push_transport: Some(transport),
             audit: audit.clone(),
+            egress,
         }
         .toolset()
         .expect("a credential offers the tools");
@@ -385,6 +398,30 @@ fn basic(user: &str, secret: &str) -> String {
         "Basic {}",
         base64::engine::general_purpose::STANDARD.encode(format!("{user}:{secret}"))
     )
+}
+
+/// The run's egress allowlist (#1490) binds the push even though these
+/// tools are not admitted through the toolkit policy: a forge host it does
+/// not name is refused before anything is sent, named host and port.
+#[tokio::test]
+async fn git_push_is_refused_by_the_run_egress_allowlist() {
+    let forge = Forge::with_branches(&["main"]);
+    let egress = RunEgress::new(PublicPolicy::allowlist(["other.example"]).expect("policy"));
+    let rig = Rig::under(
+        &forge,
+        Some(github_credential()),
+        Vec::new(),
+        source("https://github.example.test/EliteaAI/elitea-platform.git"),
+        Arc::clone(&egress),
+    )
+    .await;
+    let result = rig.call("git_push", json!({"branch": "change"})).await;
+    assert_eq!(result["status"], "refused", "{result}");
+    let message = result["message"].as_str().expect("message");
+    assert!(message.contains("github.example.test:443"), "{message}");
+    assert!(!message.contains("EliteaAI"), "the host, never the URL");
+    assert!(forge.hits().is_empty(), "nothing was sent");
+    assert_eq!(egress.summary().refused[0].host, "github.example.test");
 }
 
 #[tokio::test]

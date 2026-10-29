@@ -443,6 +443,7 @@ impl OrdinaryNativeAgentAssembler {
                             )
                             .with_audit(turn.audit()),
                         ),
+                        egress: Arc::clone(tool_policy.egress()),
                     }
                     .toolset()
                 } else {

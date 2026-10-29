@@ -172,6 +172,33 @@ async fn the_client_refuses_an_ip_literal_before_connecting() {
     );
 }
 
+#[tokio::test]
+async fn an_operator_origin_is_sent_under_any_allowlist_and_recorded() {
+    let (port, accepted) = one_shot_server().await;
+    let target = url(&format!("http://127.0.0.1:{port}/v1"));
+    let run = allowlist(&["api.example.com"]);
+    let client = scope(Arc::clone(&run), async {
+        client_builder().no_proxy().build_for_run().expect("client")
+    })
+    .await;
+    assert!(
+        client
+            .execute(reqwest::Request::new(reqwest::Method::GET, target.clone()))
+            .await
+            .is_err(),
+        "a run-chosen request to the same host is refused"
+    );
+    let response = client
+        .execute_operator_origin(reqwest::Request::new(reqwest::Method::GET, target))
+        .await
+        .expect("sent");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(accepted.load(Ordering::SeqCst), 1);
+    let summary = run.summary();
+    assert_eq!(summary.reached[0].host, "127.0.0.1");
+    assert_eq!(summary.reached[0].port, port);
+}
+
 struct Counting(AtomicUsize);
 
 #[async_trait]

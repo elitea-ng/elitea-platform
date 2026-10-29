@@ -277,8 +277,7 @@ pub(crate) fn map_reqwest(error: &reqwest::Error) -> ProviderError {
 /// refusing any request whose origin the adapter did not declare or the
 /// deployment allowlist does not admit.
 pub(crate) struct PinnedTransport {
-    /// Bound to the run's egress policy (#1490), which a provider origin must
-    /// pass too.
+    /// Bound to the run (#1490) for its ledger; see [`Transport::send`].
     http: crate::egress::HttpClient,
     origins: &'static [&'static str],
     egress: Arc<Allowlist>,
@@ -320,15 +319,16 @@ pub(crate) fn origin_admitted(url: &reqwest::Url, origins: &[&str], egress: &All
 #[async_trait]
 impl Transport for PinnedTransport {
     async fn send(&self, request: Request, max_bytes: usize) -> Result<HttpAnswer, ProviderError> {
+        // The adapter's exact, compiled-in origin, admitted by the operator's
+        // deployment allowlist: a worker-configured endpoint, not one the run
+        // chose, so the run's egress allowlist (#1490) does not apply — Main
+        // cannot know it. It is still recorded as reached.
         if !origin_admitted(request.url(), self.origins, &self.egress) {
             return Err(ProviderError::EgressRefused);
         }
-        if self.http.egress().check_url(request.url()).is_err() {
-            return Err(ProviderError::HostNotAllowed);
-        }
         let response = self
             .http
-            .execute(request)
+            .execute_operator_origin(request)
             .await
             .map_err(|error| map_reqwest(&error.without_url()))?;
         read_answer(response, max_bytes).await

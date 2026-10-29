@@ -63,6 +63,7 @@ use super::families::gitlab::config::GitLabToolkitConfig;
 pub use super::git_receive_pack::PushPack;
 use super::git_receive_pack::{GitCredential, PushRequest, push_new_branch};
 use super::snapshot::{AdmittedToolSnapshot, FrozenToolKind};
+use crate::egress::{EgressTransport, RunEgress};
 
 /// The pull (merge) request tool's name.
 pub const OPEN_PULL_REQUEST: &str = "open_pull_request";
@@ -764,6 +765,7 @@ pub fn open_pull_request_toolset(
     targets: Vec<PullRequestTarget>,
     diff: Arc<dyn WorkspaceDiffSource>,
     audit: Arc<dyn PullRequestAudit>,
+    egress: Arc<RunEgress>,
 ) -> Option<Arc<dyn Toolset>> {
     WorkspaceForgeTools {
         thread,
@@ -772,6 +774,7 @@ pub fn open_pull_request_toolset(
         push: None,
         push_transport: None,
         audit,
+        egress,
     }
     .toolset()
 }
@@ -785,6 +788,11 @@ pub struct WorkspaceForgeTools {
     /// The push's transport; `None` is this host's.
     pub push_transport: Option<Arc<dyn Transport>>,
     pub audit: Arc<dyn PullRequestAudit>,
+    /// The run's egress policy (#1490). These tools are not admitted through
+    /// the toolkit policy, so they carry it themselves: every call runs
+    /// under it (the thread credential's forge client, the push) and a host
+    /// outside it is refused, never reached under an open fallback.
+    pub egress: Arc<RunEgress>,
 }
 
 impl WorkspaceForgeTools {
@@ -800,8 +808,11 @@ impl WorkspaceForgeTools {
             targets: self.targets.into_iter().map(Arc::new).collect(),
             diff: self.diff,
             push: self.push,
-            push_transport: self.push_transport,
+            push_transport: self
+                .push_transport
+                .map(|inner| Arc::new(EgressTransport::new(Arc::clone(&self.egress), inner)) as _),
             audit: self.audit,
+            egress: self.egress,
             pushed: Mutex::new(Vec::new()),
         });
         let mut tools: Vec<Arc<dyn Tool>> =
@@ -810,6 +821,19 @@ impl WorkspaceForgeTools {
             tools.push(Arc::new(GitPushTool(shared)));
         }
         Some(Arc::new(PullRequestToolset { tools }))
+    }
+}
+
+/// Run one call under the run's egress policy: a refused host answers
+/// `refused` naming it (host and port, never the URL).
+async fn under_run_egress(
+    egress: &Arc<RunEgress>,
+    call: impl Future<Output = Result<Value, Value>>,
+) -> Value {
+    let (answered, refused) = crate::egress::attributed(Arc::clone(egress), call).await;
+    match refused {
+        Some(refused) => answer("refused", refused.message()),
+        None => answered.unwrap_or_else(|refusal| refusal),
     }
 }
 
@@ -845,6 +869,7 @@ struct Shared {
     push: Option<Arc<dyn WorkspacePushSource>>,
     push_transport: Option<Arc<dyn Transport>>,
     audit: Arc<dyn PullRequestAudit>,
+    egress: Arc<RunEgress>,
     pushed: Mutex<Vec<PushedBranch>>,
 }
 
@@ -974,8 +999,11 @@ impl Shared {
         };
         let transport = match &self.push_transport {
             Some(transport) => Arc::clone(transport),
-            None => host_transport(&PUSH_POLICY)
-                .map_err(|_| answer("error", "The push client could not be built."))?,
+            None => Arc::new(EgressTransport::new(
+                Arc::clone(&self.egress),
+                host_transport(&PUSH_POLICY)
+                    .map_err(|_| answer("error", "The push client could not be built."))?,
+            )) as Arc<dyn Transport>,
         };
         let PreparedPush {
             upstream,
@@ -1101,7 +1129,7 @@ impl Tool for GitPushTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
-        Ok(self.run(&args).await.unwrap_or_else(|refusal| refusal))
+        Ok(under_run_egress(&self.0.egress, self.run(&args)).await)
     }
 }
 
@@ -1171,7 +1199,7 @@ impl Tool for OpenPullRequestTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
-        Ok(self.run(&args).await.unwrap_or_else(|refusal| refusal))
+        Ok(under_run_egress(&self.0.egress, self.run(&args)).await)
     }
 }
 

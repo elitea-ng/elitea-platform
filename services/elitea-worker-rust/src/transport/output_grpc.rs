@@ -3387,7 +3387,11 @@ mod tests {
                 egress_failure: failure,
                 ..SettlementRpc::default()
             };
-            let (calls, report) = (Arc::clone(&rpc.calls), Arc::clone(&rpc.egress));
+            let (calls, report, settled) = (
+                Arc::clone(&rpc.calls),
+                Arc::clone(&rpc.egress),
+                Arc::clone(&rpc.request),
+            );
             let control = AgentControlClient::new(
                 rpc,
                 crate::transport::ControlGrpcConfig {
@@ -3410,6 +3414,13 @@ mod tests {
             );
             let report = report.lock().expect("report").clone().expect("report sent");
             assert_eq!(report.identity, terminal.identity);
+            // One report per command (#1490 resume): the identity is the
+            // settled command's, command_id and generation included.
+            let settled = settled.lock().expect("settled").clone().expect("settled");
+            assert_eq!(report.identity, settled.identity);
+            let identity = report.identity.as_ref().expect("identity");
+            assert_ne!(identity.command_id, "");
+            assert_ne!(identity.generation, 0);
             assert_eq!(report.fence, terminal.fence);
             assert_eq!(report.hosts_reached.len(), 1);
             assert_eq!(report.hosts_reached[0].host, "api.example.com");

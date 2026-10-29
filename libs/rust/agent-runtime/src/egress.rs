@@ -444,6 +444,26 @@ impl HttpClient {
         Ok(response)
     }
 
+    /// Send `request` to an endpoint the OPERATOR configured for this
+    /// worker, which Main cannot list in a run's allowlist: the run's policy
+    /// is not consulted, and the host is still recorded as reached. Only for
+    /// a URL whose exact origin (scheme, host, port) the caller matched
+    /// against the worker's own configuration — never a URL a model, a user
+    /// or a toolkit setting chose.
+    ///
+    /// # Errors
+    ///
+    /// reqwest's error.
+    pub(crate) async fn execute_operator_origin(
+        &self,
+        request: reqwest::Request,
+    ) -> reqwest::Result<reqwest::Response> {
+        let url = request.url().clone();
+        let response = self.client.execute(request).await?;
+        self.egress.record_reached(&url);
+        Ok(response)
+    }
+
     /// `reqwest::Error` has no public constructor, and every family maps
     /// reqwest's error type, so a refusal is minted as the error of a request
     /// that cannot leave the worker: a client whose resolver refuses every
