@@ -1069,7 +1069,9 @@ impl SameToolReplayFixture {
             .session_service(self.sessions.clone())
             .run_config(run_config)
             .build()
-            .expect("replay runner");
+            .expect("replay runner")
+            // As `NativeAgentInvocation::start` configures every worker run.
+            .with_unanswered_tool_calls_kept(true);
         let mut stream = runner
             .run(
                 adk_rust::UserId::new("user-1").expect("user identity"),
@@ -1475,7 +1477,9 @@ async fn workspace_turn(
         .session_service(sessions)
         .run_config(run_config)
         .build()
-        .expect("runner");
+        .expect("runner")
+        // As `NativeAgentInvocation::start` configures every worker run.
+        .with_unanswered_tool_calls_kept(true);
     let mut stream = runner
         .run(
             adk_rust::UserId::new("user-1").expect("user"),
@@ -1749,7 +1753,9 @@ pub(super) async fn ledger_workspace_turn(
         .session_service(sessions)
         .run_config(run_config)
         .build()
-        .expect("runner");
+        .expect("runner")
+        // As `NativeAgentInvocation::start` configures every worker run.
+        .with_unanswered_tool_calls_kept(true);
     let mut stream = runner
         .run(
             adk_rust::UserId::new("user-1").expect("user"),

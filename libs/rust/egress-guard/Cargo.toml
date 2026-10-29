@@ -10,12 +10,12 @@ publish.workspace = true
 # Only for the `reqwest::dns::Resolve` trait the guarded resolver implements;
 # the caller builds its own client. The same 0.12 line agent-runtime links.
 reqwest = { version = "0.12.28", default-features = false }
-tokio = { version = "1.53.1", features = ["net", "time"] }
+tokio = { version = "1.54.1", features = ["net", "time"] }
 
 [dev-dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.151"
-tokio = { version = "1.53.1", features = ["macros", "net", "rt", "time"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["macros", "net", "rt", "time"] }
 
 [lints]
 workspace = true

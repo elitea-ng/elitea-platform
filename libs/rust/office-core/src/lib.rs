@@ -178,13 +178,14 @@ pub mod testing {
             let mut entry = input.by_index(i).expect("an entry");
             let mut data = Vec::new();
             entry.read_to_end(&mut data).expect("a readable entry");
-            if entry.name() == name {
+            let entry_name = entry.name().expect("a UTF-8 entry name").into_owned();
+            if entry_name == name {
                 let text = String::from_utf8(data).expect("a text part");
                 assert!(text.contains(from), "{name} has no {from}");
                 data = text.replacen(from, to, 1).into_bytes();
             }
             out.start_file(
-                entry.name(),
+                entry_name,
                 zip::write::SimpleFileOptions::default()
                     .compression_method(zip::CompressionMethod::Deflated),
             )

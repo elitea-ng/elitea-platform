@@ -411,11 +411,11 @@ impl TopologyStore for PgTopologyStore {
         let count: i64 = self
             .handle
             .block_on(
-                sqlx::query_scalar(&format!(
+                sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
                     "SELECT count(*) FROM deepwiki_build.wiki_nodes n \
                      WHERE n.build_id = $1 \
                        AND n.fts @@ phraseto_tsquery('deepwiki_porter', {FOLD})"
-                ))
+                )))
                 .bind(&build)
                 .bind(query)
                 .fetch_one(&pool),
@@ -440,10 +440,10 @@ impl TopologyStore for PgTopologyStore {
         let terms: Vec<String> = self
             .handle
             .block_on(
-                sqlx::query_scalar(&format!(
+                sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
                     "SELECT lexeme FROM unnest(to_tsvector('deepwiki_porter', {}))",
                     FOLD.replace("$2", "$1")
-                ))
+                )))
                 .bind(query)
                 .fetch_all(&pool),
             )
@@ -458,7 +458,7 @@ impl TopologyStore for PgTopologyStore {
         let rows = self
             .handle
             .block_on(
-                sqlx::query(&format!(
+                sqlx::query(sqlx::AssertSqlSafe(format!(
                     "WITH m AS ( \
                          SELECT n.node_id, n.rel_path, n.symbol_type, n.fts, \
                              coalesce((SELECT sum(coalesce(array_length(u.positions, 1), 1)) \
@@ -485,7 +485,7 @@ impl TopologyStore for PgTopologyStore {
                      FROM m LEFT JOIN s ON s.node_id = m.node_id \
                      ORDER BY fts_rank, m.node_id COLLATE \"C\" \
                      LIMIT $9"
-                ))
+                )))
                 .bind(&build)
                 .bind(query)
                 .bind(start)

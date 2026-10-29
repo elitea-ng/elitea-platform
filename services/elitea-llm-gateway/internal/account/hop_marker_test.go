@@ -47,7 +47,8 @@ func TestGetConfigForProvider_StampsHopMarkerOnEveryProvider(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetConfigForProvider(%s): %v", provider, err)
 		}
-		got := cfg.NetworkConfig.ExtraHeaders[hopmarker.Header]
+		header := cfg.NetworkConfig.ExtraHeaders[hopmarker.Header]
+		got := header.GetValue()
 		if got != want {
 			t.Errorf("provider %s: ExtraHeaders[%s] = %q, want %q.\n"+
 				"A provider that carries no marker is a provider whose loop the gateway cannot detect.",

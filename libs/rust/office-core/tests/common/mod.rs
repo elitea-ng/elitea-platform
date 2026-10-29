@@ -117,7 +117,7 @@ pub fn try_entries(bytes: &[u8]) -> Option<Vec<(String, Vec<u8>)>> {
         let mut f = a.by_index(i).ok()?;
         let mut v = Vec::new();
         f.read_to_end(&mut v).ok()?;
-        out.push((f.name().to_owned(), v));
+        out.push((f.name().ok()?.into_owned(), v));
     }
     Some(out)
 }

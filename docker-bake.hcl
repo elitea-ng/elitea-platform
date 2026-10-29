@@ -218,9 +218,9 @@ target "elitea-doc-extractor" {
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
-# Standalone module that needs Go 1.26.4 or above (bifrost/core); its go.mod
-# asks for the go1.26.9 security floor. The Containerfile pins
-# golang:1.26 internally, so the correct toolchain is used regardless of the
+# Standalone module that needs Go 1.27.3 or above (bifrost/core 1.13); its
+# go.mod asks for go1.27.3. The Containerfile pins
+# golang:1.27 internally, so the correct toolchain is used regardless of the
 # build runner. Context is the repository ROOT: the module replaces
 # libs/go/egresslib, which lives outside the service directory. go.work is not
 # copied into the image and the build sets GOWORK=off, so the module still

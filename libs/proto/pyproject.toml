@@ -4,13 +4,13 @@ version = "0.1.0"
 description = "Generated Elitea runtime v1 Protocol Buffer bindings"
 requires-python = ">=3.12"
 dependencies = [
-  "grpcio==1.84.0",
-  "protobuf==6.33.6",
+  "grpcio==1.84.1",
+  "protobuf==7.36.2",
 ]
 
 [project.optional-dependencies]
 generate = [
-  "grpcio-tools==1.76.0",
+  "grpcio-tools==1.84.1",
   "jsonschema==4.26.0",
 ]
 

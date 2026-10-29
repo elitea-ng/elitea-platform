@@ -253,13 +253,16 @@ for (const [id, mechanism, tag] of OXLINT_CASES) {
     );
   const rm5Fail = run('tools/lint-rules/fixtures/msw/rm5-fail.test.ts');
   const rm5Pass = run('tools/lint-rules/fixtures/msw/rm5-pass.test.ts');
+  // The RED run must fail BECAUSE of the fence, not for any other reason: the
+  // fixture's own server answers 200, and msw names the option it enforced.
+  const rm5Fenced = rm5Fail.status !== 0 && `${rm5Fail.stdout}${rm5Fail.stderr}`.includes('"onUnhandledRequest"');
   record(
     'R-M5',
     "msw onUnhandledRequest:'error' in src/test/setup.ts",
-    rm5Fail.status !== 0,
+    rm5Fenced,
     rm5Pass.status === 0,
   );
-  if (rm5Fail.status === 0) console.error(`\n[R-M5] unmocked request was NOT fenced:\n${rm5Fail.stdout}${rm5Fail.stderr}`);
+  if (!rm5Fenced) console.error(`\n[R-M5] unmocked request was NOT fenced:\n${rm5Fail.stdout}${rm5Fail.stderr}`);
   if (rm5Pass.status !== 0) console.error(`\n[R-M5] handled request failed:\n${rm5Pass.stdout}${rm5Pass.stderr}`);
 }
 

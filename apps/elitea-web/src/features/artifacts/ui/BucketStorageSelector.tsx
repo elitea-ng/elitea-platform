@@ -42,8 +42,7 @@ export function BucketStorageSelector(props: BucketStorageSelectorProps): ReactN
       <Box
         component="button"
         type="button"
-        aria-haspopup="listbox"
-        aria-label={t('artifacts.buckets.storageAria', 'Storage integration')}
+        aria-haspopup="menu"
         sx={rowSx}
         onClick={(event: MouseEvent<HTMLElement>) => setAnchor(event.currentTarget)}
       >
@@ -51,6 +50,8 @@ export function BucketStorageSelector(props: BucketStorageSelectorProps): ReactN
         {/*
           * #6638: "Storage:" above the name, the same two-line shape as the
           * sidebar's "Project:" selector (`widgets/sidebar/ui/ProjectSwitcher`).
+          * The button's name is this visible text ("Storage: <name>"), so a
+          * voice user can say what they see (WCAG 2.5.3).
           */}
         <Box sx={labelBoxSx}>
           <Typography

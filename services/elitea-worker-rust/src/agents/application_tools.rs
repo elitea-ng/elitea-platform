@@ -4232,8 +4232,9 @@ impl Tool for ApplicationAgentTool {
             outcome = tracing::field::Empty,
             error_code = tracing::field::Empty,
         );
-        let result = self
-            .invoke_child(ctx, arguments)
+        // Boxed like the nested pipeline tool: a nesting level keeps no child state machine on
+        // the polling thread's stack.
+        let result = Box::pin(self.invoke_child(ctx, arguments))
             .instrument(span.clone())
             .await;
         match &result {

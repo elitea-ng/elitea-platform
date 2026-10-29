@@ -402,9 +402,8 @@ impl DockerSupervisor {
             self.capture_snapshot_owned(scope, &lease, control, content)
                 .await
         };
-        let result = self
-            .snapshot_heartbeat(scope, &lease, operation, Some(diagnostic))
-            .await?;
+        let result =
+            Box::pin(self.snapshot_heartbeat(scope, &lease, operation, Some(diagnostic))).await?;
         if matches!(&result, SnapshotReconciliation::Captured { .. }) {
             observe(diagnostic, Stage::LeaseRelease, async {
                 Ok(self.ledger.release(&lease).await?)

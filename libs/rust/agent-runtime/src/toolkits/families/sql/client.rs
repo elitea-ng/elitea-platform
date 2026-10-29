@@ -212,7 +212,7 @@ impl SqlClient {
     }
 
     fn postgres_options(&self) -> PgConnectOptions {
-        // SQLx 0.8.6 has no public fully environment-free PostgreSQL options
+        // SQLx 0.9.0 has no public fully environment-free PostgreSQL options
         // constructor. Every claim-provided ordinary field and behavior is
         // overwritten here; production activation remains gated on removing
         // the driver's ambient PG TLS-file seam.
@@ -408,13 +408,17 @@ where
 async fn prepare_statement<DB>(
     transaction: &mut sqlx::Transaction<'_, DB>,
     sql: &str,
-) -> Result<DB::Statement<'static>, SqlClientError>
+) -> Result<DB::Statement, SqlClientError>
 where
     DB: sqlx::Database,
     for<'connection> &'connection mut DB::Connection: Executor<'connection, Database = DB>,
 {
+    // The toolkit's whole purpose is to run the SQL the caller wrote; the
+    // checks that bound it (read-only mode, statement classification,
+    // timeouts) run around this call, not on the text's provenance.
+    let sql = sqlx::SqlSafeStr::into_sql_str(sqlx::AssertSqlSafe(sql.to_owned()));
     match tokio::time::timeout(PREPARE_TIMEOUT, (&mut **transaction).prepare(sql)).await {
-        Ok(Ok(statement)) => Ok(statement.to_owned()),
+        Ok(Ok(statement)) => Ok(statement),
         Ok(Err(error)) => Err(map_prepare_error(&error)),
         Err(_) => Err(timeout(true)),
     }

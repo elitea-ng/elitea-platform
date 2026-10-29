@@ -93,7 +93,6 @@ pub fn has_supported_extension(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sha2::{Digest, Sha256};
 
     #[test]
     fn splitext_follows_os_path() {
@@ -117,7 +116,7 @@ mod tests {
     fn the_list_is_the_sdks_verbatim() {
         assert_eq!(SUPPORTED_EXTENSIONS.len(), 55);
         let joined = SUPPORTED_EXTENSIONS.join("\n");
-        let digest = format!("{:x}", Sha256::digest(joined.as_bytes()));
+        let digest = crate::content_version(joined.as_bytes());
         assert_eq!(
             digest,
             "efebf83caec4b6a40026ee498b59cae39050e4b7700d3b683d748d10c2ab1b4a"

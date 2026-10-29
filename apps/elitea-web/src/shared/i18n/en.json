@@ -355,7 +355,6 @@
   "artifacts.buckets.loading": "Loading buckets…",
   "artifacts.buckets.pin": "Pin bucket",
   "artifacts.buckets.search": "Search buckets",
-  "artifacts.buckets.storageAria": "Storage integration",
   "artifacts.buckets.title": "Buckets",
   "artifacts.buckets.unpin": "Unpin bucket",
   "artifacts.create.creating": "Creating…",
@@ -5174,5 +5173,8 @@
   "features.agentLifecycle.releases.tabRevisions": "Revisions of this version",
   "features.agentLifecycle.releases.title": "Release history",
   "features.agentLifecycle.releases.withdrawn": "Withdrawn",
-  "features.agentLifecycle.releases.notSaved": "Save the agent first; its history starts with its first saved version."
+  "features.agentLifecycle.releases.notSaved": "Save the agent first; its history starts with its first saved version.",
+  "chatInput.agentEditorPanel.settingsMenuLabelState": "agent settings menu: {{state}}",
+  "chatInput.versionSelector.menuLabelNamed": "version selector menu: {{name}}",
+  "chatMessages.fileList.showMoreFiles": "Show {{count}} more files"
 }

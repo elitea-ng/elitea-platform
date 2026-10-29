@@ -144,18 +144,25 @@ fn build_partial_llm_event(
 ) -> Event {
     let mut event = Event::with_id(event_id, invocation_id);
     event.author = agent_name.to_string();
-    event.llm_request = Some(request_json.to_string());
-    event
-        .provider_metadata
-        .insert("gcp.vertex.agent.llm_request".to_string(), request_json.to_string());
-    event.provider_metadata.insert(
-        "gcp.vertex.agent.llm_response".to_string(),
-        serde_json::to_string(chunk).unwrap_or_default(),
-    );
+    // Keep payload snapshots on the terminal chunk for backwards-compatible
+    // debug tooling, but never repeat the full request and response on every
+    // incremental chunk. Large histories otherwise turn streaming into
+    // O(request_size * chunk_count) serialization and transport work.
+    if !chunk.partial {
+        event.llm_request = Some(request_json.to_string());
+        event
+            .provider_metadata
+            .insert("gcp.vertex.agent.llm_request".to_string(), request_json.to_string());
+        event.provider_metadata.insert(
+            "gcp.vertex.agent.llm_response".to_string(),
+            serde_json::to_string(chunk).unwrap_or_default(),
+        );
+    }
     event.llm_response.partial = chunk.partial;
     event.llm_response.turn_complete = chunk.turn_complete;
     event.llm_response.finish_reason = chunk.finish_reason;
     event.llm_response.usage_metadata = chunk.usage_metadata.clone();
+    event.llm_response.citation_metadata = chunk.citation_metadata.clone();
     event.llm_response.content = chunk.content.clone();
     event.llm_response.provider_metadata = chunk.provider_metadata.clone();
     event.llm_response.interaction_id = chunk.interaction_id.clone();
@@ -188,8 +195,10 @@ fn build_final_llm_event(
     event.llm_response.turn_complete = true;
 
     if let Some(last_chunk) = last_chunk {
+        event.llm_response.turn_complete = last_chunk.turn_complete;
         event.llm_response.finish_reason = last_chunk.finish_reason;
         event.llm_response.usage_metadata = last_chunk.usage_metadata.clone();
+        event.llm_response.citation_metadata = last_chunk.citation_metadata.clone();
         event.llm_response.provider_metadata = last_chunk.provider_metadata.clone();
         event.llm_response.interaction_id = last_chunk.interaction_id.clone();
         event.llm_response.interrupted = last_chunk.interrupted;
@@ -291,6 +300,8 @@ pub struct LlmAgent {
     /// Per-agent tool execution strategy override. When `Some`, overrides the
     /// `RunConfig` strategy for this agent's dispatch loop.
     tool_execution_strategy: Option<ToolExecutionStrategy>,
+    /// Whether consecutive agent-delegation calls may execute concurrently.
+    parallelize_agent_delegations: bool,
     input_guardrails: Arc<GuardrailSet>,
     output_guardrails: Arc<GuardrailSet>,
     tool_guardrails: Arc<ToolGuardrailSet>,
@@ -515,6 +526,20 @@ impl ToolSetup {
 
         Ok(ResolvedTools { map, declarations, transfer_targets })
     }
+
+    /// Lets static and invocation-scoped toolsets enrich each LLM request.
+    async fn process_llm_request(
+        &self,
+        ctx: &Arc<dyn InvocationContext>,
+        request: &mut LlmRequest,
+    ) -> Result<()> {
+        for toolset in self.toolsets.iter().map(AsRef::as_ref).chain(
+            ctx.run_config().runtime_toolsets.iter().map(|runtime| runtime.toolset().as_ref()),
+        ) {
+            toolset.process_llm_request(ctx.clone() as Arc<dyn ReadonlyContext>, request).await?;
+        }
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for LlmAgent {
@@ -612,6 +637,13 @@ impl LlmAgent {
             .flatten()
             .filter_map(|value| serde_json::from_value::<Part>(value.clone()).ok())
             .collect()
+    }
+
+    fn continues_turn(metadata: Option<&serde_json::Value>) -> bool {
+        metadata
+            .and_then(|metadata| metadata.get("continue_turn"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
     }
 
     fn augment_content_for_history(
@@ -738,6 +770,7 @@ pub struct LlmAgentBuilder {
     tool_call_confirmation: Option<Arc<dyn ToolCallConfirmation>>,
     steering_source: Option<Arc<dyn SteeringSource>>,
     tool_execution_strategy: Option<ToolExecutionStrategy>,
+    parallelize_agent_delegations: bool,
     input_guardrails: GuardrailSet,
     output_guardrails: GuardrailSet,
     tool_guardrails: ToolGuardrailSet,
@@ -792,6 +825,7 @@ impl LlmAgentBuilder {
             tool_call_confirmation: None,
             steering_source: None,
             tool_execution_strategy: None,
+            parallelize_agent_delegations: false,
             input_guardrails: GuardrailSet::new(),
             output_guardrails: GuardrailSet::new(),
             tool_guardrails: ToolGuardrailSet::new(),
@@ -945,6 +979,10 @@ impl LlmAgentBuilder {
     }
 
     /// Set a state key where the agent's final output will be stored.
+    ///
+    /// The value is the concatenated text of the final model response. When an
+    /// `output_schema` is set, it is written only after the response passes schema
+    /// validation; a response that exhausts `output_max_retries` leaves the key unset.
     pub fn output_key(mut self, key: impl Into<String>) -> Self {
         self.output_key = Some(key.into());
         self
@@ -1152,6 +1190,12 @@ impl LlmAgentBuilder {
     }
 
     /// Configure tool confirmation requirements for this agent.
+    ///
+    /// The effective requirement is the union of this policy and
+    /// [`InvocationContext::requires_tool_confirmation`], so a runtime-injected requirement
+    /// (for example a team relationship with required approval) still pauses the call when
+    /// no decision exists and blocks it when the decision is
+    /// [`ToolConfirmationDecision::Deny`].
     pub fn tool_confirmation_policy(mut self, policy: ToolConfirmationPolicy) -> Self {
         self.tool_confirmation_policy = policy;
         self
@@ -1197,6 +1241,16 @@ impl LlmAgentBuilder {
     /// concurrency safety.
     pub fn tool_execution_strategy(mut self, strategy: ToolExecutionStrategy) -> Self {
         self.tool_execution_strategy = Some(strategy);
+        self
+    }
+
+    /// Allow consecutive agent-delegation calls to execute concurrently.
+    ///
+    /// Ordinary tools remain sequential and retain their position relative to
+    /// each delegation batch. This setting takes precedence over the general
+    /// tool execution strategy for the agent.
+    pub fn parallelize_agent_delegations(mut self, parallelize: bool) -> Self {
+        self.parallelize_agent_delegations = parallelize;
         self
     }
 
@@ -1431,6 +1485,7 @@ impl LlmAgentBuilder {
             tool_call_confirmation: self.tool_call_confirmation,
             steering_source: self.steering_source,
             tool_execution_strategy: self.tool_execution_strategy,
+            parallelize_agent_delegations: self.parallelize_agent_delegations,
             input_guardrails: Arc::new(self.input_guardrails),
             output_guardrails: Arc::new(self.output_guardrails),
             tool_guardrails: Arc::new(self.tool_guardrails),
@@ -1807,6 +1862,10 @@ impl CallbackContext for ToolOutcomeCallbackContext {
     fn tool_outcome(&self) -> Option<ToolOutcome> {
         Some(self.outcome.clone())
     }
+
+    fn shared_state(&self) -> Option<Arc<adk_core::SharedState>> {
+        self.inner.shared_state()
+    }
 }
 
 /// Per-invocation circuit breaker state.
@@ -1852,6 +1911,27 @@ struct ToolExecutionResult {
     escalate_or_skip: bool,
 }
 
+#[derive(Clone, Copy)]
+enum ToolDispatchMode {
+    Sequential,
+    Parallel,
+    ParallelDelegations,
+    Auto,
+}
+
+impl ToolDispatchMode {
+    fn resolve(strategy: ToolExecutionStrategy, parallelize_agent_delegations: bool) -> Self {
+        if parallelize_agent_delegations {
+            return Self::ParallelDelegations;
+        }
+        match strategy {
+            ToolExecutionStrategy::Sequential => Self::Sequential,
+            ToolExecutionStrategy::Parallel => Self::Parallel,
+            ToolExecutionStrategy::Auto => Self::Auto,
+        }
+    }
+}
+
 struct ToolExecutor<'a> {
     ctx: Arc<dyn InvocationContext>,
     tool_map: &'a std::collections::HashMap<String, Arc<dyn Tool>>,
@@ -1862,6 +1942,8 @@ struct ToolExecutor<'a> {
     after_tool_callbacks_full: &'a Arc<Vec<AfterToolCallbackFull>>,
     on_tool_error_callbacks: &'a Arc<Vec<OnToolErrorCallback>>,
     tool_confirmation_policy: &'a ToolConfirmationPolicy,
+    /// Elitea patch: the argument-aware check, asked when the policy does not confirm.
+    tool_call_confirmation: &'a Option<Arc<dyn ToolCallConfirmation>>,
     cb_mutex: &'a std::sync::Mutex<Option<CircuitBreakerState>>,
     invocation_id: &'a str,
     concurrency_manager: &'a adk_core::ToolConcurrencyManager,
@@ -1869,24 +1951,46 @@ struct ToolExecutor<'a> {
     tool_timeout: std::time::Duration,
     confirmation_decisions: &'a std::collections::HashMap<String, ToolConfirmationDecision>,
     confirmation_fingerprints: &'a std::collections::HashMap<String, String>,
-    live_confirmation_decisions: &'a std::collections::HashMap<String, ToolConfirmationDecision>,
+    /// Serializes `ToolConfirmationHandler::decide`, so prompts stay one at a time while
+    /// approved siblings run.
+    confirmation_lock: tokio::sync::Mutex<()>,
+    /// Set when an approval fails, so calls still waiting for theirs stop waiting.
+    approval_failed: tokio::sync::watch::Sender<bool>,
     #[cfg(feature = "enhanced-plugins")]
     enhanced_plugin_manager: &'a Option<Arc<EnhancedPluginManager>>,
 }
 
 impl ToolExecutor<'_> {
     /// Elitea patch: runs one batch of concurrency-safe calls together; the
-    /// semaphore inside `execute` still enforces each tool's limit.
-    async fn execute_concurrently(&self, calls: Vec<PendingToolCall>) -> Vec<ToolExecutionResult> {
+    /// semaphore inside `execute` still enforces each tool's limit. Running
+    /// calls finish before an approval error ends the turn.
+    async fn execute_concurrently(
+        &self,
+        calls: Vec<PendingToolCall>,
+    ) -> Result<Vec<ToolExecutionResult>> {
         use futures::StreamExt as _;
         let buffer_size = calls.len().max(1);
         futures::stream::iter(calls.into_iter().map(|call| self.execute(call)))
             .buffer_unordered(buffer_size)
-            .collect()
+            .collect::<Vec<_>>()
             .await
+            .into_iter()
+            .collect()
     }
 
-    async fn execute(&self, call: PendingToolCall) -> ToolExecutionResult {
+    async fn execute(&self, call: PendingToolCall) -> Result<ToolExecutionResult> {
+        let result = self.execute_inner(call).await?;
+        let mut event = Event::new(self.invocation_id);
+        event.author = self.ctx.agent_name().to_owned();
+        event.branch = self.ctx.branch().to_owned();
+        event.actions = result.actions.clone();
+        event.llm_response.content = Some(result.content.clone());
+        // Runner commits each result while other calls are still awaiting approval.
+        let _ = self.progress_tx.send(event).await;
+        Ok(result)
+    }
+
+    async fn execute_inner(&self, call: PendingToolCall) -> Result<ToolExecutionResult> {
         let PendingToolCall { index, name, args, id, function_call_id, guardrail_denial } = call;
         let mut tool_actions = EventActions::default();
         let mut response_content: Option<Content> = None;
@@ -1909,52 +2013,62 @@ impl ToolExecutor<'_> {
                     annotations: None,
                 }],
             };
-            return ToolExecutionResult {
+            return Ok(ToolExecutionResult {
                 index,
                 content: denied_content,
                 actions: tool_actions,
                 escalate_or_skip: false,
-            };
+            });
         }
 
-        // Acquire concurrency permit before tool execution.
-        // The permit is held for the entire duration of this tool call
-        // and released on drop when this async block completes.
-        let _concurrency_permit = match self.concurrency_manager.acquire(&name).await {
-            Ok(permit) => Some(permit),
-            Err(e) => {
-                // Concurrency limit reached with Fail policy — return error
-                let error_content = Content {
-                    role: "function".to_string(),
-                    parts: vec![Part::FunctionResponse {
-                        function_response: FunctionResponseData::new(
-                            name.clone(),
-                            serde_json::json!({ "error": e.to_string() }),
-                        ),
-                        id: id.clone(),
-                        annotations: None,
-                    }],
+        // Live confirmation belongs to this dispatch, not the entire model batch. Runtime-injected
+        // requirements such as team relationship approval gate execution exactly like the policy.
+        let by_policy = self.tool_confirmation_policy.requires_confirmation(&name)
+            || self.ctx.requires_tool_confirmation(&name);
+        let by_arguments = !by_policy
+            && match self.tool_call_confirmation.as_ref() {
+                Some(check) => check.requires_confirmation(&name, &args).await,
+                None => false,
+            };
+        if by_policy || by_arguments {
+            let mut decision = static_confirmation_decision(
+                self.confirmation_decisions,
+                self.confirmation_fingerprints,
+                &function_call_id,
+                &name,
+                &args,
+            );
+            if decision.is_none()
+                && let Some(handler) = self.ctx.run_config().tool_confirmation_handler.as_ref()
+            {
+                let request = ToolConfirmationRequest {
+                    tool_name: name.clone(),
+                    function_call_id: Some(function_call_id.clone()),
+                    args: args.clone(),
                 };
-                return ToolExecutionResult {
-                    index,
-                    content: error_content,
-                    actions: tool_actions,
-                    escalate_or_skip: false,
+                let mut approval_failed = self.approval_failed.subscribe();
+                // One prompt at a time; a failed approval releases calls still waiting for theirs.
+                let decided = tokio::select! {
+                    biased;
+                    _ = approval_failed.wait_for(|failed| *failed) => {
+                        Err(adk_core::AdkError::tool(format!(
+                            "approval for tool '{name}' was abandoned because another approval in the same batch failed"
+                        )))
+                    }
+                    decided = async {
+                        let _prompt = self.confirmation_lock.lock().await;
+                        handler.decide(&request).await
+                    } => decided,
                 };
+                match decided {
+                    Ok(value) => decision = Some(value),
+                    Err(error) => {
+                        self.approval_failed.send_replace(true);
+                        return Err(error);
+                    }
+                }
             }
-        };
-
-        // Tool confirmation (deny case; None handled by pre-check)
-        if self.tool_confirmation_policy.requires_confirmation(&name) {
-            match self.live_confirmation_decisions.get(&function_call_id).copied().or_else(|| {
-                static_confirmation_decision(
-                    self.confirmation_decisions,
-                    self.confirmation_fingerprints,
-                    &function_call_id,
-                    &name,
-                    &args,
-                )
-            }) {
+            match decision {
                 Some(ToolConfirmationDecision::Approve) => {
                     tool_actions.tool_confirmation_decision =
                         Some(ToolConfirmationDecision::Approve);
@@ -1994,6 +2108,38 @@ impl ToolExecutor<'_> {
                 }
             }
         }
+
+        // Acquire concurrency permit after confirmation, so an approval waiting on a person
+        // does not hold the tool's slot, and a call that will not run takes none.
+        // The permit is held for the entire duration of this tool call
+        // and released on drop when this async block completes.
+        let _concurrency_permit = if response_content.is_some() {
+            None
+        } else {
+            match self.concurrency_manager.acquire(&name).await {
+                Ok(permit) => Some(permit),
+                Err(e) => {
+                    // Concurrency limit reached with Fail policy — return error
+                    let error_content = Content {
+                        role: "function".to_string(),
+                        parts: vec![Part::FunctionResponse {
+                            function_response: FunctionResponseData::new(
+                                name.clone(),
+                                serde_json::json!({ "error": e.to_string() }),
+                            ),
+                            id: id.clone(),
+                            annotations: None,
+                        }],
+                    };
+                    return Ok(ToolExecutionResult {
+                        index,
+                        content: error_content,
+                        actions: tool_actions,
+                        escalate_or_skip: false,
+                    });
+                }
+            }
+        };
 
         // Before-tool callbacks
         // Track potentially modified args for enhanced plugin after-hook
@@ -2132,6 +2278,16 @@ impl ToolExecutor<'_> {
                 let max_attempts = budget.map(|b| b.max_retries + 1).unwrap_or(1);
                 let retry_delay = budget.map(|b| b.delay).unwrap_or_default();
 
+                let mut started = Event::new(self.invocation_id);
+                started.author = self.ctx.agent_name().to_owned();
+                started.branch = self.ctx.branch().to_owned();
+                // Partial, as tool progress is: never persisted, never a final response.
+                started.llm_response.partial = true;
+                started.provider_metadata.insert(
+                    "adk_tool_started".into(),
+                    serde_json::json!({"id": id, "name": name}).to_string(),
+                );
+                let _ = self.progress_tx.send(started).await;
                 let tool_clone = tool.clone();
                 let tool_start = std::time::Instant::now();
                 let mut last_error = String::new();
@@ -2427,12 +2583,12 @@ impl ToolExecutor<'_> {
         }
 
         let escalate_or_skip = tool_actions.escalate || tool_actions.skip_summarization;
-        ToolExecutionResult {
+        Ok(ToolExecutionResult {
             index,
             content: response_content,
             actions: tool_actions,
             escalate_or_skip,
-        }
+        })
     }
 }
 
@@ -2504,6 +2660,7 @@ impl Agent for LlmAgent {
         let tool_guardrails = Arc::clone(&self.tool_guardrails);
         let output_guardrails = self.output_guardrails.clone();
         let agent_tool_execution_strategy = self.tool_execution_strategy;
+        let parallelize_agent_delegations = self.parallelize_agent_delegations;
         #[cfg(feature = "enhanced-plugins")]
         let enhanced_plugin_manager = self.enhanced_plugin_manager.clone();
 
@@ -2512,8 +2669,6 @@ impl Agent for LlmAgent {
                 ctx.run_config().tool_confirmation_decisions.clone();
             let confirmation_fingerprints =
                 ctx.run_config().tool_confirmation_fingerprints.clone();
-            let mut live_confirmation_decisions =
-                std::collections::HashMap::<String, ToolConfirmationDecision>::new();
             let confirmation_handler = ctx.run_config().tool_confirmation_handler.clone();
 
             // ===== BEFORE AGENT CALLBACKS =====
@@ -2621,7 +2776,7 @@ impl Agent for LlmAgent {
                     ctx.run_config().cached_content.as_deref(),
                 );
 
-                let request = LlmRequest {
+                let mut request = LlmRequest {
                     model: model.name().to_string(),
                     contents: conversation_history.clone(),
                     tools: tool_declarations.clone(),
@@ -2634,6 +2789,11 @@ impl Agent for LlmAgent {
                     // for providers that never populate `interaction_id`.
                     previous_response_id: last_interaction_id.clone(),
                 };
+
+                if let Err(error) = tool_setup.process_llm_request(&ctx, &mut request).await {
+                    yield Err(error);
+                    return;
+                }
 
                 // ===== ENHANCED PLUGIN: BEFORE MODEL CALL =====
                 // Enhanced plugins can modify the request or short-circuit the model call.
@@ -2705,7 +2865,7 @@ impl Agent for LlmAgent {
                             .parts
                             .iter()
                             .any(|part| matches!(part, Part::FunctionCall { .. }));
-                        let content = if has_function_calls {
+                        let content = if has_function_calls || Self::continues_turn(final_provider_metadata.as_ref()) {
                             content
                         } else {
                             Self::apply_output_guardrails(output_guardrails.as_ref(), content).await?
@@ -2716,6 +2876,8 @@ impl Agent for LlmAgent {
                     let mut cached_event = Event::new(&invocation_id);
                     cached_event.author = agent_name.clone();
                     cached_event.llm_response.content = accumulated_content.clone();
+                    cached_event.llm_response.turn_complete = cached_response.turn_complete;
+                    cached_event.llm_response.citation_metadata = cached_response.citation_metadata.clone();
                     cached_event.llm_response.provider_metadata = cached_response.provider_metadata.clone();
                     // Surface and track the response id for provider-neutral continuity.
                     cached_event.llm_response.interaction_id = cached_response.interaction_id.clone();
@@ -2834,7 +2996,12 @@ impl Agent for LlmAgent {
 
                         // Accumulate content for conversation history (always needed)
                         if let Some(chunk_content) = chunk.content.clone() {
-                            if let Some(ref mut acc) = accumulated_content {
+                            if !chunk.partial && chunk.provider_metadata.as_ref()
+                                .and_then(|metadata| metadata.get("content_complete"))
+                                .and_then(serde_json::Value::as_bool) == Some(true)
+                            {
+                                accumulated_content = Some(chunk_content);
+                            } else if let Some(ref mut acc) = accumulated_content {
                                 acc.parts.extend(chunk_content.parts);
                             } else {
                                 accumulated_content = Some(chunk_content);
@@ -2848,14 +3015,27 @@ impl Agent for LlmAgent {
                                 .as_ref()
                                 .map(|content| collect_long_running_tool_ids(&tool_map, content))
                                 .unwrap_or_default();
-                            yield Ok(build_partial_llm_event(
+                            let mut event = build_partial_llm_event(
                                 &llm_event_id,
                                 &invocation_id,
                                 &agent_name,
                                 &request_json,
                                 &chunk,
                                 long_running_tool_ids,
-                            ));
+                            );
+                            // Runner persists terminal events as complete content.
+                            // Providers can finish with tools/metadata after text
+                            // deltas, so the last chunk alone is insufficient.
+                            if !chunk.partial {
+                                event.llm_response.content = accumulated_content.clone();
+                                if let Some(metadata) = event.llm_response.provider_metadata
+                                    .get_or_insert_with(|| serde_json::json!({}))
+                                    .as_object_mut()
+                                {
+                                    metadata.insert("content_complete".into(), true.into());
+                                }
+                            }
+                            yield Ok(event);
                         }
 
                         // Track the response id for provider-neutral continuity.
@@ -2874,6 +3054,10 @@ impl Agent for LlmAgent {
                         }
                     }
 
+                    if let Some(last) = &last_chunk {
+                        final_provider_metadata = last.provider_metadata.clone();
+                    }
+
                     // For None mode: yield single final event with accumulated content
                     if !should_stream_to_client {
                         if let Some(content) = accumulated_content.take() {
@@ -2881,7 +3065,7 @@ impl Agent for LlmAgent {
                                 .parts
                                 .iter()
                                 .any(|part| matches!(part, Part::FunctionCall { .. }));
-                            let content = if has_function_calls {
+                            let content = if has_function_calls || Self::continues_turn(final_provider_metadata.as_ref()) {
                                 content
                             } else {
                                 Self::apply_output_guardrails(output_guardrails.as_ref(), content)
@@ -2891,9 +3075,6 @@ impl Agent for LlmAgent {
                             accumulated_content = Some(content);
                         }
 
-                        if let Some(last) = &last_chunk {
-                            final_provider_metadata = last.provider_metadata.clone();
-                        }
                         let long_running_tool_ids = accumulated_content
                             .as_ref()
                             .map(|content| collect_long_running_tool_ids(&tool_map, content))
@@ -3005,6 +3186,7 @@ impl Agent for LlmAgent {
                     .unwrap_or_default();
 
                 let has_function_calls = !function_call_names.is_empty();
+                let continues_turn = Self::continues_turn(final_provider_metadata.as_ref());
 
                 // Check if ALL function calls are from long-running tools
                 // If so, we should NOT continue the loop - the tool returned a pending status
@@ -3021,28 +3203,12 @@ impl Agent for LlmAgent {
                         content,
                         final_provider_metadata.as_ref(),
                     ));
+                }
 
-                    // Handle output_key: save final agent output to state_delta
-                    if let Some(ref output_key) = output_key
-                        && !has_function_calls
-                    {
-                        let mut text_parts = String::new();
-                        for part in &content.parts {
-                            if let Part::Text { text } = part {
-                                text_parts.push_str(text);
-                            }
-                        }
-                        if !text_parts.is_empty() {
-                            // Yield a final state update event
-                            let mut state_event = Event::new(&invocation_id);
-                            state_event.author = agent_name.clone();
-                            state_event.actions.state_delta.insert(
-                                output_key.clone(),
-                                serde_json::Value::String(text_parts),
-                            );
-                            yield Ok(state_event);
-                        }
-                    }
+                // Native server tools can pause a turn without calling a client
+                // tool. Continue through this same bounded, cancellable loop.
+                if !has_function_calls && continues_turn {
+                    continue;
                 }
 
                 if !has_function_calls {
@@ -3093,6 +3259,28 @@ impl Agent for LlmAgent {
                         }
                     }
 
+                    // Persist the final output only once it has passed schema validation, so a
+                    // rejected attempt never lands in `state[output_key]`.
+                    if let Some(ref output_key) = output_key
+                        && let Some(ref content) = accumulated_content
+                    {
+                        let mut text_parts = String::new();
+                        for part in &content.parts {
+                            if let Part::Text { text } = part {
+                                text_parts.push_str(text);
+                            }
+                        }
+                        if !text_parts.is_empty() {
+                            let mut state_event = Event::new(&invocation_id);
+                            state_event.author = agent_name.clone();
+                            state_event.actions.state_delta.insert(
+                                output_key.clone(),
+                                serde_json::Value::String(text_parts),
+                            );
+                            yield Ok(state_event);
+                        }
+                    }
+
                     // No function calls, we're done
                     // Record LLM response for tracing
                     if let Some(ref content) = accumulated_content {
@@ -3112,8 +3300,10 @@ impl Agent for LlmAgent {
                 if let Some(content) = &accumulated_content {
                     // ===== RESOLVE TOOL EXECUTION STRATEGY =====
                     // Per-agent override; defaults to Sequential if not set.
-                    let strategy = agent_tool_execution_strategy
-                        .unwrap_or(ToolExecutionStrategy::Sequential);
+                    let strategy = ToolDispatchMode::resolve(
+                        agent_tool_execution_strategy.unwrap_or(ToolExecutionStrategy::Sequential),
+                        parallelize_agent_delegations,
+                    );
 
                     let fc_parts = collect_function_calls(content, &invocation_id);
 
@@ -3202,9 +3392,11 @@ impl Agent for LlmAgent {
                     // so check before parallel dispatch.
                     let mut confirmation_interrupted = false;
                     for call in &fc_parts {
+                        // Elitea patch: with a live handler the executor asks it.
                         let by_arguments = match tool_call_confirmation.as_ref() {
                             Some(check)
-                                if call.guardrail_denial.is_none()
+                                if confirmation_handler.is_none()
+                                    && call.guardrail_denial.is_none()
                                     && !tool_confirmation_policy.requires_confirmation(&call.name)
                                     && !ctx.requires_tool_confirmation(&call.name) =>
                             {
@@ -3212,7 +3404,8 @@ impl Agent for LlmAgent {
                             }
                             _ => false,
                         };
-                        if call.guardrail_denial.is_none()
+                        if confirmation_handler.is_none()
+                            && call.guardrail_denial.is_none()
                             && (tool_confirmation_policy.requires_confirmation(&call.name)
                                 || ctx.requires_tool_confirmation(&call.name)
                                 || by_arguments)
@@ -3224,29 +3417,12 @@ impl Agent for LlmAgent {
                                 &call.args,
                             )
                             .is_none()
-                            && live_confirmation_decisions
-                                .get(&call.function_call_id)
-                                .copied()
-                                .is_none()
                         {
                             let request = ToolConfirmationRequest {
                                 tool_name: call.name.clone(),
                                 function_call_id: Some(call.function_call_id.clone()),
                                 args: call.args.clone(),
                             };
-                            if let Some(handler) = confirmation_handler.as_ref() {
-                                match handler.decide(&request).await {
-                                    Ok(decision) => {
-                                        live_confirmation_decisions
-                                            .insert(call.function_call_id.clone(), decision);
-                                        continue;
-                                    }
-                                    Err(error) => {
-                                        yield Err(error);
-                                        return;
-                                    }
-                                }
-                            }
 
                                 let mut ce = Event::new(&invocation_id);
                                 ce.author = agent_name.clone();
@@ -3297,6 +3473,7 @@ impl Agent for LlmAgent {
                         after_tool_callbacks_full: &after_tool_callbacks_full,
                         on_tool_error_callbacks: &on_tool_error_callbacks,
                         tool_confirmation_policy: &tool_confirmation_policy,
+                        tool_call_confirmation: &tool_call_confirmation,
                         cb_mutex: &cb_mutex,
                         invocation_id: &invocation_id,
                         concurrency_manager: &concurrency_manager,
@@ -3304,7 +3481,8 @@ impl Agent for LlmAgent {
                         tool_timeout,
                         confirmation_decisions: &confirmation_decisions,
                         confirmation_fingerprints: &confirmation_fingerprints,
-                        live_confirmation_decisions: &live_confirmation_decisions,
+                        confirmation_lock: tokio::sync::Mutex::new(()),
+                        approval_failed: tokio::sync::watch::channel(false).0,
                         #[cfg(feature = "enhanced-plugins")]
                         enhanced_plugin_manager: &enhanced_plugin_manager,
                     };
@@ -3323,14 +3501,14 @@ impl Agent for LlmAgent {
                     let mut results = {
                         let dispatch = async {
                             let results: Vec<ToolExecutionResult> = match strategy {
-                                ToolExecutionStrategy::Sequential => {
+                                ToolDispatchMode::Sequential => {
                                     let mut results = Vec::with_capacity(fc_parts.len());
                                     for call in fc_parts {
-                                        results.push(executor.execute(call).await);
+                                        results.push(executor.execute(call).await?);
                                     }
                                     results
                                 }
-                                ToolExecutionStrategy::Parallel => {
+                                ToolDispatchMode::Parallel => {
                                     use futures::StreamExt as _;
                                     // Parallel is an explicit caller override. Tool
                                     // safety metadata is intentionally not inspected.
@@ -3343,10 +3521,54 @@ impl Agent for LlmAgent {
                                         fc_parts.into_iter().map(|call| executor.execute(call)),
                                     )
                                     .buffer_unordered(buffer_size)
-                                    .collect()
+                                    // Running tools finish before an approval error ends the turn.
+                                    .collect::<Vec<_>>()
                                     .await
+                                    .into_iter()
+                                    .collect::<Result<Vec<_>>>()?
                                 }
-                                ToolExecutionStrategy::Auto => {
+                                ToolDispatchMode::ParallelDelegations => {
+                                    use futures::StreamExt as _;
+
+                                    let mut all_results = Vec::with_capacity(fc_parts.len());
+                                    let mut calls = fc_parts.into_iter().peekable();
+                                    while let Some(call) = calls.next() {
+                                        let is_delegation = tool_map
+                                            .get(&call.name)
+                                            .is_some_and(|tool| tool.is_agent_delegation());
+                                        if !is_delegation {
+                                            all_results.push(executor.execute(call).await?);
+                                            continue;
+                                        }
+
+                                        let mut delegation_batch = vec![call];
+                                        while calls.peek().is_some_and(|next| {
+                                            tool_map.get(&next.name).is_some_and(|tool| {
+                                                tool.is_agent_delegation()
+                                            })
+                                        }) {
+                                            if let Some(next) = calls.next() {
+                                                delegation_batch.push(next);
+                                            }
+                                        }
+
+                                        let buffer_size = delegation_batch.len();
+                                        all_results.extend(
+                                            futures::stream::iter(
+                                                delegation_batch
+                                                    .into_iter()
+                                                    .map(|call| executor.execute(call)),
+                                            )
+                                            .buffer_unordered(buffer_size)
+                                            .collect::<Vec<_>>()
+                                            .await
+                                            .into_iter()
+                                            .collect::<Result<Vec<_>>>()?,
+                                        );
+                                    }
+                                    all_results
+                                }
+                                ToolDispatchMode::Auto => {
                                     // A call may overlap another only when its tool is
                                     // read-only *and* declares concurrency safety.
                                     //
@@ -3368,18 +3590,17 @@ impl Agent for LlmAgent {
                                             continue;
                                         }
                                         all_results.extend(
-                                            executor.execute_concurrently(std::mem::take(&mut batch))
-                                            .await,
+                                            executor
+                                                .execute_concurrently(std::mem::take(&mut batch))
+                                                .await?,
                                         );
-                                        all_results.push(executor.execute(call).await);
+                                        all_results.push(executor.execute(call).await?);
                                     }
-                                    all_results.extend(
-                                        executor.execute_concurrently(batch).await,
-                                    );
+                                    all_results.extend(executor.execute_concurrently(batch).await?);
                                     all_results
                                 }
                             };
-                            results
+                            Ok::<_, adk_core::AdkError>(results)
                         };
 
                         // Drain tool progress concurrently with execution, yielding
@@ -3401,7 +3622,13 @@ impl Agent for LlmAgent {
                         while let Ok(progress_event) = progress_rx.try_recv() {
                             yield Ok(progress_event);
                         }
-                        results
+                        match results {
+                            Ok(results) => results,
+                            Err(error) => {
+                                yield Err(error);
+                                return;
+                            }
+                        }
                     };
                     // Preserve LLM-returned order even when tool futures finish out of order.
                     results.sort_by_key(|r| r.index);
@@ -3409,14 +3636,9 @@ impl Agent for LlmAgent {
                     // Restore circuit breaker state from the mutex
                     circuit_breaker_state = cb_mutex.into_inner().unwrap_or_else(|e| e.into_inner());
 
-                    // Yield results in original order
+                    // Events were already emitted on completion. Only model context
+                    // is assembled in call order; never emit a second result event.
                     for result in results {
-                        let mut tool_event = Event::new(&invocation_id);
-                        tool_event.author = agent_name.clone();
-                        tool_event.actions = result.actions;
-                        tool_event.llm_response.content = Some(result.content.clone());
-                        yield Ok(tool_event);
-
                         if result.escalate_or_skip {
                             return;
                         }
@@ -3534,5 +3756,40 @@ mod run_helper_tests {
         assert_eq!(calls[1].index, 1);
         assert_eq!(calls[1].name, "second");
         assert_eq!(calls[1].function_call_id, "provider-id");
+    }
+
+    #[test]
+    fn partial_stream_events_do_not_repeat_large_payloads() {
+        let marker = "PRIVATE-REQUEST-PAYLOAD";
+        let request_json = format!("{marker}{}", "x".repeat(128 * 1024));
+        let chunk = LlmResponse {
+            content: Some(Content::new("model").with_text("x")),
+            partial: true,
+            ..Default::default()
+        };
+        let mut serialized_bytes = 0;
+
+        for index in 0..64 {
+            let event = build_partial_llm_event(
+                &format!("event-{index}"),
+                "invocation",
+                "agent",
+                &request_json,
+                &chunk,
+                Vec::new(),
+            );
+            let serialized = serde_json::to_string(&event).expect("event should serialize");
+
+            assert!(!serialized.contains(marker));
+            assert!(event.llm_request.is_none());
+            assert!(!event.provider_metadata.contains_key("gcp.vertex.agent.llm_request"));
+            assert!(!event.provider_metadata.contains_key("gcp.vertex.agent.llm_response"));
+            serialized_bytes += serialized.len();
+        }
+
+        assert!(
+            serialized_bytes < 1024 * 1024,
+            "64 tiny chunks unexpectedly serialized to {serialized_bytes} bytes"
+        );
     }
 }

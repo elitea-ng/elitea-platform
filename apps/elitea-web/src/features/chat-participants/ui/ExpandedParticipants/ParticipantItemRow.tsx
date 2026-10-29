@@ -8,6 +8,7 @@ import Typography from '@mui/material/Typography';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import type { SocialAuthorProfile } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
+import { visuallyHidden } from '@/shared/lib/visuallyHidden';
 
 import type { TransformedParticipant } from '../../model/types';
 import { avatarInitialsType, typeScale } from '@/shared/brand/typeScale';
@@ -105,6 +106,7 @@ const ParticipantItemRow = memo(
         component="button"
         type="button"
         sx={{
+          position: 'relative',
           display: 'flex',
           alignItems: 'center',
           gap: 1,
@@ -120,18 +122,27 @@ const ParticipantItemRow = memo(
           },
         }}
         onClick={handleClick}
-        aria-label={isOtherUser ? t('chat-participants.row.mention', 'Mention {{name}}', { name }) : name}
         data-testid={`participant-item-${participantId}`}
       >
+        {/*
+          * The name comes from the hidden span, not an `aria-label`: the visible
+          * text ("E" + "E2E Member") must sit inside a labelled button's name
+          * (WCAG 2.5.3), and the avatar initial is decoration.
+          */}
+        <Box component="span" sx={visuallyHidden}>
+          {isOtherUser ? t('chat-participants.row.mention', 'Mention {{name}}', { name }) : name}
+        </Box>
         {avatarUrl ? (
           <Box
             component="img"
             src={avatarUrl}
-            alt={name}
+            alt=""
+            aria-hidden
             sx={{ width: 20, height: 20, borderRadius: 'var(--el-shape-radiusSm, 4px)' }}
           />
         ) : (
           <Box
+            aria-hidden
             sx={{
               width: 20,
               height: 20,
@@ -150,6 +161,7 @@ const ParticipantItemRow = memo(
         )}
         <Typography
           variant="bodySmall"
+          aria-hidden
           sx={{
             overflow: 'hidden',
             textOverflow: 'ellipsis',

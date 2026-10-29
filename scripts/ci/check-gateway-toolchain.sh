@@ -24,9 +24,10 @@
 #   3. The `go` directive in go.mod shares the image's major.minor series, and
 #      never asks for a patch newer than a pinned image can supply. That line
 #      is a FLOOR, not a maximum, so it may sit below the image version.
-#   4. That directive is at or above the standard-library security floor
-#      (stdlibFloorGo126 in services/elitea-main/tests/buildcontext/
-#      toolchain_floor_test.go, the single place the floor is written). The Go
+#   4. That directive is at or above the standard-library security floor of
+#      its series (stdlibFloorGo<major><minor>, e.g. stdlibFloorGo127 for a
+#      `go 1.27.x` directive, in services/elitea-main/tests/buildcontext/
+#      toolchain_floor_test.go, the single place the floors are written). The Go
 #      test holds the same rule, but it runs in ci-go, whose paths do not cover
 #      this module, so a gateway-only change is checked here.
 #
@@ -124,21 +125,29 @@ else
 fi
 
 # ── 4. The standard-library security floor ───────────────────────────────────
+#
+# The floor constant is chosen by the series of the go directive: `go 1.27.3`
+# reads stdlibFloorGo127. A series with no constant FAILS, so moving the
+# gateway to a new series also means writing that series' floor.
 FLOOR_FILE="${REPO_ROOT}/services/elitea-main/tests/buildcontext/toolchain_floor_test.go"
 [ -f "$FLOOR_FILE" ] || { echo "ERROR: ${FLOOR_FILE#"${REPO_ROOT}/"} is missing; the security floor has no source" >&2; exit 1; }
-FLOOR="$(sed -nE 's/^[[:space:]]*stdlibFloorGo126[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' "$FLOOR_FILE" | head -1)"
-if [ -z "$FLOOR" ]; then
-  fail "read no stdlibFloorGo126 from ${FLOOR_FILE#"${REPO_ROOT}/"}. A floor that reads as nothing passes everything."
-elif [ -n "$GO_DIRECTIVE" ]; then
-  echo "the standard-library security floor is go ${FLOOR}"
-  floor_patch="$(printf '%s' "$FLOOR" | cut -d. -f3)"
-  directive_patch="$(printf '%s' "$GO_DIRECTIVE" | cut -d. -f3)"
-  if [ "$(printf '%s' "$GO_DIRECTIVE" | cut -d. -f1-2)" != "$(printf '%s' "$FLOOR" | cut -d. -f1-2)" ]; then
-    fail "go.mod needs go ${GO_DIRECTIVE}, outside the series of the security floor go ${FLOOR}.
-       Move the floor constant with the series."
-  elif [ -z "$directive_patch" ] || [ "$directive_patch" -lt "$floor_patch" ]; then
-    fail "go.mod needs go ${GO_DIRECTIVE}, below the standard-library security floor go ${FLOOR}.
+if [ -n "$GO_DIRECTIVE" ]; then
+  FLOOR_NAME="stdlibFloorGo$(printf '%s' "$GO_DIRECTIVE" | cut -d. -f1-2 | tr -d .)"
+  FLOOR="$(sed -nE "s/^[[:space:]]*${FLOOR_NAME}[[:space:]]*=[[:space:]]*\"([0-9]+\.[0-9]+\.[0-9]+)\".*/\1/p" "$FLOOR_FILE" | head -1)"
+  if [ -z "$FLOOR" ]; then
+    fail "read no ${FLOOR_NAME} from ${FLOOR_FILE#"${REPO_ROOT}/"}. A floor that reads as nothing passes everything.
+       Write the floor for the series of go.mod's directive (go ${GO_DIRECTIVE})."
+  else
+    echo "the standard-library security floor is go ${FLOOR} (${FLOOR_NAME})"
+    floor_patch="$(printf '%s' "$FLOOR" | cut -d. -f3)"
+    directive_patch="$(printf '%s' "$GO_DIRECTIVE" | cut -d. -f3)"
+    if [ "$(printf '%s' "$GO_DIRECTIVE" | cut -d. -f1-2)" != "$(printf '%s' "$FLOOR" | cut -d. -f1-2)" ]; then
+      fail "go.mod needs go ${GO_DIRECTIVE}, outside the series of the security floor go ${FLOOR}.
+       ${FLOOR_NAME} must name a version of its own series."
+    elif [ -z "$directive_patch" ] || [ "$directive_patch" -lt "$floor_patch" ]; then
+      fail "go.mod needs go ${GO_DIRECTIVE}, below the standard-library security floor go ${FLOOR}.
        A builder older than the floor would compile a vulnerable standard library."
+    fi
   fi
 fi
 

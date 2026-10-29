@@ -83,7 +83,7 @@ pub mod workspace_archive;
 pub mod workspace_tools;
 
 /// The patched-adk guard. The three builders below exist only in the patched
-/// adk 2.2.0 crates in `libs/rust/vendor` (the registry releases have
+/// adk 2.3.0 crates in `libs/rust/vendor` (the registry releases have
 /// none of them), and these constants are compiled into every build of this crate,
 /// not only its tests. So a workspace or host that links the runtime without
 /// the `[patch.crates-io]` lines fails to COMPILE here instead of running the

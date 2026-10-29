@@ -164,7 +164,7 @@ class ToolkitCallToolSummaryV1(_message.Message):
     truncated: bool
     error_message: str
     authorization_required: ToolkitAuthorizationRequiredV1
-    def __init__(self, status: _Optional[_Union[ToolkitCallToolStatusV1, str]] = ..., result_json: _Optional[str] = ..., truncated: bool = ..., error_message: _Optional[str] = ..., authorization_required: _Optional[_Union[ToolkitAuthorizationRequiredV1, _Mapping]] = ...) -> None: ...
+    def __init__(self, status: _Optional[_Union[ToolkitCallToolStatusV1, str]] = ..., result_json: _Optional[str] = ..., truncated: _Optional[bool] = ..., error_message: _Optional[str] = ..., authorization_required: _Optional[_Union[ToolkitAuthorizationRequiredV1, _Mapping]] = ...) -> None: ...
 
 class ToolkitCallToolResultV1(_message.Message):
     __slots__ = ("toolkit_type", "tool_name", "input_bundle_id", "input_bundle_digest", "settings_entry_id", "settings_entry_version", "settings_content_digest", "arguments_entry_id", "arguments_content_digest", "result_artifact", "result_summary")

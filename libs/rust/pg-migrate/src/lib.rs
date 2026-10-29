@@ -230,25 +230,31 @@ async fn apply_locked(
     // A schema-qualified ledger lives in the engine's own schema, which the
     // first migration cannot have created yet.
     if let Some((schema, _)) = table.split_once('.') {
-        sqlx::raw_sql(&format!("CREATE SCHEMA IF NOT EXISTS {schema};"))
-            .execute(&mut *connection)
-            .await?;
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "CREATE SCHEMA IF NOT EXISTS {schema};"
+        )))
+        .execute(&mut *connection)
+        .await?;
     }
     // `migrate._BOOTSTRAP`, with the engine's ledger table.
-    sqlx::raw_sql(&format!(
+    // `table` and `schema` are the engine's own ledger name (a constant of
+    // each caller), never request input: identifiers cannot be bound.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "CREATE TABLE IF NOT EXISTS {table} (
     version    TEXT        PRIMARY KEY,
     name       TEXT        NOT NULL,
     checksum   TEXT        NOT NULL,
     applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );"
-    ))
+    )))
     .execute(&mut *connection)
     .await?;
 
-    let rows = sqlx::query(&format!("SELECT version, name, checksum FROM {table}"))
-        .fetch_all(&mut *connection)
-        .await?;
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT version, name, checksum FROM {table}"
+    )))
+    .fetch_all(&mut *connection)
+    .await?;
     let mut applied = std::collections::HashMap::with_capacity(rows.len());
     for row in rows {
         let version: String = row.try_get("version")?;
@@ -281,12 +287,12 @@ async fn apply_locked(
         let mut transaction = connection.begin().await?;
         // The simple-query protocol: a migration is several statements,
         // as psycopg sends a parameterless execute.
-        sqlx::raw_sql(&migration.sql)
+        sqlx::raw_sql(sqlx::AssertSqlSafe(migration.sql.as_str()))
             .execute(&mut *transaction)
             .await?;
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO {table} (version, name, checksum) VALUES ($1, $2, $3)"
-        ))
+        )))
         .bind(&migration.version)
         .bind(&migration.name)
         .bind(migration.checksum())

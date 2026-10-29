@@ -108,10 +108,10 @@ async fn rows(pool: &PgPool, key: GraphKey) -> [i64; 5] {
             .iter_mut()
             .zip(["graphs", "entities", "relations", "sources", "documents"])
     {
-        *slot = sqlx::query_scalar(&format!(
+        *slot = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT count(*) FROM inventory_graph.{table}
               WHERE project_id = $1 AND application_id = $2"
-        ))
+        )))
         .bind(key.project_id)
         .bind(key.application_id)
         .fetch_one(pool)

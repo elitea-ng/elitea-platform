@@ -132,8 +132,10 @@ test('J-verrepl: [PRODUCT GAP] deleting an in-use version opens the replacement 
     // Only an outside click dismisses it. The listbox has to be GONE first:
     // its own closing overlay still covers the viewport for the length of the
     // menu transition, and a click issued into that window is absorbed by it
-    // rather than reaching the dialog's backdrop.
-    await expect(page.getByRole('listbox')).toBeHidden();
+    // rather than reaching the dialog's backdrop. Since MUI 9.5 the closing
+    // menu is `aria-hidden` at once, so a role query passes before the overlay
+    // leaves the DOM: count the options with `includeHidden` instead.
+    await expect(page.getByRole('option', { name: 'base', includeHidden: true })).toHaveCount(0);
     await page.mouse.click(10, 10);
     await expect(dialog).toBeHidden({ timeout: 5_000 });
   } finally {

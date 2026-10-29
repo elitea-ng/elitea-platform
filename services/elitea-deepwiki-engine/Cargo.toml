@@ -39,7 +39,7 @@ axum = { version = "=0.8.9", default-features = false, features = ["http1", "jso
 # several with look-around, which `regex` lacks. A backtracking engine
 # with `sre`'s match preference. Already in the tree (tiktoken-rs uses it);
 # this pins the same version as a direct dependency.
-fancy-regex = "=0.19.2"
+fancy-regex = "=0.20.0"
 globset = "=0.4.20"
 indexmap = "=2.14.2"
 rayon = "=1.12.0"
@@ -61,16 +61,16 @@ reqwest = { version = "=0.13.5", default-features = false, features = ["rustls",
 rustix = { version = "=1.1.5", default-features = false, features = ["std", "process"] }
 # The migration ledger checksum (`migrate.py`: SHA-256 hex). Already in
 # the tree through sqlx-postgres.
-sha2 = "=0.10.9"
+sha2 = "=0.11.1"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
+serde_json = { version = "=1.0.154", features = ["preserve_order", "float_roundtrip"] }
 # The index storage (ADR-0026 decision 5): PostgreSQL only, no macros (no
 # compile-time database), no migrate feature (the ledger is `migrate.py`'s,
 # ported in `storage::migrate`). TLS through rustls with aws-lc-rs, the
 # provider the tree already carries for gix/reqwest.
-sqlx = { version = "=0.8.6", default-features = false, features = ["json", "postgres", "runtime-tokio", "tls-rustls-aws-lc-rs"] }
+sqlx = { version = "=0.9.0", default-features = false, features = ["json", "postgres", "runtime-tokio", "tls-rustls-aws-lc-rs"] }
 thiserror = "=2.0.21"
-tokio = { version = "=1.53.1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "=1.54.1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "=0.1.19", features = ["sync"] }
 tracing = "=0.1.44"
 # The DeepWiki namespace id: UUIDv5 of (project, wiki id)
@@ -78,10 +78,10 @@ tracing = "=0.1.44"
 uuid = { version = "1", default-features = false, features = ["v5"] }
 # NFKD for the sanitizer's node-id slug (`unicodedata.normalize`). Already
 # in the tree through sqlx; pinned to the locked version.
-unicode-normalization = "=0.1.25"
+unicode-normalization = "=0.1.26"
 
 [dev-dependencies]
-tokio = { version = "=1.53.1", features = ["test-util"] }
+tokio = { version = "=1.54.1", features = ["test-util"] }
 # The model fakes served as elitea.llm.v1.ModelService over real gRPC
 # (`testing::with_model_service`): the engine's model calls are gRPC.
 elitea-model-rpc = { path = "../../libs/rust/model-rpc", features = ["testing"] }

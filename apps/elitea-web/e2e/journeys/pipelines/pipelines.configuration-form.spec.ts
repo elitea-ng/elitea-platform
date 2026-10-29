@@ -82,6 +82,12 @@ async function createPipeline(page: Page, name: string): Promise<CreatedPipeline
   expect(pipeline.pipelineId, 'the created pipeline must carry an id').toMatch(/^\d+$/);
   expect(pipeline.versionId, 'the created pipeline must carry a version').not.toBe('');
   created.push(pipeline);
+  // Let the save's own SPA navigation to the editor settle. A `page.goto` issued
+  // while its lazy route chunk is in flight is the WebKit unload race that
+  // `shared/lib/chunk-load-guard.ts` describes: the chunk import fails, and the
+  // goto hung for the whole 90 s budget behind "Importing a module script failed."
+  await page.waitForURL(new RegExp(`/app/pipelines/[^/]+/${pipeline.pipelineId}(\\?|$)`), { timeout: 30_000 });
+  await expect(page.getByTestId('edit-pipeline-configuration-panel')).toBeVisible({ timeout: 30_000 });
   return pipeline;
 }
 

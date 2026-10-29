@@ -191,7 +191,7 @@ class WorkspaceUploadResponseV1(_message.Message):
     exists: bool
     refusal: WorkspaceRefusalV1
     rejection: _errors_pb2.RuntimeErrorV1
-    def __init__(self, exists: bool = ..., refusal: _Optional[_Union[WorkspaceRefusalV1, _Mapping]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+    def __init__(self, exists: _Optional[bool] = ..., refusal: _Optional[_Union[WorkspaceRefusalV1, _Mapping]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
 
 class WorkspacePublishRequestV1(_message.Message):
     __slots__ = ("claim", "kind", "segment_sha256", "bytes", "prerequisites", "refs", "object_format")
@@ -307,7 +307,7 @@ class WorkspaceRecordEventResponseV1(_message.Message):
     recorded: bool
     refusal: WorkspaceRefusalV1
     rejection: _errors_pb2.RuntimeErrorV1
-    def __init__(self, recorded: bool = ..., refusal: _Optional[_Union[WorkspaceRefusalV1, _Mapping]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+    def __init__(self, recorded: _Optional[bool] = ..., refusal: _Optional[_Union[WorkspaceRefusalV1, _Mapping]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
 
 class WorkspaceChangedFileV1(_message.Message):
     __slots__ = ("scope", "path", "from_path", "status", "additions", "deletions", "binary", "too_large", "diff")
@@ -329,7 +329,7 @@ class WorkspaceChangedFileV1(_message.Message):
     binary: bool
     too_large: bool
     diff: str
-    def __init__(self, scope: _Optional[_Union[WorkspaceChangeScopeV1, str]] = ..., path: _Optional[str] = ..., from_path: _Optional[str] = ..., status: _Optional[_Union[WorkspaceChangeStatusV1, str]] = ..., additions: _Optional[int] = ..., deletions: _Optional[int] = ..., binary: bool = ..., too_large: bool = ..., diff: _Optional[str] = ...) -> None: ...
+    def __init__(self, scope: _Optional[_Union[WorkspaceChangeScopeV1, str]] = ..., path: _Optional[str] = ..., from_path: _Optional[str] = ..., status: _Optional[_Union[WorkspaceChangeStatusV1, str]] = ..., additions: _Optional[int] = ..., deletions: _Optional[int] = ..., binary: _Optional[bool] = ..., too_large: _Optional[bool] = ..., diff: _Optional[str] = ...) -> None: ...
 
 class WorkspaceChangesHeaderV1(_message.Message):
     __slots__ = ("claim", "commit", "parent", "base", "turn_omitted", "cumulative_omitted", "depth")
@@ -365,4 +365,4 @@ class WorkspaceRecordChangesResponseV1(_message.Message):
     recorded: bool
     refusal: WorkspaceRefusalV1
     rejection: _errors_pb2.RuntimeErrorV1
-    def __init__(self, recorded: bool = ..., refusal: _Optional[_Union[WorkspaceRefusalV1, _Mapping]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+    def __init__(self, recorded: _Optional[bool] = ..., refusal: _Optional[_Union[WorkspaceRefusalV1, _Mapping]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...

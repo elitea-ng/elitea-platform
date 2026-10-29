@@ -140,6 +140,7 @@ impl DockerClient {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)] // Elitea patch: one call carries the whole bounded request.
     pub async fn native_code_dependency(
         &self,
         identity: &CodeJobIdentity,

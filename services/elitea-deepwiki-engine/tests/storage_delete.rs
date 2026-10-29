@@ -112,9 +112,9 @@ async fn rows(pool: &PgPool, project: i32, wiki: &str) -> Vec<i64> {
     let mut counts = Vec::new();
     for table in TABLES {
         // A table name from the list above, never input.
-        let count: i64 = sqlx::query_scalar(&format!(
+        let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT count(*) FROM {table} WHERE project_id = $1 AND wiki_id = $2"
-        ))
+        )))
         .bind(project)
         .bind(wiki)
         .fetch_one(pool)
@@ -276,9 +276,9 @@ async fn deleting_a_project_removes_all_its_wikis_and_no_other_project() {
     assert_eq!(stale.wikis, [] as [String; 0]);
     assert_eq!((stale.builds, stale.live_builds), (1, 0));
     for table in TABLES {
-        let left: i64 = sqlx::query_scalar(&format!(
+        let left: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT count(*) FROM {table} WHERE project_id = 7"
-        ))
+        )))
         .fetch_one(&pool)
         .await
         .expect("count");
@@ -736,10 +736,10 @@ fn now_minus(minutes: i64) -> String {
 
 /// The database's RFC 3339 rendering of `now() - minutes`.
 async fn listed_at(pool: &PgPool, minutes: i64) -> String {
-    sqlx::query_scalar(&format!(
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT to_char(({}) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')",
         now_minus(minutes)
-    ))
+    )))
     .fetch_one(pool)
     .await
     .expect("time")

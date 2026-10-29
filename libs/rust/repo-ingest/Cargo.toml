@@ -14,7 +14,7 @@ publish.workspace = true
 loopback-git-http = []
 
 [dependencies]
-base64 = "0.22.1"
+base64 = "0.23.1"
 elitea-engine-core = { path = "../engine-core" }
 # The shared host allowlist rule only (`egress::HostAllowlist`); no provider
 # client, no reqwest.
@@ -28,18 +28,18 @@ elitea-platform-rpc = { path = "../platform-rpc" }
 # the blocking client but are unreachable: a CloneTarget holds only http(s).
 gix = { version = "0.90.0", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "worktree-mutation", "sha1", "max-performance"] }
 regex = "1.13.1"
-serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"] }
+serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
 tonic = { version = "0.14.6", default-features = false }
-sha2 = "0.10.9"
-tokio = { version = "1.53.1", features = ["fs", "macros", "rt", "sync", "time"] }
+sha2 = "0.11.1"
+tokio = { version = "1.54.1", features = ["fs", "macros", "rt", "sync", "time"] }
 tracing = "0.1.44"
-zeroize = "1.9.0"
+zeroize = "1.9.1"
 
 [dev-dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 elitea-platform-rpc = { path = "../platform-rpc", features = ["testing"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
-tokio = { version = "1.53.1", features = ["fs", "macros", "net", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
+tokio = { version = "1.54.1", features = ["fs", "macros", "net", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
 
 [lints]
 workspace = true

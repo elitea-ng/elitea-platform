@@ -215,9 +215,9 @@ fn main_part_name(zip: &mut Zip<'_>, cap: u64) -> Result<String> {
     let mut r = Reader::from_reader(xml.as_slice());
     loop {
         match r.read_event() {
-            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == b"Relationship" => {
-                if attr(&e, b"Type").is_some_and(|t| t.ends_with("/officeDocument"))
-                    && let Some(target) = attr(&e, b"Target")
+            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == "Relationship" => {
+                if attr(&e, "Type").is_some_and(|t| t.ends_with("/officeDocument"))
+                    && let Some(target) = attr(&e, "Target")
                 {
                     return Ok(target.trim_start_matches('/').to_owned());
                 }
@@ -233,9 +233,9 @@ fn rel_target(xml: &[u8], suffix: &str) -> Option<String> {
     let mut r = Reader::from_reader(xml);
     loop {
         match r.read_event() {
-            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == b"Relationship" => {
-                if attr(&e, b"Type").is_some_and(|t| t.ends_with(suffix)) {
-                    return attr(&e, b"Target");
+            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == "Relationship" => {
+                if attr(&e, "Type").is_some_and(|t| t.ends_with(suffix)) {
+                    return attr(&e, "Target");
                 }
             }
             Ok(Event::Eof) | Err(_) => return None,
@@ -249,9 +249,9 @@ fn rel_targets(xml: &[u8], suffix: &str) -> Vec<String> {
     let mut r = Reader::from_reader(xml);
     loop {
         match r.read_event() {
-            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == b"Relationship" => {
-                if attr(&e, b"Type").is_some_and(|t| t.ends_with(suffix))
-                    && let Some(t) = attr(&e, b"Target")
+            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == "Relationship" => {
+                if attr(&e, "Type").is_some_and(|t| t.ends_with(suffix))
+                    && let Some(t) = attr(&e, "Target")
                 {
                     out.push(t);
                 }
@@ -277,39 +277,40 @@ fn read_workbook(xml: &[u8]) -> (Vec<(String, String)>, Vec<DefinedName>) {
     let mut open: Option<DefinedName> = None;
     loop {
         match r.read_event() {
-            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == b"sheet" => {
+            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == "sheet" => {
                 sheets.push((
-                    attr(&e, b"name").unwrap_or_default(),
-                    rel_attr(&e, b"id").unwrap_or_default(),
+                    attr(&e, "name").unwrap_or_default(),
+                    rel_attr(&e, "id").unwrap_or_default(),
                 ));
             }
-            Ok(Event::Start(e)) if e.local_name().as_ref() == b"definedName" => {
+            Ok(Event::Start(e)) if e.local_name().as_ref() == "definedName" => {
                 open = Some(DefinedName {
-                    name: attr(&e, b"name").unwrap_or_default(),
-                    local: attr(&e, b"localSheetId").and_then(|v| v.trim().parse().ok()),
+                    name: attr(&e, "name").unwrap_or_default(),
+                    local: attr(&e, "localSheetId").and_then(|v| v.trim().parse().ok()),
                     text: String::new(),
                 });
             }
-            Ok(Event::Empty(e)) if e.local_name().as_ref() == b"definedName" => {
+            Ok(Event::Empty(e)) if e.local_name().as_ref() == "definedName" => {
                 defined.push(DefinedName {
-                    name: attr(&e, b"name").unwrap_or_default(),
-                    local: attr(&e, b"localSheetId").and_then(|v| v.trim().parse().ok()),
+                    name: attr(&e, "name").unwrap_or_default(),
+                    local: attr(&e, "localSheetId").and_then(|v| v.trim().parse().ok()),
                     text: String::new(),
                 });
             }
             Ok(Event::Text(t)) => {
-                if let (Some(n), Ok(s)) = (open.as_mut(), t.decode()) {
-                    n.text.push_str(&s);
+                if let Some(n) = open.as_mut() {
+                    let s: &str = &t;
+                    n.text.push_str(s);
                 }
             }
             Ok(Event::GeneralRef(t)) => {
-                if let (Some(n), Ok(name)) = (open.as_mut(), t.decode())
-                    && let Some(c) = crate::docx_facts::entity(&name)
+                if let Some(n) = open.as_mut()
+                    && let Some(c) = crate::docx_facts::entity(&t)
                 {
                     n.text.push(c);
                 }
             }
-            Ok(Event::End(e)) if e.local_name().as_ref() == b"definedName" => {
+            Ok(Event::End(e)) if e.local_name().as_ref() == "definedName" => {
                 defined.extend(open.take());
             }
             Ok(Event::Eof) | Err(_) => break,
@@ -544,8 +545,9 @@ fn find_mentions(zip: &mut Zip<'_>, out: &mut XlsxFacts, w: &Walk<'_>) -> Result
     let sheet = w.names[w.target].to_lowercase();
     let candidates: Vec<String> = zip
         .file_names()
+        .filter_map(std::result::Result::ok)
         .filter(|n| scannable(n))
-        .map(str::to_owned)
+        .map(std::borrow::Cow::into_owned)
         .collect();
     for name in candidates {
         let cap = if name.starts_with("xl/worksheets/") {
@@ -624,7 +626,7 @@ fn scan_mentions(xml: &[u8], m: &Mention<'_>) -> bool {
         buf.clear();
         hit
     };
-    let skipped = |name: &[u8]| matches!(name, b"v" | b"is" | b"definedName");
+    let skipped = |name: &str| matches!(name, "v" | "is" | "definedName");
     loop {
         match r.read_event() {
             Ok(Event::Start(e)) => {
@@ -652,14 +654,11 @@ fn scan_mentions(xml: &[u8], m: &Mention<'_>) -> bool {
                 skip = skip.saturating_sub(1);
             }
             Ok(Event::Text(t)) if skip == 0 => {
-                if let Ok(s) = t.decode() {
-                    buf.push_str(&s);
-                }
+                let s: &str = &t;
+                buf.push_str(s);
             }
             Ok(Event::GeneralRef(t)) if skip == 0 => {
-                if let Ok(name) = t.decode()
-                    && let Some(c) = crate::docx_facts::entity(&name)
-                {
+                if let Some(c) = crate::docx_facts::entity(&t) {
                     buf.push(c);
                 }
             }
@@ -671,8 +670,8 @@ fn scan_mentions(xml: &[u8], m: &Mention<'_>) -> bool {
 
 fn attrs_mention(e: &quick_xml::events::BytesStart<'_>, m: &Mention<'_>) -> bool {
     e.attributes().flatten().any(|a| {
-        a.value.contains(&b'!') && {
-            let raw = String::from_utf8_lossy(&a.value);
+        a.value.contains('!') && {
+            let raw = a.value.clone();
             let text = quick_xml::escape::unescape(&raw).unwrap_or_else(|_| raw.clone());
             m.refers(&text)
         }
@@ -684,7 +683,7 @@ fn table_names(xml: &[u8]) -> Vec<String> {
     loop {
         match r.read_event() {
             Ok(Event::Start(e) | Event::Empty(e)) => {
-                return [b"name".as_slice(), b"displayName".as_slice()]
+                return ["name", "displayName"]
                     .iter()
                     .filter_map(|k| attr(&e, k))
                     .map(|n| n.to_lowercase())
@@ -704,12 +703,12 @@ fn pivot_sources(xml: &[u8], sheet: &str, tables: &[String], named: &[(String, b
     loop {
         match r.read_event() {
             Ok(Event::Empty(e) | Event::Start(e))
-                if e.local_name().as_ref() == b"worksheetSource" =>
+                if e.local_name().as_ref() == "worksheetSource" =>
             {
-                if attr(&e, b"sheet").is_some_and(|s| s.to_lowercase() == sheet) {
+                if attr(&e, "sheet").is_some_and(|s| s.to_lowercase() == sheet) {
                     return true;
                 }
-                if let Some(n) = attr(&e, b"name") {
+                if let Some(n) = attr(&e, "name") {
                     let n = n.to_lowercase();
                     if tables.contains(&n)
                         || named
@@ -749,10 +748,10 @@ fn reach(
         loop {
             match r.read_event() {
                 Ok(Event::Empty(e) | Event::Start(e))
-                    if e.local_name().as_ref() == b"Relationship" =>
+                    if e.local_name().as_ref() == "Relationship" =>
                 {
-                    let kind = attr(&e, b"Type").unwrap_or_default();
-                    let external = attr(&e, b"TargetMode").is_some_and(|m| m == "External");
+                    let kind = attr(&e, "Type").unwrap_or_default();
+                    let external = attr(&e, "TargetMode").is_some_and(|m| m == "External");
                     let mut skipped = [
                         "/externalLink",
                         "/theme",
@@ -766,7 +765,7 @@ fn reach(
                     if !worksheets {
                         skipped |= kind.ends_with("/worksheet") || kind.ends_with("/chartsheet");
                     }
-                    if let Some(t) = attr(&e, b"Target")
+                    if let Some(t) = attr(&e, "Target")
                         && !external
                         && !skipped
                     {
@@ -839,49 +838,43 @@ fn scan_sheet(xml: &[u8], sheet: usize, scan_for: &Scan<'_>) -> SheetScan {
     loop {
         match r.read_event() {
             Ok(Event::Start(e)) => match e.local_name().as_ref() {
-                b"c" => {
+                "c" => {
                     in_c = true;
-                    coord = attr(&e, b"r").and_then(|a| parse_cell_ref(&a));
-                    kind = attr(&e, b"t").unwrap_or_default();
+                    coord = attr(&e, "r").and_then(|a| parse_cell_ref(&a));
+                    kind = attr(&e, "t").unwrap_or_default();
                     (f, v, is) = (None, None, None);
                 }
-                b"f" if in_c => {
+                "f" if in_c => {
                     into = Target::Formula;
                     f = Some(String::new());
                 }
-                b"v" if in_c => {
+                "v" if in_c => {
                     into = Target::Value;
                     v = Some(String::new());
                 }
-                b"rPh" if in_c => in_phonetic = true,
-                b"t" if in_c && !in_phonetic => {
+                "rPh" if in_c => in_phonetic = true,
+                "t" if in_c && !in_phonetic => {
                     into = Target::Inline;
                     is.get_or_insert_with(String::new);
                 }
-                b"drawing" => scan.drawing = rel_attr(&e, b"id").or(Some(String::new())),
+                "drawing" => scan.drawing = rel_attr(&e, "id").or(Some(String::new())),
                 _ => {}
             },
             Ok(Event::Empty(e)) => match e.local_name().as_ref() {
-                b"f" if in_c => f = Some(String::new()),
-                b"drawing" => scan.drawing = rel_attr(&e, b"id").or(Some(String::new())),
+                "f" if in_c => f = Some(String::new()),
+                "drawing" => scan.drawing = rel_attr(&e, "id").or(Some(String::new())),
                 _ => {}
             },
-            Ok(Event::Text(t)) => {
-                if let Ok(s) = t.decode() {
-                    push(&mut f, &mut v, &mut is, into, &s);
-                }
-            }
+            Ok(Event::Text(t)) => push(&mut f, &mut v, &mut is, into, &t),
             Ok(Event::GeneralRef(t)) => {
-                if let Ok(name) = t.decode()
-                    && let Some(c) = crate::docx_facts::entity(&name)
-                {
+                if let Some(c) = crate::docx_facts::entity(&t) {
                     push(&mut f, &mut v, &mut is, into, &c.to_string());
                 }
             }
             Ok(Event::End(e)) => match e.local_name().as_ref() {
-                b"f" | b"v" | b"t" => into = Target::Nowhere,
-                b"rPh" => in_phonetic = false,
-                b"c" => {
+                "f" | "v" | "t" => into = Target::Nowhere,
+                "rPh" => in_phonetic = false,
+                "c" => {
                     in_c = false;
                     let holds = f.as_deref().is_some_and(|t| !t.is_empty())
                         || v.as_deref().is_some_and(|t| !t.is_empty())
@@ -985,37 +978,34 @@ fn read_shared(xml: &[u8], need: &HashSet<usize>) -> HashMap<usize, String> {
     loop {
         match r.read_event() {
             Ok(Event::Start(e)) => match e.local_name().as_ref() {
-                b"si" => {
+                "si" => {
                     in_si = true;
                     text.clear();
                 }
-                b"rPh" => in_phonetic = true,
-                b"t" if in_si && !in_phonetic => in_t = true,
+                "rPh" => in_phonetic = true,
+                "t" if in_si && !in_phonetic => in_t = true,
                 _ => {}
             },
             // An empty string is an `<si/>`: it still takes an index.
-            Ok(Event::Empty(e)) if e.local_name().as_ref() == b"si" => {
+            Ok(Event::Empty(e)) if e.local_name().as_ref() == "si" => {
                 if need.contains(&index) {
                     out.insert(index, String::new());
                 }
                 index += 1;
             }
             Ok(Event::Text(t)) if in_t => {
-                if let Ok(s) = t.decode() {
-                    text.push_str(&s);
-                }
+                let s: &str = &t;
+                text.push_str(s);
             }
             Ok(Event::GeneralRef(t)) if in_t => {
-                if let Ok(name) = t.decode()
-                    && let Some(c) = crate::docx_facts::entity(&name)
-                {
+                if let Some(c) = crate::docx_facts::entity(&t) {
                     text.push(c);
                 }
             }
             Ok(Event::End(e)) => match e.local_name().as_ref() {
-                b"t" => in_t = false,
-                b"rPh" => in_phonetic = false,
-                b"si" => {
+                "t" => in_t = false,
+                "rPh" => in_phonetic = false,
+                "si" => {
                     if need.contains(&index) {
                         out.insert(index, std::mem::take(&mut text));
                     }
@@ -1047,10 +1037,10 @@ fn read_chart(xml: &[u8]) -> XlsxChart {
                 let name = e.local_name();
                 let name = name.as_ref();
                 match name {
-                    b"f" => refs.push(String::new()),
-                    b"barDir" => bar_dir = attr(&e, b"val"),
-                    n if kind.is_none() && n.ends_with(b"Chart") && n != b"chart" => {
-                        let raw = String::from_utf8_lossy(&n[..n.len() - 5]).into_owned();
+                    "f" => refs.push(String::new()),
+                    "barDir" => bar_dir = attr(&e, "val"),
+                    n if kind.is_none() && n.ends_with("Chart") && n != "chart" => {
+                        let raw = n[..n.len() - 5].to_owned();
                         kind = Some(raw);
                     }
                     _ => {}
@@ -1060,35 +1050,34 @@ fn read_chart(xml: &[u8]) -> XlsxChart {
                 let name = e.local_name();
                 let name = name.as_ref();
                 match name {
-                    b"plotArea" => seen_plot = true,
-                    b"title" if !seen_plot => in_title = true,
-                    b"t" if in_title => in_t = true,
-                    b"f" => {
+                    "plotArea" => seen_plot = true,
+                    "title" if !seen_plot => in_title = true,
+                    "t" if in_title => in_t = true,
+                    "f" => {
                         in_f = true;
                         refs.push(String::new());
                     }
-                    b"barDir" => bar_dir = attr(&e, b"val"),
-                    n if kind.is_none() && n.ends_with(b"Chart") && n != b"chart" => {
-                        let raw = String::from_utf8_lossy(&n[..n.len() - 5]).into_owned();
+                    "barDir" => bar_dir = attr(&e, "val"),
+                    n if kind.is_none() && n.ends_with("Chart") && n != "chart" => {
+                        let raw = n[..n.len() - 5].to_owned();
                         kind = Some(raw);
                     }
                     _ => {}
                 }
             }
             Ok(Event::Text(t)) => {
-                if let Ok(s) = t.decode() {
-                    if in_t {
-                        title.push_str(&s);
-                        have_title = true;
-                    } else if in_f && let Some(last) = refs.last_mut() {
-                        last.push_str(&s);
-                    }
+                let s: &str = &t;
+                if in_t {
+                    title.push_str(s);
+                    have_title = true;
+                } else if in_f && let Some(last) = refs.last_mut() {
+                    last.push_str(s);
                 }
             }
             Ok(Event::End(e)) => match e.local_name().as_ref() {
-                b"title" => in_title = false,
-                b"t" => in_t = false,
-                b"f" => in_f = false,
+                "title" => in_title = false,
+                "t" => in_t = false,
+                "f" => in_f = false,
                 _ => {}
             },
             Ok(Event::Eof) | Err(_) => break,

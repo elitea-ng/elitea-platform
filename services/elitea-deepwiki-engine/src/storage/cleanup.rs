@@ -108,7 +108,7 @@ async fn delete_batch(pool: &PgPool, table: &str, wiki: &(i32, String), limit: i
              WHERE project_id = $1 AND wiki_id = $2 AND branch = $3 \
              LIMIT $4 FOR UPDATE SKIP LOCKED)"
     );
-    Ok(sqlx::query(&statement)
+    Ok(sqlx::query(sqlx::AssertSqlSafe(&*statement))
         .bind(wiki.0)
         .bind(&wiki.1)
         .bind(DEAD_BRANCH)
@@ -141,7 +141,7 @@ async fn stray_wiki(
             "SELECT DISTINCT project_id, wiki_id FROM {table} WHERE branch = $1 LIMIT {}",
             handled.len() + 1
         );
-        let found: Vec<(i32, String)> = sqlx::query_as(&statement)
+        let found: Vec<(i32, String)> = sqlx::query_as(sqlx::AssertSqlSafe(&*statement))
             .bind(DEAD_BRANCH)
             .fetch_all(pool)
             .await?;

@@ -1202,7 +1202,7 @@ func TestUserIDPropagatedToContext(t *testing.T) {
 	if capture.gotCtx == nil {
 		t.Fatal("router never received a context (ChatCompletionRequest not called)")
 	}
-	got, ok := capture.gotCtx.Value(schemas.BifrostContextKeyUserID).(string)
+	got, ok := capture.gotCtx.Value(schemas.BifrostContextKeyUserID).(string) //nolint:staticcheck // SA1019: the key the handler sets
 	if !ok || got != "user-abc" {
 		t.Fatalf("BifrostContextKeyUserID on context = %q (ok=%v), want %q — user id was not propagated",
 			got, ok, "user-abc")

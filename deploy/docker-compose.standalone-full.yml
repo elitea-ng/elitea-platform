@@ -480,7 +480,7 @@ services:
       start_period: 5s
 
   # ── Bifrost LLM gateway ─────────────────────────────────────────────────────
-  # Standalone Go module (Go 1.26.4, GOWORK=off) embedding bifrost/core. Serves
+  # Standalone Go module (Go 1.27 series, GOWORK=off) embedding bifrost/core. Serves
   # both the OpenAI and Anthropic dialects under /llm.
   #
   # Dependencies are far lighter than the helm chart implies:

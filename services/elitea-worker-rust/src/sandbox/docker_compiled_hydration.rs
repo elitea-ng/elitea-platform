@@ -77,14 +77,13 @@ impl DockerSupervisor {
                     .and_then(|epoch| u64::try_from(epoch).ok()),
             )
             .claimed(&lease);
-        let result = self
-            .snapshot_heartbeat(
-                scope,
-                &lease,
-                self.capture_snapshot_owned(scope, &lease, control, content),
-                Some(diagnostic),
-            )
-            .await?;
+        let result = Box::pin(self.snapshot_heartbeat(
+            scope,
+            &lease,
+            self.capture_snapshot_owned(scope, &lease, control, content),
+            Some(diagnostic),
+        ))
+        .await?;
         if matches!(&result, SnapshotReconciliation::Captured { .. }) {
             observe(diagnostic, Stage::LeaseRelease, async {
                 Ok(self.ledger.release(&lease).await?)

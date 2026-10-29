@@ -149,7 +149,19 @@ func openRealtimeSocket(
 	// caller parameters are merged onto it — `intent` above all, which selects
 	// the provider's TRANSCRIPTION session mode and which the only known caller
 	// sends on every dial.
-	wsURL, uErr := realtimeProviderURL(rt.RealtimeWebSocketURL(key, model), params)
+	//
+	// The intent argument stays EMPTY. bifrost 1.13 added it, and the OpenAI
+	// provider then returns `?intent=<i>` WITHOUT `?model=`. The gateway keeps
+	// the URL it always sent: the provider's `?model=` URL, with the caller's
+	// allowlisted parameters (intent among them) merged on by
+	// realtimeProviderURL.
+	baseURL, bErr := rt.RealtimeWebSocketURL(key, model, "")
+	if bErr != nil {
+		// The error is NOT formatted with %v: a provider error can quote the
+		// URL, and the URL can carry userinfo.
+		return nil, fmt.Errorf("realtime: the provider %s refused to build its realtime URL", provider)
+	}
+	wsURL, uErr := realtimeProviderURL(baseURL, params)
 	if uErr != nil {
 		// The URL is NOT logged: it is built from the credential's base URL,
 		// which can carry userinfo.

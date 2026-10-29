@@ -289,7 +289,7 @@ impl<R: Ed25519PublicKeyResolver + 'static> SandboxSupervisorService for Supervi
         Response<crate::protocol::elitea::runtime::v1::SubmitRustCompiledSnapshotResponseV1>,
         Status,
     > {
-        self.submit_snapshot(request).await
+        Box::pin(self.submit_snapshot(request)).await
     }
     async fn publish_rust_compiled_snapshot(
         &self,

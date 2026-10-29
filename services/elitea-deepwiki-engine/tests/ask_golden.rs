@@ -315,7 +315,13 @@ async fn the_file_system_and_todo_tools_give_the_deepagents_text() {
                     "{what}"
                 );
                 assert_eq!(
-                    format!("{:x}", Sha256::digest(ours.as_bytes())),
+                    Sha256::digest(ours.as_bytes())
+                        .iter()
+                        .fold(String::new(), |mut hex, byte| {
+                            let _ =
+                                std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"));
+                            hex
+                        }),
                     record["result_sha256"].as_str().expect("sha"),
                     "{what}"
                 );

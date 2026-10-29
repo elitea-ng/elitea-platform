@@ -240,7 +240,7 @@ impl PgIndex {
             bind.len() + 3,
             bind.len() + 2
         );
-        let mut query = sqlx::query(&sql).bind(self.wiki());
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(&*sql)).bind(self.wiki());
         for value in bind {
             query = query.bind(value);
         }
@@ -358,7 +358,7 @@ impl IndexStore for PgIndex {
              ORDER BY length(symbol_name), node_id LIMIT 1",
             adapter::NODE_SELECT
         );
-        let row = sqlx::query(&sql)
+        let row = sqlx::query(sqlx::AssertSqlSafe(&*sql))
             .bind(self.wiki())
             .bind(format!("%{}%", like_sqlite(name)))
             .bind(self.project())
@@ -477,7 +477,7 @@ impl IndexStore for PgIndex {
                AND project_id = $5 LIMIT $4",
             adapter::NODE_SELECT
         );
-        let rows = sqlx::query(&sql)
+        let rows = sqlx::query(sqlx::AssertSqlSafe(&*sql))
             .bind(self.wiki())
             .bind(symbol_types)
             .bind(prefix_pattern(path_prefix))

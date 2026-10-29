@@ -21,7 +21,7 @@ leiden-rs = { path = "../vendor/leiden-rs", version = "=0.8.1", default-features
 
 [dev-dependencies]
 # The networkx fixture (tests/pagerank.rs) is JSON.
-serde_json = "1.0.151"
+serde_json = "1.0.154"
 
 [lints]
 workspace = true

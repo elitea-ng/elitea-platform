@@ -138,20 +138,20 @@ impl ContentTypes {
                 Ok(Event::Empty(e) | Event::Start(e)) => {
                     let name = e.local_name();
                     let kind = name.as_ref();
-                    if kind != b"Default" && kind != b"Override" {
+                    if kind != "Default" && kind != "Override" {
                         continue;
                     }
                     let (mut key, mut ty) = (None, None);
                     for a in e.attributes().flatten() {
-                        let v = String::from_utf8_lossy(&a.value).to_ascii_lowercase();
+                        let v = a.value.to_ascii_lowercase();
                         match a.key.local_name().as_ref() {
-                            b"Extension" | b"PartName" => key = Some(v),
-                            b"ContentType" => ty = Some(v),
+                            "Extension" | "PartName" => key = Some(v),
+                            "ContentType" => ty = Some(v),
                             _ => {}
                         }
                     }
                     if let (Some(k), Some(t)) = (key, ty) {
-                        if kind == b"Default" {
+                        if kind == "Default" {
                             ct.defaults.insert(k, t);
                         } else {
                             ct.overrides.insert(k.trim_start_matches('/').to_owned(), t);
@@ -193,14 +193,14 @@ fn parse_rels(rels_name: &str, xml: &[u8]) -> Vec<Rel> {
     let mut r = Reader::from_reader(xml);
     loop {
         match r.read_event() {
-            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == b"Relationship" => {
+            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == "Relationship" => {
                 let (mut kind, mut target, mut external) = (String::new(), String::new(), false);
                 for a in e.attributes().flatten() {
-                    let v = String::from_utf8_lossy(&a.value).into_owned();
+                    let v = a.value.to_string();
                     match a.key.local_name().as_ref() {
-                        b"Type" => kind = v,
-                        b"Target" => target = v,
-                        b"TargetMode" => external = v.eq_ignore_ascii_case("external"),
+                        "Type" => kind = v,
+                        "Target" => target = v,
+                        "TargetMode" => external = v.eq_ignore_ascii_case("external"),
                         _ => {}
                     }
                 }
@@ -429,7 +429,12 @@ fn note_element(name: &[u8], info: &mut XmlInfo) {
 /// cell cap needs.
 pub(crate) fn check_xml(bytes: &[u8], l: &Limits) -> Result<XmlInfo> {
     let max_depth = l.max_xml_depth;
-    let mut reader = Reader::from_reader(bytes);
+    // quick-xml 0.42 refuses input that is not UTF-8, where 0.41 read it
+    // byte-wise. A part named `.xml` is always gated as XML (a binary renamed
+    // `.xml` included), so read it lossily: an invalid byte becomes U+FFFD,
+    // which changes no markup, and the depth, DTD and span checks still bound it.
+    let text = String::from_utf8_lossy(bytes);
+    let mut reader = Reader::from_str(&text);
     let mut depth = 0u64;
     let mut info = XmlInfo::default();
     let mut seen_root = false;
@@ -442,17 +447,17 @@ pub(crate) fn check_xml(bytes: &[u8], l: &Limits) -> Result<XmlInfo> {
                 }
                 if !seen_root {
                     seen_root = true;
-                    info.svg = e.local_name().as_ref() == b"svg";
+                    info.svg = e.local_name().as_ref() == "svg";
                 }
-                note_element(e.local_name().as_ref(), &mut info);
+                note_element(e.local_name().as_ref().as_bytes(), &mut info);
                 check_span(&e, l)?;
             }
             Ok(Event::Empty(e)) => {
                 if !seen_root {
                     seen_root = true;
-                    info.svg = e.local_name().as_ref() == b"svg";
+                    info.svg = e.local_name().as_ref() == "svg";
                 }
-                note_element(e.local_name().as_ref(), &mut info);
+                note_element(e.local_name().as_ref().as_bytes(), &mut info);
                 check_span(&e, l)?;
             }
             Ok(Event::End(_)) => depth = depth.saturating_sub(1),
@@ -600,21 +605,19 @@ pub(crate) fn scan_tolerant(b: &[u8], l: &Limits) -> Result<XmlInfo> {
 /// `w:gridSpan w:val`, and `gridSpan`/`rowSpan` attributes of `a:tc`.
 fn check_span(e: &quick_xml::events::BytesStart<'_>, l: &Limits) -> Result<()> {
     let name = e.local_name();
-    let is_docx_span = name.as_ref() == b"gridSpan";
-    if !is_docx_span && name.as_ref() != b"tc" {
+    let is_docx_span = name.as_ref() == "gridSpan";
+    if !is_docx_span && name.as_ref() != "tc" {
         return Ok(());
     }
     for a in e.attributes().flatten() {
         let key = a.key.local_name();
         let wanted = if is_docx_span {
-            key.as_ref() == b"val"
+            key.as_ref() == "val"
         } else {
-            matches!(key.as_ref(), b"gridSpan" | b"rowSpan")
+            matches!(key.as_ref(), "gridSpan" | "rowSpan")
         };
         if wanted
-            && let Some(v) = std::str::from_utf8(&a.value)
-                .ok()
-                .and_then(|v| v.trim().parse::<u64>().ok())
+            && let Some(v) = Some(&*a.value).and_then(|v| v.trim().parse::<u64>().ok())
             && v > l.max_table_span
         {
             return Err(limit(Limit::TableSpan, v));
@@ -628,14 +631,14 @@ fn pptx_slide_size(xml: &[u8]) -> Option<(u64, u64)> {
     let mut reader = Reader::from_reader(xml);
     loop {
         match reader.read_event() {
-            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == b"sldSz" => {
+            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == "sldSz" => {
                 let mut cx = None;
                 let mut cy = None;
                 for a in e.attributes().flatten() {
-                    let v = std::str::from_utf8(&a.value).ok()?.parse::<u64>().ok();
+                    let v = a.value.parse::<u64>().ok();
                     match a.key.local_name().as_ref() {
-                        b"cx" => cx = v,
-                        b"cy" => cy = v,
+                        "cx" => cx = v,
+                        "cy" => cy = v,
                         _ => {}
                     }
                 }
@@ -668,16 +671,14 @@ fn docx_page_size(xml: &[u8]) -> Option<(u64, u64)> {
     let mut best: Option<(u64, u64)> = None;
     loop {
         match reader.read_event() {
-            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == b"pgSz" => {
+            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == "pgSz" => {
                 let mut w = None;
                 let mut h = None;
                 for a in e.attributes().flatten() {
-                    let v = std::str::from_utf8(&a.value)
-                        .ok()
-                        .and_then(|s| s.parse::<u64>().ok());
+                    let v = Some(&*a.value).and_then(|s| s.parse::<u64>().ok());
                     match a.key.local_name().as_ref() {
-                        b"w" => w = v,
-                        b"h" => h = v,
+                        "w" => w = v,
+                        "h" => h = v,
                         _ => {}
                     }
                 }
@@ -799,7 +800,7 @@ pub(crate) fn validate_and_repack(
     let mut declared_total = 0u64;
     for index in 0..n {
         let f = archive.by_index_raw(index).map_err(malformed)?;
-        let name = f.name().to_owned();
+        let name = f.name().map_err(malformed)?.into_owned();
         if !safe_name(&name) {
             return Err(OfficeError::Malformed(format!(
                 "unsafe entry name {name:?}"

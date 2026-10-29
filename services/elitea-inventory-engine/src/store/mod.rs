@@ -241,9 +241,12 @@ pub async fn schema_gap(pool: &PgPool) -> Result<Option<String>> {
             LEDGER.table
         )));
     }
-    let applied: Vec<String> = sqlx::query_scalar(&format!("SELECT version FROM {}", LEDGER.table))
-        .fetch_all(pool)
-        .await?;
+    let applied: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT version FROM {}",
+        LEDGER.table
+    )))
+    .fetch_all(pool)
+    .await?;
     let missing: Vec<String> = embedded()?
         .into_iter()
         .filter(|migration| !applied.contains(&migration.version))
@@ -839,17 +842,18 @@ async fn import_prepared(
         .iter_mut()
         .zip(["inventory_graph.sources", "inventory_graph.documents"])
     {
-        *count = sqlx::query_scalar(&format!(
+        // `table` is one of the two constant names above, never input.
+        *count = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT count(*) FROM {table} WHERE project_id = $1 AND application_id = $2"
-        ))
+        )))
         .bind(key.project_id)
         .bind(key.application_id)
         .fetch_one(&mut *transaction)
         .await?;
         if replace_state {
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "DELETE FROM {table} WHERE project_id = $1 AND application_id = $2"
-            ))
+            )))
             .bind(key.project_id)
             .bind(key.application_id)
             .execute(&mut *transaction)

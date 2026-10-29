@@ -35,8 +35,12 @@ import { walk } from './budgets-core.mjs';
  */
 const T_MODULE_TARGETS = new Set(['src/shared/i18n']);
 
-function parseSource(source) {
-  return parse(source, { sourceType: 'module', plugins: ['typescript', 'jsx'] });
+// JSX only for .tsx/.jsx, as budgets-core and mock-rules-core do: with `jsx` on,
+// a `.ts` generic arrow (`<T>(x: T) => …`) reads as an unclosed element, which
+// @babel/parser 8 rejects (7 let it through).
+function parseSource(filename, source) {
+  const jsx = filename.endsWith('.tsx') || filename.endsWith('.jsx');
+  return parse(source, { sourceType: 'module', plugins: jsx ? ['typescript', 'jsx'] : ['typescript'] });
 }
 
 /**
@@ -104,7 +108,7 @@ export function extractCallSites(filename, source) {
 
   let ast;
   try {
-    ast = parseSource(source);
+    ast = parseSource(filename, source);
   } catch (error) {
     flagged.push({ filename, line: 1, reason: 'parse-error', detail: error.message });
     return { entries, flagged };

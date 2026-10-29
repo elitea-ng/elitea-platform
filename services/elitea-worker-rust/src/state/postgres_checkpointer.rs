@@ -1663,9 +1663,12 @@ fn duration_micros_ceil(duration: std::time::Duration) -> Result<i64, PostgresCh
 async fn begin_bounded(
     pool: &PgPool,
 ) -> Result<Transaction<'static, Postgres>, PostgresCheckpointError> {
-    pool.begin_with(super::postgres_session::bounded_begin_statement(
-        super::postgres_session::WRITER_LOCK_TIMEOUT,
-        super::postgres_session::IDLE_TRANSACTION_TIMEOUT,
+    // The statement is formatted from two duration constants, never input.
+    pool.begin_with(sqlx::AssertSqlSafe(
+        super::postgres_session::bounded_begin_statement(
+            super::postgres_session::WRITER_LOCK_TIMEOUT,
+            super::postgres_session::IDLE_TRANSACTION_TIMEOUT,
+        ),
     ))
     .await
     .map_err(storage_error)
