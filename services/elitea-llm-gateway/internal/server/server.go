@@ -23,6 +23,9 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/bifrostlog"
 	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/config"
 	natsinfra "github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
+	// Provider request bodies leave as compact JSON. An indented body with
+	// ordinary markup in it is refused by the edge in front of a provider.
+	_ "github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/providerwire"
 )
 
 // NATSClient is the budget-path surface the gateway server owns and hands to
