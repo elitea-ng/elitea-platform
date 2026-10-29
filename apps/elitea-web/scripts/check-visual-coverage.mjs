@@ -164,6 +164,9 @@ const EXEMPT = new Map([
   // baseline is regenerated through the ci-web-e2e workflow_dispatch, never
   // locally, so the page enters exempt and leaves when that run lands.
   ['/admin/app/retention', 'not snapshotted yet — new page (issue 1495). The policy table renders the seeded defaults from shared migration 0195, so the screen is deterministic; add a spec to admin.visual.spec.ts and regenerate the baseline through ci-web-e2e workflow_dispatch to remove this entry.'],
+  // Issue 1497 (ADR-0040 decision 1). New in the change that added it, like
+  // retention above: the baseline comes from a ci-web-e2e workflow_dispatch.
+  ['/admin/app/agent-registry', 'not snapshotted yet — new page (issue 1497). The table lists the seeded agents with their backfilled tier, so pin it with a landmark on agent-registry-table, add a spec to admin.visual.spec.ts and regenerate the baseline through ci-web-e2e workflow_dispatch to remove this entry.'],
   ['/help-center', 'not snapshotted — needs seeded resource links, NOT a missing backend. `useResourcesConfig` reads GET /admin/plugin_config_values/prompt_lib/resources, which the admin port (#200) made serve real values; the section is authored on Admin › Features and journey 36g asserts the round trip. This stack configures none, so a baseline would still pin an unconfigured screen; seed a fixed set of links and it is coverable. Measured meanwhile, its stalled and loaded renders are byte-identical, so it will need only a mount guard, not a data landmark.'],
 ]);
 

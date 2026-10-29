@@ -1473,6 +1473,25 @@ async function main(): Promise<void> {
       const alreadyPublished = (versions.items ?? []).some(
         (v: { status?: string }) => v.status === "published",
       );
+      if (!alreadyPublished) {
+        // ADR-0040 (#1497): an agent that predates shared 0204 was backfilled
+        // as tier medium, and a direct publish of that tier answers 409
+        // change_request_required. The docs agent is a fixture, so it is
+        // pinned to tier low (the governance role the seeding admin holds may
+        // lower a tier) before the direct publish below.
+        const lowered = await api(
+          req,
+          baseUrl,
+          "PUT",
+          `/elitea_core/agent_registry/prompt_lib/${PROJECT_ID}/${agent.id}`,
+          { risk_tier: "low" },
+        );
+        if (lowered.status !== 200) {
+          notes.push(
+            `agent tier could not be set to low (status ${lowered.status}); the publish may answer change_request_required.`,
+          );
+        }
+      }
       const publishResult = alreadyPublished
         ? { status: 200, body: { reused: true } }
         : await api(

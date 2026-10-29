@@ -19,6 +19,7 @@ import {
   type ImportOutcome,
   type PublishOutcome,
 } from '../api/lifecycleApi';
+import { governanceRefusalMessage, readGovernanceRefusal } from '../lib/governanceRefusal';
 import {
   normalizePublishValidation,
   type NormalizedPublishValidation,
@@ -77,15 +78,11 @@ export function lifecycleErrorMessage(error: unknown): string {
     return t('features.agentLifecycle.error.unknown', 'The action could not be completed.');
   }
   const failure = error.failure;
-  if (failure.kind === 'auth') {
-    return t('features.agentLifecycle.error.auth', 'You are not signed in. Sign in and try again.');
-  }
-  if (failure.kind === 'network') {
-    return t('features.agentLifecycle.error.network', 'The server could not be reached.');
-  }
-  if (failure.kind === 'aborted') {
-    return t('features.agentLifecycle.error.aborted', 'The action was cancelled.');
-  }
+  if (failure.kind !== 'http') return transportFailureMessage(failure.kind);
+  // A governance refusal carries its code in `error` too; read it as a code,
+  // never as text, so the author sees a sentence and not `release_gate_failed`.
+  const refusal = readGovernanceRefusal(error);
+  if (refusal !== undefined) return governanceRefusalMessage(refusal);
   const serverMessage = readServerError(failure.body);
   switch (failure.status) {
     case 403:
@@ -99,6 +96,17 @@ export function lifecycleErrorMessage(error: unknown): string {
       return serverMessage ?? t('features.agentLifecycle.error.invalid', 'The version did not pass validation.');
     default:
       return serverMessage ?? t('features.agentLifecycle.error.unknown', 'The action could not be completed.');
+  }
+}
+
+function transportFailureMessage(kind: 'auth' | 'network' | 'aborted'): string {
+  switch (kind) {
+    case 'auth':
+      return t('features.agentLifecycle.error.auth', 'You are not signed in. Sign in and try again.');
+    case 'network':
+      return t('features.agentLifecycle.error.network', 'The server could not be reached.');
+    case 'aborted':
+      return t('features.agentLifecycle.error.aborted', 'The action was cancelled.');
   }
 }
 

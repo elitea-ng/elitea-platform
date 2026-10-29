@@ -39,6 +39,26 @@ function record(request: Request, body: unknown): void {
   recorded.push({ url: request.url, method: request.method, body });
 }
 
+const registryLow = {
+  project_id: 2,
+  application_id: 7,
+  application_name: 'Audit Agent',
+  business_owner_id: null,
+  technical_owner_id: 4,
+  risk_tier: 'low',
+  intended_use: '',
+  out_of_scope_use: '',
+  data_classes: [],
+  certification_state: 'uncertified',
+  certified_release_id: null,
+  certified_at: null,
+  recertify_by: null,
+  state_reason: '',
+  state_changed_at: '2026-10-29T09:00:00Z',
+  suspension_id: null,
+  updated_at: '2026-10-29T09:00:00Z',
+};
+
 const passValidation = {
   status: 'PASS',
   critical_issues: [],
@@ -70,6 +90,12 @@ beforeEach(() => {
   recorded = [];
   configureGeneratedClient({ baseUrl: BASE });
   server.use(
+    // Tier low publishes directly (ADR-0040 decision 3); the generated
+    // default answers the spec example, which is high. The tier-aware path
+    // has its own suite (governance.test.tsx).
+    http.get(`${BASE}/elitea_core/agent_registry/prompt_lib/:projectId/:applicationId`, () =>
+      HttpResponse.json({ ...registryLow, project_id: Number(PROJECT) }),
+    ),
     http.post(`${BASE}/elitea_core/publish_validate/prompt_lib/:projectId/:versionId`, async ({ request }) => {
       record(request, await request.json());
       return HttpResponse.json(passValidation);
