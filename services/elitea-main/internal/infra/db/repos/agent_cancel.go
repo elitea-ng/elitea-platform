@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -129,6 +130,15 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 				row.ResponseMessageGroupID).Scan(&conversationID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("read the stopped turn's conversation: %w", err)
 			}
+			// A stop is never refused for a legal hold (it is a safety
+			// control), but on a held conversation it keeps the question
+			// rather than deleting an empty turn (#1507).
+			held := false
+			if conversationID > 0 {
+				if held, err = conversationHeld(ctx, holdReader{tx}, strconv.Itoa(int(projectID)), conversationID); err != nil {
+					return err
+				}
+			}
 			projection, projectionErr := queries.ProjectCurrentAgentStop(
 				ctx,
 				sqlcgen.ProjectCurrentAgentStopParams{
@@ -136,6 +146,7 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 					QuestionMessageGroupID: *row.QuestionMessageGroupID,
 					ExecutionID:            row.ExecutionID,
 					ExecutionGeneration:    row.ClientExecutionGeneration,
+					KeepHeld:               held,
 				},
 			)
 			if projectionErr != nil {
@@ -281,3 +292,11 @@ func (repository *CurrentAgentCancelRepository) SettleGovernedRefusal(
 }
 
 var _ agentexecutionapp.GovernedRefusalSettler = (*CurrentAgentCancelRepository)(nil)
+
+// holdReader lets the cancel transaction answer conversationHeld, whose
+// querier returns pgx.Row.
+type holdReader struct{ tx sqlExecutor }
+
+func (r holdReader) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return r.tx.QueryRow(ctx, sql, args...)
+}

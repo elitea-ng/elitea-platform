@@ -164,6 +164,10 @@ WITH target AS MATERIALIZED (
           OR target.keep_empty_editor_test
           OR target.is_regeneration
           OR COALESCE(target.latest_trace_text, '') <> ''
+          -- A legal hold covers the conversation (#1507): the stop keeps
+          -- the question and settles the empty answer instead of deleting
+          -- the turn, so the record holds what the user asked.
+          OR sqlc.arg(keep_held)::boolean
       )
     RETURNING response.id
 ), salvaged_item AS (
@@ -195,6 +199,7 @@ WITH target AS MATERIALIZED (
       AND NOT target.keep_empty_editor_test
       AND NOT target.is_regeneration
       AND COALESCE(target.latest_trace_text, '') = ''
+      AND NOT sqlc.arg(keep_held)::boolean
     RETURNING response.id
 ), deleted_question_items AS (
     DELETE FROM chat_message_items AS item
