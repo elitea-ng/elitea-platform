@@ -112,6 +112,9 @@ type Handler struct {
 	// answered before that step existed and is still the honest answer for
 	// one with no gateway.
 	publishModelClient PublishModelClient
+	// releases records agent releases on publish and withdraws them on
+	// unpublish (releases.go, ADR-0040 decision 2). nil records none.
+	releases ReleaseRecorder
 }
 
 // EventEmitter is the seam to internal/events.Publisher, declared locally so
@@ -1412,6 +1415,12 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		response["catalog_agent_id"] = strconv.Itoa(twin.ApplicationID)
 		response["catalog_version_id"] = strconv.Itoa(twin.VersionID)
 	}
+	// The release of this publish (ADR-0040 decision 2), recorded after
+	// the sub-agents are embedded so its digest is the definition a run
+	// reads. Omitted when no release was recorded.
+	if releaseID, recorded := h.recordPublishedRelease(r, projectID, appID, cloneID, versionID, body.VersionName); recorded {
+		response["release_id"] = strconv.FormatInt(releaseID, 10)
+	}
 	if h.events != nil {
 		h.events.Emit(ctx, projectID, "agent.version.published", map[string]any{
 			"application_id":     appID,
@@ -1751,6 +1760,13 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) {
 	if err := removeCatalogTwins(ctx, h.pool, projectID, revertedVersionIDs); err != nil {
 		slog.ErrorContext(ctx, "unpublish: catalog twin removal failed", "project_id", projectID, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove the agent from the catalog"})
+		return
+	}
+	// The releases of the reverted versions are withdrawn: they stay
+	// readable and run by id, and stop being the published release.
+	if err := h.withdrawReleases(r, projectID, revertedVersionIDs); err != nil {
+		slog.ErrorContext(ctx, "unpublish: withdraw the agent releases", "project_id", projectID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to withdraw the agent release"})
 		return
 	}
 

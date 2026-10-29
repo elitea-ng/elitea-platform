@@ -94,6 +94,13 @@ const meteredOperationsMigrationPath = "shared/0174_gateway_metered_operations.s
 // does.
 const tokenBindingMigrationPath = "shared/0071_token_project_binding.sql"
 
+// agentReleasesMigrationPath is shared 0198 (ADR-0040 decision 2): every
+// agent version save appends a draft revision to
+// elitea_lifecycle.version_revisions in the save's transaction, so a
+// database without it refuses every version save with 42P01. The file
+// depends on no other schema and every statement in it is guarded.
+const agentReleasesMigrationPath = "shared/0198_agent_releases.sql"
+
 // dumpGuardExemptMigrations are the ledgered shared files RunMigrations applies
 // itself, in order. Every one of them MUST be idempotent and MUST tolerate a
 // database that already holds its objects: the pool.Exec below leaves NO ledger
@@ -117,6 +124,7 @@ var dumpGuardExemptMigrations = []string{
 	// request log, which the Usage, analytics and request-log reads select.
 	meteredOperationsMigrationPath,
 	tokenBindingMigrationPath,
+	agentReleasesMigrationPath,
 }
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {

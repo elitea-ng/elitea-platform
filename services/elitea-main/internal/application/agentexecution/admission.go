@@ -39,6 +39,10 @@ type SubmitRequest struct {
 	// the caller, not the work, and adding it would make every replay that
 	// crosses a deployment an idempotency conflict.
 	TriggerOrigin executiondomain.TriggerOrigin
+	// Release is the agent release the run executes (release.go); nil for
+	// any other run. It is not part of the request digest: the release's
+	// definition is already in Input.
+	Release *ReleaseRun
 }
 
 type Admission struct {
@@ -56,6 +60,15 @@ type Admission struct {
 	// bound agent's run (#1119); nil otherwise. The admission transaction
 	// writes it into the run's security context.
 	GovernedCredentials *GovernedCredentialFreeze
+	// ReleaseID is the agent release the run executes (ADR-0040 decision
+	// 2); zero for any other run. The admission writes it to
+	// agent_execution_jobs.release_id.
+	ReleaseID int64
+	// BindingVersionID is the version whose agent binding the admission
+	// binds when it differs from the run's version: the release's own
+	// version row for a release run (release.go). Zero binds the run's
+	// version.
+	BindingVersionID int64
 }
 
 // ApplicationID is the agent of the admission: the application of a current
@@ -206,6 +219,8 @@ func (s *AdmissionService) Submit(
 		CurrentRegenerateTurn: request.CurrentRegenerateTurn.Clone(),
 		CurrentContinueTurn:   request.CurrentContinueTurn.Clone(),
 		GovernedCredentials:   governed,
+		ReleaseID:             releaseID(request.Release),
+		BindingVersionID:      bindingVersionID(request.Release, 0),
 	})
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("admit agent execution: %w", err)

@@ -856,7 +856,18 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// cannot be assembled (ADR-0044 decision 2, #1490). The row's deadline is
 	// moved to now, so the existing deadline retirement settles it; no
 	// retirement or terminal error code is added. No data, no permission.
-	require.EqualValues(t, 197, Head(shared))
+	//
+	// 198: shared/0198_agent_releases.sql, immutable digest-addressed agent
+	// releases with toolkit pins (elitea_lifecycle.application_releases, an
+	// UPDATE trigger keeps them immutable), the published-release pointer
+	// (application_release_heads) and draft revisions (version_revisions)
+	// (ADR-0040 decision 2, #1492). It depends on no other schema. No data,
+	// no permission.
+	//
+	// 199: shared/0199_agent_execution_release.sql,
+	// agent_execution_jobs.release_id, the release a run executed (ADR-0040
+	// decision 2, #1492). No data, no permission.
+	require.EqualValues(t, 199, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

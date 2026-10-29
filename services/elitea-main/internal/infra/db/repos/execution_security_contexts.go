@@ -42,7 +42,11 @@ type securityContextFacts struct {
 	actorID              string
 	applicationID        int64
 	applicationVersionID int64
-	admittedAt           time.Time
+	// bindingVersionID is the version whose agent binding the run binds
+	// when it is not applicationVersionID: the release's own version row
+	// for a release run (ADR-0040 decision 2). Zero is applicationVersionID.
+	bindingVersionID int64
+	admittedAt       time.Time
 	// governed is the agent run's governed credential freeze (#1119); nil
 	// when admission resolved none.
 	governed *agentexecutionapp.GovernedCredentialFreeze
@@ -53,6 +57,14 @@ type securityContextFacts struct {
 // resolved for (#1119): a binding was approved, suspended or replaced in
 // between. A retry resolves again.
 var ErrGovernedBindingChanged = errors.New("the agent binding changed while governed credentials were resolved")
+
+// bindingVersion is the version whose agent binding the run binds.
+func (facts securityContextFacts) bindingVersion() int64 {
+	if facts.bindingVersionID > 0 {
+		return facts.bindingVersionID
+	}
+	return facts.applicationVersionID
+}
 
 // recordFacts reads the facts every admission record carries.
 func recordFacts(record executiondomain.Admission, admittedAt time.Time, applicationVersionID int64) securityContextFacts {
@@ -125,7 +137,7 @@ WHERE execution_id = $1 AND profile = 'elitea.credential-profile.governed.v1'`, 
 		built.ApplicationID, built.ApplicationVersionID = facts.applicationID, facts.applicationVersionID
 	}
 	if governed := facts.governed; governed != nil {
-		if governed.AgentBindingID != built.AgentBindingID || governed.ApplicationVersionID != facts.applicationVersionID {
+		if governed.AgentBindingID != built.AgentBindingID || governed.ApplicationVersionID != facts.bindingVersion() {
 			return securitycontext.Reference{}, ErrGovernedBindingChanged
 		}
 		for _, ref := range governed.References {
@@ -219,7 +231,7 @@ WHERE m.id::text = $1 AND m.tenant_project_id = $2 AND m.state = 'active'
 	case mandateEpoch != authority.MandateEpoch,
 		subjectID != authority.SubjectUserID,
 		len(digest) != len(runtimedomain.Digest{}),
-		facts.applicationVersionID > 0 && versionID != facts.applicationVersionID,
+		facts.applicationVersionID > 0 && versionID != facts.bindingVersion(),
 		delegationID != "" && delegationEpoch == nil,
 		// The mandate's binding pins another definition than the one the
 		// run executes (#1462).
@@ -257,7 +269,7 @@ WHERE m.id::text = $1 AND m.tenant_project_id = $2 AND m.state = 'active'
 // audit; the comparison is repeated here because the binding is read again
 // in this transaction.
 func bindActiveAgentIdentity(ctx context.Context, rows rowFunc, built *securitycontext.Context, facts securityContextFacts) error {
-	id, epoch, digest, found, err := usableBindingForVersion(ctx, rows, facts.tenantProjectID, facts.applicationVersionID)
+	id, epoch, digest, found, err := usableBindingForVersion(ctx, rows, facts.tenantProjectID, facts.bindingVersion())
 	if err != nil || !found {
 		return err
 	}
