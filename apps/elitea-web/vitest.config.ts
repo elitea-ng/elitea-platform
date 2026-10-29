@@ -38,6 +38,14 @@ export default defineConfig(withClientCoreAccess({
           globals: true,
           setupFiles: ['./src/test/setup.ts'],
           include: ['src/**/*.{test,spec}.{ts,tsx}'],
+          // [#1531] Vitest's 5 s default is sized for an uninstrumented laptop
+          // run. CI runs this project in coverage shards on 4-vCPU runners,
+          // where heavy component trees take several times longer, and
+          // setup.ts raises the testing-library wait ceiling to 5 s; a test
+          // ceiling equal to that would cut every slow-but-correct wait off
+          // before it can report. Files that need more still raise their own
+          // with `vi.setConfig`.
+          testTimeout: 20_000,
         },
       },
       // [#424] The `browser` project that used to sit here is GONE. No CI job

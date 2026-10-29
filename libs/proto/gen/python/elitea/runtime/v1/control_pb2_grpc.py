@@ -7,7 +7,7 @@ from elitea.runtime.v1 import compiled_code_pb2 as elitea_dot_runtime_dot_v1_dot
 from elitea.runtime.v1 import control_pb2 as elitea_dot_runtime_dot_v1_dot_control__pb2
 from elitea.runtime.v1 import sandbox_pb2 as elitea_dot_runtime_dot_v1_dot_sandbox__pb2
 
-GRPC_GENERATED_VERSION = '1.84.1'
+GRPC_GENERATED_VERSION = '1.85.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 

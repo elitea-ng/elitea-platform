@@ -607,11 +607,18 @@ async fn postgres_fanout_agent_branches_approve_and_reject_their_own_calls() {
         .expect("apply checkpoint migration");
     let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
     let tool_calls = Arc::new(AtomicUsize::new(0));
+    // `third` answers only after both cards are decided, so the runner cannot
+    // park on a final fetch that ran before this test saw the cards.
+    let decided = Arc::new(tokio::sync::Notify::new());
+    let decisions = AtomicUsize::new(0);
     let (platform, model_facade, captured) = saved_runtime(
         vec![
             TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
             TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(pipeline_text_response("done")),
+            TestModelGatewayOutcome::Gated {
+                gate: Arc::clone(&decided),
+                response: pipeline_text_response("done"),
+            },
             TestModelGatewayOutcome::Response(pipeline_text_response("done")),
             TestModelGatewayOutcome::Response(pipeline_text_response("done")),
         ],
@@ -643,6 +650,9 @@ async fn postgres_fanout_agent_branches_approve_and_reject_their_own_calls() {
             (Some("first"), Some("tool_guard")) => ledger.decide(key, "approve", None),
             (Some("second"), Some("tool_guard")) => ledger.decide(key, "reject", None),
             other => panic!("unexpected card {other:?}"),
+        }
+        if decisions.fetch_add(1, Ordering::AcqRel) + 1 == 2 {
+            decided.notify_one();
         }
     })
     .await
@@ -679,12 +689,20 @@ async fn postgres_fanout_agent_branch_asks_and_resumes_with_the_answer() {
         .await
         .expect("apply checkpoint migration");
     let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    // `third` answers only after the card is decided. Otherwise, under load,
+    // `first` and `third` can finish before the card frame reaches this test:
+    // the runner's final fetch finds no decision and parks, and the answer
+    // is never delivered live.
+    let decided = Arc::new(tokio::sync::Notify::new());
     let (assembler, captured) = assembler(
         &db.pool,
         vec![
             TestModelGatewayOutcome::Response(pipeline_text_response("first done")),
             TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
-            TestModelGatewayOutcome::Response(pipeline_text_response("third done")),
+            TestModelGatewayOutcome::Gated {
+                gate: Arc::clone(&decided),
+                response: pipeline_text_response("third done"),
+            },
             TestModelGatewayOutcome::Response(pipeline_text_response("second done")),
         ],
         Arc::new(PipelineMcpConnector {
@@ -703,7 +721,10 @@ async fn postgres_fanout_agent_branch_asks_and_resumes_with_the_answer() {
     let (members, cards) = run_deciding(invocation, &|card| {
         let key = card["interrupt_key"].as_str().expect("card key");
         match (card["fanout_v1"]["member"].as_str(), card["kind"].as_str()) {
-            (Some("second"), Some("ask_user")) => ledger.decide(key, "answer", Some("Staging")),
+            (Some("second"), Some("ask_user")) => {
+                ledger.decide(key, "answer", Some("Staging"));
+                decided.notify_one();
+            }
             other => panic!("unexpected card {other:?}"),
         }
     })
@@ -829,12 +850,26 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
         .expect("apply checkpoint migration");
     let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
     let tool_calls = Arc::new(AtomicUsize::new(0));
+    // Every branch raises a card, so no sibling keeps the runner busy while
+    // this test decides them: under load it fetched before a decision landed,
+    // parked, and the approved tool never ran. `third` asks only after the
+    // first two cards are decided, and the first resumed reply waits for the
+    // third decision, so some branch is always in flight until all three land.
+    let two_decided = Arc::new(tokio::sync::Notify::new());
+    let all_decided = Arc::new(tokio::sync::Notify::new());
+    let decisions = AtomicUsize::new(0);
     let (platform, model_facade, captured) = saved_runtime(
         vec![
             TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
             TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(pipeline_text_response("resumed done")),
+            TestModelGatewayOutcome::Gated {
+                gate: Arc::clone(&two_decided),
+                response: pipeline_mcp_tool_call_response(),
+            },
+            TestModelGatewayOutcome::Gated {
+                gate: Arc::clone(&all_decided),
+                response: pipeline_text_response("resumed done"),
+            },
             TestModelGatewayOutcome::Response(pipeline_text_response("resumed done")),
             TestModelGatewayOutcome::Response(pipeline_text_response("resumed done")),
         ],
@@ -874,6 +909,11 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
             (Some("second"), Some("tool_guard")) => ledger.decide(key, "approve", None),
             (Some("third"), Some("tool_guard")) => ledger.decide(key, "reject", None),
             other => panic!("unexpected card {other:?}"),
+        }
+        match decisions.fetch_add(1, Ordering::AcqRel) + 1 {
+            2 => two_decided.notify_one(),
+            3 => all_decided.notify_one(),
+            _ => {}
         }
     })
     .await
