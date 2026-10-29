@@ -57,9 +57,9 @@ describe("classifyStartFailure", () => {
     });
   });
 
-  it("shows a refused composition by its named text (FU-249: a Parallel in a saved child pipeline)", () => {
+  it("shows a refused composition by its named text (FU-249: a Parallel in a pipeline run as an agent's tool)", () => {
     const message =
-      'Pipeline "FP inner parallel" has Parallel node "inner", so it cannot run inside another agent or pipeline ("FP outer" → "FP inner parallel"): for now a Parallel node runs only in the pipeline you start. Start pipeline "FP inner parallel" directly, or remove the attachment before saving.';
+      'Pipeline "FP inner parallel" has Parallel node "inner", so it cannot run as a tool of an agent or inside a Parallel branch ("FP outer" → "FP inner parallel"). Run pipeline "FP inner parallel" from a pipeline Agent node outside any Parallel branch, start it directly, or remove the attachment before saving.';
     expect(
       classifyStartFailure(
         httpError(422, { error: "APPLICATION_COMPOSITION_INVALID", message }),

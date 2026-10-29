@@ -755,28 +755,6 @@ fn assert_parallel_in_child_refused(error: &super::super::runtime::NativeAgentAs
     ));
 }
 
-/// FU-249: a saved pipeline with a Parallel runs only as the started root. Beneath a
-/// pipeline `agent` node it is refused typed (the registered deployment message, never the
-/// generic unsupported one) before any model call.
-#[tokio::test(flavor = "current_thread")]
-async fn a_parallel_in_a_saved_child_pipeline_is_refused_typed_before_any_model_call() {
-    let (sessions, checkpointer) = state();
-    let versions = BTreeMap::from([
-        ((7, 8), parallel_pipeline()),
-        ((9, 10), plain_agent(Vec::new())),
-    ]);
-    let (assembler, captured, _) = process(&sessions, &checkpointer, &versions, Vec::new());
-    let request = root_request(
-        &root_yaml("inner"),
-        vec![reference((7, 8), "pipeline", "inner")],
-    );
-    let Err(error) = assembler.assemble(authorized(&request)).await else {
-        panic!("a Parallel in a saved child pipeline must be refused");
-    };
-    assert_parallel_in_child_refused(&error);
-    assert_eq!(model_calls(&captured), 0);
-}
-
 /// FU-249: the same pipeline as an Agent's tool is refused typed at assembly, never skipped
 /// and never failing only when the tool is called.
 #[tokio::test(flavor = "current_thread")]

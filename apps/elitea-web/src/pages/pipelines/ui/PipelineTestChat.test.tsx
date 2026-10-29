@@ -166,7 +166,7 @@ describe('PipelineTestChat', () => {
 
   it("shows Main's named composition refusal instead of the retry hint (FU-249)", async () => {
     installConversationRoutes();
-    const refusal = 'Pipeline "FP inner parallel" has Parallel node "inner", so it cannot run inside another agent or pipeline ("FP nested" → "FP inner parallel"): for now a Parallel node runs only in the pipeline you start. Start pipeline "FP inner parallel" directly, or remove the attachment before saving.';
+    const refusal = 'Pipeline "FP inner parallel" has Parallel node "inner", so it cannot run as a tool of an agent or inside a Parallel branch ("FP nested" → "FP inner parallel"). Run pipeline "FP inner parallel" from a pipeline Agent node outside any Parallel branch, start it directly, or remove the attachment before saving.';
     server.use(http.post('*/elitea_core/conversations/prompt_lib/:projectId', () =>
       HttpResponse.json({ code: 'APPLICATION_COMPOSITION_INVALID', error: refusal }, { status: 400 })));
     const user = userEvent.setup();

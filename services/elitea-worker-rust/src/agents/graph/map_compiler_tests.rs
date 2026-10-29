@@ -397,8 +397,16 @@ fn map_keeps_explicit_root_declaration_order_and_selected_terminal_key_seam() {
         definition.map_terminal_json_keys(),
         BTreeSet::from(["mapped".to_owned()])
     );
-    assert!(!definition.recovery_frontier_supported(&["render".to_owned()]));
-    assert!(definition.recovery_frontier_supported(&["map_entities".to_owned()]));
+    assert!(
+        !definition.recovery_frontier_supported(
+            &["render".to_owned()],
+            &std::collections::BTreeSet::new()
+        )
+    );
+    assert!(definition.recovery_frontier_supported(
+        &["map_entities".to_owned()],
+        &std::collections::BTreeSet::new()
+    ));
 }
 
 #[test]

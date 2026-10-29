@@ -625,7 +625,7 @@ func TestCurrentApplicationStartRouteNamesThePipelineLimitItRefused(t *testing.T
 		},
 		// FU-244: a stored composition the start validation rejects for a bound.
 		"composition": {applicationcomposition.ErrAtStart, applicationcomposition.Code, "form a circular reference"},
-		// FU-249: a Parallel in a saved child pipeline is named at start too.
+		// FU-249: a Parallel in a pipeline run as an agent's tool is named at start too.
 		"nested parallel": {nestedParallelAtStart(t), applicationcomposition.Code, `Pipeline "Inner" has Parallel node "gather"`},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -662,9 +662,9 @@ func nestedParallelAtStart(t *testing.T) error {
 	t.Helper()
 	inner := applicationcomposition.Identity{ApplicationID: 2, VersionID: 2}
 	source := compositionVersions{
-		1: {Kind: applicationcomposition.KindPipeline, Name: "Outer",
-			Attachments: []applicationcomposition.Attachment{{Alias: "inner", Identity: inner}},
-			AgentNodes:  []applicationcomposition.AgentNode{{ID: "inner_call", Alias: "inner"}}},
+		// An agent's tool: a Parallel cannot run there (FU-249).
+		1: {Kind: applicationcomposition.KindAgent, Name: "Outer",
+			Attachments: []applicationcomposition.Attachment{{Alias: "inner", Identity: inner}}},
 		2: {Kind: applicationcomposition.KindPipeline, Name: "Inner", ParallelNode: "gather"},
 	}
 	err := applicationcomposition.Check(context.Background(), source, applicationcomposition.Identity{ApplicationID: 1, VersionID: 1}, nil)

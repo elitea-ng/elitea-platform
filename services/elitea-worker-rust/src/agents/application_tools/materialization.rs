@@ -95,6 +95,9 @@ pub(in crate::agents) struct ApplicationMaterializationPath {
     continuation: ApplicationContinuation,
     graph_agent_scopes: usize,
     native_graph_root: bool,
+    /// An ordinary saved Agent lies on this path: a pipeline below it runs as
+    /// that Agent's tool, not as a node of the root graph (FU-249).
+    under_agent: bool,
 }
 
 impl Default for ApplicationMaterializationPath {
@@ -115,6 +118,7 @@ impl ApplicationMaterializationPath {
             continuation,
             graph_agent_scopes: 0,
             native_graph_root: false,
+            under_agent: false,
         }
     }
 
@@ -129,6 +133,13 @@ impl ApplicationMaterializationPath {
     /// The conversation's root is a pipeline graph, not an ordinary Agent.
     pub(in crate::agents) const fn has_native_graph_root(&self) -> bool {
         self.native_graph_root
+    }
+
+    /// Only pipelines between the root graph and here: a saved pipeline at
+    /// this path runs as a subgraph of the root graph, so a Parallel in it
+    /// binds through the run's binding (FU-249).
+    pub(in crate::agents) const fn is_graph_path(&self) -> bool {
+        self.native_graph_root && !self.under_agent
     }
 
     pub(in crate::agents) const fn is_scoped(&self) -> bool {
@@ -147,6 +158,7 @@ impl ApplicationMaterializationPath {
         }
         let mut path = self.clone();
         path.graph_agent_scopes += 1;
+        path.under_agent = true;
         Ok(path)
     }
 
@@ -159,6 +171,7 @@ impl ApplicationMaterializationPath {
         }
         let mut next = self.enter(identity)?;
         next.agent_tier += 1;
+        next.under_agent = true;
         Ok(next)
     }
 

@@ -1692,11 +1692,11 @@ impl AgentEventProjector {
         {
             return self.project_pipeline_printer(event, &payload);
         }
-        let (interrupt_data, _) = pipeline_interrupt_data(&payload, &payload.thread_id)?;
+        let (interrupt_data, nested) = pipeline_interrupt_data(&payload, &payload.thread_id)?;
         if interrupt_data.get("schema").and_then(Value::as_str)
             == Some(super::graph::FANOUT_PARKED_SCHEMA)
         {
-            return self.project_fanout_parked(event, &interrupt_data);
+            return self.project_fanout_parked(event, &interrupt_data, &nested);
         }
         let guardrail_type = interrupt_data
             .get("guardrail_type")
@@ -1723,14 +1723,22 @@ impl AgentEventProjector {
         &mut self,
         event: &Event,
         parked: &Value,
+        nested: &[NestedPipelineCheckpoint],
     ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        // A Parallel parked inside a saved child pipeline (FU-249) also keeps
+        // open the Agent-node calls that run that child: each is a call of a
+        // node on the parked path, and the wake continues inside it.
+        let enclosing = |id: &str| {
+            pipeline_application_call_node(id)
+                .is_some_and(|node| nested.iter().any(|tier| tier.node_name == node))
+        };
         if !matches!(
             self.state,
             ProjectionState::Started | ProjectionState::Complete(_)
         ) || self
             .active_tools
-            .values()
-            .any(|active| !active.fanout_member)
+            .iter()
+            .any(|(id, active)| !active.fanout_member && !enclosing(id))
         {
             return Err(AgentEventProjectionError::invalid_state());
         }
@@ -5394,6 +5402,11 @@ fn nested_pipeline_interrupt_child_event(
         return Err(AgentEventProjectionError::invalid_state());
     }
     let (raw_data, _) = pipeline_interrupt_data(&payload, root_thread_id)?;
+    // FU-249: a fixed Parallel parked inside a saved child pipeline is the
+    // run's park terminal, not a child pause: the root projects it.
+    if raw_data.get("schema").and_then(Value::as_str) == Some(super::graph::FANOUT_PARKED_SCHEMA) {
+        return Ok(None);
+    }
     let guardrail_type = raw_data
         .get("guardrail_type")
         .and_then(Value::as_str)

@@ -79,7 +79,7 @@ use map_compiler::validate_map_ownership;
 pub(crate) use parallel_compiler::refuse_child_parallel;
 use parallel_compiler::validate_parallel_ownership;
 #[allow(unused_imports)] // The binding is staged behind the Parallel gate.
-pub(crate) use parallel_compiler::{ParallelCompilerBinding, RootSessionSource};
+pub(crate) use parallel_compiler::{ChildFanout, ParallelCompilerBinding, RootSessionSource};
 
 pub(crate) const MAX_PIPELINE_YAML_BYTES: usize = 512 * 1024;
 pub(crate) use elitea_agent_runtime::graph::PIPELINE_YAML_BUDGET;
@@ -978,26 +978,51 @@ impl PipelineDefinition {
 
     #[must_use]
     /// Recover deterministic nodes, model checkpoints, or durable sandbox receipts.
-    pub(crate) fn recovery_frontier_supported(&self, pending: &[String]) -> bool {
+    /// `pipeline_aliases`: the attachments Main froze as saved pipelines. An
+    /// Agent node running one is a recovery frontier too (FU-249): its child
+    /// resumes from its own checkpoint. An Agent node running a saved Agent is
+    /// not, since that Agent's effects have no such proof.
+    pub(crate) fn recovery_frontier_supported(
+        &self,
+        pending: &[String],
+        pipeline_aliases: &BTreeSet<String>,
+    ) -> bool {
         pending.iter().all(|id| {
             self.nodes.iter().any(|node| {
                 node.id() == id
                     && !self.parallel_owned_nodes.contains(id)
                     && !self.map_owned_nodes.contains(id)
-                    && matches!(
-                        node,
-                        PipelineNodeDefinition::Llm(_)
-                            | PipelineNodeDefinition::Code(_)
-                            | PipelineNodeDefinition::StateModifier(_)
-                            | PipelineNodeDefinition::SplitOut(_)
-                            | PipelineNodeDefinition::Aggregate(_)
-                            | PipelineNodeDefinition::Decision(_)
-                            | PipelineNodeDefinition::Router(_)
-                            | PipelineNodeDefinition::Parallel(_)
-                            | PipelineNodeDefinition::Map(_)
-                    )
+                    && (matches!(node, PipelineNodeDefinition::Application(agent)
+                        if pipeline_aliases.contains(agent.selection().alias()))
+                        || matches!(
+                            node,
+                            PipelineNodeDefinition::Llm(_)
+                                | PipelineNodeDefinition::Code(_)
+                                | PipelineNodeDefinition::StateModifier(_)
+                                | PipelineNodeDefinition::SplitOut(_)
+                                | PipelineNodeDefinition::Aggregate(_)
+                                | PipelineNodeDefinition::Decision(_)
+                                | PipelineNodeDefinition::Router(_)
+                                | PipelineNodeDefinition::Parallel(_)
+                                | PipelineNodeDefinition::Map(_)
+                        ))
             })
         })
+    }
+
+    /// The pending Agent nodes of a recovery frontier (FU-249): each one's
+    /// child frontier is proven separately.
+    pub(crate) fn application_frontier_nodes<'a>(&self, pending: &'a [String]) -> Vec<&'a str> {
+        pending
+            .iter()
+            .filter(|id| {
+                self.nodes.iter().any(|node| {
+                    node.id() == id.as_str()
+                        && matches!(node, PipelineNodeDefinition::Application(_))
+                })
+            })
+            .map(String::as_str)
+            .collect()
     }
 
     pub(crate) fn node_recovery_spec(
@@ -1316,7 +1341,11 @@ impl PipelineDefinition {
                 "the pipeline agent name is malformed",
             ));
         }
-        refuse_child_parallel(runtimes)?;
+        // FU-249: a saved child pipeline's Parallel binds through the run's
+        // binding; without one (a pipeline run as an Agent's tool) it is refused.
+        if runtimes.parallel.is_none() {
+            refuse_child_parallel(runtimes)?;
+        }
         let (checkpointer, bound_runtimes) =
             self.bind_parallel_authority(checkpointer, runtimes)?;
         let (checkpointer, bound_runtimes) =
@@ -1723,12 +1752,21 @@ impl PipelineDefinition {
         };
         let transition = node.transition().map(ToOwned::to_owned);
         let node_id = node.id().to_owned();
-        let application = ApplicationNode::new(
-            node.clone(),
-            self.state.clone(),
-            resolver.as_ref(),
-            Arc::clone(checkpointer),
-        )
+        let application = match runtimes.child_fanout(node.id())? {
+            None => ApplicationNode::new(
+                node.clone(),
+                self.state.clone(),
+                resolver.as_ref(),
+                Arc::clone(checkpointer),
+            ),
+            Some(fanout) => ApplicationNode::new_in_fanout(
+                node.clone(),
+                self.state.clone(),
+                resolver.as_ref(),
+                Arc::clone(checkpointer),
+                fanout,
+            ),
+        }
         .map_err(|_| {
             PipelineConfigurationError::Unsupported(
                 "the selected pipeline Agent participant is unavailable",

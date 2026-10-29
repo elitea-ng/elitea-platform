@@ -929,6 +929,32 @@ async fn direct_code_dispatch_observes_its_durable_initial_frontier() {
     let terminal = checkpoints.load(THREAD).await.unwrap().unwrap();
     assert_eq!(terminal.pending_nodes, [] as [String; 0]);
     assert_eq!(terminal.state["count"], 7);
-    assert!(definition.recovery_frontier_supported(&["run".into()]));
-    assert!(!definition.recovery_frontier_supported(&["missing".into()]));
+    assert!(
+        definition.recovery_frontier_supported(&["run".into()], &std::collections::BTreeSet::new())
+    );
+    assert!(
+        !definition
+            .recovery_frontier_supported(&["missing".into()], &std::collections::BTreeSet::new())
+    );
+}
+
+/// FU-249: an Agent node is a model-checkpoint recovery frontier only when the
+/// attachment it runs was frozen as a saved pipeline (its child resumes from
+/// its own checkpoint); an Agent node running a saved Agent is not.
+#[test]
+fn an_agent_node_is_a_recovery_frontier_only_for_a_frozen_saved_pipeline() {
+    let definition = PipelineDefinition::from_yaml(
+        "state:\n  answer: str\n  messages: list\nentry_point: delegate\nnodes:\n  - id: delegate\n    type: agent\n    tool: inner\n    input_mapping:\n      task: {type: fixed, value: 'go'}\n    output: [answer]\n    transition: END\n",
+    )
+    .expect("one Agent node");
+    let pending = ["delegate".to_owned()];
+    assert!(!definition.recovery_frontier_supported(&pending, &std::collections::BTreeSet::new()));
+    assert!(!definition.recovery_frontier_supported(
+        &pending,
+        &std::collections::BTreeSet::from(["other".to_owned()])
+    ));
+    assert!(definition.recovery_frontier_supported(
+        &pending,
+        &std::collections::BTreeSet::from(["inner".to_owned()])
+    ));
 }

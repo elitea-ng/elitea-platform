@@ -241,18 +241,35 @@ func parallelPipeline(name string, attached ...int64) applicationcomposition.Ver
 	return version
 }
 
-// FU-249: a saved pipeline with a Parallel node runs only as the started root,
-// never beneath a pipeline Agent node (a Parallel branch's included) or as an
-// agent's tool; the refusal names the pipeline, its node and the path.
-func TestAPipelineWithAParallelRunsOnlyAsTheStartedRoot(t *testing.T) {
-	if violation := check(t, fakeSource{1: parallelPipeline("Fan", 2), 2: agent("Worker")}, 1); violation != nil {
-		t.Fatalf("a Parallel in the started pipeline saves: %v", violation)
+// branches marks every Agent node of version as a fixed Parallel branch.
+func branches(version applicationcomposition.Version) applicationcomposition.Version {
+	for i := range version.AgentNodes {
+		version.AgentNodes[i].Branch = true
+	}
+	return version
+}
+
+// FU-249: a saved pipeline with a Parallel node runs in the started pipeline and
+// in a saved pipeline the root reaches through pipeline Agent nodes only (a
+// subgraph of the root graph). As an agent's tool, or inside another Parallel's
+// branch, it is refused; the refusal names the pipeline, its node and the path.
+func TestAPipelineWithAParallelRunsInTheRootGraphOnly(t *testing.T) {
+	for name, source := range map[string]fakeSource{
+		"started pipeline":    {1: parallelPipeline("Fan", 2), 2: agent("Worker")},
+		"pipeline Agent node": {1: pipeline("Outer", 2), 2: parallelPipeline("Inner")},
+		"two pipeline levels": {1: pipeline("Outer", 3), 3: pipeline("Middle", 2), 2: parallelPipeline("Inner")},
+		"beside a Parallel":   {1: parallelPipeline("Outer", 2), 2: parallelPipeline("Inner")},
+	} {
+		if violation := check(t, source, 1); violation != nil {
+			t.Fatalf("%s: a Parallel in the root graph saves: %v", name, violation)
+		}
 	}
 	for name, source := range map[string]fakeSource{
-		"pipeline Agent node": {1: pipeline("Outer", 2), 2: parallelPipeline("Inner")},
-		"Parallel branch":     {1: parallelPipeline("Outer", 2), 2: parallelPipeline("Inner")},
-		"agent tool":          {1: agent("Outer", 2), 2: parallelPipeline("Inner")},
-		"deeper":              {1: agent("Outer", 3), 3: pipeline("Middle", 2), 2: parallelPipeline("Inner")},
+		"Parallel branch":          {1: branches(parallelPipeline("Outer", 2)), 2: parallelPipeline("Inner")},
+		"below a Parallel branch":  {1: branches(parallelPipeline("Outer", 3)), 3: pipeline("Middle", 2), 2: parallelPipeline("Inner")},
+		"agent tool":               {1: agent("Outer", 2), 2: parallelPipeline("Inner")},
+		"agent tool, deeper":       {1: agent("Outer", 3), 3: pipeline("Middle", 2), 2: parallelPipeline("Inner")},
+		"pipeline Agent node tool": {1: pipeline("Outer", 3), 3: agent("Worker", 2), 2: parallelPipeline("Inner")},
 	} {
 		violation := check(t, source, 1)
 		expect(t, violation, applicationcomposition.BoundNestedParallel)
@@ -262,18 +279,29 @@ func TestAPipelineWithAParallelRunsOnlyAsTheStartedRoot(t *testing.T) {
 	}
 }
 
-func TestAChildPipelineGainingAParallelIsRefusedThroughItsParent(t *testing.T) {
-	source := fakeSource{1: pipeline("Outer", 2), 2: pipeline("Inner")}
+func TestReadPipelineMarksTheAgentNodesAParallelRunsAsBranches(t *testing.T) {
+	nodes, _, _ := applicationcomposition.ReadPipeline("state:\n  joined: list\nentry_point: fan\nnodes:\n  - id: fan\n    type: parallel\n    branches: [{id: one, node: a}]\n    max_concurrency: 1\n    wait: all\n    output: [joined]\n    transition: other\n  - id: a\n    type: agent\n    tool: worker\n  - id: other\n    type: agent\n    tool: worker\n    transition: END\n")
+	if len(nodes) != 2 || !nodes[0].Branch || nodes[1].Branch {
+		t.Fatalf("nodes = %+v", nodes)
+	}
+}
+
+func TestAChildPipelineGainingAParallelIsRefusedThroughAnAgentParent(t *testing.T) {
+	source := fakeSource{1: agent("Outer", 2), 2: pipeline("Inner")}
 	saved := parallelPipeline("Inner")
 	err := applicationcomposition.CheckWithAncestors(context.Background(), ancestrySource{source}, id(2), &saved)
 	refusal := applicationcomposition.Refusal(err)
 	if refusal == nil || !strings.Contains(refusal.Message, `Parallel node "gather"`) {
 		t.Fatalf("refusal = %+v (%v)", refusal, err)
 	}
+	graph := fakeSource{1: pipeline("Outer", 2), 2: pipeline("Inner")}
+	if err := applicationcomposition.CheckWithAncestors(context.Background(), ancestrySource{graph}, id(2), &saved); err != nil {
+		t.Fatalf("beneath a pipeline Agent node it saves: %v", err)
+	}
 }
 
 func TestAStartRefusalNamesANestedParallelAndKeepsTheRegisteredTextOtherwise(t *testing.T) {
-	err := applicationcomposition.Check(context.Background(), fakeSource{1: pipeline("Outer", 2), 2: parallelPipeline("Inner")}, id(1), nil)
+	err := applicationcomposition.Check(context.Background(), fakeSource{1: agent("Outer", 2), 2: parallelPipeline("Inner")}, id(1), nil)
 	named := applicationcomposition.Refusal(applicationcomposition.AtStart(err))
 	if named == nil || named.Status != http.StatusUnprocessableEntity || named.Code != applicationcomposition.Code || !strings.Contains(named.Message, `Parallel node "gather"`) {
 		t.Fatalf("start refusal = %+v", named)

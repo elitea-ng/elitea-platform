@@ -48,8 +48,14 @@ fn fixed_parallel_owns_distinct_declared_agents_and_excludes_parent_frontiers() 
         definition.parallel_owned_nodes,
         BTreeSet::from(["workerA".into(), "workerB".into()])
     );
-    assert!(definition.recovery_frontier_supported(&["gather".into()]));
-    assert!(!definition.recovery_frontier_supported(&["workerA".into()]));
+    assert!(
+        definition
+            .recovery_frontier_supported(&["gather".into()], &std::collections::BTreeSet::new())
+    );
+    assert!(
+        !definition
+            .recovery_frontier_supported(&["workerA".into()], &std::collections::BTreeSet::new())
+    );
     // Decisions arrive per interrupt from Main, never through parent state.
     assert!(
         !definition

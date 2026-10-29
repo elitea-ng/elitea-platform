@@ -12,7 +12,7 @@
 
 pub(crate) use super::model_checkpoint::ValidatedModelCheckpoint;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use adk_rust::agent::LlmAgentBuilder;
@@ -1578,7 +1578,9 @@ impl PipelineStateServices {
             .await
             .map_err(|_| invalid_configuration())?;
         // A node recovery resumes this execution's own node attempt only.
-        let (evidence, _) = self.inspect_checkpoint(plan, definition, None).await?;
+        let (evidence, _) = self
+            .inspect_checkpoint(plan, definition, None, &BTreeSet::new())
+            .await?;
         let projector = definition
             .node_result_projector(&receipt.node_id, &plan.execution_id, plan.generation)
             .map_err(|_| invalid_configuration())?;
@@ -1629,6 +1631,7 @@ impl PipelineStateServices {
         plan: &OrdinaryNativeAgentPlan,
         definition: &PipelineDefinition,
         wake: Option<&super::graph::fanout_wake::FanoutWake>,
+        pipeline_aliases: &BTreeSet<String>,
     ) -> Result<(ValidatedModelCheckpoint, RecoveryFrontier), NativeAgentAssemblyError> {
         let checkpoint = self
             .checkpointer
@@ -1650,17 +1653,40 @@ impl PipelineStateServices {
             return Err(invalid_configuration());
         };
         if checkpoint.thread_id != plan.session_id.as_str()
-            || !definition.recovery_frontier_supported(&checkpoint.pending_nodes)
+            || !definition.recovery_frontier_supported(&checkpoint.pending_nodes, pipeline_aliases)
             || checkpoint.cleared_interrupt.is_some()
         {
             return Err(invalid_configuration());
         }
+        // FU-249: an Agent node on the frontier resumes its saved child pipeline
+        // only where the child is parked inside a fixed Parallel occurrence (its
+        // branches resume from their own checkpoints and receipts). Any other
+        // child frontier, an effectful node included, is not resumed blind.
+        let mut children = Vec::new();
+        for node in definition.application_frontier_nodes(&checkpoint.pending_nodes) {
+            let child = self
+                .checkpointer
+                .load(&format!("{}/{node}", checkpoint.thread_id))
+                .await
+                .map_err(|_| dependency_unavailable())?
+                .filter(super::graph::holds_parallel_occurrence)
+                .ok_or_else(invalid_configuration)?;
+            children.push(serde_json::to_value(&child).map_err(|_| invalid_configuration())?);
+        }
         // Bind all frontier data, including graph state, attempts and child receipts.
         // Convert through Value to order map keys before hashing.
         let value = serde_json::to_value(&checkpoint).map_err(|_| invalid_configuration())?;
-        let bytes =
+        let bytes = if children.is_empty() {
             serde_json::to_vec(&("elitea.pipeline.recovery.v1", plan.definition_digest, value))
-                .map_err(|_| invalid_configuration())?;
+        } else {
+            serde_json::to_vec(&(
+                "elitea.pipeline.recovery.v2",
+                plan.definition_digest,
+                value,
+                children,
+            ))
+        }
+        .map_err(|_| invalid_configuration())?;
         let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
         Ok((
             ValidatedModelCheckpoint::from_graph(
@@ -2237,9 +2263,16 @@ pub(super) async fn assemble_pipeline_native(
     )
     .await?;
     let is_resume = resume.is_some();
-    // Only the started root binds a Parallel; a saved child pipeline's is
-    // refused typed at compile (FU-249).
-    let has_parallel = definition.has_parallel_nodes();
+    // The run binds a Parallel when the root or a saved child pipeline beneath
+    // it holds one (FU-249): the child's binds through the run's binding.
+    let has_parallel = definition.has_parallel_nodes()
+        || node_runtimes
+            .composition_definitions()
+            .is_some_and(|definitions| {
+                definitions
+                    .values()
+                    .any(PipelineDefinition::has_parallel_nodes)
+            });
     let (turn_checkpointer, node_runtimes, fanout_stop) = pipeline_turn(
         &fanout,
         &state,

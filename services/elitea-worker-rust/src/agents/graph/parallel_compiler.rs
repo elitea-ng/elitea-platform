@@ -97,6 +97,21 @@ impl ParallelCompilerBinding {
         self
     }
 
+    /// The same run binding over a saved child pipeline's authority (FU-249):
+    /// the child's Parallel shares the run's deadline, Stop, ledger and root
+    /// session, and appends through the child's own checkpoint chain.
+    pub(crate) fn rebased(&self, authority: Arc<dyn ParallelCheckpointAuthority>) -> Arc<Self> {
+        Arc::new(Self {
+            root_session: self.root_session.clone(),
+            ..Self::bound(
+                authority,
+                self.deadline,
+                Arc::clone(&self.cancellation),
+                self.decisions.clone(),
+            )
+        })
+    }
+
     /// The run's fan-out latch; the run's durable Stop fires it.
     pub(crate) fn cancellation(&self) -> Arc<FanoutCancellation> {
         Arc::clone(&self.cancellation)
@@ -116,7 +131,62 @@ impl ParallelCompilerBinding {
     }
 }
 
+/// What an Agent node needs to run a saved child pipeline that holds a fixed
+/// Parallel (FU-249): the run's binding, and the authority view of the
+/// checkpointer the node is given.
+pub(crate) struct ChildFanout {
+    pub(crate) binding: Arc<ParallelCompilerBinding>,
+    pub(crate) parent: Arc<dyn ParallelCheckpointAuthority>,
+}
+
 impl PipelineNodeRuntimes {
+    /// The child fan-out of Agent node `node`, when the saved pipeline it runs
+    /// (or one beneath it) holds a Parallel and the run bound one. The parent
+    /// authority mirrors this graph's own checkpointer: its bound Parallel
+    /// authority, else the run's authority behind this scope's receipts.
+    pub(crate) fn child_fanout(
+        &self,
+        node: &str,
+    ) -> Result<Option<ChildFanout>, PipelineConfigurationError> {
+        let (Some(binding), Some(definitions)) =
+            (self.parallel.as_ref(), self.composition_definitions())
+        else {
+            return Ok(None);
+        };
+        let path = if self.application_scope_path.is_empty() {
+            node.to_owned()
+        } else {
+            format!("{}/{node}", self.application_scope_path)
+        };
+        let descendants = format!("{path}/");
+        if !definitions.iter().any(|(key, definition)| {
+            (key == &path || key.starts_with(&descendants)) && definition.has_parallel_nodes()
+        }) {
+            return Ok(None);
+        }
+        let parent = if self.parallel_authority_bound {
+            Arc::clone(&binding.authority)
+        } else {
+            match self.application_scopes() {
+                Some(scopes) => scopes
+                    .wrap_parallel_authority(
+                        &self.application_scope_path,
+                        Arc::clone(&binding.authority),
+                    )
+                    .map_err(|_| {
+                        PipelineConfigurationError::Invalid(
+                            "the fixed Parallel scope is not admitted",
+                        )
+                    })?,
+                None => Arc::clone(&binding.authority),
+            }
+        };
+        Ok(Some(ChildFanout {
+            binding: Arc::clone(binding),
+            parent,
+        }))
+    }
+
     pub(crate) fn with_parallel_events(
         mut self,
         events: PipelineNodeEventSender,

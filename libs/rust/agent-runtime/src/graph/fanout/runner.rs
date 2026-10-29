@@ -396,14 +396,12 @@ impl FanoutRunner {
             admission_open: true,
             tick: None,
         };
+        let mut restored_cards = Vec::new();
         for (child, restored) in restored.into_iter().enumerate() {
             state.slots.push(match restored {
                 RestoredChild::Pending => Slot::Queued(Vec::new()),
                 RestoredChild::Paused { cards, .. } => {
-                    // Re-raise: card ingestion is idempotent on the key.
-                    for card in &cards {
-                        self.events.card_opened(child, card).await?;
-                    }
+                    restored_cards.extend(cards.iter().map(|card| (child, card.clone())));
                     Slot::Paused {
                         cards,
                         ready: BTreeMap::new(),
@@ -419,6 +417,15 @@ impl FanoutRunner {
         // before a crash.
         if reentered {
             self.fetch_and_apply(&mut state, true).await?;
+        }
+        // Re-raise the restored cards (ingestion is idempotent on the key),
+        // except one this fetch already holds a decision for: it was raised
+        // before its decision, and raising it again would show an answered
+        // question as open (FU-249, a wake re-run from its park).
+        for (child, card) in &restored_cards {
+            if !decided(&state, &card.interrupt_key) {
+                self.events.card_opened(*child, card).await?;
+            }
         }
         if open_cards(&state) > 0 {
             state.tick = Some(Tick::reset(Instant::now()));
@@ -839,6 +846,17 @@ fn open_cards(state: &Loop) -> usize {
             _ => 0,
         })
         .sum()
+}
+
+/// Whether the loop already holds a decision for `key`: delivered to a
+/// resumed child, ready beside a paused child's other cards, or held.
+fn decided(state: &Loop, key: &str) -> bool {
+    state.delivered.contains(key)
+        || state.held.contains_key(key)
+        || state
+            .slots
+            .iter()
+            .any(|slot| matches!(slot, Slot::Paused { ready, .. } if ready.contains_key(key)))
 }
 
 fn open_card_list(state: &Loop) -> Vec<CardIdentity> {
