@@ -235,6 +235,14 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		}
 	}
 
+	// The worker egress allowlist's grammar (ADR-0044 decision 2).
+	if section.id == platformconfig.SectionWorkerEgress {
+		if reason := validateWorkerEgressValues(body.Values); reason != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+			return
+		}
+	}
+
 	principal, _ := auth.UserFromContext(r.Context())
 	author := principal.Email
 	if author == "" {

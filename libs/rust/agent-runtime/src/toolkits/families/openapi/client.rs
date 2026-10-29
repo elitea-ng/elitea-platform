@@ -27,6 +27,7 @@ use zeroize::Zeroizing;
 use super::config::{OpenApiAuth, OpenApiClientConfig, restricted_header};
 use super::response_selection::ResponseSelection;
 use super::spec::{OpenApiOperation, OpenApiParameter, OpenApiParameterLocation};
+use crate::egress::BuildForRun as _;
 use crate::toolkits::DelegatedAuthorizationRequirement;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -294,7 +295,10 @@ type OpenApiHttpClient = HyperClient<HttpsConnector<HttpConnector>, Full<Bytes>>
 
 struct RustlsOpenApiTransport {
     http: tokio::sync::OnceCell<OpenApiHttpClient>,
-    token_http: reqwest::Client,
+    token_http: crate::egress::HttpClient,
+    /// The run's egress policy (#1490): the operation requests go out on a
+    /// hyper client of their own, so each is checked here.
+    egress: Arc<crate::egress::RunEgress>,
 }
 
 #[async_trait]
@@ -307,10 +311,16 @@ impl OpenApiTransport for RustlsOpenApiTransport {
             .http
             .get_or_try_init(|| async { build_http_client() })
             .await?;
-        let response =
-            tokio::time::timeout(REQUEST_TIMEOUT, execute_http(http, request.into_inner()))
-                .await
-                .map_err(|_| timeout())??;
+        let request = request.into_inner();
+        let url =
+            reqwest::Url::parse(&request.uri().to_string()).map_err(|_| invalid_configuration())?;
+        self.egress
+            .check_url(&url)
+            .map_err(|_| dependency_unavailable())?;
+        let response = tokio::time::timeout(REQUEST_TIMEOUT, execute_http(http, request))
+            .await
+            .map_err(|_| timeout())??;
+        self.egress.record_reached(&url);
         Ok(response)
     }
 
@@ -393,20 +403,20 @@ impl OpenApiClient {
         ) {
             return Err(invalid_configuration());
         }
-        let token_http = reqwest::Client::builder()
+        let token_http = crate::egress::client_builder()
             .https_only(true)
-            .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(TOKEN_TIMEOUT)
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT_VALUE)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             config,
             transport: Arc::new(RustlsOpenApiTransport {
                 http: tokio::sync::OnceCell::new(),
+                egress: Arc::clone(token_http.egress()),
                 token_http,
             }),
             access_token: tokio::sync::Mutex::new(None),

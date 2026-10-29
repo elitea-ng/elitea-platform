@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use crate::allowlist::PermitSet;
 use crate::classify::{Class, classify};
+use crate::policy::PublicPolicy;
 
 /// The most addresses one answer may carry (`addrcheck.MaxResolvedAddresses`).
 pub const MAX_RESOLVED_ADDRESSES: usize = 32;
@@ -25,6 +26,9 @@ pub enum ResolveError {
     TooManyAddresses,
     /// Every address was private (unpermitted) or forbidden.
     NotPublic,
+    /// The run's [`PublicPolicy`] does not name the host on this port. Nothing
+    /// was looked up.
+    NotAllowed,
 }
 
 impl fmt::Display for ResolveError {
@@ -33,6 +37,7 @@ impl fmt::Display for ResolveError {
             Self::Lookup => "the host name could not be resolved",
             Self::TooManyAddresses => "the host name resolved to too many addresses",
             Self::NotPublic => "the host name resolves only to addresses egress refuses",
+            Self::NotAllowed => "the host is not on this run's egress allowlist",
         })
     }
 }
@@ -85,7 +90,8 @@ pub fn filter(addresses: &[IpAddr], port: u16, private: &PermitSet) -> Vec<IpAdd
 
 /// Resolve `host` and return only the addresses egress admits on `port`.
 /// An IP literal resolves to itself, `localhost` to 127.0.0.1 (never asked
-/// of the resolver).
+/// of the resolver). The public policy is [`PublicPolicy::Open`]; see
+/// [`resolve_checked_with`].
 ///
 /// # Errors
 ///
@@ -97,10 +103,31 @@ pub async fn resolve_checked(
     port: u16,
     private: &PermitSet,
 ) -> Result<Vec<IpAddr>, ResolveError> {
+    resolve_checked_with(lookup, host, port, private, &PublicPolicy::Open).await
+}
+
+/// [`resolve_checked`] under a run's public policy: a host the policy does
+/// not name on `port` is refused before any lookup, and the addresses of an
+/// admitted one still pass the SSRF rule.
+///
+/// # Errors
+///
+/// [`ResolveError::NotAllowed`] for a host outside the policy, otherwise as
+/// [`resolve_checked`].
+pub async fn resolve_checked_with(
+    lookup: &dyn Lookup,
+    host: &str,
+    port: u16,
+    private: &PermitSet,
+    public: &PublicPolicy,
+) -> Result<Vec<IpAddr>, ResolveError> {
     let host = host
         .strip_prefix('[')
         .and_then(|rest| rest.strip_suffix(']'))
         .unwrap_or(host);
+    if !public.admits(host, port) {
+        return Err(ResolveError::NotAllowed);
+    }
     let addresses = if let Ok(literal) = host.parse::<IpAddr>() {
         vec![literal]
     } else if host.eq_ignore_ascii_case("localhost") {
@@ -133,11 +160,15 @@ pub async fn resolve_checked(
 /// resolver because a permit may pin one; a caller fetching on 443 and 80
 /// builds one client per port. Build the client with `no_proxy()`, or a proxy
 /// would resolve the name instead.
+///
+/// reqwest never asks a resolver about an IP-literal URL, so a caller that
+/// may fetch one checks it with [`resolve_checked_with`] before sending.
 #[derive(Clone)]
 pub struct GuardedResolver {
     lookup: Arc<dyn Lookup>,
     port: u16,
     private: PermitSet,
+    public: PublicPolicy,
 }
 
 impl GuardedResolver {
@@ -148,7 +179,15 @@ impl GuardedResolver {
             lookup,
             port,
             private,
+            public: PublicPolicy::Open,
         }
+    }
+
+    /// The same resolver under a run's public policy.
+    #[must_use]
+    pub fn with_public_policy(mut self, public: PublicPolicy) -> Self {
+        self.public = public;
+        self
     }
 }
 
@@ -157,6 +196,7 @@ impl fmt::Debug for GuardedResolver {
         formatter
             .debug_struct("GuardedResolver")
             .field("port", &self.port)
+            .field("public_open", &self.public.is_open())
             .finish_non_exhaustive()
     }
 }
@@ -166,11 +206,12 @@ impl reqwest::dns::Resolve for GuardedResolver {
         let resolver = self.clone();
         let host = name.as_str().to_owned();
         Box::pin(async move {
-            let admitted = resolve_checked(
+            let admitted = resolve_checked_with(
                 resolver.lookup.as_ref(),
                 &host,
                 resolver.port,
                 &resolver.private,
+                &resolver.public,
             )
             .await
             .map_err(|error| Box::new(error) as Box<dyn std::error::Error + Send + Sync>)?;

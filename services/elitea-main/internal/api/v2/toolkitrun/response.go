@@ -296,6 +296,15 @@ func WriteError(w http.ResponseWriter, err error) {
 		return
 	}
 	var pending *toolkitcalltoolapp.PendingRun
+	if refusal, refused := executionapp.AsDispatchRefusal(err); refused {
+		// Main refused to prepare the command (a worker egress allowlist
+		// that cannot be assembled, shared 0197): the run is already failed
+		// with this message, which says what is wrong and who fixes it.
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"ok": false, "reason": strings.ToLower(refusal.Code), "error": refusal.Message,
+		})
+		return
+	}
 	switch {
 	case errors.As(err, &pending):
 		// The execution is durable and STILL RUNNING; the request gave up, not

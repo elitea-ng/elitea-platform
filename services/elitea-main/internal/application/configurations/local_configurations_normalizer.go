@@ -28,7 +28,7 @@ func currentLocalConfigurationType(typeName string) bool {
 	switch typeName {
 	case "llm_model", "embedding_model", "image_generation_model", "asr_model", "tts_model",
 		"service_prompt", "environment_settings", "project_context", "project_icon",
-		CloudExecutorConfigurationType:
+		CloudExecutorConfigurationType, WorkerEgressConfigurationType:
 		return true
 	default:
 		return false
@@ -60,6 +60,8 @@ func (CurrentLocalConfigurationCreateNormalizer) NormalizeCreate(
 		normalized, err = normalizeCurrentLocalProjectIcon(data)
 	case CloudExecutorConfigurationType:
 		normalized, err = normalizeCloudExecutorSetting(data)
+	case WorkerEgressConfigurationType:
+		normalized, err = normalizeWorkerEgressSetting(data)
 	default:
 		return CurrentConfigurationNormalizationResult{Complete: false}, nil
 	}

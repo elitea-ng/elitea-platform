@@ -104,6 +104,16 @@ func (s *MemoryStore) DeleteOlderThan(_ context.Context, cutoff time.Time) (int6
 	return deleted, nil
 }
 
+// MarkFinal implements Store.
+func (s *MemoryStore) MarkFinal(_ context.Context, executionID, replica string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if row, ok := s.rows[rowKey{executionID, replica}]; ok && !row.audited {
+		row.Final, row.UpdatedAt = true, now
+	}
+	return nil
+}
+
 // Rows is the number of rows held, claimed or not, for tests.
 func (s *MemoryStore) Rows() int {
 	s.mu.Lock()

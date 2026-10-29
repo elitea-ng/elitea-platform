@@ -266,8 +266,11 @@ scraping and no internal REST.
   a turn and recording its event loses that one event; the merged summary is
   still in the proxy's log.) A report for a turn that was already written
   (a resumed turn reuses the execution id with a new token) starts a new
-  event. Rows are deleted 7 days after their last report
-  (`ELITEA_EGRESS_AUDIT_RETENTION_DAYS` on elitea-main, 1 to 365).
+  event. The worker's own reports (one `worker:<command id>` row per
+  claimed command) merge into the same turn. Rows are deleted 30 days after
+  their last report (`ELITEA_EGRESS_AUDIT_RETENTION_DAYS` on elitea-main, 1
+  to 365), so the admin "hosts reached" view under Worker Egress can cover
+  a month.
 - **Compose.** `deploy/docker-compose.egress-proxy.yml` wires the same
   audit. `deploy/scripts/gen-egress-proxy-certs.sh` (run by
   `standalone-stack.sh certs`, after `gen-runtime-certs.sh`) issues the

@@ -1050,6 +1050,8 @@ where
             lease: &probe,
             deadline_unix_millis: command.deadline_unix_millis,
             now_unix_millis: &now,
+            // Reported before the command settles, like an agent run's.
+            egress: crate::protocol::egress::run_egress(command),
         };
         // The run owns the store effects: it is awaited to its end and
         // observes Stop, the deadline and lease loss itself, between
@@ -1091,10 +1093,14 @@ where
         lease: &mut ClaimLeaseMonitor,
     ) -> Result<DirectToolkitRequest, RuntimeFailureKind> {
         let materialized = self.fetch_input(verified, execution, lease).await?;
+        // Every client the toolkit builds is bound to the command's public
+        // egress policy (#1490).
+        let egress = crate::protocol::egress::run_egress(verified.command());
         if verified.kind() != ToolkitCommandKind::ExecuteRead {
             return self
                 .materialize_shared_request(verified, execution, lease, materialized.as_bytes())
-                .await;
+                .await
+                .map(|request| request.with_egress(egress));
         }
         let request = match DirectToolkitRequest::parse(materialized.as_bytes()) {
             Ok(request) => request,
@@ -1108,7 +1114,7 @@ where
                 return Err(request_failure(code));
             }
         };
-        Ok(request)
+        Ok(request.with_egress(egress))
     }
 
     /// Fetch, verify and attach a governed command's security context; a
@@ -1549,8 +1555,10 @@ where
             }
             _ => return Err(RuntimeFailureKind::InvalidInput),
         };
+        // Discovery is held to the command's egress policy and lands in its
+        // ledger (#1490): the request's policy carries the command's run.
         let resolved = lease
-            .run_pre_invocation(requirement.resolve_public_metadata())
+            .run_pre_invocation(requirement.resolve_public_metadata(request.policy().egress()))
             .await
             .map_err(|error| lease_failure(&error))?;
         let metadata = resolved

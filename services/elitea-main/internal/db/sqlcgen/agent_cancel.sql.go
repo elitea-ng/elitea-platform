@@ -257,6 +257,10 @@ WITH target AS MATERIALIZED (
           OR target.keep_empty_editor_test
           OR target.is_regeneration
           OR COALESCE(target.latest_trace_text, '') <> ''
+          -- A legal hold covers the conversation (#1507): the stop keeps
+          -- the question and settles the empty answer instead of deleting
+          -- the turn, so the record holds what the user asked.
+          OR $5::boolean
       )
     RETURNING response.id
 ), salvaged_item AS (
@@ -288,6 +292,7 @@ WITH target AS MATERIALIZED (
       AND NOT target.keep_empty_editor_test
       AND NOT target.is_regeneration
       AND COALESCE(target.latest_trace_text, '') = ''
+      AND NOT $5::boolean
     RETURNING response.id
 ), deleted_question_items AS (
     DELETE FROM chat_message_items AS item
@@ -312,6 +317,7 @@ type ProjectCurrentAgentStopParams struct {
 	ResponseMessageGroupID int32  `db:"response_message_group_id" json:"response_message_group_id"`
 	QuestionMessageGroupID int32  `db:"question_message_group_id" json:"question_message_group_id"`
 	ExecutionID            string `db:"execution_id" json:"execution_id"`
+	KeepHeld               bool   `db:"keep_held" json:"keep_held"`
 }
 
 type ProjectCurrentAgentStopRow struct {
@@ -327,6 +333,7 @@ func (q *Queries) ProjectCurrentAgentStop(ctx context.Context, arg ProjectCurren
 		arg.ResponseMessageGroupID,
 		arg.QuestionMessageGroupID,
 		arg.ExecutionID,
+		arg.KeepHeld,
 	)
 	var i ProjectCurrentAgentStopRow
 	err := row.Scan(

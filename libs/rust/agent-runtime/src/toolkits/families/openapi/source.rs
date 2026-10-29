@@ -1,8 +1,10 @@
 //! Bounded anonymous retrieval of an admitted `OpenAPI` specification URL.
 use std::time::Duration;
 
-use reqwest::{Client, Url};
+use reqwest::Url;
 use serde_json::{Map, Value};
+
+use crate::egress::{BuildForRun as _, HttpClient};
 
 use super::spec::OpenApiSpecErrorCode;
 
@@ -29,12 +31,11 @@ pub(crate) async fn load(settings: &Map<String, Value>) -> Result<Option<Value>,
         return Ok(None);
     };
     let url = source_url(raw)?;
-    let client = Client::builder()
+    let client = crate::egress::client_builder()
         .https_only(true)
-        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(15))
-        .build()
+        .build_for_run()
         .map_err(|_| SourceError::Unavailable)?;
     let source = fetch(&client, url.clone()).await?;
     let mut document = parse_fetched(&source)?;
@@ -84,11 +85,10 @@ fn source_url(raw: &str) -> Result<Url, SourceError> {
     Ok(url)
 }
 
-async fn fetch(client: &Client, url: Url) -> Result<Value, SourceError> {
+async fn fetch(client: &HttpClient, url: Url) -> Result<Value, SourceError> {
     // This client has no toolkit credentials, cookies, or default authorization headers.
     let mut response = client
-        .get(url)
-        .send()
+        .execute(reqwest::Request::new(reqwest::Method::GET, url))
         .await
         .map_err(|_| SourceError::Unavailable)?;
     if !response.status().is_success() {
@@ -177,11 +177,10 @@ mod tests {
         )
     }
 
-    fn client() -> Client {
-        Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
+    fn client() -> HttpClient {
+        crate::egress::client_builder()
             .timeout(Duration::from_secs(2))
-            .build()
+            .build_for_run()
             .expect("test client")
     }
 
@@ -233,9 +232,9 @@ mod tests {
                 .expect("headers");
             done.await.expect("release stalled response");
         });
-        let client = Client::builder()
+        let client = crate::egress::client_builder()
             .timeout(Duration::from_millis(100))
-            .build()
+            .build_for_run()
             .expect("client");
         assert_eq!(
             fetch(&client, url).await.expect_err("deadline"),

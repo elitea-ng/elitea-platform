@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
 use super::config::XrayToolkitConfig;
+use crate::egress::BuildForRun as _;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// The SDK's authentication timeout; GraphQL calls had none.
@@ -184,7 +185,7 @@ pub(in crate::toolkits) trait XrayTransport: Send + Sync {
 }
 
 struct ReqwestXrayTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -255,7 +256,7 @@ pub(in crate::toolkits) struct XrayClient {
 
 impl XrayClient {
     pub(in crate::toolkits) fn new(config: XrayToolkitConfig) -> Result<Self, XrayClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -263,7 +264,7 @@ impl XrayClient {
             .timeout(REQUEST_TIMEOUT)
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self::with_transport(
             config,

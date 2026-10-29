@@ -270,6 +270,17 @@ impl DirectToolkitRequest {
         &self.tokens
     }
 
+    /// Bind the request's toolkit policy to the execution's public egress
+    /// policy and ledger (#1490).
+    #[must_use]
+    pub(crate) fn with_egress(
+        mut self,
+        egress: Arc<elitea_agent_runtime::egress::RunEgress>,
+    ) -> Self {
+        self.policy = Arc::new(self.policy.as_ref().clone().with_egress(egress));
+        self
+    }
+
     #[must_use]
     pub(crate) fn policy(&self) -> &Arc<ToolAdmissionPolicy> {
         &self.policy

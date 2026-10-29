@@ -1,5 +1,6 @@
 pub mod command;
 pub mod control;
+pub mod egress;
 mod error;
 pub mod node_event;
 pub mod output;

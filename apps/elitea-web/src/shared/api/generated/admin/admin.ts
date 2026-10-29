@@ -110,6 +110,7 @@ import type {
   ListLegalHoldsParams,
   ListMandatesParams,
   ListNativeDevicesAdministrationParams,
+  ListWorkerEgressHostsParams,
   Mandate,
   MandateAttachment,
   MandateAttachmentRequest,
@@ -167,6 +168,7 @@ import type {
   UserProjectPermissionsUpdate,
   UserProjectRoleMap,
   UserRolesUpdateRequest,
+  WorkerEgressHostsResponse,
 } from "../model";
 
 import { eliteaFetch } from ".././mutator";
@@ -6709,6 +6711,233 @@ export function useDeleteProjectRetentionOverride<
     projectId,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listWorkerEgressHostsResponse200 = {
+  data: WorkerEgressHostsResponse;
+  status: 200;
+};
+
+export type listWorkerEgressHostsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listWorkerEgressHostsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listWorkerEgressHostsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listWorkerEgressHostsResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type listWorkerEgressHostsResponseSuccess =
+  listWorkerEgressHostsResponse200 & {
+    headers: Headers;
+  };
+export type listWorkerEgressHostsResponseError = (
+  | listWorkerEgressHostsResponse400
+  | listWorkerEgressHostsResponse401
+  | listWorkerEgressHostsResponse403
+  | listWorkerEgressHostsResponse503
+) & {
+  headers: Headers;
+};
+
+export type listWorkerEgressHostsResponse =
+  listWorkerEgressHostsResponseSuccess | listWorkerEgressHostsResponseError;
+
+export const getListWorkerEgressHostsUrl = (
+  params?: ListWorkerEgressHostsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/worker_egress/hosts?${stringifiedParams}`
+    : `/admin/worker_egress/hosts`;
+};
+
+/**
+ * The worker egress hosts view (ADR-0044 decision 2): the hosts the runs of each project and agent reached and were refused in the last `days` days, from the stored egress summaries, so an operator can seed the platform's or a project's worker egress allowlist before switching the `worker_egress` mode to allowlist. `source` selects the worker's own HTTP clients (the default, what that allowlist governs), the egress proxy (sandbox and code runs) or both. Gated on `configuration.governance`.
+ * @summary List the public hosts runs reached and were refused
+ */
+export const listWorkerEgressHosts = async (
+  params?: ListWorkerEgressHostsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listWorkerEgressHostsResponse> => {
+  return eliteaFetch<listWorkerEgressHostsResponse>(
+    getListWorkerEgressHostsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListWorkerEgressHostsQueryKey = (
+  params?: ListWorkerEgressHostsParams,
+) => {
+  return [`/admin/worker_egress/hosts`, ...(params ? [params] : [])] as const;
+};
+
+export const getListWorkerEgressHostsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listWorkerEgressHosts>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListWorkerEgressHostsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listWorkerEgressHosts>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListWorkerEgressHostsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listWorkerEgressHosts>>
+  > = ({ signal }) =>
+    listWorkerEgressHosts(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listWorkerEgressHosts>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListWorkerEgressHostsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listWorkerEgressHosts>>
+>;
+export type ListWorkerEgressHostsQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListWorkerEgressHosts<
+  TData = Awaited<ReturnType<typeof listWorkerEgressHosts>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params: undefined | ListWorkerEgressHostsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listWorkerEgressHosts>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listWorkerEgressHosts>>,
+          TError,
+          Awaited<ReturnType<typeof listWorkerEgressHosts>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListWorkerEgressHosts<
+  TData = Awaited<ReturnType<typeof listWorkerEgressHosts>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListWorkerEgressHostsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listWorkerEgressHosts>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listWorkerEgressHosts>>,
+          TError,
+          Awaited<ReturnType<typeof listWorkerEgressHosts>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListWorkerEgressHosts<
+  TData = Awaited<ReturnType<typeof listWorkerEgressHosts>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListWorkerEgressHostsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listWorkerEgressHosts>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the public hosts runs reached and were refused
+ */
+
+export function useListWorkerEgressHosts<
+  TData = Awaited<ReturnType<typeof listWorkerEgressHosts>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListWorkerEgressHostsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listWorkerEgressHosts>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListWorkerEgressHostsQueryOptions(params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

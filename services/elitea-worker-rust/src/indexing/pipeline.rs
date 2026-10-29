@@ -51,6 +51,7 @@ use std::sync::Arc;
 use adk_rust::futures::StreamExt as _;
 use adk_rust::futures::stream::FuturesOrdered;
 use bytes::Bytes;
+use elitea_agent_runtime::egress::{EgressTransport, RunEgress};
 use elitea_connectors::pictures::{PictureBatch, PictureStep};
 use elitea_content_source::{Acl, DocumentRef, SourceError};
 use elitea_doc_chunk::{
@@ -313,6 +314,9 @@ pub(crate) struct IndexRun<'a> {
     pub(crate) lease: &'a dyn RunLiveness,
     pub(crate) deadline_unix_millis: i64,
     pub(crate) now_unix_millis: &'a (dyn Fn() -> i64 + Send + Sync),
+    /// The command's public egress policy and ledger (#1490): every
+    /// connector request the source makes is checked and recorded here.
+    pub(crate) egress: Arc<RunEgress>,
 }
 
 /// The chat model entries of a claim, fetched on demand.
@@ -784,7 +788,10 @@ pub(crate) async fn run_index(
             project_id: &project_id,
         },
         &runtime.allowlist,
-        Arc::clone(&runtime.transport),
+        Arc::new(EgressTransport::new(
+            Arc::clone(&run.egress),
+            Arc::clone(&runtime.transport),
+        )),
         runtime.limits,
     ) {
         Ok(source) => source,

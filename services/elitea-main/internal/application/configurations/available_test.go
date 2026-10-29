@@ -48,6 +48,8 @@ func TestPinnedCurrentAvailableCatalogMatchesCurrentFixedRegistry(t *testing.T) 
 		"tavily", "firecrawl", "brave_search", "duckduckgo_instant", "shodan",
 		// Registered in Go: the cloud executor project setting (ADR-0034).
 		"cloud_executor",
+		// Registered in Go: the worker egress project setting (ADR-0044).
+		"worker_egress",
 	}
 	gotTypes := make([]string, len(entries))
 	for index, entry := range entries {

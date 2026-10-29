@@ -244,7 +244,7 @@ func TestPublishedBeforeDeadlineClaimedAfterDeadlineRetiresWithoutAuthority(t *t
 				"command-1", "RUNNING", "DISPATCHED", "NOT_STARTED", "", "outbox-1", true,
 				digest[:], digest[:], false, "", true, false, int64(1),
 			}},
-			{values: []any{int64(1)}},
+			{values: []any{int64(1), "", ""}},
 		},
 	}}
 	generated := false
@@ -476,7 +476,7 @@ func TestNeverStartedCancellationFinalizesWithoutLease(t *testing.T) {
 			store := &scriptedStore{scriptedExecutor: &scriptedExecutor{
 				rowResults: []scriptedRow{
 					claimExecutionRow("CANCELLED", state, true, publishedDigest[:], publishedDigest[:], false),
-					{values: []any{int64(1)}},
+					{values: []any{int64(1), "", ""}},
 				},
 			}}
 			repository, err := newClaimsRepository(

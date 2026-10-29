@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use elitea_egress_guard::{GuardedResolver, Lookup, PermitSet, resolve_checked};
+use elitea_egress_guard::{GuardedResolver, Lookup, PermitSet, resolve_checked_with};
 use html_to_markdown_rs::{
     ConversionOptions, OutputFormat, PreprocessingOptions, PreprocessingPreset,
 };
@@ -41,15 +41,24 @@ pub(crate) struct DirectFetcher {
     user_agent: String,
     /// One client per port: the guarded resolver checks permits per port.
     clients: Mutex<BTreeMap<(u16, bool), reqwest::Client>>,
+    /// The run's public egress policy (#1490): every hop's host must pass it
+    /// as well as the SSRF rule.
+    egress: Arc<crate::egress::RunEgress>,
 }
 
 impl DirectFetcher {
-    pub(crate) fn new(lookup: Arc<dyn Lookup>, permits: PermitSet, user_agent: String) -> Self {
+    pub(crate) fn new(
+        lookup: Arc<dyn Lookup>,
+        permits: PermitSet,
+        user_agent: String,
+        egress: Arc<crate::egress::RunEgress>,
+    ) -> Self {
         Self {
             lookup,
             permits,
             user_agent,
             clients: Mutex::new(BTreeMap::new()),
+            egress,
         }
     }
 
@@ -61,15 +70,18 @@ impl DirectFetcher {
         if let Some(client) = clients.get(&(port, https_only)) {
             return Ok(client.clone());
         }
+        // Not `crate::egress::HttpClient`: this client's resolver is the
+        // guard itself, under the run's public policy, and `fetch` checks and
+        // records every hop by hand (IP literals never reach it: the URL
+        // rules refuse them).
         let client = reqwest::Client::builder()
             .https_only(https_only)
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
-            .dns_resolver(Arc::new(GuardedResolver::new(
-                Arc::clone(&self.lookup),
-                port,
-                self.permits.clone(),
-            )))
+            .dns_resolver(Arc::new(
+                GuardedResolver::new(Arc::clone(&self.lookup), port, self.permits.clone())
+                    .with_public_policy(self.egress.policy().clone()),
+            ))
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(FETCH_TIMEOUT)
             .user_agent(self.user_agent.clone())
@@ -95,14 +107,26 @@ impl DirectFetcher {
             let port = url
                 .port_or_known_default()
                 .ok_or(ProviderError::UrlRefused)?;
-            // Checked here for a clear refusal; the client's resolver checks
-            // again and is what the connection actually uses.
-            resolve_checked(self.lookup.as_ref(), &host, port, &self.permits)
-                .await
-                .map_err(|error| match error {
-                    elitea_egress_guard::ResolveError::NotPublic => ProviderError::AddressRefused,
-                    _ => ProviderError::Unavailable,
-                })?;
+            // The run's egress policy first (#1490): a refused hop is counted
+            // and named. Then the SSRF rule, checked here for a clear refusal;
+            // the client's resolver checks both again and is what the
+            // connection actually uses.
+            if self.egress.check(&host, port).is_err() {
+                return Err(ProviderError::HostNotAllowed.into());
+            }
+            resolve_checked_with(
+                self.lookup.as_ref(),
+                &host,
+                port,
+                &self.permits,
+                self.egress.policy(),
+            )
+            .await
+            .map_err(|error| match error {
+                elitea_egress_guard::ResolveError::NotPublic => ProviderError::AddressRefused,
+                elitea_egress_guard::ResolveError::NotAllowed => ProviderError::HostNotAllowed,
+                _ => ProviderError::Unavailable,
+            })?;
             let client = self.client(port, !allow_http)?;
             let mut outgoing = Request::new(Method::GET, url.clone());
             outgoing
@@ -113,6 +137,7 @@ impl DirectFetcher {
                 .execute(outgoing)
                 .await
                 .map_err(|error| map_reqwest(&error.without_url()))?;
+            self.egress.record_reached(&url);
             // A redirect's body is never read: take its Location and drop
             // the response, so a hop costs a header, not 5 MiB.
             if response.status().is_redirection()

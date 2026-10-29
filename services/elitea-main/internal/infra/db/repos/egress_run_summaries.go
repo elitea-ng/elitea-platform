@@ -141,6 +141,31 @@ func (s *EgressRunSummaries) DeleteOlderThan(ctx context.Context, cutoff time.Ti
 	return tag.RowsAffected(), nil
 }
 
+// MarkFinal makes the open (execution, replica) row final and restarts its
+// settle window. A claimed row, or none, is left alone.
+func (s *EgressRunSummaries) MarkFinal(ctx context.Context, executionID, replica string, now time.Time) error {
+	if _, err := s.pool.Exec(ctx, `
+UPDATE elitea_runtime.egress_run_summaries
+SET final = true, updated_at = $3
+WHERE execution_id = $1 AND replica = $2 AND audited_at IS NULL`, executionID, replica, now); err != nil {
+		return fmt.Errorf("mark the egress run summary final: %w", err)
+	}
+	return nil
+}
+
+// ExecutionProject answers the resource project of one claimed execution
+// generation, from the execution kernel, so a worker's report is filed under
+// the project Main admitted the run in, never one the worker names.
+func (s *EgressRunSummaries) ExecutionProject(ctx context.Context, executionID string, generation uint64) (int64, error) {
+	var project int64
+	if err := s.pool.QueryRow(ctx, `
+SELECT resource_project_id FROM elitea_runtime.execution_jobs
+WHERE execution_id = $1 AND generation = $2`, executionID, int64(generation)).Scan(&project); err != nil {
+		return 0, fmt.Errorf("read the execution's project: %w", err)
+	}
+	return project, nil
+}
+
 func nonNil[T any](items []T) []T {
 	if items == nil {
 		return []T{}

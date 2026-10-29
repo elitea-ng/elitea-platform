@@ -97,6 +97,8 @@ mod direct_execution_tests;
 #[cfg(all(test, feature = "toolkit-office"))]
 mod docx_tests;
 #[cfg(test)]
+mod egress_tests;
+#[cfg(test)]
 mod elastic_tests;
 #[cfg(test)]
 mod figma_tests;

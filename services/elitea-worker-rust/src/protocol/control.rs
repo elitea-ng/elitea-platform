@@ -47,13 +47,14 @@ use super::elitea::runtime::v1::{
     AuthorizeInvocationResponseV1, BeginExecutionDispositionV1, BeginExecutionRequestV1,
     BeginExecutionResponseV1, ClaimCommandRequestV1, ClaimCommandResponseV1, ClaimDispositionV1,
     ClaimReceiptV1, ClaimSteeringMessagesRequestV1, ClaimSteeringMessagesResponseV1,
-    DesiredExecutionStateV1, DigestAlgorithmV1, DigestV1, ExecutionFenceV1, ExecutionIdentityV1,
-    ExecutionInputBundleReferenceV1, ExecutionInputBundleV1, ExecutionInputEntryV1,
-    ExecutionOutcomeV1, ExecutionOutputFrameV1, NodeEventV1, ObserveDesiredStateRequestV1,
-    ObserveDesiredStateResponseV1, PrepareSettlementRequestV1, PrepareSettlementResponseV1,
-    RemoveIndexDispositionV1, RemoveIndexRequestV1, RemoveIndexResponseV1, RenewLeaseRequestV1,
-    RenewLeaseResponseV1, RuntimeErrorCodeV1, RuntimeErrorV1, ScopedContentReferenceV1,
-    SettlementProposalV1, SettlementRecoveryV1, worker_command_v1,
+    DesiredExecutionStateV1, DigestAlgorithmV1, DigestV1, EgressHostReachedV1, EgressHostRefusedV1,
+    ExecutionFenceV1, ExecutionIdentityV1, ExecutionInputBundleReferenceV1, ExecutionInputBundleV1,
+    ExecutionInputEntryV1, ExecutionOutcomeV1, ExecutionOutputFrameV1, NodeEventV1,
+    ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
+    PrepareSettlementResponseV1, RemoveIndexDispositionV1, RemoveIndexRequestV1,
+    RemoveIndexResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1, ReportEgressSummaryRequestV1,
+    RuntimeErrorCodeV1, RuntimeErrorV1, ScopedContentReferenceV1, SettlementProposalV1,
+    SettlementRecoveryV1, worker_command_v1,
 };
 use super::output::{
     AgentTerminalOutput, RuntimeFailureKind, ToolkitExecuteReadTerminalOutput,
@@ -2321,6 +2322,9 @@ pub struct AgentControlClient<R> {
     /// `ELITEA_WORKER_GOVERNED_CONTEXT`: fresh claims say this worker
     /// fetches and verifies a governed command's security context.
     governed_security_context: bool,
+    /// Where each execution's egress ledger lives (#1490); the process's
+    /// registry outside tests.
+    egress: Arc<super::egress::EgressRegistry>,
 }
 
 impl AgentControlClient<TonicControlRpc> {
@@ -2352,7 +2356,19 @@ impl<R> AgentControlClient<R> {
             workload_session_id,
             producer_id,
             governed_security_context: false,
+            egress: super::egress::EgressRegistry::global(),
         })
+    }
+
+    /// Test-only: read execution egress ledgers from `registry`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_egress_registry(
+        mut self,
+        registry: Arc<super::egress::EgressRegistry>,
+    ) -> Self {
+        self.egress = registry;
+        self
     }
 
     /// Claim governed commands (ADR-0039, #1115): every fresh claim sets
@@ -2638,6 +2654,8 @@ impl<R: ControlRpc> AgentControlClient<R> {
                 ControlSemanticError::InvalidInput("the settlement outcome is malformed").into(),
             );
         }
+        self.report_egress_summary(&identity, &fence).await;
+        let settled_identity = identity.clone();
         let proposal_bytes = proposal.encode_to_vec();
         let proposal_digest = digest::digest(&digest::SHA256, &proposal_bytes);
         let request = PrepareSettlementRequestV1 {
@@ -2651,8 +2669,35 @@ impl<R: ControlRpc> AgentControlClient<R> {
             }),
         };
         let response = self.control.prepare_settlement(request).await?;
-        parse_prepare_settlement_response(response, expected_outcome, retirement)
-            .map_err(Into::into)
+        let receipt = parse_prepare_settlement_response(response, expected_outcome, retirement)?;
+        self.egress.forget(&settled_identity);
+        Ok(receipt)
+    }
+
+    /// Report the execution's egress summary (#1490) under the live claim,
+    /// before `PrepareSettlement`. Best effort: nothing is sent when nothing
+    /// was reached or refused, and a failure is logged, never returned.
+    async fn report_egress_summary(
+        &self,
+        identity: &ExecutionIdentityV1,
+        fence: &ExecutionFenceV1,
+    ) {
+        let Some(summary) = self.egress.summary_for_settlement(identity) else {
+            return;
+        };
+        let request = egress_summary_request(identity, fence, &summary);
+        match self.control.report_egress_summary(request).await {
+            Ok(response) if response.rejection.is_none() => {}
+            Ok(_) => tracing::warn!(
+                event = "worker_egress_summary_rejected",
+                "Main rejected the execution's egress summary; settlement continues"
+            ),
+            Err(error) => tracing::warn!(
+                event = "worker_egress_summary_failed",
+                error = ?error,
+                "the execution's egress summary could not be reported; settlement continues"
+            ),
+        }
     }
 
     /// Replay the exact state-owner proposal after a terminal ACK crash.
@@ -2671,6 +2716,9 @@ impl<R: ControlRpc> AgentControlClient<R> {
             .map_err(|_| {
                 ControlSemanticError::InvalidInput("the settlement recovery outcome is malformed")
             })?;
+        self.report_egress_summary(&recovery.identity, &recovery.fence)
+            .await;
+        let settled_identity = recovery.identity.clone();
         let request = PrepareSettlementRequestV1 {
             identity: Some(recovery.identity),
             fence: Some(recovery.fence),
@@ -2679,8 +2727,46 @@ impl<R: ControlRpc> AgentControlClient<R> {
             idempotency_key: recovery.idempotency_key,
         };
         let response = self.control.prepare_settlement(request).await?;
-        parse_prepare_settlement_response(response, expected_outcome, recovery.retirement)
-            .map_err(Into::into)
+        let receipt =
+            parse_prepare_settlement_response(response, expected_outcome, recovery.retirement)?;
+        self.egress.forget(&settled_identity);
+        Ok(receipt)
+    }
+}
+
+/// One execution's egress summary as `ReportEgressSummary` carries it: each
+/// list already bounded to 256 hosts by the ledger.
+fn egress_summary_request(
+    identity: &ExecutionIdentityV1,
+    fence: &ExecutionFenceV1,
+    summary: &elitea_agent_runtime::egress::EgressSummary,
+) -> ReportEgressSummaryRequestV1 {
+    let count = |count: u64| i64::try_from(count).unwrap_or(i64::MAX);
+    ReportEgressSummaryRequestV1 {
+        identity: Some(identity.clone()),
+        fence: Some(fence.clone()),
+        hosts_reached: summary
+            .reached
+            .iter()
+            .map(|host| EgressHostReachedV1 {
+                host: host.host.clone(),
+                port: u32::from(host.port),
+                connections: count(host.count),
+                bytes_up: 0,
+                bytes_down: 0,
+            })
+            .collect(),
+        hosts_refused: summary
+            .refused
+            .iter()
+            .map(|host| EgressHostRefusedV1 {
+                host: host.host.clone(),
+                port: u32::from(host.port),
+                reason: elitea_agent_runtime::egress::REFUSAL_REASON_NOT_ALLOWED.to_owned(),
+                count: count(host.count),
+            })
+            .collect(),
+        other_hosts: count(summary.other_hosts),
     }
 }
 

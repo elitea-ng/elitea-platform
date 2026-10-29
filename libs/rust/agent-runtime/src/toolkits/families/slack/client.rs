@@ -13,6 +13,7 @@ use serde_json::{Map, Value, json};
 use zeroize::Zeroizing;
 
 use super::config::SlackToolkitConfig;
+use crate::egress::BuildForRun as _;
 
 const SLACK_API_ORIGIN: &str = "https://slack.com/api/";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -267,7 +268,7 @@ pub(in crate::toolkits) trait SlackTransport: Send + Sync {
 }
 
 struct ReqwestSlackTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -331,7 +332,7 @@ pub(crate) struct SlackClient {
 
 impl SlackClient {
     pub(crate) fn new(config: SlackToolkitConfig) -> Result<Self, SlackClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -340,7 +341,7 @@ impl SlackClient {
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT_VALUE)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             config,
