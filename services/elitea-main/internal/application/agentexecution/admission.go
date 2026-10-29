@@ -15,6 +15,7 @@ import (
 
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
@@ -42,13 +43,23 @@ type SubmitRequest struct {
 	// the caller, not the work, and adding it would make every replay that
 	// crosses a deployment an idempotency conflict.
 	TriggerOrigin executiondomain.TriggerOrigin
+	// Release is the agent release the run executes (release.go); nil for
+	// any other run. It is not part of the request digest: the release's
+	// definition is already in Input.
+	Release *ReleaseRun
 }
 
 type Admission struct {
 	// MemoryToolkitIDs are the memory toolkits the run was given, computed
 	// once here from the server-frozen toolkit set (memoryToolkitIDs) and
 	// stored on the execution; the vector claim token copies them.
-	MemoryToolkitIDs      []int64
+	MemoryToolkitIDs []int64
+	// ToolkitTypes are the canonical toolkit types (guardrails.CanonicalKey)
+	// of the same frozen toolkit set, sub-agents included, sorted and
+	// unique; never nil. The admission stores them on the execution
+	// (execution_jobs.toolkit_types, shared 0201) so a toolkit_type
+	// suspension can cancel the run while it is in flight.
+	ToolkitTypes          []string
 	Record                executiondomain.Admission
 	Binding               executiondomain.AgentExecutionBinding
 	CurrentTurn           *CurrentApplicationTurn
@@ -60,6 +71,15 @@ type Admission struct {
 	// bound agent's run (#1119); nil otherwise. The admission transaction
 	// writes it into the run's security context.
 	GovernedCredentials *GovernedCredentialFreeze
+	// ReleaseID is the agent release the run executes (ADR-0040 decision
+	// 2); zero for any other run. The admission writes it to
+	// agent_execution_jobs.release_id.
+	ReleaseID int64
+	// BindingVersionID is the version whose agent binding the admission
+	// binds when it differs from the run's version: the release's own
+	// version row for a release run (release.go). Zero binds the run's
+	// version.
+	BindingVersionID int64
 }
 
 // ApplicationID is the agent of the admission: the application of a current
@@ -197,12 +217,13 @@ func (s *AdmissionService) Submit(
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("%w: %v", ErrInvalidAgentAdmission, err)
 	}
 
-	memoryToolkits, err := s.runMemoryToolkits(ctx, request)
+	memoryToolkits, toolkitTypes, err := s.runToolkitSet(ctx, request)
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, err
 	}
 	outcome, err := s.store.AdmitAgentExecution(ctx, Admission{
 		MemoryToolkitIDs:      memoryToolkits,
+		ToolkitTypes:          toolkitTypes,
 		Record:                record,
 		Binding:               binding,
 		CurrentTurn:           request.CurrentTurn.Clone(),
@@ -211,6 +232,8 @@ func (s *AdmissionService) Submit(
 		CurrentContinueTurn:   request.CurrentContinueTurn.Clone(),
 		CurrentFanoutWakeTurn: request.CurrentFanoutWakeTurn.Clone(),
 		GovernedCredentials:   governed,
+		ReleaseID:             releaseID(request.Release),
+		BindingVersionID:      bindingVersionID(request.Release, 0),
 	})
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("admit agent execution: %w", err)
@@ -358,27 +381,34 @@ const (
 	maxNestedMemoryVersions = 100
 )
 
-// runMemoryToolkits is the run's memory toolkits: its own (memoryToolkitIDs)
-// and, with WithNestedMemoryToolkits, those of every sub-agent its frozen
-// toolkit set names, read from the run's project. A read failure fails the
-// admission: the execution is never stored with a guessed set.
-func (s *AdmissionService) runMemoryToolkits(ctx context.Context, request SubmitRequest) ([]int64, error) {
-	ids, children, err := frozenToolkitSet(request.CapabilityID, request.Input)
+// runToolkitSet is the run's memory toolkits and the canonical toolkit
+// types of the same set (Admission.ToolkitTypes): its own entries
+// (memoryToolkitIDs) and, with WithNestedMemoryToolkits, those of every
+// sub-agent its frozen toolkit set names, read from the run's project. A
+// read failure fails the admission: the execution is never stored with a
+// guessed set.
+func (s *AdmissionService) runToolkitSet(ctx context.Context, request SubmitRequest) ([]int64, []string, error) {
+	raw, err := frozenToolkitsRaw(request.CapabilityID, request.Input)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidAgentAdmission, err)
+		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidAgentAdmission, err)
 	}
+	ids, children, err := toolkitEntries(raw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidAgentAdmission, err)
+	}
+	types := toolkitTypeEntries(raw)
 	if s.nested == nil || len(children) == 0 {
-		return ids, nil
+		return ids, finishToolkitTypes(types), nil
 	}
 	project, err := strconv.ParseInt(request.Identity.ResourceProjectID, 10, 64)
 	if err != nil || project <= 0 {
-		return nil, ErrInvalidAgentAdmission
+		return nil, nil, ErrInvalidAgentAdmission
 	}
 	seen := map[[2]int64]bool{}
 	frontier := children
 	for depth := 0; len(frontier) > 0; depth++ {
 		if depth >= maxNestedMemoryDepth {
-			return nil, fmt.Errorf("%w: sub-agents nest deeper than %d", ErrInvalidAgentAdmission, maxNestedMemoryDepth)
+			return nil, nil, fmt.Errorf("%w: sub-agents nest deeper than %d", ErrInvalidAgentAdmission, maxNestedMemoryDepth)
 		}
 		var next [][2]int64
 		for _, child := range frontier {
@@ -387,23 +417,24 @@ func (s *AdmissionService) runMemoryToolkits(ctx context.Context, request Submit
 			}
 			seen[child] = true
 			if len(seen) > maxNestedMemoryVersions {
-				return nil, fmt.Errorf("%w: more than %d sub-agent versions", ErrInvalidAgentAdmission, maxNestedMemoryVersions)
+				return nil, nil, fmt.Errorf("%w: more than %d sub-agent versions", ErrInvalidAgentAdmission, maxNestedMemoryVersions)
 			}
 			tools, err := s.nested.NestedApplicationTools(ctx, project, child[0], child[1])
 			if err != nil {
-				return nil, fmt.Errorf("read a sub-agent's toolkits for the run's memory toolkits: %w", err)
+				return nil, nil, fmt.Errorf("read a sub-agent's toolkits for the run's memory toolkits: %w", err)
 			}
 			childIDs, grandchildren, err := toolkitEntries(tools)
 			if err != nil {
-				return nil, fmt.Errorf("%w: a sub-agent's frozen toolkit set: %v", ErrInvalidAgentAdmission, err)
+				return nil, nil, fmt.Errorf("%w: a sub-agent's frozen toolkit set: %v", ErrInvalidAgentAdmission, err)
 			}
 			ids = append(ids, childIDs...)
+			types = append(types, toolkitTypeEntries(tools)...)
 			next = append(next, grandchildren...)
 		}
 		frontier = next
 	}
 	slices.Sort(ids)
-	return slices.Compact(ids), nil
+	return slices.Compact(ids), finishToolkitTypes(types), nil
 }
 
 // memoryToolkitIDs lists the memory toolkits of an agent run's OWN frozen
@@ -425,8 +456,67 @@ func memoryToolkitIDs(capabilityID string, input *runtimev1.AgentExecutionInputV
 // input, chat history, a tool's settings or arguments) can never add one. A
 // frozen set that cannot be decoded fails the admission.
 func frozenToolkitSet(capabilityID string, input *runtimev1.AgentExecutionInputV1) ([]int64, [][2]int64, error) {
+	raw, err := frozenToolkitsRaw(capabilityID, input)
+	if err != nil {
+		return nil, nil, err
+	}
+	return toolkitEntries(raw)
+}
+
+// FrozenToolkitTypes is the canonical toolkit types of an agent run's OWN
+// frozen toolkit set (its sub-agents are not read). The kill switch uses it
+// for a run admitted before execution_jobs.toolkit_types existed, from the
+// input stored with the run.
+func FrozenToolkitTypes(capabilityID string, input *runtimev1.AgentExecutionInputV1) ([]string, error) {
+	raw, err := frozenToolkitsRaw(capabilityID, input)
+	if err != nil {
+		return nil, err
+	}
+	if _, _, err := toolkitEntries(raw); err != nil {
+		return nil, err
+	}
+	return finishToolkitTypes(toolkitTypeEntries(raw)), nil
+}
+
+// toolkitTypeEntries is the canonical `type` of each top-level entry of one
+// frozen `tools` list. An entry that cannot be read names no type, as
+// toolkitEntries skips it.
+func toolkitTypeEntries(raw json.RawMessage) []string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var tools []json.RawMessage
+	if json.Unmarshal(raw, &tools) != nil {
+		return nil
+	}
+	types := make([]string, 0, len(tools))
+	for _, entry := range tools {
+		var tool struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(entry, &tool) != nil {
+			continue
+		}
+		if key := guardrails.CanonicalKey(tool.Type); key != "" {
+			types = append(types, key)
+		}
+	}
+	return types
+}
+
+// finishToolkitTypes sorts and de-duplicates; never nil.
+func finishToolkitTypes(types []string) []string {
+	if len(types) == 0 {
+		return []string{}
+	}
+	slices.Sort(types)
+	return slices.Compact(types)
+}
+
+// frozenToolkitsRaw is the frozen `tools` list frozenToolkitSet reads.
+func frozenToolkitsRaw(capabilityID string, input *runtimev1.AgentExecutionInputV1) (json.RawMessage, error) {
 	if input == nil {
-		return []int64{}, nil, nil
+		return nil, nil
 	}
 	var raw []byte
 	switch capabilityID {
@@ -438,7 +528,7 @@ func frozenToolkitSet(capabilityID string, input *runtimev1.AgentExecutionInputV
 		}
 		if len(input.GetApplication()) != 0 {
 			if err := json.Unmarshal(input.GetApplication(), &application); err != nil {
-				return nil, nil, fmt.Errorf("the frozen application is not readable: %w", err)
+				return nil, fmt.Errorf("the frozen application is not readable: %w", err)
 			}
 		}
 		if application.VersionDetails != nil {
@@ -447,7 +537,7 @@ func frozenToolkitSet(capabilityID string, input *runtimev1.AgentExecutionInputV
 	case executiondomain.AgentAdhocCapability:
 		raw = input.GetTools()
 	}
-	return toolkitEntries(raw)
+	return raw, nil
 }
 
 // toolkitEntries reads one frozen `tools` list: the memory toolkit ids and

@@ -116,10 +116,18 @@ func mandateSkip(code string) (string, string) {
 		return resultSkippedMandateRequired, code + ": attach a mandate to this schedule; governed schedules run only under one"
 	case runmandate.CodeMandateScopeMismatch:
 		return resultSkippedMandateScope, code + ": the mandate's scope no longer covers this schedule's cron or input"
+	case runmandate.CodeMandateReleaseRolledBack:
+		return resultSkippedMandateUnusable, code + ": " + releaseRolledBackAdvice
 	default:
 		return resultSkippedMandateUnusable, code + ": the attached mandate is not usable for this schedule"
 	}
 }
+
+// releaseRolledBackAdvice is the caller-facing sentence of a
+// MANDATE_RELEASE_ROLLED_BACK refusal.
+const releaseRolledBackAdvice = "the agent was rolled back to an earlier release, and the attached mandate " +
+	"binds the version this trigger names, not the release's version. Roll the agent forward to the " +
+	"release of this version, or point the trigger at the release's version with a mandate bound to it"
 
 // triggerAuthority is the governed check of one inbound call. ok false means
 // the response is written.
@@ -208,8 +216,17 @@ func (h *Handler) saveCovered(
 	}
 }
 
-// governedStartRefused reports a start the admission refused because the
-// mandate changed after the fire-time check.
-func governedStartRefused(err error) bool {
-	return errors.Is(err, repos.ErrRunAuthorityNotUsable)
+// governedStartRefusal is the refusal code of a start the admission
+// refused under its mandate: MANDATE_NOT_USABLE when the mandate changed
+// after the fire-time check, MANDATE_RELEASE_ROLLED_BACK when the agent was
+// rolled back to a release the mandate does not bind. Empty for any other
+// error.
+func governedStartRefusal(err error) string {
+	switch {
+	case errors.Is(err, repos.ErrRunAuthorityReleaseRolledBack):
+		return runmandate.CodeMandateReleaseRolledBack
+	case errors.Is(err, repos.ErrRunAuthorityNotUsable):
+		return runmandate.CodeMandateNotUsable
+	}
+	return ""
 }

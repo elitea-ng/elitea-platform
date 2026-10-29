@@ -116,6 +116,9 @@ type Server struct {
 	// epochs checks a governed run's revocation epochs at claim and lease
 	// renewal (#1121); nil with the governance flag off.
 	epochs *governedEpochs
+	// wallCap cancels an agent run past the whole-run wall cap at lease
+	// renewal (run_wall_cap.go). Nil checks nothing.
+	wallCap *runWallCap
 	// egressSummaries keeps the worker's egress reports (ADR-0044
 	// decision 2); nil answers ReportEgressSummary UNSUPPORTED_CAPABILITY.
 	egressSummaries EgressSummaries
@@ -456,6 +459,7 @@ func (s *Server) RenewLease(ctx context.Context, request *runtimev1.RenewLeaseRe
 		// reaches the epoch read (#1121).
 		lease.DesiredState = s.epochs.renewDesiredState(ctx, fence, lease.DesiredState)
 	}
+	lease.DesiredState = s.wallCap.desiredState(ctx, fence, lease.CapabilityID, lease.DesiredState)
 	desiredState, err := desiredStateProto(lease.DesiredState)
 	if err != nil {
 		return renewRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL, "The execution desired state is unavailable.", false), nil
@@ -487,6 +491,7 @@ func (s *Server) ObserveDesiredState(ctx context.Context, request *runtimev1.Obs
 		code, message, retryable := safeRuntimeError(err)
 		return observeRejection(code, message, retryable), nil
 	}
+	observed.DesiredState = s.wallCap.desiredState(ctx, fence, observed.CapabilityID, observed.DesiredState)
 	desiredState, err := desiredStateProto(observed.DesiredState)
 	if err != nil {
 		return observeRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL, "The execution desired state is unavailable.", false), nil

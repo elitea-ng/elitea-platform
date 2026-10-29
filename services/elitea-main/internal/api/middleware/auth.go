@@ -223,6 +223,9 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 							writePrincipalRefusal(w, r, sourceSession, validationErr)
 							return
 						}
+						// From the row, after validation: a validator that
+						// rebuilds the principal does not carry it.
+						user.BrowserSessionRef = session.Ref
 						serveAuthenticated(next, w, r, user, auth.AuthenticationSourceSession)
 						return
 					}

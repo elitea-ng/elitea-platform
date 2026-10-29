@@ -69,6 +69,11 @@ const (
 	CodeMandateTenantMismatch  = "MANDATE_TENANT_MISMATCH"
 	CodeMandateKindNotAllowed  = "MANDATE_KIND_NOT_ALLOWED"
 	CodeMandateBindingMismatch = "MANDATE_BINDING_MISMATCH"
+	// CodeMandateReleaseRolledBack is an admission refused because the
+	// agent's published release was rolled back to a release whose version
+	// the mandate's binding does not bind (ADR-0040 decision 2; the
+	// admission's repos.ErrRunAuthorityReleaseRolledBack).
+	CodeMandateReleaseRolledBack = "MANDATE_RELEASE_ROLLED_BACK"
 )
 
 var (
