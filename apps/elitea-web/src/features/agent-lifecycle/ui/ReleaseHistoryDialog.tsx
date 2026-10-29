@@ -36,7 +36,8 @@ import { lifecycleErrorMessage } from '../model/useEntityLifecycle';
  *
  * Releases: every publish made an immutable release; one of them is the
  * release a run executes when it names none. "Roll back" re-points that to an
- * earlier release, with an optional reason the audit event keeps. Revisions:
+ * earlier release, with an optional reason the audit event keeps (the
+ * event's name is 256 characters, so the field takes 200). Revisions:
  * every save of the open version, with what it changed.
  */
 export interface ReleaseHistoryDialogProps {
@@ -368,9 +369,9 @@ function RollbackDialog({
         <TextField
           fullWidth
           margin="normal"
-          label={t('features.agentLifecycle.releases.reason', 'Reason (kept in the audit trail)')}
+          label={t('features.agentLifecycle.releases.reason', 'Reason (recorded in the audit event)')}
           value={reason}
-          onChange={(event) => setReason(event.target.value.slice(0, 1024))}
+          onChange={(event) => setReason(event.target.value.slice(0, 200))}
         />
         {rollback.isError && <Alert severity="error">{lifecycleErrorMessage(rollback.error)}</Alert>}
       </DialogContent>

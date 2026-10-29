@@ -5157,7 +5157,7 @@
   "features.agentLifecycle.releases.firstRelease": "Release #{{id}} is the first release.",
   "features.agentLifecycle.releases.noChanges": "No changes.",
   "features.agentLifecycle.releases.noRevisions": "This version has no saved revisions yet.",
-  "features.agentLifecycle.releases.reason": "Reason (kept in the audit trail)",
+  "features.agentLifecycle.releases.reason": "Reason (recorded in the audit event)",
   "features.agentLifecycle.releases.revisionHeading": "Revision {{revision}} · user {{actor}} · {{time}}",
   "features.agentLifecycle.releases.rollback": "Roll back to this",
   "features.agentLifecycle.releases.rollbackBody": "New runs of this agent will use this release. Runs already in progress keep the release they started with.",

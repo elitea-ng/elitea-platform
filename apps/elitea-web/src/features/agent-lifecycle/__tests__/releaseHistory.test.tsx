@@ -115,7 +115,7 @@ describe('ReleaseHistoryDialog', () => {
     renderDialog();
 
     await user.click(await screen.findByTestId('release-rollback-1'));
-    await user.type(screen.getByLabelText('Reason (kept in the audit trail)'), 'regression');
+    await user.type(screen.getByLabelText('Reason (recorded in the audit event)'), 'regression');
     await user.click(screen.getByTestId('release-rollback-confirm'));
 
     await waitFor(() => expect(rollbacks).toEqual([{ reason: 'regression' }]));

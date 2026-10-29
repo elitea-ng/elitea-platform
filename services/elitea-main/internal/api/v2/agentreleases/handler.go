@@ -226,7 +226,7 @@ func (h *Handler) Rollback(w http.ResponseWriter, r *http.Request) {
 		Action:     AuditActionRolledBack,
 		EntityType: "application_release",
 		EntityID:   &id,
-		EntityName: "application:" + strconv.FormatInt(applicationID, 10) + " from release:" + strconv.FormatInt(outcome.From.ID, 10),
+		EntityName: rollbackEntityName(applicationID, outcome.From.ID, body.Reason),
 		ProjectID:  &project,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -318,4 +318,16 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// rollbackEntityName names the rollback in the audit event: the agent, the
+// release it moved away from and the operator's reason. The release pointer
+// keeps only its latest move, so the event is where a rollback's reason
+// survives; the audit store clamps the name to 256 characters.
+func rollbackEntityName(applicationID, fromReleaseID int64, reason string) string {
+	name := "application:" + strconv.FormatInt(applicationID, 10) + " from release:" + strconv.FormatInt(fromReleaseID, 10)
+	if reason != "" {
+		name += " reason: " + reason
+	}
+	return name
 }

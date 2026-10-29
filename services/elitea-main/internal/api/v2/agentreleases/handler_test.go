@@ -149,3 +149,12 @@ func TestReadsAndUnavailableStore(t *testing.T) {
 		t.Fatalf("no store %d", recorder.Code)
 	}
 }
+
+func TestRollbackEntityNameCarriesTheReason(t *testing.T) {
+	if got := rollbackEntityName(31, 5, ""); got != "application:31 from release:5" {
+		t.Fatalf("no reason: %q", got)
+	}
+	if got := rollbackEntityName(31, 5, "regression in v6"); got != "application:31 from release:5 reason: regression in v6" {
+		t.Fatalf("with reason: %q", got)
+	}
+}
