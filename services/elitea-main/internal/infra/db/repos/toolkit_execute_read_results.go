@@ -108,7 +108,7 @@ func (r *ToolkitExecuteReadResultsRepository) ProjectToolkitExecuteRead(
 					return loadErr
 				}
 				if inserted.CancellationRejected {
-					if err := materializeCanonicalCancellation(ctx, tx, record, false); err != nil {
+					if err := materializeCanonicalCancellation(ctx, tx, record, false, false); err != nil {
 						return err
 					}
 					cancellationWon = true

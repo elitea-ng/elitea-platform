@@ -48,13 +48,15 @@ func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 	)
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, user_id, email, provider, provider_session_index,
-		       created_at, last_seen_at, expires_at, idle_timeout_seconds, revoked_at
+		       created_at, last_seen_at, expires_at, idle_timeout_seconds, revoked_at,
+		       ref, ended_at, COALESCE(end_reason, '')
 		FROM elitea_auth.browser_sessions
 		WHERE id = $1`, id,
 	).Scan(
 		&session.ID, &session.UserID, &session.Email, &session.Provider,
 		&session.ProviderSessionIndex, &session.CreatedAt, &session.LastSeenAt,
 		&session.ExpiresAt, &idle, &session.RevokedAt,
+		&session.Ref, &session.EndedAt, &session.EndReason,
 	)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -87,9 +89,13 @@ func (s *PostgresStore) Touch(ctx context.Context, id string, seenAt time.Time) 
 func (s *PostgresStore) Revoke(ctx context.Context, id string, revokedAt time.Time) error {
 	// `revoked_at IS NULL` keeps the FIRST revocation's timestamp. A logout
 	// replayed by a browser retry must not rewrite when the session ended.
+	// The end (shared 0200) keeps the first end too: a session that already
+	// expired stays expired in its audit record.
 	_, err := s.pool.Exec(ctx, `
 		UPDATE elitea_auth.browser_sessions
-		SET revoked_at = $2
+		SET revoked_at = $2,
+		    ended_at = COALESCE(ended_at, $2),
+		    end_reason = COALESCE(end_reason, 'logout')
 		WHERE id = $1 AND revoked_at IS NULL`, id, revokedAt)
 	if err != nil {
 		return fmt.Errorf("browsersession: revoke session: %w", err)
@@ -102,12 +108,32 @@ func (s *PostgresStore) RevokeAllForUser(
 ) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE elitea_auth.browser_sessions
-		SET revoked_at = $2
+		SET revoked_at = $2,
+		    ended_at = COALESCE(ended_at, $2),
+		    end_reason = COALESCE(end_reason, 'revoked')
 		WHERE user_id = $1 AND revoked_at IS NULL`, userID, revokedAt)
 	if err != nil {
 		return 0, fmt.Errorf("browsersession: revoke sessions of user: %w", err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+// MarkEnded stamps a session ended at its deadline, once (EndMarker). A row
+// already ended or revoked keeps its first end.
+func (s *PostgresStore) MarkEnded(ctx context.Context, id, reason string, endedAt time.Time) error {
+	switch reason {
+	case EndIdle, EndAbsolute:
+	default:
+		return fmt.Errorf("browsersession: %q is not an expiry", reason)
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE elitea_auth.browser_sessions
+		SET ended_at = $3, end_reason = $2
+		WHERE id = $1 AND ended_at IS NULL AND revoked_at IS NULL`, id, reason, endedAt)
+	if err != nil {
+		return fmt.Errorf("browsersession: record the session end: %w", err)
+	}
+	return nil
 }
 
 // DeleteExpired removes rows nothing can ever authenticate with again.

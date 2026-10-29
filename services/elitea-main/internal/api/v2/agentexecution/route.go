@@ -18,6 +18,7 @@ import (
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
@@ -187,6 +188,10 @@ type currentApplicationStartBody struct {
 	// membership server-side instead (see `mentionAudience`).
 	SendingToUser     bool `json:"isSendingToUser"`
 	SendingToEveryone bool `json:"is_mentioning_everyone"`
+	// ReleaseID runs one agent release of the participant's application
+	// (ADR-0040 decision 2), published or withdrawn. Absent or zero runs
+	// the participant's version.
+	ReleaseID int64 `json:"release_id"`
 }
 
 type currentRegenerationBody struct {
@@ -337,10 +342,11 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 				MentionsEveryone: body.SendingToEveryone,
 				TriggerOrigin:    origin,
 				ProjectSkillIDs:  projectSkillIDs,
+				ReleaseID:        body.ReleaseID,
 			},
 		)
 	case CurrentAdhocStartContract:
-		if body.ParticipantID < 0 || !currentJSONObject(body.LLMSettings) {
+		if body.ParticipantID < 0 || !currentJSONObject(body.LLMSettings) || body.ReleaseID != 0 {
 			writeUnsupported(writer)
 			return
 		}
@@ -623,6 +629,12 @@ func writeStartError(writer http.ResponseWriter, err error) {
 	if status, body, refused := safety.HTTPRefusal(err); refused {
 		// The kill switch (ADR-0041 decision 1): the code and the scope,
 		// never the operator's reason.
+		writeJSON(writer, status, body)
+		return
+	}
+	if status, body, refused := agentrelease.HTTPRefusal(err); refused {
+		// A release run (ADR-0040 decision 2): the toolkit id and the
+		// reason, never a setting.
 		writeJSON(writer, status, body)
 		return
 	}

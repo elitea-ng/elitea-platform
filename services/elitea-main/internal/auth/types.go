@@ -87,6 +87,13 @@ type User struct {
 	// cookie caller is exempt. Never serialised: no forwarded or cached
 	// principal can claim it.
 	NativeClientID string `json:"-"`
+	// BrowserSessionRef is the NON-SECRET reference (browser_sessions.ref,
+	// shared 0200) of the server-side browser session that authenticated
+	// this request, 0 for every other credential. Only the browser session
+	// reader sets it, from the row it read. Admission records it on the run
+	// (execution_jobs.browser_session_ref) so a run joins the session's
+	// audit events. Never serialised.
+	BrowserSessionRef int64 `json:"-"`
 }
 
 // BoundProjectRefused reports a binding whose project is no longer usable.

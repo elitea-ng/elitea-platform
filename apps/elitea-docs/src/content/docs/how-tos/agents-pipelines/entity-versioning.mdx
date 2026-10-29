@@ -38,6 +38,28 @@ When an entity has two or more versions, a **Compare versions** action becomes a
 
 Publishing an agent (see [Publish agents and skills](/how-tos/agents-pipelines/publishing)) only exports its **published** versions.
 
+## Read the release history
+
+Each time you publish an agent's version, Elitea records an immutable **release**, and each save of a version records a **revision** with its author and what changed. Pipelines are never published, so they have no releases.
+
+1. Open the agent.
+2. Select the **⋮** menu beside the version bar, and select **Release history**.
+3. On the **Releases** tab, the release marked **Current** is the one new runs use. Select **Changes** on a release to see what changed since the release before it.
+4. On the **Revisions of this version** tab, each revision shows who saved it, when, and each changed field as `replace /path: new value`.
+
+## Roll back to an earlier release
+
+When a new release behaves badly, make an earlier release current again. You need the permission to publish agents.
+
+1. Open **Release history** as described above.
+2. On the earlier release, select **Roll back to this**. Only published releases that are not current offer it.
+3. Type a reason. It is recorded in the audit event of the rollback.
+4. Select **Roll back**.
+
+New runs use that release. Runs already in progress keep the release they started with. If a toolkit of that release was changed after it was published, the rollback is refused with `release_toolkit_drifted`, because the release can no longer run as it was. Restore the toolkit's settings, or publish a corrected version instead.
+
+See [Agent lifecycle](/admin/enterprise-controls/agent-lifecycle) for what a release records and the evidence it produces.
+
 ## Delete a version
 
 You can delete any version except `base` and the current default. If other agents or pipelines reference the version you're deleting, a replacement-version dialog lists them and lets you pick which version they should point to instead; the system updates those references automatically.

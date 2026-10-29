@@ -30,6 +30,10 @@ type Handler struct {
 	// nativePolicy is the cached native client policy a save of the
 	// native_client_policy section invalidates (native_client_policy.go).
 	nativePolicy PolicyInvalidator
+	// sessionPolicy and runCaps are the cached run-safety sections a save
+	// drops (run_safety.go).
+	sessionPolicy SectionInvalidator
+	runCaps       SectionInvalidator
 	// cloudExecutorEncryption is the startup answer for the cloud executor's
 	// storage encryption at rest ("confirmed", "attested", "refused"; empty
 	// when the handoff is not composed). See WithCloudExecutorEncryption.

@@ -277,6 +277,12 @@ func (r *ToolkitExecuteReadJobsRepository) AdmitToolkitExecuteRead(
 		if createdID != admission.Record.Job.ID {
 			return errors.New("direct toolkit execution insert changed identity")
 		}
+		// The run's toolkit type and browser session (shared 0201).
+		if err := stampAdmissionSafety(ctx, tx, admission.Record.Job.ID,
+			int64(admission.Record.Job.Generation),
+			admissionSafetyRecord{ToolkitTypes: toolkitAdmissionTypes(ctx)}); err != nil {
+			return err
+		}
 		if err := queries.InsertToolkitExecuteReadBinding(ctx, sqlcgen.InsertToolkitExecuteReadBindingParams{
 			ExecutionID:    admission.Record.Job.ID,
 			Generation:     int64(admission.Record.Job.Generation),
