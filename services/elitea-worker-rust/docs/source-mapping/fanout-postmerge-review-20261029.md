@@ -180,12 +180,54 @@ Other changes:
 | Main × save/start of a Parallel three Agent-node levels down | F at save (no run) | `composition.go:567`, Worker `composition.rs` | `TestInlineLLMBranchesInTheDeepestPipelineAreRefused`, `postgres_a_parallel_three_agent_levels_down_is_refused_typed` |
 | Worker × approved Agent-member call in flight at a crash | C → F (`may_have_started`, never repeated) | dispatch journal, member path | `postgres_an_approved_agent_member_call_in_flight_at_a_crash_ends_typed` |
 | Worker × lost between a member's card frame and its decision | R | one ordered root stream (PM-6) | `postgres_an_agent_member_lost_at_its_card_frame_is_decided_from_the_durable_confirmation` |
+| Worker × lost at the resumed saved Agent branch's model call (wake) | R (only the killed model call runs again) | child checkpoint per branch, stable member call id | browser PM-1 (chat 40) |
+| Worker × lost mid-stream in a resumed inline LLM branch (wake) | R | branch checkpoint + recorded decision | `postgres_inline_llm_branches_stream_their_text_under_their_member_tier`; browser PM-5 (chat 28) |
+| Web × reload of a run whose recovery frontier was refused | F (registered text + support reference) | `protocol/output.rs` (RecoveryFrontierUnsupported), Main policy | `ApplicationAnswer.test.tsx`; browser (chat 20) |
 
 ## Browser evidence (fanpar, main-based images)
 
-To be filled in once the main-based images are deployed. The deploy also verifies the 0202 ledger renumber.
+- **Stack and images.**
+  - Main, Worker and supervisor run `pm-778e5beb8` (Worker sha256:64951e88faaa…, Main sha256:1ab3aa889bf1…).
+  - Web and gateway run `pm-2d7f7d3e8` (Web sha256:3436d996a180…).
+  - `stack.sh binary-check`: the Worker image holds `pipeline.recovery.child_not_parked` and
+    `elitea.fanout.inline_member.v1`; the Main image holds `RECOVERY_FRONTIER_UNSUPPORTED`.
+  - verify-profile 50/0. The ledger renumber 0198 → 0202 is verified: 198..201 carry main's checksums.
+  - Fixtures were created in the UI (pipelines and chats). The one exception is the forced-frontier case below, whose
+    stored child frontier was edited in the stack's own database.
+- **PM-1, chat 40, "FP agent branch".**
+  - The saved Agent branch pauses with its own card next to the pipeline branch's card. Both cards are restored after
+    a reload.
+  - A second tab was open. The Agent card was answered with the Worker killed at the resumed saved agent's model
+    request (wake `dc348c14…`).
+  - The redelivery made exactly one model request: the killed call. The Agent node's own model step was re-projected
+    from its checkpoint (same run id, stored timestamp), not re-requested, and its call id stayed stable. No card was
+    re-raised and the other card re-parked.
+  - Ledger: CONSUMED once per card. Answering the second card in the other tab joined both branches. The first tab
+    showed the join live; a reload keeps it.
+- **PM-5, chat 28, "FP inline mix".**
+  - While the run is parked, the inline branches stream live into their own tiers (ask_llm, approve_llm,
+    reject_llm) next to the saved pipeline's tier.
+  - The ask_llm card was answered with the Worker killed at the resumed branch's model stream (wake `e83eeaa0…`,
+    after the first chunk). The redelivery resumed ask_llm from its checkpoint with the decision and made one model
+    request. The text streamed into the ask_llm tier, the run joined, and the result is unchanged after a reload.
+  - Gap: once the run ends, and after a reload, the panel shows only the tiers that hold a tool call. The persisted
+    thinking steps are stored and listed correctly, but the transcript's trace read takes only `tool_call` rows
+    (`apps/elitea-web/src/features/chat-messages/model/useConversationTraceSteps.ts:43`, on main since #1032).
+- **Registered frontier terminal, chat 20, "FP outer".**
+  - The bell card was answered with the Worker killed mid-wake. Before the redelivery, the stored first-level child
+    frontier was edited to two pending nodes; this is the PG negative test's edit, applied to the stack's own
+    `agentstate` database.
+  - The redelivery refused it with `pipeline.recovery.child_frontier_unsupported` and made no model request.
+  - Live and after a reload the page shows the registered text. "Details for support" shows
+    `RECOVERY_FRONTIER_UNSUPPORTED` and the message id.
+  - Ledger: the decided card is SUPERSEDED and the open card is CANCELLED, both closed at the terminal.
 
 ## Follow-ups
 
 - FU-255 to FU-259 (PM-7, PM-8, PM-11, PM-12, Map in a child), FU-260 (nested inline-branch streaming), FU-261 (replay
   retention 23514).
+- Seen on the browser stack, not this change:
+  - On a redelivery past a decided pause, the Parallel trace logs `Fan-out child admitted start="fresh"` although
+    the child continues from its mid-run checkpoint (`ChildStart::Fresh` reads "No checkpoint yet"). This misleads
+    an operator reading logs.
+  - A turn that ends with the frontier terminal shows "Thought for -1 h -1 min and -1 sec" (negative duration).

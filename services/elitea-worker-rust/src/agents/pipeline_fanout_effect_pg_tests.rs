@@ -2231,7 +2231,7 @@ async fn lost_wake_two_levels(
 /// PM-2: reclaim a lost two-level wake after `tamper`, serving `middle` as the
 /// frozen middle pipeline; the assembly-time walk must refuse with `cause`
 /// before any model call or tool runs (F, nothing resumed).
-async fn refused_two_levels_down(middle: Value, cause: &str, tamper: &str) {
+async fn refused_two_levels_down(middle: Value, cause: &str, tamper: &'static str) {
     const WAKE_EXECUTION: &str = "execution-grandchild-refused";
     let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
