@@ -21,6 +21,11 @@ PM-7, PM-8, PM-11, PM-12 and the named gaps are FU-255 to FU-261 in `FOLLOWUPS-2
   does.
 - **PM-5.** A root-level inline LLM branch streams its model text and tool calls under its member tier, like an Agent
   branch and like the current platform's pipeline LLM nodes. It never streams as the run's own text.
+  - After the run ends, and after a reload, every member and sub-agent tier is still there with its own steps. Each
+    step opens to its text, which is fetched on open as for every restored step (#951).
+  - This also fixes a pre-existing gap from #1032. The transcript's reload source read only `tool_call` rows, so
+    every chat's saved sub-agent tier lost its inner thinking on reload, and a Parallel member that called no tool
+    lost its tier altogether.
 - **PM-6.** An Agent member's forwarded confirmation is durable in the root session before its card can be decided.
   This is proven; no code change was needed.
 - **PM-10.** The three Parallel branch strings are translated in all 18 locales, and the #1508 mapping's citations are
@@ -71,6 +76,12 @@ PM-7, PM-8, PM-11, PM-12 and the named gaps are FU-255 to FU-261 in `FOLLOWUPS-2
   - `src/agents/graph/node_events_parallel.rs:38` (`for_inline_llm_branch`, inline-member stamp);
   - `src/agents/graph/parallel_compiler.rs:248,681` (`InlineBranchEvents`, `compile_llm_branch`);
   - `src/agents/events.rs:1532,6440` (`project_inline_member`, `inline_member_tier`, reset on a member's status).
+  - Web, the reload view:
+    - `apps/elitea-web/src/entities/message/lib/traceSteps.ts:118,135,141` (`isMemberThinkingRow`,
+      `memberThinkingSteps`, `withMemberThinkingSteps`; a restored thinking step keeps its owner call id and path);
+    - `apps/elitea-web/src/entities/message/lib/toolActions.ts:277` (`restoredOwner`);
+    - `apps/elitea-web/src/entities/message/lib/wire.ts:86`;
+    - `apps/elitea-web/src/features/chat-messages/lib/convertMessagesToChatHistory.ts:313`.
 - **PM-6:** `src/agents/pipeline_fanout_effect_pg_tests.rs` (`run_until_first_card` and its test).
 - **PM-10:** 18 locale files; `fanout-inline-llm-branches-20261028.md`.
 
@@ -102,7 +113,18 @@ PM-7, PM-8, PM-11, PM-12 and the named gaps are FU-255 to FU-261 in `FOLLOWUPS-2
   - new: `TestCheckpointPathsCountInlineLLMBranches`, `TestReadPipelineCountsOnlyParallelOwnedLLMNodes`,
     `TestInlineLLMBranchesInTheDeepestPipelineAreRefused`, `TestEveryRuntimeErrorCodeHasRegisteredTextOrIsNotATerminal`;
   - `go test -race ./...`: see the PR description.
-- **Web:** the i18n tests (5 files, 25 tests), and the `ApplicationAnswer` reload view of `RECOVERY_FRONTIER_UNSUPPORTED`.
+- **Web:**
+  - the i18n tests (5 files, 25 tests), and the `ApplicationAnswer` reload view of `RECOVERY_FRONTIER_UNSUPPORTED`;
+  - `persistedMemberThinking.test.ts` (5 tests) over fanpar's real light rows for one "FP inline mix" turn
+    (`__tests__/parallel-member-trace-rows.json`, hierarchy only, no text). It proves:
+    - one tier per member, including inline branches that call no tool;
+    - the saved sub-agent tier holds its wrapper and its inner thinking;
+    - two concurrent instances of one saved agent stay apart;
+    - the coordinator's steps are unchanged, and a turn with no member rows is unchanged.
+  - The test is decisive. Without the merge the tier tests fail; without the restored owner fields the two-instance
+    test fails.
+  - `src/entities/message`, `src/features/chat-messages` and `src/widgets/chat-box`: 126 files, 1374 passed;
+    `tsc --noEmit` and oxlint are clean.
 - **Conformance:** the golden manifest passes with the new policy.
 
 ## Performance
@@ -115,6 +137,16 @@ PM-7, PM-8, PM-11, PM-12 and the named gaps are FU-255 to FU-261 in `FOLLOWUPS-2
     ends;
   - frames are the ones an LLM node already produces, with the member tier overlaid in place.
 - **PM-3:** no new work on the success path.
+- **PM-5 reload view:** no new request and no new route.
+  - The member thinking rows come from the light trace rows the message page reader already fetches. That reader is
+    paged at 500 rows and 200 message groups per request
+    (`apps/elitea-web/src/entities/conversation/api/messageTraces.ts`).
+  - The conversation-wide `tool_call` listing is unchanged.
+  - Measured on fanpar, chat 41: 60 turns, 120 groups, 660 trace rows, a SQL copy of a real turn. Loading the first
+    page of 50 groups, before and after:
+    - 53 requests both times: messages 1, page trace rows 1, `tool_call` listing 1, step detail 25, feedback 25;
+    - identical response bytes: 36,005 B; 236,449 B (250 rows); 119,769 B (120 rows).
+  - Client work is one filter over the page's rows per message group.
 
 ## Durability
 
@@ -163,6 +195,10 @@ Other changes:
   exactly three keys). A forged or malformed marker is an invalid state, never projected.
 - **Registered terminal:** the text is data-free and registered on both sides. The internal cause never reaches the
   user.
+- **PM-5 reload view:** the rows come from the existing listing, under its existing authorization. They are only
+  regrouped client-side.
+  - The owner path is bounded by the existing persisted-path limits: 3 tiers, 2048-char names, 512-char call ids.
+  - Text is rendered as React text, as before.
 - No new route, RPC, SQL built from strings, outbound call, credential or log field carrying user data. The PM-10
   locale strings are static.
 - `rules/security.md`:
@@ -182,13 +218,15 @@ Other changes:
 | Worker × lost between a member's card frame and its decision | R | one ordered root stream (PM-6) | `postgres_an_agent_member_lost_at_its_card_frame_is_decided_from_the_durable_confirmation` |
 | Worker × lost at the resumed saved Agent branch's model call (wake) | R (only the killed model call runs again) | child checkpoint per branch, stable member call id | browser PM-1 (chat 40) |
 | Worker × lost mid-stream in a resumed inline LLM branch (wake) | R | branch checkpoint + recorded decision | `postgres_inline_llm_branches_stream_their_text_under_their_member_tier`; browser PM-5 (chat 28) |
+| Web × reload or end of a run with Parallel members and sub-agents | R (every tier and step restored from durable trace rows) | `traceSteps.ts:141`, `convertMessagesToChatHistory.ts:313` | `persistedMemberThinking.test.ts`; browser (chat 28) |
 | Web × reload of a run whose recovery frontier was refused | F (registered text + support reference) | `protocol/output.rs` (RecoveryFrontierUnsupported), Main policy | `ApplicationAnswer.test.tsx`; browser (chat 20) |
 
 ## Browser evidence (fanpar, main-based images)
 
 - **Stack and images.**
   - Main, Worker and supervisor run `pm-778e5beb8` (Worker sha256:64951e88faaa…, Main sha256:1ab3aa889bf1…).
-  - Web and gateway run `pm-2d7f7d3e8` (Web sha256:3436d996a180…).
+  - Web and gateway run `pm-2d7f7d3e8` (Web sha256:3436d996a180…). The PM-5 reload proofs run Web `pm-07757110d`
+    (sha256:9091e9efe164…).
   - `stack.sh binary-check`: the Worker image holds `pipeline.recovery.child_not_parked` and
     `elitea.fanout.inline_member.v1`; the Main image holds `RECOVERY_FRONTIER_UNSUPPORTED`.
   - verify-profile 50/0. The ledger renumber 0198 → 0202 is verified: 198..201 carry main's checksums.
@@ -210,9 +248,13 @@ Other changes:
   - The ask_llm card was answered with the Worker killed at the resumed branch's model stream (wake `e83eeaa0…`,
     after the first chunk). The redelivery resumed ask_llm from its checkpoint with the decision and made one model
     request. The text streamed into the ask_llm tier, the run joined, and the result is unchanged after a reload.
-  - Gap: once the run ends, and after a reload, the panel shows only the tiers that hold a tool call. The persisted
-    thinking steps are stored and listed correctly, but the transcript's trace read takes only `tool_call` rows
-    (`apps/elitea-web/src/features/chat-messages/model/useConversationTraceSteps.ts:43`, on main since #1032).
+  - On `pm-2d7f7d3e8`, once the run ended and after a reload, the panel showed only the tiers that hold a tool call.
+    The cause was the transcript's `tool_call`-only reload source (since #1032).
+  - Fixed in Web `pm-07757110d` (sha256:9091e9efe164…). Image check: the new bundle holds the member-row check
+    (`usePipelineEditorLifecycle-BB0fSMS1.js`) and the old bundle does not; the tab ran `BB0fSMS1`.
+    - After a reload of "PM-5 run 1": tiers FP llm reverse, reject_llm, approve_llm and ask_llm. The saved pipeline's
+      tier holds its wrapper call and its inner thinking step, and opening that step fetches its text.
+    - "PM-5 run 2", answered and ended live: all four tiers stay without a reload.
 - **Registered frontier terminal, chat 20, "FP outer".**
   - The bell card was answered with the Worker killed mid-wake. Before the redelivery, the stored first-level child
     frontier was edited to two pending nodes; this is the PG negative test's edit, applied to the stack's own
