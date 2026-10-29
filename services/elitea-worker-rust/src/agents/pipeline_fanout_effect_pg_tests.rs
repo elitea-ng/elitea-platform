@@ -475,6 +475,34 @@ async fn run_keyed_deciding(
         .map_err(|error| error.to_string())
 }
 
+/// Run until the first model request is in flight, then drop the run there:
+/// the process is lost mid model call. Waits for the request itself, never a
+/// fixed time, so a loaded machine cannot drop the run before its call.
+async fn lose_at_first_model_request(
+    invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
+    captured: &CapturedModelRequests,
+) {
+    let run = run_collecting(invocation);
+    tokio::pin!(run);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        tokio::select! {
+            outcome = &mut run => {
+                panic!("the run ended before its model call was in flight: {outcome:?}");
+            }
+            () = tokio::time::sleep(Duration::from_millis(10)) => {
+                if model_requests(captured) >= 1 {
+                    return;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "no model request within 30 s"
+                );
+            }
+        }
+    }
+}
+
 /// The latest root checkpoint's joined entries.
 async fn joined(pool: &sqlx::PgPool) -> Option<Vec<Value>> {
     let state = sqlx::query_scalar::<_, String>(
@@ -1595,12 +1623,7 @@ async fn postgres_a_wake_lost_inside_a_child_pipeline_resumes_the_answered_branc
         .await
         .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
     // Dropped inside the gateway's 1 s header timeout: the process is gone.
-    let outcome =
-        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
-    assert!(
-        outcome.is_err(),
-        "branch a waits in its model call: {outcome:?}"
-    );
+    lose_at_first_model_request(invocation, &lost_requests).await;
     assert_eq!(
         model_requests(&lost_requests),
         1,
@@ -1651,6 +1674,87 @@ async fn postgres_a_wake_lost_inside_a_child_pipeline_resumes_the_answered_branc
     db.pool.close().await;
 }
 
+/// FU-249 follow-up: the child pipeline's Parallel parked, only branch `a`
+/// answered; in the wake `a`'s resumed model call fails. Under On Error
+/// `continue` `a` ends failed, `b` and `c` are re-raised and park again: the
+/// failed branch never ends the run or drops the other branches' cards.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_branch_failing_in_a_child_pipeline_wake_keeps_the_other_cards() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let (first, _) = assembler(
+        &db.pool,
+        (0..3)
+            .map(|_| TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()))
+            .collect(),
+        pipeline_connector(),
+        parallel_child_pipeline(),
+    );
+    let request = child_parallel_request();
+    let invocation = first
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the child fan-out: {error}"));
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .expect("the child's Parallel parks the run");
+    let parked_keys = cards
+        .iter()
+        .map(|card| {
+            card["interrupt_key"]
+                .as_str()
+                .expect("a card key")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(parked_keys.len(), 3, "{cards:?}");
+    ledger.decide(&parked_keys[0], "answer", Some("Staging"));
+
+    let (woken, _) = assembler(
+        &db.pool,
+        (0..4)
+            .map(|_| TestModelGatewayOutcome::Unavailable)
+            .collect(),
+        pipeline_connector(),
+        parallel_child_pipeline(),
+    );
+    let wake = child_parallel_wake();
+    let invocation = woken
+        .with_fanout_decisions_for_tests(ledger.client(2))
+        .assemble(claim(&wake, 2))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
+    let (members, cards) = run_collecting(invocation)
+        .await
+        .expect("a failed branch parks the others again, never fails the run");
+    assert!(
+        members
+            .iter()
+            .any(|member| member["fanout_v1"]["member"] == "a" && member["status"] == "failed"),
+        "{members:?}"
+    );
+    let keys = cards
+        .iter()
+        .filter_map(|card| card["interrupt_key"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        keys,
+        [parked_keys[1].as_str(), parked_keys[2].as_str()],
+        "{cards:?}"
+    );
+    db.pool.close().await;
+}
+
 /// FU-249: recovery resumes an Agent node's saved child only where the child
 /// is parked inside a fixed Parallel occurrence. A child lost mid model call
 /// in an ordinary node (here its LLM node) is not resumed blind: the inspect
@@ -1685,12 +1789,7 @@ async fn postgres_a_child_pipeline_lost_outside_a_parallel_is_not_resumed() {
         ))
         .await
         .unwrap_or_else(|error| panic!("assemble the child run: {error}"));
-    let outcome =
-        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
-    assert!(
-        outcome.is_err(),
-        "the child waits in its model call: {outcome:?}"
-    );
+    lose_at_first_model_request(invocation, &lost_requests).await;
     assert_eq!(model_requests(&lost_requests), 1);
 
     let (again, _) = assembler(
@@ -1951,12 +2050,7 @@ async fn postgres_a_wake_lost_mid_model_resumes_the_answered_agent_branch() {
         ))
         .await
         .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
-    let outcome =
-        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
-    assert!(
-        outcome.is_err(),
-        "the answered member's Agent waits in its model call: {outcome:?}"
-    );
+    lose_at_first_model_request(invocation, &lost_requests).await;
     assert_eq!(model_requests(&lost_requests), 1);
 
     let (woken, captured) = assembler(
@@ -2038,12 +2132,7 @@ async fn postgres_a_wake_lost_mid_model_resumes_the_answered_child() {
         .await
         .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
     // Dropped inside the gateway's 1 s header timeout: the process is gone.
-    let outcome =
-        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
-    assert!(
-        outcome.is_err(),
-        "the answered child waits in its model call: {outcome:?}"
-    );
+    lose_at_first_model_request(invocation, &lost_requests).await;
     assert_eq!(
         model_requests(&lost_requests),
         1,
