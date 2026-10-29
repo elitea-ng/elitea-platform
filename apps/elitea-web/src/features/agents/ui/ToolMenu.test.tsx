@@ -572,7 +572,8 @@ describe('ToolMenu — saved entity', () => {
     fireEvent.click(await screen.findByText('Other Pipeline'));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Cannot add "Other Pipeline": this would create a circular agent reference. Remove the circular dependency first.');
-    expect(screen.queryByText('Other Pipeline')).not.toBeInTheDocument();
+    // The menu closes through its exit transition; wait for it to leave the DOM.
+    await waitFor(() => expect(screen.queryByText('Other Pipeline')).not.toBeInTheDocument());
     expect(updateRelationCalls).toBe(1);
     expect(onToolsChangedCalls).toBe(0);
   });
