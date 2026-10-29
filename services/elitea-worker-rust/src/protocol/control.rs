@@ -1403,6 +1403,11 @@ pub struct AgentExecutionOutputAuthority {
 }
 
 impl AgentExecutionOutputAuthority {
+    /// The claim's full identity and fence, for step reports (ADR-0042).
+    pub(crate) const fn claim_parts(&self) -> (&ExecutionIdentityV1, &ExecutionFenceV1) {
+        (&self.claim.identity, &self.claim.fence)
+    }
+
     /// Consume the exact claim into an ACK-driven output cursor.
     ///
     /// The cursor owns the raw fence and authenticated handoff watermark. A
@@ -2402,6 +2407,36 @@ impl<R> AgentControlClient<R> {
         ))
     }
 
+    /// Start step recording for an attempt that takes over a run another
+    /// claim began (settlement recovery, model-checkpoint or node recovery;
+    /// ADR-0042, #1499). When this process holds no recorder for the command,
+    /// the earlier attempt ran elsewhere (or this worker restarted), so its
+    /// unreported steps may be gone: an `error` step `steps_possibly_lost`
+    /// opens the recovered attempt and makes the gap explicit. The claim is
+    /// bound so early reports go under it.
+    pub(crate) fn begin_recovered_run_steps(
+        &self,
+        identity: &ExecutionIdentityV1,
+        fence: &ExecutionFenceV1,
+        at_unix_ms: i64,
+    ) {
+        let prior = self.steps.find(identity).is_some();
+        self.steps.bind_claim(identity, fence);
+        if prior {
+            return;
+        }
+        let recorder = self.steps.recorder(identity);
+        recorder.mark_resumed();
+        recorder.record(
+            super::run_steps::StepDraft::new(
+                super::elitea::runtime::v1::RunStepKindV1::Error,
+                STEPS_POSSIBLY_LOST,
+                at_unix_ms,
+            )
+            .summary("reason", serde_json::Value::from("worker_restart")),
+        );
+    }
+
     /// Claim governed commands (ADR-0039, #1115): every fresh claim sets
     /// `governed_security_context_v1`. Off, the claim is the legacy one.
     #[must_use]
@@ -2710,8 +2745,11 @@ impl<R: ControlRpc> AgentControlClient<R> {
     }
 
     /// Report the buffered step records early, under the live claim, once a
-    /// full batch (64 steps) waits. Nothing happens before the claim is
-    /// bound; the settlement report then sends everything.
+    /// full batch (64 steps) waits or the oldest step is older than 2 s.
+    /// Nothing happens before the claim is bound; the settlement report then
+    /// sends everything. Each batch gets ONE attempt (bounded by the RPC
+    /// deadline): a failure keeps the steps buffered and opens a backoff
+    /// window, so a slow or unavailable Main never holds the run longer.
     pub(crate) async fn flush_run_steps_early(&self, recorder: &super::run_steps::RunStepRecorder) {
         if !recorder.should_flush_early() {
             return;
@@ -2757,7 +2795,11 @@ impl<R: ControlRpc> AgentControlClient<R> {
                 return;
             }
             let count = batch.len();
-            match self.report_run_step_batch(identity, fence, batch).await {
+            let attempts = if settle { RUN_STEPS_REPORT_ATTEMPTS } else { 1 };
+            match self
+                .report_run_step_batch(identity, fence, batch, attempts)
+                .await
+            {
                 RunStepReport::Delivered => recorder.acknowledge(count),
                 RunStepReport::Refused(reason) => {
                     // A stale fence or a Main without the RPC refuses every
@@ -2768,6 +2810,8 @@ impl<R: ControlRpc> AgentControlClient<R> {
                 RunStepReport::Exhausted => {
                     if settle {
                         recorder.drop_pending("retries_exhausted");
+                    } else {
+                        recorder.note_early_failure();
                     }
                     return;
                 }
@@ -2782,9 +2826,10 @@ impl<R: ControlRpc> AgentControlClient<R> {
         identity: &ExecutionIdentityV1,
         fence: &ExecutionFenceV1,
         steps: Vec<super::elitea::runtime::v1::RunStepV1>,
+        attempts: u32,
     ) -> RunStepReport {
         let mut backoff = RUN_STEPS_RETRY_BACKOFF;
-        for attempt in 1..=RUN_STEPS_REPORT_ATTEMPTS {
+        for attempt in 1..=attempts {
             if attempt > 1 {
                 tokio::time::sleep(backoff).await;
                 backoff = backoff.saturating_mul(2);
@@ -2885,6 +2930,11 @@ impl<R: ControlRpc> AgentControlClient<R> {
             .map_err(|_| {
                 ControlSemanticError::InvalidInput("the settlement recovery outcome is malformed")
             })?;
+        self.begin_recovered_run_steps(
+            &recovery.identity,
+            &recovery.fence,
+            super::run_steps::now_unix_ms(),
+        );
         self.report_run_steps(&recovery.identity, &recovery.fence, true)
             .await;
         self.report_egress_summary(&recovery.identity, &recovery.fence)
@@ -2905,6 +2955,9 @@ impl<R: ControlRpc> AgentControlClient<R> {
         Ok(receipt)
     }
 }
+
+/// The step that marks a recovered attempt's possible gap (ADR-0042).
+pub(crate) const STEPS_POSSIBLY_LOST: &str = "steps_possibly_lost";
 
 /// Attempts per step batch, and the first backoff (doubled each retry).
 const RUN_STEPS_REPORT_ATTEMPTS: u32 = 4;

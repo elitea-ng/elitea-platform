@@ -340,3 +340,33 @@ fn timestamps_parse_as_unix_milliseconds() {
     assert_eq!(rfc3339_unix_ms("1970-01-01T00:00:01.5Z"), 1_500);
     assert_eq!(rfc3339_unix_ms("not a time"), 0);
 }
+
+#[test]
+fn an_aged_step_flushes_early_unless_a_failed_report_is_backing_off() {
+    let recorder = RunStepRecorder::new("execution-1");
+    assert!(!recorder.should_flush_early(), "nothing buffered");
+    recorder.record(draft(RunStepKindV1::ToolCall, "tool"));
+    assert!(!recorder.should_flush_early(), "one young step waits");
+    recorder.age_pending(MAX_UNSENT_STEP_AGE);
+    assert!(recorder.should_flush_early(), "an aged step goes out");
+
+    recorder.note_early_failure();
+    assert!(
+        !recorder.should_flush_early(),
+        "the backoff window holds it"
+    );
+    assert_eq!(recorder.pending_len(), 1, "and keeps it buffered");
+    recorder.expire_early_backoff();
+    assert!(recorder.should_flush_early());
+
+    recorder.note_early_failure();
+    recorder.acknowledge(1);
+    recorder.record(draft(RunStepKindV1::ToolCall, "next"));
+    recorder.age_pending(MAX_UNSENT_STEP_AGE);
+    assert!(
+        recorder.should_flush_early(),
+        "a delivered report clears the backoff"
+    );
+    recorder.drop_pending("test");
+    assert!(!recorder.should_flush_early(), "dropped steps leave no age");
+}

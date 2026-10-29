@@ -3609,6 +3609,115 @@ pub(crate) mod tests {
         );
     }
 
+    /// A step older than 2 s is reported early even below a full batch. An
+    /// unavailable Main gets ONE attempt: the steps stay buffered and the
+    /// next early report waits for the backoff window, then delivers them.
+    #[tokio::test(flavor = "current_thread")]
+    async fn aged_run_steps_are_reported_early_and_kept_when_main_is_down() {
+        let identity = ExecutionIdentityV1 {
+            execution_id: "execution-aged".to_owned(),
+            generation: 1,
+            command_id: "command-aged".to_owned(),
+            ..ExecutionIdentityV1::default()
+        };
+        let steps = Arc::new(crate::protocol::run_steps::RunStepRegistry::default());
+        let ids = record_steps(&steps, &identity, 3);
+        steps.bind_claim(&identity, &ExecutionFenceV1::default());
+        let recorder = steps.find(&identity).expect("tracked");
+        let rpc = SettlementRpc {
+            run_steps_answers: Arc::new(Mutex::new(
+                vec![Err(tonic::Code::Unavailable), Ok(None)].into(),
+            )),
+            ..SettlementRpc::default()
+        };
+        let reports = Arc::clone(&rpc.run_steps);
+        let control = settlement_control(rpc, &steps);
+        control.flush_run_steps_early(&recorder).await;
+        assert!(
+            reports.lock().expect("reports").is_empty(),
+            "young steps wait"
+        );
+
+        recorder.age_pending(crate::protocol::run_steps::MAX_UNSENT_STEP_AGE);
+        control.flush_run_steps_early(&recorder).await;
+        assert_eq!(
+            reports.lock().expect("reports").len(),
+            1,
+            "one attempt only"
+        );
+        assert_eq!(
+            recorder.pending_len(),
+            3,
+            "a failed early report keeps them"
+        );
+        control.flush_run_steps_early(&recorder).await;
+        assert_eq!(
+            reports.lock().expect("reports").len(),
+            1,
+            "the backoff window holds the next attempt"
+        );
+
+        recorder.expire_early_backoff();
+        control.flush_run_steps_early(&recorder).await;
+        let reports = reports.lock().expect("reports").clone();
+        assert_eq!(reports.len(), 2);
+        let sent: Vec<&String> = reports[1].steps.iter().map(|step| &step.step_id).collect();
+        assert_eq!(sent, ids.iter().collect::<Vec<_>>());
+        assert_eq!(recorder.pending_len(), 0);
+    }
+
+    /// An attempt that resumes another claim's run with no recorder in this
+    /// process opens with `steps_possibly_lost`; one that continues a
+    /// recorder this process already holds does not.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_taken_over_run_opens_with_a_steps_possibly_lost_error_step() {
+        let identity = ExecutionIdentityV1 {
+            execution_id: "execution-takeover".to_owned(),
+            generation: 3,
+            command_id: "command-takeover".to_owned(),
+            tenant_id: "tenant-takeover".to_owned(),
+            ..ExecutionIdentityV1::default()
+        };
+        let fence = ExecutionFenceV1 {
+            lease_epoch: 9,
+            ..ExecutionFenceV1::default()
+        };
+        let steps = Arc::new(crate::protocol::run_steps::RunStepRegistry::default());
+        let rpc = SettlementRpc::default();
+        let reports = Arc::clone(&rpc.run_steps);
+        let control = settlement_control(rpc, &steps);
+        control.begin_recovered_run_steps(&identity, &fence, 42);
+        control.begin_recovered_run_steps(&identity, &fence, 43);
+        let recorder = steps.find(&identity).expect("tracked");
+        assert_eq!(recorder.pending_len(), 1, "one marker, not one per call");
+        assert!(recorder.is_resumed());
+        recorder.age_pending(crate::protocol::run_steps::MAX_UNSENT_STEP_AGE);
+        control.flush_run_steps_early(&recorder).await;
+        let reports = reports.lock().expect("reports").clone();
+        assert_eq!(reports.len(), 1, "the claim was bound");
+        assert_eq!(reports[0].fence, Some(fence.clone()));
+        assert_eq!(reports[0].identity, Some(identity.clone()));
+        let marker = &reports[0].steps[0];
+        assert_eq!(
+            marker.kind,
+            crate::protocol::elitea::runtime::v1::RunStepKindV1::Error as i32
+        );
+        assert_eq!(marker.name, crate::protocol::control::STEPS_POSSIBLY_LOST);
+        assert_eq!(marker.summary_json, r#"{"reason":"worker_restart"}"#);
+
+        let continued = ExecutionIdentityV1 {
+            command_id: "command-continued".to_owned(),
+            ..identity
+        };
+        record_steps(&steps, &continued, 1);
+        control.begin_recovered_run_steps(&continued, &fence, 44);
+        assert_eq!(
+            steps.find(&continued).expect("tracked").pending_len(),
+            1,
+            "this process ran the earlier attempt: no gap"
+        );
+    }
+
     /// A transport error and a retryable rejection are retried with the SAME
     /// steps (main skips a step id it stored); a stale-fence rejection or a
     /// Main without the RPC drops them (logged, counted) and the run still

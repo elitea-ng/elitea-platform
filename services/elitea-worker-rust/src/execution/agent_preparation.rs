@@ -648,6 +648,19 @@ impl AuthorizedAgentRun {
     }
 
     #[must_use]
+    /// The claim of a run that resumes another attempt's work (model
+    /// checkpoint or node recovery): `None` for a fresh run.
+    pub(super) fn recovered_claim(
+        &self,
+    ) -> Option<(
+        &crate::protocol::elitea::runtime::v1::ExecutionIdentityV1,
+        &crate::protocol::elitea::runtime::v1::ExecutionFenceV1,
+    )> {
+        self.checkpoint
+            .as_ref()
+            .map(|_| self.output_authority.claim_parts())
+    }
+
     pub(super) fn trace_tenant_id(&self) -> &str {
         &self.verified.command().tenant_id
     }

@@ -60,6 +60,14 @@ const MAX_SUMMARY_STRING_BYTES: usize = 512;
 const MIN_CITATION_NEEDLE_CHARS: usize = 4;
 /// Room kept for the `summary_truncated` marker.
 const SUMMARY_MARKER_BYTES: usize = 32;
+/// A buffered step older than this is reported early, before a full batch
+/// waits: a worker that dies mid-run then loses at most this much.
+pub(crate) const MAX_UNSENT_STEP_AGE: Duration = Duration::from_secs(2);
+/// After a failed early report the next one waits this long, doubling per
+/// consecutive failure up to [`MAX_EARLY_RETRY_DELAY`], so an unavailable
+/// Main costs the run one bounded attempt per window, not one per step.
+const EARLY_RETRY_DELAY: Duration = Duration::from_secs(2);
+const MAX_EARLY_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// The most executions the registry holds; past it the oldest is dropped.
 const MAX_TRACKED_EXECUTIONS: usize = 4_096;
 /// An execution not settled within this is dropped with its unsent steps.
@@ -482,6 +490,11 @@ fn into_step(draft: StepDraft, retrievals: &[RecordedRetrieval]) -> RunStepV1 {
 #[derive(Default)]
 struct RecorderState {
     pending: VecDeque<RunStepV1>,
+    /// When each pending step was recorded, oldest first.
+    recorded_at: VecDeque<Instant>,
+    /// No early report before this (set by a failed one).
+    early_retry_at: Option<Instant>,
+    early_failures: u32,
     retrievals: Vec<RecordedRetrieval>,
     /// The live claim's full identity and fence, once bound.
     claim: Option<(ExecutionIdentityV1, ExecutionFenceV1)>,
@@ -548,6 +561,7 @@ impl RunStepRecorder {
                 });
             }
             state.pending.push_back(step);
+            state.recorded_at.push_back(Instant::now());
             Ok(Some(step_id))
         });
         recorded.unwrap_or_else(|()| {
@@ -574,15 +588,56 @@ impl RunStepRecorder {
         self.with_state(|state| state.resumed)
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn pending_len(&self) -> usize {
         self.with_state(|state| state.pending.len())
     }
 
-    /// Whether a full batch is waiting: the lifecycle then flushes early.
+    /// Whether to report before settlement: a full batch waits, or the
+    /// oldest buffered step is older than [`MAX_UNSENT_STEP_AGE`] — unless a
+    /// failed early report's backoff window is still open.
     #[must_use]
     pub(crate) fn should_flush_early(&self) -> bool {
-        self.pending_len() >= MAX_STEPS_PER_REPORT
+        let now = Instant::now();
+        self.with_state(|state| {
+            let Some(oldest) = state.recorded_at.front() else {
+                return false;
+            };
+            if state.early_retry_at.is_some_and(|retry_at| now < retry_at) {
+                return false;
+            }
+            state.pending.len() >= MAX_STEPS_PER_REPORT
+                || now.saturating_duration_since(*oldest) >= MAX_UNSENT_STEP_AGE
+        })
+    }
+
+    /// An early report failed: its steps stay buffered, and the next early
+    /// attempt waits for the backoff window.
+    pub(crate) fn note_early_failure(&self) {
+        self.with_state(|state| {
+            state.early_failures = state.early_failures.saturating_add(1);
+            let delay = EARLY_RETRY_DELAY
+                .saturating_mul(1 << state.early_failures.saturating_sub(1).min(4))
+                .min(MAX_EARLY_RETRY_DELAY);
+            state.early_retry_at = Some(Instant::now() + delay);
+        });
+    }
+
+    /// Test-only: pretend every buffered step was recorded `by` earlier.
+    #[cfg(test)]
+    pub(crate) fn age_pending(&self, by: Duration) {
+        self.with_state(|state| {
+            for at in &mut state.recorded_at {
+                *at = at.checked_sub(by).unwrap_or(*at);
+            }
+        });
+    }
+
+    /// Test-only: close the early backoff window now.
+    #[cfg(test)]
+    pub(crate) fn expire_early_backoff(&self) {
+        self.with_state(|state| state.early_retry_at = None);
     }
 
     fn bind_claim(&self, identity: &ExecutionIdentityV1, fence: &ExecutionFenceV1) {
@@ -625,6 +680,11 @@ impl RunStepRecorder {
         self.with_state(|state| {
             let count = count.min(state.pending.len());
             state.pending.drain(..count);
+            state
+                .recorded_at
+                .drain(..count.min(state.recorded_at.len()));
+            state.early_retry_at = None;
+            state.early_failures = 0;
         });
     }
 
@@ -633,6 +693,7 @@ impl RunStepRecorder {
         let dropped = self.with_state(|state| {
             let count = state.pending.len();
             state.pending.clear();
+            state.recorded_at.clear();
             count
         });
         if dropped > 0 {
@@ -798,6 +859,12 @@ pub(crate) fn command_identity(
         command_id: command_id.to_owned(),
         ..ExecutionIdentityV1::default()
     }
+}
+
+/// The wall clock in Unix milliseconds.
+#[must_use]
+pub(crate) fn now_unix_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
 }
 
 /// Unix milliseconds of an RFC 3339 timestamp; 0 when it does not parse.

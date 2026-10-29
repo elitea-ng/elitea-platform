@@ -140,6 +140,11 @@ where
         let clock = Arc::clone(&self.clock);
         let max_output_sessions = self.max_output_sessions;
         let terminal_recovery = self.terminal_recovery;
+        // A checkpoint or node-recovery attempt resumes another claim's run:
+        // mark the possible step gap first (ADR-0042, #1499).
+        if let Some((identity, fence)) = run.recovered_claim() {
+            control.begin_recovered_run_steps(identity, fence, clock.now_unix_millis());
+        }
         // Box the generated state machine before adding instrumentation. The
         // lifecycle deliberately crosses several ownership-heavy async phases;
         // keeping the poll frame behind this allocation prevents its stack size
