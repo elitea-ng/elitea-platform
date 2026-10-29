@@ -1963,6 +1963,12 @@ pub(crate) enum TestModelGatewayOutcome {
     },
     Unavailable,
     Pending,
+    /// Answer once `gate` is notified: holds one member of a parallel run
+    /// until the test has done what must come first (a live decision).
+    Gated {
+        gate: Arc<tokio::sync::Notify>,
+        response: Response<Body>,
+    },
     /// End the test process at this model request: a Worker that dies after
     /// everything before the request is durable (process-replacement proofs).
     ExitProcess(i32),
@@ -2036,6 +2042,10 @@ impl ModelGatewayTransport for TestModelGatewayTransport {
             | TestModelGatewayOutcome::ResponseForModel { response, .. } => Ok(response),
             TestModelGatewayOutcome::Unavailable => Err(ModelGatewayTransportError::Unavailable),
             TestModelGatewayOutcome::Pending => std::future::pending().await,
+            TestModelGatewayOutcome::Gated { gate, response } => {
+                gate.notified().await;
+                Ok(response)
+            }
             TestModelGatewayOutcome::ExitProcess(code) => std::process::exit(code),
         }
     }
