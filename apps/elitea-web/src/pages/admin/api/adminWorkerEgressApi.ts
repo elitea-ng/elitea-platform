@@ -12,7 +12,7 @@ import { unwrapBody } from '@/shared/api/unwrap';
 const KEY = ['admin', 'worker-egress-hosts'] as const;
 
 /** Reads the hosts body out of the envelope or the bare body. */
-export function workerEgressHosts(response: unknown): WorkerEgressHostsResponse {
+function workerEgressHosts(response: unknown): WorkerEgressHostsResponse {
   const body = unwrapBody(response);
   if (typeof body === 'object' && body !== null && Array.isArray((body as { reached?: unknown }).reached)) {
     return body as WorkerEgressHostsResponse;
