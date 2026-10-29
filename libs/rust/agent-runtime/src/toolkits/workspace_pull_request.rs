@@ -51,7 +51,7 @@ use elitea_connectors::transport::{Transport, Url};
 use serde_json::{Map, Value, json};
 use zeroize::Zeroizing;
 
-use super::families::connector_client::transport as host_transport;
+use super::families::connector_client::transport_for as host_transport;
 use super::families::github::client::GitHubClient;
 use super::families::github::config::GitHubToolkitConfig;
 use super::families::github::writes::{
@@ -999,11 +999,9 @@ impl Shared {
         };
         let transport = match &self.push_transport {
             Some(transport) => Arc::clone(transport),
-            None => Arc::new(EgressTransport::new(
-                Arc::clone(&self.egress),
-                host_transport(&PUSH_POLICY)
-                    .map_err(|_| answer("error", "The push client could not be built."))?,
-            )) as Arc<dyn Transport>,
+            // Already bound to the run: one check and one count per request.
+            None => host_transport(Arc::clone(&self.egress), &PUSH_POLICY)
+                .map_err(|_| answer("error", "The push client could not be built."))?,
         };
         let PreparedPush {
             upstream,
@@ -1441,6 +1439,37 @@ fn capitalized(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use elitea_connectors::transport::{Method, Request};
+
+    use super::{PUSH_POLICY, host_transport};
+    use crate::egress::{HostCount, PublicPolicy, RunEgress, scope};
+
+    /// The push's host transport checks and counts each request once, even
+    /// run inside the same run's scope (it used to be wrapped twice).
+    #[tokio::test]
+    async fn the_push_transport_counts_each_request_once() {
+        let run = RunEgress::new(PublicPolicy::allowlist(["github.com"]).expect("policy"));
+        let transport = host_transport(Arc::clone(&run), &PUSH_POLICY).expect("transport");
+        let target = Url::parse("https://evil.example/o/r.git/git-receive-pack").expect("url");
+        let error = scope(
+            Arc::clone(&run),
+            transport.execute(Request::new(Method::POST, target)),
+        )
+        .await
+        .expect_err("refused");
+        assert!(error.is_refused());
+        assert_eq!(
+            run.summary().refused,
+            vec![HostCount {
+                host: "evil.example".to_owned(),
+                port: 443,
+                count: 1,
+            }]
+        );
+    }
+
     use super::{
         github_web_origin, remote_host, remote_path_as_written, remote_repository_as_written,
         valid_branch,

@@ -2627,7 +2627,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
             );
         }
         self.report_egress_summary(&identity, &fence).await;
-        let execution_id = identity.execution_id.clone();
+        let settled_identity = identity.clone();
         let proposal_bytes = proposal.encode_to_vec();
         let proposal_digest = digest::digest(&digest::SHA256, &proposal_bytes);
         let request = PrepareSettlementRequestV1 {
@@ -2642,7 +2642,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
         };
         let response = self.control.prepare_settlement(request).await?;
         let receipt = parse_prepare_settlement_response(response, expected_outcome, retirement)?;
-        self.egress.forget(&execution_id);
+        self.egress.forget(&settled_identity);
         Ok(receipt)
     }
 
@@ -2654,7 +2654,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
         identity: &ExecutionIdentityV1,
         fence: &ExecutionFenceV1,
     ) {
-        let Some(summary) = self.egress.summary_for_settlement(&identity.execution_id) else {
+        let Some(summary) = self.egress.summary_for_settlement(identity) else {
             return;
         };
         let request = egress_summary_request(identity, fence, &summary);
@@ -2690,6 +2690,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
             })?;
         self.report_egress_summary(&recovery.identity, &recovery.fence)
             .await;
+        let settled_identity = recovery.identity.clone();
         let request = PrepareSettlementRequestV1 {
             identity: Some(recovery.identity),
             fence: Some(recovery.fence),
@@ -2698,8 +2699,10 @@ impl<R: ControlRpc> AgentControlClient<R> {
             idempotency_key: recovery.idempotency_key,
         };
         let response = self.control.prepare_settlement(request).await?;
-        parse_prepare_settlement_response(response, expected_outcome, recovery.retirement)
-            .map_err(Into::into)
+        let receipt =
+            parse_prepare_settlement_response(response, expected_outcome, recovery.retirement)?;
+        self.egress.forget(&settled_identity);
+        Ok(receipt)
     }
 }
 

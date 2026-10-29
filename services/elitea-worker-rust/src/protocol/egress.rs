@@ -7,14 +7,17 @@
 //! fails the command closed at verification ([`policy_from_command`]); an
 //! entry is never skipped.
 //!
-//! One [`RunEgress`] per execution holds the policy and the ledger of hosts
-//! reached and refused. The registry here hands every path that runs part of
-//! the execution (an agent turn, its checkpoint recovery, a direct toolkit
-//! call) the same instance, so the summary the worker reports before
-//! settlement ([`EgressRegistry::summary_for_settlement`]) covers all of it.
-//! A settled execution is forgotten: a later turn of the same execution (a
-//! resumed pause) starts a new ledger, and its report replaces the earlier
-//! one on Main.
+//! One [`RunEgress`] per command (execution, generation, command id) holds
+//! the policy and the ledger of hosts reached and refused. The registry here
+//! hands every path that runs part of the command (an agent turn, its
+//! checkpoint recovery, a direct toolkit call) the same instance, so the
+//! summary the worker reports before settlement
+//! ([`EgressRegistry::summary_for_settlement`]) covers all of it. A later
+//! generation of the same execution (a retry, a resumed pause) is a new
+//! command: it starts a new ledger under its own signed policy, never the
+//! earlier one's, and drops the earlier generations' entries. A settled
+//! command is forgotten; one that never settles (lease loss, abandonment)
+//! ages out, and can only ever be served to its own command.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -25,7 +28,7 @@ use elitea_agent_runtime::egress::{
 };
 
 use super::ProtocolError;
-use super::elitea::runtime::v1::{WorkerCommandV1, WorkerEgressModeV1};
+use super::elitea::runtime::v1::{ExecutionIdentityV1, WorkerCommandV1, WorkerEgressModeV1};
 
 /// The most executions the registry holds; past it the oldest is dropped.
 const MAX_TRACKED_EXECUTIONS: usize = 4_096;
@@ -63,16 +66,45 @@ pub fn policy_from_command(command: &WorkerCommandV1) -> Result<PublicPolicy, Pr
     }
 }
 
+/// One command's key: the execution, its generation and the command id, as
+/// both the signed command and the settlement identity carry them. A retry or
+/// resume of the same execution is a new generation (and command), so it
+/// never shares a ledger or a policy with an earlier one.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct CommandKey {
+    execution_id: String,
+    generation: u64,
+    command_id: String,
+}
+
+impl CommandKey {
+    fn of_command(command: &WorkerCommandV1) -> Self {
+        Self {
+            execution_id: command.execution_id.clone(),
+            generation: command.generation,
+            command_id: command.command_id.clone(),
+        }
+    }
+
+    fn of_identity(identity: &ExecutionIdentityV1) -> Self {
+        Self {
+            execution_id: identity.execution_id.clone(),
+            generation: identity.generation,
+            command_id: identity.command_id.clone(),
+        }
+    }
+}
+
 struct Tracked {
     egress: Arc<RunEgress>,
     since: Instant,
 }
 
-/// The executions this process is running, each with its one [`RunEgress`].
+/// The commands this process is running, each with its one [`RunEgress`].
 /// Production uses [`EgressRegistry::global`]; a test may hold its own.
 #[derive(Default)]
 pub struct EgressRegistry {
-    tracked: Mutex<HashMap<String, Tracked>>,
+    tracked: Mutex<HashMap<CommandKey, Tracked>>,
 }
 
 impl EgressRegistry {
@@ -83,9 +115,13 @@ impl EgressRegistry {
         Arc::clone(GLOBAL.get_or_init(|| Arc::new(Self::default())))
     }
 
-    /// The execution's egress: the same instance for every caller of one
-    /// execution. A command that somehow failed validation gets an EMPTY
-    /// allowlist (nothing public is reached), never an open policy.
+    /// The command's egress: the same instance for every caller of one
+    /// command (execution, generation and command id), always under THIS
+    /// command's signed policy. A tracked entry whose policy differs is
+    /// replaced, never served; a newer generation of the execution drops the
+    /// older generations' entries (their leases are gone). A command that
+    /// somehow failed validation gets an EMPTY allowlist (nothing public is
+    /// reached), never an open policy.
     #[must_use]
     pub fn run_egress(&self, command: &WorkerCommandV1) -> Arc<RunEgress> {
         let policy = policy_from_command(command)
@@ -93,12 +129,19 @@ impl EgressRegistry {
         let Ok(mut tracked) = self.tracked.lock() else {
             return RunEgress::new(policy);
         };
-        if let Some(existing) = tracked.get(&command.execution_id) {
+        let key = CommandKey::of_command(command);
+        if let Some(existing) = tracked.get(&key)
+            && *existing.egress.policy() == policy
+        {
             return Arc::clone(&existing.egress);
         }
         let now = Instant::now();
-        tracked.retain(|_, entry| now.duration_since(entry.since) < MAX_TRACKED_AGE);
-        if tracked.len() >= MAX_TRACKED_EXECUTIONS
+        tracked.retain(|other, entry| {
+            now.duration_since(entry.since) < MAX_TRACKED_AGE
+                && !(other.execution_id == key.execution_id && other.generation < key.generation)
+        });
+        if !tracked.contains_key(&key)
+            && tracked.len() >= MAX_TRACKED_EXECUTIONS
             && let Some(oldest) = tracked
                 .iter()
                 .min_by_key(|(_, entry)| entry.since)
@@ -108,7 +151,7 @@ impl EgressRegistry {
         }
         let egress = RunEgress::new(policy);
         tracked.insert(
-            command.execution_id.clone(),
+            key,
             Tracked {
                 egress: Arc::clone(&egress),
                 since: now,
@@ -117,21 +160,24 @@ impl EgressRegistry {
         egress
     }
 
-    /// The execution's cumulative summary, for the report sent before
+    /// The command's cumulative summary, for the report sent before
     /// settlement; `None` when nothing was reached or refused (or the
-    /// execution never built a client). The execution stays tracked until
+    /// command never built a client). The command stays tracked until
     /// [`Self::forget`]: a retried settlement reports the same snapshot.
     #[must_use]
-    pub fn summary_for_settlement(&self, execution_id: &str) -> Option<EgressSummary> {
+    pub fn summary_for_settlement(&self, identity: &ExecutionIdentityV1) -> Option<EgressSummary> {
         let tracked = self.tracked.lock().ok()?;
-        let summary = tracked.get(execution_id)?.egress.summary();
+        let summary = tracked
+            .get(&CommandKey::of_identity(identity))?
+            .egress
+            .summary();
         (!summary.is_empty()).then_some(summary)
     }
 
-    /// Stop tracking a settled execution.
-    pub fn forget(&self, execution_id: &str) {
+    /// Stop tracking a settled command.
+    pub fn forget(&self, identity: &ExecutionIdentityV1) {
         if let Ok(mut tracked) = self.tracked.lock() {
-            tracked.remove(execution_id);
+            tracked.remove(&CommandKey::of_identity(identity));
         }
     }
 }
@@ -234,20 +280,99 @@ mod tests {
         ));
     }
 
+    fn command_at(
+        execution_id: &str,
+        generation: u64,
+        policy: Option<WorkerEgressPolicyV1>,
+    ) -> WorkerCommandV1 {
+        WorkerCommandV1 {
+            command_id: format!("{execution_id}-command-{generation}"),
+            generation,
+            ..command(execution_id, policy)
+        }
+    }
+
+    fn identity_of(command: &WorkerCommandV1) -> ExecutionIdentityV1 {
+        ExecutionIdentityV1 {
+            command_id: command.command_id.clone(),
+            execution_id: command.execution_id.clone(),
+            generation: command.generation,
+            ..ExecutionIdentityV1::default()
+        }
+    }
+
     #[test]
-    fn one_execution_shares_one_ledger_until_forgotten() {
+    fn one_command_shares_one_ledger_until_forgotten() {
         let registry = EgressRegistry::default();
-        let first = registry.run_egress(&command("e-1", Some(allowlist(&["a.example"]))));
-        let again = registry.run_egress(&command("e-1", None));
+        let signed = command_at("e-1", 1, Some(allowlist(&["a.example"])));
+        let first = registry.run_egress(&signed);
+        let again = registry.run_egress(&signed);
         assert!(Arc::ptr_eq(&first, &again));
-        assert!(registry.summary_for_settlement("e-1").is_none());
+        let identity = identity_of(&signed);
+        assert!(registry.summary_for_settlement(&identity).is_none());
         let _ = first.check("b.example", 443);
-        let summary = registry.summary_for_settlement("e-1").expect("summary");
+        let summary = registry.summary_for_settlement(&identity).expect("summary");
         assert_eq!(summary.refused[0].host, "b.example");
-        registry.forget("e-1");
-        assert!(registry.summary_for_settlement("e-1").is_none());
+        registry.forget(&identity);
+        assert!(registry.summary_for_settlement(&identity).is_none());
         // A malformed policy never opens egress.
-        let closed = registry.run_egress(&command("e-2", Some(allowlist(&["a b"]))));
+        let closed = registry.run_egress(&command_at("e-2", 1, Some(allowlist(&["a b"]))));
         assert!(!closed.policy().admits("a.example", 443));
+    }
+
+    #[test]
+    fn a_new_generation_runs_under_its_own_policy_and_ledger() {
+        let registry = EgressRegistry::default();
+        let wide = command_at("e-1", 1, None);
+        let first = registry.run_egress(&wide);
+        assert!(first.policy().is_open());
+        assert!(first.check("wide.example", 443).is_ok());
+
+        // The retry (generation 2) carries a narrower signed policy: it is
+        // enforced, and the ledger starts empty.
+        let narrow = command_at("e-1", 2, Some(allowlist(&["a.example"])));
+        let second = registry.run_egress(&narrow);
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(second.check("wide.example", 443).is_err());
+        assert!(second.check("a.example", 443).is_ok());
+        let summary = registry
+            .summary_for_settlement(&identity_of(&narrow))
+            .expect("summary");
+        assert_eq!(summary.refused.len(), 1);
+        assert_eq!(summary.refused[0].host, "wide.example");
+        // The superseded generation is no longer tracked.
+        assert!(
+            registry
+                .summary_for_settlement(&identity_of(&wide))
+                .is_none()
+        );
+
+        // Same execution and generation, another command id: its own entry.
+        let other = WorkerCommandV1 {
+            command_id: "e-1-other".to_owned(),
+            ..command_at("e-1", 2, None)
+        };
+        let third = registry.run_egress(&other);
+        assert!(!Arc::ptr_eq(&second, &third));
+        assert!(third.policy().is_open());
+        assert!(
+            registry
+                .summary_for_settlement(&identity_of(&other))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_tracked_entry_with_another_policy_is_never_served() {
+        let registry = EgressRegistry::default();
+        let open = command_at("e-1", 1, None);
+        let first = registry.run_egress(&open);
+        let narrowed = WorkerCommandV1 {
+            egress_policy: Some(allowlist(&["a.example"])),
+            ..open
+        };
+        let second = registry.run_egress(&narrowed);
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(!second.policy().admits("wide.example", 443));
     }
 }

@@ -10,7 +10,7 @@ use elitea_connectors::reqwest012::ReqwestTransport;
 use elitea_connectors::transport::Transport;
 use elitea_connectors::{BuildError, ClientPolicy};
 
-use crate::egress::EgressTransport;
+use crate::egress::{EgressTransport, RunEgress};
 
 /// A provider client error as the agent sees it. The error types live in
 /// `elitea-connectors`, which knows nothing of adk; each family states its
@@ -24,7 +24,18 @@ pub(crate) trait IntoAdk {
 /// policy (#1490): a host outside it is refused before sending, and the hosts
 /// reached are counted.
 pub(crate) fn transport(policy: &ClientPolicy) -> Result<Arc<dyn Transport>, BuildError> {
-    Ok(Arc::new(EgressTransport::for_run(Arc::new(
-        ReqwestTransport::hardened(policy)?,
-    ))))
+    transport_for(crate::egress::current(), policy)
+}
+
+/// [`transport`] bound to `egress` rather than the run in scope. The result
+/// already checks and counts each request once: never wrap it in another
+/// [`EgressTransport`].
+pub(crate) fn transport_for(
+    egress: Arc<RunEgress>,
+    policy: &ClientPolicy,
+) -> Result<Arc<dyn Transport>, BuildError> {
+    Ok(Arc::new(EgressTransport::new(
+        egress,
+        Arc::new(ReqwestTransport::hardened(policy)?),
+    )))
 }

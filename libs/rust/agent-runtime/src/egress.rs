@@ -50,6 +50,8 @@ pub const MAX_SUMMARY_HOSTS: usize = 256;
 /// How many distinct overflowing hosts are remembered so a repeat is not
 /// counted twice; past it every overflowing request counts.
 const MAX_OVERFLOW_KEYS: usize = 4_096;
+/// The ledger's name for a refused URL that has no host.
+pub const INVALID_HOST: &str = "<invalid>";
 /// A DNS name is at most 253 bytes; a longer host is cut, never stored whole.
 const MAX_HOST_BYTES: usize = 253;
 
@@ -229,7 +231,9 @@ impl RunEgress {
     }
 
     /// [`Self::check`] for a URL's host and port. A URL without a host, or
-    /// with no port its scheme implies, is refused under an allowlist.
+    /// with no port its scheme implies, is refused under an allowlist, and
+    /// counted like any refusal: a host-less URL as [`INVALID_HOST`], port 0
+    /// when the scheme implies none.
     ///
     /// # Errors
     ///
@@ -241,10 +245,16 @@ impl RunEgress {
             if self.policy.is_open() {
                 return Ok(());
             }
+            let host = ledger_host(host);
             let refused = EgressRefused {
-                host: ledger_host(host),
+                host: if host.is_empty() {
+                    INVALID_HOST.to_owned()
+                } else {
+                    host
+                },
                 port,
             };
+            self.count(true, refused.host.clone(), port);
             let _ = CALL.try_with(|call| call.note(&refused));
             return Err(refused);
         }

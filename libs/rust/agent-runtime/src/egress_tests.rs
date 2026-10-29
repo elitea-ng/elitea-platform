@@ -57,6 +57,41 @@ fn open_admits_every_host_and_allowlist_only_its_entries() {
 }
 
 #[test]
+fn a_url_without_host_or_port_is_refused_and_counted() {
+    let open = RunEgress::open();
+    assert!(open.check_url(&url("file:///etc/passwd")).is_ok());
+    assert!(open.summary().is_empty());
+
+    let run = allowlist(&["api.example.com"]);
+    let refused = run
+        .check_url(&url("file:///etc/passwd"))
+        .expect_err("no host");
+    assert_eq!((refused.host(), refused.port()), (INVALID_HOST, 0));
+    let refused = run
+        .check_url(&url("custom://API.example.com/x"))
+        .expect_err("no known port");
+    assert_eq!((refused.host(), refused.port()), ("api.example.com", 0));
+    let _ = run.check_url(&url("file:///other"));
+    let summary = run.summary();
+    assert_eq!(summary.reached, Vec::<HostCount>::new());
+    assert_eq!(
+        summary.refused,
+        vec![
+            HostCount {
+                host: INVALID_HOST.to_owned(),
+                port: 0,
+                count: 2,
+            },
+            HostCount {
+                host: "api.example.com".to_owned(),
+                port: 0,
+                count: 1,
+            },
+        ]
+    );
+}
+
+#[test]
 fn the_summary_counts_and_bounds_hosts() {
     let run = allowlist(&["*.reached.example"]);
     for index in 0..300 {

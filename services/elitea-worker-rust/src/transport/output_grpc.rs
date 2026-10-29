@@ -3343,16 +3343,13 @@ mod tests {
             let temp = tempfile::tempdir().expect("temporary directory");
             let verified = verified_agent_command("signed_command_output_session");
             let terminal = terminal_frame();
-            let execution_id = terminal
-                .identity
-                .as_ref()
-                .expect("identity")
-                .execution_id
-                .clone();
+            let identity = terminal.identity.clone().expect("identity");
             let registry = Arc::new(crate::protocol::egress::EgressRegistry::default());
             let egress =
                 registry.run_egress(&crate::protocol::elitea::runtime::v1::WorkerCommandV1 {
-                    execution_id: execution_id.clone(),
+                    execution_id: identity.execution_id.clone(),
+                    command_id: identity.command_id.clone(),
+                    generation: identity.generation,
                     egress_policy: Some(
                         crate::protocol::elitea::runtime::v1::WorkerEgressPolicyV1 {
                             mode:
@@ -3431,7 +3428,7 @@ mod tests {
             assert_eq!(report.hosts_refused[0].reason, "host_not_allowed");
             assert_eq!(report.other_hosts, 0);
             assert!(
-                registry.summary_for_settlement(&execution_id).is_none(),
+                registry.summary_for_settlement(identity).is_none(),
                 "a settled execution is no longer tracked"
             );
         }
