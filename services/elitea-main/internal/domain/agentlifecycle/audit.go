@@ -31,4 +31,7 @@ const (
 	ReasonRecertifyByPassed = "recertify_by_passed"
 	ReasonLapseSuspend      = "lapse_action_suspend"
 	ReasonLapseWarn         = "lapse_action_warn"
+	// ReasonTierWithoutCadence returns a due, lapsed or suspended agent to
+	// certified when its tier moves to one with no recertification cadence.
+	ReasonTierWithoutCadence = "tier_without_cadence"
 )

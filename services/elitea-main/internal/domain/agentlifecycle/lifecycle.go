@@ -69,6 +69,12 @@ func (s CertificationState) Valid() bool {
 	return false
 }
 
+// AwaitsRecertification reports a certification that must be granted
+// again: due, lapsed or suspended.
+func (s CertificationState) AwaitsRecertification() bool {
+	return s == StateDue || s == StateLapsed || s == StateSuspended
+}
+
 // ChangeKind is what a change request asks for.
 type ChangeKind string
 

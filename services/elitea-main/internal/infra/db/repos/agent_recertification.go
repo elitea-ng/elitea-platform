@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
@@ -36,10 +37,11 @@ type ReleaseDriftChecker interface {
 	ReleaseDrifted(ctx context.Context, projectID, applicationID, releaseID int64) (bool, error)
 }
 
-// CertificationSuspender writes the kill switch rows of lapsed agents.
+// CertificationSuspender writes the kill switch rows of lapsed agents, in
+// the pass's transaction, so a suspension commits with its audit event.
 // *ExecutionSuspensionRepository satisfies it.
 type CertificationSuspender interface {
-	CreateSuspension(ctx context.Context, s safety.NewSuspension) (safety.Suspension, error)
+	CreateSuspensionTx(ctx context.Context, tx pgx.Tx, s safety.NewSuspension) (safety.Suspension, error)
 }
 
 // RecertificationDeps are the collaborators of one pass.
@@ -74,13 +76,17 @@ func (s *AgentLifecycle) RecertificationPass(ctx context.Context, deps Recertifi
 		return summary, err
 	}
 	now := s.now()
+	// A tier with no cadence never lapses by time, even when a deadline
+	// recorded under an earlier tier table is still on the row.
+	noCadence := policy.TiersWithoutCadence()
 
 	// certified → due: the window, and a published release that moved.
 	if err := s.moveRows(ctx, `
 UPDATE elitea_lifecycle.agent_registry
 SET certification_state = 'due', state_reason = $2, state_changed_at = clock_timestamp(), updated_at = clock_timestamp()
 WHERE certification_state = 'certified' AND recertify_by IS NOT NULL AND recertify_by <= $1
-RETURNING tenant_project_id, application_id`, []any{now.Add(agentlifecycle.DueWindow), agentlifecycle.ReasonRecertifyWindow},
+  AND NOT (risk_tier = ANY($3::text[]))
+RETURNING tenant_project_id, application_id`, []any{now.Add(agentlifecycle.DueWindow), agentlifecycle.ReasonRecertifyWindow, noCadence},
 		agentlifecycle.ActionCertificationDue, agentlifecycle.ReasonRecertifyWindow, &summary.Due); err != nil {
 		return summary, err
 	}
@@ -115,7 +121,8 @@ RETURNING registry.tenant_project_id, registry.application_id`, []any{agentlifec
 UPDATE elitea_lifecycle.agent_registry
 SET certification_state = $2, state_reason = $3, state_changed_at = clock_timestamp(), updated_at = clock_timestamp()
 WHERE certification_state IN ('certified', 'due') AND recertify_by IS NOT NULL AND recertify_by <= $1
-RETURNING tenant_project_id, application_id`, now, lapseTo, agentlifecycle.ReasonRecertifyByPassed)
+  AND NOT (risk_tier = ANY($4::text[]))
+RETURNING tenant_project_id, application_id`, now, lapseTo, agentlifecycle.ReasonRecertifyByPassed, noCadence)
 		if err != nil {
 			return fmt.Errorf("agent lifecycle: lapse the certifications: %w", err)
 		}
@@ -133,6 +140,9 @@ RETURNING tenant_project_id, application_id`, now, lapseTo, agentlifecycle.Reaso
 				return err
 			}
 		}
+		if lapseTo == "suspended" {
+			return s.auditCoveredSuspensions(ctx, tx, lapsed)
+		}
 		return nil
 	}); err != nil {
 		return summary, err
@@ -141,7 +151,6 @@ RETURNING tenant_project_id, application_id`, now, lapseTo, agentlifecycle.Reaso
 
 	if policy.LapseAction == agentlifecycle.LapseSuspend {
 		// A lapsed row of the warn era becomes suspended too.
-		var promoted []registryKey
 		if err := s.inTx(ctx, func(tx pgx.Tx) error {
 			rows, err := tx.Query(ctx, `
 UPDATE elitea_lifecycle.agent_registry
@@ -151,12 +160,14 @@ RETURNING tenant_project_id, application_id`, agentlifecycle.ReasonLapseSuspend)
 			if err != nil {
 				return fmt.Errorf("agent lifecycle: suspend the lapsed agents: %w", err)
 			}
-			promoted, err = collectKeys(rows)
-			return err
+			promoted, err := collectKeys(rows)
+			if err != nil {
+				return err
+			}
+			return s.auditCoveredSuspensions(ctx, tx, promoted)
 		}); err != nil {
 			return summary, err
 		}
-		_ = promoted // their suspension and audit event come from assertSuspensions
 		suspended, err := s.assertSuspensions(ctx, deps)
 		summary.Suspended += suspended
 		if err != nil {
@@ -290,8 +301,35 @@ WHERE tenant_project_id = $1 AND application_id = $2 AND certification_state = '
 	return checked, due, nil
 }
 
+// auditCoveredSuspensions appends agent.certification.suspended for each
+// row just moved to suspended that an active agent suspension (a manual
+// one) already covers: assertSuspensions writes no certification
+// suspension for it, so this is its only evidence.
+func (s *AgentLifecycle) auditCoveredSuspensions(ctx context.Context, tx pgx.Tx, keys []registryKey) error {
+	for _, key := range keys {
+		var id int64
+		err := tx.QueryRow(ctx, `
+SELECT id FROM elitea_runtime.execution_suspensions
+WHERE scope = 'agent' AND project_id = $1 AND scope_key = $2 AND resumed_at IS NULL
+ORDER BY id LIMIT 1`, key.projectID, agentRef(key.applicationID)).Scan(&id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("agent lifecycle: read the active suspension of agent %d: %w", key.applicationID, err)
+		}
+		if err := s.append(ctx, tx, lifecycleEvent(key.projectID, agentlifecycle.ActionCertificationSuspended, 0,
+			"agent", agentRef(key.applicationID), agentlifecycle.ReasonLapseSuspend,
+			"suspension:"+strconv.FormatInt(id, 10))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // assertSuspensions writes the certification suspension of every
-// suspended row that has no active agent suspension.
+// suspended row that has no active agent suspension. Each suspension
+// commits with its agent.certification.suspended event or not at all.
 func (s *AgentLifecycle) assertSuspensions(ctx context.Context, deps RecertificationDeps) (int, error) {
 	if deps.Suspender == nil {
 		return 0, errors.New("agent lifecycle: lapse_action is suspend but no suspension writer is composed")
@@ -313,13 +351,24 @@ WHERE registry.certification_state = 'suspended'
 	}
 	written := 0
 	for _, key := range keys {
-		created, err := deps.Suspender.CreateSuspension(ctx, safety.NewSuspension{
-			Target: safety.Target{Scope: safety.ScopeAgent, ProjectID: key.projectID, ApplicationID: key.applicationID},
-			Reason: "The agent's certification lapsed (ADR-0040). Recertify it to run it again.",
-			Source: safety.SourceCertification, ResumeRequires: safety.ResumeGovernanceRole,
+		var created safety.Suspension
+		err := s.inTx(ctx, func(tx pgx.Tx) error {
+			var err error
+			created, err = deps.Suspender.CreateSuspensionTx(ctx, tx, safety.NewSuspension{
+				Target: safety.Target{Scope: safety.ScopeAgent, ProjectID: key.projectID, ApplicationID: key.applicationID},
+				Reason: "The agent's certification lapsed (ADR-0040). Recertify it to run it again.",
+				Source: safety.SourceCertification, ResumeRequires: safety.ResumeGovernanceRole,
+			})
+			if err != nil {
+				return err
+			}
+			return s.append(ctx, tx, lifecycleEvent(key.projectID, agentlifecycle.ActionCertificationSuspended, 0,
+				"agent", agentRef(key.applicationID), agentlifecycle.ReasonLapseSuspend,
+				"suspension:"+strconv.FormatInt(created.ID, 10)))
 		})
 		var already *safety.AlreadySuspendedError
-		if errors.As(err, &already) {
+		if errors.As(err, &already) || isUniqueViolationErr(err) {
+			// Suspended meanwhile (a manual suspension, or another pass).
 			continue
 		}
 		if err != nil {
@@ -329,15 +378,15 @@ WHERE registry.certification_state = 'suspended'
 		if deps.Notify != nil {
 			deps.Notify(created.ID)
 		}
-		if err := s.inTx(ctx, func(tx pgx.Tx) error {
-			return s.append(ctx, tx, lifecycleEvent(key.projectID, agentlifecycle.ActionCertificationSuspended, 0,
-				"agent", agentRef(key.applicationID), agentlifecycle.ReasonLapseSuspend,
-				"suspension:"+strconv.FormatInt(created.ID, 10)))
-		}); err != nil {
-			return written, err
-		}
 	}
 	return written, nil
+}
+
+// isUniqueViolationErr reports a unique violation (23505) anywhere in err's
+// chain, such as a concurrent duplicate suspension surfacing at commit.
+func isUniqueViolationErr(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // releaseSuspensions undoes lapse_action suspend after it went back to

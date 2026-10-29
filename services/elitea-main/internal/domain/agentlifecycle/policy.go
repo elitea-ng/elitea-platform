@@ -122,6 +122,27 @@ func (r Requirement) RecertifyBy(now time.Time) *time.Time {
 	return &deadline
 }
 
+// RecertificationRequirement is what a recertification asks: the tier's
+// requirement with at least one approval. A tier that needs no approval
+// still recertifies through maker-checker, so a due, lapsed or suspended
+// agent at any tier has a way back to certified.
+func (r Requirement) RecertificationRequirement() Requirement {
+	r.Approvals = max(r.Approvals, 1)
+	return r
+}
+
+// TiersWithoutCadence lists the tiers whose certification never lapses by
+// time (RecertifyEvery 0), as text for a SQL filter.
+func (p Policy) TiersWithoutCadence() []string {
+	tiers := []string{}
+	for _, tier := range Tiers {
+		if p.Requirement(tier).RecertifyEvery <= 0 {
+			tiers = append(tiers, string(tier))
+		}
+	}
+	return tiers
+}
+
 // Approval is one approval already recorded on a change request.
 type Approval struct {
 	ApproverID int64

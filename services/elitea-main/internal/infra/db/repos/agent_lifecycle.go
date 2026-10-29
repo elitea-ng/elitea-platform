@@ -350,8 +350,9 @@ type RegistryActor struct {
 
 // UpdateRegistry edits the registry record. Any edit needs an owner or the
 // governance role (an agent with no owner yet accepts any caller the route
-// admitted); a tier move follows agentlifecycle.CheckTierChange and is
-// audited as agent.registry.tier_changed.
+// admitted); a tier move follows agentlifecycle.CheckTierChange, is
+// audited as agent.registry.tier_changed and moves the certification to the
+// new tier's cadence (applyTierCadence).
 func (s *AgentLifecycle) UpdateRegistry(ctx context.Context, projectID, applicationID int64, actor RegistryActor, update agentlifecycle.RegistryUpdate) (agentlifecycle.Registry, error) {
 	if update.DataClasses != nil {
 		classes, err := agentlifecycle.NormalizeDataClasses(*update.DataClasses)
@@ -371,7 +372,10 @@ func (s *AgentLifecycle) UpdateRegistry(ctx context.Context, projectID, applicat
 			return agentlifecycle.Registry{}, agentlifecycle.Refuse(agentlifecycle.InvalidCode, "An owner id is a user id, or 0 to clear it.")
 		}
 	}
-	var updated agentlifecycle.Registry
+	var (
+		updated agentlifecycle.Registry
+		resumed []int64
+	)
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		current, err := readRegistry(ctx, tx, projectID, applicationID, true)
 		if err != nil {
@@ -425,16 +429,101 @@ RETURNING `+registryColumns,
 			return fmt.Errorf("agent lifecycle: update the registry row: %w", err)
 		}
 		if tier != current.Tier {
-			return s.append(ctx, tx, lifecycleEvent(projectID, agentlifecycle.ActionRegistryTierChanged, actor.UserID,
-				"agent", agentRef(applicationID), "from:"+string(current.Tier), "to:"+string(tier)))
+			if err := s.append(ctx, tx, lifecycleEvent(projectID, agentlifecycle.ActionRegistryTierChanged, actor.UserID,
+				"agent", agentRef(applicationID), "from:"+string(current.Tier), "to:"+string(tier))); err != nil {
+				return err
+			}
+			resumed, err = s.applyTierCadence(ctx, tx, &updated, actor.UserID)
+			return err
 		}
 		return nil
 	})
 	if err != nil {
 		return agentlifecycle.Registry{}, err
 	}
+	if s.suspensionResumed != nil {
+		for _, id := range resumed {
+			s.suspensionResumed(id)
+		}
+	}
 	s.decorate(ctx, []*agentlifecycle.Registry{&updated})
 	return updated, nil
+}
+
+// applyTierCadence moves a certification to its new tier's cadence, in the
+// tier change's transaction: recertify_by becomes certified_at plus the
+// cadence, NULL when the tier has none. A due, lapsed or suspended agent
+// whose new tier has no cadence has nothing left to lapse: it returns to
+// certified with no deadline and its certification suspension is resumed,
+// each audited. Otherwise a lowered tier could leave an agent suspended
+// with no recertification to clear it. It answers the resumed suspensions.
+func (s *AgentLifecycle) applyTierCadence(ctx context.Context, tx pgx.Tx, registry *agentlifecycle.Registry, actorID int64) ([]int64, error) {
+	if registry.State == agentlifecycle.StateUncertified || registry.CertifiedAt == nil {
+		return nil, nil
+	}
+	policy, err := s.currentPolicy(ctx)
+	if err != nil {
+		return nil, err
+	}
+	deadline := policy.Requirement(registry.Tier).RecertifyBy(*registry.CertifiedAt)
+	projectID, applicationID := registry.ProjectID, registry.ApplicationID
+	if deadline != nil || !registry.State.AwaitsRecertification() {
+		moved, err := scanRegistry(tx.QueryRow(ctx, `
+UPDATE elitea_lifecycle.agent_registry SET recertify_by = $3, updated_at = clock_timestamp()
+WHERE tenant_project_id = $1 AND application_id = $2
+RETURNING `+registryColumns, projectID, applicationID, deadline))
+		if err != nil {
+			return nil, fmt.Errorf("agent lifecycle: move the recertification deadline: %w", err)
+		}
+		*registry = moved
+		return nil, nil
+	}
+	from := registry.State
+	moved, err := scanRegistry(tx.QueryRow(ctx, `
+UPDATE elitea_lifecycle.agent_registry
+SET certification_state = 'certified', recertify_by = NULL, state_reason = $3,
+    state_changed_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE tenant_project_id = $1 AND application_id = $2
+RETURNING `+registryColumns, projectID, applicationID, agentlifecycle.ReasonTierWithoutCadence))
+	if err != nil {
+		return nil, fmt.Errorf("agent lifecycle: certify the agent at a tier without cadence: %w", err)
+	}
+	*registry = moved
+	if err := s.append(ctx, tx, lifecycleEvent(projectID, agentlifecycle.ActionCertificationCert, actorID,
+		"agent", agentRef(applicationID), agentlifecycle.ReasonTierWithoutCadence, "from:"+string(from),
+		"tier:"+string(registry.Tier))); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `
+UPDATE elitea_runtime.execution_suspensions
+SET resumed_at = greatest(clock_timestamp(), created_at), resumed_by = $3, resume_reason = $4
+WHERE scope = 'agent' AND project_id = $1 AND scope_key = $2 AND source = 'certification' AND resumed_at IS NULL
+RETURNING id`, projectID, agentRef(applicationID), actorID,
+		"The agent's tier ("+string(registry.Tier)+") has no recertification cadence.")
+	if err != nil {
+		return nil, fmt.Errorf("agent lifecycle: resume the certification suspension: %w", err)
+	}
+	var resumed []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		resumed = append(resumed, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("agent lifecycle: resume the certification suspension: %w", err)
+	}
+	for _, id := range resumed {
+		if err := s.append(ctx, tx, lifecycleEvent(projectID, agentlifecycle.ActionCertificationCert, actorID,
+			"agent", agentRef(applicationID), agentlifecycle.ReasonTierWithoutCadence,
+			"suspension_resumed:"+strconv.FormatInt(id, 10))); err != nil {
+			return nil, err
+		}
+	}
+	return resumed, nil
 }
 
 // ownersExist refuses an owner id that names no user.
@@ -816,7 +905,7 @@ func (s *AgentLifecycle) CreateChangeRequest(ctx context.Context, request agentl
 		if err != nil {
 			return err
 		}
-		requirement := policy.Requirement(registry.Tier)
+		requirement := changeRequirement(policy, registry, request.Kind)
 		if !requirement.RequiresApproval() {
 			return agentlifecycle.RefuseWith(agentlifecycle.ChangeNotRequiredCode,
 				fmt.Sprintf("A %s-tier agent needs no approval. Publish it directly.", registry.Tier),
@@ -867,6 +956,17 @@ RETURNING `+changeRequestColumns,
 		return nil
 	})
 	return created, err
+}
+
+// changeRequirement is what a change request of kind asks at the agent's
+// live tier. A recertification of a due, lapsed or suspended agent is
+// always possible, whatever the tier: it asks at least one approval.
+func changeRequirement(policy agentlifecycle.Policy, registry agentlifecycle.Registry, kind agentlifecycle.ChangeKind) agentlifecycle.Requirement {
+	requirement := policy.Requirement(registry.Tier)
+	if kind == agentlifecycle.KindRecertification && registry.State.AwaitsRecertification() {
+		return requirement.RecertificationRequirement()
+	}
+	return requirement
 }
 
 func isUniqueViolation(err error, constraint string) bool {
@@ -926,7 +1026,7 @@ func (s *AgentLifecycle) SubmitChangeRequest(ctx context.Context, projectID, app
 		if err != nil {
 			return err
 		}
-		requirement := policy.Requirement(registry.Tier)
+		requirement := changeRequirement(policy, registry, current.Kind)
 		if !requirement.RequiresApproval() {
 			return agentlifecycle.RefuseWith(agentlifecycle.ChangeNotRequiredCode,
 				fmt.Sprintf("A %s-tier agent needs no approval. Withdraw this request and publish directly.", registry.Tier),

@@ -260,3 +260,25 @@ func TestRecertifyBy(t *testing.T) {
 		t.Errorf("critical deadline = %v", deadline)
 	}
 }
+
+func TestRecertificationAlwaysHasAWayOut(t *testing.T) {
+	policy := DefaultPolicy()
+	if got := policy.TiersWithoutCadence(); len(got) != 1 || got[0] != string(TierLow) {
+		t.Fatalf("tiers without cadence = %v, want [low]", got)
+	}
+	low := policy.Requirement(TierLow)
+	if low.RequiresApproval() || !low.RecertificationRequirement().RequiresApproval() {
+		t.Fatalf("low = %+v, recertification = %+v", low, low.RecertificationRequirement())
+	}
+	if got := policy.Requirement(TierCritical).RecertificationRequirement().Approvals; got != 2 {
+		t.Fatalf("critical recertification approvals = %d, want 2", got)
+	}
+	for _, state := range []CertificationState{StateDue, StateLapsed, StateSuspended} {
+		if !state.AwaitsRecertification() {
+			t.Fatalf("%s does not await recertification", state)
+		}
+	}
+	if StateCertified.AwaitsRecertification() || StateUncertified.AwaitsRecertification() {
+		t.Fatal("certified or uncertified awaits recertification")
+	}
+}

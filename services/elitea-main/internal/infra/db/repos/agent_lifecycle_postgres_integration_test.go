@@ -192,7 +192,7 @@ func TestAgentLifecycle_LapseSuspendRefusesRuns(t *testing.T) {
 	}
 	if _, err := pool.Exec(ctx, `
 UPDATE elitea_lifecycle.agent_registry
-SET certification_state = 'certified', certified_release_id = $1,
+SET certification_state = 'certified', certified_release_id = $1, risk_tier = 'medium',
     certified_at = clock_timestamp() - interval '400 days', recertify_by = clock_timestamp() - interval '1 day'
 WHERE tenant_project_id = 1 AND application_id = 31`, release.ID); err != nil {
 		t.Fatal(err)
@@ -249,5 +249,161 @@ WHERE tenant_project_id = 1 AND application_id = 31`, release.ID); err != nil {
 	}
 	if registry, err = store.Registry(ctx, 1, 31); err != nil || registry.State != agentlifecycle.StateLapsed {
 		t.Fatalf("registry after warn = %+v, %v", registry, err)
+	}
+}
+
+// certifyForTest sets agent 31 certified on release with the given
+// deadline offset (negative: passed).
+func certifyForTest(t *testing.T, pool *pgxpool.Pool, releaseID int64, state string, recertifyIn time.Duration) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `
+UPDATE elitea_lifecycle.agent_registry
+SET certification_state = $2, certified_release_id = $1,
+    certified_at = clock_timestamp() - interval '400 days', recertify_by = clock_timestamp() + $3::interval
+WHERE tenant_project_id = 1 AND application_id = 31`, releaseID, state, recertifyIn.String()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func countAction(actions []string, action string) int {
+	n := 0
+	for _, a := range actions {
+		if a == action {
+			n++
+		}
+	}
+	return n
+}
+
+// TestAgentLifecycle_SuspendedEventForCoveredAgent proves a lapsed row
+// promoted to suspended while a manual suspension already covers it still
+// gets its agent.certification.suspended event, and that the pass writes
+// no second suspension for it.
+func TestAgentLifecycle_SuspendedEventForCoveredAgent(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedAgentReleaseFixture(t, pool)
+	releases, _ := newReleaseTestStores(t, pool)
+	release := releaseTestPublish(t, pool, releases, 41, 141, "v1")
+	ctx := t.Context()
+	warn := newLifecycleTestStore(t, pool, agentlifecycle.DefaultPolicy())
+	if _, err := warn.Registry(ctx, 1, 31); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE elitea_lifecycle.agent_registry SET risk_tier = 'medium'
+WHERE tenant_project_id = 1 AND application_id = 31`); err != nil {
+		t.Fatal(err)
+	}
+	certifyForTest(t, pool, release.ID, "certified", -24*time.Hour)
+	suspensions, err := NewExecutionSuspensionRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := RecertificationDeps{Drift: releases, Suspender: suspensions}
+	if summary, err := warn.RecertificationPass(ctx, deps); err != nil || summary.Lapsed != 1 {
+		t.Fatalf("warn pass = %s, %v", summary, err)
+	}
+	manual, err := suspensions.CreateSuspension(ctx, safety.NewSuspension{
+		Target: safety.Target{Scope: safety.ScopeAgent, ProjectID: 1, ApplicationID: 31},
+		Reason: "Incident.", Source: safety.SourceManual, ResumeRequires: safety.ResumeAnyAdmin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := agentlifecycle.DefaultPolicy()
+	policy.LapseAction = agentlifecycle.LapseSuspend
+	suspend := newLifecycleTestStore(t, pool, policy)
+	summary, err := suspend.RecertificationPass(ctx, deps)
+	if err != nil || summary.Suspended != 0 {
+		t.Fatalf("suspend pass = %s, %v", summary, err)
+	}
+	if got := countAction(lifecycleAuditActions(t, pool), agentlifecycle.ActionCertificationSuspended); got != 1 {
+		t.Fatalf("suspended events = %d, want 1", got)
+	}
+	var active int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.execution_suspensions
+WHERE scope = 'agent' AND scope_key = '31' AND resumed_at IS NULL`).Scan(&active); err != nil || active != 1 {
+		t.Fatalf("active suspensions = %d, %v (manual %d)", active, err, manual.ID)
+	}
+}
+
+// TestAgentLifecycle_LowerTierWithoutCadenceRecertifies proves a suspended
+// agent lowered to a tier with no cadence returns to certified with no
+// deadline and its certification suspension resumed, both audited; and
+// that a tier change moves recertify_by to the new tier's cadence.
+func TestAgentLifecycle_LowerTierWithoutCadenceRecertifies(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedAgentReleaseFixture(t, pool)
+	releases, _ := newReleaseTestStores(t, pool)
+	release := releaseTestPublish(t, pool, releases, 41, 141, "v1")
+	ctx := t.Context()
+	policy := agentlifecycle.DefaultPolicy()
+	policy.LapseAction = agentlifecycle.LapseSuspend
+	store := newLifecycleTestStore(t, pool, policy)
+	governance := RegistryActor{UserID: 11, Governance: true}
+	medium := agentlifecycle.TierMedium
+	if _, err := store.UpdateRegistry(ctx, 1, 31, governance, agentlifecycle.RegistryUpdate{Tier: &medium}); err != nil {
+		t.Fatal(err)
+	}
+	certifyForTest(t, pool, release.ID, "certified", 300*24*time.Hour)
+
+	// medium → high: recertify_by is certified_at + 180 days, already past.
+	high := agentlifecycle.TierHigh
+	registry, err := store.UpdateRegistry(ctx, 1, 31, governance, agentlifecycle.RegistryUpdate{Tier: &high})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registry.RecertifyBy == nil || registry.CertifiedAt == nil ||
+		!registry.RecertifyBy.Equal(registry.CertifiedAt.Add(180*agentlifecycle.Day)) {
+		t.Fatalf("recertify_by = %v, certified_at = %v", registry.RecertifyBy, registry.CertifiedAt)
+	}
+	suspensions, err := NewExecutionSuspensionRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := RecertificationDeps{Drift: releases, Suspender: suspensions}
+	if summary, err := store.RecertificationPass(ctx, deps); err != nil || summary.Suspended != 1 {
+		t.Fatalf("pass = %s, %v", summary, err)
+	}
+
+	// A recertification is open to a suspended agent at any tier.
+	low := agentlifecycle.TierLow
+	registry, err = store.UpdateRegistry(ctx, 1, 31, governance, agentlifecycle.RegistryUpdate{Tier: &low})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registry.State != agentlifecycle.StateCertified || registry.RecertifyBy != nil {
+		t.Fatalf("registry after low = %+v", registry)
+	}
+	var active int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.execution_suspensions
+WHERE scope = 'agent' AND scope_key = '31' AND resumed_at IS NULL`).Scan(&active); err != nil || active != 0 {
+		t.Fatalf("active suspensions = %d, %v", active, err)
+	}
+	if got := countAction(lifecycleAuditActions(t, pool), agentlifecycle.ActionCertificationCert); got != 2 {
+		t.Fatalf("certified events = %d, want 2 (state and resume)", got)
+	}
+
+	// A low-tier agent is never lapsed by time, even with a stale deadline.
+	certifyForTest(t, pool, release.ID, "certified", -24*time.Hour)
+	if summary, err := store.RecertificationPass(ctx, deps); err != nil || summary.Lapsed != 0 || summary.Due != 0 {
+		t.Fatalf("pass at low = %s, %v", summary, err)
+	}
+
+	// A due low-tier agent can still be recertified (one approval).
+	if _, err := store.MarkDue(ctx, 1, 31, 11, "External review."); err != nil {
+		t.Fatal(err)
+	}
+	change, err := store.CreateChangeRequest(ctx, agentlifecycle.NewChangeRequest{
+		ProjectID: 1, ApplicationID: 31, Kind: agentlifecycle.KindRecertification, Summary: "Review.", ProposedBy: 7,
+	})
+	if err != nil {
+		t.Fatalf("create at low: %v", err)
+	}
+	if _, err := store.SubmitChangeRequest(ctx, 1, 31, change.ID, 7); err != nil {
+		t.Fatalf("submit at low: %v", err)
+	}
+	outcome, err := store.ApproveChangeRequest(ctx, Approval{ProjectID: 1, ApplicationID: 31, ChangeID: change.ID, ApproverID: 8})
+	if err != nil || !outcome.Complete {
+		t.Fatalf("approve at low = %+v, %v", outcome, err)
 	}
 }

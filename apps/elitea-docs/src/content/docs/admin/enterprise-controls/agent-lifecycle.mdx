@@ -220,6 +220,8 @@ An approval is a statement about one point in time. Models are retired, toolkits
 
 **A certification has a deadline.** When a change request certifies an agent, its recertify-by date is set from the tier's cadence. The defaults are critical 90 days, high 180 and medium 365. Low-tier agents have no deadline.
 
+**A tier change moves the deadline.** When a certified agent's tier changes, its recertify-by date becomes the time of certification plus the new tier's cadence, or none when the new tier has no cadence. Raising a tier can therefore make an agent due or lapsed at once. When a `due`, `lapsed` or `suspended` agent moves to a tier with no cadence, it returns to `certified` with no deadline and its certification suspension is resumed. Both are recorded as `agent.certification.certified` with the reason `tier_without_cadence`. An agent at a tier with no cadence never lapses by time.
+
 **A certified agent becomes `due`** when:
 
 - its recertify-by date is less than 30 days away (`recertify_window`);
@@ -233,7 +235,7 @@ An approval is a statement about one point in time. Models are retired, toolkits
 - `warn` (the default): the agent keeps running; its state shows as lapsed in the registry and the agent's Governance dialog.
 - `suspend`: the platform suspends the agent with the [kill switch](/admin/enterprise-controls/runtime-safety), with source `certification`. Its runs are refused with HTTP 409 `agent_certification_lapsed` and its state is `suspended`. Only a holder of the governance role can resume it.
 
-**Recertifying.** Open the agent, select **⋮ › Governance › Change requests**, and select **Start recertification**. This is a change request of kind `recertification` for the agent's current release, with no definition change. It runs the gate again and collects the approvals and attestations the tier requires. Its approval certifies the agent again, sets a new recertify-by date and lifts a certification suspension.
+**Recertifying.** Open the agent, select **⋮ › Governance › Change requests**, and select **Start recertification**. This is a change request of kind `recertification` for the agent's current release, with no definition change. It runs the gate again and collects the approvals and attestations the tier requires. Its approval certifies the agent again, sets a new recertify-by date and lifts a certification suspension. A `due`, `lapsed` or `suspended` agent can always be recertified, whatever its tier. At a tier that needs no approval, a recertification still needs one approval from someone other than its author.
 
 The routine `main.agent_recertification` runs every hour (**Admin › Schedules & Tasks**). It checks drift and scheduled evaluations for up to 50 agents per pass, the oldest checked first.
 
