@@ -195,7 +195,7 @@ A replacement worker must load the same authoritative state without the original
 
 ## Existing source and ADK ownership
 
-The installed dependency is ADK-Rust 2.2.0.
+The installed dependency is ADK-Rust 2.3.0.
 `adk-runner::compaction` supplies compaction strategies and event-token estimation.
 `adk-runner::IntraInvocationCompactor` supplies per-call-cycle triggering and summarizer integration.
 Its default trigger estimates event content and can fall back to uncompacted history after summary failure.

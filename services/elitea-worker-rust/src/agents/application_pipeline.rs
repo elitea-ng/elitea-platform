@@ -1241,8 +1241,9 @@ impl Tool for ApplicationPipelineTool {
             resumed = tracing::field::Empty,
             outcome = tracing::field::Empty,
         );
-        let result = self
-            .invoke_child(ctx.clone(), arguments)
+        // Boxed: each nesting level (agent -> pipeline -> agent) otherwise keeps the child's
+        // state machine on the polling thread's stack.
+        let result = Box::pin(self.invoke_child(ctx.clone(), arguments))
             .instrument(span.clone())
             .await;
         span.record(

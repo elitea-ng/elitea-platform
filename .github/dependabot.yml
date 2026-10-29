@@ -154,6 +154,20 @@ updates:
       # Repeated in all three cargo entries: every workspace that path-depends
       # on libs/rust carries zavora-* in its own lock.
       - dependency-name: "zavora-*"
+      # adk-agent, adk-runner and adk-sandbox are patched copies in
+      # libs/rust/vendor applied through [patch.crates-io]; Dependabot cannot
+      # move a path crate, so a bump of their pins resolves the unpatched
+      # registry crate and the runtime's compile guard fails. Their re-vendor
+      # is a reviewed diff (libs/rust/vendor/README.md). The rest of adk-*
+      # still moves here; when an adk minor lands, the group PR breaks against
+      # the old patched copies, and that is the cue to re-vendor. Lift when the
+      # patches are upstream. adk-rust re-exports adk-agent and adk-runner and
+      # moves with them. In both entries that patch them (not the inventory
+      # engine's, which uses the registry crates).
+      - dependency-name: "adk-agent"
+      - dependency-name: "adk-runner"
+      - dependency-name: "adk-sandbox"
+      - dependency-name: "adk-rust"
 
   - package-ecosystem: cargo
     directories:
@@ -187,6 +201,20 @@ updates:
       # Repeated in all three cargo entries: every workspace that path-depends
       # on libs/rust carries zavora-* in its own lock.
       - dependency-name: "zavora-*"
+      # adk-agent, adk-runner and adk-sandbox are patched copies in
+      # libs/rust/vendor applied through [patch.crates-io]; Dependabot cannot
+      # move a path crate, so a bump of their pins resolves the unpatched
+      # registry crate and the runtime's compile guard fails. Their re-vendor
+      # is a reviewed diff (libs/rust/vendor/README.md). The rest of adk-*
+      # still moves here; when an adk minor lands, the group PR breaks against
+      # the old patched copies, and that is the cue to re-vendor. Lift when the
+      # patches are upstream. adk-rust re-exports adk-agent and adk-runner and
+      # moves with them. In both entries that patch them (not the inventory
+      # engine's, which uses the registry crates).
+      - dependency-name: "adk-agent"
+      - dependency-name: "adk-runner"
+      - dependency-name: "adk-sandbox"
+      - dependency-name: "adk-rust"
 
   - package-ecosystem: pip
     directories:

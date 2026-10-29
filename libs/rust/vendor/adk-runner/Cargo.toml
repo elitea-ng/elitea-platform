@@ -13,7 +13,7 @@
 edition = "2024"
 rust-version = "1.95"
 name = "adk-runner"
-version = "2.2.0"
+version = "2.3.0"
 authors = ["James Karanja Maina <james.karanja@zavora.ai>"]
 build = false
 autolib = false
@@ -118,25 +118,25 @@ name = "sandbox_runner_tests"
 path = "tests/sandbox_runner_tests.rs"
 
 [dependencies.adk-artifact]
-version = "2.2.0"
+version = "2.3.0"
 optional = true
 
 [dependencies.adk-core]
-version = "2.2.0"
+version = "2.3.0"
 
 [dependencies.adk-plugin]
-version = "2.2.0"
+version = "2.3.0"
 optional = true
 
 [dependencies.adk-sandbox]
-version = "2.2.0"
+version = "2.3.0"
 optional = true
 
 [dependencies.adk-session]
-version = "2.2.0"
+version = "2.3.0"
 
 [dependencies.adk-skill]
-version = "2.2.0"
+version = "2.3.0"
 optional = true
 
 [dependencies.async-stream]

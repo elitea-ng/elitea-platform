@@ -19,9 +19,9 @@ graph-shaping-bench = []
 
 [dependencies]
 adk-anthropic = "=2.3.0"
-adk-sandbox = { version = "=2.2.0", optional = true, default-features = false, features = ["workspace-docker"] }
-adk-runner = { version = "=2.2.0", default-features = false, features = ["context-compaction"] }
-adk-rust = { version = "=2.2.0", default-features = false, features = ["agents", "runner", "sessions", "models", "anthropic", "graph", "tools", "mcp-http"] }
+adk-sandbox = { version = "=2.3.0", optional = true, default-features = false, features = ["workspace-docker"] }
+adk-runner = { version = "=2.3.0", default-features = false, features = ["context-compaction"] }
+adk-rust = { version = "=2.3.0", default-features = false, features = ["agents", "runner", "sessions", "models", "anthropic", "graph", "tools", "mcp-http"] }
 async-nats = { version = "=0.50.0", default-features = false, features = ["jetstream", "kv", "ring", "server_2_10", "server_2_11", "server_2_12"] }
 async-stream = "=0.3.6"
 async-trait = "=0.1.92"
@@ -184,7 +184,7 @@ codegen-units = 1
 panic = "abort"
 incremental = false
 
-# Pinned ADK 2.2.0 history-retention and sandbox extensions, shared with
+# Pinned ADK 2.3.0 history-retention and sandbox extensions, shared with
 # every consumer of elitea-agent-runtime (ADR-0029 decision 2): the libs/rust
 # workspace applies the same patches. See ../../libs/rust/vendor/README.md.
 [patch.crates-io]

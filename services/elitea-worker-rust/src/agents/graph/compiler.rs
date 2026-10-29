@@ -1331,6 +1331,30 @@ impl PipelineDefinition {
         )
     }
 
+    /// The static pauses: `interrupt_before`, and after every Printer node and `interrupt_after`.
+    fn with_interrupts(&self, mut builder: GraphAgentBuilder) -> GraphAgentBuilder {
+        let before_interrupts: Vec<&str> =
+            self.interrupt_before.iter().map(String::as_str).collect();
+        if !before_interrupts.is_empty() {
+            builder = builder.interrupt_before(&before_interrupts);
+        }
+        let mut after_interrupts = self
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                PipelineNodeDefinition::Printer(node) => Some(node.id()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        after_interrupts.extend(self.interrupt_after.iter().map(String::as_str));
+        after_interrupts.sort_unstable();
+        after_interrupts.dedup();
+        if !after_interrupts.is_empty() {
+            builder = builder.interrupt_after(&after_interrupts);
+        }
+        builder
+    }
+
     /// Compile with invocation-owned model and direct-tool runtimes.
     pub(crate) fn compile_with_runtime(
         &self,
@@ -1406,30 +1430,12 @@ impl PipelineDefinition {
         }) {
             builder = self.bind_node(builder, node, runtimes, &node_checkpointer)?;
         }
-        let mut builder = builder
-            .into_agent()?
-            .node(PipelineFinishedTurnNode)
-            .edge(FINISHED_TURN_NODE, END);
-        let before_interrupts: Vec<&str> =
-            self.interrupt_before.iter().map(String::as_str).collect();
-        if !before_interrupts.is_empty() {
-            builder = builder.interrupt_before(&before_interrupts);
-        }
-        let printer_interrupts = self
-            .nodes
-            .iter()
-            .filter_map(|node| match node {
-                PipelineNodeDefinition::Printer(node) => Some(node.id()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let mut after_interrupts = printer_interrupts;
-        after_interrupts.extend(self.interrupt_after.iter().map(String::as_str));
-        after_interrupts.sort_unstable();
-        after_interrupts.dedup();
-        if !after_interrupts.is_empty() {
-            builder = builder.interrupt_after(&after_interrupts);
-        }
+        let mut builder = self.with_interrupts(
+            builder
+                .into_agent()?
+                .node(PipelineFinishedTurnNode)
+                .edge(FINISHED_TURN_NODE, END),
+        );
         if let Some(resume) = resume {
             let resume_state = resume.into_state();
             builder = builder

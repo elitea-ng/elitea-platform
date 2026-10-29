@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "adk-agent"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "adk-core",
  "adk-telemetry",
@@ -83,9 +83,9 @@ dependencies = [
 
 [[package]]
 name = "adk-model"
-version = "2.2.0"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b5170b6a23b7df96213d5062c0ecc9fd987c6a8cfed73db97d36b834b1a9e33"
+checksum = "719d5c9867218440e64c9b2b7df20444e40c2d34ddf9208cc46bcb54eacfd6ff"
 dependencies = [
  "adk-anthropic",
  "adk-core",
@@ -104,7 +104,7 @@ dependencies = [
 
 [[package]]
 name = "adk-runner"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "adk-core",
  "adk-session",
@@ -122,9 +122,9 @@ dependencies = [
 
 [[package]]
 name = "adk-rust"
-version = "2.2.0"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71cc9684fdcf1bf323482a40c1bf589c944883ae81e9bd50e266a63b6bc2f9c2"
+checksum = "505a83604d4e5919b011cdb59c0aa93ec40bec86ea86e3b2930c32a122408a52"
 dependencies = [
  "adk-agent",
  "adk-core",
@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "adk-sandbox"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "adk-core",
  "async-trait",

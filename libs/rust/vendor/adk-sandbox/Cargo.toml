@@ -13,7 +13,7 @@
 edition = "2024"
 rust-version = "1.95"
 name = "adk-sandbox"
-version = "2.2.0"
+version = "2.3.0"
 authors = ["James Karanja Maina <james.karanja@zavora.ai>"]
 build = false
 autolib = false
@@ -109,11 +109,15 @@ name = "sandbox_integration_tests"
 path = "tests/sandbox_integration_tests.rs"
 
 [[test]]
+name = "seatbelt_enforcement_tests"
+path = "tests/seatbelt_enforcement_tests.rs"
+
+[[test]]
 name = "seatbelt_profile_property_tests"
 path = "tests/seatbelt_profile_property_tests.rs"
 
 [dependencies.adk-core]
-version = "2.2.0"
+version = "2.3.0"
 
 [dependencies.async-trait]
 version = "0.1"
@@ -166,11 +170,11 @@ features = [
 optional = true
 
 [dependencies.wasmtime]
-version = "46"
+version = "48"
 optional = true
 
 [dependencies.wasmtime-wasi]
-version = "46"
+version = "48"
 optional = true
 
 [dev-dependencies.proptest]

@@ -20,7 +20,10 @@ upstream test does not register a production worker capability.
 
 ## Dependency baseline
 
-Every direct and transitive ADK dependency now resolves to `2.2.0`. The direct
+Every direct and transitive ADK dependency now resolves to `2.3.0`: the
+patched adk-agent, adk-runner and adk-sandbox were re-vendored from the 2.3.0
+archives (`libs/rust/vendor/README.md`) and the rest come from the registry.
+The `2.2.0` notes below record the earlier step. At `2.2.0` the direct
 pin upgrade is a bounded model/Runner compatibility change, not an MCP
 prerequisite. The architect's preceding `2.1.0` baseline already contained the
 OpenAI/OpenAI-compatible and Anthropic provider corrections. The worker's

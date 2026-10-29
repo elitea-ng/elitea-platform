@@ -1284,7 +1284,13 @@ impl NativeAgentInvocation {
         if !self.runner.active_runs().is_empty() {
             return Err(NativeAgentRuntimeError::invalid_state());
         }
-        let runner = self.runner.with_session_event_refresh(true);
+        // A resume starts a run with a new user event (the decision marker)
+        // after the paused call, and the replay adapters need that call in
+        // the request; `replay_history` closes abandoned calls itself.
+        let runner = self
+            .runner
+            .with_session_event_refresh(true)
+            .with_unanswered_tool_calls_kept(true);
         let app_name = runner.app_name().to_owned();
         let user_id = self.user_id.to_string();
         let session_id = self.session_id.to_string();

@@ -68,14 +68,14 @@ its `Cargo.lock`, update
 the table and the review, and re-run the Phase 3 gate
 (`parity/compare_phase3.py`).
 
-## `adk-agent/`, `adk-runner/`, `adk-sandbox/` — ADK 2.2.0 runtime extensions
+## `adk-agent/`, `adk-runner/`, `adk-sandbox/` — ADK 2.3.0 runtime extensions
 
-Patched copies of three published adk-rust 2.2.0 crates, moved here from
+Patched copies of three published adk-rust 2.3.0 crates, moved here from
 `services/elitea-worker-rust/vendor/` (ADR-0029 decision 2, stage 2) so every
 consumer of `elitea-agent-runtime` builds the same patched adk: the worker and
 this workspace both apply them through `[patch.crates-io]`, and a future
 desktop host must do the same (a library cannot carry a patch for its
-consumers). Keep the exact version (`=2.2.0`) in every manifest that patches
+consumers). Keep the exact version (`=2.3.0`) in every manifest that patches
 them; `cargo tree -i adk-agent` must show the path source, never the registry.
 
 **The compile-time guard.** `elitea-agent-runtime` names three patched-only
@@ -83,27 +83,27 @@ builders (`LlmAgentBuilder::retain_prepared_history`,
 `LlmAgentBuilder::steering_source`, `Runner::with_session_event_refresh`) in
 three `const _` items in `src/lib.rs`
 that are part of every build, not a test. A host that depends on the runtime
-but forgets the `[patch.crates-io]` lines resolves the registry 2.2.0 crates,
+but forgets the `[patch.crates-io]` lines resolves the registry 2.3.0 crates,
 which have none of them, so its build fails with "no function or
 associated item named ..." in `elitea-agent-runtime` rather than running the
 unpatched agent loop. Keep those constants when the patches change; remove
 them only with the patches.
 
-These packages preserve the published ADK 2.2.0 dependency graph.
-History extensions change `adk-agent/src/llm_agent.rs` and `adk-runner/src/runner.rs`.
+These packages preserve the published ADK 2.3.0 dependency graph.
+History extensions change `adk-agent/src/llm_agent.rs`, `adk-runner/src/runner.rs` and `adk-runner/src/context.rs`.
 The optional sandbox supervisor extension changes `adk-sandbox/src/workspace/docker.rs` and adds
 `docker_code_jobs.rs` with opt-in real-container tests in `docker_live_tests.rs`.
 Each package includes the upstream Apache 2.0 license.
 
 Upstream repository: https://github.com/zavora-ai/adk-rust
 
-Published source commit: `74765eb04930648795b53c3db689ddd10032c31e`.
+Published source commit: `7dd31e2571e0e50ee5039b3edcec1150c106bcc6`.
 
 | Package | Published archive SHA-256 |
 | --- | --- |
-| adk-agent 2.2.0 | `e150b28775ad28d4a4d0a49267a64298052346b8faf6f93ce075d025faecdcb8` |
-| adk-sandbox 2.2.0 | `eaca26dc4fce7f1dcef2a4ca6d6ca9f35ce4b6a6850b636a66de295d10a09596` |
-| adk-runner 2.2.0 | `31262e6bb997df8daa5bed8cc54bdefb3d92c84014c8715b937eb51731446bb0` |
+| adk-agent 2.3.0 | `24e216ce9361811c6f9737aaca0a71bc84bd5f78f6ea855c8ea0f3a561181f8d` |
+| adk-sandbox 2.3.0 | `670b384da20cb6e0adcc0f3acd3b93d57fdfdeb24264dd8f7ed1a361794d58a5` |
+| adk-runner 2.3.0 | `f359e6760f53e27d35d70a15b469eb4401341e6a96897d564262f59524b597ad` |
 
 `retain_prepared_history` lets the agent retain history prepared by successful model callbacks.
 Its default is false. Elitea enables it when its durable compaction callbacks own prepared history.
@@ -113,7 +113,9 @@ confirmation check to `LlmAgentBuilder`: a `ToolCallConfirmation` asked, in the
 pre-dispatch confirmation pass, for a call the name-based
 `ToolConfirmationPolicy` does not already confirm. A call it confirms interrupts
 exactly as a policy-confirmed one does, and a recorded decision for that call id
-and argument fingerprint answers it. Unset, nothing changes. The worker uses it
+and argument fingerprint answers it. 2.3.0 added a live `ToolConfirmationHandler`
+inside the tool executor; the check is asked there too, so a run with a handler
+cannot skip it. Unset, nothing changes. The worker uses it
 to ask before a destructive `run_command` of a cloud workspace.
 
 `steering_source` (steering during execution) adds a `SteeringSource` to
@@ -127,15 +129,25 @@ from the turn's local queue.
 
 `ToolExecutionStrategy::Auto` keeps the model's order across writes (#1213):
 only a run of adjacent read-only, concurrency-safe calls overlaps, and any other
-call runs alone in its place. The published 2.2.0 partitions the whole step and
-runs every safe call first, so a read listed after a write ran before it and
-read the old file. The desktop runs local tools under `Auto`; the regression is
+call runs alone in its place. The published crate partitions the whole step and
+runs every safe call first (2.3.0 still does), so a read listed after a write
+ran before it and read the old file. The desktop runs local tools under `Auto`; the regression is
 `d0::tests::a_read_after_a_write_in_one_step_runs_after_it`.
 
 `with_session_event_refresh` reloads the session view after each persisted event.
 Its default is false. Elitea enables it to use its durable active-history projection.
 All stream fragments still reach the caller. Partial fragments do not accumulate in the refreshed session.
 Storage failures stop execution instead of silently using an obsolete session view.
+
+`with_unanswered_tool_calls_kept` (`adk-runner/src/runner.rs`, `context.rs`)
+keeps every function call in the conversation history, answered or not, as
+2.2.0 did. 2.3.0 drops a call with no result from the model history once a
+later user turn exists (`close_interrupted_tool_calls`). The worker resumes a
+paused call (a confirmation decision, an `ask_user` answer) by starting a run
+whose user event is the decision marker, and its replay adapters need the
+paused call in that request to replay it exactly; `replay_history` closes
+abandoned calls itself at the provider boundary. Its default is false;
+`NativeAgentInvocation::start` enables it for every worker run.
 
 These extensions do not replace the ADK execution loop or implement another summarizer.
 The initial session snapshot remains allocated by the native mutable session.

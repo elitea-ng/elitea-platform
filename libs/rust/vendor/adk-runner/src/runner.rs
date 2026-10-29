@@ -3,8 +3,8 @@ use crate::cache::CacheManager;
 #[cfg(feature = "artifacts")]
 use adk_artifact::ArtifactService;
 use adk_core::{
-    Agent, AppName, CacheCapable, Content, ContextCacheConfig, Event, EventStream, Memory,
-    ReadonlyContext, Result, RunConfig, SessionId, UserId,
+    Agent, AppName, CacheCapable, Content, ContextCacheConfig, Event, EventStream, InvocationId,
+    Memory, ReadonlyContext, Result, RunConfig, SessionId, UserId,
 };
 #[cfg(feature = "plugins")]
 use adk_plugin::PluginManager;
@@ -50,6 +50,36 @@ fn preserve_streamed_content(accumulated: &mut HashMap<String, Content>, event: 
 struct ActiveRunCleanup {
     active_runs: ActiveRuns,
     run_id: u64,
+}
+
+/// A newly registered runner invocation and its event stream.
+///
+/// The invocation identity is available before the stream is polled, so hosts
+/// can durably correlate failures that happen before the first agent event.
+pub struct RunnerInvocation {
+    invocation_id: InvocationId,
+    events: EventStream,
+}
+
+impl RunnerInvocation {
+    /// Returns the identity assigned to this invocation.
+    pub fn invocation_id(&self) -> &InvocationId {
+        &self.invocation_id
+    }
+
+    /// Consumes the invocation and returns its event stream.
+    pub fn into_events(self) -> EventStream {
+        self.events
+    }
+}
+
+impl std::fmt::Debug for RunnerInvocation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RunnerInvocation")
+            .field("invocation_id", &self.invocation_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Drop for ActiveRunCleanup {
@@ -102,6 +132,9 @@ pub struct RunnerConfig {
     /// `user_scopes()` and `user_id()` reflect the authenticated identity.
     pub request_context: Option<adk_core::RequestContext>,
     /// Optional cooperative cancellation token for externally managed runs.
+    ///
+    /// Each run derives a child of this token, so cancelling it stops every in-flight
+    /// run, while [`Runner::interrupt`] cancels only the targeted run's child.
     pub cancellation_token: Option<CancellationToken>,
     /// Optional intra-invocation compaction configuration.
     /// When set, the runner estimates token count before each agent run
@@ -128,6 +161,8 @@ pub struct RunnerConfig {
 /// [`Runner::new()`].
 pub struct Runner {
     refresh_session_events: bool,
+    /// Elitea patch: see [`Runner::with_unanswered_tool_calls_kept`].
+    keep_unanswered_tool_calls: bool,
     app_name: String,
     root_agent: Arc<dyn Agent>,
     session_service: Arc<dyn SessionService>,
@@ -170,6 +205,17 @@ impl Runner {
     /// Disabled by default to preserve existing session-service behavior.
     pub fn with_session_event_refresh(mut self, enabled: bool) -> Self {
         self.refresh_session_events = enabled;
+        self
+    }
+
+    /// Elitea patch: keep unanswered function calls in the model history.
+    ///
+    /// ADK 2.3.0 omits a call without a result once a later user turn exists.
+    /// A host that resumes a paused call by starting a run with a new user
+    /// event must still see that call, and pairs or closes calls itself at
+    /// its provider boundary. Disabled by default (the 2.3.0 behavior).
+    pub fn with_unanswered_tool_calls_kept(mut self, keep: bool) -> Self {
+        self.keep_unanswered_tool_calls = keep;
         self
     }
 
@@ -242,6 +288,7 @@ impl Runner {
             root_agent: config.agent,
             session_service: config.session_service,
             refresh_session_events: false,
+            keep_unanswered_tool_calls: false,
             #[cfg(feature = "artifacts")]
             artifact_service: config.artifact_service,
             memory_service: config.memory_service,
@@ -356,10 +403,36 @@ impl Runner {
         user_content: Content,
         run_config: Option<RunConfig>,
     ) -> Result<EventStream> {
+        Ok(self
+            .start_with_config(user_id, session_id, user_content, run_config)
+            .await?
+            .into_events())
+    }
+
+    /// Registers one invocation and returns its identity with the event stream.
+    ///
+    /// Prefer this method when a host must durably associate its own turn or
+    /// operation record before the first agent event can be produced.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if invocation setup fails before the stream is created.
+    /// Session lookup and agent execution failures are yielded by the returned
+    /// stream.
+    pub async fn start_with_config(
+        &self,
+        user_id: UserId,
+        session_id: SessionId,
+        user_content: Content,
+        run_config: Option<RunConfig>,
+    ) -> Result<RunnerInvocation> {
+        let invocation_id = InvocationId::try_from(format!("inv-{}", uuid::Uuid::new_v4()))?;
+        let stream_invocation_id = invocation_id.to_string();
         let app_name = self.app_name.clone();
         let typed_app_name = AppName::try_from(app_name.clone())?;
         let session_service = self.session_service.clone();
         let refresh_session_events = self.refresh_session_events;
+        let keep_unanswered_tool_calls = self.keep_unanswered_tool_calls;
         let root_agent = self.root_agent.clone();
         #[cfg(feature = "artifacts")]
         let artifact_service = self.artifact_service.clone();
@@ -374,7 +447,6 @@ impl Runner {
         let cache_capable = self.cache_capable.clone();
         let cache_manager_ref = self.cache_manager.clone();
         let request_context = self.request_context.clone();
-        let cancellation_token = self.cancellation_token.clone();
         let intra_compactor = self.intra_compactor.clone();
         #[cfg(feature = "context-compaction")]
         let context_compaction = self.context_compaction.clone();
@@ -388,7 +460,14 @@ impl Runner {
         // unique run ID rather than the raw session ID: two identities can share a
         // session ID, and one identity can have two runs in flight, and both cases
         // previously overwrote each other's token.
-        let session_token = CancellationToken::new();
+        //
+        // A child of the global token fires when either the global token or this run's
+        // interrupt does, with no watcher task to outlive the run; dropping the run's
+        // last handle detaches the child from the global token.
+        let session_token = match self.cancellation_token.as_ref() {
+            Some(global) => global.child_token(),
+            None => CancellationToken::new(),
+        };
         let run_id = self.next_run_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         {
             let mut runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
@@ -398,27 +477,7 @@ impl Runner {
             );
         }
         let active_runs = self.active_runs.clone();
-        // Effective token: cancelled if either the global token or the session token fires
-        let effective_token = if let Some(ref global) = cancellation_token {
-            let combined = CancellationToken::new();
-            let combined_clone = combined.clone();
-            let global_clone = global.clone();
-            let session_clone = session_token.clone();
-            // Watch both tokens — cancel the combined token when either fires
-            let combined_for_global = combined_clone.clone();
-            tokio::spawn(async move {
-                global_clone.cancelled().await;
-                combined_for_global.cancel();
-            });
-            let combined_for_session = combined_clone;
-            tokio::spawn(async move {
-                session_clone.cancelled().await;
-                combined_for_session.cancel();
-            });
-            Some(combined)
-        } else {
-            Some(session_token.clone())
-        };
+        let effective_token = Some(session_token);
 
         // Built here rather than inside the generator: registration happens as soon
         // as `run` is called, so deregistration must also survive a stream that is
@@ -466,7 +525,7 @@ impl Runner {
             let memory_service_clone = memory_service.clone();
 
             // Create invocation context with MutableSession
-            let invocation_id = format!("inv-{}", uuid::Uuid::new_v4());
+            let invocation_id = stream_invocation_id;
             #[cfg(any(feature = "skills", feature = "plugins"))]
             let mut effective_user_content = user_content.clone();
             #[cfg(not(any(feature = "skills", feature = "plugins")))]
@@ -507,6 +566,8 @@ impl Runner {
                     return;
                 }
             };
+            // Elitea patch: see `Runner::with_unanswered_tool_calls_kept`.
+            invocation_ctx.mutable_session().keep_unanswered_tool_calls(keep_unanswered_tool_calls);
 
             // Add optional services
             #[cfg(feature = "artifacts")]
@@ -1376,7 +1437,7 @@ impl Runner {
             }
         };
 
-        Ok(Box::pin(s))
+        Ok(RunnerInvocation { invocation_id, events: Box::pin(s) })
     }
 
     /// Convenience method that accepts string arguments.
