@@ -8,14 +8,14 @@ use std::collections::BTreeSet;
 use std::time::Instant;
 
 use super::*;
+use crate::agents::graph::fanout_test_ledger::{LedgerClient, TestLedger};
 use crate::agents::graph::{
-    AdkParallelBranchRuntime, DurableParallelNode, MAX_PARENT_ROWS_PER_VISIT,
-    PARALLEL_INTERRUPT_SCHEMA, PARALLEL_RESUME_STATE_KEY, ParallelActivation, ParallelBlocked,
-    ParallelBranchDefinition, ParallelBranchExecution, ParallelBranchGraphFactory,
-    ParallelBranchOutcome, ParallelBranchPause, ParallelBranchRuntime, ParallelBranchTerminal,
-    ParallelCheckpointAppender, ParallelChildCheckpointerFactory, ParallelChildRequest,
-    ParallelDecision, ParallelNodeDefinition, ParallelOccurrenceCheckpointer, ParallelPauseCard,
-    PreparedParallelActivation, PreparedParallelBranch, fanout_budget,
+    AdkParallelBranchRuntime, DurableParallelNode, FANOUT_PARKED_SCHEMA, MAX_PARENT_ROWS_PER_VISIT,
+    ParallelActivation, ParallelBranchDefinition, ParallelBranchExecution,
+    ParallelBranchGraphFactory, ParallelBranchOutcome, ParallelBranchPause, ParallelBranchRuntime,
+    ParallelBranchTerminal, ParallelCheckpointAppender, ParallelChildCheckpointerFactory,
+    ParallelChildRequest, ParallelDecision, ParallelNodeDefinition, ParallelOccurrenceCheckpointer,
+    ParallelPauseCard, PreparedParallelBranch, fanout_budget,
 };
 use adk_rust::graph::{
     CompiledGraph, FunctionNode, GraphError, Node, NodeContext, interrupt::Interrupt,
@@ -239,24 +239,33 @@ impl ParallelBranchRuntime for TimedRuntime {
         activation: &mut ParallelActivation,
         definition: &ParallelNodeDefinition,
         context: &NodeContext,
-    ) -> Result<PreparedParallelActivation, GraphError> {
+    ) -> Result<Vec<PreparedParallelBranch>, GraphError> {
         self.inner.prepare(activation, definition, context).await
     }
 
-    async fn record_pause(
+    fn pause_cards(
         &self,
-        activation: &ParallelActivation,
-        cards: Vec<(usize, ParallelPauseCard)>,
-    ) -> Result<(), GraphError> {
-        self.inner.record_pause(activation, cards).await
+        branch: &ParallelBranchDefinition,
+        pause: &ParallelBranchPause,
+    ) -> Result<Vec<ParallelPauseCard>, GraphError> {
+        self.inner.pause_cards(branch, pause)
     }
 
-    async fn record_blocked(
+    fn project_result(
         &self,
-        activation: &ParallelActivation,
-        blocked: ParallelBlocked,
-    ) -> Result<(), GraphError> {
-        self.inner.record_blocked(activation, blocked).await
+        branch: &ParallelBranchDefinition,
+        child: &State,
+    ) -> Result<ParallelBranchTerminal, GraphError> {
+        self.inner.project_result(branch, child)
+    }
+
+    async fn resume_input(
+        &self,
+        branch: &ParallelBranchDefinition,
+        pause: &ParallelBranchPause,
+        decisions: &[ParallelDecision],
+    ) -> Result<State, GraphError> {
+        self.inner.resume_input(branch, pause, decisions).await
     }
 
     async fn invoke(
@@ -304,8 +313,22 @@ fn parent_graph(
     definition: ParallelNodeDefinition,
     node_runtime: Arc<dyn ParallelBranchRuntime>,
 ) -> CompiledGraph {
-    StateGraph::with_channels(&["input", "context", "gathered", PARALLEL_RESUME_STATE_KEY])
-        .add_node(DurableParallelNode::new(definition, node_runtime))
+    decided_graph(runtime, definition, node_runtime, None)
+}
+
+/// The parent graph whose Parallel node fetches decisions from `decisions`.
+fn decided_graph(
+    runtime: &Arc<AdkParallelBranchRuntime>,
+    definition: ParallelNodeDefinition,
+    node_runtime: Arc<dyn ParallelBranchRuntime>,
+    decisions: Option<Arc<LedgerClient>>,
+) -> CompiledGraph {
+    let mut node = DurableParallelNode::new(definition, node_runtime);
+    if let Some(decisions) = decisions {
+        node = node.with_decisions(decisions);
+    }
+    StateGraph::with_channels(&["input", "context", "gathered"])
+        .add_node(node)
         .add_edge(START, "gather")
         .add_edge("gather", END)
         .compile()
@@ -326,22 +349,18 @@ fn input_state() -> State {
     HashMap::from([("input".to_owned(), json!("original"))])
 }
 
-fn approve_all(pause: &Value) -> State {
-    let decisions = pause["cards"]
-        .as_array()
-        .expect("aggregate cards")
-        .iter()
-        .map(|card| {
-            json!({"interrupt_id": card["interrupt_id"], "tool_call_id": card["tool_call_id"], "action": "approve", "value": ""})
-        })
-        .collect::<Vec<_>>();
-    HashMap::from([
-        ("input".to_owned(), json!("original")),
-        (
-            PARALLEL_RESUME_STATE_KEY.to_owned(),
-            json!({"schema": PARALLEL_INTERRUPT_SCHEMA, "parallel_activation": pause["parallel_activation"], "decisions": decisions}),
-        ),
-    ])
+/// Decide every card the parked payload lists, as Main's decision POSTs do.
+fn approve_all(ledger: &TestLedger, pause: &Value) -> usize {
+    assert_eq!(pause["schema"], FANOUT_PARKED_SCHEMA);
+    let pending = pause["pending"].as_array().expect("parked cards");
+    for card in pending {
+        ledger.decide(
+            card["interrupt_key"].as_str().expect("interrupt key"),
+            "approve",
+            None,
+        );
+    }
+    pending.len()
 }
 
 fn activation(thread: &str, definition: &ParallelNodeDefinition) -> ParallelActivation {
@@ -738,17 +757,14 @@ async fn every_visit_appends_at_most_two_parent_rows_across_crash_windows() {
     let definition_four = definition(4, 4);
     let mut prepared_activation = activation(thread, &definition_four);
     let first_runtime = runtime(&first, &branches);
-    let PreparedParallelActivation::Ready(_dropped) = first_runtime
+    let _dropped = first_runtime
         .prepare(
             &mut prepared_activation,
             &definition_four,
             &NodeContext::new(input_state(), ExecutionConfig::new(thread), 0),
         )
         .await
-        .expect("freeze and prepare")
-    else {
-        panic!("unexpected blocked occurrence");
-    };
+        .expect("freeze and prepare");
     drop(first_runtime);
     let second = root(pool, thread, "activation-2", 2).await;
     graph(&runtime(&second, &branches), definition_four)
@@ -760,8 +776,8 @@ async fn every_visit_appends_at_most_two_parent_rows_across_crash_windows() {
         assert_eq!(branches.runs(&format!("n{index}")), 1);
     }
 
-    // Pause visit: freeze + one pause row that carries the cards. The pause
-    // row is written by the ADK save; record_pause appends nothing.
+    // Pause visit: freeze + the ADK pause row. The cards live on the child
+    // receipts and in the parked payload, never on the parent.
     let thread = "budget-pause";
     let first = root(pool, thread, "pause-1", 1).await;
     let branches = InstantBranches::new(&["n1", "n2"]);
@@ -776,35 +792,44 @@ async fn every_visit_appends_at_most_two_parent_rows_across_crash_windows() {
     assert_eq!(parent_rows(pool, thread).await, MAX_PARENT_ROWS_PER_VISIT);
     let paused = first.load(thread).await.expect("load").expect("pause row");
     assert_eq!(paused.checkpoint_id, interrupted.checkpoint_id);
-    assert_eq!(
-        paused.metadata["elitea.graph.parallel.occurrence.v2"]["cards"]
-            .as_array()
-            .map(Vec::len),
-        Some(2),
-        "the pause row carries both cards"
+    assert!(
+        paused.metadata["elitea.graph.parallel.occurrence.v3"]
+            .get("cards")
+            .is_none(),
+        "the pause row carries the frozen occurrence only"
     );
     let Interrupt::Dynamic {
         data: Some(pause), ..
     } = interrupted.interrupt
     else {
-        panic!("expected aggregate pause data");
+        panic!("expected the parked payload");
     };
+    let ledger = TestLedger::new();
+    assert_eq!(approve_all(&ledger, &pause), 2);
 
-    // Resume visit under a new execution (process replacement): accepted
-    // decision set + join, still two rows; completed children do not re-run.
+    // Resume visit under a new execution (process replacement): the decisions
+    // apply on the children, the join is the visit's only parent row, and
+    // completed children do not re-run.
     let resumed_writer = root(pool, thread, "pause-2", 2).await;
-    let result = graph(&runtime(&resumed_writer, &branches), definition(3, 3))
-        .invoke(
-            approve_all(&pause),
-            ExecutionConfig::new(thread).with_resume_from(&interrupted.checkpoint_id),
-        )
-        .await
-        .expect("resume joins");
+    let resumed_runtime = runtime(&resumed_writer, &branches);
+    let result = decided_graph(
+        &resumed_runtime,
+        definition(3, 3),
+        resumed_runtime.clone(),
+        Some(ledger.client(2)),
+    )
+    .invoke(
+        HashMap::new(),
+        ExecutionConfig::new(thread).with_resume_from(&interrupted.checkpoint_id),
+    )
+    .await
+    .expect("resume joins");
     assert_eq!(result["gathered"].as_array().map(Vec::len), Some(3));
     assert_eq!(
         parent_rows(pool, thread).await,
-        2 * MAX_PARENT_ROWS_PER_VISIT
+        MAX_PARENT_ROWS_PER_VISIT + 1
     );
+    assert_eq!(ledger.open_decisions(), 0);
     assert_eq!(branches.runs("n0"), 1);
     assert_eq!(branches.runs("n1"), 2);
     assert_eq!(branches.runs("n2"), 2);
@@ -826,7 +851,7 @@ async fn every_visit_appends_at_most_two_parent_rows_across_crash_windows() {
     assert_eq!(
         parent_rows(pool, thread).await,
         1,
-        "the staged cards appended nothing"
+        "a computed pause appended nothing"
     );
     drop(first);
     let second = root(pool, thread, "lost-2", 2).await;
@@ -843,7 +868,8 @@ async fn every_visit_appends_at_most_two_parent_rows_across_crash_windows() {
     else {
         panic!("expected aggregate pause data");
     };
-    assert_eq!(again["cards"][0]["interrupt_id"], "card-n0");
+    assert_eq!(again["pending"].as_array().map(Vec::len), Some(1));
+    assert_eq!(again["pending"][0]["interrupt_id"], "card-n0");
     assert_eq!(parent_rows(pool, thread).await, MAX_PARENT_ROWS_PER_VISIT);
     assert_eq!((branches.runs("n0"), branches.runs("n1")), (1, 1));
 }

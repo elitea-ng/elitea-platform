@@ -110,3 +110,18 @@ func TestAgentAdmissionPinScopesToTheResponse(t *testing.T) {
 		t.Fatalf("scopes: turn1=%q turn2=%q resume1=%q", one.continuationScope, two.continuationScope, resume.continuationScope)
 	}
 }
+
+// A parked fan-out's wake resumes the same response: it is a continuation in
+// that response's scope, so a governed run never wakes as legacy.
+func TestAgentAdmissionPinTreatsAFanoutWakeAsAContinuationOfItsResponse(t *testing.T) {
+	const conversation, response = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+	turn := agentAdmissionPin(agentexecutionapp.Admission{CurrentTurn: &agentexecutionapp.CurrentApplicationTurn{
+		ConversationUUID: conversation, ResponseMessageID: response,
+	}})
+	wake := agentAdmissionPin(agentexecutionapp.Admission{CurrentFanoutWakeTurn: &agentexecutionapp.CurrentFanoutWakeTurn{
+		ConversationUUID: conversation, ResponseMessageID: response,
+	}})
+	if !wake.continuation || wake.continuationScope != turn.continuationScope || wake.continuationScope == "" {
+		t.Fatalf("wake pin %+v, turn scope %q", wake, turn.continuationScope)
+	}
+}

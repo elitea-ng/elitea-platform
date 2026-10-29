@@ -323,6 +323,32 @@ class AcknowledgeNodeRecoveryResponseV1(_message.Message):
     outcome_json: bytes
     def __init__(self, outcome_json: _Optional[bytes] = ...) -> None: ...
 
+class FetchExecutionInterruptsRequestV1(_message.Message):
+    __slots__ = ("scope",)
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    scope: RuntimeContentScopeV1
+    def __init__(self, scope: _Optional[_Union[RuntimeContentScopeV1, _Mapping]] = ...) -> None: ...
+
+class FetchExecutionInterruptsResponseV1(_message.Message):
+    __slots__ = ("fetch_json",)
+    FETCH_JSON_FIELD_NUMBER: _ClassVar[int]
+    fetch_json: bytes
+    def __init__(self, fetch_json: _Optional[bytes] = ...) -> None: ...
+
+class AcknowledgeExecutionInterruptRequestV1(_message.Message):
+    __slots__ = ("scope", "ack_json")
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    ACK_JSON_FIELD_NUMBER: _ClassVar[int]
+    scope: RuntimeContentScopeV1
+    ack_json: bytes
+    def __init__(self, scope: _Optional[_Union[RuntimeContentScopeV1, _Mapping]] = ..., ack_json: _Optional[bytes] = ...) -> None: ...
+
+class AcknowledgeExecutionInterruptResponseV1(_message.Message):
+    __slots__ = ("outcome_json",)
+    OUTCOME_JSON_FIELD_NUMBER: _ClassVar[int]
+    outcome_json: bytes
+    def __init__(self, outcome_json: _Optional[bytes] = ...) -> None: ...
+
 class ReadNodeRecoveryResultRequestV1(_message.Message):
     __slots__ = ("scope", "content_id", "version")
     SCOPE_FIELD_NUMBER: _ClassVar[int]

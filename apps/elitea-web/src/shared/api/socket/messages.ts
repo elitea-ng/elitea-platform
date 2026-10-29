@@ -676,6 +676,70 @@ const AgentSwarmHandoffMessageSchema = z.looseObject({
   threadId: z.string().optional(),
 });
 
+/**
+ * evidence:
+ *   - libs/ts/client-core/src/stream/frameTypes.ts (fan-out contract v1.1 §9)
+ *   - apps/elitea-web/src/features/chat-messages/lib/chatStreamFanoutFrames.ts
+ */
+const AgentInterruptPendingMessageSchema = z.looseObject({
+  type: z.literal("agent_interrupt_pending"),
+  message_id: z.string().optional(),
+  sio_event: z.string().optional(),
+  question_id: z.string().optional(),
+  content: z.unknown().optional(),
+  response_metadata: responseMetadataSchema.optional(),
+  created_at: z.union([z.string(), z.number()]).optional(),
+  threadId: z.string().optional(),
+});
+
+/**
+ * evidence:
+ *   - libs/ts/client-core/src/stream/frameTypes.ts (fan-out contract v1.1 §9)
+ *   - apps/elitea-web/src/features/chat-messages/lib/chatStreamFanoutFrames.ts
+ */
+const AgentHitlResolvedMessageSchema = z.looseObject({
+  type: z.literal("agent_hitl_resolved"),
+  message_id: z.string().optional(),
+  sio_event: z.string().optional(),
+  question_id: z.string().optional(),
+  content: z.unknown().optional(),
+  response_metadata: responseMetadataSchema.optional(),
+  created_at: z.union([z.string(), z.number()]).optional(),
+  threadId: z.string().optional(),
+});
+
+/**
+ * evidence:
+ *   - libs/ts/client-core/src/stream/frameTypes.ts (fan-out contract v1.1 §9)
+ *   - apps/elitea-web/src/features/chat-messages/lib/chatStreamFanoutFrames.ts
+ */
+const AgentFanoutMemberMessageSchema = z.looseObject({
+  type: z.literal("agent_fanout_member"),
+  message_id: z.string().optional(),
+  sio_event: z.string().optional(),
+  question_id: z.string().optional(),
+  content: z.unknown().optional(),
+  response_metadata: responseMetadataSchema.optional(),
+  created_at: z.union([z.string(), z.number()]).optional(),
+  threadId: z.string().optional(),
+});
+
+/**
+ * evidence:
+ *   - libs/ts/client-core/src/stream/frameTypes.ts (fan-out contract v1.1 §9)
+ *   - apps/elitea-web/src/features/chat-messages/lib/chatStreamFanoutFrames.ts
+ */
+const AgentFanoutProgressMessageSchema = z.looseObject({
+  type: z.literal("agent_fanout_progress"),
+  message_id: z.string().optional(),
+  sio_event: z.string().optional(),
+  question_id: z.string().optional(),
+  content: z.unknown().optional(),
+  response_metadata: responseMetadataSchema.optional(),
+  created_at: z.union([z.string(), z.number()]).optional(),
+  threadId: z.string().optional(),
+});
+
 /** `z.discriminatedUnion('type', [...])` over every `FRAME_TYPE` variant (spec §5.5). */
 export const socketMessageSchema = z.discriminatedUnion('type', [
   AgentStartMessageSchema,
@@ -692,6 +756,10 @@ export const socketMessageSchema = z.discriminatedUnion('type', [
   AgentRequiresConfirmationMessageSchema,
   AgentHitlInterruptMessageSchema,
   AgentNodeRecoveryRequiredMessageSchema,
+  AgentInterruptPendingMessageSchema,
+  AgentHitlResolvedMessageSchema,
+  AgentFanoutMemberMessageSchema,
+  AgentFanoutProgressMessageSchema,
   McpAuthorizationRequiredMessageSchema,
   AgentLlmStartMessageSchema,
   AgentLlmChunkMessageSchema,

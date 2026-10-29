@@ -229,13 +229,14 @@ took `ELITEA_RT_V1_VALIDATE` from 0 to 4 messages.
   elitea-main verifies the streams.
 
 **One subject family per producer.** The project SSE route
-(`GET /api/v2/events/prompt_lib/{projectID}`) reads two subjects and accepts
-ONE event type from each:
+(`GET /api/v2/events/prompt_lib/{projectID}`) reads four subjects and accepts
+only its own event types from each:
 
 | Family | Subject | Account | Publisher | Accepted type |
 |---|---|---|---|---|
 | presence | `elitea.events.project.<id>.presence` | MAIN | elitea-main only | `canvas.editors` |
 | workspace | `elitea.events.project.<id>.workspace` | MAIN | elitea-main only | `workspace.handoff` (relayed only to each frame's audience) |
+| conversations | `elitea.events.project.<id>.conversations` | MAIN | elitea-main only | `conversation_activity`, and the per-interrupt HITL frames `agent_hitl_resolved`, `agent_fanout_wake_admitted` (relayed only to each frame's audience, to a caller who may list conversations) |
 | gateway | `gateway.events.project.<id>.events` | GATEWAY, imported into MAIN | elitea-llm-gateway only | `budget.soft_alert` |
 
 So the gateway cannot forge a `canvas.editors` roster into a project's stream

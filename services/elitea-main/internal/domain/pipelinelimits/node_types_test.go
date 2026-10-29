@@ -90,3 +90,52 @@ func TestNodeCountIsCheckedBeforeNodeTypes(t *testing.T) {
 		t.Fatalf("got %v, want ErrTooManyNodes before any node is inspected", err)
 	}
 }
+
+func parallelOver(secondType string) string {
+	return "entry_point: gather\nstate:\n  joined: list\n  out: str\nnodes:\n" +
+		"  - id: gather\n    type: parallel\n    branches: [{id: one, node: first}, {id: two, node: second}]\n" +
+		"    max_concurrency: 2\n    wait: all\n    output: [joined]\n    transition: END\n" +
+		"  - id: first\n    type: agent\n    tool: Research\n    output: [out]\n" +
+		"  - id: second\n    type: " + secondType + "\n    output: [out]\n"
+}
+
+// An inline LLM node (FU-247) or any other non-Agent node cannot run as a
+// fixed Parallel branch: refused at save and at start, naming both nodes.
+func TestCheckRefusesAParallelBranchThatIsNotAnAgentNode(t *testing.T) {
+	for _, nodeType := range []string{"llm", "state_modifier", "toolkit"} {
+		doc := parallelOver(nodeType)
+		for name, err := range map[string]error{
+			"save":  pipelinelimits.Check(doc),
+			"start": pipelinelimits.CheckStart(doc, []string{"Research"}),
+		} {
+			var api *apierr.APIError
+			if !errors.As(err, &api) || api.Code != pipelinelimits.CodeParallelBranchUnsupported {
+				t.Fatalf("%s %s: got %v, want %s", nodeType, name, err, pipelinelimits.CodeParallelBranchUnsupported)
+			}
+			if pipelinelimits.Refusal(err) != api {
+				t.Errorf("%s %s: Refusal does not answer the branch refusal", nodeType, name)
+			}
+			for _, want := range []string{`Node "gather"`, `node "second"`, `"` + nodeType + `" node`} {
+				if !strings.Contains(api.Message, want) {
+					t.Errorf("%s %s: message %q does not contain %s", nodeType, name, api.Message, want)
+				}
+			}
+		}
+	}
+}
+
+func TestCheckAdmitsAgentBranchesAndLeavesMalformedBranchesToTheCompiler(t *testing.T) {
+	for name, doc := range map[string]string{
+		"agent branches":    parallelOver("agent"),
+		"missing node":      strings.Replace(parallelOver("llm"), "node: second", "node: absent", 1),
+		"non-scalar node":   strings.Replace(parallelOver("llm"), "node: second", "node: [second]", 1),
+		"non-list branches": strings.Replace(parallelOver("llm"), "[{id: one, node: first}, {id: two, node: second}]", "first", 1),
+		"integer type":      strings.Replace(parallelOver("llm"), "type: llm", "type: 3", 1),
+		// The compiler runs the first node with an id, as here.
+		"first declaration is the agent": parallelOver("agent") + "  - id: second\n    type: llm\n",
+	} {
+		if err := pipelinelimits.Check(doc); err != nil {
+			t.Errorf("%s: got %v, want admitted", name, err)
+		}
+	}
+}

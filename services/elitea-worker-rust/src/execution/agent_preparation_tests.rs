@@ -82,6 +82,7 @@ fn input_fixture(kind: AgentExecutionKind) -> Vec<u8> {
 
 struct TestControlState {
     calls: Mutex<Vec<&'static str>>,
+    claim_opt_ins: Mutex<Vec<bool>>,
     claim: ClaimCommandResponseV1,
     begin: Mutex<BeginExecutionResponseV1>,
     authorize: Mutex<AuthorizeInvocationResponseV1>,
@@ -95,6 +96,7 @@ impl Default for TestControlState {
     fn default() -> Self {
         Self {
             calls: Mutex::new(Vec::new()),
+            claim_opt_ins: Mutex::new(Vec::new()),
             claim: ClaimCommandResponseV1::decode(bytes("accepted_claim").as_slice())
                 .expect("claim fixture"),
             begin: Mutex::new(BeginExecutionResponseV1 {
@@ -129,8 +131,13 @@ struct TestControlRpc(Arc<TestControlState>);
 impl ControlRpc for TestControlRpc {
     async fn claim_command(
         &self,
-        _request: Request<ClaimCommandRequestV1>,
+        request: Request<ClaimCommandRequestV1>,
     ) -> Result<Response<ClaimCommandResponseV1>, Status> {
+        self.0
+            .claim_opt_ins
+            .lock()
+            .expect("claim opt-ins")
+            .push(request.get_ref().fanout_interrupt_decisions);
         self.0.calls.lock().expect("calls").push("claim");
         Ok(Response::new(self.0.claim.clone()))
     }
@@ -414,6 +421,17 @@ async fn prepared_for_authorization(
         panic!("valid input must reach the authorization boundary")
     };
     prepared
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ordinary_agent_claims_opt_into_fanout_interrupt_decisions() {
+    // fanout-interrupt-decisions v1.1 §8.1: Main grants a fanout_wake
+    // continuation only to a claim that opts in; both agent kinds do.
+    for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
+        let (control, state) = control();
+        fresh(control.as_ref(), &state, kind).await;
+        assert_eq!(*state.claim_opt_ins.lock().expect("claim opt-ins"), [true]);
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -8,6 +8,7 @@ use super::{
     pipeline_node_event_channel_error, valid_event_identity, valid_graph_id,
 };
 use crate::agents::graph::ParallelBranchExecution;
+use crate::agents::pipeline::scoped_applications::PipelineApplicationActivation;
 
 const MAX_BRANCH_THREADS: usize = 129;
 const MAX_FIXED_BRANCHES: usize = 16;
@@ -21,6 +22,11 @@ pub(super) struct ParallelEventScope {
     owned_thread: String,
     threads: BTreeSet<String>,
     parent: Option<PipelineNodeEventScope>,
+    /// A Parallel member's tier (`{"call": fo1_…, "ordinal": n}`), stamped on
+    /// its own call so the projector keys the call and every descendant by the
+    /// member tier the fan-out frames and cards use (contract §3.3). `None`
+    /// for a Map item.
+    member_tier: Option<String>,
 }
 
 impl PipelineNodeEventSender {
@@ -44,16 +50,26 @@ impl PipelineNodeEventSender {
         {
             return Err(pipeline_node_event_channel_error());
         }
-        let scope = ParallelEventScope::from_catalog(
+        let mut scope = ParallelEventScope::from_catalog(
             execution.activation_root_thread_id(),
             execution.branch_thread_id(),
             execution.owned_node(),
             execution.admitted_threads().clone(),
             parent,
         )?;
+        scope.member_tier = Some(
+            serde_json::json!({
+                "call": crate::agents::graph::fanout_frames::member_call_id(
+                    execution.branch_thread_id()
+                ),
+                "ordinal": execution.branch_ordinal() + 1,
+            })
+            .to_string(),
+        );
         Ok(Self {
             inner: self.inner.clone(),
             parallel_scope: Some(std::sync::Arc::new(scope)),
+            fanout_member: true,
         })
     }
 
@@ -80,11 +96,15 @@ impl PipelineNodeEventSender {
         self.parallel_scope.is_some()
     }
 
+    /// `original_root` is the invocation the scoped call's receipt names: a
+    /// root-level member's already-routed leaf is projected onto the current
+    /// root invocation from it, as a scoped Agent node's leaves are.
     pub(crate) fn project_parallel_application_event(
         &self,
         event: &mut Event,
         local: Option<&PipelineNodeEventScope>,
         root_container: &str,
+        original_root: Option<&str>,
     ) -> adk_rust::Result<()> {
         let scope = self
             .parallel_scope
@@ -103,16 +123,52 @@ impl PipelineNodeEventSender {
             .filter(|key| event.provider_metadata.contains_key(**key))
             .count();
         if existing != 0 {
-            if existing != keys.len()
-                || keys
-                    .iter()
-                    .any(|key| !valid_event_identity(&event.provider_metadata[*key]))
-                || !scope
-                    .contains_thread(&event.provider_metadata[DESCENDANT_CHECKPOINT_THREAD_KEY])
-            {
+            let edge = |key: &str| {
+                event
+                    .provider_metadata
+                    .get(key)
+                    .is_some_and(|value| valid_event_identity(value))
+            };
+            let proved = if existing == keys.len() {
+                keys.iter().all(|key| edge(key))
+                    && scope
+                        .contains_thread(&event.provider_metadata[DESCENDANT_CHECKPOINT_THREAD_KEY])
+            } else {
+                // An Agent child's leaf carries no checkpoint thread (the
+                // projector refuses one on a non-pipeline child); the
+                // activation receipt stamped on it proves its branch thread.
+                !event
+                    .provider_metadata
+                    .contains_key(DESCENDANT_CHECKPOINT_THREAD_KEY)
+                    && edge(DESCENDANT_CONTAINER_INVOCATION_KEY)
+                    && edge(DESCENDANT_PARENT_CALL_KEY)
+                    && PipelineApplicationActivation::from_event(event)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|activation| scope.contains_thread(activation.thread_id()))
+            };
+            if !proved {
                 return Err(pipeline_node_event_channel_error());
             }
+            if current.is_none()
+                && let Some(original) = original_root
+            {
+                crate::agents::pipeline::scoped_applications::stamp_root_scope_projection(
+                    event,
+                    original,
+                    root_container,
+                )
+                .map_err(|_| pipeline_node_event_channel_error())?;
+            }
             return Ok(());
+        }
+        // The member's own call start or result (the scoped runtime sends
+        // nothing else without an edge): it stays open beside its siblings.
+        if !event.tool_calls().is_empty() || !event.tool_results().is_empty() {
+            event.provider_metadata.insert(
+                crate::agents::events::FANOUT_MEMBER_CALL_KEY.to_owned(),
+                scope.member_tier.clone().unwrap_or_else(|| "1".to_owned()),
+            );
         }
         if let Some(current) = current {
             event.provider_metadata.insert(
@@ -179,6 +235,7 @@ impl ParallelEventScope {
             owned_thread: format!("{root_thread}/{owned_node}"),
             threads,
             parent,
+            member_tier: None,
         })
     }
 
@@ -274,6 +331,18 @@ impl ParallelEventScope {
                 DESCENDANT_CHECKPOINT_THREAD_KEY.to_owned(),
                 current.checkpoint_thread_id().to_owned(),
             );
+            // The member's own child pipeline: its thread is relative to the
+            // proved branch thread, not to the root graph's naming.
+            if local.is_some() && current.checkpoint_thread_id() == self.owned_thread {
+                event.provider_metadata.insert(
+                    crate::agents::events::FANOUT_MEMBER_THREAD_KEY.to_owned(),
+                    serde_json::json!({
+                        "call": current.parent_call_id(),
+                        "thread": self.branch_root_thread,
+                    })
+                    .to_string(),
+                );
+            }
             event.invocation_id = format!("pipeline-child:{}", current.parent_call_id());
             current.agent_name().clone_into(&mut event.author);
             event.branch.clear();

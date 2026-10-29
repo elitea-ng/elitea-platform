@@ -281,6 +281,26 @@ WHERE claim_id = $1 AND released_at IS NULL`, existing.ClaimID); err != nil {
 			}
 			return nil
 		}
+		// Recovery-mode claim requests (node recovery, model checkpoint) are
+		// inspection flows, never an ordinary turn, so only plain claims ask.
+		if !request.FanoutInterruptDecisions && !request.NodeRecovery && !request.AgentModelCheckpointRecovery &&
+			!terminalRecoveryOnly && !runningRecoveryOnly && !nodeRecoveryOnly &&
+			(request.CapabilityID == executiondomain.AgentApplicationCapability || request.CapabilityID == executiondomain.AgentAdhocCapability) {
+			// fanout-interrupt-decisions v1.1 §8.1: an older worker would run a
+			// fanout_wake continuation (no decisions, empty input) as a fresh
+			// turn. It is answered retry-later; an opted-in worker claims it.
+			wake, err := isFanoutWakeExecution(ctx, tx, request.ExecutionID)
+			if err != nil {
+				return err
+			}
+			if wake {
+				decision = executionapp.ClaimDecision{
+					Disposition:  executionapp.ClaimRetryLaterNoACK,
+					DesiredState: desired,
+				}
+				return nil
+			}
+		}
 
 		if !authorityGranted {
 			tag, err := tx.Exec(ctx, `

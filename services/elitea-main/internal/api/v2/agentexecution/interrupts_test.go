@@ -171,6 +171,7 @@ func TestExecutionInterruptDecisionStrictAdmission(t *testing.T) {
 		{"query string", decisionPath("7", interruptTestResponse, interruptTestKey) + "?value=x", approve, []string{domain.PermissionDecide}, ok, nil, 400, 0, "agent_interrupt_invalid_decision"},
 		{"over 8192 bytes", decisionPath("7", interruptTestResponse, interruptTestKey), oversized, []string{domain.PermissionDecide}, ok, nil, 400, 0, "agent_interrupt_invalid_decision"},
 		{"empty body", decisionPath("7", interruptTestResponse, interruptTestKey), nil, []string{domain.PermissionDecide}, ok, nil, 400, 0, "agent_interrupt_invalid_decision"},
+		{"authorize (FU-250)", decisionPath("7", interruptTestResponse, interruptTestKey), []byte(`{"action":"authorize","expected_revision":1,"request_id":"` + strings.Repeat("ab", 32) + `"}`), []string{domain.PermissionDecide}, ok, nil, 400, 0, "agent_interrupt_invalid_decision"},
 		{"store failure", decisionPath("7", interruptTestResponse, interruptTestKey), approve, []string{domain.PermissionDecide}, domain.DecideResult{}, errors.New("database down"), 500, 1, ""},
 		{"deadline", decisionPath("7", interruptTestResponse, interruptTestKey), approve, []string{domain.PermissionDecide}, domain.DecideResult{}, context.DeadlineExceeded, 504, 1, ""},
 	} {
@@ -216,7 +217,9 @@ func TestExecutionInterruptDecisionUsesContractFixtures(t *testing.T) {
 		useCase := &interruptUseCaseStub{result: domain.DecideResult{InterruptKey: interruptTestKey, State: domain.StateDecided, Revision: 2, RequestID: strings.Repeat("ab", 32)}}
 		w := httptest.NewRecorder()
 		newInterruptTestRoute(t, useCase, domain.PermissionDecide).ServeHTTP(w, interruptRequest(http.MethodPost, decisionPath("7", interruptTestResponse, interruptTestKey), raw))
-		invalid := strings.Contains(filepath.Base(path), ".invalid.")
+		// A schema-valid authorize is refused until it carries its credential
+		// reference end to end (FU-250).
+		invalid := strings.Contains(filepath.Base(path), ".invalid.") || strings.Contains(filepath.Base(path), ".authorize.")
 		if invalid && (w.Code != 400 || useCase.calls != 0) {
 			t.Errorf("%s: status=%d calls=%d", filepath.Base(path), w.Code, useCase.calls)
 		}

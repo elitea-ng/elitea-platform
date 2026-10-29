@@ -878,7 +878,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// (a toolkit_type suspension cancels in-flight runs), browser_session_ref,
 	// run_started_at (the whole-run wall cap) and cancel_reason (cap_reached).
 	// Nullable columns only. No data, no permission.
-	require.EqualValues(t, 201, Head(shared))
+	//
+	// 202: shared/0202_execution_interrupt_wakes.sql, park and wake for the
+	// per-interrupt decision ledger (fanout-interrupt-decisions v1.1 §8): the
+	// park columns on execution_interrupt_responses and
+	// elitea_runtime.execution_interrupt_wakes with the partial unique index
+	// "one active continuation per response", and the open-card index a new
+	// turn supersedes through. No data, no permission.
+	require.EqualValues(t, 202, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

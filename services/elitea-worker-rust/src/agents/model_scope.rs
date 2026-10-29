@@ -9,7 +9,7 @@ use adk_rust::futures::StreamExt as _;
 use adk_rust::session::{AppendEventRequest, CreateRequest, GetRequest, SessionService};
 use adk_rust::{
     AdkError, AdkIdentity, Agent, BeforeModelResult, Content, Event, EventStream,
-    InvocationContext, Llm, LlmRequest, ReadonlyContext,
+    InvocationContext, Llm, LlmRequest, ReadonlyContext, Tool, Toolset,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,34 @@ use super::model_checkpoint::ModelCheckpointWriter;
 
 #[path = "model_scope_output.rs"]
 mod output;
+
+/// Passes `inner`'s tools through unchanged and records which are read-only.
+struct ReadOnlyRecordingToolset {
+    inner: Arc<dyn Toolset>,
+    sink: super::model_checkpoint::ReadOnlyTools,
+    guarded: Arc<HashSet<String>>,
+}
+
+#[async_trait]
+impl Toolset for ReadOnlyRecordingToolset {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    async fn tools(
+        &self,
+        context: Arc<dyn ReadonlyContext>,
+    ) -> adk_rust::Result<Vec<Arc<dyn Tool>>> {
+        let tools = self.inner.tools(context).await?;
+        let mut sink = self.sink.lock().map_err(|_| invalid_scope())?;
+        for tool in &tools {
+            if tool.is_read_only() && !self.guarded.contains(tool.name()) {
+                sink.insert(tool.name().to_owned());
+            }
+        }
+        Ok(tools)
+    }
+}
 
 const COMPLETION_KEY: &str = "elitea.model.completion.v1";
 
@@ -97,6 +125,8 @@ pub(super) struct ModelScopeSessions {
     definition_digest: [u8; 32],
     node_scope: Option<String>,
     recover_pending_models: bool,
+    /// A fan-out child: an interrupted read-only batch is replayed (D2).
+    read_only_replay: bool,
     application_tools: Arc<HashSet<String>>,
     /// The root session's identity, where nested approved calls journal their dispatch.
     root_identity: Option<AdkIdentity>,
@@ -118,6 +148,7 @@ impl ModelScopeSessions {
             definition_digest,
             node_scope: None,
             recover_pending_models: false,
+            read_only_replay: false,
             application_tools: Arc::default(),
             root_identity: None,
             dispatch_abort: super::dispatch_journal::DispatchAbort::default(),
@@ -162,6 +193,13 @@ impl ModelScopeSessions {
     /// Enable restoration only after root checkpoint recovery is authorized.
     pub(super) fn with_pending_model_recovery(mut self) -> Self {
         self.recover_pending_models = true;
+        self
+    }
+
+    /// A fixed Parallel child: its read-only tools in flight are replayed
+    /// on recovery instead of ending the child "may have started" (D2).
+    pub(super) fn with_read_only_replay(mut self) -> Self {
+        self.read_only_replay = true;
         self
     }
 
@@ -213,6 +251,7 @@ impl ModelScopeSessions {
     ) -> Arc<ScopedModelCheckpoint> {
         let (context_events, context_receiver) = super::graph::pipeline_node_event_channel();
         Arc::new(ScopedModelCheckpoint {
+            read_only_tools: self.read_only_replay.then(Arc::default),
             storage: self.clone(),
             plan,
             budget,
@@ -238,6 +277,8 @@ pub(super) struct ScopedModelCheckpoint {
     writer: OnceCell<ScopedWriter>,
     skip_replay_model: AtomicBool,
     replay_marker: Option<Content>,
+    /// The read-only tools this child was offered (a fan-out child only).
+    read_only_tools: Option<super::model_checkpoint::ReadOnlyTools>,
     completion: Option<Arc<dyn super::session::DurableModelCompletion>>,
     output_completion: Arc<Mutex<Option<String>>>,
     output_partial: Arc<Mutex<Option<String>>>,
@@ -323,6 +364,30 @@ impl ScopedModelCheckpoint {
         }))
     }
 
+    /// Record the read-only tools of `toolsets` as they resolve, except the
+    /// `guarded` ones (a confirmation or delegated authorization): an
+    /// interrupted batch of only these is replayed. Unchanged without D2 replay.
+    pub(super) fn record_read_only(
+        &self,
+        toolsets: Vec<Arc<dyn Toolset>>,
+        guarded: &HashSet<String>,
+    ) -> Vec<Arc<dyn Toolset>> {
+        let Some(sink) = &self.read_only_tools else {
+            return toolsets;
+        };
+        let guarded = Arc::new(guarded.clone());
+        toolsets
+            .into_iter()
+            .map(|inner| {
+                Arc::new(ReadOnlyRecordingToolset {
+                    inner,
+                    sink: Arc::clone(sink),
+                    guarded: Arc::clone(&guarded),
+                }) as Arc<dyn Toolset>
+            })
+            .collect()
+    }
+
     pub(super) fn with_replay_pending(self: Arc<Self>, pending: bool) -> Arc<Self> {
         self.skip_replay_model.store(pending, Ordering::Release);
         self
@@ -388,6 +453,7 @@ impl ScopedModelCheckpoint {
                     self.storage.definition_digest,
                 )
                 .with_application_tools(self.storage.application_tools.iter().map(String::as_str))
+                .with_read_only_tools(self.read_only_tools.clone())
                 .with_request_budget(self.budget.clone())
                 .with_context_events(self.context_events.clone())
                 .with_context_compaction(compaction);

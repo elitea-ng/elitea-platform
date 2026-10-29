@@ -96,6 +96,13 @@ func (d FetchedDecision) canonicalValue() map[string]any {
 	}
 }
 
+// WithinFetchLimit reports whether the canonical entry is at most
+// MaxFetchEntryBytes (contract §7).
+func (d FetchedDecision) WithinFetchLimit() bool {
+	size, err := d.CanonicalSize()
+	return err == nil && size <= MaxFetchEntryBytes
+}
+
 // CanonicalSize is the entry's canonical byte length (bounded by
 // MaxFetchEntryBytes).
 func (d FetchedDecision) CanonicalSize() (int, error) {

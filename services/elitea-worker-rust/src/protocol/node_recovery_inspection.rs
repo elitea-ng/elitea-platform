@@ -29,6 +29,7 @@ impl<R: crate::transport::ControlRpc> AgentControlClient<R> {
         )?;
         request.node_recovery = true;
         request.agent_model_checkpoint_recovery = false;
+        request.fanout_interrupt_decisions = false;
         let response = self.control.claim_command(request).await?;
         match response.receipt.as_ref().map(|r| r.disposition) {
             Some(value) if value == ClaimDispositionV1::RecoverNodeVisit as i32 => {
@@ -689,6 +690,10 @@ mod tests {
             assert!(
                 !request.get_ref().agent_model_checkpoint_recovery,
                 "mutually exclusive Main opt-ins"
+            );
+            assert!(
+                !request.get_ref().fanout_interrupt_decisions,
+                "a recovery claim never asks for a fan-out wake"
             );
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(tonic::Response::new(self.response.clone()))

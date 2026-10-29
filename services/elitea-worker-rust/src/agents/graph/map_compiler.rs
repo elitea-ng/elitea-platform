@@ -10,8 +10,9 @@ use ring::digest;
 use serde_json::Value;
 
 use super::{
-    PipelineConfigurationError, PipelineDefinition, PipelineGraphBuilder, PipelineNodeDefinition,
-    PipelineNodeRuntimes, builtin_state_key, state_value_matches, validate_node_state,
+    FanoutChildRefusal, PipelineConfigurationError, PipelineDefinition, PipelineGraphBuilder,
+    PipelineNodeDefinition, PipelineNodeRuntimes, builtin_state_key, state_value_matches,
+    validate_node_state,
 };
 use crate::agents::graph::application::{
     ApplicationNode, PARALLEL_AGENT_INPUTS_STATE_KEY, PipelineApplicationResolver,
@@ -203,10 +204,11 @@ impl PipelineDefinition {
                 result.copy_from_slice(hash.finish().as_ref());
                 result
             }
-            _ => {
-                return Err(PipelineConfigurationError::Unsupported(
-                    "the Map owned worker kind is not admitted",
-                ));
+            other => {
+                return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                    node: other.id().to_owned(),
+                    refusal: FanoutChildRefusal::Kind,
+                });
             }
         };
         let factory = Arc::new(CompilerMapWorker {
@@ -270,7 +272,14 @@ pub(super) fn validate_map_ownership(
         if !matches!(
             worker,
             PipelineNodeDefinition::StateModifier(_) | PipelineNodeDefinition::Application(_)
-        ) || !worker.route_targets().is_empty()
+        ) {
+            // Readable and typed so Wave 3 can admit each kind on its own.
+            return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                node: worker.id().to_owned(),
+                refusal: FanoutChildRefusal::Kind,
+            });
+        }
+        if !worker.route_targets().is_empty()
             || worker.id() == entry
             || parallel_owned.contains(worker.id())
             || !owned.insert(worker.id().to_owned())

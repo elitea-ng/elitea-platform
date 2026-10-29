@@ -808,7 +808,7 @@ impl<C: AgentProgressConnector> FreshAgentProgressPublisher<C> {
     pub(super) async fn publish_pause_progress(
         &mut self,
         verified: &VerifiedAgentCommand,
-        event: NodeEventV1,
+        mut event: NodeEventV1,
         occurred_at_unix_millis: i64,
     ) -> Result<AgentProgressPublishOutcome, AgentProgressPublishError> {
         if !matches!(
@@ -834,6 +834,9 @@ impl<C: AgentProgressConnector> FreshAgentProgressPublisher<C> {
                 "the durably acknowledged result must remain the last progress event",
             ));
         }
+        // Mark the per-card frame so a reader knows more cards may follow;
+        // the aggregate terminal pause never carries the marker (FU-227).
+        stamp_pause_progress(&mut event)?;
         self.publish_event(verified, event, occurred_at_unix_millis, None)
             .await
     }
@@ -2987,4 +2990,27 @@ impl std::error::Error for AgentOutputPreflightError {
             }
         }
     }
+}
+
+/// `response_metadata.pause_progress = true` on one per-card pause frame.
+pub(super) fn stamp_pause_progress(
+    event: &mut NodeEventV1,
+) -> Result<(), AgentProgressPublishError> {
+    let mut metadata = if event.response_metadata.is_empty() {
+        serde_json::Map::new()
+    } else {
+        match serde_json::from_slice::<serde_json::Value>(&event.response_metadata) {
+            Ok(serde_json::Value::Object(metadata)) => metadata,
+            _ => {
+                return Err(AgentProgressPublishError::InvalidState(
+                    "the pause frame metadata is not an object",
+                ));
+            }
+        }
+    };
+    metadata.insert("pause_progress".to_owned(), serde_json::Value::Bool(true));
+    event.response_metadata = serde_json::to_vec(&metadata).map_err(|_| {
+        AgentProgressPublishError::InvalidState("the pause frame metadata cannot be encoded")
+    })?;
+    Ok(())
 }

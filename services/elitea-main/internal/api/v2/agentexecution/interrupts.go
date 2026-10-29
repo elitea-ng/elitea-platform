@@ -17,8 +17,8 @@ import (
 )
 
 // Per-interrupt HITL decision API (libs/proto/contracts/fanout-interrupt-decisions-v1.md §6).
-// Registered only when ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED is true;
-// no client calls it in Wave 1.
+// Registered whenever the agent runtime is composed (contract v1.1, decision
+// D3: no flag).
 const (
 	CurrentExecutionInterruptsPath        = "/api/v2/elitea_core/task/prompt_lib/{projectID}/{responseMessageID}/interrupts"
 	CurrentExecutionInterruptDecisionPath = CurrentExecutionInterruptsPath + "/{interruptKey}/decision"
@@ -123,9 +123,17 @@ func NewCurrentExecutionInterruptRoute(useCase ExecutionInterruptUseCase, authCo
 			writeInterruptError(w, r, domain.ErrInvalidDecision, fields)
 			return
 		}
-		_, canonical, err := domain.ParseDecisionRequest(raw)
+		decision, canonical, err := domain.ParseDecisionRequest(raw)
 		if err != nil {
 			writeInterruptError(w, r, err, fields)
+			return
+		}
+		// A delegated sign-in decided from a card is not wired to its
+		// credential reference yet (FU-250): refused typed, never resumed
+		// "authorized" without the credential. Skip stays.
+		if decision.Action == domain.ActionAuthorize {
+			writeInterruptCode(w, http.StatusBadRequest, "agent_interrupt_invalid_decision",
+				"Signing in from a parallel branch card is not available yet; choose Skip.")
 			return
 		}
 		result, err := useCase.Decide(r.Context(), domain.DecideInput{Selector: selector, InterruptKey: key, Canonical: canonical})

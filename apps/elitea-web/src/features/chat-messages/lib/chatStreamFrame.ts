@@ -77,6 +77,10 @@ export const HANDLED_STREAM_TYPES: ReadonlySet<string> = new Set<string>([
   SocketMessageType.ChatPredictSummaryStarted,
   SocketMessageType.ChatPredictSummaryFinished,
   SocketMessageType.ChatUserMessage,
+  SocketMessageType.AgentInterruptPending,
+  SocketMessageType.AgentHitlResolved,
+  SocketMessageType.AgentFanoutMember,
+  SocketMessageType.AgentFanoutProgress,
 ]);
 
 /**

@@ -1835,6 +1835,57 @@ fn parallel_authorization_cards_aggregate_exact_ids_calls_and_hierarchy_in_order
     assert_eq!(metadata["tool_call_id"], "call-2");
 }
 
+fn fanout_park_event() -> crate::protocol::elitea::runtime::v1::NodeEventV1 {
+    decode_current_node_event_json(
+        &serde_json::to_vec(&json!({
+            "type": "agent_hitl_interrupt",
+            "content": "",
+            "response_metadata": {
+                "thread_id": "thread-1",
+                "chat_project_id": 7,
+                "fanout_parked_v1": {"open_interrupts": 3}
+            }
+        }))
+        .expect("park browser JSON"),
+    )
+    .expect("park browser event")
+}
+
+/// A fixed Parallel's park is the run's sole pause terminal, passed through
+/// exactly as projected (browser finding 2026-10-27: it was refused as
+/// `agent_pause.invalid_state` because it carries no legacy card).
+#[test]
+fn a_fanout_park_is_the_sole_paused_terminal_and_never_mixes_with_a_legacy_card() {
+    let park = fanout_park_event();
+    let mut pauses = AgentPauseAccumulator::default();
+    assert!(pauses.observe(&park).expect("park terminal"));
+    let aggregate = pauses.finish().expect("park aggregate");
+    assert!(matches!(
+        aggregate.selection,
+        super::output_delivery::FreshAgentTerminalSelection::PausedHitl
+    ));
+    assert_eq!(aggregate.event.response_metadata, park.response_metadata);
+
+    let legacy = decode_current_node_event_json(
+        &serde_json::to_vec(&json!({
+            "type": "agent_hitl_interrupt",
+            "content": "approval required",
+            "response_metadata": {"hitl_interrupts": [{"interrupt_id": "s-1"}]}
+        }))
+        .expect("legacy browser JSON"),
+    )
+    .expect("legacy browser event");
+    let authorization = browser_authorization_card("auth-1", "call-1", "resolver", "parent-1");
+    for second in [&legacy, &authorization, &park] {
+        let mut pauses = AgentPauseAccumulator::default();
+        assert!(pauses.observe(&park).expect("park terminal"));
+        assert!(pauses.observe(second).is_err());
+    }
+    let mut pauses = AgentPauseAccumulator::default();
+    assert!(pauses.observe(&legacy).expect("legacy card"));
+    assert!(pauses.observe(&park).is_err());
+}
+
 #[test]
 fn mixed_guardrail_cards_preserve_both_sets_under_hitl_terminal_authority() {
     let sensitive = decode_current_node_event_json(
@@ -5914,6 +5965,39 @@ async fn lease_loss_releases_a_parked_agent_stream_and_retains_the_command() {
     drop(observed);
     assert_eq!(admission.available_capacity(), 1);
     drop(temporary);
+}
+
+/// FU-227: every per-card pause frame says more cards may follow; existing
+/// metadata is kept and a non-object is refused instead of overwritten.
+#[test]
+fn per_card_pause_frames_carry_the_pause_progress_marker() {
+    use crate::protocol::elitea::runtime::v1::NodeEventV1;
+    let mut empty = NodeEventV1 {
+        r#type: "agent_hitl_interrupt".to_owned(),
+        ..NodeEventV1::default()
+    };
+    super::output_delivery::stamp_pause_progress(&mut empty).expect("stamp");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&empty.response_metadata).expect("json"),
+        json!({"pause_progress": true})
+    );
+    let mut card = NodeEventV1 {
+        r#type: "agent_hitl_interrupt".to_owned(),
+        response_metadata: serde_json::to_vec(&json!({"hitl_interrupts": [{"id": "c1"}]}))
+            .expect("json"),
+        ..NodeEventV1::default()
+    };
+    super::output_delivery::stamp_pause_progress(&mut card).expect("stamp");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&card.response_metadata).expect("json"),
+        json!({"hitl_interrupts": [{"id": "c1"}], "pause_progress": true})
+    );
+    let mut not_object = NodeEventV1 {
+        r#type: "agent_hitl_interrupt".to_owned(),
+        response_metadata: b"[1]".to_vec(),
+        ..NodeEventV1::default()
+    };
+    assert!(super::output_delivery::stamp_pause_progress(&mut not_object).is_err());
 }
 
 /// A model turn that has produced some text and is still working: it never

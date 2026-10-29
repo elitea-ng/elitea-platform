@@ -1107,6 +1107,47 @@ fn a_pipeline_profile_admits_yaml_up_to_the_compiler_bound() {
     );
 }
 
+/// A fixed Parallel's wake is the parked fresh turn with an empty input, no
+/// decision fields and the wake marker as its only meta (contract §8.1). The
+/// shell admits exactly that (browser finding 2026-10-27: every wake was
+/// refused as "the authorized agent profile is malformed"), and nothing else
+/// may ride an empty input or the marker.
+#[test]
+fn a_pipeline_wake_is_admitted_with_its_empty_input_and_only_its_marker() {
+    let wake = || {
+        let mut request = ordinary_request(AgentExecutionKind::Application);
+        set_application_agent_type(&mut request, "pipeline");
+        set_application_instructions(&mut request, "nodes: []");
+        request.payload.user_input = UserInput::Text(String::new());
+        request.payload.meta.insert(
+            crate::agents::graph::fanout_wake::FANOUT_WAKE_META_KEY.to_owned(),
+            json!({"schema": "elitea.pipeline.fanout-wake.v1",
+                "response_message_id": "10000000-0000-4000-8000-000000000043",
+                "decision_revision": 2,
+                "parked_execution_id": "0123456789abcdef0123456789abcdef",
+                "parked_generation": 1}),
+        );
+        request
+    };
+    OrdinaryNoToolProfile::validate_pipeline_shell(&wake(), true)
+        .expect("the wake's empty input and marker are its own profile");
+
+    let mut empty = wake();
+    empty.payload.meta.clear();
+    assert!(OrdinaryNoToolProfile::validate_pipeline_shell(&empty, true).is_err());
+
+    let mut extra = wake();
+    extra
+        .payload
+        .meta
+        .insert("pipeline_static_resume_v1".to_owned(), json!({}));
+    assert!(OrdinaryNoToolProfile::validate_pipeline_shell(&extra, true).is_err());
+
+    let mut decided = wake();
+    decided.payload.hitl_resume = true;
+    assert!(OrdinaryNoToolProfile::validate_pipeline_shell(&decided, true).is_err());
+}
+
 fn application_version_mut(request: &mut AgentExecutionRequest) -> &mut Map<String, Value> {
     request
         .payload

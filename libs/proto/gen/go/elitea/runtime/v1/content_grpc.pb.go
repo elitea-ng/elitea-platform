@@ -19,40 +19,42 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	RuntimeContentService_GetInput_FullMethodName                     = "/elitea.runtime.v1.RuntimeContentService/GetInput"
-	RuntimeContentService_GetEliteaClientToken_FullMethodName         = "/elitea.runtime.v1.RuntimeContentService/GetEliteaClientToken"
-	RuntimeContentService_RedeemCredential_FullMethodName             = "/elitea.runtime.v1.RuntimeContentService/RedeemCredential"
-	RuntimeContentService_GetApplicationVersion_FullMethodName        = "/elitea.runtime.v1.RuntimeContentService/GetApplicationVersion"
-	RuntimeContentService_GetAttachmentObject_FullMethodName          = "/elitea.runtime.v1.RuntimeContentService/GetAttachmentObject"
-	RuntimeContentService_ExecuteHTTPAction_FullMethodName            = "/elitea.runtime.v1.RuntimeContentService/ExecuteHTTPAction"
-	RuntimeContentService_WriteSkill_FullMethodName                   = "/elitea.runtime.v1.RuntimeContentService/WriteSkill"
-	RuntimeContentService_WriteProjectContext_FullMethodName          = "/elitea.runtime.v1.RuntimeContentService/WriteProjectContext"
-	RuntimeContentService_ListArtifacts_FullMethodName                = "/elitea.runtime.v1.RuntimeContentService/ListArtifacts"
-	RuntimeContentService_ReadArtifact_FullMethodName                 = "/elitea.runtime.v1.RuntimeContentService/ReadArtifact"
-	RuntimeContentService_WriteArtifact_FullMethodName                = "/elitea.runtime.v1.RuntimeContentService/WriteArtifact"
-	RuntimeContentService_DeleteArtifact_FullMethodName               = "/elitea.runtime.v1.RuntimeContentService/DeleteArtifact"
-	RuntimeContentService_ResolveCodeWorkspace_FullMethodName         = "/elitea.runtime.v1.RuntimeContentService/ResolveCodeWorkspace"
-	RuntimeContentService_AdmitCodeDebug_FullMethodName               = "/elitea.runtime.v1.RuntimeContentService/AdmitCodeDebug"
-	RuntimeContentService_CommitCodeDebug_FullMethodName              = "/elitea.runtime.v1.RuntimeContentService/CommitCodeDebug"
-	RuntimeContentService_StepCodePlatform_FullMethodName             = "/elitea.runtime.v1.RuntimeContentService/StepCodePlatform"
-	RuntimeContentService_ReadCodePlatformEffects_FullMethodName      = "/elitea.runtime.v1.RuntimeContentService/ReadCodePlatformEffects"
-	RuntimeContentService_PollNodeRecovery_FullMethodName             = "/elitea.runtime.v1.RuntimeContentService/PollNodeRecovery"
-	RuntimeContentService_AcknowledgeNodeRecovery_FullMethodName      = "/elitea.runtime.v1.RuntimeContentService/AcknowledgeNodeRecovery"
-	RuntimeContentService_ReadNodeRecoveryResult_FullMethodName       = "/elitea.runtime.v1.RuntimeContentService/ReadNodeRecoveryResult"
-	RuntimeContentService_RegisterCodeVisit_FullMethodName            = "/elitea.runtime.v1.RuntimeContentService/RegisterCodeVisit"
-	RuntimeContentService_RegisterCodeIntent_FullMethodName           = "/elitea.runtime.v1.RuntimeContentService/RegisterCodeIntent"
-	RuntimeContentService_PutToolkitDiscoveryResult_FullMethodName    = "/elitea.runtime.v1.RuntimeContentService/PutToolkitDiscoveryResult"
-	RuntimeContentService_GetToolkitDiscoveryResult_FullMethodName    = "/elitea.runtime.v1.RuntimeContentService/GetToolkitDiscoveryResult"
-	RuntimeContentService_ReadSandboxWorkspaceManifest_FullMethodName = "/elitea.runtime.v1.RuntimeContentService/ReadSandboxWorkspaceManifest"
-	RuntimeContentService_ReadSandboxWorkspaceFile_FullMethodName     = "/elitea.runtime.v1.RuntimeContentService/ReadSandboxWorkspaceFile"
-	RuntimeContentService_GetSandboxBundle_FullMethodName             = "/elitea.runtime.v1.RuntimeContentService/GetSandboxBundle"
-	RuntimeContentService_PublishSandboxBundle_FullMethodName         = "/elitea.runtime.v1.RuntimeContentService/PublishSandboxBundle"
-	RuntimeContentService_FetchSandboxBundleFile_FullMethodName       = "/elitea.runtime.v1.RuntimeContentService/FetchSandboxBundleFile"
-	RuntimeContentService_UploadSandboxBundleFile_FullMethodName      = "/elitea.runtime.v1.RuntimeContentService/UploadSandboxBundleFile"
-	RuntimeContentService_GetCompiledSnapshot_FullMethodName          = "/elitea.runtime.v1.RuntimeContentService/GetCompiledSnapshot"
-	RuntimeContentService_PublishCompiledSnapshot_FullMethodName      = "/elitea.runtime.v1.RuntimeContentService/PublishCompiledSnapshot"
-	RuntimeContentService_FetchCompiledSnapshotFile_FullMethodName    = "/elitea.runtime.v1.RuntimeContentService/FetchCompiledSnapshotFile"
-	RuntimeContentService_UploadCompiledSnapshotFile_FullMethodName   = "/elitea.runtime.v1.RuntimeContentService/UploadCompiledSnapshotFile"
+	RuntimeContentService_GetInput_FullMethodName                      = "/elitea.runtime.v1.RuntimeContentService/GetInput"
+	RuntimeContentService_GetEliteaClientToken_FullMethodName          = "/elitea.runtime.v1.RuntimeContentService/GetEliteaClientToken"
+	RuntimeContentService_RedeemCredential_FullMethodName              = "/elitea.runtime.v1.RuntimeContentService/RedeemCredential"
+	RuntimeContentService_GetApplicationVersion_FullMethodName         = "/elitea.runtime.v1.RuntimeContentService/GetApplicationVersion"
+	RuntimeContentService_GetAttachmentObject_FullMethodName           = "/elitea.runtime.v1.RuntimeContentService/GetAttachmentObject"
+	RuntimeContentService_ExecuteHTTPAction_FullMethodName             = "/elitea.runtime.v1.RuntimeContentService/ExecuteHTTPAction"
+	RuntimeContentService_WriteSkill_FullMethodName                    = "/elitea.runtime.v1.RuntimeContentService/WriteSkill"
+	RuntimeContentService_WriteProjectContext_FullMethodName           = "/elitea.runtime.v1.RuntimeContentService/WriteProjectContext"
+	RuntimeContentService_ListArtifacts_FullMethodName                 = "/elitea.runtime.v1.RuntimeContentService/ListArtifacts"
+	RuntimeContentService_ReadArtifact_FullMethodName                  = "/elitea.runtime.v1.RuntimeContentService/ReadArtifact"
+	RuntimeContentService_WriteArtifact_FullMethodName                 = "/elitea.runtime.v1.RuntimeContentService/WriteArtifact"
+	RuntimeContentService_DeleteArtifact_FullMethodName                = "/elitea.runtime.v1.RuntimeContentService/DeleteArtifact"
+	RuntimeContentService_ResolveCodeWorkspace_FullMethodName          = "/elitea.runtime.v1.RuntimeContentService/ResolveCodeWorkspace"
+	RuntimeContentService_AdmitCodeDebug_FullMethodName                = "/elitea.runtime.v1.RuntimeContentService/AdmitCodeDebug"
+	RuntimeContentService_CommitCodeDebug_FullMethodName               = "/elitea.runtime.v1.RuntimeContentService/CommitCodeDebug"
+	RuntimeContentService_StepCodePlatform_FullMethodName              = "/elitea.runtime.v1.RuntimeContentService/StepCodePlatform"
+	RuntimeContentService_ReadCodePlatformEffects_FullMethodName       = "/elitea.runtime.v1.RuntimeContentService/ReadCodePlatformEffects"
+	RuntimeContentService_PollNodeRecovery_FullMethodName              = "/elitea.runtime.v1.RuntimeContentService/PollNodeRecovery"
+	RuntimeContentService_AcknowledgeNodeRecovery_FullMethodName       = "/elitea.runtime.v1.RuntimeContentService/AcknowledgeNodeRecovery"
+	RuntimeContentService_ReadNodeRecoveryResult_FullMethodName        = "/elitea.runtime.v1.RuntimeContentService/ReadNodeRecoveryResult"
+	RuntimeContentService_FetchExecutionInterrupts_FullMethodName      = "/elitea.runtime.v1.RuntimeContentService/FetchExecutionInterrupts"
+	RuntimeContentService_AcknowledgeExecutionInterrupt_FullMethodName = "/elitea.runtime.v1.RuntimeContentService/AcknowledgeExecutionInterrupt"
+	RuntimeContentService_RegisterCodeVisit_FullMethodName             = "/elitea.runtime.v1.RuntimeContentService/RegisterCodeVisit"
+	RuntimeContentService_RegisterCodeIntent_FullMethodName            = "/elitea.runtime.v1.RuntimeContentService/RegisterCodeIntent"
+	RuntimeContentService_PutToolkitDiscoveryResult_FullMethodName     = "/elitea.runtime.v1.RuntimeContentService/PutToolkitDiscoveryResult"
+	RuntimeContentService_GetToolkitDiscoveryResult_FullMethodName     = "/elitea.runtime.v1.RuntimeContentService/GetToolkitDiscoveryResult"
+	RuntimeContentService_ReadSandboxWorkspaceManifest_FullMethodName  = "/elitea.runtime.v1.RuntimeContentService/ReadSandboxWorkspaceManifest"
+	RuntimeContentService_ReadSandboxWorkspaceFile_FullMethodName      = "/elitea.runtime.v1.RuntimeContentService/ReadSandboxWorkspaceFile"
+	RuntimeContentService_GetSandboxBundle_FullMethodName              = "/elitea.runtime.v1.RuntimeContentService/GetSandboxBundle"
+	RuntimeContentService_PublishSandboxBundle_FullMethodName          = "/elitea.runtime.v1.RuntimeContentService/PublishSandboxBundle"
+	RuntimeContentService_FetchSandboxBundleFile_FullMethodName        = "/elitea.runtime.v1.RuntimeContentService/FetchSandboxBundleFile"
+	RuntimeContentService_UploadSandboxBundleFile_FullMethodName       = "/elitea.runtime.v1.RuntimeContentService/UploadSandboxBundleFile"
+	RuntimeContentService_GetCompiledSnapshot_FullMethodName           = "/elitea.runtime.v1.RuntimeContentService/GetCompiledSnapshot"
+	RuntimeContentService_PublishCompiledSnapshot_FullMethodName       = "/elitea.runtime.v1.RuntimeContentService/PublishCompiledSnapshot"
+	RuntimeContentService_FetchCompiledSnapshotFile_FullMethodName     = "/elitea.runtime.v1.RuntimeContentService/FetchCompiledSnapshotFile"
+	RuntimeContentService_UploadCompiledSnapshotFile_FullMethodName    = "/elitea.runtime.v1.RuntimeContentService/UploadCompiledSnapshotFile"
 )
 
 // RuntimeContentServiceClient is the client API for RuntimeContentService service.
@@ -134,6 +136,12 @@ type RuntimeContentServiceClient interface {
 	PollNodeRecovery(ctx context.Context, in *PollNodeRecoveryRequestV1, opts ...grpc.CallOption) (*PollNodeRecoveryResponseV1, error)
 	AcknowledgeNodeRecovery(ctx context.Context, in *AcknowledgeNodeRecoveryRequestV1, opts ...grpc.CallOption) (*AcknowledgeNodeRecoveryResponseV1, error)
 	ReadNodeRecoveryResult(ctx context.Context, in *ReadNodeRecoveryResultRequestV1, opts ...grpc.CallOption) (*ReadNodeRecoveryResultResponseV1, error)
+	// The per-interrupt decision ledger of the claimed execution
+	// (contracts/fanout-interrupt-decisions-v1.md v1.1 §7): the decided cards
+	// and the acknowledgement of one applied decision. Both payloads are the
+	// contract's canonical JSON; a refusal is a status code (§7.1).
+	FetchExecutionInterrupts(ctx context.Context, in *FetchExecutionInterruptsRequestV1, opts ...grpc.CallOption) (*FetchExecutionInterruptsResponseV1, error)
+	AcknowledgeExecutionInterrupt(ctx context.Context, in *AcknowledgeExecutionInterruptRequestV1, opts ...grpc.CallOption) (*AcknowledgeExecutionInterruptResponseV1, error)
 	// The original Code sandbox visit and intent registrations.
 	RegisterCodeVisit(ctx context.Context, in *RegisterCodeVisitRequestV1, opts ...grpc.CallOption) (*RegisterCodeVisitResponseV1, error)
 	RegisterCodeIntent(ctx context.Context, in *RegisterCodeIntentRequestV1, opts ...grpc.CallOption) (*RegisterCodeIntentResponseV1, error)
@@ -369,6 +377,26 @@ func (c *runtimeContentServiceClient) ReadNodeRecoveryResult(ctx context.Context
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReadNodeRecoveryResultResponseV1)
 	err := c.cc.Invoke(ctx, RuntimeContentService_ReadNodeRecoveryResult_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeContentServiceClient) FetchExecutionInterrupts(ctx context.Context, in *FetchExecutionInterruptsRequestV1, opts ...grpc.CallOption) (*FetchExecutionInterruptsResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FetchExecutionInterruptsResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeContentService_FetchExecutionInterrupts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeContentServiceClient) AcknowledgeExecutionInterrupt(ctx context.Context, in *AcknowledgeExecutionInterruptRequestV1, opts ...grpc.CallOption) (*AcknowledgeExecutionInterruptResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AcknowledgeExecutionInterruptResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeContentService_AcknowledgeExecutionInterrupt_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -618,6 +646,12 @@ type RuntimeContentServiceServer interface {
 	PollNodeRecovery(context.Context, *PollNodeRecoveryRequestV1) (*PollNodeRecoveryResponseV1, error)
 	AcknowledgeNodeRecovery(context.Context, *AcknowledgeNodeRecoveryRequestV1) (*AcknowledgeNodeRecoveryResponseV1, error)
 	ReadNodeRecoveryResult(context.Context, *ReadNodeRecoveryResultRequestV1) (*ReadNodeRecoveryResultResponseV1, error)
+	// The per-interrupt decision ledger of the claimed execution
+	// (contracts/fanout-interrupt-decisions-v1.md v1.1 §7): the decided cards
+	// and the acknowledgement of one applied decision. Both payloads are the
+	// contract's canonical JSON; a refusal is a status code (§7.1).
+	FetchExecutionInterrupts(context.Context, *FetchExecutionInterruptsRequestV1) (*FetchExecutionInterruptsResponseV1, error)
+	AcknowledgeExecutionInterrupt(context.Context, *AcknowledgeExecutionInterruptRequestV1) (*AcknowledgeExecutionInterruptResponseV1, error)
 	// The original Code sandbox visit and intent registrations.
 	RegisterCodeVisit(context.Context, *RegisterCodeVisitRequestV1) (*RegisterCodeVisitResponseV1, error)
 	RegisterCodeIntent(context.Context, *RegisterCodeIntentRequestV1) (*RegisterCodeIntentResponseV1, error)
@@ -709,6 +743,12 @@ func (UnimplementedRuntimeContentServiceServer) AcknowledgeNodeRecovery(context.
 }
 func (UnimplementedRuntimeContentServiceServer) ReadNodeRecoveryResult(context.Context, *ReadNodeRecoveryResultRequestV1) (*ReadNodeRecoveryResultResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ReadNodeRecoveryResult not implemented")
+}
+func (UnimplementedRuntimeContentServiceServer) FetchExecutionInterrupts(context.Context, *FetchExecutionInterruptsRequestV1) (*FetchExecutionInterruptsResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FetchExecutionInterrupts not implemented")
+}
+func (UnimplementedRuntimeContentServiceServer) AcknowledgeExecutionInterrupt(context.Context, *AcknowledgeExecutionInterruptRequestV1) (*AcknowledgeExecutionInterruptResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AcknowledgeExecutionInterrupt not implemented")
 }
 func (UnimplementedRuntimeContentServiceServer) RegisterCodeVisit(context.Context, *RegisterCodeVisitRequestV1) (*RegisterCodeVisitResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RegisterCodeVisit not implemented")
@@ -1126,6 +1166,42 @@ func _RuntimeContentService_ReadNodeRecoveryResult_Handler(srv interface{}, ctx 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RuntimeContentService_FetchExecutionInterrupts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FetchExecutionInterruptsRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeContentServiceServer).FetchExecutionInterrupts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeContentService_FetchExecutionInterrupts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeContentServiceServer).FetchExecutionInterrupts(ctx, req.(*FetchExecutionInterruptsRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeContentService_AcknowledgeExecutionInterrupt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AcknowledgeExecutionInterruptRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeContentServiceServer).AcknowledgeExecutionInterrupt(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeContentService_AcknowledgeExecutionInterrupt_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeContentServiceServer).AcknowledgeExecutionInterrupt(ctx, req.(*AcknowledgeExecutionInterruptRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _RuntimeContentService_RegisterCodeVisit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RegisterCodeVisitRequestV1)
 	if err := dec(in); err != nil {
@@ -1424,6 +1500,14 @@ var RuntimeContentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReadNodeRecoveryResult",
 			Handler:    _RuntimeContentService_ReadNodeRecoveryResult_Handler,
+		},
+		{
+			MethodName: "FetchExecutionInterrupts",
+			Handler:    _RuntimeContentService_FetchExecutionInterrupts_Handler,
+		},
+		{
+			MethodName: "AcknowledgeExecutionInterrupt",
+			Handler:    _RuntimeContentService_AcknowledgeExecutionInterrupt_Handler,
 		},
 		{
 			MethodName: "RegisterCodeVisit",

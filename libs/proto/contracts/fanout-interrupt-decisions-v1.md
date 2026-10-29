@@ -1,6 +1,10 @@
 # Fan-out interrupt decisions v1
 
-Status: contract draft for review, 2026-10-08. Wave 1 (Track D2). Nothing in this contract is wired yet.
+Status: **v1.1**, 2026-10-16 (Wave 2a-2). v1 was the Wave 1 draft of 2026-10-08 (Track D2). v1.1 adds the coalesced
+progress frame (section 9.1), the fan-out join entry and On Error setting (section 8a), the pause-progress marker
+(section 9.2), the mixed-pause rule (section 9.3), Main's card ingestion rules (section 4.1), the private-route status
+codes (section 7.1), the `fanout_wake` claim opt-in (section 8.1), and removes the Main API flag (section 10). Every
+v1 schema `$id` is unchanged; v1.1 only adds schemas. Section 14 lists the v1.1 decisions.
 Producers and consumers: Worker (Wave 2 `FanoutRunner`), Main (Track M2 ledger and API, Wave 2 wiring), Web
 (Wave 2). Runtime design: `services/elitea-worker-rust/docs/fanout-v2-runtime-design.md`.
 
@@ -59,6 +63,8 @@ All `$id`s are `elitea.pipeline.<stem>.v1`. Cross-schema `$ref` uses the `$id`.
 | `fanout-member-status` | `agent_fanout_member` frame, `response_metadata.fanout_member_status_v1` | Worker → Main → Web |
 | `fanout-parked` | terminal frame of a parked execution, `response_metadata.fanout_parked_v1` | Worker → Main → Web |
 | `fanout-wake` | `payload.meta.fanout_wake_v1` of a wake continuation | Main → Worker |
+| `fanout-progress` (v1.1) | `agent_fanout_progress` frame, `response_metadata.fanout_progress_v1` | Worker → Main → Web |
+| `fanout-join-entry` (v1.1) | one entry of the ordered collection a fan-out node joins (node output) | Worker (graph state) |
 | `fanout-interrupt-key-vectors` | test vectors only | — |
 
 Common grammar:
@@ -152,6 +158,26 @@ Coherence the schema enforces: hierarchy is null/null/[] or name/call_id/≥1 ti
 least one tier carrying `sibling_ordinal`; `available_actions` and `display.guardrail_type` match `kind`; a static
 pause (`pipeline_static`) offers only `continue`, and a HITL node (`pipeline_hitl`) only `approve`, `reject`, `edit`.
 
+### 4.1 Card ingestion in Main (v1.1)
+
+- The frame is a NodeEvent of `type` `agent_interrupt_pending`. Its `response_metadata.interrupt_card_v1` is the card.
+  The frame may also carry the hierarchy fields, `fanout_v1` and `pause_progress` (section 9.2) for Web; Main reads only
+  the card. A frame that also carries a legacy pause member (`hitl_interrupt`, `hitl_interrupts`,
+  `authorization_requests`, `parallel_pause_v1`, `node_recovery_required_v1`) is refused as invalid output.
+- Main raises the card into the ledger **in the transaction that accepts the frame**, after the frame's fence, sequence
+  and response binding (`stream_id`, `message_id`, `execution_generation`, `sio_event`) are checked. The root response is
+  the execution's bound `client_message_id`; the frame never names it. A refused raise refuses the frame, so the frame
+  and its card are durable together or not at all.
+- Idempotent on `(root_response_id, interrupt_key)` with byte equality of the canonical card and frontier (section 5).
+  A replayed frame (same event id) is a no-op before the raise runs.
+- **Private frontier without a private channel.** The raw frozen child thread never leaves the Worker. Main stores the
+  frontier `{child_thread, fanout_node, ordinal}` derived from the card: `child_thread` is the member tier's `call_id`
+  (`fo1_…`, a digest of the frozen child thread, section 3.3), `fanout_node` is `fanout_v1.node`, `ordinal` is
+  `fanout_v1.ordinal`. The card must carry exactly one tier whose `call_id` starts with `fo1_`, and that tier's
+  `sibling_ordinal` must equal `fanout_v1.ordinal`.
+- **Coordinator cards are refused until root pauses move** (section 10): a card with `fanout_v1: null` in an
+  `agent_interrupt_pending` frame is invalid output in v1.1, so a response never has two pause authorities.
+
 ## 5. Ledger (Main)
 
 Track M2 builds this; Wave 2 wires it.
@@ -210,8 +236,8 @@ POST /api/v2/elitea_core/task/prompt_lib/{projectID}/{responseMessageID}/interru
 
 Same prefix and RBAC as node recovery: GET uses `models.applications.task.get`, POST uses
 `models.chat.messages.create`. Main rechecks the original actor's conversation ownership and membership, the active
-user and project, **inside** the transaction. Wave 1 registers the handlers behind a Main flag that is off in
-production (Track M2).
+user and project, **inside** the transaction. Wave 1 registered the handlers behind a Main flag; v1.1 deletes the
+flag and the handlers are always registered (decision D3).
 
 **GET** returns schema `fanout-interrupt-list`: the open cards (`PENDING`, `DECIDED`) with state and revision, and the
 response's `decision_revision`. Web uses it on reload and to reconcile.
@@ -253,7 +279,9 @@ Same transport as node recovery control (`libs/proto/contracts/node-recovery-v1.
 mTLS HTTPS content listener, the verified workload certificate, `X-Elitea-Claim-Id` and `X-Elitea-Fence` (32 bytes,
 base64 RawURL, no padding). Main rechecks the current live claim and session, the immutable manifest, the original
 actor's permissions, the deadline and "no terminal result" under the job lock, and repeats the authority lookup with
-the DB clock after taking the lock. The claim must be an ordinary `RUNNING` claim; a `NODE_RECOVERY` claim is refused.
+the DB clock after taking the lock. The claim must be an ordinary `RUNNING` claim: the first claim (`NONE`) or a
+reclaim with model-checkpoint recovery (`AGENT_MODEL_CHECKPOINT`, how production reclaims a run after process loss); a
+`NODE_RECOVERY` claim is refused.
 One bounded attempt per call, no redirects, no automatic network retry.
 
 ```
@@ -298,6 +326,32 @@ a checkpoint id, `stale` has `null`. `revision` and `decision_sha256` must equal
 Main stores the exact canonical ACK bytes; a byte-identical replay under a current fence returns `replay:true`;
 a conflicting replay is 409.
 
+### 7.1 Transport details (v1.1)
+
+- Paths are under the private content listener next to `…/node-recovery/control` and `…/node-recovery/ack`; the
+  `generation` path segment is the decimal claim generation and must equal the claim's. No query string is accepted.
+- Headers: `X-Elitea-Claim-Id` (the claim id of the receipt) and `X-Elitea-Fence` (the 32-byte fence token, base64
+  RawURL, no padding). The workload identity comes only from the verified mTLS peer certificate.
+- **Fetch** has an empty body (`Content-Length: 0`, no transfer encoding). **ACK** body is at most 1024 bytes and must
+  validate against `fanout-interrupt-ack-request`.
+- Responses are `application/json`, `Cache-Control: no-store`, written in the canonical form of section 7: fetch →
+  `fanout-interrupt-fetch`, ACK → `fanout-interrupt-ack-result`.
+- Status codes (bodies are fixed text, never ledger data; the Worker branches on the status only):
+
+| Status | Meaning | Worker reaction |
+|---|---|---|
+| 200 | fetch result or ACK result (including `replay:true`) | apply / done |
+| 400 | malformed request: non-empty fetch body, query string, ACK body invalid or over 1024 bytes | typed fault, no retry |
+| 403 | claim refused: bad headers or certificate, or the claim is not the live ordinary `RUNNING` claim (released, expired, stale fence, older claim, `NODE_RECOVERY` claim, desired state not `RUNNING`, deadline passed, terminal result present, the original actor lost `models.chat.messages.create`) | control stop (as lease loss); never a business failure |
+| 404 | ACK names no card of this execution's root response | typed fault, no retry |
+| 409 | ACK conflicts: the card is not `DECIDED` at that revision, `request_id`/`decision_sha256` differ, or a different ACK is stored | typed fault, no retry |
+| 503 | listener busy (bounded concurrency) or ledger unavailable | next tick (live) or one later attempt (restore) |
+
+- The claim authority is **one shared query** for node recovery control and the ledger (FU-063), parameterised by the
+  claim's recovery mode: node recovery accepts only `NODE_RECOVERY` claims with desired state `SUSPENDED` or
+  `RUNNING`; the ledger accepts only ordinary claims (`NONE` or `AGENT_MODEL_CHECKPOINT`) with desired state `RUNNING`. It runs twice under the job
+  lock so the second evaluation uses the database clock after the locks are held.
+
 ## 8. Park and wake
 
 The Worker parks the execution as soon as nothing can run: no running child, admission closed or exhausted, at least
@@ -316,8 +370,101 @@ decision transaction take it):
 The continuation is a new continuation kind `fanout_wake` (new value next to `hitl`, `authorization`, `output_limit`,
 `static` in `CurrentContinuationKind`, `continue.go:32-38`), idempotency key
 `continue-interrupt/{responseMessageID}/{decision_revision}`. Its payload carries **no decisions**, only
-`payload.meta.fanout_wake_v1 = {schema, response_message_id, decision_revision}` (`fanout-wake`). The Worker re-enters
-the pending fan-out node and fetches.
+`payload.meta.fanout_wake_v1 = {schema, response_message_id, decision_revision, parked_execution_id,
+parked_generation}` (`fanout-wake`). The Worker re-enters the pending fan-out node and fetches. A wake re-enters a root
+checkpoint written by another execution only when that writer is exactly `[parked_execution_id, parked_generation]`;
+any other writer is refused (`graph.fanout.wake_without_park`).
+
+### 8.1 Wake admission (v1.1)
+
+- `payload` is `AgentExecutionInputV1` and `meta` is its `meta` JSON member (`libs/proto/elitea/runtime/v1/agent.proto`).
+  A wake input has `hitl_resume: false`, `should_continue: false`, empty `user_input`, no `hitl_decisions`, and
+  `meta.fanout_wake_v1` as above; every other frozen field is the parked execution's. A wake carries **no decision and
+  no interrupt kind**: the continuation fetches every `DECIDED` card, whatever its kind (section 9.3).
+- Durable intent first. The decision or park-settlement transaction writes one wake row
+  (`elitea_runtime.execution_interrupt_wakes`) keyed by `(root_response_id, decision_revision)`; a partial unique index
+  allows **one active wake per response** (`state IN ('QUEUED', 'ADMITTED')`). The row is the outbox: Main admits the
+  continuation job from it after commit and again from a sweep, through the ordinary continuation admission with the
+  idempotency key above, so a lost commit acknowledgement or a crash between the two steps produces exactly one job.
+  The row moves to `ADMITTED` with the job's execution id, and to `DONE` when that execution settles or parks.
+- Claim opt-in: a Worker sets `ClaimCommandRequestV1.fanout_interrupt_decisions = true`
+  (`libs/proto/elitea/runtime/v1/control.proto`) when it implements this contract. Main never grants a `fanout_wake`
+  job to a claim without it (the claim is answered retry-later, so an older Worker in a rolling deploy cannot run a wake
+  as a fresh turn).
+- **Parked terminal frame (Main wiring).** The parked execution ends with the existing paused terminal: terminal state
+  `PAUSED_HITL`, result artifact `node-event:{execution}:hitl-interrupt`, NodeEvent `type` `agent_hitl_interrupt`, a
+  non-empty `content` string, `response_metadata.thread_id` and `response_metadata.fanout_parked_v1`. It carries none of
+  `hitl_interrupt`, `hitl_interrupts`, `authorization_requests`, `parallel_pause_v1`, `node_recovery_required_v1`. Main
+  validates the payload against `fanout-parked` and requires every `pending` entry to be a card of this response
+  (`interrupt_key` and `interrupt_id`) and `decision_revision_seen` not to exceed the response's revision; otherwise the
+  frame is refused as a result mismatch (never stored as a silent park). Main stores the canonical payload on the
+  response and settles the park in the same transaction.
+- **Wake job (Main wiring).** The wake job is an ordinary agent execution of the parked execution's capability, actor,
+  tenant and projects, bound to the same `client_stream_id`, `client_message_id` and `client_execution_generation`, with
+  `sio_event` `chat_continue_predict`, and with `thread_id` set to the parked response's thread. Its input is the parked
+  execution's frozen request entry (digest-checked) with only the §8.1 changes; `meta` keeps every frozen member except
+  the static resume markers (`pipeline_static_resume_v1`, `pipeline_static_tool_resume_v1`). Main admits it after the
+  queuing transaction commits and from a sweep every 5 s (16 rows per pass, `FOR UPDATE SKIP LOCKED`, a claimed row is
+  skipped for 30 s on the database clock, at most 20 attempts). The original actor is rechecked at the claim and again
+  inside the admission transaction; a wake that can never run ends `FAILED` with `failure_code` `actor_not_allowed`,
+  `response_not_parked`, `parked_input_invalid`, `admission_refused` or `admission_exhausted`, and its cards stay
+  `DECIDED`. An `ADMITTED` wake becomes `DONE` when its execution parks again, or lazily when its job is terminal.
+- **New turn.** Admitting a new user turn in a conversation supersedes every open card of the conversation's earlier
+  responses in the same transaction (queued wakes `FAILED` `response_superseded`, `agent_hitl_resolved` per card).
+- **Live delivery of `agent_hitl_resolved`.** A park is terminal for the execution stream, and Web does not hold it
+  open. After the deciding, stopping, regenerating or new-turn transaction commits (never before), Main:
+  - publishes one `agent_hitl_resolved` event per resolution on the project SSE plane
+    (`GET /api/v2/events/prompt_lib/{projectId}`), data = the `fanout-interrupt-resolved` object (never a value) plus
+    `conversation_id` (the conversation uuid) and `root_response_id`;
+  - publishes `agent_fanout_wake_admitted` `{conversation_id, root_response_id, execution_id, generation}` when a wake
+    job is admitted, so open tabs attach to that execution's stream;
+  - also wakes the replay stream of the response's latest execution, and keeps the durable replay-log copy for reload.
+
+  Both project-plane events use their own audience-scoped family, the **conversation** family: NATS subject
+  `elitea.events.project.<id>.conversation`, logical channel `project:<id>:conversation`, MAIN account, published by
+  elitea-main only (`deploy/helm/nats/values.yaml`, `deploy/helm/nats/README.md`). The SSE route relays exactly these two
+  types from it. Each frame names the conversation's readers (its author and user participants, computed in the
+  committing transaction, at most 256); the relay delivers it only to a caller in that list and strips the list. Web
+  receives them on the project stream it already holds, as SSE events named `agent_hitl_resolved` and
+  `agent_fanout_wake_admitted`.
+  A conversation with more readers gets no live copy. Live delivery is at most once; a lost event costs latency only
+  (reload or the next frame reconciles).
+
+## 8a. Fan-out join and On Error (v1.1, binding user decision 2026-10-12)
+
+**Node setting `on_error`** on Parallel and Map: `continue` (default) or `stop`.
+- `continue`: a failed member (after its own retries) becomes a failed join entry; the other members run to the end;
+  the node succeeds with partial results and downstream Router, LLM or state modifier nodes decide. If **every** member
+  fails the node fails.
+- `stop`: fail-after-drain. Admission closes, running members drain, the node fails. Open cards of the activation
+  become `CANCELLED`; paused members are never resumed for a doomed activation.
+- Each member's terminal outcome is a durable receipt before the join; the join replays deterministically after a
+  crash. Member order is declared order (Parallel) or item index (Map).
+
+**Entry** (`fanout-join-entry`): one per member, in order.
+
+```json
+{"branch_id": "jira_branch", "node": "jira_agent", "status": "succeeded", "outputs": {"summary": "..."}}
+{"index": 3, "node": "summarize", "status": "failed",
+ "error": {"code": "graph.node_timed_out", "message_safe": "The item timed out.", "support_ref": "<32 hex>"},
+ "partial_outputs": {"draft": "..."}}
+```
+
+- `branch_id` (Parallel) or `index` (Map, 0-based), never both. `node` is the member's worker node id.
+- `error.code` is from the validated failure-code set; `message_safe` is fixed catalog text for the code (never model
+  output, tool output, paths or values); `support_ref` is the first 128 bits of
+  `SHA-256("elitea.graph.fanout-support-ref.v1" 0x00 || LP(child_thread))` in lowercase hex, so it is stable across
+  replays and reveals nothing. The canonical `error` object is at most **512 bytes**; the schema bounds make that exact
+  (`code` ≤ 64, `message_safe` ≤ 370 printable ASCII without `"` or `\`, `support_ref` 32).
+- `partial_outputs` is optional on a failed entry; `outputs` only on a succeeded one. Both count toward the member value
+  bound (512 KiB) and the joined bound (8 MiB).
+
+**Landing** through the output key's typed reducer (#1195); no shape guessing:
+- `append` (default): the key receives the ordered list of entries.
+- keyed: the key receives an object keyed by `fanout_v1.member` (Parallel branch id, Map decimal index), each value the
+  entry.
+- `merge`: the `outputs` objects of succeeded entries are merged; a key written by two members is a typed readable
+  failure (`graph.fanout.join_merge_conflict`), never last-write-wins. Failed entries are not merged.
 
 ## 9. Stream frames
 
@@ -327,6 +474,7 @@ the pending fan-out node and fetches.
 | `agent_hitl_resolved` | no | Main (durable in the execution log) | `interrupt_resolved_v1` → `fanout-interrupt-resolved` | on DECIDED, CANCELLED, SUPERSEDED |
 | `agent_fanout_member` | no | Worker | `fanout_member_status_v1` → `fanout-member-status` | immediate |
 | existing terminal frame of a parked execution | yes | Worker | `fanout_parked_v1` → `fanout-parked` | once |
+| `agent_fanout_progress` (v1.1) | no | Worker | `fanout_progress_v1` → `fanout-progress` | coalesced, section 9.1 |
 
 - `agent_interrupt_pending` and `agent_fanout_member` are new names; `agent_hitl_resolved` is new too (it does not
   exist in Worker, Main or Web today). Main projects `agent_interrupt_pending` into the ledger in the same transaction
@@ -342,10 +490,47 @@ the pending fan-out node and fetches.
 - The legacy aggregate `elitea.graph.parallel-interrupt.v1` interrupt is not produced by V2. Web treats any it still
   sees as reconcile-only (Track W).
 
+### 9.1 Coalesced progress frame (v1.1, decision D6)
+
+- `agent_fanout_progress` is non-terminal. `response_metadata.fanout_progress_v1 =
+  {schema, fanout_v1: {kind, node, activation, total}, members: [{ordinal, call_id, text}]}`. Its `fanout_v1` is the
+  activation scope; the member identity is per entry (`ordinal` = member ordinal, `call_id` = the member tier call id of
+  section 3.3). `content` is `null`.
+- One coalescer flush (every 250 ms or at 64 KiB of buffered delta text, `fanout_progress.rs`) is sent as one or more
+  frames: **at most 64 members and at most 8192 UTF-8 bytes of `text` in total per frame**, members in strictly
+  ascending ordinal, each ordinal ≤ `total`, text split only at character boundaries and never reordered. 8192 bytes
+  keeps the worst-case HTML-escaped NodeEvent JSON under its 60 KiB bound, so a full 64 KiB flush is at most 8 frames.
+- Lifecycle frames are never coalesced and flush the coalescer first, so a member's `agent_fanout_member` `start`
+  frame always precedes its first progress entry. Web appends each entry's text to the accordion of the member with
+  the same `call_id`; an entry for an unknown `call_id` is dropped and logged by ordinal only.
+- Text is model output: it is never logged by Worker or Main, and Main stores it only as the replayed frame.
+
+### 9.2 Pause-progress marker (v1.1, FU-227)
+
+Every per-card frame carries `response_metadata.pause_progress: true`: the root path's per-card
+`agent_hitl_interrupt` progress frames and every `agent_interrupt_pending`. The aggregate frame never carries it: the
+root path's paused terminal frame (`finish_hitl`) and the parked terminal frame (`fanout_parked_v1`). Web settles a
+pause batch on the first frame of the response without the marker and deletes its quiet-window heuristic.
+
+### 9.3 Mixed pause: approval cards and authorization cards on one response (v1.1, FU-228)
+
+- **Fan-out cards:** every card is its own ledger row, decided by its own POST and applied by the Worker as fetched,
+  whatever its `kind`. There is no "one kind per continuation" rule and no complete-set rule for fan-out cards. A
+  `fanout_wake` continuation carries no decisions and no kind (section 8.1), so one wake delivers a decided
+  `delegated_auth` card and a decided `tool_guard` card together.
+- **Parity with EliteaUI:** EliteaUI lets the user decide each card of a mixed pause independently, in any order, and
+  submits the decisions that are ready (approval and MCP authorization together) as one root resume batch
+  (`hitl.helpers.js` `scheduleRootHitlDecision`/`completeRootHitlDecision`). Per-interrupt decisions keep that user
+  behaviour: independent cards, any order, no forced grouping by kind; only the transport is per card.
+- **Root (coordinator) pauses** keep today's path until they move to the ledger (section 10): Main's
+  `CurrentContinuationTarget.Validate` admits one kind per continuation and Web submits each kind once its set is
+  complete. That rule is not extended to fan-out cards.
+
 ## 10. Rollout and compatibility
 
-- All admission gates stay `false` (`FIXED_PARALLEL_INTEGRATION_READY`, `MAP_INTEGRATION_READY`, Web
-  `CompilerAdmittedNodeTypes`). The Main API flag is off in production.
+- v1.1: the Main API flag `ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED` is deleted (decision D3); the public
+  decision API, the private routes and the frame ingestion are always on. Parallel is admitted in the same PR as the
+  Worker runner (2a-2), Map in 2a-3 (PLAN §8.1: no feature flags, no merged-but-disabled state).
 - Until Wave 2 moves root pauses, the existing root path (`meta.hitl_interrupts`, `ResumeCurrentAgentHITL`, complete
   set) is unchanged. When it moves, the complete-set checks (`continue.go:409-432`,
   `internal/db/queries/agent_chat.sql:2145,2153,2368,2380`) are removed in the same change; there is no period with two
@@ -421,7 +606,7 @@ Rows are keyed by the root response, so they survive continuation executions and
   is closed (§11).
 - Private calls are one bounded attempt, no redirects, no automatic retry. The public API returns typed errors
   (400/404/409) and never a partial state.
-- The Main API is behind a flag that is off in production until Wave 2 acceptance.
+- v1.1: the Main API is always registered (no flag).
 
 | Requirement | Enforced by (code mechanism) | Proven by (test) |
 |---|---|---|
@@ -470,3 +655,20 @@ Confirmed by the user, relayed through the Point 5 planning session, 2026-10-08.
 4. The 409 code is `agent_interrupt_already_resolved` (section 6).
 5. Static pauses use the `continue` action; member status includes `cancelled`; `interrupt_id` is printable ASCII,
    at most 512 characters (sections 1, 3.2, 9).
+
+## 14. v1.1 decisions (2026-10-16)
+
+1. **D6 progress frame** `agent_fanout_progress` with `fanout-progress` (section 9.1); per frame ≤ 64 members and
+   ≤ 8192 text bytes, so one 64 KiB coalescer flush is ≤ 8 frames.
+2. **On Error** `continue` (default) | `stop`; join entries per `fanout-join-entry`; the canonical `error` object is
+   ≤ 512 bytes; all members failed fails the node; landing through the typed reducer (section 8a; binding user
+   decision 2026-10-12).
+3. **FU-227** `pause_progress: true` on per-card frames only (section 9.2).
+4. **FU-228** per-interrupt decisions for mixed pauses; no kind grouping for fan-out cards; root pauses unchanged until
+   they move (section 9.3).
+5. Main derives the private frontier from the card (member tier `call_id`), refuses coordinator cards in
+   `agent_interrupt_pending` until root pauses move, and raises in the frame-accepting transaction (section 4.1).
+6. Private routes: fixed status codes, 403 = control stop (section 7.1); one shared claim-authority query (FU-063).
+7. Wake: durable wake row with one-active-per-response partial unique index, admitted through the ordinary
+   continuation path; Worker claim opt-in `fanout_interrupt_decisions` (section 8.1).
+8. **D3** the Main API flag is deleted (section 10).

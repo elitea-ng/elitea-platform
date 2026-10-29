@@ -17,32 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-type recoveryClaimScope struct {
-	projectID      int64
-	actorID        int64
-	responseID     string
-	desired        string
-	bundleID       string
-	manifestDigest []byte
-}
-
-const recoveryClaimAuthoritySQL = `
-SELECT j.resource_project_id,j.actor_id::bigint,binding.client_message_id,j.desired_state,j.input_bundle_id,bundle.manifest_digest
-FROM elitea_runtime.execution_jobs j
-JOIN elitea_runtime.execution_claims c USING(execution_id,generation)
-JOIN elitea_runtime.workload_sessions ws ON ws.workload_session_id=c.workload_session_id AND ws.workload_identity=c.workload_identity AND ws.producer_id=c.producer_id
-JOIN elitea_runtime.command_outbox command USING(execution_id,generation)
-JOIN elitea_runtime.agent_execution_jobs binding USING(execution_id,generation)
-JOIN elitea_runtime.input_bundles bundle ON bundle.input_bundle_id=j.input_bundle_id
-WHERE c.claim_id=$1 AND c.execution_id=$2 AND c.generation=$3 AND c.workload_identity=$4 AND c.fence_token=$5
- AND c.released_at IS NULL AND c.lease_expires_at>clock_timestamp() AND c.recovery_mode='NODE_RECOVERY'
- AND ws.issued_at<=clock_timestamp() AND ws.expires_at>clock_timestamp() AND ws.revoked_at IS NULL
- AND j.state='RUNNING' AND j.desired_state IN ('SUSPENDED','RUNNING')
- AND j.tenant_id=j.resource_project_id::text AND j.projection_project_id=j.resource_project_id
- AND j.capability_id IN ('agent.execute.application.v1','agent.execute.adhoc.v1') AND binding.capability_id=j.capability_id
- AND command.retired_at IS NULL AND command.authority_granted_at IS NOT NULL AND command.deadline>clock_timestamp()
- AND NOT EXISTS(SELECT 1 FROM elitea_runtime.output_inbox terminal WHERE terminal.execution_id=j.execution_id AND terminal.generation=j.generation)
-FOR UPDATE OF j,c,ws,command`
+type recoveryClaimScope = agentClaimScope
 
 func (r *NodeRecoveryRepository) lockRecoveryClaim(ctx context.Context, tx sqlExecutor, claim storage.ContentClaim) (recoveryClaimScope, error) {
 	identity, err := workloadidentity.Certificate(claim.PeerCertificate)
@@ -52,19 +27,12 @@ func (r *NodeRecoveryRepository) lockRecoveryClaim(ctx context.Context, tx sqlEx
 	if !domain.ValidExecutionID(claim.ExecutionID) || claim.Generation == 0 || len(claim.FenceToken) != 32 || claim.ClaimID == "" {
 		return recoveryClaimScope{}, storage.ErrContentUnauthorized
 	}
-	args := []any{claim.ClaimID, claim.ExecutionID, int64(claim.Generation), identity, claim.FenceToken}
-	var scope recoveryClaimScope
-	for i := 0; i < 2; i++ {
-		err = tx.QueryRow(ctx, recoveryClaimAuthoritySQL, args...).Scan(&scope.projectID, &scope.actorID, &scope.responseID, &scope.desired, &scope.bundleID, &scope.manifestDigest)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return recoveryClaimScope{}, storage.ErrContentUnauthorized
-		}
-		if err != nil {
-			return recoveryClaimScope{}, err
-		}
-	}
-	if len(scope.manifestDigest) != 32 || scope.bundleID == "" {
+	scope, err := lockAgentClaim(ctx, tx, nodeRecoveryClaimMode, claim.ClaimID, claim.ExecutionID, int64(claim.Generation), identity, claim.FenceToken)
+	if errors.Is(err, errAgentClaimRefused) {
 		return recoveryClaimScope{}, storage.ErrContentUnauthorized
+	}
+	if err != nil {
+		return recoveryClaimScope{}, err
 	}
 	if err := r.permissions(ctx, tx, app.Selector{ProjectID: scope.projectID, ActorUserID: scope.actorID, ResponseMessageID: scope.responseID}, "models.chat.messages.create"); err != nil {
 		return recoveryClaimScope{}, storage.ErrContentUnauthorized

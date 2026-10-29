@@ -107,6 +107,7 @@ type ContentServer struct {
 	codeDebug           *RuntimeCodeDebugArtifactService
 	originalCodeIntents OriginalCodeIntentStore
 	nodeRecovery        NodeRecoveryControlStore
+	executionInterrupts ExecutionInterruptControlStore
 	nodeRecoveryResults NodeRecoveryResultStore
 	authorizer          ContentAuthorizer
 	store               ContentStore

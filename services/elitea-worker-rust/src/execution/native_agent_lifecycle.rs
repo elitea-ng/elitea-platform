@@ -1000,6 +1000,8 @@ where
 }
 
 const MAX_PENDING_PAUSE_CARDS: usize = 16;
+/// The park terminal's metadata key (contract fanout-interrupt-decisions v1.1).
+const FANOUT_PARKED_KEY: &str = "fanout_parked_v1";
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum AgentPauseAggregationError {
@@ -1032,6 +1034,10 @@ pub(super) struct AgentPauseAccumulator {
     hitl_interrupts: Vec<Value>,
     authorization_event: Option<NodeEventV1>,
     authorization_requests: Vec<Value>,
+    /// A fixed Parallel's park terminal (`fanout_parked_v1`): its cards went
+    /// out one by one through the ledger, so it is the run's sole pause and
+    /// never combines with a legacy card (one pause authority).
+    fanout_parked: Option<NodeEventV1>,
 }
 
 impl AgentPauseAccumulator {
@@ -1054,6 +1060,21 @@ impl AgentPauseAccumulator {
 
     fn observe_hitl(&mut self, event: &NodeEventV1) -> Result<(), AgentPauseAggregationError> {
         let metadata = pause_metadata(event)?;
+        if metadata.contains_key(FANOUT_PARKED_KEY) {
+            if self.fanout_parked.is_some()
+                || self.hitl_event.is_some()
+                || self.authorization_event.is_some()
+                || metadata.contains_key("hitl_interrupts")
+                || metadata.contains_key("hitl_interrupt")
+            {
+                return Err(AgentPauseAggregationError::InvalidState);
+            }
+            self.fanout_parked = Some(event.clone());
+            return Ok(());
+        }
+        if self.fanout_parked.is_some() {
+            return Err(AgentPauseAggregationError::InvalidState);
+        }
         let interrupts = metadata
             .get("hitl_interrupts")
             .and_then(Value::as_array)
@@ -1087,6 +1108,9 @@ impl AgentPauseAccumulator {
         if request.remove("authorization_requests").is_some() {
             return Err(AgentPauseAggregationError::InvalidState);
         }
+        if self.fanout_parked.is_some() {
+            return Err(AgentPauseAggregationError::InvalidState);
+        }
         let identity =
             authorization_identity(&request).ok_or(AgentPauseAggregationError::InvalidState)?;
         if self.authorization_requests.iter().any(|pending| {
@@ -1113,6 +1137,13 @@ impl AgentPauseAccumulator {
     }
 
     pub(super) fn finish(&mut self) -> Result<AggregatedAgentPause, AgentPauseAggregationError> {
+        if let Some(event) = self.fanout_parked.take() {
+            // Exactly as projected: Main reads `fanout_parked_v1` strictly.
+            return Ok(AggregatedAgentPause {
+                event,
+                selection: FreshAgentTerminalSelection::PausedHitl,
+            });
+        }
         match (
             self.hitl_interrupts.is_empty(),
             self.authorization_requests.is_empty(),
@@ -1570,9 +1601,11 @@ pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
     match error.code() {
         NativeAgentAssemblyErrorCode::UnsupportedCapability
             if error.cause().is_some_and(|cause| {
-                // A toolkit a direct node's position cannot serve is fixed by
-                // editing the pipeline.
+                // A toolkit a direct node's position cannot serve, or a node
+                // kind a Parallel branch cannot run (an inline LLM node until
+                // FU-247), is fixed by editing the pipeline.
                 cause.code() == crate::agents::pipeline::UNSERVED_DIRECT_TOOLKIT_CODE
+                    || crate::agents::graph::compiler::FanoutChildRefusal::is_code(cause.code())
             }) =>
         {
             RuntimeFailureKind::PipelineNodeTypeNotAvailable
@@ -1784,6 +1817,56 @@ mod taxonomy_tests {
             code,
             crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::UnsupportedCapability
         );
+        assert_eq!(message, PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE);
+        assert!(!retryable);
+    }
+
+    /// A saved child pipeline holding a Parallel (FU-249) ends as the
+    /// registered deployment message, never the generic unsupported one.
+    #[test]
+    fn a_parallel_in_a_saved_child_pipeline_ends_as_the_registered_deployment_message() {
+        use crate::agents::graph::compiler::{FanoutChildRefusal, PipelineConfigurationError};
+        use crate::protocol::output::{
+            PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE, runtime_error_policy,
+        };
+
+        let error = crate::agents::runtime::pipeline_configuration_assembly_error(
+            &PipelineConfigurationError::FanoutChildUnsupported {
+                node: "inner_call/gather".to_owned(),
+                refusal: FanoutChildRefusal::ContainsParallel,
+            },
+            "the stored pipeline could not be compiled",
+        );
+        let kind = assembly_failure(&error);
+        assert_eq!(kind, RuntimeFailureKind::PipelineNodeTypeNotAvailable);
+        let (_, message, retryable) = runtime_error_policy(kind);
+        assert_eq!(message, PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE);
+        assert!(!retryable);
+    }
+
+    /// A Parallel branch that names an inline LLM node (FU-247) is refused at
+    /// assembly with the same registered message, never the generic one.
+    #[test]
+    fn an_inline_llm_parallel_branch_ends_as_the_registered_deployment_message() {
+        use crate::agents::graph::compiler::PipelineDefinition;
+        use crate::protocol::output::{
+            PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE, runtime_error_policy,
+        };
+
+        let refusal = PipelineDefinition::from_yaml(
+            "state:\n  answer: str\n  joined: list\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{id: one, node: ask}, {id: two, node: other}]\n    max_concurrency: 2\n    wait: all\n    output: [joined]\n    transition: END\n  - id: ask\n    type: llm\n    output: [answer]\n  - id: other\n    type: llm\n    output: [answer]\n",
+        )
+        .err()
+        .expect("an inline LLM branch is refused");
+        assert_eq!(refusal.code(), "graph.fanout.child_kind_unsupported");
+        assert!(refusal.to_string().contains("node ask "), "{refusal}");
+        let error = crate::agents::runtime::pipeline_configuration_assembly_error(
+            &refusal,
+            "the stored pipeline could not be compiled",
+        );
+        let kind = assembly_failure(&error);
+        assert_eq!(kind, RuntimeFailureKind::PipelineNodeTypeNotAvailable);
+        let (_, message, retryable) = runtime_error_policy(kind);
         assert_eq!(message, PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE);
         assert!(!retryable);
     }

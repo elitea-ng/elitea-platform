@@ -202,7 +202,8 @@ export function PipelineTestChat({ restore, settings, disableChat, slotRef, iden
           data-testid="edit-pipeline-test-chat-error"
           sx={{ px: 2, pt: 1 }}
         >
-          {t('pages.pipelines.testChat.error', 'Could not start a test conversation. Click the message box to try again.')}
+          {testConversation.failureMessage
+            ?? t('pages.pipelines.testChat.error', 'Could not start a test conversation. Click the message box to try again.')}
         </Box>
       )}
       <ExistingTestRuns test={testConversation} />

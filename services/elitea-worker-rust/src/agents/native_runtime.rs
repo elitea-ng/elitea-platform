@@ -148,6 +148,17 @@ impl NativeRuntimeAssembler<OrdinaryNativeAgentAssembler, PipelineNativeAgentAss
         self
     }
 
+    /// Lend the content client whose claim-fenced routes carry the fan-out
+    /// decision ledger (pipelines with a fixed Parallel node).
+    #[must_use]
+    pub(crate) fn with_fanout_decisions(
+        mut self,
+        client: Arc<crate::transport::InputContentClient>,
+    ) -> Self {
+        self.pipeline = self.pipeline.with_fanout_decisions(client);
+        self
+    }
+
     /// Lend the web families' runtime (#1238) to direct agents and pipeline
     /// nodes.
     #[must_use]

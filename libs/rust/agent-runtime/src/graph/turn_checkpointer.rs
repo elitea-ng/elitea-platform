@@ -1,5 +1,6 @@
 //! Separate a new pipeline turn from replay of its durable graph frontier.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use adk_graph::checkpoint::RetentionPolicy;
@@ -9,11 +10,39 @@ use serde_json::{Value, json};
 
 const EXECUTION_KEY: &str = "elitea.pipeline.execution.v1";
 
+/// The execution that writes one pipeline turn's root-thread checkpoints.
+///
+/// Every root-thread write carries it as `elitea.pipeline.execution.v1`. A
+/// fresh turn sees only its own execution's frontier; an explicit
+/// continuation reads the frontier an earlier execution left.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TurnExecution(Value);
+
+impl TurnExecution {
+    #[must_use]
+    pub fn new(execution_id: &str, generation: u64) -> Self {
+        Self(json!([execution_id, generation]))
+    }
+
+    /// Record this execution as the writer of `checkpoint`.
+    pub fn stamp(&self, checkpoint: &mut Checkpoint) {
+        checkpoint
+            .metadata
+            .insert(EXECUTION_KEY.to_owned(), self.0.clone());
+    }
+
+    /// Whether checkpoint metadata names this execution as its writer.
+    #[must_use]
+    pub fn wrote(&self, metadata: &HashMap<String, Value>) -> bool {
+        metadata.get(EXECUTION_KEY) == Some(&self.0)
+    }
+}
+
 /// Keep stored checkpoints intact. Fresh turns cannot load an older execution.
 /// Explicit continuations still use the checkpoint validated by resume admission.
 pub struct TurnCheckpointer {
     inner: Arc<dyn Checkpointer>,
-    execution: Value,
+    execution: TurnExecution,
     resume: bool,
 }
 
@@ -26,7 +55,7 @@ impl TurnCheckpointer {
     ) -> Self {
         Self {
             inner,
-            execution: json!([execution_id, generation]),
+            execution: TurnExecution::new(execution_id, generation),
             resume,
         }
     }
@@ -36,16 +65,16 @@ impl TurnCheckpointer {
 impl Checkpointer for TurnCheckpointer {
     async fn save(&self, checkpoint: &Checkpoint) -> Result<String, GraphError> {
         let mut checkpoint = checkpoint.clone();
-        checkpoint
-            .metadata
-            .insert(EXECUTION_KEY.to_owned(), self.execution.clone());
+        self.execution.stamp(&mut checkpoint);
         self.inner.save(&checkpoint).await
     }
 
     async fn load(&self, thread_id: &str) -> Result<Option<Checkpoint>, GraphError> {
-        Ok(self.inner.load(thread_id).await?.filter(|checkpoint| {
-            self.resume || checkpoint.metadata.get(EXECUTION_KEY) == Some(&self.execution)
-        }))
+        Ok(self
+            .inner
+            .load(thread_id)
+            .await?
+            .filter(|checkpoint| self.resume || self.execution.wrote(&checkpoint.metadata)))
     }
 
     async fn load_by_id(&self, checkpoint_id: &str) -> Result<Option<Checkpoint>, GraphError> {
@@ -111,6 +140,25 @@ mod tests {
                     next.checkpoint_id
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_turn_execution_stamp_names_exactly_one_execution_and_generation() {
+        let execution = TurnExecution::new("execution-1", 2);
+        let mut checkpoint = Checkpoint::new("thread", State::new(), 0, vec![]);
+        assert!(!execution.wrote(&checkpoint.metadata));
+        execution.stamp(&mut checkpoint);
+        assert_eq!(
+            checkpoint.metadata[EXECUTION_KEY],
+            json!(["execution-1", 2])
+        );
+        assert!(execution.wrote(&checkpoint.metadata));
+        for other in [
+            TurnExecution::new("execution-2", 2),
+            TurnExecution::new("execution-1", 3),
+        ] {
+            assert!(!other.wrote(&checkpoint.metadata));
         }
     }
 

@@ -83,6 +83,8 @@ const (
 	BoundHops          Bound = "application_hops"
 	BoundStaticPause   Bound = "static_pause_under_graph_root"
 	BoundCheckpoints   Bound = "checkpoint_paths"
+	// FU-249: a saved pipeline with a Parallel node runs only as the started root.
+	BoundNestedParallel Bound = "parallel_in_child_pipeline"
 )
 
 // Kind is a saved version's kind.
@@ -120,6 +122,8 @@ type Version struct {
 	// Pipeline only, from ReadPipeline.
 	AgentNodes  []AgentNode
 	StaticPause bool
+	// ParallelNode is the first Parallel node's id, empty when there is none.
+	ParallelNode string
 }
 
 // Source reads one saved version. ok is false for a version that does not
@@ -153,14 +157,26 @@ func (v *Violation) Error() string { return v.message }
 // Refusal answers the 400 a save writes for err when err is a Violation, ErrAtStart
 // for a refused start, else nil.
 func Refusal(err error) *apierr.APIError {
-	if errors.Is(err, ErrAtStart) {
-		return ErrAtStart.(*apierr.APIError)
+	var atStart *apierr.APIError
+	if errors.As(err, &atStart) && atStart.Code == Code {
+		return atStart
 	}
 	var violation *Violation
 	if !errors.As(err, &violation) {
 		return nil
 	}
 	return &apierr.APIError{Status: http.StatusBadRequest, Code: Code, Message: violation.message}
+}
+
+// AtStart is the start refusal for a refused composition err. A Parallel in a
+// child pipeline (FU-249) is named, as its save refusal is; every other bound
+// answers the registered RuntimeMessage the Worker's assembly refusal carries.
+func AtStart(err error) error {
+	var violation *Violation
+	if errors.As(err, &violation) && violation.Bound == BoundNestedParallel {
+		return &apierr.APIError{Status: http.StatusUnprocessableEntity, Code: Code, Message: violation.message}
+	}
+	return ErrAtStart
 }
 
 // Check walks the composition of root as a root of its own kind. root is read
@@ -466,6 +482,12 @@ func (w *walker) enterPipeline(p path, id Identity, child Version) (path, error)
 	if p.depth > MaxPipelineDepth {
 		return path{}, depthViolation(chain(p.trail, child.Name))
 	}
+	// FU-249: the Worker binds a Parallel's checkpoint authority to the started root only.
+	if child.ParallelNode != "" {
+		return path{}, violation(BoundNestedParallel, fmt.Sprintf(
+			"Pipeline %s has Parallel node %s, so it cannot run inside another agent or pipeline (%s): for now a Parallel node runs only in the pipeline you start. Start pipeline %s directly, or remove the attachment before saving.",
+			label(child.Name), label(child.ParallelNode), chain(p.trail, child.Name), label(child.Name)))
+	}
 	next, err := w.enter(p, id, child)
 	next.depth++
 	return next, err
@@ -729,20 +751,20 @@ func label(name string) string {
 	return `"` + builder.String() + `"`
 }
 
-// ReadPipeline reads the Agent nodes and the static pause of a pipeline
-// definition. A definition the save-time admission refuses or that does not
-// parse has none: the Worker refuses it on its own.
-func ReadPipeline(instructions string) (nodes []AgentNode, staticPause bool) {
+// ReadPipeline reads the Agent nodes, the static pause and the first Parallel
+// node of a pipeline definition. A definition the save-time admission refuses
+// or that does not parse has none: the Worker refuses it on its own.
+func ReadPipeline(instructions string) (nodes []AgentNode, staticPause bool, parallelNode string) {
 	if pipelinelimits.Check(instructions) != nil {
-		return nil, false
+		return nil, false, ""
 	}
 	var document yaml.Node
 	if yaml.NewDecoder(strings.NewReader(instructions)).Decode(&document) != nil || len(document.Content) != 1 {
-		return nil, false
+		return nil, false, ""
 	}
 	root := aliased(document.Content[0])
 	if root.Kind != yaml.MappingNode {
-		return nil, false
+		return nil, false, ""
 	}
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		value := aliased(root.Content[i+1])
@@ -753,22 +775,21 @@ func ReadPipeline(instructions string) (nodes []AgentNode, staticPause bool) {
 			}
 		case "nodes":
 			if value.Kind == yaml.SequenceNode {
-				nodes = agentNodes(value)
+				nodes, parallelNode = agentNodes(value)
 			}
 		}
 	}
-	return nodes, staticPause
+	return nodes, staticPause, parallelNode
 }
 
-func agentNodes(sequence *yaml.Node) []AgentNode {
-	var nodes []AgentNode
+func agentNodes(sequence *yaml.Node) (nodes []AgentNode, parallelNode string) {
 	for _, entry := range sequence.Content {
 		entry = aliased(entry)
 		if entry.Kind != yaml.MappingNode {
 			continue
 		}
 		var node AgentNode
-		var isAgent bool
+		var isAgent, isParallel bool
 		for i := 0; i+1 < len(entry.Content); i += 2 {
 			value := aliased(entry.Content[i+1])
 			if value.Kind != yaml.ScalarNode {
@@ -777,6 +798,7 @@ func agentNodes(sequence *yaml.Node) []AgentNode {
 			switch aliased(entry.Content[i]).Value {
 			case "type":
 				isAgent = value.Value == "agent"
+				isParallel = value.Value == "parallel"
 			case "id":
 				node.ID = value.Value
 			case "tool":
@@ -786,8 +808,11 @@ func agentNodes(sequence *yaml.Node) []AgentNode {
 		if isAgent && node.Alias != "" {
 			nodes = append(nodes, node)
 		}
+		if isParallel && parallelNode == "" && node.ID != "" {
+			parallelNode = node.ID
+		}
 	}
-	return nodes
+	return nodes, parallelNode
 }
 
 func aliased(node *yaml.Node) *yaml.Node {

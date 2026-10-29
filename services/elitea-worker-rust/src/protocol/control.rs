@@ -1933,6 +1933,21 @@ pub(crate) fn test_session_authority_for_claim(
     }
 }
 
+/// The session authority of a reclaim of the same execution after a Worker
+/// died: a later claim attempt, lease epoch and claim start, its own fence.
+#[cfg(test)]
+pub(crate) fn test_session_authority_for_reclaim(
+    execution_id: &str,
+    generation: u64,
+    attempt: u8,
+) -> ClaimBoundSessionAuthority {
+    ClaimBoundSessionAuthority {
+        claim_attempt: u64::from(attempt),
+        lease_epoch: u64::from(attempt),
+        ..test_session_authority_for_claim(execution_id, generation, attempt)
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn test_lease_starting_execution(
     lease_expires_at_unix_millis: i64,
@@ -2383,6 +2398,19 @@ impl<R> AgentControlClient<R> {
         request.governed_security_context_v1 = self.governed_security_context;
         Ok(request)
     }
+
+    /// A fresh agent claim: the governed opt-in and the per-interrupt fan-out
+    /// decisions opt-in (`build_agent_claim_request`), so Main may grant it a
+    /// `fanout_wake` continuation. Toolkit claims never run a wake.
+    fn fresh_agent_claim_request(
+        &self,
+        verified: &VerifiedAgentCommand,
+    ) -> Result<ClaimCommandRequestV1, ControlSemanticError> {
+        let mut request =
+            build_agent_claim_request(verified, &self.workload_session_id, &self.producer_id)?;
+        request.governed_security_context_v1 = self.governed_security_context;
+        Ok(request)
+    }
 }
 
 impl<R: ControlRpc> AgentControlClient<R> {
@@ -2396,7 +2424,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
         verified: &VerifiedAgentCommand,
         now_unix_millis: i64,
     ) -> Result<AcceptedAgentClaim, AgentControlError> {
-        let request = self.fresh_claim_request(verified)?;
+        let request = self.fresh_agent_claim_request(verified)?;
         let response = self.control.claim_command(request).await?;
         parse_accepted_agent_claim(
             verified,
@@ -2423,7 +2451,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
         verified: &VerifiedAgentCommand,
         now_unix_millis: i64,
     ) -> Result<AgentClaimDecision, AgentControlError> {
-        let request = self.fresh_claim_request(verified)?;
+        let request = self.fresh_agent_claim_request(verified)?;
         let response = self.control.claim_command(request).await?;
         parse_agent_claim_decision(
             verified,
@@ -2769,7 +2797,13 @@ pub fn build_agent_claim_request(
     workload_session_id: &str,
     producer_id: &str,
 ) -> Result<ClaimCommandRequestV1, ControlSemanticError> {
-    build_claim_request(verified, workload_session_id, producer_id)
+    let mut request = build_claim_request(verified, workload_session_id, producer_id)?;
+    // This Worker implements the per-interrupt fan-out decision contract
+    // (fanout-interrupt-decisions-v1.md v1.1 §8.1), so Main may grant it a
+    // fanout_wake continuation. Recovery claims clear it again: Main reads the
+    // opt-in on ordinary claims only.
+    request.fanout_interrupt_decisions = true;
+    Ok(request)
 }
 
 fn build_claim_request(
@@ -2785,6 +2819,8 @@ fn build_claim_request(
     Ok(ClaimCommandRequestV1 {
         agent_model_checkpoint_recovery: false,
         node_recovery: false,
+        // Agent claims opt in (`build_agent_claim_request`); toolkit claims never run a wake.
+        fanout_interrupt_decisions: false,
         // Legacy by default; AgentControlClient::fresh_claim_request sets it
         // for a worker that serves the governed security context (#1115).
         governed_security_context_v1: false,

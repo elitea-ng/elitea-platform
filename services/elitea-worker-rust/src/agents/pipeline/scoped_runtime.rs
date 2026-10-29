@@ -12,7 +12,7 @@ use crate::agents::events::{
 };
 use crate::agents::graph::{
     PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PipelineNodeEventScope, PipelineNodeEventSender,
-    scoped_pipeline_tool_context,
+    ScopedCallKind, scoped_pipeline_tool_context,
 };
 use crate::agents::session::ApplicationRuntimeProjection;
 use adk_rust::graph::{Checkpointer, GraphError, NodeContext};
@@ -134,6 +134,9 @@ pub(crate) struct PipelineApplicationNodeRuntime {
     pub(crate) applications: Arc<ApplicationRuntimeProjection>,
     pub(crate) events: PipelineNodeEventSender,
     pub(crate) prepare_gate: Arc<Mutex<()>>,
+    /// Activation calls whose start this runtime forwarded and whose call is
+    /// still running: a fan-out child that fails closes its visible call.
+    visible_starts: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
 }
 
 impl PipelineApplicationNodeRuntime {
@@ -150,6 +153,7 @@ impl PipelineApplicationNodeRuntime {
             applications,
             events,
             prepare_gate,
+            visible_starts: Arc::default(),
         }
     }
 
@@ -161,6 +165,7 @@ impl PipelineApplicationNodeRuntime {
             applications: Arc::clone(&self.applications),
             events,
             prepare_gate: Arc::clone(&self.prepare_gate),
+            visible_starts: Arc::default(),
         }
     }
 
@@ -195,6 +200,15 @@ impl PipelineApplicationNodeRuntime {
             &branch,
         )
         .await?;
+        let fanout = self.events.has_parallel_event_scope();
+        // D2 (T-2A §8): a fixed Parallel child an earlier claim started runs
+        // again and resumes from its own model checkpoint; only a tool that
+        // may have started without a receipt ends it "may have started".
+        let kind = match (fanout, receipt.outcome(), fresh) {
+            (false, ..) => ScopedCallKind::Node,
+            (true, GraphCallOutcome::Started, false) => ScopedCallKind::FanoutChildRecovery,
+            (true, ..) => ScopedCallKind::FanoutChild,
+        };
         match receipt.outcome().clone() {
             GraphCallOutcome::Completed { result, terminal } => {
                 self.forward(
@@ -255,9 +269,10 @@ impl PipelineApplicationNodeRuntime {
                     return Ok((result, receipt.activation().call_id().to_owned()));
                 }
             }
-            GraphCallOutcome::Started if !fresh => {
+            GraphCallOutcome::Started if !fresh && !fanout => {
                 // An interrupted unpaused provider/tool has no graph-level replay authority.
-                return Err(failure());
+                // The child may have started an effect: it is never dispatched again.
+                return Err(may_have_started());
             }
             GraphCallOutcome::Started => {}
         }
@@ -268,6 +283,7 @@ impl PipelineApplicationNodeRuntime {
             receipt.invocation_id(),
             receipt.author(),
             receipt.branch(),
+            kind,
         )?;
         let receiver_owner = self.applications.event_receiver().ok_or_else(failure)?;
         let mut receiver = receiver_owner.take().await.map_err(|_| failure())?;
@@ -287,13 +303,46 @@ impl PipelineApplicationNodeRuntime {
             .restore(receiver)
             .await
             .map_err(|_| failure())?;
+        let visible = self
+            .visible_starts
+            .lock()
+            .is_ok_and(|mut starts| starts.remove(receipt.activation().call_id()))
+            || !fresh;
         let result = match result {
             Ok(result) => result,
-            Err(refusal) => return Err(self.child_failure(refusal).await),
+            Err(refusal) => {
+                let error = self.child_failure(refusal).await;
+                // A fixed Parallel child's failure is data the join records
+                // (contract §8a); its visible call closes with that failure.
+                if fanout && visible {
+                    self.close_failed_call(
+                        &receipt,
+                        graph_scope.as_ref(),
+                        parent.invocation_id(),
+                        &error,
+                    )
+                    .await?;
+                }
+                return Err(error);
+            }
         };
         let outcome = if crate::agents::application_tools::nested_application_interrupt_ids(&result)
             .is_some()
         {
+            // A fixed Parallel member cannot pause yet (FU-246), at any depth.
+            if fanout {
+                let error = self.fanout_pause();
+                if visible {
+                    self.close_failed_call(
+                        &receipt,
+                        graph_scope.as_ref(),
+                        parent.invocation_id(),
+                        &error,
+                    )
+                    .await?;
+                }
+                return Err(error);
+            }
             if terminal.is_some() {
                 return Err(failure());
             }
@@ -320,10 +369,82 @@ impl PipelineApplicationNodeRuntime {
         Ok((result, receipt.activation().call_id().to_owned()))
     }
 
+    /// The typed, readable end of a member whose Agent asked for a decision.
+    fn fanout_pause(&self) -> GraphError {
+        GraphError::NodeExecutionFailed {
+            node: "application_scope".to_owned(),
+            message: format!(
+                "{}: the agent of node '{}' asked for a decision, which a parallel branch cannot \
+                 take yet",
+                crate::agents::application_tools::FANOUT_AGENT_PAUSE_CODE,
+                self.node_name
+            ),
+        }
+    }
+
+    /// Close a failed fan-out child's call with a failure result in the shape
+    /// a saved Agent reports a child failure, naming no provider message.
+    async fn close_failed_call(
+        &self,
+        receipt: &PipelineGraphCallReceipt,
+        graph_scope: Option<&PipelineNodeEventScope>,
+        root_container: &str,
+        error: &GraphError,
+    ) -> Result<(), GraphError> {
+        let may_have_started = matches!(error, GraphError::NodeExecutionFailed { message, .. }
+            if message.starts_with(CALL_MAY_HAVE_STARTED_CODE));
+        let pause = matches!(error, GraphError::NodeExecutionFailed { message, .. }
+            if message.starts_with(crate::agents::application_tools::FANOUT_AGENT_PAUSE_CODE));
+        let (code, message) = if may_have_started {
+            (
+                "graph.fanout.may_have_started",
+                "The task may already have started its work; it was not repeated.",
+            )
+        } else if pause {
+            (
+                crate::agents::application_tools::FANOUT_AGENT_PAUSE_CODE,
+                "The agent asked for a decision, which a parallel branch cannot take yet.",
+            )
+        } else {
+            ("graph.node_execution_failed", "The task failed.")
+        };
+        let start = receipt.original_start();
+        let name = start
+            .tool_calls()
+            .first()
+            .map(|call| call.name.to_owned())
+            .ok_or_else(failure)?;
+        let mut event = Event::new(receipt.invocation_id());
+        start.author.clone_into(&mut event.author);
+        start.branch.clone_into(&mut event.branch);
+        event.llm_response.finish_reason = Some(adk_rust::FinishReason::Stop);
+        event.llm_response.turn_complete = true;
+        event.llm_response.content = Some(adk_rust::Content {
+            role: "function".to_owned(),
+            parts: vec![Part::FunctionResponse {
+                function_response: adk_rust::FunctionResponseData::new(
+                    name,
+                    serde_json::json!({
+                        "error": message,
+                        "failure": {"code": code, "message": message, "recoverable": true,
+                            "retryable": false, "recovery_action": "verify_before_retry"},
+                    }),
+                ),
+                id: Some(receipt.activation().call_id().to_owned()),
+                annotations: None,
+            }],
+        });
+        super::scoped_applications::stamp_activation_parent(&mut event, receipt)
+            .map_err(|_| failure())?;
+        self.forward(event, graph_scope, root_container, receipt.invocation_id())
+            .await
+    }
+
     /// Report a typed child refusal with its registered public reason.
     async fn child_failure(&self, refusal: ChildFailure) -> GraphError {
         let (code, error) = match refusal {
             ChildFailure::Scope(error) => return error,
+            ChildFailure::FanoutPause => return self.fanout_pause(),
             // The decided call never ran (FU-226).
             ChildFailure::ReplayUnsupported => (
                 REPLAY_UNSUPPORTED_PUBLIC_CODE,
@@ -334,6 +455,13 @@ impl PipelineApplicationNodeRuntime {
             // registered reason, as an unscoped Agent node does
             // (`graph/application.rs` `child_failure`).
             ChildFailure::ApprovedCallStop(code) => {
+                // In a fixed Parallel branch a call that may have started ends
+                // that child typed; the join's On Error decides the run.
+                if code == crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE
+                    && self.events.has_parallel_event_scope()
+                {
+                    return may_have_started();
+                }
                 return self
                     .events
                     .approved_call_stop(code, &self.node_name)
@@ -440,14 +568,17 @@ impl PipelineApplicationNodeRuntime {
                 return Err(failure());
             }
             // The immutable checkpoint receipt is the original model-call identity.
-            return self
-                .forward(
-                    receipt.original_start().clone(),
-                    graph_scope,
-                    root_container,
-                    receipt.invocation_id(),
-                )
-                .await;
+            self.forward(
+                receipt.original_start().clone(),
+                graph_scope,
+                root_container,
+                receipt.invocation_id(),
+            )
+            .await?;
+            if let Ok(mut starts) = self.visible_starts.lock() {
+                starts.insert(receipt.activation().call_id().to_owned());
+            }
+            return Ok(());
         }
         if event.invocation_id == receipt.invocation_id() {
             receipt.branch().clone_into(&mut event.branch);
@@ -471,7 +602,12 @@ impl PipelineApplicationNodeRuntime {
     ) -> Result<(), GraphError> {
         if self.events.has_parallel_event_scope() {
             self.events
-                .project_parallel_application_event(&mut event, graph_scope, root_container)
+                .project_parallel_application_event(
+                    &mut event,
+                    graph_scope,
+                    root_container,
+                    Some(original_root),
+                )
                 .map_err(|_| failure())?;
             return self
                 .events
@@ -565,6 +701,20 @@ fn numeric_call(call: &str) -> String {
         .map(|digit| char::from(b'0' + *digit))
         .collect()
 }
+/// Code prefix of the refusal for a child call an earlier process started and
+/// never finished. Fan-out maps it to a typed child failure.
+pub(crate) const CALL_MAY_HAVE_STARTED_CODE: &str = "pipeline.agent_call.may_have_started";
+
+fn may_have_started() -> GraphError {
+    GraphError::NodeExecutionFailed {
+        node: "application_scope".to_owned(),
+        message: format!(
+            "{CALL_MAY_HAVE_STARTED_CODE}: an earlier run started this Agent call and may have \
+             started its work; it is not repeated"
+        ),
+    }
+}
+
 /// Why the child call of one scoped Agent node did not produce a value.
 #[derive(Debug)]
 enum ChildFailure {
@@ -572,6 +722,8 @@ enum ChildFailure {
     Scope(GraphError),
     /// The nested Agent refused its decided call before running it.
     ReplayUnsupported,
+    /// A fixed Parallel member's Agent asked for a decision (FU-246).
+    FanoutPause,
     /// The approved call may have started (`RECOVERY_REFUSED_UPSTREAM_CODE`),
     /// or its dispatch record could not be written (`DISPATCH_UNRECORDED_CODE`).
     ApprovedCallStop(&'static str),
@@ -589,7 +741,9 @@ impl ChildFailure {
         use crate::agents::direct_hitl::DirectHitlErrorCode;
         use crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE;
         use crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE;
-        if code == RECOVERY_REFUSED_UPSTREAM_CODE {
+        if code == crate::agents::application_tools::FANOUT_AGENT_PAUSE_CODE {
+            Self::FanoutPause
+        } else if code == RECOVERY_REFUSED_UPSTREAM_CODE {
             Self::ApprovedCallStop(RECOVERY_REFUSED_UPSTREAM_CODE)
         } else if code == DISPATCH_UNRECORDED_CODE {
             Self::ApprovedCallStop(DISPATCH_UNRECORDED_CODE)

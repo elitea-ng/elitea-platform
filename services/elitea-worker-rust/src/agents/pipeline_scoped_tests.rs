@@ -729,6 +729,79 @@ async fn a_static_saved_pipeline_tool_under_a_graph_root_is_refused_before_any_m
     assert_eq!(model_calls(&captured), 0);
 }
 
+/// A saved pipeline whose root is a Parallel of two Agent nodes running `helper`.
+const PARALLEL_GRAPH: &str = "state:\n  input: str\n  messages: list\n  b1: str\n  b2: str\n  joined: list\n  answer: str\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{id: one, node: ask_one}, {id: two, node: ask_two}]\n    max_concurrency: 2\n    wait: all\n    output: [joined]\n    transition: END\n  - id: ask_one\n    type: agent\n    tool: helper\n    input_mapping:\n      task: {type: fixed, value: 'one'}\n    output: [b1]\n  - id: ask_two\n    type: agent\n    tool: helper\n    input_mapping:\n      task: {type: fixed, value: 'two'}\n    output: [b2]\n";
+
+fn parallel_pipeline() -> Value {
+    saved_version(
+        "pipeline",
+        PARALLEL_GRAPH,
+        &json!({}),
+        vec![reference((9, 10), "agent", "helper")],
+    )
+}
+
+fn assert_parallel_in_child_refused(error: &super::super::runtime::NativeAgentAssemblyError) {
+    let cause = error.cause().expect("a typed cause");
+    assert_eq!(
+        cause.code(),
+        "graph.fanout.parallel_in_child_pipeline",
+        "{error:?}"
+    );
+    // The lifecycle maps every fan-out child refusal to the registered message
+    // (`a_parallel_in_a_saved_child_pipeline_ends_as_the_registered_deployment_message`).
+    assert!(crate::agents::graph::compiler::FanoutChildRefusal::is_code(
+        cause.code()
+    ));
+}
+
+/// FU-249: a saved pipeline with a Parallel runs only as the started root. Beneath a
+/// pipeline `agent` node it is refused typed (the registered deployment message, never the
+/// generic unsupported one) before any model call.
+#[tokio::test(flavor = "current_thread")]
+async fn a_parallel_in_a_saved_child_pipeline_is_refused_typed_before_any_model_call() {
+    let (sessions, checkpointer) = state();
+    let versions = BTreeMap::from([
+        ((7, 8), parallel_pipeline()),
+        ((9, 10), plain_agent(Vec::new())),
+    ]);
+    let (assembler, captured, _) = process(&sessions, &checkpointer, &versions, Vec::new());
+    let request = root_request(
+        &root_yaml("inner"),
+        vec![reference((7, 8), "pipeline", "inner")],
+    );
+    let Err(error) = assembler.assemble(authorized(&request)).await else {
+        panic!("a Parallel in a saved child pipeline must be refused");
+    };
+    assert_parallel_in_child_refused(&error);
+    assert_eq!(model_calls(&captured), 0);
+}
+
+/// FU-249: the same pipeline as an Agent's tool is refused typed at assembly, never skipped
+/// and never failing only when the tool is called.
+#[tokio::test(flavor = "current_thread")]
+async fn a_parallel_pipeline_tool_of_an_agent_node_is_refused_typed_before_any_model_call() {
+    let (sessions, checkpointer) = state();
+    let versions = BTreeMap::from([
+        (
+            (5, 6),
+            plain_agent(vec![reference((7, 8), "pipeline", "inner")]),
+        ),
+        ((7, 8), parallel_pipeline()),
+        ((9, 10), plain_agent(Vec::new())),
+    ]);
+    let (assembler, captured, _) = process(&sessions, &checkpointer, &versions, Vec::new());
+    let request = root_request(
+        &root_yaml("worker"),
+        vec![reference((5, 6), "agent", "worker")],
+    );
+    let Err(error) = assembler.assemble(authorized(&request)).await else {
+        panic!("a Parallel pipeline tool beneath a graph root must be refused");
+    };
+    assert_parallel_in_child_refused(&error);
+    assert_eq!(model_calls(&captured), 0);
+}
+
 fn assert_composition_bound(error: &super::super::runtime::NativeAgentAssemblyError, detail: &str) {
     assert!(is_composition_bound(error), "{error:?}");
     assert_eq!(

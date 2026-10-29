@@ -57,6 +57,16 @@ describe("classifyStartFailure", () => {
     });
   });
 
+  it("shows a refused composition by its named text (FU-249: a Parallel in a saved child pipeline)", () => {
+    const message =
+      'Pipeline "FP inner parallel" has Parallel node "inner", so it cannot run inside another agent or pipeline ("FP outer" → "FP inner parallel"): for now a Parallel node runs only in the pipeline you start. Start pipeline "FP inner parallel" directly, or remove the attachment before saving.';
+    expect(
+      classifyStartFailure(
+        httpError(422, { error: "APPLICATION_COMPOSITION_INVALID", message }),
+      ),
+    ).toEqual({ started: false, reason: "rejected", message });
+  });
+
   it("prefers safe_message, the field every Go producer actually writes", () => {
     expect(
       classifyStartFailure(

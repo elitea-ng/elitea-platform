@@ -7,16 +7,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
+use crate::agents::graph::fanout_test_ledger::TestLedger;
 use crate::agents::graph::map_reduce::{
     DurableMapNode, MapDefinition, MapItemExecution, MapNodeOutcome, MapOccurrenceCheckpointer,
     MapReduction, MapWorkerGraphFactory, MapWorkerKind, MapWorkerTerminal,
 };
 use crate::agents::graph::{
-    AdkParallelBranchRuntime, DurableParallelNode, PARALLEL_INTERRUPT_SCHEMA,
-    PARALLEL_RESUME_STATE_KEY, ParallelBranchDefinition, ParallelBranchExecution,
-    ParallelBranchGraphFactory, ParallelBranchPause, ParallelBranchRuntime, ParallelBranchTerminal,
-    ParallelCheckpointAppender, ParallelDecision, ParallelOccurrenceCheckpointer,
-    ParallelPauseCard, PreparedParallelActivation,
+    AdkParallelBranchRuntime, DurableParallelNode, FANOUT_PARKED_SCHEMA, ParallelBranchDefinition,
+    ParallelBranchExecution, ParallelBranchGraphFactory, ParallelBranchPause,
+    ParallelBranchRuntime, ParallelBranchTerminal, ParallelCheckpointAppender, ParallelDecision,
+    ParallelOccurrenceCheckpointer, ParallelPauseCard,
 };
 use adk_rust::graph::{
     CompiledGraph, FunctionNode, GraphError, Node, NodeContext, StateSchema, interrupt::Interrupt,
@@ -285,42 +285,26 @@ fn original_state() -> State {
     HashMap::from([("input".to_owned(), json!("original"))])
 }
 
-fn aggregate_pause(output: &NodeOutput) -> Value {
+fn parked_pause(output: &NodeOutput) -> Value {
     let Some(Interrupt::Dynamic {
         data: Some(data), ..
     }) = output.interrupt.as_ref()
     else {
-        panic!("expected the aggregate parallel pause");
+        panic!("expected the parked fan-out interrupt");
     };
-    assert_eq!(data["schema"], PARALLEL_INTERRUPT_SCHEMA);
+    assert_eq!(data["schema"], FANOUT_PARKED_SCHEMA);
     data.clone()
 }
 
-fn approve_all(pause: &Value) -> State {
-    let decisions = pause["cards"]
-        .as_array()
-        .expect("aggregate cards")
-        .iter()
-        .map(|card| {
-            json!({
-                "interrupt_id": card["interrupt_id"],
-                "tool_call_id": card["tool_call_id"],
-                "action": "approve",
-                "value": "",
-            })
-        })
-        .collect::<Vec<_>>();
-    HashMap::from([
-        ("input".to_owned(), json!("original")),
-        (
-            PARALLEL_RESUME_STATE_KEY.to_owned(),
-            json!({
-                "schema": PARALLEL_INTERRUPT_SCHEMA,
-                "parallel_activation": pause["parallel_activation"],
-                "decisions": decisions,
-            }),
-        ),
-    ])
+/// Decide every parked card in Main's ledger (V2 delivery).
+fn approve_all(ledger: &TestLedger, pause: &Value) {
+    for card in pause["pending"].as_array().expect("parked cards") {
+        ledger.decide(
+            card["interrupt_key"].as_str().expect("interrupt key"),
+            "approve",
+            None,
+        );
+    }
 }
 
 /// C1a. Freeze four branches under execution 1: two complete, one pauses and
@@ -353,13 +337,10 @@ async fn parallel_children_survive_a_new_execution_and_resume_from_their_own_che
         step: 4,
         config_digest: definition.config_digest(),
     };
-    let PreparedParallelActivation::Ready(prepared) = first_runtime
+    let prepared = first_runtime
         .prepare(&mut activation, &definition, &context)
         .await
-        .expect("freeze the occurrence under execution 1")
-    else {
-        panic!("unexpected blocked occurrence");
-    };
+        .expect("freeze the occurrence under execution 1");
     for branch in prepared.into_iter().take(3) {
         let _ = first_runtime.invoke(&activation, branch, &context).await;
     }
@@ -386,15 +367,17 @@ async fn parallel_children_survive_a_new_execution_and_resume_from_their_own_che
         .execute(&context)
         .await
         .expect("restore the occurrence under execution 2");
-    let pause = aggregate_pause(&restored);
-    assert_eq!(pause["cards"].as_array().map(Vec::len), Some(1));
-    assert_eq!(pause["cards"][0]["interrupt_id"], "card-ask");
+    let pause = parked_pause(&restored);
+    assert_eq!(pause["pending"].as_array().map(Vec::len), Some(1));
+    assert_eq!(pause["pending"][0]["interrupt_id"], "card-ask");
     assert_eq!(runs.work("done_a"), 1, "a completed branch ran again");
     assert_eq!(runs.work("done_b"), 1, "a completed branch ran again");
     assert_eq!(runs.work("ask"), 1, "the paused branch lost its checkpoint");
     assert_eq!(runs.work("late"), 1);
 
-    // Execution 3 is the HITL continuation that carries the decision.
+    // Execution 3 is the continuation; its restore fetch carries the decision.
+    let ledger = TestLedger::new();
+    approve_all(&ledger, &pause);
     let third = claim(
         &database,
         "execution-3",
@@ -403,9 +386,15 @@ async fn parallel_children_survive_a_new_execution_and_resume_from_their_own_che
     )
     .await;
     let resumed = DurableParallelNode::new(definition, parallel_runtime(&third, &runs))
-        .execute(&parallel_context(approve_all(&pause)))
+        .with_decisions(ledger.client(3))
+        .execute(&parallel_context(original_state()))
         .await
         .expect("resume the paused branch under execution 3");
+    assert_eq!(
+        ledger.open_decisions(),
+        0,
+        "the decision was not acknowledged"
+    );
     assert!(resumed.interrupt.is_none());
     let gathered = resumed.updates["gathered"]
         .as_array()
@@ -872,13 +861,10 @@ async fn a_superseded_claim_cannot_overwrite_the_later_claims_completed_children
         step: 4,
         config_digest: definition.config_digest(),
     };
-    let PreparedParallelActivation::Ready(_) = first_runtime
+    first_runtime
         .prepare(&mut activation, &definition, &context)
         .await
-        .expect("freeze the occurrence under execution 1")
-    else {
-        panic!("unexpected blocked occurrence");
-    };
+        .expect("freeze the occurrence under execution 1");
     drop(first_runtime);
 
     // Claim A restores and parks inside its first branch.
@@ -992,7 +978,7 @@ async fn scoped_claim(
 
 fn frozen_threads(checkpoint: &Checkpoint) -> Vec<String> {
     serde_json::from_value(
-        checkpoint.metadata["elitea.graph.parallel.occurrence.v2"]["child_threads"].clone(),
+        checkpoint.metadata["elitea.graph.parallel.occurrence.v3"]["child_threads"].clone(),
     )
     .expect("frozen child threads")
 }

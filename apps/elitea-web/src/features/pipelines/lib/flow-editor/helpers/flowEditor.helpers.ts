@@ -1,4 +1,3 @@
-import { isFixedParallelAuthoringAllowed } from '../constants/parallel.constants';
 /**
  * Ported from `apps/elitea-ui/src/[fsd]/features/pipelines/flow-editor/lib/
  * helpers/flowEditor.helpers.js` (512 lines, unit A2c). This is the
@@ -274,7 +273,6 @@ export const canCreateNodeType = (
   nodeType: string,
   sourceFlags: ReturnType<typeof getNodeTypeFlags>,
 ): boolean => {
-  if (!isFixedParallelAuthoringAllowed(nodeType)) return false;
   // Cannot create special node types (Condition/Decision) from special source nodes
   if (
     (nodeType === PipelineNodeTypes.Condition || nodeType === PipelineNodeTypes.Decision) &&

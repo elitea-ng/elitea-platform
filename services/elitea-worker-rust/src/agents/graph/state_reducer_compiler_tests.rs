@@ -250,11 +250,6 @@ nodes:
             ),
             (
                 parallel,
-                "joined: list",
-                "joined: {type: list, reducer: append}",
-            ),
-            (
-                parallel,
                 "detail: {type: dict, value: {}}",
                 "detail: {type: dict, value: {}, reducer: merge}",
             ),
@@ -280,6 +275,12 @@ nodes:
                 refused.contains("must use the overwrite reducer"),
                 "{refused}"
             );
+        }
+        // A Parallel output lands through its own declared reducer
+        // (join append onto `append`); the join is checked, not refused.
+        let appended = parallel.replace("joined: list", "joined: {type: list, reducer: append}");
+        if let Err(error) = PipelineDefinition::from_yaml(&appended) {
+            panic!("a Parallel append join onto an append reducer must compile: {error}");
         }
     }
 

@@ -169,6 +169,8 @@ export interface MessageGroupMetaWire {
   readonly context?: { readonly included?: boolean };
   readonly hitl_interrupt?: HitlInterruptRawWire;
   readonly hitl_interrupts?: readonly HitlInterruptRawWire[];
+  /** The parked terminal frame's pending list (fan-out contract v1.1 §8): the response waits on per-interrupt cards. */
+  readonly fanout_parked_v1?: unknown;
   readonly thread_id?: string;
   readonly output_limit_reached?: boolean;
   readonly output_limit_sequence?: number | string;

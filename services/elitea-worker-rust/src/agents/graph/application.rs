@@ -762,10 +762,26 @@ impl ApplicationNode {
         }
         let mut child_context = NodeContext::new(state, context.config.clone(), context.step);
         child_context.set_parent_schema(parent_schema);
-        let mut output = self
-            .pipeline_subgraph(graph)
-            .execute(&child_context)
-            .await?;
+        let mut output = match self.pipeline_subgraph(graph).execute(&child_context).await {
+            Ok(output) => output,
+            Err(error) => {
+                // A fixed Parallel member's failure is data its join records
+                // (contract §8a); its visible call closes with that failure.
+                if let Some(events) = events.filter(|events| events.is_fanout_member())
+                    && event_scope.is_some()
+                {
+                    events
+                        .send_application_failed_scoped(
+                            display_name,
+                            &call_id,
+                            parent_scope.as_ref(),
+                        )
+                        .await
+                        .map_err(|_| node_failure(self.name()))?;
+                }
+                return Err(error);
+            }
+        };
         if let Some(interrupt) = output.interrupt.as_mut() {
             self.bind_child_checkpoint(context, interrupt, event_scope.as_ref())
                 .await?;

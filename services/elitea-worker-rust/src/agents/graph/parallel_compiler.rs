@@ -3,14 +3,15 @@
 use async_trait::async_trait;
 
 use super::{
-    PipelineConfigurationError, PipelineDefinition, PipelineGraphBuilder, PipelineNodeDefinition,
-    PipelineNodeRuntimes, state_value_matches,
+    FanoutChildRefusal, PipelineConfigurationError, PipelineDefinition, PipelineGraphBuilder,
+    PipelineNodeDefinition, PipelineNodeRuntimes, state_value_matches,
 };
 use crate::agents::graph::application::{
     APPLICATION_MESSAGES_STATE_KEY, APPLICATION_RESULT_STATE_KEY, APPLICATION_TASK_STATE_KEY,
     ApplicationNode, ApplicationNodeDefinition, PipelineApplicationResolver,
 };
 use crate::agents::graph::direct_tool::DIRECT_TOOL_RESUME_STATE_KEY;
+use crate::agents::graph::fanout_control::FanoutCancellation;
 use crate::agents::graph::hitl::HITL_RESUME_STATE_KEY;
 use crate::agents::graph::llm::LLM_TOOL_RESUME_STATE_KEY;
 use crate::agents::graph::node_events::{
@@ -24,63 +25,56 @@ use crate::agents::graph::parallel::{
 };
 use crate::agents::graph::yaml::ParallelNodeDefinition;
 use adk_rust::graph::{
-    Channel, Checkpointer, CompiledGraph, END, GraphError, START, State, StateGraph, StateSchema,
+    Channel, Checkpoint, Checkpointer, CompiledGraph, END, GraphError, Node, NodeContext,
+    NodeOutput, START, State, StateGraph, StateSchema,
 };
+use elitea_agent_runtime::graph::fanout::runner::DecisionSource;
 use ring::digest;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-const FIXED_PARALLEL_INTEGRATION_READY: bool = false;
-
-/// Prove descendant cards against their exact saved checkpoints and sessions.
-#[async_trait]
-pub(crate) trait ParallelBranchContinuation: Send + Sync {
-    fn cards(
-        &self,
-        definition: &ApplicationNodeDefinition,
-        pause: &ParallelBranchPause,
-    ) -> Result<Vec<ParallelPauseCard>, GraphError>;
-
-    async fn input(
-        &self,
-        definition: &ApplicationNodeDefinition,
-        pause: &ParallelBranchPause,
-        decisions: &[ParallelDecision],
-    ) -> Result<State, GraphError>;
-}
-
 pub(crate) struct ParallelCompilerBinding {
     authority: Arc<dyn ParallelCheckpointAuthority>,
     occurrence: Arc<ParallelOccurrenceCheckpointer>,
-    continuation: Arc<dyn ParallelBranchContinuation>,
     deadline: tokio::time::Instant,
+    /// One latch per run, fired by the run's durable Stop.
+    cancellation: Arc<FanoutCancellation>,
+    /// The claim's fenced decision ledger (none: nothing is ever decided).
+    decisions: Option<Arc<dyn DecisionSource>>,
 }
 
 impl ParallelCompilerBinding {
     pub(crate) fn new(
         authority: Arc<dyn ParallelCheckpointAuthority>,
-        continuation: Arc<dyn ParallelBranchContinuation>,
         deadline: tokio::time::Instant,
-    ) -> Result<Arc<Self>, PipelineConfigurationError> {
-        if !FIXED_PARALLEL_INTEGRATION_READY {
-            return Err(PipelineConfigurationError::Unsupported(
-                "fixed Parallel requires composed continuation and restart acceptance",
-            ));
-        }
-        Ok(Arc::new(Self::bound(authority, continuation, deadline)))
+        decisions: Arc<dyn DecisionSource>,
+    ) -> Arc<Self> {
+        Arc::new(Self::bound(
+            authority,
+            deadline,
+            Arc::default(),
+            Some(decisions),
+        ))
     }
 
     fn bound(
         authority: Arc<dyn ParallelCheckpointAuthority>,
-        continuation: Arc<dyn ParallelBranchContinuation>,
         deadline: tokio::time::Instant,
+        cancellation: Arc<FanoutCancellation>,
+        decisions: Option<Arc<dyn DecisionSource>>,
     ) -> Self {
         Self {
             occurrence: Arc::new(ParallelOccurrenceCheckpointer::new(authority.clone())),
             authority,
-            continuation,
             deadline,
+            cancellation,
+            decisions,
         }
+    }
+
+    /// The run's fan-out latch; the run's durable Stop fires it.
+    pub(crate) fn cancellation(&self) -> Arc<FanoutCancellation> {
+        Arc::clone(&self.cancellation)
     }
 
     pub(crate) fn parent_checkpointer(&self) -> Arc<dyn Checkpointer> {
@@ -90,10 +84,10 @@ impl ParallelCompilerBinding {
     #[cfg(test)]
     pub(crate) fn for_tests(
         authority: Arc<dyn ParallelCheckpointAuthority>,
-        continuation: Arc<dyn ParallelBranchContinuation>,
         deadline: tokio::time::Instant,
+        decisions: Option<Arc<dyn DecisionSource>>,
     ) -> Arc<Self> {
-        Arc::new(Self::bound(authority, continuation, deadline))
+        Arc::new(Self::bound(authority, deadline, Arc::default(), decisions))
     }
 }
 
@@ -105,6 +99,14 @@ impl PipelineNodeRuntimes {
         if let Some(resolver) = self.application.as_ref() {
             self.application = Some(resolver.for_parallel_events(events.clone())?);
         }
+        // An LLM node emits through its factory's sender: a member's saved
+        // pipeline routes it through the branch's proved scope too.
+        if let Some(factory) = self.llm.take() {
+            self.llm = Some(Arc::new(ParallelLlmEvents {
+                inner: factory,
+                events: events.clone(),
+            }));
+        }
         self.events = Some(events);
         Ok(self)
     }
@@ -115,11 +117,45 @@ impl PipelineNodeRuntimes {
     }
 }
 
+/// An LLM factory whose node events go through a Parallel branch's sender.
+struct ParallelLlmEvents {
+    inner: Arc<dyn crate::agents::graph::llm::PipelineLlmAgentFactory>,
+    events: PipelineNodeEventSender,
+}
+
+impl crate::agents::graph::llm::PipelineLlmAgentFactory for ParallelLlmEvents {
+    fn build(
+        &self,
+        definition: &crate::agents::graph::llm::LlmNodeDefinition,
+        input: &crate::agents::graph::llm::LlmExecutionInput,
+        output_schema: Option<serde_json::Value>,
+        replay: Option<&crate::agents::graph::llm::PipelineLlmReplayEnvelope>,
+        scope: &crate::agents::graph::llm::PipelineModelScope,
+    ) -> Result<
+        crate::agents::graph::llm::PipelineLlmAgentBinding,
+        crate::agents::graph::llm::LlmExecutionError,
+    > {
+        self.inner
+            .build(definition, input, output_schema, replay, scope)
+    }
+
+    fn event_sender(&self) -> Option<PipelineNodeEventSender> {
+        self.inner.event_sender().map(|_| self.events.clone())
+    }
+}
+
 impl PipelineDefinition {
     pub(crate) fn has_parallel_nodes(&self) -> bool {
         self.nodes
             .iter()
             .any(|node| matches!(node, PipelineNodeDefinition::Parallel(_)))
+    }
+
+    pub(crate) fn first_parallel_node(&self) -> Option<&str> {
+        self.nodes.iter().find_map(|node| match node {
+            PipelineNodeDefinition::Parallel(node) => Some(node.id()),
+            _ => None,
+        })
     }
 
     pub(super) fn bind_parallel_authority(
@@ -155,8 +191,9 @@ impl PipelineDefinition {
         };
         let bound = Arc::new(ParallelCompilerBinding::bound(
             authority,
-            Arc::clone(&binding.continuation),
             binding.deadline,
+            Arc::clone(&binding.cancellation),
+            binding.decisions.clone(),
         ));
         let parent: Arc<dyn Checkpointer> = bound.occurrence.clone();
         runtimes.parallel = Some(bound);
@@ -203,11 +240,21 @@ impl PipelineDefinition {
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
         reject_nested_parallel(&owned, runtimes)?;
+        // The member tier shows the participant the branch's Agent node selects.
+        let member_names = definition
+            .branches()
+            .iter()
+            .map(|branch| {
+                owned.get(branch.id()).map_or_else(
+                    || branch.node().to_owned(),
+                    |node| node.selection().alias().to_owned(),
+                )
+            })
+            .collect();
         let factory = Arc::new(CompilerParallelBranches {
             owned,
             state_types: self.state.clone(),
             resolver,
-            continuation: Arc::clone(&binding.continuation),
             events: runtimes.events.clone(),
         });
         let runtime = Arc::new(AdkParallelBranchRuntime::new(
@@ -215,8 +262,16 @@ impl PipelineDefinition {
             factory,
             Arc::clone(&binding.occurrence),
         ));
+        let mut node = DurableParallelNode::new(definition.clone(), runtime);
+        if let Some(decisions) = &binding.decisions {
+            node = node.with_decisions(Arc::clone(decisions));
+        }
         builder = builder.node(
-            DurableParallelNode::new(definition.clone(), runtime).with_deadline(binding.deadline),
+            node.with_deadline(binding.deadline)
+                .with_cancellation(Arc::clone(&binding.cancellation))
+                .with_node_events(runtimes.events.clone())
+                .with_member_names(member_names)
+                .with_output_reducer(self.state_reducers.get(definition.output_key()).copied()),
         );
         if let Some(target) = definition.transition() {
             builder = builder.edge(definition.id(), if target == "END" { END } else { target });
@@ -237,13 +292,52 @@ fn reject_nested_parallel(
                 format!("{}/{}", runtimes.application_scope_path, node.id())
             };
             let descendants = format!("{path}/");
+            // Code inside a fan-out child needs the Wave 3 Code-slot and
+            // receipt work; refuse it by name until then, as Map does.
+            if definitions.iter().any(|(key, definition)| {
+                (key == &path || key.starts_with(&descendants)) && definition.has_code_nodes()
+            }) {
+                return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                    node: node.id().to_owned(),
+                    refusal: FanoutChildRefusal::ContainsCode,
+                });
+            }
+        }
+        for node in owned.values() {
+            let path = if runtimes.application_scope_path.is_empty() {
+                node.id().to_owned()
+            } else {
+                format!("{}/{}", runtimes.application_scope_path, node.id())
+            };
+            let descendants = format!("{path}/");
             if definitions.iter().any(|(key, definition)| {
                 (key == &path || key.starts_with(&descendants)) && definition.has_parallel_nodes()
             }) {
-                return Err(PipelineConfigurationError::Unsupported(
-                    "an explicit Parallel branch cannot contain another explicit Parallel",
-                ));
+                return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                    node: node.id().to_owned(),
+                    refusal: FanoutChildRefusal::ContainsParallel,
+                });
             }
+        }
+    }
+    Ok(())
+}
+
+/// FU-249: a Parallel binds its checkpoint authority to the started root only,
+/// so a saved child pipeline (beneath an Agent node, a Parallel branch's
+/// included) that holds one is refused by the path of its Parallel node.
+pub(crate) fn refuse_child_parallel(
+    runtimes: &PipelineNodeRuntimes,
+) -> Result<(), PipelineConfigurationError> {
+    let Some(definitions) = runtimes.composition_definitions() else {
+        return Ok(());
+    };
+    for (path, definition) in definitions {
+        if let Some(parallel) = definition.first_parallel_node() {
+            return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                node: format!("{path}/{parallel}"),
+                refusal: FanoutChildRefusal::ContainsParallel,
+            });
         }
     }
     Ok(())
@@ -261,12 +355,21 @@ pub(super) fn validate_parallel_ownership(
         _ => None,
     }) {
         for branch in parallel.branches() {
-            let Some(PipelineNodeDefinition::Application(node)) =
-                nodes.iter().find(|node| node.id() == branch.node())
-            else {
-                return Err(PipelineConfigurationError::Invalid(
-                    "fixed Parallel branches must own declared Agent nodes",
-                ));
+            let node = match nodes.iter().find(|node| node.id() == branch.node()) {
+                Some(PipelineNodeDefinition::Application(node)) => node,
+                // Only saved Agent and saved Pipeline children run as branches
+                // until Wave 3 admits the other kinds one by one.
+                Some(other) => {
+                    return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                        node: other.id().to_owned(),
+                        refusal: FanoutChildRefusal::Kind,
+                    });
+                }
+                None => {
+                    return Err(PipelineConfigurationError::Invalid(
+                        "fixed Parallel branches must own declared Agent nodes",
+                    ));
+                }
             };
             if node.transition().is_some()
                 || node.id() == entry
@@ -295,7 +398,6 @@ struct CompilerParallelBranches {
     owned: BTreeMap<String, ApplicationNodeDefinition>,
     state_types: BTreeMap<String, String>,
     resolver: Arc<dyn PipelineApplicationResolver>,
-    continuation: Arc<dyn ParallelBranchContinuation>,
     events: Option<PipelineNodeEventSender>,
 }
 
@@ -393,11 +495,21 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
             }
             None => Arc::clone(&self.resolver),
         };
+        // A continued authored `after` pause re-arms only its proven checkpoint.
+        let checkpointer = if execution.static_after_checkpoints().is_empty() {
+            execution.checkpointer()
+        } else {
+            Arc::new(super::super::static_pause::StaticResumeCheckpointer::new(
+                execution.checkpointer(),
+                execution.static_after_checkpoints().clone(),
+            ))
+        };
+        let frontier = Arc::clone(&checkpointer);
         let node = ApplicationNode::new(
             definition.clone(),
             self.state_types.clone(),
             resolver.as_ref(),
-            execution.checkpointer(),
+            checkpointer,
         )
         .map_err(|_| {
             GraphError::InvalidGraph(
@@ -436,7 +548,10 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
             .channels
             .insert("messages".to_owned(), Channel::list("messages"));
         StateGraph::new(schema)
-            .add_node(execution.wrap_node(node))
+            .add_node(execution.wrap_node(BranchFrontierNode {
+                node,
+                checkpointer: frontier,
+            }))
             .add_edge(START, definition.id())
             .add_edge(definition.id(), END)
             .compile()
@@ -490,7 +605,8 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         branch: &crate::agents::graph::ParallelBranchDefinition,
         pause: &ParallelBranchPause,
     ) -> Result<Vec<ParallelPauseCard>, GraphError> {
-        self.continuation.cards(self.definition(branch)?, pause)
+        self.definition(branch)?;
+        Ok(vec![super::super::parallel_cards::child_card(pause)?.card])
     }
 
     async fn resume_input(
@@ -499,12 +615,84 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         pause: &ParallelBranchPause,
         decisions: &[ParallelDecision],
     ) -> Result<State, GraphError> {
-        self.continuation
-            .input(self.definition(branch)?, pause, decisions)
-            .await
+        let definition = self.definition(branch)?;
+        // The child participant's own authored pause catalog proves a static
+        // pause; it is resolved from frozen saved versions, not from state.
+        // By node, as the branch's own run resolves it: a fixed Parallel's
+        // participants are scoped per owned node, not by alias.
+        let participant = self
+            .resolver
+            .resolve_node(
+                definition.id(),
+                definition.selection(),
+                Arc::clone(&pause.checkpointer),
+            )
+            .map_err(|_| {
+                GraphError::InvalidGraph(
+                    "the fixed Parallel Agent participant is unavailable".to_owned(),
+                )
+            })?;
+        let catalog = match &participant {
+            crate::agents::graph::application::ResolvedApplicationParticipant::Pipeline {
+                static_pauses,
+                ..
+            } => Some(static_pauses),
+            _ => None,
+        };
+        super::super::parallel_cards::child_resume(pause, catalog, decisions).await
+    }
+}
+
+/// A scoped Agent call proves itself against its own thread's frontier (the
+/// graph-call receipt, `prepare_graph_call`). A fresh branch child has saved
+/// nothing yet, so save the frontier the call is admitted at before the node
+/// runs, as the root graph does for its entry (`with_initial_checkpoint`).
+struct BranchFrontierNode {
+    node: ApplicationNode,
+    checkpointer: Arc<dyn Checkpointer>,
+}
+
+#[async_trait]
+impl Node for BranchFrontierNode {
+    fn name(&self) -> &str {
+        self.node.name()
+    }
+
+    fn description(&self) -> &str {
+        self.node.description()
+    }
+
+    fn capabilities(&self) -> adk_rust::AgentCapabilities {
+        self.node.capabilities()
+    }
+
+    fn validate(&self) -> Result<(), GraphError> {
+        self.node.validate()
+    }
+
+    fn validate_against(&self, parent: &StateSchema) -> Result<(), GraphError> {
+        self.node.validate_against(parent)
+    }
+
+    async fn execute(&self, context: &NodeContext) -> Result<NodeOutput, GraphError> {
+        let thread = &context.config.thread_id;
+        if self.checkpointer.load(thread).await?.is_none() {
+            let frontier = Checkpoint::new(
+                thread,
+                context.state.clone(),
+                context.step,
+                vec![self.node.name().to_owned()],
+            );
+            self.checkpointer.save(&frontier).await?;
+        }
+        self.node.execute(context).await
     }
 }
 
 #[cfg(test)]
 #[path = "parallel_compiler_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "parallel_cards_tests.rs"]
+mod card_tests;

@@ -7,6 +7,7 @@ import recoveryReceipt from '@/shared/lib/fixtures/node-recovery-required.json';
  * rather than a turn someone imagined.
  */
 import { describe, expect, it } from 'vitest';
+import { fanoutFixture } from '../__tests__/fanoutFixtures';
 
 import { sha256Hex } from '@/shared/lib/hash/sha256';
 import { ToolActionStatus } from '@/shared/lib/chat';
@@ -272,6 +273,14 @@ describe('applyChatStreamFrame', () => {
   });
 });
 
+const PROGRESS_CALL_ID = fanoutFixture<{ members: { call_id: string }[] }>('fanout-progress-v1').members[0]!.call_id;
+const FANOUT_METADATA: Readonly<Record<string, Record<string, unknown>>> = {
+  [SocketMessageType.AgentInterruptPending]: { pause_progress: true, interrupt_card_v1: fanoutFixture('fanout-interrupt-card-v1') },
+  [SocketMessageType.AgentHitlResolved]: { interrupt_resolved_v1: fanoutFixture('fanout-interrupt-resolved-v1') },
+  [SocketMessageType.AgentFanoutMember]: { fanout_member_status_v1: fanoutFixture('fanout-member-status-v1') },
+  [SocketMessageType.AgentFanoutProgress]: { fanout_progress_v1: fanoutFixture('fanout-progress-v1') },
+};
+
 describe('the ported boundary is explicit', () => {
   it('every handled type is reduced, and every unhandled one is inert', () => {
     // The fixture satisfies EVERY handled case's preconditions — an
@@ -299,6 +308,16 @@ describe('the ported boundary is explicit', () => {
         const owned = before.map(message => ({ ...message, id: response, executionGeneration: '1' }));
         expect(applyChatStreamFrame(owned, frame(type, { message_id: response, execution_generation: '1',
           response_metadata: { node_recovery_required_v1: recoveryReceipt } }), CONTEXT)).not.toBe(owned);
+        continue;
+      }
+      const fanout = FANOUT_METADATA[type];
+      if (fanout) {
+        // The fan-out family reads only its contract metadata (v1.1 §9).
+        const seeded = type === SocketMessageType.AgentHitlResolved || type === SocketMessageType.AgentFanoutProgress
+          ? applyChatStreamFrame(applyChatStreamFrame(before, frame(SocketMessageType.AgentInterruptPending, { response_metadata: FANOUT_METADATA[SocketMessageType.AgentInterruptPending] }), CONTEXT),
+            frame(SocketMessageType.AgentFanoutMember, { response_metadata: { fanout_member_status_v1: { ...fanoutFixture<Record<string, unknown>>('fanout-member-status-v1'), parent_agent_call_id: PROGRESS_CALL_ID, parent_agent_path: [{ call_id: PROGRESS_CALL_ID, name: 'Researcher', sibling_ordinal: 1 }] } } }), CONTEXT)
+          : before;
+        expect(applyChatStreamFrame(seeded, frame(type, { response_metadata: fanout }), CONTEXT), `${type} changed nothing`).not.toBe(seeded);
         continue;
       }
       const next = applyChatStreamFrame(

@@ -223,7 +223,7 @@ func (s *CompositionSource) Prefetch(ctx context.Context, ids []applicationcompo
 		version := applicationcomposition.Version{Kind: applicationcomposition.KindAgent, Name: name}
 		if agentType == "pipeline" {
 			version.Kind = applicationcomposition.KindPipeline
-			version.AgentNodes, version.StaticPause = applicationcomposition.ReadPipeline(instructions)
+			version.AgentNodes, version.StaticPause, version.ParallelNode = applicationcomposition.ReadPipeline(instructions)
 		}
 		s.cache[id] = cachedVersion{version: version, ok: true}
 		found[id.VersionID] = id
@@ -493,7 +493,7 @@ func checkStartComposition(ctx context.Context, q sqlExecutor, schema string, ap
 	root := applicationcomposition.Identity{ApplicationID: int64(applicationID), VersionID: int64(versionID)}
 	err := applicationcomposition.Check(ctx, newCompositionSource(q, schema), root, nil)
 	if applicationcomposition.Refusal(err) != nil {
-		return applicationcomposition.ErrAtStart
+		return applicationcomposition.AtStart(err)
 	}
 	if err != nil {
 		return fmt.Errorf("current application composition: %w", err)

@@ -25,6 +25,9 @@ import type { HitlInterrupt, HitlResumePayload } from '../chat-hitl-actions/Chat
 import { ChatHitlActions } from '../chat-hitl-actions/ChatHitlActions';
 import { SubAgentAccordion } from '../sub-agent-section/SubAgentAccordion';
 import type { SubAgentTool } from '../sub-agent-section/subAgentIcon.helpers';
+import { ChatContinue, type ChatContinueProps } from '../chat-continue/ChatContinue';
+import { t } from '@/shared/i18n';
+import { StaticPauseCard } from './StaticPauseCard';
 
 /** One extra card owned by a bucket instance (static pause) — rendered after that instance's HITL cards. */
 interface ApprovalExtraCard {
@@ -40,6 +43,12 @@ export interface AnswerApprovalsProps {
   readonly renderAuthorizationCard: (action: unknown, index: number) => ReactNode;
   readonly confirmation?: ReactNode;
   readonly hitlBuckets: HitlBuckets<HitlInterrupt>;
+  /**
+   * Per-interrupt delegated-auth cards (fan-out ledger), bucketed like the HITL
+   * cards and rendered where the reference renders authorization: first.
+   */
+  readonly ledgerAuthorizationBuckets?: HitlBuckets<HitlInterrupt> | undefined;
+  readonly renderAuthModal?: ChatContinueProps['renderAuthModal'];
   readonly onHitlResume?: ((payload: HitlResumePayload) => void) | undefined;
   readonly tools?: readonly SubAgentTool[] | undefined;
   /** Static-pause cards with their owning bucket (or extra buckets they open). */
@@ -55,6 +64,8 @@ export function AnswerApprovals({
   renderAuthorizationCard,
   confirmation,
   hitlBuckets,
+  ledgerAuthorizationBuckets,
+  renderAuthModal,
   onHitlResume,
   tools,
   extraCards = [],
@@ -62,6 +73,34 @@ export function AnswerApprovals({
 }: AnswerApprovalsProps): ReactNode {
   const renderHitlCard = ({ interrupt, index }: { readonly interrupt: HitlInterrupt; readonly index: number }): ReactNode => {
     const interruptId = getInterruptIdentity(interrupt as Readonly<Record<string, unknown>>);
+    const disabled = !onHitlResume || Boolean(interrupt.decided) || Boolean(interrupt.queued);
+    // A per-interrupt static pause (`continue`) uses the static-pause card; a
+    // per-interrupt sign-in uses the bare authorization `ChatContinue`.
+    if (interrupt.ledger_kind === 'hitl_node' && interrupt.available_actions?.includes('continue')) {
+      return (
+        <StaticPauseCard
+          key={interruptId || `hitl-${index}`}
+          nodeName={interrupt.node_name ?? ''}
+          disabled={disabled}
+          onContinue={() => onHitlResume?.({ action: 'continue', interruptId })}
+        />
+      );
+    }
+    if (interrupt.ledger_kind === 'delegated_auth') {
+      return (
+        <ChatContinue
+          key={interruptId || `hitl-${index}`}
+          authRequired
+          disabled={disabled}
+          onContinueWithoutAuth={() => onHitlResume?.({ action: 'skip', interruptId })}
+          onAuthSuccess={() => onHitlResume?.({ action: 'authorize', interruptId })}
+          authRequiredAction={{ id: interruptId, authorizationRequestId: interruptId, ...(interrupt.tool_name ? { name: interrupt.tool_name } : {}), toolMeta: interrupt.server_url ? { server_url: interrupt.server_url } : {} }}
+          renderAuthModal={renderAuthModal}
+          message={interrupt.message}
+          continueLabel={t('features.chatMessages.authorization.skip', 'Skip')}
+        />
+      );
+    }
     return (
       <ChatHitlActions
         key={interruptId || `hitl-${index}`}
@@ -69,7 +108,7 @@ export function AnswerApprovals({
         toolCallId={interrupt.tool_call_id ?? ''}
         interruptId={interruptId}
         onHitlResume={onHitlResume}
-        disabled={!onHitlResume || Boolean(interrupt.decided) || Boolean(interrupt.queued)}
+        disabled={disabled}
       />
     );
   };
@@ -80,6 +119,7 @@ export function AnswerApprovals({
   return (
     <>
       {authorizationBuckets.coordinator.map(renderAuthorizationCard)}
+      {ledgerAuthorizationBuckets?.coordinator.map(renderHitlCard)}
       {authorizationBuckets.subAgents.map((bucket) => (
         <SubAgentAccordion
           key={`authorization-sa-${bucket.instanceKey}`}
@@ -92,6 +132,20 @@ export function AnswerApprovals({
           transparent
         >
           {bucket.actions.map(renderAuthorizationCard)}
+        </SubAgentAccordion>
+      ))}
+      {ledgerAuthorizationBuckets?.subAgents.map((bucket) => (
+        <SubAgentAccordion
+          key={`ledger-authorization-sa-${bucket.instanceKey}`}
+          name={bucket.name}
+          label={bucket.label}
+          tools={tools}
+          agentType={bucket.agentType}
+          paused
+          defaultExpanded
+          transparent
+        >
+          {bucket.entries.map(renderHitlCard)}
         </SubAgentAccordion>
       ))}
 

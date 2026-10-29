@@ -205,6 +205,11 @@ type Dependencies struct {
 	// concrete type, the same "declared locally" shape
 	// pipelinetriggers.EventEmitter uses.
 	DomainEvents pipelineruns.EventEmitter
+	// InterruptLiveEvents publishes the per-interrupt ledger's live frames
+	// (agent_hitl_resolved, agent_fanout_wake_admitted) on the project SSE
+	// plane's audience-scoped conversation family. Nil without a live-update plane: the
+	// durable replay copy remains.
+	InterruptLiveEvents repos.InterruptLiveEvents
 	// Workspace is the cloud executor's handoff seam (ADR-0034, workspace.go
 	// in this package). Every field may be nil: the workspace-store calls then
 	// answer UNSUPPORTED_CAPABILITY and the runtime context serves no
@@ -643,6 +648,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	var nodeRecovery *recoveryapp.Service
 	var nodeRecoveryStore *repos.NodeRecoveryRepository
 	var executionInterrupts *repos.ExecutionInterruptRepository
+	// The ledger's after-commit signals: the replay wake for
+	// agent_hitl_resolved and the wake-admission kick. Filled below, before
+	// anything is served.
+	interruptSignals := &repos.ExecutionInterruptSignals{}
+	var fanoutWakes *agentexecutionapp.FanoutWakeAdmitter
 	recoveryOwners := &repos.RecoveryEffectOwners{HTTP: repos.NewHTTPActionRecoveryProofProvider()}
 	var originalCodeIntents *repos.CodeIntentRepository
 	codeSources, codeDefinitions, err := configureCodeSourceCapture(config, dependencies)
@@ -764,16 +774,27 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if recoveryErr != nil {
 			return nil, recoveryErr
 		}
-		if config.ExecutionInterruptsAPIEnabled {
-			executionInterrupts, recoveryErr = repos.NewExecutionInterruptRepository(dependencies.AdmissionPool)
-			if recoveryErr != nil {
-				return nil, fmt.Errorf("construct execution interrupt repository: %w", recoveryErr)
-			}
+		// The per-interrupt decision ledger is always on with the agent runtime
+		// (fanout-interrupt-decisions v1.1, decision D3: no flag).
+		executionInterrupts, recoveryErr = repos.NewExecutionInterruptRepository(dependencies.AdmissionPool)
+		if recoveryErr != nil {
+			return nil, fmt.Errorf("construct execution interrupt repository: %w", recoveryErr)
 		}
 		agentCancellation, cancelErr := repos.NewCurrentAgentCancelRepository(dependencies.AdmissionPool)
 		if cancelErr != nil {
 			return nil, fmt.Errorf("construct current agent cancellation repository: %w", cancelErr)
 		}
+		// fanout-interrupt-decisions v1.1 §8.1: a QUEUED wake row becomes one
+		// fanout_wake continuation through the ordinary agent admission.
+		fanoutWakes, recoveryErr = agentexecutionapp.NewFanoutWakeAdmitter(executionInterrupts, agentAdmissions, dependencies.Logger)
+		if recoveryErr != nil {
+			return nil, fmt.Errorf("construct fanout wake admitter: %w", recoveryErr)
+		}
+		interruptSignals.Wakes = fanoutWakes
+		interruptSignals.Live = dependencies.InterruptLiveEvents
+		executionInterrupts.SetSignals(interruptSignals)
+		agentCancellation.SetInterruptSignals(interruptSignals)
+		agentJobs.SetInterruptSignals(interruptSignals)
 		var agentCancellationStore agentexecutionapp.CurrentAgentCancellationStore = agentCancellation
 		if dependencies.ConversationActivity != nil {
 			agentCancellationStore = activityCancellationStore{next: agentCancellation, activity: dependencies.ConversationActivity}
@@ -1044,6 +1065,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("compose agent admission reservation reaper: %w", err)
 		}
+		if fanoutWakes != nil {
+			publisherRoot, err = newPublisherSet(publisherRoot, fanoutWakes)
+			if err != nil {
+				return nil, fmt.Errorf("compose fanout wake admitter: %w", err)
+			}
+		}
 	}
 	var replayMaintenance *executionReplayRetentionJanitor
 	var nodeEvents *repos.NodeEventsRepository
@@ -1065,6 +1092,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("compose execution replay wake bus: %w", err)
 		}
 		replayWaiter = replayWake
+		interruptSignals.Replay = replayWake
 		replayRetention, retentionErr := newExecutionReplayRetentionJanitor(
 			nodeEvents,
 			executionReplayRetentionPollInterval,
@@ -1238,6 +1266,14 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	settlementOptions = append(settlementOptions, workspaceSettlementHooks(dependencies.Workspace, dependencies.Logger)...)
 	settlementOptions = append(settlementOptions, activitySettlementHooks(dependencies.ConversationActivity)...)
+	// A run that ended without parking leaves cards nothing can apply; the
+	// wake sweep closes them (contract §5, §8a). Kick it once the turn settles.
+	settlementOptions = append(settlementOptions, executionapp.WithAfterSettleHooks(
+		func(_ context.Context, proposal executionapp.SettlementProposal, _ executionapp.SettlementReceipt) {
+			if changesConversationActivity(proposal) && interruptSignals.Wakes != nil {
+				interruptSignals.Wakes.Kick()
+			}
+		}))
 	settlements, err := executionapp.NewSettlementService(settlementsRepository, settlementOptions...)
 	if err != nil {
 		return nil, err
@@ -1464,6 +1500,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct agent execution result repository: %w", err)
 		}
+		agentResults.SetInterruptSignals(interruptSignals)
 		agentOutput, err = outputapp.NewAgentExecutionService(
 			agentJobs,
 			outputClaims,
@@ -2231,6 +2268,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	if nodeRecoveryStore != nil {
 		contentServer.WithNodeRecoveryControl(nodeRecoveryStore).WithNodeRecoveryResults(nodeRecoveryStore)
+	}
+	if executionInterrupts != nil {
+		// Private claim-fenced decision fetch/ACK (fanout-interrupt-decisions
+		// v1.1 §7) on the same mTLS listener as node recovery control.
+		contentServer.WithExecutionInterrupts(executionInterrupts)
 	}
 	if config.AgentExecutionDispatchEnabled && dependencies.ObjectStore != nil && sandboxGrants != nil {
 		sandboxSpoolDir, err = os.MkdirTemp("", "elitea-sandbox-bundles-")

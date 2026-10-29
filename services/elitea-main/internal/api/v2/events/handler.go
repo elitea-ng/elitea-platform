@@ -104,9 +104,15 @@ const StreamPermission = "models.project_context.view"
 //     The payload is the conversation's id, uuid and source, its activity
 //     state and times, an unread hint and a read time; never a name or a
 //     message.
+//     The per-interrupt HITL ledger's live frames ride on the same family
+//     and the same audience rule (fanout-interrupt-decisions v1.1 §8.1):
+//     agent_hitl_resolved carries the fanout-interrupt-resolved object (never
+//     a decision value) plus conversation_id and root_response_id;
+//     agent_fanout_wake_admitted carries conversation_id, root_response_id,
+//     execution_id, generation. Their audience is the conversation's readers.
 var streamFamilies = []struct {
-	channel   func(projectID string) string
-	eventType string
+	channel    func(projectID string) string
+	eventTypes []string
 	// audience: relay only to a caller named in the frame's `audience`.
 	audience bool
 	// projectAudience: a frame may name `audience_project: true` instead
@@ -116,11 +122,18 @@ var streamFamilies = []struct {
 	// mode) for the family to be relayed at all.
 	permission string
 }{
-	{events.ProjectChannel, events.EventBudgetSoftAlert, false, false, ""},
-	{events.PresenceChannel, canvaspresence.EventType, false, false, ""},
-	{events.WorkspaceChannel, WorkspaceHandoffEventType, true, false, ""},
-	{events.ConversationsChannel, ConversationActivityEventType, true, true, ConversationListPermission},
+	{events.ProjectChannel, []string{events.EventBudgetSoftAlert}, false, false, ""},
+	{events.PresenceChannel, []string{canvaspresence.EventType}, false, false, ""},
+	{events.WorkspaceChannel, []string{WorkspaceHandoffEventType}, true, false, ""},
+	{events.ConversationsChannel, []string{ConversationActivityEventType, InterruptResolvedEventType, FanoutWakeAdmittedEventType}, true, true, ConversationListPermission},
 }
+
+// InterruptResolvedEventType and FanoutWakeAdmittedEventType are the
+// per-interrupt HITL ledger's live frames (repos.ExecutionInterruptSignals).
+const (
+	InterruptResolvedEventType  = "agent_hitl_resolved"
+	FanoutWakeAdmittedEventType = "agent_fanout_wake_admitted"
+)
 
 // WorkspaceHandoffEventType is workspacehandoff.EventType, named here so the
 // relay table does not depend on the handoff application package.
@@ -186,7 +199,7 @@ func audienceFrame(payload []byte, userID int64, known bool, allowProject ...boo
 // family; see ForwardedOn).
 func Forwarded(eventType string) bool {
 	for _, f := range streamFamilies {
-		if f.eventType == eventType {
+		if slices.Contains(f.eventTypes, eventType) {
 			return true
 		}
 	}
@@ -198,7 +211,7 @@ func Forwarded(eventType string) bool {
 func ForwardedOn(projectID, channel, eventType string) bool {
 	for _, f := range streamFamilies {
 		if f.channel(projectID) == channel {
-			return f.eventType == eventType
+			return slices.Contains(f.eventTypes, eventType)
 		}
 	}
 	return false

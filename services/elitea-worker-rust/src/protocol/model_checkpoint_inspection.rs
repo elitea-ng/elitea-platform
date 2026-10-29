@@ -25,6 +25,7 @@ impl<R: crate::transport::ControlRpc> super::AgentControlClient<R> {
             &self.producer_id,
         )?;
         request.agent_model_checkpoint_recovery = true;
+        request.fanout_interrupt_decisions = false;
         let response = self.control.claim_command(request).await?;
         parse_checkpoint_claim_decision(
             verified,
@@ -445,6 +446,10 @@ mod tests {
             request: Request<ClaimCommandRequestV1>,
         ) -> Result<Response<ClaimCommandResponseV1>, Status> {
             assert!(request.get_ref().agent_model_checkpoint_recovery);
+            assert!(
+                !request.get_ref().fanout_interrupt_decisions,
+                "a recovery claim never asks for a fan-out wake"
+            );
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(Response::new(
                 self.claim_response.clone().expect("expected claim"),

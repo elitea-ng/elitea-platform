@@ -42,7 +42,8 @@ const BLOCK_WITH_COMMENT_ACTION = 'block_with_comment';
  * (`currentHITLValue`, agentexecution/route.go).
  */
 export interface HitlResumePayload {
-  readonly action: 'approve' | 'reject' | 'edit' | 'block_with_comment' | 'answer';
+  /** `continue`, `authorize` and `skip` come only from per-interrupt ledger cards (`AnswerApprovals`). */
+  readonly action: 'approve' | 'reject' | 'edit' | 'block_with_comment' | 'answer' | 'continue' | 'authorize' | 'skip';
   readonly value?: string | undefined;
   readonly toolCallId?: string | undefined;
   readonly interruptId?: string | undefined;
@@ -66,6 +67,10 @@ export interface HitlInterrupt {
   readonly action_label?: string;
   readonly tool_args?: unknown;
   readonly policy_message?: string;
+  readonly node_name?: string;
+  /** Per-interrupt ledger cards only (`lib/fanoutFrames.ts`): the card kind and an auth card's server. */
+  readonly ledger_kind?: string;
+  readonly server_url?: string;
 }
 
 /** @public Props for `ChatHitlActions`. */

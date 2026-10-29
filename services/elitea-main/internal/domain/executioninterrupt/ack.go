@@ -72,3 +72,20 @@ func (f Frontier) CanonicalJSON() ([]byte, error) {
 	}
 	return encoded, nil
 }
+
+// AckResultSchema names fanout-interrupt-ack-result.v1.
+const AckResultSchema = "elitea.pipeline.fanout-interrupt-ack-result.v1"
+
+// CanonicalJSON writes the private ACK response (fanout-interrupt-ack-result.v1).
+func (r AckResult) CanonicalJSON() ([]byte, error) {
+	if !ValidDigest(r.InterruptKey) || (r.State != StateConsumed && r.State != StateSuperseded) || r.Revision < 1 {
+		return nil, ErrLedgerFault
+	}
+	return canonicalOf(map[string]any{
+		"interrupt_key": r.InterruptKey,
+		"replay":        r.Replay,
+		"revision":      r.Revision,
+		"schema":        AckResultSchema,
+		"state":         string(r.State),
+	})
+}

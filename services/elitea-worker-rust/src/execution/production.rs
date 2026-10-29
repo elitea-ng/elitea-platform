@@ -411,6 +411,7 @@ impl ProductionAgentRuntime {
             )
             .with_office_runtime(office_runtime.clone())
             .with_web_runtime(web_runtime.clone())
+            .with_fanout_decisions(Arc::clone(&input))
             .with_workspace_runs(workspace_runs)
             .with_mcp_connector(Arc::clone(&mcp_connector)),
         );

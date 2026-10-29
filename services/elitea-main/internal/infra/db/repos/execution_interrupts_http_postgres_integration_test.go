@@ -109,3 +109,95 @@ func TestExecutionInterruptHTTPAgainstPostgres(t *testing.T) {
 		t.Fatalf("unknown key: %d %s", w.Code, w.Body.String())
 	}
 }
+
+// TestExecutionInterruptPublicRouteAuthorizationMatrix: the gate §3a matrix
+// for the list and decision routes, which are now always registered with the
+// agent runtime (decision D3). Every refused caller leaves the card
+// unchanged; a token and a session of the same owner are treated alike.
+func TestExecutionInterruptPublicRouteAuthorizationMatrix(t *testing.T) {
+	h := newInterruptHarness(t)
+	response := h.newResponse()
+	key := h.raise(response, "fanout-interrupt-card-v1.json")
+	route, err := agentexecutionapi.NewCurrentExecutionInterruptRoute(h.repo,
+		apimw.AuthConfig{PrincipalValidator: interruptPrincipalValidator{}, FormSessions: authtest.FormSessions{}, Validator: authtest.Tokens{}},
+		legacyrbac.NewPostgresResolver(h.pool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Personal access tokens of the owner and of the outsider (the legacy
+	// RBAC resolver maps a token to its owning user).
+	h.exec(`CREATE TABLE IF NOT EXISTS public.auth_core__token (
+    id SERIAL PRIMARY KEY, uuid VARCHAR(36) UNIQUE, expires TIMESTAMP,
+    user_id INTEGER REFERENCES auth_core__user(id) ON DELETE CASCADE, name TEXT)`)
+	h.exec(`INSERT INTO public.auth_core__token (id, uuid, user_id, name) VALUES
+ (9007, gen_random_uuid()::text, 7, 'owner pat'), (9009, gen_random_uuid()::text, 9, 'outsider pat')`)
+	base := "/api/v2/elitea_core/task/prompt_lib/1/" + response + "/interrupts"
+	decision := base + "/" + key + "/decision"
+	call := func(authType string, actor int64, method, path string, body []byte) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, bytes.NewReader(body))
+		switch authType {
+		case "user":
+			authtest.SignIn(req, strconv.FormatInt(actor, 10))
+		case "token":
+			// A personal access token: the token id differs from its owner.
+			authtest.BearerToken(req, "900"+strconv.FormatInt(actor, 10), strconv.FormatInt(actor, 10)) // the seeded token ids
+		case "forged":
+			// The retired forward-auth identity headers, no credential.
+			authtest.ForgeXAuth(req, strconv.FormatInt(actor, 10))
+		}
+		w := httptest.NewRecorder()
+		route.ServeHTTP(w, req)
+		return w
+	}
+	body := func(seed string) []byte {
+		return []byte(`{"action":"approve","expected_revision":1,"request_id":"` + strings.Repeat(seed, 32) + `","value":""}`)
+	}
+	type matrixCase struct {
+		name, authType string
+		actor          int64
+		path           string
+		list, decide   int
+	}
+	foreignProject := strings.Replace(base, "/prompt_lib/1/", "/prompt_lib/2/", 1)
+	refused := []matrixCase{
+		{"unauthenticated", "", 0, base, http.StatusUnauthorized, http.StatusUnauthorized},
+		{"forged identity headers of the owner", "forged", interruptOwner, base, http.StatusUnauthorized, http.StatusUnauthorized},
+		{"project member outside the conversation", "user", interruptOutsider, base, http.StatusForbidden, http.StatusForbidden},
+		{"member of another project only", "user", interruptForeigner, base, http.StatusForbidden, http.StatusForbidden},
+		{"owner through another project", "user", interruptOwner, foreignProject, http.StatusForbidden, http.StatusForbidden},
+		{"other user, no membership", "user", 4242, base, http.StatusForbidden, http.StatusForbidden},
+		{"suspended participant", "user", interruptSuspended, base, http.StatusForbidden, http.StatusForbidden},
+		{"outsider token", "token", interruptOutsider, base, http.StatusForbidden, http.StatusForbidden},
+	}
+	for _, c := range refused {
+		if w := call(c.authType, c.actor, http.MethodGet, c.path, nil); w.Code != c.list || strings.Contains(w.Body.String(), key) {
+			t.Errorf("%s list: %d %s", c.name, w.Code, w.Body.String())
+		}
+		path := c.path + "/" + key + "/decision"
+		if w := call(c.authType, c.actor, http.MethodPost, path, body("e5")); w.Code != c.decide {
+			t.Errorf("%s decide: %d %s", c.name, w.Code, w.Body.String())
+		}
+	}
+	if got := h.row(response, key); got.state != "PENDING" || got.revision != 1 {
+		t.Fatalf("a refused caller changed the card: %+v", got)
+	}
+	// Allowed: the conversation owner (session and token) and the question's
+	// author (a conversation member).
+	for name, authType := range map[string]string{"owner session": "user", "owner token": "token"} {
+		if w := call(authType, interruptOwner, http.MethodGet, base, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), key) {
+			t.Errorf("%s list: %d %s", name, w.Code, w.Body.String())
+		}
+	}
+	if w := call("user", interruptAsker, http.MethodGet, base, nil); w.Code != http.StatusOK {
+		t.Errorf("asker list: %d", w.Code)
+	}
+	if w := call("token", interruptOwner, http.MethodPost, decision, body("f6")); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"replay":false`) {
+		t.Fatalf("owner token decide: %d %s", w.Code, w.Body.String())
+	}
+	if w := call("user", interruptOwner, http.MethodPost, decision, body("f6")); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"replay":true`) {
+		t.Fatalf("owner session replay of the token's decision: %d %s", w.Code, w.Body.String())
+	}
+	if w := call("user", interruptAsker, http.MethodPost, decision, body("a7")); w.Code != http.StatusConflict {
+		t.Fatalf("asker after the decision: %d", w.Code)
+	}
+}

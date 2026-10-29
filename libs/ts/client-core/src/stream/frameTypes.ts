@@ -103,6 +103,11 @@ export const FRAME_TYPE = {
   AgentRequiresConfirmation: 'agent_requires_confirmation',
   AgentHitlInterrupt: 'agent_hitl_interrupt',
   AgentNodeRecoveryRequired: 'agent_node_recovery_required',
+  /** Fan-out contract v1.1 §9: per-interrupt cards, their resolution, and the fan-out members' progress. */
+  AgentInterruptPending: 'agent_interrupt_pending',
+  AgentHitlResolved: 'agent_hitl_resolved',
+  AgentFanoutMember: 'agent_fanout_member',
+  AgentFanoutProgress: 'agent_fanout_progress',
   McpAuthorizationRequired: 'mcp_authorization_required',
   AgentLlmStart: 'agent_llm_start',
   AgentLlmChunk: 'agent_llm_chunk',

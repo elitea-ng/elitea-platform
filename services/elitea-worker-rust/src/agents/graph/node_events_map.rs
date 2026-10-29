@@ -22,6 +22,7 @@ impl PipelineNodeEventSender {
         Ok(Self {
             inner: self.inner.clone(),
             parallel_scope: Some(std::sync::Arc::new(scope)),
+            fanout_member: false,
         })
     }
 }

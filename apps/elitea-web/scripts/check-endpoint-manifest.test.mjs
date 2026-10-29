@@ -726,8 +726,8 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // only (a browser session is refused), so the manifest count is unchanged.
 // 313 -> 315 (per-interrupt HITL ledger, Point 5 Track M2):
 // listExecutionInterrupts and decideExecutionInterrupt. Main registers them
-// only behind ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED and no web code
-// calls them in Wave 1, so the manifest count is unchanged.
+// with the agent runtime; no web code calls them yet (the Web caller lands with
+// 2a-2 task 11), so the manifest count is unchanged.
 // 315 -> 317 (shared theme preference): getCurrentAuthorTheme and
 // updateCurrentAuthorTheme, the per-user theme mode the web and desktop apps
 // both read and write. Their manifest entries are `handwritten` (see
@@ -1073,8 +1073,12 @@ const GENERATED_OPERATION_COUNT = 417;
  * 288 -> 291 (issue 1493, ADR-0041 decision 1):
  * settings.list/create/resumeProjectExecutionSuspension, the Stop agent
  * action of the agent page (features/kill-switch). Generated.
+ *
+ * 291 -> 293 (Point 5 2a-2, fixed Parallel): chat.listExecutionInterrupts
+ * and chat.decideExecutionInterrupt, the open fan-out cards of a response
+ * and their decision (features/chat-messages interruptLedgerApi). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 291;
+const MANIFEST_ENTRY_COUNT = 293;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

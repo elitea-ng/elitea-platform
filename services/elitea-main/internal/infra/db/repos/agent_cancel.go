@@ -9,12 +9,20 @@ import (
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	interruptdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type CurrentAgentCancelRepository struct {
 	projects projectStore
+	signals  *ExecutionInterruptSignals
+}
+
+// SetInterruptSignals installs the after-commit live wake for the
+// agent_hitl_resolved frames a stop emits. Call it during composition.
+func (repository *CurrentAgentCancelRepository) SetInterruptSignals(signals *ExecutionInterruptSignals) {
+	repository.signals = signals
 }
 
 func NewCurrentAgentCancelRepository(pool *pgxpool.Pool) (*CurrentAgentCancelRepository, error) {
@@ -64,11 +72,13 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 	}
 
 	var outcome agentexecutionapp.CurrentAgentCancelOutcome
+	var notice resolvedNotice
 	err = repository.projects.WithinProjectTx(
 		ctx,
 		request.ProjectID,
 		pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite},
 		func(tx sqlExecutor) error {
+			notice = resolvedNotice{}
 			queries, ok := tx.(currentAgentCancelQuerier)
 			if !ok {
 				return errors.New("current agent cancellation query is unavailable")
@@ -159,6 +169,11 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 					return errors.New("current agent cancellation deleted an incomplete pair")
 				}
 				outcome.Deleted = true
+				var closeErr error
+				notice, closeErr = cancelOpenInterruptCards(ctx, tx, request)
+				if closeErr != nil {
+					return closeErr
+				}
 				// The steering of the deleted turn goes with it, now.
 				return DiscardTurnSteering(ctx, tx, int64(projectID), conversationID, request.ResponseMessageID)
 			}
@@ -184,16 +199,32 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 				return errors.New("current agent cancellation projection did not settle")
 			}
 			outcome.Salvaged = projection.Salvaged
-			return nil
+			var closeErr error
+			notice, closeErr = cancelOpenInterruptCards(ctx, tx, request)
+			return closeErr
 		},
 	)
 	if err != nil {
 		return agentexecutionapp.CurrentAgentCancelOutcome{}, err
 	}
+	repository.signals.resolved(ctx, notice)
 	return outcome, nil
 }
 
 var _ agentexecutionapp.CurrentAgentCancellationStore = (*CurrentAgentCancelRepository)(nil)
+
+// cancelOpenInterruptCards closes the response's open per-interrupt cards in
+// the stop transaction (fanout-interrupt-decisions §5: atomic with the stop),
+// after the response row lock is held, and emits agent_hitl_resolved for each.
+// The cancelled fence then refuses any late ACK.
+func cancelOpenInterruptCards(ctx context.Context, tx sqlExecutor, request agentexecutionapp.CurrentAgentCancelRequest) (resolvedNotice, error) {
+	_, notice, err := closeOpenExecutionInterrupts(ctx, tx, request.ResponseMessageID, interruptdomain.StateCancelled,
+		interruptdomain.Closer{ActorUserID: request.ActorUserID})
+	if err != nil {
+		return resolvedNotice{}, fmt.Errorf("cancel open interrupt cards: %w", err)
+	}
+	return notice, nil
+}
 
 type governedRefusalQuerier interface {
 	CancelCurrentAgentExecution(

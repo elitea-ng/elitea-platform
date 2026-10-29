@@ -1,5 +1,7 @@
 use super::*;
 use crate::agents::graph::node_events::{pipeline_node_event_channel, pipeline_node_signal_event};
+use adk_rust::graph::GraphError;
+use adk_rust::{AdkError, ErrorCategory, ErrorComponent};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -252,7 +254,7 @@ fn routed_leaf_retains_its_nearest_edge_and_refuses_partial_or_unknown_threads()
     );
     let original = json!(event);
     sender
-        .project_parallel_application_event(&mut event, None, "root-invocation")
+        .project_parallel_application_event(&mut event, None, "root-invocation", None)
         .unwrap();
     assert_eq!(json!(event), original);
     event.provider_metadata.insert(
@@ -261,13 +263,66 @@ fn routed_leaf_retains_its_nearest_edge_and_refuses_partial_or_unknown_threads()
     );
     assert!(
         sender
-            .project_parallel_application_event(&mut event, None, "root-invocation")
+            .project_parallel_application_event(&mut event, None, "root-invocation", None)
             .is_err()
     );
     event.provider_metadata.remove(DESCENDANT_PARENT_CALL_KEY);
     assert!(
         sender
-            .project_parallel_application_event(&mut event, None, "root-invocation")
+            .project_parallel_application_event(&mut event, None, "root-invocation", None)
+            .is_err()
+    );
+}
+
+/// An Agent child's leaf has no checkpoint thread: its activation receipt
+/// (stamped by the scoped runtime) proves the branch thread instead.
+#[test]
+fn agent_child_leaf_is_proved_by_its_activation_receipt() {
+    use crate::agents::pipeline::scoped_applications::PipelineApplicationScope;
+    let definition = crate::agents::graph::compiler::PipelineDefinition::from_yaml(
+        "state: {answer: str}\nentry_point: child\nnodes:\n  - id: child\n    type: agent\n    tool: assistant\n    input_mapping: {task: {type: fixed, value: work}}\n    output: [answer]\n    transition: END\n",
+    )
+    .unwrap();
+    let scope = PipelineApplicationScope::new(String::new(), &definition, None).unwrap();
+    let leaf = |thread: &str| {
+        let mut event = Event::new("agent-leaf");
+        event.provider_metadata.insert(
+            DESCENDANT_CONTAINER_INVOCATION_KEY.to_owned(),
+            "agent-child".to_owned(),
+        );
+        event.provider_metadata.insert(
+            DESCENDANT_PARENT_CALL_KEY.to_owned(),
+            "agent-call".to_owned(),
+        );
+        scope
+            .activate(thread, "child", 0)
+            .unwrap()
+            .stamp_with_branch(&mut event, "elitea.saved_applications".to_owned())
+            .unwrap();
+        event
+    };
+    let (sender, _) = sender(binding(Some(parent())));
+    let mut event = leaf("hashed-branch/owned");
+    let original = json!(event);
+    sender
+        .project_parallel_application_event(&mut event, None, "root-invocation", None)
+        .unwrap();
+    assert_eq!(json!(event), original, "the leaf keeps its own edge");
+    // A receipt for a thread this branch does not own.
+    let mut foreign = leaf("other-branch");
+    assert!(
+        sender
+            .project_parallel_application_event(&mut foreign, None, "root-invocation", None)
+            .is_err()
+    );
+    // No receipt: nothing proves the leaf.
+    let mut bare = leaf("hashed-branch/owned");
+    bare.provider_metadata.remove(
+        crate::agents::pipeline::scoped_applications::PIPELINE_APPLICATION_SCOPE_METADATA_KEY,
+    );
+    assert!(
+        sender
+            .project_parallel_application_event(&mut bare, None, "root-invocation", None)
             .is_err()
     );
 }
@@ -294,5 +349,49 @@ async fn ordinary_sender_keeps_existing_root_projection() {
         !event
             .provider_metadata
             .contains_key(DESCENDANT_CHECKPOINT_THREAD_KEY)
+    );
+}
+
+/// A fixed Parallel member's failure is its branch outcome: its failure
+/// signals never reach the root stream, and an approved call that may have
+/// started stays typed on the branch (browser finding, 2026-10-27).
+#[tokio::test]
+async fn a_member_failure_stays_in_its_branch_and_a_root_failure_ends_the_run() {
+    let (mut member, receiver) = sender(binding(Some(parent())));
+    member.fanout_member = true;
+    member
+        .send_execution_failure("pipeline.tool_unavailable")
+        .await
+        .unwrap();
+    member
+        .send_model_failure(&AdkError::new(
+            ErrorComponent::Model,
+            ErrorCategory::Internal,
+            "model.failed",
+            "failed",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(receiver.try_failure_code().await, None);
+    let stop = member
+        .approved_call_stop(
+            crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+            "rev",
+        )
+        .await
+        .expect("a typed member stop");
+    assert!(
+        matches!(&stop, GraphError::NodeExecutionFailed { message, .. }
+        if message.starts_with(crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE))
+    );
+    assert_eq!(receiver.try_failure_code().await, None);
+
+    let (root, receiver) = pipeline_node_event_channel();
+    root.send_execution_failure("pipeline.tool_unavailable")
+        .await
+        .unwrap();
+    assert_eq!(
+        receiver.try_failure_code().await,
+        Some("pipeline.tool_unavailable")
     );
 }

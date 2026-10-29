@@ -105,7 +105,13 @@ const MAX_NESTED_PIPELINE_CHECKPOINTS: usize = 3;
 const MAX_PIPELINE_INTERRUPT_MESSAGE_BYTES: usize = MAX_PIPELINE_HITL_MESSAGE_BYTES
     + MAX_NESTED_PIPELINE_CHECKPOINTS * (MAX_PIPELINE_NODE_IDENTITY_BYTES + 2);
 const MAX_PIPELINE_NODE_IDENTITY_BYTES: usize = 128;
-const MAX_AGENT_PATH_TIERS: usize = 3;
+/// Agent path tiers, the fan-out member tier included (contract §3.3).
+const MAX_AGENT_PATH_TIERS: usize =
+    elitea_agent_runtime::graph::fanout_budget::MAX_AGENT_PATH_TIERS;
+/// A fan-out member tier's ordinal (Map items reach 64); every other tier
+/// keeps the per-model-turn bound.
+const MAX_FANOUT_MEMBER_ORDINAL: usize =
+    elitea_agent_runtime::graph::fanout_budget::MAX_FANOUT_ORDINAL;
 pub(crate) const APPLICATION_BRANCH_ROOT: &str = "elitea.saved_applications";
 pub(crate) const DESCENDANT_CONTAINER_INVOCATION_KEY: &str =
     "elitea.descendant.container_invocation_id";
@@ -113,6 +119,15 @@ pub(crate) const DESCENDANT_PARENT_CALL_KEY: &str = "elitea.descendant.parent_ca
 pub(crate) const PIPELINE_TOOL_BOUNDARY_METADATA_KEY: &str = "elitea.pipeline.tool-boundary.v1";
 
 pub(crate) const DESCENDANT_CHECKPOINT_THREAD_KEY: &str = "elitea.descendant.checkpoint_thread_id";
+/// A fixed Parallel member's child pipeline runs under its frozen branch
+/// thread, not the root graph's naming: `{"call", "thread"}` names the member
+/// call and the branch thread its checkpoint thread is relative to. Only the
+/// Parallel node stamps it, after proving the thread against its catalog.
+pub(crate) const FANOUT_MEMBER_THREAD_KEY: &str = "elitea.fanout.member_thread.v1";
+/// A fixed Parallel member's own call (its start and its result). Members run
+/// side by side, so their calls stay open together; only the Parallel node
+/// stamps it.
+pub(crate) const FANOUT_MEMBER_CALL_KEY: &str = "elitea.fanout.member_call.v1";
 /// The pipeline child's own pending graph checkpoint (#973).
 ///
 /// Private runtime state, carried on the PERSISTED descendant interrupt event
@@ -846,6 +861,11 @@ struct ActiveToolCall {
     /// The tool a Smart Tools Selection `invoke_tool` call will actually run,
     /// shown in the tool-call record in place of the meta-tool's own name.
     display_name: Option<String>,
+    /// A fixed Parallel member's call: it may stay open beside its siblings.
+    fanout_member: bool,
+    /// The member tier (`fo1_` call id, ordinal) that keys a Parallel
+    /// member's call and its descendants, as its fan-out frames and cards do.
+    member_tier: Option<(String, usize)>,
 }
 
 #[derive(Clone)]
@@ -1174,6 +1194,20 @@ impl AgentEventProjector {
     ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
         validate_event_id(&event.id)?;
         validate_invocation_id(&event.invocation_id)?;
+        // A fan-out frame the Parallel node built: emitted as is, in order.
+        if let Some((frame_type, metadata)) = super::graph::fanout_frames::stamped_frame(event)
+            .map_err(|_| AgentEventProjectionError::invalid_state())?
+        {
+            let mut batch = ProjectedAgentEventBatch::new();
+            batch.push(self.event(
+                frame_type,
+                &Value::Null,
+                None,
+                &metadata,
+                event.timestamp,
+            )?)?;
+            return Ok(batch);
+        }
         if let Some(projected) = super::pipeline::scoped_applications::project_root_scope_event(
             event,
             self.invocation_id.as_deref(),
@@ -1532,10 +1566,17 @@ impl AgentEventProjector {
             self.descendants.insert(
                 parent_call_id.to_owned(),
                 DescendantAgentProjector {
-                    tier: AgentPathTier {
-                        name: application.display_name,
-                        call_id: parent_call_id.to_owned(),
-                        sibling_ordinal: active.sibling_ordinal,
+                    tier: match &active.member_tier {
+                        Some((call_id, ordinal)) => AgentPathTier {
+                            name: application.display_name,
+                            call_id: call_id.clone(),
+                            sibling_ordinal: Some(*ordinal),
+                        },
+                        None => AgentPathTier {
+                            name: application.display_name,
+                            call_id: parent_call_id.to_owned(),
+                            sibling_ordinal: active.sibling_ordinal,
+                        },
                     },
                     projector: Box::new(projector),
                 },
@@ -1608,6 +1649,11 @@ impl AgentEventProjector {
             return self.project_pipeline_printer(event, &payload);
         }
         let (interrupt_data, _) = pipeline_interrupt_data(&payload, &payload.thread_id)?;
+        if interrupt_data.get("schema").and_then(Value::as_str)
+            == Some(super::graph::FANOUT_PARKED_SCHEMA)
+        {
+            return self.project_fanout_parked(event, &interrupt_data);
+        }
         let guardrail_type = interrupt_data
             .get("guardrail_type")
             .and_then(Value::as_str)
@@ -1624,6 +1670,70 @@ impl AgentEventProjector {
             }
             _ => Err(AgentEventProjectionError::unsupported()),
         }
+    }
+
+    /// The parked fan-out's terminal (contract §8, §9): one `agent_hitl_interrupt`
+    /// carrying only `fanout_parked_v1` (the open cards were raised by their own
+    /// frames), never a root pause member. The paused members' calls stay open.
+    fn project_fanout_parked(
+        &mut self,
+        event: &Event,
+        parked: &Value,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        if !matches!(
+            self.state,
+            ProjectionState::Started | ProjectionState::Complete(_)
+        ) || self
+            .active_tools
+            .values()
+            .any(|active| !active.fanout_member)
+        {
+            return Err(AgentEventProjectionError::invalid_state());
+        }
+        let valid = parked.as_object().is_some_and(|object| {
+            object.len() == 3
+                && object
+                    .get("decision_revision_seen")
+                    .is_some_and(Value::is_u64)
+                && object
+                    .get("pending")
+                    .and_then(Value::as_array)
+                    .is_some_and(|pending| {
+                        (1..=elitea_agent_runtime::graph::fanout_budget::MAX_OPEN_INTERRUPTS)
+                            .contains(&pending.len())
+                            && pending.iter().all(|entry| {
+                                entry.as_object().is_some_and(|entry| {
+                                    entry.len() == 2
+                                        && entry
+                                            .get("interrupt_key")
+                                            .and_then(Value::as_str)
+                                            .is_some_and(|key| key.len() == 64)
+                                        && entry
+                                            .get("interrupt_id")
+                                            .and_then(Value::as_str)
+                                            .is_some_and(|id| !id.is_empty() && id.len() <= 512)
+                                })
+                            })
+                    })
+        });
+        if !valid {
+            return Err(AgentEventProjectionError::invalid_state());
+        }
+        let metadata = json!({
+            "thread_id": self.context.thread_id,
+            "chat_project_id": self.context.chat_project_id,
+            "fanout_parked_v1": parked,
+        });
+        let mut batch = ProjectedAgentEventBatch::new();
+        batch.push(self.event(
+            "agent_hitl_interrupt",
+            &Value::String("Parallel branches paused.".to_owned()),
+            None,
+            &metadata,
+            event.timestamp,
+        )?)?;
+        self.state = ProjectionState::Paused;
+        Ok(batch)
     }
 
     fn project_pipeline_node_recovery(
@@ -2556,7 +2666,14 @@ impl AgentEventProjector {
             self.state,
             ProjectionState::Started | ProjectionState::Complete(_)
         );
-        if starts_turn && !self.active_tools.is_empty() {
+        // A turn starts with no call open, except a fan-out member's start
+        // beside its siblings' open member calls.
+        let member_start = event.provider_metadata.contains_key(FANOUT_MEMBER_CALL_KEY)
+            && self
+                .active_tools
+                .values()
+                .all(|active| active.fanout_member);
+        if starts_turn && !self.active_tools.is_empty() && !member_start {
             return Err(AgentEventProjectionError::invalid_state());
         }
         let (event_id, timestamp_start, previous_content, previous_thinking) = match &self.state {
@@ -2863,7 +2980,21 @@ impl AgentEventProjector {
         calls: &[adk_rust::ToolCallView<'_>],
         batch: &mut ProjectedAgentEventBatch,
     ) -> Result<(), AgentEventProjectionError> {
-        if calls.len() > MAX_TOOL_CALLS_PER_MODEL_TURN || !self.active_tools.is_empty() {
+        // Fan-out member calls stay open together, at most one per branch.
+        let member_start = event.provider_metadata.contains_key(FANOUT_MEMBER_CALL_KEY)
+            && self
+                .active_tools
+                .values()
+                .all(|active| active.fanout_member)
+            && self.active_tools.len() + calls.len()
+                <= elitea_agent_runtime::graph::fanout_budget::MAX_PARALLEL_BRANCHES
+            && calls.iter().all(|call| {
+                call.call_id
+                    .is_none_or(|id| !self.active_tools.contains_key(id))
+            });
+        if calls.len() > MAX_TOOL_CALLS_PER_MODEL_TURN
+            || (!self.active_tools.is_empty() && !member_start)
+        {
             return Err(AgentEventProjectionError::invalid_state());
         }
         let timestamp = event
@@ -2914,6 +3045,8 @@ impl AgentEventProjector {
                     .map(|(toolkit, _)| toolkit.clone())
                     .or_else(|| self.toolkit_attribution.get(call.name).cloned()),
                 display_name: inner.map(|(_, tool)| tool),
+                fanout_member: event.provider_metadata.contains_key(FANOUT_MEMBER_CALL_KEY),
+                member_tier: fanout_member_tier(event)?,
             };
             let entry = tool_entry(id, &active, None, None, None, None);
             batch.push(self.event(
@@ -4746,6 +4879,171 @@ pub(crate) fn pipeline_mcp_auth_event_binding(
     pipeline_mcp_auth_event_binding_from_payload(event, &payload, root_agent_name, thread_id)
 }
 
+/// The card a fan-out child's replayed pause shows (contract §4), bound by the
+/// same typed bindings the root path uses and in the same order as
+/// `parallel_cards::child_card`. The digest covers the full private pending
+/// object; the display holds only the closed contract fields, never routes,
+/// call digests, replay envelopes, headers or resource metadata.
+#[allow(clippy::too_many_lines)] // One binding order, one display mapping per kind.
+pub(crate) fn fanout_card_parts(
+    event: &Event,
+    root_agent_name: &str,
+    thread_id: &str,
+) -> Result<super::graph::fanout_frames::FanoutCardParts, AgentEventProjectionError> {
+    use super::graph::fanout_frames::{CardDisplay, CardKind};
+    /// Tool arguments a card shows (§4): larger ones are refused, never cut.
+    const MAX_CARD_TOOL_ARGS_BYTES: usize = 16 * 1024;
+    let args_json = |args: &Value| {
+        serde_json::to_string(args)
+            .ok()
+            .filter(|text| text.len() <= MAX_CARD_TOOL_ARGS_BYTES)
+            .ok_or_else(AgentEventProjectionError::invalid_state)
+    };
+    let parts = |kind: CardKind, actions: &[String], display: CardDisplay, pending: &Value| {
+        let available_actions = actions
+            .iter()
+            .map(|action| super::graph::fanout_frames::card_action(action))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        let encoded =
+            serde_json::to_vec(pending).map_err(|_| AgentEventProjectionError::invalid_state())?;
+        Ok(super::graph::fanout_frames::FanoutCardParts {
+            kind,
+            available_actions,
+            display,
+            payload_sha256: hex(digest::digest(&digest::SHA256, &encoded).as_ref()),
+        })
+    };
+    if let Ok(binding) = pipeline_hitl_event_binding(event, root_agent_name, thread_id) {
+        let data = &binding.data;
+        let pending = json!({
+            "type": "hitl", "interaction_type": data.interaction_type,
+            "history_contract_version": data.history_contract_version,
+            "interrupt_id": binding.interrupt_id, "call_digest": binding.call_digest,
+            "guardrail_type": "pipeline_hitl", "node_name": data.node_name,
+            "message": data.message, "available_actions": data.available_actions,
+            "routes": data.routes, "edit_state_key": data.edit_state_key,
+            "definition_digest": data.definition_digest,
+        });
+        let display = CardDisplay {
+            edit_state_key: data.edit_state_key.clone(),
+            guardrail_type: "pipeline_hitl",
+            interaction_type: Some(data.interaction_type.clone()),
+            message: data.message.clone(),
+            node_name: Some(data.node_name.clone()),
+            ..CardDisplay::default()
+        };
+        return parts(
+            CardKind::HitlNode,
+            &data.available_actions,
+            display,
+            &pending,
+        );
+    }
+    if let Ok(binding) = pipeline_tool_event_binding(event, root_agent_name, thread_id) {
+        let data = &binding.data;
+        let pending = json!({
+            "type": "hitl", "interrupt_id": binding.interrupt_id,
+            "call_digest": binding.call_digest, "guardrail_type": "sensitive_tool",
+            "node_name": data.node_name, "message": data.message,
+            "available_actions": data.available_actions, "tool_call_id": data.tool_call_id,
+            "tool_name": data.tool_name, "toolkit_name": data.toolkit_name,
+            "toolkit_type": data.toolkit_type, "action_label": data.action_label,
+            "tool_args": data.tool_args, "policy_message": data.policy_message,
+            "definition_digest": data.definition_digest, "argument_digest": data.argument_digest,
+        });
+        let display = CardDisplay {
+            action_label: Some(data.action_label.clone()).filter(|label| !label.is_empty()),
+            guardrail_type: "sensitive_tool",
+            message: data.message.clone(),
+            node_name: Some(data.node_name.clone()),
+            policy_message: Some(data.policy_message.clone()).filter(|text| !text.is_empty()),
+            tool_args_json: Some(args_json(&data.tool_args)?),
+            tool_call_id: Some(data.tool_call_id.clone()),
+            tool_name: Some(data.tool_name.clone()),
+            toolkit_name: Some(data.toolkit_name.clone()),
+            toolkit_type: Some(data.toolkit_type.clone()),
+            ..CardDisplay::default()
+        };
+        return parts(
+            CardKind::ToolGuard,
+            &data.available_actions,
+            display,
+            &pending,
+        );
+    }
+    if let Ok(binding) = pipeline_clarifying_event_binding(event, root_agent_name, thread_id) {
+        let data = &binding.data;
+        let pending = json!({
+            "type": "hitl", "interrupt_id": binding.interrupt_id,
+            "call_digest": binding.call_digest, "guardrail_type": "clarifying_question",
+            "node_name": data.node_name, "message": data.message, "questions": data.questions,
+            "available_actions": data.available_actions, "tool_call_id": data.tool_call_id,
+            "tool_name": data.tool_name, "tool_args": data.tool_args,
+            "definition_digest": data.definition_digest, "argument_digest": data.argument_digest,
+        });
+        let display = CardDisplay {
+            guardrail_type: "clarifying_question",
+            message: data.message.clone(),
+            node_name: Some(data.node_name.clone()),
+            tool_args_json: Some(args_json(&data.tool_args)?),
+            tool_call_id: Some(data.tool_call_id.clone()),
+            tool_name: Some(data.tool_name.clone()),
+            ..CardDisplay::default()
+        };
+        return parts(
+            CardKind::AskUser,
+            &data.available_actions,
+            display,
+            &pending,
+        );
+    }
+    if let Ok(binding) = pipeline_mcp_auth_event_binding(event, root_agent_name, thread_id) {
+        let data = &binding.data;
+        let pending = json!({
+            "type": "hitl", "interrupt_id": binding.interrupt_id,
+            "call_digest": binding.call_digest, "guardrail_type": "mcp_auth",
+            "node_name": data.node_name, "message": data.message,
+            "available_actions": data.available_actions, "tool_call_id": data.tool_call_id,
+            "tool_name": data.tool_name, "toolkit_name": data.toolkit_name,
+            "toolkit_type": data.toolkit_type, "tool_args": data.tool_args,
+            "server_url": data.server_url, "definition_digest": data.definition_digest,
+            "argument_digest": data.argument_digest,
+        });
+        let display = CardDisplay {
+            guardrail_type: "mcp_auth",
+            message: data.message.clone(),
+            node_name: Some(data.node_name.clone()),
+            server_url: Some(data.server_url.clone()).filter(|url| url.starts_with("https://")),
+            tool_call_id: Some(data.tool_call_id.clone()),
+            tool_name: Some(data.tool_name.clone()),
+            toolkit_name: Some(data.toolkit_name.clone()),
+            toolkit_type: Some(data.toolkit_type.clone()),
+            ..CardDisplay::default()
+        };
+        return parts(
+            CardKind::DelegatedAuth,
+            &data.available_actions,
+            display,
+            &pending,
+        );
+    }
+    let binding = pipeline_static_event_binding(event, root_agent_name, thread_id)?;
+    let pending = binding.public_proof(event)?;
+    let display = CardDisplay {
+        guardrail_type: "pipeline_static",
+        message: STATIC_PAUSE_MESSAGE.to_owned(),
+        node_name: Some(binding.metadata.node_name.clone()),
+        ..CardDisplay::default()
+    };
+    parts(
+        CardKind::HitlNode,
+        &["continue".to_owned()],
+        display,
+        &pending,
+    )
+}
+
 /// Validate and bind an internal graph checkpoint for descendant Application
 /// confirmations. The child confirmation events remain the only public cards.
 pub(crate) fn pipeline_application_event_binding(
@@ -5968,7 +6266,7 @@ fn parse_agent_path_tier(value: &Value) -> Result<AgentPathTier, AgentEventProje
             value
                 .as_u64()
                 .and_then(|value| usize::try_from(value).ok())
-                .filter(|value| *value > 0 && *value <= MAX_TOOL_CALLS_PER_MODEL_TURN)
+                .filter(|value| *value > 0 && *value <= sibling_ordinal_bound(call_id))
                 .ok_or_else(AgentEventProjectionError::invalid_state)
         })
         .transpose()?;
@@ -5977,6 +6275,47 @@ fn parse_agent_path_tier(value: &Value) -> Result<AgentPathTier, AgentEventProje
         call_id: call_id.to_owned(),
         sibling_ordinal,
     })
+}
+
+/// The member tier a Parallel member's own call carries
+/// (`{"call": fo1_…, "ordinal": n}`); `None` for any other call, including a
+/// Map item's ("1").
+fn fanout_member_tier(event: &Event) -> Result<Option<(String, usize)>, AgentEventProjectionError> {
+    let Some(raw) = event.provider_metadata.get(FANOUT_MEMBER_CALL_KEY) else {
+        return Ok(None);
+    };
+    if raw == "1" {
+        return Ok(None);
+    }
+    let value: Value =
+        serde_json::from_str(raw).map_err(|_| AgentEventProjectionError::invalid_state())?;
+    let call_id = value["call"]
+        .as_str()
+        .filter(|call| sibling_ordinal_bound(call) == MAX_FANOUT_MEMBER_ORDINAL)
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    let ordinal = value["ordinal"]
+        .as_u64()
+        .and_then(|ordinal| usize::try_from(ordinal).ok())
+        .filter(|ordinal| (1..=MAX_FANOUT_MEMBER_ORDINAL).contains(ordinal))
+        .filter(|_| value.as_object().is_some_and(|object| object.len() == 2))
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    Ok(Some((call_id.to_owned(), ordinal)))
+}
+
+/// A fan-out member tier is named by its `fo1_` member call id (contract
+/// §3.3: `"fo1_" + lowercase_hex(SHA-256(…))`); only it reaches ordinal 64.
+fn sibling_ordinal_bound(call_id: &str) -> usize {
+    let member = call_id.strip_prefix("fo1_").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    });
+    if member {
+        MAX_FANOUT_MEMBER_ORDINAL
+    } else {
+        MAX_TOOL_CALLS_PER_MODEL_TURN
+    }
 }
 
 fn agent_path_tier_value(tier: &AgentPathTier) -> Value {
@@ -6040,22 +6379,27 @@ fn tool_entry(
         "error": error,
     });
     if let Some(application) = active.application.as_ref() {
+        // A Parallel member's call is keyed by its member tier, like its frames.
+        let (call_id, sibling_ordinal) = match &active.member_tier {
+            Some((call_id, ordinal)) => (call_id.as_str(), Some(*ordinal)),
+            None => (id, active.sibling_ordinal),
+        };
         let metadata = json!({
             "original_name": application.display_name,
             "display_name": application.display_name,
             "agent_type": application.agent_type,
             "toolkit_type": application.toolkit_type(),
-            "parent_agent_call_id": id,
+            "parent_agent_call_id": call_id,
             "parent_agent_path": [],
-            "sibling_ordinal": active.sibling_ordinal,
+            "sibling_ordinal": sibling_ordinal,
         });
         let Value::Object(object) = &mut entry else {
             return entry;
         };
         object.insert("metadata".to_owned(), metadata.clone());
-        object.insert("parent_agent_call_id".to_owned(), json!(id));
+        object.insert("parent_agent_call_id".to_owned(), json!(call_id));
         object.insert("parent_agent_path".to_owned(), json!([]));
-        object.insert("sibling_ordinal".to_owned(), json!(active.sibling_ordinal));
+        object.insert("sibling_ordinal".to_owned(), json!(sibling_ordinal));
         object.insert(
             "tool_meta".to_owned(),
             json!({
@@ -6141,7 +6485,22 @@ fn descendant_checkpoint_thread(
     let checkpoint_thread_id = marker
         .filter(|value| valid_tool_identity(value))
         .ok_or_else(AgentEventProjectionError::invalid_state)?;
-    let expected = match parent_thread_id {
+    let member_thread = event
+        .provider_metadata
+        .get(FANOUT_MEMBER_THREAD_KEY)
+        .map(|raw| {
+            serde_json::from_str::<Value>(raw)
+                .ok()
+                .filter(|value| {
+                    value.as_object().is_some_and(|object| object.len() == 2)
+                        && value["call"].as_str() == Some(parent_call_id)
+                })
+                .and_then(|value| value["thread"].as_str().map(str::to_owned))
+                .filter(|thread| valid_tool_identity(thread))
+                .ok_or_else(AgentEventProjectionError::invalid_state)
+        })
+        .transpose()?;
+    let expected = match member_thread.as_deref().or(parent_thread_id) {
         Some(parent_thread_id) => {
             let node_name = pipeline_application_call_node(parent_call_id)
                 .ok_or_else(AgentEventProjectionError::invalid_state)?;
@@ -6486,6 +6845,8 @@ mod scoped_static_inventory_tests {
                     pipeline_node_name: None,
                     toolkit: None,
                     display_name: None,
+                    fanout_member: false,
+                    member_tier: None,
                 },
             );
             root.descendants.insert(
@@ -6523,3 +6884,105 @@ mod scoped_static_inventory_tests {
 
 #[path = "events_code_debug.rs"]
 mod code_debug;
+
+#[cfg(test)]
+mod fanout_member_tier_tests {
+    use serde_json::{Map, Value, json};
+
+    use super::{
+        AgentPathTier, FANOUT_MEMBER_CALL_KEY, fanout_member_tier, overlay_hierarchy_object,
+        parse_agent_path_tier,
+    };
+
+    fn member_call_id(child_thread: &str) -> String {
+        elitea_agent_runtime::graph::fanout::identity::member_call_id(child_thread)
+    }
+
+    fn tier(call_id: &str, ordinal: u64) -> Value {
+        json!({"name": "Researcher", "call_id": call_id, "sibling_ordinal": ordinal})
+    }
+
+    /// A Parallel member's call carries its tier; a Map item's carries "1";
+    /// anything else is refused rather than keyed wrongly.
+    #[test]
+    fn a_member_call_stamp_names_its_tier_or_is_refused() {
+        let member = member_call_id("p1:child");
+        let stamped = |raw: &str| {
+            let mut event = adk_rust::Event::new("member");
+            event
+                .provider_metadata
+                .insert(FANOUT_MEMBER_CALL_KEY.to_owned(), raw.to_owned());
+            fanout_member_tier(&event)
+        };
+        assert_eq!(
+            stamped(&json!({"call": member, "ordinal": 64}).to_string()).unwrap(),
+            Some((member.clone(), 64))
+        );
+        assert_eq!(stamped("1").unwrap(), None);
+        assert_eq!(
+            fanout_member_tier(&adk_rust::Event::new("plain")).unwrap(),
+            None
+        );
+        for raw in [
+            json!({"call": member, "ordinal": 0}).to_string(),
+            json!({"call": member, "ordinal": 65}).to_string(),
+            json!({"call": "pipeline-v2:first_call:0", "ordinal": 1}).to_string(),
+            json!({"call": member, "ordinal": 1, "extra": true}).to_string(),
+            "not json".to_owned(),
+        ] {
+            assert!(stamped(&raw).is_err(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_fanout_member_tier_takes_ordinals_up_to_64_and_others_up_to_16() {
+        let member = member_call_id("p1:child");
+        assert!(parse_agent_path_tier(&tier(&member, 1)).is_ok());
+        assert!(parse_agent_path_tier(&tier(&member, 64)).is_ok());
+        assert!(parse_agent_path_tier(&tier(&member, 65)).is_err());
+        assert!(parse_agent_path_tier(&tier(&member, 0)).is_err());
+        for ordinary in ["call_1", "fo1_short", &member.to_uppercase()] {
+            assert!(
+                parse_agent_path_tier(&tier(ordinary, 16)).is_ok(),
+                "{ordinary}"
+            );
+            assert!(
+                parse_agent_path_tier(&tier(ordinary, 17)).is_err(),
+                "{ordinary}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_member_tier_counts_toward_three_agent_path_tiers() {
+        let prefix = vec![AgentPathTier {
+            name: "Coordinator".to_owned(),
+            call_id: "call_coordinator".to_owned(),
+            sibling_ordinal: None,
+        }];
+        let member = member_call_id("p1:child");
+        let with = |tiers: Vec<Value>| {
+            let mut object = Map::new();
+            object.insert("parent_agent_path".to_owned(), Value::Array(tiers));
+            overlay_hierarchy_object(&mut object, &prefix).map(|()| object)
+        };
+        // Coordinator, member (ordinal 64) and one nested agent: three tiers.
+        let three = with(vec![
+            tier(&member, 64),
+            json!({"name": "Sub", "call_id": "call_sub"}),
+        ])
+        .expect("three tiers fit");
+        assert_eq!(three["parent_agent_path"].as_array().map(Vec::len), Some(3));
+        assert_eq!(three["parent_agent_path"][1]["sibling_ordinal"], 64);
+        assert_eq!(three["parent_agent_call_id"], "call_sub");
+        assert!(
+            with(vec![
+                tier(&member, 2),
+                json!({"name": "Sub", "call_id": "call_sub"}),
+                json!({"name": "Leaf", "call_id": "call_leaf"}),
+            ])
+            .is_err(),
+            "a fourth tier is refused"
+        );
+    }
+}

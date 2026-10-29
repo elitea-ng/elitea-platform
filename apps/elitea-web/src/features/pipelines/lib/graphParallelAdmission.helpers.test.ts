@@ -31,10 +31,19 @@ describe('strict fixed Parallel admission', () => {
     { branches: [refs[0], { id: 'right', node: 'right_participant' }] },
     { max_concurrency: 0 }, { max_concurrency: 9 }, { max_concurrency: 3 }, { max_concurrency: 1.5 }, { max_concurrency: '2' },
     { wait: 'any' }, { wait: null }, { error_policy: 'fail_fast' }, { error_policy: null },
+    { on_error: 'fail' }, { on_error: null }, { join: 'collect' }, { join: 'merge' }, { join: 'merge', on_error: 'continue' },
+    { error_policy: 'fail_after_drain', on_error: 'continue' },
     { output: [] }, { output: ['10', '2'] }, { output: ['note'] }, { output: ['undeclared'] }, { output: ['messages'] },
     { input: [] }, { input_mapping: {} }, { reduction: 'ordered_collection' }, { transition: 7 },
   ])('refuses malformed or foreign Parallel configuration %j', (patch) => {
     expect(graphParallelIssues(changed(patch)).length).toBeGreaterThan(0);
+  });
+  it.each([
+    { on_error: 'continue' }, { on_error: 'stop' }, { join: 'append' }, { join: 'keyed' },
+    { on_error: 'stop', join: 'merge' }, { error_policy: 'fail_after_drain', join: 'merge' },
+    { error_policy: 'fail_after_drain', on_error: 'stop' },
+  ])('admits the v1.1 On Error and Join settings %j', (patch) => {
+    expect(graphParallelIssues(changed(patch))).toEqual([]);
   });
   it('refuses the private Parallel output channels even when declared as lists', () => {
     for (const key of ['__elitea_parallel_resume_v1', '__elitea_parallel_agent_inputs_v1']) {
@@ -77,6 +86,15 @@ describe('strict fixed Parallel admission', () => {
   it('rejects a declared sibling with the correct identity but a non-Agent type', () => {
     const value = document();
     expect(graphParallelIssues({ ...value, nodes: value.nodes?.map((node) => node.id === 'Agent_left' ? { ...node, type: 'llm' } : node) ?? [] }).length).toBeGreaterThan(0);
+  });
+  it('names an inline LLM branch (FU-247) and its kind instead of admitting it', () => {
+    const value = document();
+    const issues = graphParallelIssues({ ...value, nodes: value.nodes?.map((node) => node.id === 'Agent_left' ? { ...node, type: 'llm' } : node) ?? [] });
+    expect(issues.map((issue) => issue.message)).toContain(
+      'branches[0].node: Node "Agent_left" is a "llm" node, but a branch can only run an Agent node (a saved agent or pipeline) for now. '
+        + 'Put the "llm" node in a saved pipeline and run that pipeline from an Agent node.',
+    );
+    expect(parallelOwnedAgent({ ...value, nodes: value.nodes?.map((node) => node.id === 'Agent_left' ? { ...node, type: 'llm' } : node) ?? [] }, 'extension', 0)).toBeUndefined();
   });
   it('withholds child mutation when another node reuses the selected exact Agent identity', () => {
     const value = document();

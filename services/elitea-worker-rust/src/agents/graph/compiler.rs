@@ -66,6 +66,7 @@ use super::yaml::{
     valid_output_key,
 };
 use elitea_agent_runtime::bounded_yaml::{self, BoundedYamlError};
+use elitea_agent_runtime::graph::fanout::plan::JoinMode;
 
 #[path = "map_compiler.rs"]
 mod map_compiler;
@@ -75,9 +76,10 @@ use super::map_yaml::MapNodeDefinition;
 use super::{pipeline_completed_event, pipeline_result_event};
 pub(crate) use map_compiler::MapCompilerBinding;
 use map_compiler::validate_map_ownership;
+#[allow(unused_imports)] // The binding is staged behind the Parallel gate.
+pub(crate) use parallel_compiler::ParallelCompilerBinding;
+pub(crate) use parallel_compiler::refuse_child_parallel;
 use parallel_compiler::validate_parallel_ownership;
-#[allow(unused_imports)] // Public continuation binding is staged behind the Parallel gate.
-pub(crate) use parallel_compiler::{ParallelBranchContinuation, ParallelCompilerBinding};
 
 pub(crate) const MAX_PIPELINE_YAML_BYTES: usize = 512 * 1024;
 pub(crate) use elitea_agent_runtime::graph::PIPELINE_YAML_BUDGET;
@@ -934,6 +936,7 @@ impl PipelineDefinition {
             .cloned()
             .collect();
         validate_overwrite_channels(&nodes, &state_reducers, &recovery_owned)?;
+        validate_parallel_joins(&nodes, &state_reducers)?;
         let recovery = raw_recovery.admit(&nodes, &state, &raw.entry_point, &recovery_owned)?;
         let interrupt_before = validate_static_interrupts(raw.interrupt_before, &node_ids)?;
         let interrupt_after = validate_static_interrupts(raw.interrupt_after, &node_ids)?;
@@ -1224,6 +1227,13 @@ impl PipelineDefinition {
     }
 
     #[must_use]
+    pub(crate) fn has_code_nodes(&self) -> bool {
+        self.nodes
+            .iter()
+            .any(|node| matches!(node, PipelineNodeDefinition::Code(_)))
+    }
+
+    #[must_use]
     pub(crate) fn has_application_nodes(&self) -> bool {
         self.nodes
             .iter()
@@ -1295,6 +1305,7 @@ impl PipelineDefinition {
                 "the pipeline agent name is malformed",
             ));
         }
+        refuse_child_parallel(runtimes)?;
         let (checkpointer, bound_runtimes) =
             self.bind_parallel_authority(checkpointer, runtimes)?;
         let (checkpointer, bound_runtimes) =
@@ -1496,9 +1507,6 @@ impl PipelineDefinition {
             PIPELINE_NODE_EVENT_SCOPE_STATE_KEY.to_owned(),
             PIPELINE_RESULT_TRACE_STATE_KEY.to_owned(),
         ]);
-        if self.has_parallel_nodes() {
-            channels.insert(super::parallel::PARALLEL_RESUME_STATE_KEY.to_owned());
-        }
         channels.extend(self.state.keys().cloned());
         for node in self
             .nodes
@@ -2572,12 +2580,17 @@ fn validate_node_state(
             }
         }
         PipelineNodeDefinition::Parallel(node) => {
+            // Append lands the ordered collection; keyed and merge land one object.
+            let kind = match node.join() {
+                JoinMode::Append => "list",
+                JoinMode::Keyed | JoinMode::Merge => "dict",
+            };
             if builtin_state_key(node.output_key())
                 || reserved_user_state_key(node.output_key())
-                || state.get(node.output_key()).map(String::as_str) != Some("list")
+                || state.get(node.output_key()).map(String::as_str) != Some(kind)
             {
                 return Err(PipelineConfigurationError::Invalid(
-                    "a fixed Parallel output must be a declared list channel",
+                    "a fixed Parallel output must be a declared list (append) or dict (keyed, merge) channel",
                 ));
             }
         }
@@ -2802,7 +2815,6 @@ fn validate_overwrite_channels(
         } else {
             match node {
                 PipelineNodeDefinition::Map(map) => vec![map.runtime().destination.as_str()],
-                PipelineNodeDefinition::Parallel(parallel) => vec![parallel.output_key()],
                 PipelineNodeDefinition::SplitOut(_) | PipelineNodeDefinition::Aggregate(_) => {
                     node.output_keys().iter().map(String::as_str).collect()
                 }
@@ -2810,7 +2822,10 @@ fn validate_overwrite_channels(
                 PipelineNodeDefinition::StateModifier(_) => {
                     node.cleaned_keys().iter().map(String::as_str).collect()
                 }
-                PipelineNodeDefinition::Code(_)
+                // A Parallel output lands through its declared reducer; the
+                // join mode is checked against it in `validate_parallel_joins`.
+                PipelineNodeDefinition::Parallel(_)
+                | PipelineNodeDefinition::Code(_)
                 | PipelineNodeDefinition::Application(_)
                 | PipelineNodeDefinition::Decision(_)
                 | PipelineNodeDefinition::DirectTool(_)
@@ -2823,6 +2838,31 @@ fn validate_overwrite_channels(
             return Err(PipelineConfigurationError::Invalid(
                 "this state channel must use the overwrite reducer",
             ));
+        }
+    }
+    Ok(())
+}
+
+/// Save-time check that every Parallel join can land on its output key's
+/// declared reducer (`JoinMode::check`), so no combination is discovered at
+/// run time.
+fn validate_parallel_joins(
+    nodes: &[PipelineNodeDefinition],
+    reducers: &BTreeMap<String, StateReducer>,
+) -> Result<(), PipelineConfigurationError> {
+    for node in nodes {
+        if let PipelineNodeDefinition::Parallel(parallel) = node {
+            parallel
+                .join()
+                .check(
+                    parallel.on_error(),
+                    reducers.get(parallel.output_key()).copied(),
+                )
+                .map_err(|_| {
+                    PipelineConfigurationError::Invalid(
+                        "a fixed Parallel join does not match its output reducer or On Error",
+                    )
+                })?;
         }
     }
     Ok(())
@@ -2877,7 +2917,6 @@ pub(super) fn reserved_user_state_key(key: &str) -> bool {
         || key == HITL_RESUME_STATE_KEY
         || key == DIRECT_TOOL_RESUME_STATE_KEY
         || key == LLM_TOOL_RESUME_STATE_KEY
-        || key == super::parallel::PARALLEL_RESUME_STATE_KEY
         || key == super::application::PARALLEL_AGENT_INPUTS_STATE_KEY
         || key == PIPELINE_NODE_EVENT_SCOPE_STATE_KEY
         || key == PIPELINE_RESULT_TRACE_STATE_KEY
@@ -3130,6 +3169,57 @@ pub(crate) enum PipelineConfigurationError {
     Unsupported(&'static str),
     #[error("the stored pipeline graph could not be compiled")]
     Graph(#[source] GraphError),
+    /// A fan-out child (Parallel branch or Map worker) of a kind that is not
+    /// admitted yet. Names the node (a validated identifier, never data) so
+    /// each kind can be lifted on its own (Wave 3).
+    #[error("the fan-out child node {node} is not supported yet: {refusal}")]
+    FanoutChildUnsupported {
+        node: String,
+        refusal: FanoutChildRefusal,
+    },
+}
+
+/// Why a fan-out child is refused before Wave 3.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FanoutChildRefusal {
+    /// The child node kind is not admitted as a fan-out child.
+    Kind,
+    /// The child is a saved pipeline that contains a Code node.
+    ContainsCode,
+    /// A saved child pipeline contains a Parallel node, which binds its
+    /// checkpoint authority to the started root only (FU-249).
+    ContainsParallel,
+}
+
+impl FanoutChildRefusal {
+    #[must_use]
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::Kind => "graph.fanout.child_kind_unsupported",
+            Self::ContainsCode => "graph.fanout.child_contains_code",
+            Self::ContainsParallel => "graph.fanout.parallel_in_child_pipeline",
+        }
+    }
+
+    /// Whether `code` is a fan-out child refusal: fixed by editing the pipeline.
+    #[must_use]
+    pub(crate) fn is_code(code: &str) -> bool {
+        [Self::Kind, Self::ContainsCode, Self::ContainsParallel]
+            .iter()
+            .any(|refusal| refusal.code() == code)
+    }
+}
+
+impl std::fmt::Display for FanoutChildRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Kind => "this node kind cannot run as a Parallel branch or Map worker",
+            Self::ContainsCode => "a saved pipeline with a Code node cannot run as a fan-out child",
+            Self::ContainsParallel => {
+                "a saved pipeline with a Parallel node runs only as the started pipeline"
+            }
+        })
+    }
 }
 
 impl PipelineConfigurationError {
@@ -3148,6 +3238,7 @@ impl PipelineConfigurationError {
             Self::Invalid(_) => "graph.pipeline.invalid_configuration",
             Self::Unsupported(_) => "graph.pipeline.unsupported_capability",
             Self::Graph(_) => "graph.pipeline.compile_failed",
+            Self::FanoutChildUnsupported { refusal, .. } => refusal.code(),
         }
     }
 
@@ -3162,6 +3253,11 @@ impl PipelineConfigurationError {
             | Self::Invalid(_)
             | Self::Unsupported(_)
             | Self::Graph(_) => None,
+            Self::FanoutChildUnsupported { refusal, .. } => Some(match refusal {
+                FanoutChildRefusal::Kind => "fanout_child_kind",
+                FanoutChildRefusal::ContainsCode => "fanout_child_code",
+                FanoutChildRefusal::ContainsParallel => "parallel_in_child_pipeline",
+            }),
         }
     }
 }

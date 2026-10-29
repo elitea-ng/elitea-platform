@@ -214,17 +214,73 @@ func TestTheOverrideIsTheVersionAboutToBeSaved(t *testing.T) {
 }
 
 func TestReadPipelineFindsAgentNodesAndStaticPauses(t *testing.T) {
-	nodes, paused := applicationcomposition.ReadPipeline("entry_point: a\ninterrupt_before: [b]\nnodes:\n  - id: a\n    type: agent\n    tool: worker\n  - id: b\n    type: llm\n  - &n\n    id: c\n    type: agent\n    tool: other\n")
-	if !paused || len(nodes) != 2 || nodes[0] != (applicationcomposition.AgentNode{ID: "a", Alias: "worker"}) || nodes[1].Alias != "other" {
-		t.Fatalf("nodes = %+v paused = %v", nodes, paused)
+	nodes, paused, parallel := applicationcomposition.ReadPipeline("entry_point: a\ninterrupt_before: [b]\nnodes:\n  - id: a\n    type: agent\n    tool: worker\n  - id: b\n    type: llm\n  - &n\n    id: c\n    type: agent\n    tool: other\n")
+	if !paused || parallel != "" || len(nodes) != 2 || nodes[0] != (applicationcomposition.AgentNode{ID: "a", Alias: "worker"}) || nodes[1].Alias != "other" {
+		t.Fatalf("nodes = %+v paused = %v parallel = %q", nodes, paused, parallel)
 	}
 	for _, text := range []string{"", "nodes: [", "- just a list", "interrupt_after: []\nnodes: []\n"} {
-		if nodes, paused := applicationcomposition.ReadPipeline(text); len(nodes) != 0 || paused {
-			t.Fatalf("%q: nodes = %+v paused = %v", text, nodes, paused)
+		if nodes, paused, parallel := applicationcomposition.ReadPipeline(text); len(nodes) != 0 || paused || parallel != "" {
+			t.Fatalf("%q: nodes = %+v paused = %v parallel = %q", text, nodes, paused, parallel)
 		}
 	}
-	if nodes, _ := applicationcomposition.ReadPipeline(strings.Repeat("x", 512*1024+1)); nodes != nil {
+	if nodes, _, _ := applicationcomposition.ReadPipeline(strings.Repeat("x", 512*1024+1)); nodes != nil {
 		t.Fatal("an over-bound definition is not parsed")
+	}
+}
+
+func TestReadPipelineFindsTheFirstParallelNode(t *testing.T) {
+	_, _, parallel := applicationcomposition.ReadPipeline("state:\n  joined: list\nentry_point: inner\nnodes:\n  - id: inner\n    type: parallel\n    branches: [{id: one, node: a}, {id: two, node: b}]\n    max_concurrency: 2\n    wait: all\n    output: [joined]\n    transition: END\n  - id: a\n    type: agent\n    tool: worker\n  - id: b\n    type: agent\n    tool: worker\n")
+	if parallel != "inner" {
+		t.Fatalf("parallel = %q", parallel)
+	}
+}
+
+func parallelPipeline(name string, attached ...int64) applicationcomposition.Version {
+	version := pipeline(name, attached...)
+	version.ParallelNode = "gather"
+	return version
+}
+
+// FU-249: a saved pipeline with a Parallel node runs only as the started root,
+// never beneath a pipeline Agent node (a Parallel branch's included) or as an
+// agent's tool; the refusal names the pipeline, its node and the path.
+func TestAPipelineWithAParallelRunsOnlyAsTheStartedRoot(t *testing.T) {
+	if violation := check(t, fakeSource{1: parallelPipeline("Fan", 2), 2: agent("Worker")}, 1); violation != nil {
+		t.Fatalf("a Parallel in the started pipeline saves: %v", violation)
+	}
+	for name, source := range map[string]fakeSource{
+		"pipeline Agent node": {1: pipeline("Outer", 2), 2: parallelPipeline("Inner")},
+		"Parallel branch":     {1: parallelPipeline("Outer", 2), 2: parallelPipeline("Inner")},
+		"agent tool":          {1: agent("Outer", 2), 2: parallelPipeline("Inner")},
+		"deeper":              {1: agent("Outer", 3), 3: pipeline("Middle", 2), 2: parallelPipeline("Inner")},
+	} {
+		violation := check(t, source, 1)
+		expect(t, violation, applicationcomposition.BoundNestedParallel)
+		if !strings.Contains(violation.Error(), `Pipeline "Inner" has Parallel node "gather"`) || !strings.Contains(violation.Error(), `"Outer" → `) {
+			t.Fatalf("%s: message = %s", name, violation)
+		}
+	}
+}
+
+func TestAChildPipelineGainingAParallelIsRefusedThroughItsParent(t *testing.T) {
+	source := fakeSource{1: pipeline("Outer", 2), 2: pipeline("Inner")}
+	saved := parallelPipeline("Inner")
+	err := applicationcomposition.CheckWithAncestors(context.Background(), ancestrySource{source}, id(2), &saved)
+	refusal := applicationcomposition.Refusal(err)
+	if refusal == nil || !strings.Contains(refusal.Message, `Parallel node "gather"`) {
+		t.Fatalf("refusal = %+v (%v)", refusal, err)
+	}
+}
+
+func TestAStartRefusalNamesANestedParallelAndKeepsTheRegisteredTextOtherwise(t *testing.T) {
+	err := applicationcomposition.Check(context.Background(), fakeSource{1: pipeline("Outer", 2), 2: parallelPipeline("Inner")}, id(1), nil)
+	named := applicationcomposition.Refusal(applicationcomposition.AtStart(err))
+	if named == nil || named.Status != http.StatusUnprocessableEntity || named.Code != applicationcomposition.Code || !strings.Contains(named.Message, `Parallel node "gather"`) {
+		t.Fatalf("start refusal = %+v", named)
+	}
+	cycle := applicationcomposition.Check(context.Background(), fakeSource{1: agent("Planner", 2), 2: agent("Worker", 1)}, id(1), nil)
+	if !errors.Is(applicationcomposition.AtStart(cycle), applicationcomposition.ErrAtStart) {
+		t.Fatalf("a cycle keeps the registered start text: %v", applicationcomposition.AtStart(cycle))
 	}
 }
 

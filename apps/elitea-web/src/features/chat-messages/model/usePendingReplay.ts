@@ -73,7 +73,7 @@ export function useReattach(
       response_message_id: target.responseMessageId,
     }, target.conversationUuid, target.projectId, target.questionId);
     // Only a run the transport now owns replays into the seeded row.
-    if (subscribed && ownsRun()) pendingReplay.arm(target.responseMessageId);
+    if (subscribed && ownsRun() && target.replay !== 'append') pendingReplay.arm(target.responseMessageId);
     return subscribed;
   }, [ownsRun, subscribeToRun, pendingReplay]);
 }

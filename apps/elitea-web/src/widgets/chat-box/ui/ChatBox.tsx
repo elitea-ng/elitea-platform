@@ -69,6 +69,7 @@ import { useActiveParticipantSelection } from './hooks/useActiveParticipantSelec
 import { useSessionMcpAuthorizationRefs } from './hooks/useSessionMcpAuthorizationRefs';
 import { useChatBoxSend } from './hooks/useChatBoxSend';
 import { useReattachSeededTurn } from './hooks/useReattachSeededTurn';
+import { useChatBoxInterruptLedger } from './hooks/useChatBoxInterruptLedger';
 import { useStableRef } from './hooks/useStableRef';
 import { useTurnActivity } from './hooks/useTurnActivity';
 
@@ -172,6 +173,7 @@ const ChatBoxInner = memo(function ChatBox({
     activeParticipant, participants: conversationParticipants, userName, userAvatar,
     llmSettings, model: data.selectedModel, configuredModelProjectId, userId, onAgentEvent, getInternalToolsForSend, editorTest, onSteerEvent: applySteeringEvent,
   });
+  useChatBoxInterruptLedger({ projectId, conversationUuid, messages, setChatHistory: data.setChatHistory, reattach: reattachStreamedExecution }); // per-interrupt cards across tabs; a fan-out wake attaches
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
   const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), onConversationCreated });
   // `isStreamingNow` is derived from the PERSISTED message groups, which carry no
@@ -217,7 +219,6 @@ const ChatBoxInner = memo(function ChatBox({
       onDeleteAllMessages?.();
     },
   });
-
 
 
   // Version selection (real fetch + persist) + auto-recovery

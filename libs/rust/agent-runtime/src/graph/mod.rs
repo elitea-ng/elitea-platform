@@ -25,6 +25,7 @@ pub const PIPELINE_YAML_BUDGET: YamlBudget = YamlBudget {
 
 pub mod application_activation;
 pub mod code_platform_drive;
+pub mod fanout;
 pub mod fanout_budget;
 pub mod fanout_progress;
 pub mod fanout_trace;

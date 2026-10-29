@@ -35,6 +35,9 @@ type SubmitRequest struct {
 	CurrentAdhocTurn      *CurrentAdhocTurn
 	CurrentRegenerateTurn *CurrentRegenerateTurn
 	CurrentContinueTurn   *CurrentContinueTurn
+	// CurrentFanoutWakeTurn is a Main-admitted wake of a parked fan-out
+	// response (continue_fanout_wake.go); it excludes every other turn.
+	CurrentFanoutWakeTurn *CurrentFanoutWakeTurn
 	// TriggerOrigin is how the run started (shared 0140). Empty means a
 	// person at the UI. It is NOT part of the request digest: it describes
 	// the caller, not the work, and adding it would make every replay that
@@ -63,6 +66,7 @@ type Admission struct {
 	CurrentAdhocTurn      *CurrentAdhocTurn
 	CurrentRegenerateTurn *CurrentRegenerateTurn
 	CurrentContinueTurn   *CurrentContinueTurn
+	CurrentFanoutWakeTurn *CurrentFanoutWakeTurn
 	// GovernedCredentials is the governed-credential-references freeze of a
 	// bound agent's run (#1119); nil otherwise. The admission transaction
 	// writes it into the run's security context.
@@ -226,6 +230,7 @@ func (s *AdmissionService) Submit(
 		CurrentAdhocTurn:      request.CurrentAdhocTurn.Clone(),
 		CurrentRegenerateTurn: request.CurrentRegenerateTurn.Clone(),
 		CurrentContinueTurn:   request.CurrentContinueTurn.Clone(),
+		CurrentFanoutWakeTurn: request.CurrentFanoutWakeTurn.Clone(),
 		GovernedCredentials:   governed,
 		ReleaseID:             releaseID(request.Release),
 		BindingVersionID:      bindingVersionID(request.Release, 0),
@@ -284,6 +289,18 @@ func validateAgentTurns(request SubmitRequest, generation string) error {
 			request.SIOEvent != "chat_continue_predict" ||
 			(turn.Kind == CurrentRegenerationApplication && request.CapabilityID != executiondomain.AgentApplicationCapability) ||
 			(turn.Kind == CurrentRegenerationAdhoc && request.CapabilityID != executiondomain.AgentAdhocCapability) {
+			return ErrInvalidAgentAdmission
+		}
+	}
+	if request.CurrentFanoutWakeTurn != nil {
+		turn := request.CurrentFanoutWakeTurn
+		if request.CurrentTurn != nil || request.CurrentAdhocTurn != nil || request.CurrentRegenerateTurn != nil ||
+			request.CurrentContinueTurn != nil || turn.Validate() != nil ||
+			request.IdempotencyKey != FanoutWakeIdempotencyKey(turn.ResponseMessageID, turn.DecisionRevision) ||
+			turn.ResponseMessageID != request.ClientMessageID || turn.ConversationUUID != request.ClientStreamID ||
+			turn.ExecutionGeneration != generation || request.SIOEvent != "chat_continue_predict" ||
+			strconv.FormatInt(turn.ProjectID, 10) != request.Identity.ResourceProjectID ||
+			strconv.FormatInt(turn.ActorUserID, 10) != request.Identity.ActorID {
 			return ErrInvalidAgentAdmission
 		}
 	}

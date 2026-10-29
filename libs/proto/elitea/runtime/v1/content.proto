@@ -84,6 +84,12 @@ service RuntimeContentService {
   rpc PollNodeRecovery(PollNodeRecoveryRequestV1) returns (PollNodeRecoveryResponseV1);
   rpc AcknowledgeNodeRecovery(AcknowledgeNodeRecoveryRequestV1) returns (AcknowledgeNodeRecoveryResponseV1);
   rpc ReadNodeRecoveryResult(ReadNodeRecoveryResultRequestV1) returns (ReadNodeRecoveryResultResponseV1);
+  // The per-interrupt decision ledger of the claimed execution
+  // (contracts/fanout-interrupt-decisions-v1.md v1.1 §7): the decided cards
+  // and the acknowledgement of one applied decision. Both payloads are the
+  // contract's canonical JSON; a refusal is a status code (§7.1).
+  rpc FetchExecutionInterrupts(FetchExecutionInterruptsRequestV1) returns (FetchExecutionInterruptsResponseV1);
+  rpc AcknowledgeExecutionInterrupt(AcknowledgeExecutionInterruptRequestV1) returns (AcknowledgeExecutionInterruptResponseV1);
   // The original Code sandbox visit and intent registrations.
   rpc RegisterCodeVisit(RegisterCodeVisitRequestV1) returns (RegisterCodeVisitResponseV1);
   rpc RegisterCodeIntent(RegisterCodeIntentRequestV1) returns (RegisterCodeIntentResponseV1);
@@ -366,6 +372,27 @@ message AcknowledgeNodeRecoveryRequestV1 {
 }
 
 message AcknowledgeNodeRecoveryResponseV1 {
+  bytes outcome_json = 1;
+  reserved 2 to 15;
+}
+
+message FetchExecutionInterruptsRequestV1 {
+  RuntimeContentScopeV1 scope = 1;
+  reserved 2 to 15;
+}
+
+message FetchExecutionInterruptsResponseV1 {
+  bytes fetch_json = 1;
+  reserved 2 to 15;
+}
+
+message AcknowledgeExecutionInterruptRequestV1 {
+  RuntimeContentScopeV1 scope = 1;
+  bytes ack_json = 2;
+  reserved 3 to 15;
+}
+
+message AcknowledgeExecutionInterruptResponseV1 {
   bytes outcome_json = 1;
   reserved 2 to 15;
 }

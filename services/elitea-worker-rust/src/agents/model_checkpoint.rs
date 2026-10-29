@@ -151,10 +151,16 @@ pub(super) struct ModelCheckpointWriter {
     context_events: Option<super::graph::PipelineNodeEventSender>,
     context_measurement: Arc<Mutex<Option<super::context_budget::RequestContextUsage>>>,
     application_tools: Arc<HashSet<String>>,
+    /// A fan-out child's read-only tools, recorded as its toolsets resolve:
+    /// a batch of only these (and saved Agents) is replayed, not refused.
+    read_only_tools: Option<ReadOnlyTools>,
     replay_delegation: Option<Arc<Mutex<Option<adk_rust::Content>>>>,
     output_continuation: Arc<Mutex<Option<output::OutputContinuation>>>,
     steering: Option<Arc<dyn crate::state::TurnSteering>>,
 }
+
+/// Names of the read-only tools a child was offered (D2, T-2A §8).
+pub(super) type ReadOnlyTools = Arc<Mutex<HashSet<String>>>;
 
 impl ModelCheckpointWriter {
     pub(super) fn new(
@@ -176,10 +182,27 @@ impl ModelCheckpointWriter {
             context_events: None,
             context_measurement: Arc::default(),
             application_tools: Arc::default(),
+            read_only_tools: None,
             replay_delegation: None,
             output_continuation: Arc::default(),
             steering: None,
         }
+    }
+
+    /// Replay an interrupted batch of read-only tools (a fan-out child).
+    pub(super) fn with_read_only_tools(mut self, tools: Option<ReadOnlyTools>) -> Self {
+        self.read_only_tools = tools;
+        self
+    }
+
+    /// Whether an interrupted call of `name` may be dispatched again: a saved
+    /// Agent keeps its own receipts; a read-only tool has no effect to repeat.
+    fn replayable(&self, name: &str) -> bool {
+        self.application_tools.contains(name)
+            || self
+                .read_only_tools
+                .as_ref()
+                .is_some_and(|tools| tools.lock().is_ok_and(|tools| tools.contains(name)))
     }
 
     /// The turn's steering queue: each persisted checkpoint names the
@@ -315,6 +338,11 @@ impl ModelCheckpointWriter {
             || checkpoint.invocation_id.len() > 256
         {
             return Err(invalid_checkpoint());
+        }
+        // A tool crossed its boundary without a receipt: it is never repeated,
+        // and the refusal says so (the registered recovery-refused reason).
+        if matches!(checkpoint.phase, Phase::ToolMayHaveStarted) {
+            return Err(tool_may_have_started());
         }
         if !matches!(
             checkpoint.phase,
@@ -512,7 +540,7 @@ impl ModelCheckpointWriter {
             return Ok(BeforeModelResult::Continue(request));
         }
         if let Some(content) = self.pending_delegation()? {
-            delegation::validate_calls(&content, |name| self.application_tools.contains(name))?;
+            delegation::validate_calls(&content, |name| self.replayable(name))?;
             self.persist_delegation(identity, invocation_id, &request, &content)
                 .await?;
             return Ok(BeforeModelResult::Continue(request));
@@ -690,6 +718,15 @@ impl ModelCheckpointWriter {
         }
         Ok(())
     }
+}
+
+pub(super) fn tool_may_have_started() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Agent,
+        ErrorCategory::Unsupported,
+        crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+        crate::protocol::output::RECOVERY_REFUSED_DETAIL,
+    )
 }
 
 fn invalid_checkpoint() -> AdkError {
@@ -1219,10 +1256,13 @@ mod tests {
             )
             .await
             .expect("tool marker");
-        assert!(
+        // A tool past its boundary is refused with the registered reason.
+        assert_eq!(
             writer
                 .restore(load().await.expect("load").as_ref())
-                .is_err()
+                .err()
+                .map(|error| error.code),
+            Some(crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE)
         );
     }
 

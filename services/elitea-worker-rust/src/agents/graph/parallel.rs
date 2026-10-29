@@ -1,49 +1,86 @@
-#![allow(dead_code)] // Composed by the next full YAML graph compiler slice.
+//! Fixed Parallel as a planner on the shared fan-out runner (design
+//! `services/elitea-worker-rust/docs/fanout-v2-runtime-design.md` §2).
+//!
+//! The node freezes its occurrence and restores every branch from its own
+//! checkpoint in one batched preparation, then hands the branches to
+//! [`FanoutRunner`] through [`ParallelChildren`]. Decisions arrive per
+//! interrupt from a [`DecisionSource`]; the child's own checkpoint proves each
+//! one. The parent is written at most twice per visit: freeze, then the join
+//! or the ADK pause row.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::{Arc, OnceLock};
 
-use adk_rust::futures::{StreamExt, stream::FuturesUnordered};
 use adk_rust::graph::checkpoint::Checkpointer;
 use adk_rust::graph::{
     Checkpoint, CompiledGraph, ExecutionConfig, GraphError, Node, NodeContext, NodeOutput, State,
 };
 use async_trait::async_trait;
+use elitea_agent_runtime::graph::fanout::admission::ChildPermits;
+use elitea_agent_runtime::graph::fanout::apply::{CardIdentity, ChildCheckpointView};
+use elitea_agent_runtime::graph::fanout::identity::{InterruptKeyInput, interrupt_key};
+use elitea_agent_runtime::graph::fanout::plan::{
+    self, ChildFailure, ChildTerminal, FanoutKind as JoinKind, JoinOutcome,
+};
+use elitea_agent_runtime::graph::fanout::runner::{
+    ChildRun, DecisionSource, FanoutChildren, FanoutEvents, FanoutRunError, FanoutRunner,
+    FanoutRunnerConfig, FanoutStop, FetchedDecision, NoDecisions, NoEvents, RestoredChild,
+    RunnerOutcome,
+};
+use elitea_agent_runtime::graph::fanout_budget::{
+    MAX_CHILD_RESULT_BYTES, MAX_DECISION_VALUE_CHARS, MAX_OPEN_INTERRUPTS,
+};
 use ring::digest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::fanout_control::{FanoutCancellation, is_lease_lost, latch_cancelled};
+use super::fanout_frames::FanoutCardParts;
 use super::fanout_trace::{self, ActivationOutcome, ChildOutcome, ChildStart, FanoutKind};
+use super::state_reducers::StateReducer;
 use super::yaml::{ParallelBranchDefinition, ParallelNodeDefinition};
 use tracing::Instrument as _;
 
 #[path = "parallel_checkpoint.rs"]
 mod checkpoint;
 use elitea_agent_runtime::graph::parallel_control as control;
+#[path = "parallel_frames.rs"]
+mod frames;
 #[path = "parallel_structure.rs"]
 mod structure;
-pub(in crate::agents::graph) use structure::{validate_state, validate_values};
-#[path = "parallel_published_resume.rs"]
-mod published_resume;
 #[cfg(test)]
 pub(crate) use checkpoint::MAX_PARENT_ROWS_PER_VISIT;
-use checkpoint::{BranchReceipt, BranchReceiptCheckpointer, FrozenBranchInput, FrozenOccurrence};
+use checkpoint::{BranchReceipt, BranchReceiptCheckpointer, FrozenBranchInput};
 pub(crate) use checkpoint::{ParallelBranchExecution, ParallelOccurrenceCheckpointer};
-#[allow(unused_imports)] // Parent proof is staged until continuation assembly is composed.
-pub(crate) use published_resume::ParallelPublishedContinuation;
+pub(in crate::agents::graph) use structure::{validate_state, validate_values};
 
 const MAX_BRANCH_INPUT_BYTES: usize = 8 * 1024 * 1024;
-const MAX_BRANCH_RESULT_BYTES: usize = 512 * 1024;
-const MAX_JOINED_RESULT_BYTES: usize = 8 * 1024 * 1024;
-const MAX_PAUSE_CARDS: usize = 16;
+const MAX_BRANCH_RESULT_BYTES: usize = MAX_CHILD_RESULT_BYTES;
+const MAX_PAUSE_CARDS: usize = MAX_OPEN_INTERRUPTS;
 const MAX_PAUSE_BYTES: usize = 512 * 1024;
-pub(crate) const PARALLEL_RESUME_STATE_KEY: &str = "__elitea_parallel_resume_v1";
-pub(crate) const PARALLEL_INTERRUPT_SCHEMA: &str = "elitea.graph.parallel-interrupt.v1";
 const BRANCH_INPUT_DIGEST_DOMAIN: &[u8] = b"elitea.graph.parallel.branch-input.v1\0";
+/// The parked interrupt payload (`libs/jsonschema/runtime/v1/fanout-parked.schema.json`).
+pub(crate) const FANOUT_PARKED_SCHEMA: &str = "elitea.pipeline.fanout-parked.v1";
+/// A branch whose Agent denied execution: a typed failure, never success.
+pub(crate) const BRANCH_BLOCKED_CODE: &str = "graph.parallel.branch_blocked";
+/// A branch an earlier process left inside an Agent call that may have started
+/// an effect (D2): it fails typed and is never dispatched again.
+pub(crate) const BRANCH_MAY_HAVE_STARTED_CODE: &str = "graph.fanout.may_have_started";
+/// A member's Agent asked for a decision: not supported yet (FU-246).
+const BRANCH_AGENT_PAUSE_CODE: &str = crate::agents::application_tools::FANOUT_AGENT_PAUSE_CODE;
+/// A branch whose saved pipeline holds a tool with external effects, which a
+/// branch cannot run yet (FU-248): typed and readable, never "failed".
+const BRANCH_TOOL_UNAVAILABLE_CODE: &str = "graph.fanout.child_tool_unavailable";
+/// Earlier checkpoints of one child examined for an already answered pause.
+const MAX_ANSWERED_PAUSE_SCAN: usize = 64;
+
+/// Children running at once across this Worker process (every activation).
+fn worker_child_permits() -> ChildPermits {
+    static PERMITS: OnceLock<ChildPermits> = OnceLock::new();
+    PERMITS.get_or_init(ChildPermits::default).clone()
+}
 
 /// Stable activation of one parallel node visit.
 ///
@@ -91,14 +128,18 @@ impl ParallelActivation {
 
 /// The execution identity under which an occurrence first froze its children.
 /// Restores, continuations and reclaims reuse it; they never re-read their own.
+/// One type for every fan-out family (Parallel branches and Map items).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ParallelChildOrigin {
+pub(crate) struct FanoutChildOrigin {
     pub(crate) execution_id: String,
     pub(crate) generation: u64,
 }
 
-impl ParallelChildOrigin {
+/// The Parallel name for the shared fan-out origin.
+pub(crate) type ParallelChildOrigin = FanoutChildOrigin;
+
+impl FanoutChildOrigin {
     pub(super) fn validate(&self) -> Result<(), GraphError> {
         if self.execution_id.is_empty()
             || self.execution_id.len() > 256
@@ -355,21 +396,14 @@ pub(crate) enum ParallelBranchTerminal {
     Blocked,
 }
 
-/// Typed denial receipt. Public status must prove this exact parent checkpoint.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ParallelBlocked {
-    pub(crate) branch_id: String,
-    pub(crate) node: String,
-    pub(crate) ordinal: usize,
-}
-
 pub(crate) enum ParallelNodeOutcome {
+    /// Every admitted branch settled and the join landed on the output key.
     Completed(NodeOutput),
+    /// Nothing can run and cards are open: the execution parks.
     Paused(NodeOutput),
-    Blocked(ParallelBlocked),
 }
 
+#[derive(Clone)]
 pub(crate) struct ParallelBranchPause {
     pub(crate) thread_id: String,
     pub(crate) checkpoint_id: String,
@@ -393,68 +427,95 @@ pub(crate) struct ParallelDecision {
     pub(crate) value: String,
 }
 
+/// What one branch invocation, or one branch restored from its own
+/// checkpoint, ended with.
 pub(crate) enum ParallelBranchOutcome {
-    Completed(serde_json::Map<String, Value>),
-    Paused(Vec<ParallelPauseCard>),
-    Blocked,
-    Failed(String),
+    Completed {
+        outputs: serde_json::Map<String, Value>,
+        checkpoint_id: String,
+    },
+    Paused {
+        pause: ParallelBranchPause,
+        cards: Vec<ParallelPauseCard>,
+    },
+    /// Typed, data-free. A blocked branch is a failure with
+    /// [`BRANCH_BLOCKED_CODE`]. `checkpoint_id` is the saved failure receipt.
+    Failed {
+        failure: ChildFailure,
+        checkpoint_id: Option<String>,
+    },
     Cancelled,
     /// The writer fence was lost. A control stop, never a branch outcome.
     LeaseLost(GraphError),
-}
-
-pub(crate) enum PreparedParallelActivation {
-    Ready(Vec<PreparedParallelBranch>),
-    Blocked(ParallelBlocked),
 }
 
 pub(crate) struct PreparedParallelBranch {
     branch: ParallelBranchDefinition,
     ordinal: usize,
     input: State,
-    checkpoint: Arc<BranchReceiptCheckpointer>,
+    /// The branch thread's own fenced store (reads and the receipt wrapper).
+    store: Arc<dyn Checkpointer>,
     thread_id: String,
     admitted_threads: BTreeSet<String>,
+    /// What the branch's own checkpoint already proves; `None` must run.
     replay: Option<ParallelBranchOutcome>,
 }
 
-struct PreparedBranchSet {
-    branches: Vec<PreparedParallelBranch>,
-    pauses: BTreeMap<usize, ParallelBranchPause>,
-    cards: Vec<(usize, ParallelPauseCard)>,
+impl PreparedParallelBranch {
+    /// The same frozen child with nothing replayed: it runs when invoked.
+    fn fresh(&self) -> Self {
+        Self {
+            branch: self.branch.clone(),
+            ordinal: self.ordinal,
+            input: self.input.clone(),
+            store: Arc::clone(&self.store),
+            thread_id: self.thread_id.clone(),
+            admitted_threads: self.admitted_threads.clone(),
+            replay: None,
+        }
+    }
 }
-
-type OrderedBranchOutcome = (usize, ParallelBranchDefinition, ParallelBranchOutcome);
 
 #[async_trait]
 pub(crate) trait ParallelBranchRuntime: Send + Sync {
     fn validate(&self, definition: &ParallelNodeDefinition) -> Result<(), GraphError>;
 
+    /// Freeze the occurrence and restore every branch from its own checkpoint
+    /// (one batched activation and one batched receipt read).
     async fn prepare(
         &self,
         activation: &mut ParallelActivation,
         definition: &ParallelNodeDefinition,
         context: &NodeContext,
-    ) -> Result<PreparedParallelActivation, GraphError>;
+    ) -> Result<Vec<PreparedParallelBranch>, GraphError>;
 
-    async fn record_pause(
-        &self,
-        activation: &ParallelActivation,
-        cards: Vec<(usize, ParallelPauseCard)>,
-    ) -> Result<(), GraphError>;
-
-    async fn record_blocked(
-        &self,
-        activation: &ParallelActivation,
-        blocked: ParallelBlocked,
-    ) -> Result<(), GraphError>;
-
+    /// Run one branch, or return what its checkpoint already proves.
     async fn invoke(
         &self,
         activation: &ParallelActivation,
         branch: PreparedParallelBranch,
         context: &NodeContext,
     ) -> ParallelBranchOutcome;
+
+    fn pause_cards(
+        &self,
+        branch: &ParallelBranchDefinition,
+        pause: &ParallelBranchPause,
+    ) -> Result<Vec<ParallelPauseCard>, GraphError>;
+
+    fn project_result(
+        &self,
+        branch: &ParallelBranchDefinition,
+        child: &State,
+    ) -> Result<ParallelBranchTerminal, GraphError>;
+
+    /// Resume controls built from exactly this child's decisions.
+    async fn resume_input(
+        &self,
+        branch: &ParallelBranchDefinition,
+        pause: &ParallelBranchPause,
+        decisions: &[ParallelDecision],
+    ) -> Result<State, GraphError>;
 }
 
 /// ADK-native branch runner with one terminal checkpoint lineage per branch.
@@ -477,10 +538,12 @@ impl AdkParallelBranchRuntime {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn parent_checkpointer(&self) -> Arc<dyn Checkpointer> {
         self.parent.clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn occurrence_checkpointer(&self) -> Arc<ParallelOccurrenceCheckpointer> {
         Arc::clone(&self.parent)
     }
@@ -511,7 +574,7 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
         activation: &mut ParallelActivation,
         definition: &ParallelNodeDefinition,
         context: &NodeContext,
-    ) -> Result<PreparedParallelActivation, GraphError> {
+    ) -> Result<Vec<PreparedParallelBranch>, GraphError> {
         self.validate(definition)?;
         let inputs = self.project_inputs(activation, definition, &context.state)?;
         let (origin, threads) = self.mint_lineage(activation, definition, &inputs)?;
@@ -519,38 +582,14 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
             .parent
             .freeze(activation, context, inputs, origin, threads)
             .await?;
-        if let Some(blocked) = occurrence.blocked.clone() {
-            return Ok(PreparedParallelActivation::Blocked(blocked));
-        }
-        let mut restored = self
-            .restore_branches(
-                activation,
-                definition,
-                &occurrence.branches,
-                &occurrence.origin,
-                &occurrence.child_threads,
-            )
-            .await?;
-        self.prepare_resume(activation, &occurrence, &mut restored, context)
-            .await?;
-        Ok(PreparedParallelActivation::Ready(restored.branches))
-    }
-
-    async fn record_pause(
-        &self,
-        activation: &ParallelActivation,
-        cards: Vec<(usize, ParallelPauseCard)>,
-    ) -> Result<(), GraphError> {
-        validate_expected_cards(&cards)?;
-        self.parent.record_pause(activation, cards).await
-    }
-
-    async fn record_blocked(
-        &self,
-        activation: &ParallelActivation,
-        blocked: ParallelBlocked,
-    ) -> Result<(), GraphError> {
-        self.parent.record_blocked(activation, blocked).await
+        self.restore_branches(
+            activation,
+            definition,
+            &occurrence.branches,
+            &occurrence.origin,
+            &occurrence.child_threads,
+        )
+        .await
     }
 
     async fn invoke(
@@ -565,23 +604,59 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
         if is_cancelled(context) {
             return ParallelBranchOutcome::Cancelled;
         }
-        let result = self.invoke_inner(activation, branch, context).await;
+        let checkpoint = Arc::new(BranchReceiptCheckpointer::new(
+            Arc::clone(&branch.store),
+            branch.thread_id.clone(),
+        ));
+        let result = self
+            .invoke_inner(activation, branch, Arc::clone(&checkpoint), context)
+            .await;
         // Lease loss outranks cancellation: the claim machinery must see it unchanged.
-        if let Err(error) = result {
-            return if is_lease_lost(&error) {
-                ParallelBranchOutcome::LeaseLost(error)
-            } else if is_cancelled(context) {
-                ParallelBranchOutcome::Cancelled
-            } else {
-                ParallelBranchOutcome::Failed(graph_error_code(&error).to_owned())
-            };
+        match result {
+            Err(error) if is_lease_lost(&error) => ParallelBranchOutcome::LeaseLost(error),
+            _ if is_cancelled(context) => ParallelBranchOutcome::Cancelled,
+            Ok(outcome) => outcome,
+            Err(error) => {
+                // A failed child saved a failure receipt before returning.
+                let checkpoint_id = checkpoint
+                    .last_saved()
+                    .ok()
+                    .flatten()
+                    .filter(|saved| matches!(saved.receipt, Some(BranchReceipt::Failed { .. })))
+                    .map(|saved| saved.checkpoint_id);
+                ParallelBranchOutcome::Failed {
+                    failure: branch_failure_of(&error),
+                    checkpoint_id,
+                }
+            }
         }
-        if is_cancelled(context) {
-            return ParallelBranchOutcome::Cancelled;
-        }
-        result.unwrap_or_else(|error| {
-            ParallelBranchOutcome::Failed(graph_error_code(&error).to_owned())
-        })
+    }
+
+    fn pause_cards(
+        &self,
+        branch: &ParallelBranchDefinition,
+        pause: &ParallelBranchPause,
+    ) -> Result<Vec<ParallelPauseCard>, GraphError> {
+        let cards = self.graphs.pause_cards(branch, pause)?;
+        validate_cards(&cards)?;
+        Ok(cards)
+    }
+
+    fn project_result(
+        &self,
+        branch: &ParallelBranchDefinition,
+        child: &State,
+    ) -> Result<ParallelBranchTerminal, GraphError> {
+        self.graphs.project_result(branch, child)
+    }
+
+    async fn resume_input(
+        &self,
+        branch: &ParallelBranchDefinition,
+        pause: &ParallelBranchPause,
+        decisions: &[ParallelDecision],
+    ) -> Result<State, GraphError> {
+        self.graphs.resume_input(branch, pause, decisions).await
     }
 }
 
@@ -667,7 +742,6 @@ impl AdkParallelBranchRuntime {
         Ok(frozen)
     }
 
-    #[allow(clippy::too_many_lines)] // Keep child admission, frozen-identity and receipt replay checks together.
     async fn restore_branches(
         &self,
         activation: &ParallelActivation,
@@ -675,10 +749,7 @@ impl AdkParallelBranchRuntime {
         inputs: &[FrozenBranchInput],
         origin: &ParallelChildOrigin,
         child_threads: &[String],
-    ) -> Result<PreparedBranchSet, GraphError> {
-        let mut prepared = Vec::with_capacity(inputs.len());
-        let mut pauses = BTreeMap::new();
-        let mut expected = Vec::new();
+    ) -> Result<Vec<PreparedParallelBranch>, GraphError> {
         let branches = inputs
             .iter()
             .map(|input| {
@@ -714,6 +785,7 @@ impl AdkParallelBranchRuntime {
                 "the prepared child set does not match the frozen occurrence",
             ));
         }
+        let mut prepared = Vec::with_capacity(inputs.len());
         for (position, ((input, branch), prepared_child)) in inputs
             .iter()
             .cloned()
@@ -739,165 +811,41 @@ impl AdkParallelBranchRuntime {
                     "the exact branch checkpoint family is invalid",
                 ));
             }
-            let checkpoint = Arc::new(BranchReceiptCheckpointer::new(
-                child.checkpointer,
-                child.thread_id.clone(),
-            ));
-            if latest
-                .as_ref()
-                .is_some_and(|saved| saved.thread_id != child.thread_id)
-            {
-                return Err(parallel_error(
-                    "graph.parallel.corrupt_receipt",
-                    "the child checkpoint belongs to another thread",
-                ));
-            }
             let replay = match latest {
-                Some(saved) => match BranchReceiptCheckpointer::receipt(&saved)? {
-                    Some(BranchReceipt::Completed) if saved.pending_nodes.is_empty() => Some(
-                        terminal_outcome(self.graphs.project_result(&branch, &saved.state)?)?,
-                    ),
-                    Some(BranchReceipt::Paused { interrupt })
-                        if !saved.pending_nodes.is_empty() =>
-                    {
-                        let pause = ParallelBranchPause {
-                            thread_id: child.thread_id.clone(),
-                            checkpoint_id: saved.checkpoint_id,
-                            interrupt,
-                            checkpointer: checkpoint.clone(),
-                        };
-                        let cards = self.graphs.pause_cards(&branch, &pause)?;
-                        validate_cards(&cards)?;
-                        expected.extend(cards.iter().cloned().map(|card| (input.ordinal, card)));
-                        pauses.insert(input.ordinal, pause);
-                        Some(ParallelBranchOutcome::Paused(cards))
-                    }
-                    Some(BranchReceipt::Failed { code }) if valid_failure_code(&code) => {
-                        Some(ParallelBranchOutcome::Failed(code))
-                    }
-                    None if saved.pending_nodes.is_empty() => {
-                        return Err(parallel_error(
-                            "graph.parallel.corrupt_receipt",
-                            "a terminal child has no lifecycle receipt",
-                        ));
-                    }
-                    None => None,
-                    Some(_) => {
-                        return Err(parallel_error(
-                            "graph.parallel.corrupt_receipt",
-                            "the child receipt contradicts its frontier",
-                        ));
-                    }
-                },
+                Some(saved) => restored_outcome(
+                    self,
+                    &branch,
+                    &child.thread_id,
+                    &child.checkpointer,
+                    saved,
+                    true,
+                )?,
                 None => None,
             };
             prepared.push(PreparedParallelBranch {
                 branch,
                 ordinal: input.ordinal,
                 input: input.input,
-                checkpoint,
+                store: child.checkpointer,
                 thread_id: child.thread_id,
                 admitted_threads: child.admitted_threads,
                 replay,
             });
         }
-        Ok(PreparedBranchSet {
-            branches: prepared,
-            pauses,
-            cards: expected,
-        })
-    }
-
-    async fn prepare_resume(
-        &self,
-        activation: &ParallelActivation,
-        occurrence: &FrozenOccurrence,
-        restored: &mut PreparedBranchSet,
-        context: &NodeContext,
-    ) -> Result<(), GraphError> {
-        let PreparedBranchSet {
-            branches: prepared,
-            pauses,
-            cards: expected,
-        } = restored;
-        validate_expected_cards(expected)?;
-        let published = if occurrence.cards.is_empty() {
-            expected.as_slice()
-        } else {
-            occurrence.cards.as_slice()
-        };
-        let incoming = decisions_for_activation(context, activation, published)?;
-        let published = published.to_vec();
-        if let Some(accepted) = &occurrence.decisions {
-            if incoming
-                .as_ref()
-                .is_some_and(|decisions| !same_decisions(decisions, accepted))
-            {
-                return Err(parallel_error(
-                    "graph.parallel.stale_decision",
-                    "the accepted parallel decision set changed",
-                ));
-            }
-            for prepared in prepared.iter_mut() {
-                // A later child pause must publish its new card before receiving decisions.
-                let matches_original = expected
-                    .iter()
-                    .filter(|(ordinal, _)| *ordinal == prepared.ordinal)
-                    .all(|card| occurrence.cards.contains(card));
-                if pauses.contains_key(&prepared.ordinal)
-                    && matches_original
-                    && let Some(controls) = occurrence.resume_inputs.get(&prepared.ordinal)
-                {
-                    prepared.input.extend(controls.clone());
-                    prepared.replay = None;
-                }
-            }
-        } else if let Some(decisions) = incoming {
-            // Resolve all descendant proofs before dispatching any resumed child.
-            let mut resume_inputs = BTreeMap::new();
-            for prepared in prepared.iter_mut() {
-                if let Some(pause) = pauses.get(&prepared.ordinal) {
-                    let selected = decisions
-                        .iter()
-                        .filter(|decision| {
-                            expected.iter().any(|(ordinal, card)| {
-                                *ordinal == prepared.ordinal && card_matches(card, decision)
-                            })
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    let controls = self
-                        .graphs
-                        .resume_input(&prepared.branch, pause, &selected)
-                        .await?;
-                    if controls.keys().any(|key| !is_resume_key(key)) {
-                        return Err(parallel_error(
-                            "graph.parallel.invalid_resume",
-                            "a branch continuation contains a business update",
-                        ));
-                    }
-                    resume_inputs.insert(prepared.ordinal, controls.clone());
-                    prepared.input.extend(controls);
-                    prepared.replay = None;
-                }
-            }
-            self.parent
-                .record_decisions(occurrence, &published, decisions, resume_inputs, context)
-                .await?;
-        }
-        Ok(())
+        Ok(prepared)
     }
 
     async fn invoke_inner(
         &self,
         activation: &ParallelActivation,
         branch: PreparedParallelBranch,
+        checkpoint: Arc<BranchReceiptCheckpointer>,
         context: &NodeContext,
     ) -> Result<ParallelBranchOutcome, GraphError> {
         let graph = self.graphs.compile_branch(
             &branch.branch,
             ParallelBranchExecution::new(
-                Arc::clone(&branch.checkpoint),
+                Arc::clone(&checkpoint),
                 activation.clone(),
                 branch.branch.node().to_owned(),
                 branch.ordinal,
@@ -907,6 +855,13 @@ impl AdkParallelBranchRuntime {
                     .state
                     .get(super::node_events::PIPELINE_NODE_EVENT_SCOPE_STATE_KEY)
                     .cloned(),
+            )
+            .with_static_after_checkpoints(
+                branch
+                    .input
+                    .get(super::static_pause::STATIC_AFTER_CHECKPOINTS_STATE_KEY)
+                    .and_then(|value| serde_json::from_value(value.clone()).ok())
+                    .unwrap_or_default(),
             ),
         )?;
         let mut config = ExecutionConfig::new(&branch.thread_id)
@@ -923,7 +878,7 @@ impl AdkParallelBranchRuntime {
                     ));
                 }
                 // The fenced terminal save this branch just made is the proof.
-                let saved = branch.checkpoint.last_saved()?.ok_or_else(|| {
+                let saved = checkpoint.last_saved()?.ok_or_else(|| {
                     parallel_error(
                         "graph.parallel.corrupt_receipt",
                         "a completed child checkpoint is missing",
@@ -937,10 +892,10 @@ impl AdkParallelBranchRuntime {
                 }
                 validate_state(&outcome.state)?;
                 let terminal = self.graphs.project_result(&branch.branch, &outcome.state)?;
-                terminal_outcome(terminal)
+                terminal_outcome(terminal, saved.checkpoint_id)
             }
             Err(GraphError::Interrupted(interrupted)) => {
-                let saved = branch.checkpoint.last_saved()?.ok_or_else(|| {
+                let saved = checkpoint.last_saved()?.ok_or_else(|| {
                     parallel_error(
                         "graph.parallel.corrupt_receipt",
                         "a paused child checkpoint is missing",
@@ -959,15 +914,586 @@ impl AdkParallelBranchRuntime {
                     thread_id: interrupted.thread_id,
                     checkpoint_id: interrupted.checkpoint_id,
                     interrupt: interrupted.interrupt,
-                    checkpointer: branch.checkpoint.clone(),
+                    checkpointer: Arc::clone(&branch.store),
                 };
-                let cards = self.graphs.pause_cards(&branch.branch, &pause)?;
-                validate_cards(&cards)?;
-                Ok(ParallelBranchOutcome::Paused(cards))
+                let cards = self.pause_cards(&branch.branch, &pause)?;
+                Ok(ParallelBranchOutcome::Paused { pause, cards })
             }
             Err(error) => Err(error),
         }
     }
+}
+
+/// Classify one child's saved checkpoint by its lifecycle receipt only.
+/// `None`: not started or found mid-run, so the child must run.
+/// `resuming`: a restore or continuation. A pause receipt carried onto a later
+/// checkpoint there means the child was resumed past that pause (its decision
+/// applied) when its process was lost: it continues from that checkpoint and is
+/// never parked again on the answered pause.
+fn restored_outcome(
+    runtime: &dyn ParallelBranchRuntime,
+    branch: &ParallelBranchDefinition,
+    thread_id: &str,
+    store: &Arc<dyn Checkpointer>,
+    saved: Checkpoint,
+    resuming: bool,
+) -> Result<Option<ParallelBranchOutcome>, GraphError> {
+    if saved.thread_id != thread_id {
+        return Err(parallel_error(
+            "graph.parallel.corrupt_receipt",
+            "the child checkpoint belongs to another thread",
+        ));
+    }
+    Ok(match BranchReceiptCheckpointer::receipt(&saved)? {
+        Some(BranchReceipt::Paused { .. })
+            if resuming
+                && !saved.pending_nodes.is_empty()
+                && BranchReceiptCheckpointer::receipt_is_carried(&saved) =>
+        {
+            None
+        }
+        Some(BranchReceipt::Completed) if saved.pending_nodes.is_empty() => Some(terminal_outcome(
+            runtime.project_result(branch, &saved.state)?,
+            saved.checkpoint_id,
+        )?),
+        Some(BranchReceipt::Paused { interrupt }) if !saved.pending_nodes.is_empty() => {
+            let pause = ParallelBranchPause {
+                thread_id: thread_id.to_owned(),
+                checkpoint_id: saved.checkpoint_id,
+                interrupt,
+                checkpointer: Arc::clone(store),
+            };
+            let cards = runtime.pause_cards(branch, &pause)?;
+            Some(ParallelBranchOutcome::Paused { pause, cards })
+        }
+        Some(BranchReceipt::Failed { code }) if valid_failure_code(&code) => {
+            Some(ParallelBranchOutcome::Failed {
+                failure: branch_failure(&code),
+                checkpoint_id: Some(saved.checkpoint_id),
+            })
+        }
+        None if saved.pending_nodes.is_empty() => {
+            return Err(parallel_error(
+                "graph.parallel.corrupt_receipt",
+                "a terminal child has no lifecycle receipt",
+            ));
+        }
+        None => None,
+        Some(_) => {
+            return Err(parallel_error(
+                "graph.parallel.corrupt_receipt",
+                "the child receipt contradicts its frontier",
+            ));
+        }
+    })
+}
+
+/// The member ordinal is 1-based (contract §3.1).
+fn card_identities(
+    activation: &ParallelActivation,
+    ordinal: usize,
+    thread_id: &str,
+    pause_checkpoint_id: &str,
+    cards: &[ParallelPauseCard],
+) -> Result<Vec<CardIdentity>, GraphError> {
+    let config_digest =
+        elitea_agent_runtime::graph::fanout::identity::lowercase_hex(&activation.config_digest);
+    let ordinal = u64::try_from(ordinal + 1).map_err(|_| invalid_pause())?;
+    Ok(cards
+        .iter()
+        .map(|card| CardIdentity {
+            interrupt_key: interrupt_key(&InterruptKeyInput {
+                root_thread: &activation.root_thread_id,
+                fanout_node_id: &activation.node_id,
+                step: activation.step,
+                config_digest: &config_digest,
+                ordinal,
+                child_thread: thread_id,
+                child_paused_checkpoint_id: pause_checkpoint_id,
+                interrupt_id: &card.interrupt_id,
+                tool_call_id: &card.tool_call_id,
+            }),
+            interrupt_id: card.interrupt_id.clone(),
+            child_paused_checkpoint_id: pause_checkpoint_id.to_owned(),
+        })
+        .collect())
+}
+
+/// The planner's children as [`FanoutRunner`] sees them. Every future it
+/// returns owns its inputs (`'static`).
+struct ParallelChildren {
+    runtime: Arc<dyn ParallelBranchRuntime>,
+    activation: ParallelActivation,
+    context: Arc<NodeContext>,
+    members: Vec<(String, String)>,
+    branches: Vec<Arc<PreparedParallelBranch>>,
+    /// Set while a child's batched preparation read is still its truth: its
+    /// first run needs no second read (one fenced probe per fresh child).
+    unread: Vec<AtomicBool>,
+    restored: std::sync::Mutex<Option<Vec<RestoredChild>>>,
+    /// The first infrastructure error a child adapter met; the node reports
+    /// it instead of the runner's control code.
+    fault: Arc<std::sync::Mutex<Option<GraphError>>>,
+    /// Card frame parts of every proven pause (only when frames are sent).
+    board: Option<Arc<CardBoard>>,
+}
+
+/// The frame parts of each card a child's proven pause opened, by interrupt
+/// key: filled where the pause is proven (a run or a restore), taken once by
+/// the frames adapter when the runner opens the card.
+#[derive(Default)]
+pub(crate) struct CardBoard(std::sync::Mutex<BTreeMap<String, FanoutCardParts>>);
+
+impl CardBoard {
+    fn record(
+        &self,
+        pause: &ParallelBranchPause,
+        cards: &[CardIdentity],
+    ) -> Result<(), GraphError> {
+        // A pipeline child's pause holds exactly one card.
+        let [card] = cards else {
+            return Err(invalid_pause());
+        };
+        let parts = super::parallel_cards::card_parts(pause)?;
+        self.0
+            .lock()
+            .map_err(|_| invalid_pause())?
+            .insert(card.interrupt_key.clone(), parts);
+        Ok(())
+    }
+
+    fn take(&self, interrupt_key: &str) -> Option<FanoutCardParts> {
+        self.0.lock().ok()?.remove(interrupt_key)
+    }
+}
+
+impl ParallelChildren {
+    fn new(
+        runtime: Arc<dyn ParallelBranchRuntime>,
+        activation: ParallelActivation,
+        context: Arc<NodeContext>,
+        prepared: Vec<PreparedParallelBranch>,
+        board: Option<Arc<CardBoard>>,
+    ) -> Result<Self, GraphError> {
+        let mut members = Vec::with_capacity(prepared.len());
+        let mut restored = Vec::with_capacity(prepared.len());
+        let mut branches = Vec::with_capacity(prepared.len());
+        let mut unread = Vec::with_capacity(prepared.len());
+        for mut branch in prepared {
+            members.push((
+                branch.branch.id().to_owned(),
+                branch.branch.node().to_owned(),
+            ));
+            unread.push(AtomicBool::new(branch.replay.is_none()));
+            restored.push(match branch.replay.take() {
+                None => RestoredChild::Pending,
+                Some(replay) => {
+                    match to_child_run(&activation, &branch, replay, "", board.as_deref())? {
+                        ChildRun::Settled { terminal, .. } => RestoredChild::Settled(terminal),
+                        ChildRun::Paused {
+                            checkpoint_id,
+                            cards,
+                        } => RestoredChild::Paused {
+                            checkpoint_id,
+                            cards,
+                        },
+                        ChildRun::LeaseLost | ChildRun::Cancelled => {
+                            return Err(parallel_error(
+                                "graph.parallel.corrupt_receipt",
+                                "a restored child holds no lifecycle receipt",
+                            ));
+                        }
+                    }
+                }
+            });
+            branches.push(Arc::new(branch));
+        }
+        Ok(Self {
+            runtime,
+            activation,
+            context,
+            members,
+            branches,
+            unread,
+            restored: std::sync::Mutex::new(Some(restored)),
+            fault: Arc::new(std::sync::Mutex::new(None)),
+            board,
+        })
+    }
+
+    fn take_fault(&self) -> Option<GraphError> {
+        self.fault.lock().ok().and_then(|mut fault| fault.take())
+    }
+
+    /// Record an adapter error and give the runner its control code.
+    fn fault(&self, error: GraphError) -> FanoutRunError {
+        let code = if is_lease_lost(&error) {
+            FanoutRunError::LeaseLost
+        } else {
+            FanoutRunError::CorruptChild
+        };
+        record_fault(&self.fault, error);
+        code
+    }
+
+    async fn view(&self, child: usize) -> Result<ChildCheckpointView, GraphError> {
+        let branch = self.branch(child)?;
+        let Some(saved) = branch.store.load(&branch.thread_id).await? else {
+            return Ok(ChildCheckpointView::Running {
+                checkpoint_id: None,
+            });
+        };
+        let checkpoint_id = saved.checkpoint_id.clone();
+        Ok(
+            match restored_outcome(
+                self.runtime.as_ref(),
+                &branch.branch,
+                &branch.thread_id,
+                &branch.store,
+                saved,
+                false,
+            )? {
+                None => ChildCheckpointView::Running {
+                    checkpoint_id: Some(checkpoint_id),
+                },
+                Some(ParallelBranchOutcome::Paused { pause, cards }) => {
+                    ChildCheckpointView::Paused {
+                        checkpoint_id: pause.checkpoint_id,
+                        interrupt_ids: cards.into_iter().map(|card| card.interrupt_id).collect(),
+                    }
+                }
+                Some(_) => ChildCheckpointView::Terminal { checkpoint_id },
+            },
+        )
+    }
+
+    fn branch(&self, child: usize) -> Result<&Arc<PreparedParallelBranch>, GraphError> {
+        self.branches.get(child).ok_or_else(|| {
+            parallel_error(
+                "graph.parallel.corrupt_occurrence",
+                "a fan-out child index is invalid",
+            )
+        })
+    }
+
+    async fn find_answered(
+        &self,
+        interrupt_key: &str,
+    ) -> Result<Option<(usize, ChildCheckpointView)>, GraphError> {
+        for (child, branch) in self.branches.iter().enumerate() {
+            let history = branch.store.list(&branch.thread_id).await?;
+            let start = history.len().saturating_sub(MAX_ANSWERED_PAUSE_SCAN);
+            for saved in history.into_iter().skip(start) {
+                if saved.thread_id != branch.thread_id || saved.pending_nodes.is_empty() {
+                    continue;
+                }
+                let Some(BranchReceipt::Paused { interrupt }) =
+                    BranchReceiptCheckpointer::receipt(&saved)?
+                else {
+                    continue;
+                };
+                let pause = ParallelBranchPause {
+                    thread_id: branch.thread_id.clone(),
+                    checkpoint_id: saved.checkpoint_id,
+                    interrupt,
+                    checkpointer: Arc::clone(&branch.store),
+                };
+                let cards = self.runtime.pause_cards(&branch.branch, &pause)?;
+                let keys = card_identities(
+                    &self.activation,
+                    branch.ordinal,
+                    &branch.thread_id,
+                    &pause.checkpoint_id,
+                    &cards,
+                )?;
+                if keys.iter().any(|card| card.interrupt_key == interrupt_key) {
+                    return Ok(Some((child, self.view(child).await?)));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+fn record_fault(slot: &std::sync::Mutex<Option<GraphError>>, error: GraphError) {
+    if let Ok(mut fault) = slot.lock() {
+        fault.get_or_insert(error);
+    }
+}
+
+#[async_trait]
+impl FanoutChildren for ParallelChildren {
+    fn members(&self) -> &[(String, String)] {
+        &self.members
+    }
+
+    async fn restore(&self) -> Result<Vec<RestoredChild>, FanoutRunError> {
+        self.restored
+            .lock()
+            .ok()
+            .and_then(|mut restored| restored.take())
+            .ok_or(FanoutRunError::CorruptChild)
+    }
+
+    async fn latest(&self, child: usize) -> Result<ChildCheckpointView, FanoutRunError> {
+        self.view(child).await.map_err(|error| self.fault(error))
+    }
+
+    fn run(
+        &self,
+        child: usize,
+        decisions: Vec<FetchedDecision>,
+    ) -> adk_rust::futures::future::BoxFuture<'static, ChildRun> {
+        let runtime = Arc::clone(&self.runtime);
+        let activation = self.activation.clone();
+        let context = Arc::clone(&self.context);
+        let fault = Arc::clone(&self.fault);
+        let board = self.board.clone();
+        let branch = self.branches.get(child).cloned();
+        let unread = decisions.is_empty()
+            && self
+                .unread
+                .get(child)
+                .is_some_and(|unread| unread.swap(false, Ordering::AcqRel));
+        Box::pin(async move {
+            let Some(branch) = branch else {
+                record_fault(
+                    &fault,
+                    parallel_error(
+                        "graph.parallel.corrupt_occurrence",
+                        "a fan-out child index is invalid",
+                    ),
+                );
+                return ChildRun::Cancelled;
+            };
+            let span =
+                fanout_trace::child_span(FanoutKind::Parallel, &activation.node_id, branch.ordinal);
+            let run = if unread {
+                // Prepared without a receipt moments ago: run it.
+                fanout_trace::child_admitted(&span, ChildStart::Fresh);
+                let outcome = runtime
+                    .invoke(&activation, branch.fresh(), &context)
+                    .instrument(span.clone())
+                    .await;
+                to_child_run(&activation, &branch, outcome, "", board.as_deref())
+            } else {
+                run_child(
+                    &*runtime,
+                    &activation,
+                    &context,
+                    &branch,
+                    decisions,
+                    &span,
+                    board.as_deref(),
+                )
+                .instrument(span.clone())
+                .await
+            };
+            match run {
+                Ok(run) => {
+                    fanout_trace::child_finished(
+                        &span,
+                        match &run {
+                            ChildRun::Settled {
+                                terminal: ChildTerminal::Succeeded(_),
+                                ..
+                            } => ChildOutcome::Completed,
+                            ChildRun::Settled { .. } => ChildOutcome::Failed,
+                            ChildRun::Paused { .. } => ChildOutcome::Paused,
+                            ChildRun::LeaseLost => ChildOutcome::LeaseLost,
+                            ChildRun::Cancelled => ChildOutcome::Cancelled,
+                        },
+                    );
+                    if matches!(run, ChildRun::LeaseLost) {
+                        record_fault(&fault, lease_lost_error());
+                    }
+                    run
+                }
+                Err(error) => {
+                    fanout_trace::child_finished(
+                        &span,
+                        if is_lease_lost(&error) {
+                            ChildOutcome::LeaseLost
+                        } else {
+                            ChildOutcome::Failed
+                        },
+                    );
+                    let lease_lost = is_lease_lost(&error);
+                    record_fault(&fault, error);
+                    if lease_lost {
+                        ChildRun::LeaseLost
+                    } else {
+                        // Not a business outcome: the activation stops typed.
+                        ChildRun::Cancelled
+                    }
+                }
+            }
+        })
+    }
+
+    async fn answered_pause(
+        &self,
+        interrupt_key: &str,
+    ) -> Result<Option<(usize, ChildCheckpointView)>, FanoutRunError> {
+        self.find_answered(interrupt_key)
+            .await
+            .map_err(|error| self.fault(error))
+    }
+}
+
+/// One child run: replay what its own checkpoint proves, continue it, or
+/// resume it with exactly its decisions.
+async fn run_child(
+    runtime: &dyn ParallelBranchRuntime,
+    activation: &ParallelActivation,
+    context: &NodeContext,
+    branch: &PreparedParallelBranch,
+    decisions: Vec<FetchedDecision>,
+    span: &tracing::Span,
+    board: Option<&CardBoard>,
+) -> Result<ChildRun, GraphError> {
+    let latest = branch.store.load(&branch.thread_id).await?;
+    let latest_id = latest
+        .as_ref()
+        .map(|saved| saved.checkpoint_id.clone())
+        .unwrap_or_default();
+    let restored = match latest {
+        Some(saved) => restored_outcome(
+            runtime,
+            &branch.branch,
+            &branch.thread_id,
+            &branch.store,
+            saved,
+            decisions.is_empty(),
+        )?,
+        None => None,
+    };
+    if decisions.is_empty() {
+        if let Some(replay) = restored {
+            // Settled or paused already: never run completed work again.
+            fanout_trace::child_admitted(span, ChildStart::Restored);
+            return to_child_run(activation, branch, replay, &latest_id, board);
+        }
+        fanout_trace::child_admitted(span, ChildStart::Fresh);
+        let outcome = runtime.invoke(activation, branch.fresh(), context).await;
+        return to_child_run(activation, branch, outcome, &latest_id, board);
+    }
+    let Some(ParallelBranchOutcome::Paused { pause, cards }) = restored else {
+        return Err(stale_decision());
+    };
+    let identities = card_identities(
+        activation,
+        branch.ordinal,
+        &branch.thread_id,
+        &pause.checkpoint_id,
+        &cards,
+    )?;
+    let mut selected = Vec::with_capacity(decisions.len());
+    for decision in &decisions {
+        let card = identities
+            .iter()
+            .position(|identity| identity.interrupt_key == decision.interrupt_key)
+            .and_then(|position| cards.get(position))
+            .ok_or_else(stale_decision)?;
+        selected.push(parallel_decision(card, decision)?);
+    }
+    let controls = runtime
+        .resume_input(&branch.branch, &pause, &selected)
+        .await?;
+    if controls.keys().any(|key| !is_resume_key(key)) {
+        return Err(parallel_error(
+            "graph.parallel.invalid_resume",
+            "a branch continuation contains a business update",
+        ));
+    }
+    fanout_trace::child_admitted(span, ChildStart::Resumed);
+    let mut resumed = branch.fresh();
+    resumed.input.extend(controls);
+    let outcome = runtime.invoke(activation, resumed, context).await;
+    to_child_run(activation, branch, outcome, &pause.checkpoint_id, board)
+}
+
+/// `fallback` names the checkpoint the child stood at when its run left no
+/// newer receipt (a failure before any save).
+fn to_child_run(
+    activation: &ParallelActivation,
+    branch: &PreparedParallelBranch,
+    outcome: ParallelBranchOutcome,
+    fallback: &str,
+    board: Option<&CardBoard>,
+) -> Result<ChildRun, GraphError> {
+    Ok(match outcome {
+        ParallelBranchOutcome::Completed {
+            outputs,
+            checkpoint_id,
+        } => ChildRun::Settled {
+            terminal: ChildTerminal::Succeeded(outputs),
+            checkpoint_id,
+        },
+        ParallelBranchOutcome::Failed {
+            failure,
+            checkpoint_id,
+        } => ChildRun::Settled {
+            // The support reference names the frozen child, never the failure.
+            terminal: ChildTerminal::Failed(ChildFailure {
+                support_ref: Some(elitea_agent_runtime::graph::fanout::plan::support_ref_for(
+                    &branch.thread_id,
+                )),
+                ..failure
+            }),
+            checkpoint_id: checkpoint_id.unwrap_or_else(|| fallback.to_owned()),
+        },
+        ParallelBranchOutcome::Paused { pause, cards } => {
+            let cards = card_identities(
+                activation,
+                branch.ordinal,
+                &branch.thread_id,
+                &pause.checkpoint_id,
+                &cards,
+            )?;
+            if let Some(board) = board {
+                board.record(&pause, &cards)?;
+            }
+            ChildRun::Paused {
+                cards,
+                checkpoint_id: pause.checkpoint_id,
+            }
+        }
+        ParallelBranchOutcome::Cancelled => ChildRun::Cancelled,
+        ParallelBranchOutcome::LeaseLost(error) => return Err(error),
+    })
+}
+
+/// A fetched decision for one card of this exact pause, bounded.
+fn parallel_decision(
+    card: &ParallelPauseCard,
+    decision: &FetchedDecision,
+) -> Result<ParallelDecision, GraphError> {
+    let value = decision.value.clone().unwrap_or_default();
+    if !matches!(
+        decision.action.as_str(),
+        "approve"
+            | "reject"
+            | "edit"
+            | "block_with_comment"
+            | "authorize"
+            | "skip"
+            | "answer"
+            | "continue"
+    ) || value.chars().count() > MAX_DECISION_VALUE_CHARS
+        || value.contains('\0')
+    {
+        return Err(parallel_error(
+            "graph.parallel.invalid_decision",
+            "a fan-out decision is outside its contract",
+        ));
+    }
+    Ok(ParallelDecision {
+        interrupt_id: card.interrupt_id.clone(),
+        tool_call_id: card.tool_call_id.clone(),
+        action: decision.action.clone(),
+        value,
+    })
 }
 
 /// ADK custom node implementing bounded, deterministic `wait: all`.
@@ -982,8 +1508,18 @@ pub(crate) struct DurableParallelNode {
     definition: ParallelNodeDefinition,
     runtime: Arc<dyn ParallelBranchRuntime>,
     deadline: Option<tokio::time::Instant>,
-    cleanup_timeout: Duration,
     cancellation: Option<Arc<FanoutCancellation>>,
+    decisions: Arc<dyn DecisionSource>,
+    events: Arc<dyn FanoutEvents>,
+    /// The run's event stream: card and member frames go out on it, and an
+    /// On Error `stop` caused by a child that may have started ends the run
+    /// with its registered reason.
+    node_events: Option<super::node_events::PipelineNodeEventSender>,
+    /// The member tier name per branch (§3.3); the branch node id by default.
+    member_names: Vec<String>,
+    permits: ChildPermits,
+    /// The output key's declared reducer, if it declares one.
+    output_reducer: Option<StateReducer>,
 }
 
 impl DurableParallelNode {
@@ -995,8 +1531,13 @@ impl DurableParallelNode {
             definition,
             runtime,
             deadline: None,
-            cleanup_timeout: Duration::from_secs(5),
             cancellation: None,
+            decisions: Arc::new(NoDecisions),
+            events: Arc::new(NoEvents),
+            node_events: None,
+            member_names: Vec::new(),
+            permits: worker_child_permits(),
+            output_reducer: None,
         }
     }
 
@@ -1006,14 +1547,43 @@ impl DurableParallelNode {
         self
     }
 
-    pub(crate) fn with_cleanup_timeout(mut self, cleanup_timeout: Duration) -> Self {
-        self.cleanup_timeout = cleanup_timeout;
-        self
-    }
-
     /// Supply the deadline from root execution authority at assembly.
     pub(crate) fn with_deadline(mut self, deadline: tokio::time::Instant) -> Self {
         self.deadline = Some(deadline);
+        self
+    }
+
+    /// Main's claim-fenced decision ledger. Default: nothing is decided.
+    pub(crate) fn with_decisions(mut self, decisions: Arc<dyn DecisionSource>) -> Self {
+        self.decisions = decisions;
+        self
+    }
+
+    /// The run's event stream. Default: none (no frames; the node error only).
+    pub(crate) fn with_node_events(
+        mut self,
+        events: Option<super::node_events::PipelineNodeEventSender>,
+    ) -> Self {
+        self.node_events = events;
+        self
+    }
+
+    /// The member tier name of each branch, in declared order.
+    pub(crate) fn with_member_names(mut self, names: Vec<String>) -> Self {
+        self.member_names = names;
+        self
+    }
+
+    /// Card and member frames. Default: none.
+    #[cfg(test)]
+    pub(crate) fn with_events(mut self, events: Arc<dyn FanoutEvents>) -> Self {
+        self.events = events;
+        self
+    }
+
+    /// The output key's typed reducer, checked against the join at compile time.
+    pub(crate) fn with_output_reducer(mut self, reducer: Option<StateReducer>) -> Self {
+        self.output_reducer = reducer;
         self
     }
 
@@ -1027,10 +1597,7 @@ impl DurableParallelNode {
             context.step,
             Some(self.definition.branches().len()),
             usize::try_from(self.definition.max_concurrency()).unwrap_or(usize::MAX),
-            context
-                .state
-                .get(PARALLEL_RESUME_STATE_KEY)
-                .is_some_and(|value| !value.is_null()),
+            false,
         );
         fanout_trace::activation_started(&span);
         let result = self
@@ -1042,10 +1609,9 @@ impl DurableParallelNode {
             match &result {
                 Ok(ParallelNodeOutcome::Completed(_)) => ActivationOutcome::Joined,
                 Ok(ParallelNodeOutcome::Paused(_)) => ActivationOutcome::Paused,
-                Ok(ParallelNodeOutcome::Blocked(_)) => ActivationOutcome::Blocked,
                 Err(error) if is_lease_lost(error) => ActivationOutcome::LeaseLost,
                 Err(GraphError::NodeExecutionFailed { message, .. })
-                    if message.starts_with("graph.parallel.cancelled") =>
+                    if message.starts_with("graph.parallel.cancel") =>
                 {
                     ActivationOutcome::Cancelled
                 }
@@ -1068,50 +1634,7 @@ impl DurableParallelNode {
             .prepare(&mut activation, &self.definition, context)
             .await?;
         self.check_running(context)?;
-        let prepared = match prepared {
-            PreparedParallelActivation::Ready(branches) => branches,
-            PreparedParallelActivation::Blocked(blocked) => {
-                return Ok(ParallelNodeOutcome::Blocked(blocked));
-            }
-        };
-        let ordered = self.drain_branches(&activation, prepared, context).await?;
-        self.collect_outcomes(&activation, ordered, context).await
-    }
-
-    fn stop_requested(&self, context: &NodeContext) -> bool {
-        is_cancelled(context)
-            || self
-                .cancellation
-                .as_deref()
-                .is_some_and(FanoutCancellation::is_cancelled)
-            || self
-                .deadline
-                .is_some_and(|deadline| deadline <= tokio::time::Instant::now())
-    }
-
-    fn check_running(&self, context: &NodeContext) -> Result<(), GraphError> {
-        if self.stop_requested(context) {
-            return Err(parallel_error(
-                "graph.parallel.cancelled",
-                "the parallel execution was cancelled",
-            ));
-        }
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_lines)] // Keep admission, stop and lease-loss ordering in one select loop.
-    async fn drain_branches(
-        &self,
-        activation: &ParallelActivation,
-        prepared: Vec<PreparedParallelBranch>,
-        context: &NodeContext,
-    ) -> Result<Vec<OrderedBranchOutcome>, GraphError> {
-        let max_concurrency = usize::try_from(self.definition.max_concurrency()).map_err(|_| {
-            parallel_error(
-                "graph.parallel.invalid_configuration",
-                "the parallel concurrency does not fit this platform",
-            )
-        })?;
+        let stop = Arc::new(FanoutStop::default());
         let cancel_signal = Arc::new(AtomicBool::new(false));
         let mut run_context =
             NodeContext::new(context.state.clone(), context.config.clone(), context.step);
@@ -1122,263 +1645,217 @@ impl DurableParallelNode {
                     Arc::clone(&cancel_signal),
                 )));
         }
-        let mut pending = prepared.into_iter();
-        let mut inflight = FuturesUnordered::new();
-        let mut ordered = Vec::with_capacity(self.definition.branches().len());
-        let mut admission_open = true;
-        let mut stopping = false;
-        let mut cleanup_deadline = None;
-        let mut lease_error = None;
-        let latch = self.cancellation.as_deref();
-        if self.stop_requested(context) {
-            self.begin_stop(
-                &mut admission_open,
-                &mut stopping,
-                &mut cleanup_deadline,
-                &cancel_signal,
-            );
-        } else {
-            for _ in 0..max_concurrency {
-                if let Some(branch) = pending.next() {
-                    inflight.push(self.invoke_branch(activation.clone(), branch, &run_context));
-                }
+        // With the run's event stream, every activation raises its cards and
+        // member lifecycle as frames (contract §4, §9).
+        let (events, board) = match &self.node_events {
+            Some(sender) => {
+                let board = Arc::new(CardBoard::default());
+                let frames = self.frames(sender, &board, &activation, &prepared, context)?;
+                (Arc::new(frames) as Arc<dyn FanoutEvents>, Some(board))
             }
+            None => (Arc::clone(&self.events), None),
+        };
+        let children = Arc::new(ParallelChildren::new(
+            Arc::clone(&self.runtime),
+            activation,
+            Arc::new(run_context),
+            prepared,
+            board,
+        )?);
+        let max_concurrency = usize::try_from(self.definition.max_concurrency()).map_err(|_| {
+            parallel_error(
+                "graph.parallel.invalid_configuration",
+                "the parallel concurrency does not fit this platform",
+            )
+        })?;
+        let runner = FanoutRunner::new(
+            children.clone(),
+            Arc::clone(&self.decisions),
+            events,
+            self.permits.clone(),
+            Arc::clone(&stop),
+            FanoutRunnerConfig {
+                max_concurrency,
+                on_error: self.definition.on_error(),
+                deadline: self.deadline,
+            },
+        )
+        .map_err(|error| runner_error(error, None))?;
+        let outcome = self.drive(runner, &stop, &cancel_signal).await;
+        let outcome = outcome.map_err(|error| runner_error(error, children.take_fault()))?;
+        // A stop that raced the last child still wins over its result.
+        if is_cancelled(context)
+            || self
+                .cancellation
+                .as_deref()
+                .is_some_and(FanoutCancellation::is_cancelled)
+        {
+            return Err(cancelled_error());
         }
-
-        // The owner fires the latch and the deadline is absolute: nothing here polls.
-        while !inflight.is_empty() {
-            let outcome = tokio::select! {
-                biased;
-                () = latch_cancelled(latch), if !stopping => {
-                    self.begin_stop(&mut admission_open, &mut stopping, &mut cleanup_deadline, &cancel_signal);
-                    continue;
-                }
-                () = tokio::time::sleep_until(self.deadline.unwrap_or_else(tokio::time::Instant::now)),
-                    if !stopping && self.deadline.is_some() => {
-                    self.begin_stop(&mut admission_open, &mut stopping, &mut cleanup_deadline, &cancel_signal);
-                    continue;
-                }
-                () = tokio::time::sleep_until(cleanup_deadline.unwrap_or_else(tokio::time::Instant::now)),
-                    if stopping => {
-                    return Err(parallel_error("graph.parallel.cancellation_cleanup_failed", "parallel cancellation cleanup exceeded its bound"));
-                }
-                outcome = inflight.next() => outcome,
-            };
-            let Some((ordinal, branch, result)) = outcome else {
-                break;
-            };
-            let result = match result {
-                ParallelBranchOutcome::Completed(_) | ParallelBranchOutcome::Paused(_) => {
-                    Some(result)
-                }
-                ParallelBranchOutcome::Blocked | ParallelBranchOutcome::Failed(_) => {
-                    admission_open = false;
-                    Some(result)
-                }
-                ParallelBranchOutcome::Cancelled => {
-                    self.begin_stop(
-                        &mut admission_open,
-                        &mut stopping,
-                        &mut cleanup_deadline,
-                        &cancel_signal,
-                    );
-                    Some(result)
-                }
-                ParallelBranchOutcome::LeaseLost(error) => {
-                    lease_error.get_or_insert(error);
-                    self.begin_stop(
-                        &mut admission_open,
-                        &mut stopping,
-                        &mut cleanup_deadline,
-                        &cancel_signal,
-                    );
-                    None
-                }
-            };
-            if let Some(result) = result {
-                ordered.push((ordinal, branch, result));
-            }
-            if !stopping && self.stop_requested(context) {
-                self.begin_stop(
-                    &mut admission_open,
-                    &mut stopping,
-                    &mut cleanup_deadline,
-                    &cancel_signal,
-                );
-            }
-            if admission_open
-                && !stopping
-                && let Some(branch) = pending.next()
-            {
-                inflight.push(self.invoke_branch(activation.clone(), branch, &run_context));
-            }
-        }
-
-        ordered.sort_by_key(|(ordinal, _, _)| *ordinal);
-        if let Some(error) = lease_error {
-            return Err(error);
-        }
-        if stopping {
-            return Err(parallel_error(
-                "graph.parallel.cancelled",
-                "the parallel execution was cancelled",
-            ));
-        }
-        self.check_running(context)?;
-        Ok(ordered)
-    }
-
-    /// Close admission, tell running children to stop and bound their cleanup.
-    fn begin_stop(
-        &self,
-        admission_open: &mut bool,
-        stopping: &mut bool,
-        cleanup_deadline: &mut Option<tokio::time::Instant>,
-        cancel_signal: &AtomicBool,
-    ) {
-        *admission_open = false;
-        if !*stopping {
-            *stopping = true;
-            cancel_signal.store(true, Ordering::Release);
-            *cleanup_deadline = Some(tokio::time::Instant::now() + self.cleanup_timeout);
+        match outcome {
+            RunnerOutcome::Settled(settled) => self.land(settled, context).await,
+            RunnerOutcome::Parked {
+                open,
+                decision_revision_seen,
+            } => Ok(ParallelNodeOutcome::Paused(
+                NodeOutput::interrupt_with_data(
+                    "Parallel branches paused.",
+                    json!({
+                        "schema": FANOUT_PARKED_SCHEMA,
+                        "decision_revision_seen": decision_revision_seen,
+                        "pending": open
+                            .iter()
+                            .map(|card| json!({
+                                "interrupt_key": card.interrupt_key,
+                                "interrupt_id": card.interrupt_id,
+                            }))
+                            .collect::<Vec<_>>(),
+                    }),
+                ),
+            )),
         }
     }
 
-    async fn collect_outcomes(
+    fn frames(
         &self,
+        sender: &super::node_events::PipelineNodeEventSender,
+        board: &Arc<CardBoard>,
         activation: &ParallelActivation,
-        ordered: Vec<OrderedBranchOutcome>,
+        prepared: &[PreparedParallelBranch],
+        context: &NodeContext,
+    ) -> Result<frames::ParallelFrames, GraphError> {
+        let invocation = context
+            .config
+            .parent_context
+            .as_ref()
+            .map(|parent| parent.invocation_id().to_owned())
+            .ok_or_else(|| {
+                parallel_error(
+                    "graph.parallel.invalid_invocation",
+                    "the parallel frames have no owning invocation",
+                )
+            })?;
+        let enclosing = super::node_events::PipelineNodeEventScope::from_state(
+            context
+                .state
+                .get(super::node_events::PIPELINE_NODE_EVENT_SCOPE_STATE_KEY),
+        )
+        .map_err(|_| {
+            parallel_error(
+                "graph.parallel.invalid_invocation",
+                "the parallel event scope is invalid",
+            )
+        })?;
+        let members = prepared
+            .iter()
+            .map(|branch| frames::MemberInput {
+                branch_id: branch.branch.id(),
+                name: self
+                    .member_names
+                    .get(branch.ordinal)
+                    .map_or_else(|| branch.branch.node(), String::as_str),
+                child_thread: &branch.thread_id,
+            })
+            .collect::<Vec<_>>();
+        frames::ParallelFrames::new(
+            sender.clone(),
+            &invocation,
+            Arc::clone(board),
+            activation,
+            &members,
+            enclosing.as_ref(),
+        )
+        .map_err(|error| runner_error(error, None))
+    }
+
+    /// Run the runner while relaying the owner's latch into the stop, and the
+    /// stop into every child's cancellation flag. Nothing here polls.
+    async fn drive(
+        &self,
+        runner: FanoutRunner,
+        stop: &FanoutStop,
+        cancel_signal: &AtomicBool,
+    ) -> Result<RunnerOutcome, FanoutRunError> {
+        let run = runner.run();
+        tokio::pin!(run);
+        let latch = self.cancellation.as_deref();
+        let (mut latched, mut relayed) = (false, false);
+        loop {
+            tokio::select! {
+                biased;
+                () = latch_cancelled(latch), if !latched => {
+                    latched = true;
+                    stop.fire();
+                }
+                () = stop.fired(), if !relayed => {
+                    relayed = true;
+                    cancel_signal.store(true, Ordering::Release);
+                }
+                result = &mut run => return result,
+            }
+        }
+    }
+
+    async fn land(
+        &self,
+        settled: Vec<plan::SettledChild>,
         context: &NodeContext,
     ) -> Result<ParallelNodeOutcome, GraphError> {
-        if let Some((_, branch, code)) = ordered.iter().find_map(|(ordinal, branch, outcome)| {
-            if let ParallelBranchOutcome::Failed(code) = outcome {
-                Some((*ordinal, branch, code))
-            } else {
-                None
-            }
-        }) {
-            return Err(GraphError::NodeExecutionFailed {
-                node: self.definition.id().to_owned(),
-                message: format!(
-                    "graph.parallel.branch_failed: branch '{}' failed after all admitted branches drained ({})",
-                    branch.id(),
-                    code,
-                ),
-            });
-        }
-
-        if let Some((ordinal, branch, _)) = ordered
-            .iter()
-            .find(|(_, _, outcome)| matches!(outcome, ParallelBranchOutcome::Blocked))
+        let entries = match plan::join(JoinKind::Parallel, self.definition.on_error(), settled)
+            .map_err(join_error)?
         {
-            let blocked = ParallelBlocked {
-                branch_id: branch.id().to_owned(),
-                node: branch.node().to_owned(),
-                ordinal: *ordinal,
-            };
-            self.runtime
-                .record_blocked(activation, blocked.clone())
-                .await?;
-            return Ok(ParallelNodeOutcome::Blocked(blocked));
-        }
-
-        let mut cards = Vec::new();
-        let mut private_cards = Vec::new();
-        for (ordinal, branch, outcome) in &ordered {
-            if let ParallelBranchOutcome::Paused(paused) = outcome {
-                for card in paused {
-                    private_cards.push((*ordinal, card.clone()));
-                    cards.push(json!({
-                        "branch_id": branch.id(),
-                        "node": branch.node(),
-                        "ordinal": ordinal,
-                        "interrupt_id": card.interrupt_id,
-                        "tool_call_id": card.tool_call_id,
-                    }));
+            JoinOutcome::Joined(entries) => entries,
+            JoinOutcome::Failed { key, failure } => {
+                if failure.code == BRANCH_MAY_HAVE_STARTED_CODE
+                    && let Some(events) = &self.node_events
+                    && let Some(stop) = events
+                        .approved_call_stop(
+                            crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+                            self.definition.id(),
+                        )
+                        .await
+                {
+                    return Err(stop);
                 }
+                return Err(GraphError::NodeExecutionFailed {
+                    node: self.definition.id().to_owned(),
+                    message: format!(
+                        "graph.parallel.branch_failed: branch '{key}' failed after all admitted branches drained ({})",
+                        failure.code,
+                    ),
+                });
             }
-        }
-        if !cards.is_empty() {
-            if cards.len() > MAX_PAUSE_CARDS {
-                return Err(parallel_error(
-                    "graph.parallel.pause_resource_exhausted",
-                    "the parallel pause card count exceeds its bound",
-                ));
-            }
-            let aggregate = json!({
-                "schema": PARALLEL_INTERRUPT_SCHEMA,
-                "parallel_node": self.definition.id(),
-                "parallel_activation": activation_label(activation)?,
-                "cards": cards,
-            });
-            ensure_bounded_json(&aggregate, MAX_PAUSE_BYTES, "pause")?;
-            self.runtime.record_pause(activation, private_cards).await?;
-            return Ok(ParallelNodeOutcome::Paused(
-                NodeOutput::interrupt_with_data("Parallel branches paused.", aggregate),
-            ));
-        }
-
-        let joined = Value::Array(
-            ordered
-                .into_iter()
-                .map(|(_, branch, outcome)| {
-                    if let ParallelBranchOutcome::Completed(outputs) = outcome {
-                        Ok(json!({
-                            "branch_id": branch.id(),
-                            "node": branch.node(),
-                            "outputs": outputs,
-                        }))
-                    } else {
-                        Err(parallel_error(
-                            "graph.parallel.invalid_outcome",
-                            "a parallel branch did not complete",
-                        ))
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-        );
-        ensure_bounded_json(&joined, MAX_JOINED_RESULT_BYTES, "joined result")?;
-        let mut output = NodeOutput::new().with_update(self.definition.output_key(), joined);
-        if context.state.contains_key(PARALLEL_RESUME_STATE_KEY) {
-            output = output.with_update(PARALLEL_RESUME_STATE_KEY, Value::Null);
-        }
-        Ok(ParallelNodeOutcome::Completed(output))
+        };
+        let output_key = self.definition.output_key();
+        let update = plan::land(
+            self.definition.join(),
+            self.output_reducer,
+            JoinKind::Parallel,
+            context.state.get(output_key),
+            entries,
+        )
+        .map_err(join_error)?;
+        Ok(ParallelNodeOutcome::Completed(
+            NodeOutput::new().with_update(output_key, update),
+        ))
     }
 
-    async fn invoke_branch(
-        &self,
-        activation: ParallelActivation,
-        branch: PreparedParallelBranch,
-        context: &NodeContext,
-    ) -> OrderedBranchOutcome {
-        let ordinal = branch.ordinal;
-        let definition = branch.branch.clone();
-        let start = if branch.replay.is_some() {
-            ChildStart::Restored
-        } else if branch.input.keys().any(|key| is_resume_key(key)) {
-            ChildStart::Resumed
-        } else {
-            ChildStart::Fresh
-        };
-        let span = fanout_trace::child_span(FanoutKind::Parallel, self.definition.id(), ordinal);
-        fanout_trace::child_admitted(&span, start);
-        let result = self
-            .runtime
-            .invoke(&activation, branch, context)
-            .instrument(span.clone())
-            .await;
-        fanout_trace::child_finished(
-            &span,
-            match &result {
-                ParallelBranchOutcome::Completed(_) => ChildOutcome::Completed,
-                ParallelBranchOutcome::Paused(_) => ChildOutcome::Paused,
-                ParallelBranchOutcome::Blocked => ChildOutcome::Blocked,
-                ParallelBranchOutcome::Failed(_) => ChildOutcome::Failed,
-                ParallelBranchOutcome::Cancelled => ChildOutcome::Cancelled,
-                ParallelBranchOutcome::LeaseLost(_) => ChildOutcome::LeaseLost,
-            },
-        );
-        (ordinal, definition, result)
+    fn check_running(&self, context: &NodeContext) -> Result<(), GraphError> {
+        if is_cancelled(context)
+            || self
+                .cancellation
+                .as_deref()
+                .is_some_and(FanoutCancellation::is_cancelled)
+        {
+            return Err(cancelled_error());
+        }
+        if self
+            .deadline
+            .is_some_and(|deadline| deadline <= tokio::time::Instant::now())
+        {
+            return Err(deadline_error());
+        }
+        Ok(())
     }
 }
 
@@ -1393,10 +1870,6 @@ impl Node for DurableParallelNode {
             ParallelNodeOutcome::Completed(output) | ParallelNodeOutcome::Paused(output) => {
                 Ok(output)
             }
-            ParallelNodeOutcome::Blocked(_) => Err(parallel_error(
-                "graph.parallel.blocked",
-                "a parallel branch denied execution after admitted branches drained",
-            )),
         }
     }
 
@@ -1416,7 +1889,134 @@ impl Node for DurableParallelNode {
     }
 }
 
-fn terminal_outcome(terminal: ParallelBranchTerminal) -> Result<ParallelBranchOutcome, GraphError> {
+/// Runner control codes as typed node errors. `fault` is the adapter's own
+/// error, which names the real cause (a fenced write, a corrupt receipt).
+fn runner_error(error: FanoutRunError, fault: Option<GraphError>) -> GraphError {
+    match error {
+        FanoutRunError::LeaseLost => fault.filter(is_lease_lost).unwrap_or_else(lease_lost_error),
+        FanoutRunError::Cancelled
+        | FanoutRunError::CancelCleanupExceeded
+        | FanoutRunError::CorruptChild
+            if fault.is_some() =>
+        {
+            fault.unwrap_or_else(cancelled_error)
+        }
+        FanoutRunError::Cancelled => cancelled_error(),
+        FanoutRunError::CancelCleanupExceeded => parallel_error(
+            "graph.parallel.cancellation_cleanup_failed",
+            "parallel cancellation cleanup exceeded its bound",
+        ),
+        FanoutRunError::DeadlineExceeded => deadline_error(),
+        FanoutRunError::TooManyOpenInterrupts => parallel_error(
+            "graph.parallel.pause_resource_exhausted",
+            "the parallel pause card count exceeds its bound",
+        ),
+        FanoutRunError::InvalidConfiguration => parallel_error(
+            "graph.parallel.invalid_configuration",
+            "the parallel runner configuration is invalid",
+        ),
+        FanoutRunError::CorruptChild => parallel_error(
+            "graph.parallel.corrupt_receipt",
+            "a parallel child checkpoint contradicts its card",
+        ),
+        FanoutRunError::FrameUndelivered => parallel_error(
+            "graph.parallel.frame_undelivered",
+            "a parallel card or member frame could not be delivered",
+        ),
+        FanoutRunError::LedgerFault => parallel_error(
+            "graph.parallel.ledger_fault",
+            "the decision ledger returned more decisions than its bound",
+        ),
+        FanoutRunError::LedgerUnavailable => parallel_error(
+            "graph.parallel.ledger_unavailable",
+            "the decision ledger could not be read before the parallel node could park",
+        ),
+    }
+}
+
+fn join_error(error: plan::FanoutPlanError) -> GraphError {
+    parallel_error(
+        &error.code(),
+        "the parallel joined result cannot land on its output key",
+    )
+}
+
+fn cancelled_error() -> GraphError {
+    parallel_error(
+        "graph.parallel.cancelled",
+        "the parallel execution was cancelled",
+    )
+}
+
+fn deadline_error() -> GraphError {
+    parallel_error(
+        "graph.parallel.deadline_exceeded",
+        "the parallel execution exceeded its deadline",
+    )
+}
+
+fn lease_lost_error() -> GraphError {
+    GraphError::CheckpointError(
+        "checkpoint.writer_not_current: the fan-out child writer is no longer current".to_owned(),
+    )
+}
+
+fn stale_decision() -> GraphError {
+    parallel_error(
+        "graph.parallel.stale_decision",
+        "the decision does not answer the child's current pause",
+    )
+}
+
+fn invalid_pause() -> GraphError {
+    parallel_error(
+        "graph.parallel.invalid_pause",
+        "the branch pause card identity is invalid",
+    )
+}
+
+/// A typed child failure with a fixed safe message per code.
+/// A failed branch's entry. A member whose Agent asked for a decision keeps
+/// the readable text naming its node (FU-246); others the code's fixed text.
+fn branch_failure_of(error: &GraphError) -> ChildFailure {
+    let code = graph_error_code(error);
+    if code == BRANCH_AGENT_PAUSE_CODE
+        && let GraphError::NodeExecutionFailed { message, .. } = error
+        && let Some(text) = unwrap_node_failures(message)
+            .strip_prefix(BRANCH_AGENT_PAUSE_CODE)
+            .and_then(|rest| rest.strip_prefix(": "))
+    {
+        let mut text = text.to_owned();
+        if let Some(first) = text.get_mut(..1) {
+            first.make_ascii_uppercase();
+        }
+        return ChildFailure::new(code, &format!("{text}."));
+    }
+    branch_failure(code)
+}
+
+fn branch_failure(code: &str) -> ChildFailure {
+    ChildFailure::new(
+        code,
+        match code {
+            BRANCH_BLOCKED_CODE => "The branch was blocked.",
+            BRANCH_MAY_HAVE_STARTED_CODE => {
+                "The branch was interrupted while it may have been changing data. \
+                 It was not run again; check the target system."
+            }
+            BRANCH_TOOL_UNAVAILABLE_CODE => {
+                "The branch's pipeline uses a tool that changes data directly, which a \
+                 parallel branch cannot run yet. It did not run."
+            }
+            _ => "The branch failed.",
+        },
+    )
+}
+
+fn terminal_outcome(
+    terminal: ParallelBranchTerminal,
+    checkpoint_id: String,
+) -> Result<ParallelBranchOutcome, GraphError> {
     match terminal {
         ParallelBranchTerminal::Completed(outputs) => {
             validate_values(outputs.values())?;
@@ -1425,9 +2025,15 @@ fn terminal_outcome(terminal: ParallelBranchTerminal) -> Result<ParallelBranchOu
                 MAX_BRANCH_RESULT_BYTES,
                 "branch result",
             )?;
-            Ok(ParallelBranchOutcome::Completed(outputs))
+            Ok(ParallelBranchOutcome::Completed {
+                outputs,
+                checkpoint_id,
+            })
         }
-        ParallelBranchTerminal::Blocked => Ok(ParallelBranchOutcome::Blocked),
+        ParallelBranchTerminal::Blocked => Ok(ParallelBranchOutcome::Failed {
+            failure: branch_failure(BRANCH_BLOCKED_CODE),
+            checkpoint_id: Some(checkpoint_id),
+        }),
     }
 }
 
@@ -1455,30 +2061,10 @@ fn business_state(state: &State) -> State {
     state
         .iter()
         .filter(|(key, _)| {
-            !is_resume_key(key)
-                && key.as_str() != PARALLEL_RESUME_STATE_KEY
-                && key.as_str() != "__elitea_pipeline_node_event_scope_v1"
+            !is_resume_key(key) && key.as_str() != "__elitea_pipeline_node_event_scope_v1"
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
-}
-
-fn activation_label(activation: &ParallelActivation) -> Result<String, GraphError> {
-    let raw = serde_json::to_vec(activation).map_err(|_| {
-        parallel_error(
-            "graph.parallel.invalid_activation",
-            "the parallel activation cannot be encoded",
-        )
-    })?;
-    let hashed = digest::digest(&digest::SHA256, &raw);
-    Ok(hashed
-        .as_ref()
-        .iter()
-        .fold(String::from("p1:"), |mut label, byte| {
-            use std::fmt::Write as _;
-            let _ = write!(label, "{byte:02x}");
-            label
-        }))
 }
 
 fn validate_cards(cards: &[ParallelPauseCard]) -> Result<(), GraphError> {
@@ -1490,109 +2076,27 @@ fn validate_cards(cards: &[ParallelPauseCard]) -> Result<(), GraphError> {
         ));
     }
     for card in cards {
-        if !valid_card_identity(&card.interrupt_id)
+        if !valid_interrupt_id(&card.interrupt_id)
             || (!card.tool_call_id.is_empty() && !valid_card_identity(&card.tool_call_id))
             || !unique.insert((&card.interrupt_id, &card.tool_call_id))
         {
-            return Err(parallel_error(
-                "graph.parallel.invalid_pause",
-                "the branch pause card identity is invalid",
-            ));
+            return Err(invalid_pause());
         }
     }
     Ok(())
 }
 
-fn validate_expected_cards(expected: &[(usize, ParallelPauseCard)]) -> Result<(), GraphError> {
-    let unique = expected
-        .iter()
-        .map(|(_, card)| (&card.interrupt_id, &card.tool_call_id))
-        .collect::<BTreeSet<_>>();
-    if expected.len() > MAX_PAUSE_CARDS || unique.len() != expected.len() {
-        return Err(parallel_error(
-            "graph.parallel.invalid_pause",
-            "the aggregate pause card set is invalid",
-        ));
-    }
-    Ok(())
+/// An interrupt id is printable ASCII, 1–512 bytes (contract §3.2): Web and
+/// Main key cards by it. A tool call id only excludes control characters.
+fn valid_interrupt_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 512
+        && value.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+        && !value.starts_with(' ')
 }
 
 fn valid_card_identity(value: &str) -> bool {
     !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control)
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ParallelResumeEnvelope {
-    schema: String,
-    parallel_activation: String,
-    decisions: Vec<ParallelDecision>,
-}
-
-fn card_matches(card: &ParallelPauseCard, decision: &ParallelDecision) -> bool {
-    card.interrupt_id == decision.interrupt_id && card.tool_call_id == decision.tool_call_id
-}
-
-fn same_decisions(left: &[ParallelDecision], right: &[ParallelDecision]) -> bool {
-    left.len() == right.len() && left.iter().all(|decision| right.contains(decision))
-}
-
-fn decisions_for_activation(
-    context: &NodeContext,
-    activation: &ParallelActivation,
-    expected: &[(usize, ParallelPauseCard)],
-) -> Result<Option<Vec<ParallelDecision>>, GraphError> {
-    let Some(raw) = context
-        .state
-        .get(PARALLEL_RESUME_STATE_KEY)
-        .filter(|value| !value.is_null())
-    else {
-        return Ok(None);
-    };
-    ensure_bounded_json(raw, MAX_PAUSE_BYTES, "pause")?;
-    let envelope: ParallelResumeEnvelope = serde_json::from_value(raw.clone()).map_err(|_| {
-        parallel_error(
-            "graph.parallel.invalid_resume",
-            "the parallel decision envelope is invalid",
-        )
-    })?;
-    if envelope.schema != PARALLEL_INTERRUPT_SCHEMA
-        || envelope.parallel_activation != activation_label(activation)?
-        || expected.is_empty()
-        || envelope.decisions.len() != expected.len()
-    {
-        return Err(parallel_error(
-            "graph.parallel.stale_decision",
-            "the parallel decision set does not match the paused activation",
-        ));
-    }
-    let mut unique = BTreeSet::new();
-    for decision in &envelope.decisions {
-        if !unique.insert((&decision.interrupt_id, &decision.tool_call_id))
-            || !expected
-                .iter()
-                .any(|(_, card)| card_matches(card, decision))
-            || !matches!(
-                decision.action.as_str(),
-                "approve"
-                    | "reject"
-                    | "edit"
-                    | "block_with_comment"
-                    | "authorize"
-                    | "skip"
-                    | "answer"
-                    | "continue"
-            )
-            || decision.value.len() > 64 * 1024
-            || decision.value.contains('\0')
-        {
-            return Err(parallel_error(
-                "graph.parallel.stale_decision",
-                "the parallel decision set is partial, duplicate, or foreign",
-            ));
-        }
-    }
-    Ok(Some(envelope.decisions))
 }
 
 pub(in crate::agents::graph) fn ensure_bounded_json(
@@ -1711,6 +2215,25 @@ impl Write for CappedJsonWriter {
 }
 
 fn graph_error_code(error: &GraphError) -> &'static str {
+    // A child refusal that names its own registered cause keeps it, also
+    // when an inner node's failure wraps it.
+    if let GraphError::NodeExecutionFailed { message, .. } = error {
+        let inner = unwrap_node_failures(message);
+        let names = |code: &str| {
+            inner
+                .strip_prefix(code)
+                .is_some_and(|rest| rest.starts_with(": "))
+        };
+        if names(crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE) {
+            return BRANCH_MAY_HAVE_STARTED_CODE;
+        }
+        if names(BRANCH_AGENT_PAUSE_CODE) {
+            return BRANCH_AGENT_PAUSE_CODE;
+        }
+        if names(super::direct_tool::EFFECT_WRITER_UNAVAILABLE_CODE) {
+            return BRANCH_TOOL_UNAVAILABLE_CODE;
+        }
+    }
     match error {
         GraphError::InvalidGraph(_) => "graph.invalid",
         GraphError::NodeNotFound(_) => "graph.node_not_found",
@@ -1730,6 +2253,17 @@ fn graph_error_code(error: &GraphError) -> &'static str {
         GraphError::JsonError(_) => "graph.json",
         GraphError::Other(_) => "graph.other",
     }
+}
+
+/// The innermost message of nested `Node '<id>' execution failed: ` wrappers.
+fn unwrap_node_failures(mut message: &str) -> &str {
+    while let Some(rest) = message.strip_prefix("Node '")
+        && let Some((node, inner)) = rest.split_once("' execution failed: ")
+        && !node.contains('\'')
+    {
+        message = inner;
+    }
+    message
 }
 
 fn valid_failure_code(code: &str) -> bool {
@@ -1752,6 +2286,9 @@ fn valid_failure_code(code: &str) -> bool {
             | "graph.io"
             | "graph.json"
             | "graph.other"
+            | BRANCH_MAY_HAVE_STARTED_CODE
+            | BRANCH_AGENT_PAUSE_CODE
+            | BRANCH_TOOL_UNAVAILABLE_CODE
     )
 }
 
@@ -1759,5 +2296,34 @@ fn parallel_error(code: &str, message: &str) -> GraphError {
     GraphError::NodeExecutionFailed {
         node: "parallel".to_owned(),
         message: format!("{code}: {message}"),
+    }
+}
+
+#[cfg(test)]
+mod error_code_tests {
+    use super::*;
+
+    #[test]
+    fn a_wrapped_may_have_started_refusal_keeps_its_code() {
+        let inner = format!(
+            "{}: it is not repeated",
+            crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE
+        );
+        for message in [
+            inner.clone(),
+            format!("Node 'application_scope' execution failed: {inner}"),
+            format!("Node 'a' execution failed: Node 'b' execution failed: {inner}"),
+        ] {
+            let error = GraphError::NodeExecutionFailed {
+                node: "second_call".to_owned(),
+                message,
+            };
+            assert_eq!(graph_error_code(&error), BRANCH_MAY_HAVE_STARTED_CODE);
+        }
+        let other = GraphError::NodeExecutionFailed {
+            node: "second_call".to_owned(),
+            message: format!("provider said {inner}"),
+        };
+        assert_eq!(graph_error_code(&other), "graph.node_execution_failed");
     }
 }

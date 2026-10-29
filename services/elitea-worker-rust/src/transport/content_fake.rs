@@ -392,6 +392,8 @@ content_fake! {
     poll_node_recovery(PollNodeRecoveryRequestV1) -> PollNodeRecoveryResponseV1;
     acknowledge_node_recovery(AcknowledgeNodeRecoveryRequestV1) -> AcknowledgeNodeRecoveryResponseV1;
     read_node_recovery_result(ReadNodeRecoveryResultRequestV1) -> ReadNodeRecoveryResultResponseV1;
+    fetch_execution_interrupts(FetchExecutionInterruptsRequestV1) -> FetchExecutionInterruptsResponseV1;
+    acknowledge_execution_interrupt(AcknowledgeExecutionInterruptRequestV1) -> AcknowledgeExecutionInterruptResponseV1;
     register_code_visit(RegisterCodeVisitRequestV1) -> RegisterCodeVisitResponseV1;
     register_code_intent(RegisterCodeIntentRequestV1) -> RegisterCodeIntentResponseV1;
     put_toolkit_discovery_result(PutToolkitDiscoveryResultRequestV1) -> PutToolkitDiscoveryResultResponseV1;

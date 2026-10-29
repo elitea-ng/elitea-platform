@@ -19,15 +19,18 @@ var (
 type ClaimRequest struct {
 	NodeRecovery                 bool
 	AgentModelCheckpointRecovery bool
-	CommandID                    string
-	OutboxID                     string
-	ExecutionID                  string
-	Generation                   uint64
-	CapabilityID                 string
-	SignedEnvelopeDigest         runtimedomain.Digest
-	WorkloadIdentity             string
-	WorkloadSessionID            string
-	ProducerID                   string
+	// FanoutInterruptDecisions is the worker's opt-in to the per-interrupt
+	// decision contract; a fanout_wake job is granted only with it.
+	FanoutInterruptDecisions bool
+	CommandID                string
+	OutboxID                 string
+	ExecutionID              string
+	Generation               uint64
+	CapabilityID             string
+	SignedEnvelopeDigest     runtimedomain.Digest
+	WorkloadIdentity         string
+	WorkloadSessionID        string
+	ProducerID               string
 }
 
 // ClaimAbortDisposition records why a live, fully fenced claim was released

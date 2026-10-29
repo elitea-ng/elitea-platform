@@ -190,9 +190,17 @@ type AgentExecutionInputV1 struct {
 	HitlDecisions          []byte  `protobuf:"bytes,19,opt,name=hitl_decisions,json=hitlDecisions,proto3" json:"hitl_decisions,omitempty"`
 	ExecutionGeneration    *string `protobuf:"bytes,20,opt,name=execution_generation,json=executionGeneration,proto3,oneof" json:"execution_generation,omitempty"`
 	IsRegenerate           bool    `protobuf:"varint,21,opt,name=is_regenerate,json=isRegenerate,proto3" json:"is_regenerate,omitempty"`
-	Meta                   []byte  `protobuf:"bytes,22,opt,name=meta,proto3" json:"meta,omitempty"`
-	ConversationId         *string `protobuf:"bytes,23,opt,name=conversation_id,json=conversationId,proto3,oneof" json:"conversation_id,omitempty"`
-	Persona                string  `protobuf:"bytes,24,opt,name=persona,proto3" json:"persona,omitempty"`
+	// One JSON object. Continuation kinds are discriminated by named members,
+	// never by a separate enum: pipeline_static_resume_v1 and
+	// pipeline_static_tool_resume_v1 (static pause), and fanout_wake_v1 for a
+	// fanout_wake continuation (schema elitea.pipeline.fanout-wake.v1:
+	// {schema, response_message_id, decision_revision}). A wake input carries
+	// no decisions (hitl_resume false, empty hitl_decisions and user_input); the
+	// worker re-enters the parked fan-out node and fetches the decided cards
+	// (fanout-interrupt-decisions-v1.md section 8.1).
+	Meta           []byte  `protobuf:"bytes,22,opt,name=meta,proto3" json:"meta,omitempty"`
+	ConversationId *string `protobuf:"bytes,23,opt,name=conversation_id,json=conversationId,proto3,oneof" json:"conversation_id,omitempty"`
+	Persona        string  `protobuf:"bytes,24,opt,name=persona,proto3" json:"persona,omitempty"`
 	// Context strategy JSON. budget_mode admits "balanced" and "full".
 	// max_context_tokens preserves an explicit combined-window override.
 	// Output reservation stays inside that window; it is not additional capacity.

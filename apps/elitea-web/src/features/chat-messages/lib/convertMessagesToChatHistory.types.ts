@@ -54,6 +54,14 @@ export interface ChatMessage {
   readonly isSummarized?: boolean | undefined;
   readonly hitlInterrupt?: unknown;
   readonly hitlInterrupts?: readonly unknown[] | undefined;
+  /** The run parked with open per-interrupt cards (`fanout_parked_v1`): not streaming, waiting for decisions. */
+  readonly fanoutParked?: boolean | undefined;
+  /**
+   * Ledger keys this view saw resolved (decided here or in another tab). A
+   * fan-out re-announces its open cards when it restores, before it applies
+   * the decisions it fetched; a resolved key is never shown again.
+   */
+  readonly resolvedLedgerKeys?: readonly string[] | undefined;
   /**
    * The continue-button prompt shown when a turn stopped on the model's token
    * limit rather than on a completed answer. `ApplicationAnswer` reads it to

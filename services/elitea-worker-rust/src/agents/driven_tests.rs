@@ -262,9 +262,9 @@ async fn cancel_returns_only_after_an_in_flight_pull_dropped_the_inner_stream() 
 fn no_select_arm_polls_a_raw_agent_stream() {
     const ALLOWED: &[(&str, &str, &str)] = &[
         (
-            "src/agents/graph/parallel.rs",
-            "inflight",
-            "FuturesUnordered of child branches polled only by this loop; no arm yields to a consumer",
+            "libs/rust/agent-runtime/src/graph/fanout/runner.rs",
+            "running",
+            "FuturesUnordered of fan-out children polled only by this loop; the stop arm drains it",
         ),
         (
             "src/execution/native_agent_lifecycle.rs",

@@ -78,9 +78,10 @@ func TestCurrentAgentCancelRepositoryProjectsRetainedSalvagedAndDeletedResponses
 	} {
 		t.Run(name, func(t *testing.T) {
 			executor := &currentAgentCancelExecutorStub{
-				// The turn's conversation, then the legal hold probe (#1507):
-				// no hold table, so the stop is not kept for a hold.
-				scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{{values: []any{int64(9)}}, {values: []any{false}}}},
+				// The turn's conversation, then the legal hold probe (#1507): no
+				// hold table, so the stop is not kept for a hold; then no ledger
+				// row: the stop still asks.
+				scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{{values: []any{int64(9)}}, {values: []any{false}}, {err: pgx.ErrNoRows}}},
 				cancelRow: sqlcgen.CancelCurrentAgentExecutionRow{
 					ResponseMessageGroupID: 51,
 					QuestionMessageGroupID: &questionID,
@@ -100,6 +101,11 @@ func TestCurrentAgentCancelRepositoryProjectsRetainedSalvagedAndDeletedResponses
 			}
 			if outcome.Deleted != projection.Deleted || outcome.Salvaged != projection.Salvaged || outcome.Replay {
 				t.Fatalf("outcome=%+v projection=%+v", outcome, projection)
+			}
+			// The turn's conversation (its steering), the legal hold probe, then
+			// the response's cards.
+			if calls := executor.rowCalls; len(calls) != 3 || !strings.Contains(calls[2].sql, "execution_interrupt_responses") {
+				t.Fatalf("stop did not close interrupt cards in its transaction: %+v", calls)
 			}
 			if projects.projectID != 2 || projects.options.AccessMode != pgx.ReadWrite ||
 				executor.cancelParams.ProjectID != 2 || executor.cancelParams.ActorUserID != 7 ||
@@ -253,9 +259,10 @@ func TestCurrentAgentCancelRepositoryTreatsAVanishedProjectionAsReplay(t *testin
 func TestCurrentAgentCancelKeepsTheTurnWhenTheHoldLookupFails(t *testing.T) {
 	questionID := int32(41)
 	executor := &currentAgentCancelExecutorStub{
-		// The turn's conversation, then a failed legal hold probe.
+		// The turn's conversation, then a failed legal hold probe, then no
+		// interrupt ledger row.
 		scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{
-			{values: []any{int64(9)}}, {err: errors.New("simulated hold lookup failure")},
+			{values: []any{int64(9)}}, {err: errors.New("simulated hold lookup failure")}, {err: pgx.ErrNoRows},
 		}},
 		cancelRow: sqlcgen.CancelCurrentAgentExecutionRow{
 			ResponseMessageGroupID: 51, QuestionMessageGroupID: &questionID,

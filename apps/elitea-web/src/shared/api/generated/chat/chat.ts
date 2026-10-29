@@ -14807,9 +14807,9 @@ export const getListExecutionInterruptsUrl = (
 };
 
 /**
- * Wave 1 per-interrupt HITL API. Registered only when
- * `ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true` (it requires
- * agent execution dispatch); otherwise the path answers 404.
+ * Per-interrupt HITL API (fanout-interrupt-decisions v1.1). Registered
+ * whenever agent execution dispatch is enabled; otherwise the path
+ * answers 404.
  *
  * Lists the PENDING and DECIDED (not yet consumed) interrupt cards of
  * one response, at most 16. `decision_revision` is the response-level
@@ -15068,9 +15068,9 @@ export const getDecideExecutionInterruptUrl = (
 };
 
 /**
- * Wave 1 per-interrupt HITL API. Registered only when
- * `ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true` (it requires
- * agent execution dispatch); otherwise the path answers 404.
+ * Per-interrupt HITL API (fanout-interrupt-decisions v1.1). Registered
+ * whenever agent execution dispatch is enabled; otherwise the path
+ * answers 404.
  *
  * Records one decision for one interrupt, idempotent on `request_id`:
  * the same id with the same bytes answers 200 with `replay: true`. Any

@@ -439,7 +439,7 @@ impl DirectToolNode {
         if !tool.is_read_only() && self.recovery.is_none() {
             return Err(DirectNodeFailure::policy(
                 "tool_binding",
-                "A tool with external effects requires its current fenced node writer.",
+                EFFECT_WRITER_UNAVAILABLE,
             ));
         }
         let tool_context = pipeline_tool_context(context, self.name(), tool.name());
@@ -849,9 +849,20 @@ impl Node for DirectToolNode {
                             message: "The pipeline failure channel closed.".to_owned(),
                         })?;
                 }
+                let writer_unavailable = matches!(
+                    failure.cause,
+                    DirectNodeFailureCause::Policy(EFFECT_WRITER_UNAVAILABLE)
+                );
                 Err(GraphError::NodeExecutionFailed {
                     node: self.name().to_owned(),
-                    message: format!("{}: {}", failure.stage, failure.cause),
+                    message: if writer_unavailable {
+                        format!(
+                            "{EFFECT_WRITER_UNAVAILABLE_CODE}: {}: {}",
+                            failure.stage, failure.cause
+                        )
+                    } else {
+                        format!("{}: {}", failure.stage, failure.cause)
+                    },
                 })
             }
         }
@@ -1254,6 +1265,16 @@ pub(super) fn pipeline_tool_context(
     }
 }
 
+/// How a scoped Agent call runs: an ordinary pipeline Agent node, a fixed
+/// Parallel child, or a fixed Parallel child an earlier claim started (D2:
+/// it resumes from its own model checkpoint).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScopedCallKind {
+    Node,
+    FanoutChild,
+    FanoutChildRecovery,
+}
+
 pub(crate) fn scoped_pipeline_tool_context(
     context: &NodeContext,
     call_id: &str,
@@ -1261,6 +1282,7 @@ pub(crate) fn scoped_pipeline_tool_context(
     invocation_id: &str,
     agent_name: &str,
     branch: &str,
+    kind: ScopedCallKind,
 ) -> Result<Arc<dyn ToolContext>, GraphError> {
     let parent =
         context
@@ -1272,6 +1294,23 @@ pub(crate) fn scoped_pipeline_tool_context(
                 message: "the scoped application has no owning invocation context".to_owned(),
             })?;
     let mut ctx = PipelineToolContext::new(parent, call_id.to_owned(), tool_name);
+    if kind != ScopedCallKind::Node
+        && let Some(marker) = ctx
+            .actions
+            .get_mut()
+            .map_err(|_| GraphError::NodeExecutionFailed {
+                node: "application_scope".to_owned(),
+                message: "the scoped application call marker is unavailable".to_owned(),
+            })?
+            .state_delta
+            .get_mut(PIPELINE_APPLICATION_NODE_METADATA_KEY)
+            .and_then(Value::as_object_mut)
+    {
+        marker.insert("fanout".to_owned(), Value::Bool(true));
+        if kind == ScopedCallKind::FanoutChildRecovery {
+            marker.insert("recover_started".to_owned(), Value::Bool(true));
+        }
+    }
     ctx.scope = Some(PipelineToolScope {
         invocation_id: invocation_id.to_owned(),
         agent_name: agent_name.to_owned(),
@@ -1627,6 +1666,13 @@ fn ensure_bounded_value(value: &Value) -> Result<(), DirectToolExecutionError> {
     }
     Ok(())
 }
+
+/// A tool with external effects found no fenced node writer (a saved child
+/// pipeline has none yet, FU-248). It leads the node's failure message so a
+/// fixed Parallel names it on the failed branch.
+pub(crate) const EFFECT_WRITER_UNAVAILABLE_CODE: &str = "pipeline.effect_writer_unavailable";
+const EFFECT_WRITER_UNAVAILABLE: &str =
+    "A tool with external effects requires its current fenced node writer.";
 
 /// Static diagnostic context. Never retains tool arguments, results, or provider messages.
 struct DirectNodeFailure {

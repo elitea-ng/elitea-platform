@@ -224,7 +224,8 @@ func waitForBody(t *testing.T, rec *lockedRecorder, want string) {
 }
 
 func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
-	for _, eventType := range []string{"canvas.editors", "budget.soft_alert", "workspace.handoff", "conversation_activity"} {
+	for _, eventType := range []string{"canvas.editors", "budget.soft_alert", "workspace.handoff", "conversation_activity",
+		"agent_hitl_resolved", "agent_fanout_wake_admitted"} {
 		if !Forwarded(eventType) {
 			t.Errorf("Forwarded(%q) = false, want true", eventType)
 		}
@@ -243,17 +244,19 @@ func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
 	// The fourth (client contract 1.12 conversation activity) is too, may
 	// name the whole project for a public conversation, and needs the
 	// conversation list permission (TestStream_ConversationActivity...).
+	// The per-interrupt HITL ledger's live frames ride the fourth family
+	// (TestStream_InterruptFramesReachOnlyConversationReaders).
 	if len(streamFamilies) != 4 {
 		t.Errorf("streamFamilies has %d entries, want 4; widening it is a privacy decision — update this test deliberately", len(streamFamilies))
 	}
 	for _, f := range streamFamilies {
-		scoped := f.eventType == WorkspaceHandoffEventType || f.eventType == ConversationActivityEventType
+		scoped := slices.Contains(f.eventTypes, WorkspaceHandoffEventType) || slices.Contains(f.eventTypes, ConversationActivityEventType)
 		if f.audience != scoped {
-			t.Errorf("family %q audience scoping = %v", f.eventType, f.audience)
+			t.Errorf("family %v audience scoping = %v", f.eventTypes, f.audience)
 		}
-		activity := f.eventType == ConversationActivityEventType
+		activity := slices.Contains(f.eventTypes, ConversationActivityEventType)
 		if f.projectAudience != activity || (f.permission == ConversationListPermission) != activity {
-			t.Errorf("family %q project audience = %v, permission = %q", f.eventType, f.projectAudience, f.permission)
+			t.Errorf("family %v project audience = %v, permission = %q", f.eventTypes, f.projectAudience, f.permission)
 		}
 	}
 	// And each from its own family only.
@@ -271,6 +274,15 @@ func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
 		{"project:7:presence", "workspace.handoff", false},
 		{"project:7:events", "workspace.handoff", false},
 		{"project:7:workspace", "canvas.editors", false},
+		{"project:7:conversations", "agent_hitl_resolved", true},
+		{"project:7:conversations", "agent_fanout_wake_admitted", true},
+		{"project:7:workspace", "agent_hitl_resolved", false},
+		{"project:7:workspace", "agent_fanout_wake_admitted", false},
+		{"project:7:conversations", "workspace.handoff", false},
+		{"project:7:presence", "agent_hitl_resolved", false},
+		{"project:7:events", "agent_hitl_resolved", false},
+		{"project:7:events", "agent_fanout_wake_admitted", false},
+		{"project:8:conversations", "agent_hitl_resolved", false},
 	} {
 		if got := ForwardedOn("7", c.channel, c.eventType); got != c.want {
 			t.Errorf("ForwardedOn(7, %q, %q) = %v, want %v", c.channel, c.eventType, got, c.want)
@@ -694,5 +706,71 @@ func TestStream_ConversationActivityReachesOnlyItsAudience(t *testing.T) {
 	}
 	if body, _ := stream(nil, list); strings.Contains(body, "conversation_activity") {
 		t.Fatalf("a caller without a user got a frame: %q", body)
+	}
+}
+
+// The ledger's live frames ride the audience-scoped conversations family: a
+// reader of the conversation who may list conversations gets each one, without
+// the audience; another project viewer, an anonymous caller and a token
+// without an owner get nothing; and the same frames on the workspace handoff
+// family are dropped.
+func TestStream_InterruptFramesReachOnlyConversationReaders(t *testing.T) {
+	stream := func(user *auth.User, channel string) string {
+		t.Helper()
+		src := newFakeSource()
+		resolver := permissionResolverFunc(func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
+			return auth.PermissionResolution{UserID: 1, Permissions: []string{ConversationListPermission}}, nil
+		})
+		h := NewHandlerFromSource(src, WithPermissionResolver(resolver))
+		ctx, cancel := context.WithCancel(context.Background())
+		if user != nil {
+			ctx = auth.ContextWithUser(ctx, *user)
+		}
+		rec := httptest.NewRecorder()
+		done := make(chan struct{})
+		go func() {
+			h.Stream(rec, newRequestWithProjectID(ctx, "7"))
+			close(done)
+		}()
+		time.Sleep(20 * time.Millisecond)
+		src.mu.Lock()
+		subscribed := slices.Contains(src.channels, channel)
+		src.mu.Unlock()
+		if subscribed {
+			for _, frame := range []natsbus.Event{
+				{Type: "agent_hitl_resolved", Payload: json.RawMessage(`{"action":"approve","conversation_id":"c-1","interrupt_id":"ask:1","interrupt_key":"k1","revision":2,"root_response_id":"r-1","schema":"elitea.pipeline.fanout-interrupt-resolved.v1","state":"DECIDED","audience":[7,8]}`)},
+				{Type: "agent_fanout_wake_admitted", Payload: json.RawMessage(`{"conversation_id":"c-1","execution_id":"e-1","generation":1,"root_response_id":"r-1","audience":[8]}`)},
+				{Type: "agent_hitl_resolved", Payload: json.RawMessage(`{"conversation_id":"c-2","root_response_id":"r-2","audience":[9]}`)},
+				{Type: "agent_hitl_resolved", Payload: json.RawMessage(`{"conversation_id":"c-3","root_response_id":"r-3"}`)},
+			} {
+				src.stream(channel) <- frame
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		<-done
+		return rec.Body.String()
+	}
+	reader := stream(&auth.User{ID: "8", UserID: "8"}, "project:7:conversations")
+	if strings.Count(reader, "event: agent_hitl_resolved") != 1 || strings.Count(reader, "event: agent_fanout_wake_admitted") != 1 ||
+		!strings.Contains(reader, `"interrupt_key":"k1"`) || !strings.Contains(reader, `"execution_id":"e-1"`) {
+		t.Fatalf("the reader did not get the conversation's frames: %q", reader)
+	}
+	for _, leaked := range []string{"c-2", "c-3", "audience"} {
+		if strings.Contains(reader, leaked) {
+			t.Fatalf("the reader's stream carries %q: %q", leaked, reader)
+		}
+	}
+	for name, user := range map[string]*auth.User{
+		"a project viewer outside the conversation": {ID: "13", UserID: "13"},
+		"no user":           nil,
+		"a token, no owner": {ID: "t-1", TokenID: "t-1", AuthType: "token"},
+	} {
+		if body := stream(user, "project:7:conversations"); strings.Contains(body, "agent_") {
+			t.Fatalf("%s got an interrupt frame: %q", name, body)
+		}
+	}
+	if body := stream(&auth.User{ID: "8", UserID: "8"}, "project:7:workspace"); strings.Contains(body, "agent_") {
+		t.Fatalf("the workspace handoff family relayed an interrupt frame: %q", body)
 	}
 }

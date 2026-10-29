@@ -21,6 +21,13 @@ import (
 
 type AgentExecutionResultsRepository struct {
 	projects projectStore
+	signals  *ExecutionInterruptSignals
+}
+
+// SetInterruptSignals installs the after-commit wake-admission kick for a
+// park that found a decision already waiting. Call it during composition.
+func (r *AgentExecutionResultsRepository) SetInterruptSignals(signals *ExecutionInterruptSignals) {
+	r.signals = signals
 }
 
 func NewAgentExecutionResultsRepository(pool *pgxpool.Pool) (*AgentExecutionResultsRepository, error) {
@@ -82,6 +89,10 @@ type currentAgentTerminal struct {
 	// frame itself, already sanitised by
 	// outputapp.AcceptedAgentExecutionAttachmentContents.
 	AttachmentContents []outputapp.AgentExecutionAttachmentContent
+	// FanoutParked is a paused terminal whose execution parked with open
+	// per-interrupt cards (fanout-interrupt-decisions §8). It is exclusive
+	// with the other three outcomes.
+	FanoutParked *currentAgentFanoutParked
 }
 
 type agentExecutionTerminalNodeEventQuerier interface {
@@ -142,7 +153,9 @@ func (r *AgentExecutionResultsRepository) ProjectAgentExecution(ctx context.Cont
 	}
 	var outcome outputapp.ProjectionOutcome
 	cancellationWon := false
+	var parked *currentAgentFanoutParked
 	err = r.projects.WithinProjectTx(ctx, projectID, pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite}, func(tx sqlExecutor) error {
+		parked = nil
 		terminal, err := loadCurrentAgentTerminal(ctx, tx, projectDatabaseID, projection)
 		if err != nil {
 			return err
@@ -197,6 +210,7 @@ func (r *AgentExecutionResultsRepository) ProjectAgentExecution(ctx context.Cont
 		if err := persistCurrentAgentTerminal(ctx, tx, projection.Expected, terminal); err != nil {
 			return err
 		}
+		parked = terminal.FanoutParked
 		if err := markOutputProjected(ctx, tx, record.EventID); err != nil {
 			return err
 		}
@@ -209,6 +223,8 @@ func (r *AgentExecutionResultsRepository) ProjectAgentExecution(ctx context.Cont
 	if cancellationWon {
 		return outputapp.ProjectionOutcome{}, outputapp.ErrOutputCancelled
 	}
+	// After commit: a park that found a decision waiting queued one wake.
+	r.signals.wakeQueued(parked != nil && parked.Settlement.WakeQueued)
 	return outcome, nil
 }
 
@@ -289,6 +305,14 @@ func loadCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, projectID int
 	case outputapp.AgentExecutionTerminalPausedHITL:
 		if artifact.ArtifactID != "node-event:"+frame.Fence.ExecutionID+":hitl-interrupt" || event.Type != "agent_hitl_interrupt" {
 			return currentAgentTerminal{}, outputapp.ErrAgentExecutionResultMismatch
+		}
+		parked, isParked, err := decodeCurrentAgentFanoutParked(event.Content, event.ResponseMetadata)
+		if err != nil {
+			return currentAgentTerminal{}, err
+		}
+		if isParked {
+			terminal.FanoutParked = &parked
+			break
 		}
 		pause, err := decodeCurrentAgentHITLPause(event.Content, event.ResponseMetadata)
 		if err != nil {
@@ -621,6 +645,12 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 		ctx, writer, int64(messageGroupID), terminal.AttachmentContents,
 	); err != nil {
 		return err
+	}
+	if terminal.FanoutParked != nil {
+		if terminal.FullMessage != nil || terminal.HITLPause != nil || terminal.AuthorizationPause != nil {
+			return outputapp.ErrAgentExecutionResultMismatch
+		}
+		return persistCurrentAgentFanoutParked(ctx, tx, expected, int64(messageGroupID), existingSkills, terminal)
 	}
 	if terminal.FullMessage != nil && terminal.HITLPause == nil && terminal.AuthorizationPause == nil {
 		message := terminal.FullMessage

@@ -55,8 +55,13 @@ mod direct_tool_tests;
 #[cfg(test)]
 mod fan_in_tests;
 pub(crate) mod fanout_control;
+#[cfg(test)]
+pub(crate) mod fanout_test_ledger;
 use elitea_agent_runtime::graph::hitl;
 pub(crate) use elitea_agent_runtime::graph::{fanout_budget, fanout_trace};
+pub(crate) mod fanout_frames;
+pub(crate) mod fanout_turn;
+pub(crate) mod fanout_wake;
 #[cfg(test)]
 mod hitl_tests;
 mod llm;
@@ -86,6 +91,7 @@ pub(crate) use node_recovery_runtime::tests::direct_tool_tests::{
     with_decision,
 };
 mod parallel;
+mod parallel_cards;
 #[cfg(test)]
 mod parallel_tests;
 mod pipeline_result;
@@ -144,7 +150,7 @@ pub(crate) use application::{
 };
 pub(crate) use direct_tool::{
     DirectToolExecutionError, DirectToolNodeKind, DirectToolSelection, PipelineDirectToolResolver,
-    ResolvedDirectTool, scoped_pipeline_tool_context,
+    ResolvedDirectTool, ScopedCallKind, scoped_pipeline_tool_context,
 };
 pub(crate) use llm::{
     LlmExecutionError, LlmExecutionInput, LlmNodeDefinition, LlmToolkitSelection,
@@ -167,16 +173,15 @@ pub use yaml::{
 #[cfg(test)]
 pub(crate) use parallel::{
     AdkParallelBranchRuntime, DurableParallelNode, MAX_PARENT_ROWS_PER_VISIT,
-    PARALLEL_INTERRUPT_SCHEMA, PARALLEL_RESUME_STATE_KEY, ParallelBlocked,
     ParallelBranchGraphFactory, ParallelBranchOutcome, ParallelBranchPause, ParallelBranchRuntime,
     ParallelBranchTerminal, ParallelDecision, ParallelOccurrenceCheckpointer, ParallelPauseCard,
-    PreparedParallelActivation, PreparedParallelBranch,
+    PreparedParallelBranch,
 };
 pub(crate) use parallel::{
-    ParallelActivation, ParallelBranchExecution, ParallelCheckpointAppender,
-    ParallelCheckpointAuthority, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
-    ParallelChildOrigin, ParallelChildRequest, ParentHead, ParentSaveProbe,
-    PreparedChildCheckpoint,
+    FANOUT_PARKED_SCHEMA, FanoutChildOrigin, ParallelActivation, ParallelBranchExecution,
+    ParallelCheckpointAppender, ParallelCheckpointAuthority, ParallelChildCheckpoint,
+    ParallelChildCheckpointerFactory, ParallelChildOrigin, ParallelChildRequest, ParentHead,
+    ParentSaveProbe, PreparedChildCheckpoint,
 };
 pub(crate) use printer::{PRINTER_PAUSE_METADATA_KEY, PrinterPauseCatalog, PrinterPauseMetadata};
 

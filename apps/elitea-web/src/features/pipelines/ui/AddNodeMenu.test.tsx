@@ -39,7 +39,7 @@ describe('AddNodeMenu', () => {
   });
 
   /** Compiler code parsing is supported; execution requires an admitted sandbox (compiler.rs:1544 and :1029). Custom remains unsupported. */
-  it('offers exactly the twelve node types the pipeline editor authors, including Code and excluding Custom', async () => {
+  it('offers exactly the thirteen node types the pipeline editor authors, including Code and Parallel and excluding Custom', async () => {
     const user = userEvent.setup();
     renderWithTheme(<AddNodeMenu onAddNode={vi.fn()} />);
 
@@ -61,6 +61,7 @@ describe('AddNodeMenu', () => {
         'Human-in-the-loop',
         'LLM',
         'MCP',
+        'Parallel',
         'Printer',
         'Router',
         'SplitOut',

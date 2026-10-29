@@ -53,6 +53,14 @@ message AgentExecutionInputV1 {
   bytes hitl_decisions = 19;
   optional string execution_generation = 20;
   bool is_regenerate = 21;
+  // One JSON object. Continuation kinds are discriminated by named members,
+  // never by a separate enum: pipeline_static_resume_v1 and
+  // pipeline_static_tool_resume_v1 (static pause), and fanout_wake_v1 for a
+  // fanout_wake continuation (schema elitea.pipeline.fanout-wake.v1:
+  // {schema, response_message_id, decision_revision}). A wake input carries
+  // no decisions (hitl_resume false, empty hitl_decisions and user_input); the
+  // worker re-enters the parked fan-out node and fetches the decided cards
+  // (fanout-interrupt-decisions-v1.md section 8.1).
   bytes meta = 22;
   optional string conversation_id = 23;
   string persona = 24;

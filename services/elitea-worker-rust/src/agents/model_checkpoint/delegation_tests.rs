@@ -358,3 +358,146 @@ async fn scoped_child_recovers_its_own_pending_delegation() {
     assert_eq!(probe.models.load(Ordering::SeqCst), 2);
     assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
 }
+
+/// The probe offered as a read-only tool of a toolset (D2 records it there).
+struct ReadOnlyProbe(Arc<Probe>);
+
+#[async_trait]
+impl Tool for ReadOnlyProbe {
+    fn name(&self) -> &'static str {
+        "saved_agent"
+    }
+    fn description(&self) -> &'static str {
+        "Read-only lookup fixture"
+    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> adk_rust::Result<Value> {
+        self.0.execute(ctx, args).await
+    }
+}
+
+fn read_only_runner(
+    storage: &ModelScopeSessions,
+    probe: Arc<Probe>,
+    sessions: Arc<dyn SessionService>,
+    guarded: bool,
+) -> adk_rust::runner::Runner {
+    let scope = storage.checkpoint(None, Some(Arc::new(Budget)), probe.clone(), None, None);
+    let toolset: Arc<dyn adk_rust::Toolset> = Arc::new(adk_rust::tool::BasicToolset::new(
+        "fixture",
+        vec![Arc::new(ReadOnlyProbe(probe.clone())) as Arc<dyn Tool>],
+    ));
+    let guarded = if guarded {
+        std::collections::HashSet::from(["saved_agent".to_owned()])
+    } else {
+        std::collections::HashSet::new()
+    };
+    let mut builder = LlmAgentBuilder::new("parent").model(scope.clone().delegation_model(probe));
+    for toolset in scope.record_read_only(vec![toolset], &guarded) {
+        builder = builder.toolset(toolset);
+    }
+    let agent = scope.clone().bind(builder).build().unwrap();
+    adk_rust::runner::Runner::builder()
+        .app_name("delegation-test")
+        .agent(scope.wrap(Arc::new(agent)))
+        .session_service(sessions)
+        .build()
+        .unwrap()
+}
+
+/// Interrupt a fan-out child (`with_read_only_replay`) inside its read-only
+/// tool, then run its replacement; `guarded` puts the tool behind a confirmation.
+async fn interrupted_read_only_child(
+    guarded: bool,
+) -> (Arc<Probe>, Vec<adk_rust::Result<adk_rust::Event>>) {
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "delegation-test".into(),
+            user_id: "user".into(),
+            session_id: Some("parent".into()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let storage = ModelScopeSessions::new(
+        ModelScopeBackend::Local(sessions.clone()),
+        "execution".into(),
+        1,
+        [1; 32],
+    )
+    .with_read_only_replay();
+    let probe = Arc::new(Probe {
+        models: AtomicUsize::new(0),
+        calls: AtomicUsize::new(0),
+        block: AtomicBool::new(true),
+        entered: tokio::sync::Notify::new(),
+    });
+    let first = read_only_runner(&storage, probe.clone(), sessions.clone(), guarded);
+    let task = tokio::spawn(async move {
+        let mut events = first
+            .run(
+                "user".try_into().unwrap(),
+                "parent".try_into().unwrap(),
+                Content::new("user").with_text("Look it up"),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = events.next().await {
+            event.unwrap();
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), probe.entered.notified())
+        .await
+        .unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    probe.block.store(false, Ordering::SeqCst);
+    let replacement = read_only_runner(
+        &storage.with_pending_model_recovery(),
+        probe.clone(),
+        sessions,
+        guarded,
+    );
+    let events = replacement
+        .run(
+            "user".try_into().unwrap(),
+            "parent".try_into().unwrap(),
+            Content::new("user").with_text("RECOVERY_INPUT"),
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    (probe, events)
+}
+
+#[tokio::test]
+async fn a_fanout_childs_interrupted_read_only_tool_runs_again() {
+    let (probe, events) = interrupted_read_only_child(false).await;
+    let text = events
+        .into_iter()
+        .map(|event| serde_json::to_string(&event.unwrap()).unwrap())
+        .collect::<String>();
+    assert!(text.contains("Parent received the child result"));
+    // The saved call batch is replayed without a model call; the tool runs again.
+    assert_eq!(probe.models.load(Ordering::SeqCst), 2);
+    assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_guarded_read_only_tool_in_flight_is_refused_as_may_have_started() {
+    let (probe, events) = interrupted_read_only_child(true).await;
+    let error = events
+        .into_iter()
+        .find_map(Result::err)
+        .expect("the replacement refuses");
+    assert_eq!(
+        error.code,
+        crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE
+    );
+    assert_eq!(probe.models.load(Ordering::SeqCst), 1);
+    assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+}

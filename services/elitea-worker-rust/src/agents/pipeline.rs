@@ -374,6 +374,13 @@ pub(crate) struct PipelineNativeAgentAssembler {
     /// A pipeline binds no chat model to a tool, so the Office tools that call
     /// a model refuse here with a sentence; the rest work.
     office_runtime: Option<Arc<crate::transport::office_host::OfficeRuntime>>,
+    /// Test-only: compose fixed Parallel with scoped Agent participants.
+    #[cfg(test)]
+    fixed_parallel_for_tests: bool,
+    /// Test-only: the decision source the test binding fetches from.
+    #[cfg(test)]
+    fanout_decisions_for_tests:
+        Option<Arc<dyn elitea_agent_runtime::graph::fanout::runner::DecisionSource>>,
     /// The web families' runtime (#1238).
     web_runtime: Option<Arc<crate::transport::metering::WebRuntime>>,
     /// Test seam: the continuation a fresh start takes, so a conversation an older worker
@@ -383,6 +390,43 @@ pub(crate) struct PipelineNativeAgentAssembler {
 }
 
 impl PipelineNativeAgentAssembler {
+    #[cfg(not(test))]
+    #[allow(clippy::unused_self)] // The test build reads its own flag.
+    const fn fanout_composition(&self) -> super::session::FanoutComposition {
+        super::session::FanoutComposition::Bound
+    }
+
+    #[cfg(test)]
+    fn fanout_composition(&self) -> super::session::FanoutComposition {
+        if self.fixed_parallel_for_tests {
+            super::session::FanoutComposition::BoundForTests(
+                self.fanout_decisions_for_tests.clone(),
+            )
+        } else {
+            super::session::FanoutComposition::Bound
+        }
+    }
+
+    /// Test-only: a bound fixed Parallel, the composition the fan-out acceptance
+    /// needs before it is admitted.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_fixed_parallel_for_tests(mut self) -> Self {
+        self.fixed_parallel_for_tests = true;
+        self
+    }
+
+    /// Test-only: the test binding fetches decisions from `source`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_fanout_decisions_for_tests(
+        mut self,
+        source: Arc<dyn elitea_agent_runtime::graph::fanout::runner::DecisionSource>,
+    ) -> Self {
+        self.fanout_decisions_for_tests = Some(source);
+        self
+    }
+
     pub(crate) fn with_sandbox(
         mut self,
         sandbox: Option<Arc<super::graph::CodeRuntimeFactory>>,
@@ -442,6 +486,10 @@ impl PipelineNativeAgentAssembler {
             office_runtime: None,
             web_runtime: None,
             #[cfg(test)]
+            fixed_parallel_for_tests: false,
+            #[cfg(test)]
+            fanout_decisions_for_tests: None,
+            #[cfg(test)]
             fresh_start_continuation: ApplicationContinuation::Scoped,
         }
     }
@@ -467,8 +515,22 @@ impl PipelineNativeAgentAssembler {
             office_runtime: None,
             web_runtime: None,
             #[cfg(test)]
+            fixed_parallel_for_tests: false,
+            #[cfg(test)]
+            fanout_decisions_for_tests: None,
+            #[cfg(test)]
             fresh_start_continuation: ApplicationContinuation::Scoped,
         }
+    }
+
+    /// Lend the content client of the claim-fenced fan-out decision routes.
+    #[must_use]
+    pub(crate) fn with_fanout_decisions(
+        mut self,
+        client: Arc<crate::transport::InputContentClient>,
+    ) -> Self {
+        self.state = self.state.with_fanout_decisions(client);
+        self
     }
 
     #[cfg(test)]
@@ -1120,7 +1182,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             &self.tool_policy,
             command.egress(),
         )?;
-        let (profile, plan, _, _) = super::runtime::admit_pipeline_plan(
+        let (profile, plan, _, start) = super::runtime::admit_pipeline_plan(
             request,
             command,
             &request.payload.input_attachments,
@@ -1129,8 +1191,16 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
         self.state
             .open(session, lease, &plan, profile.definition())
             .await?
-            .inspect_checkpoint(&plan, profile.definition())
+            .inspect_checkpoint(
+                &plan,
+                profile.definition(),
+                match &start {
+                    super::runtime::PipelineNativeStart::FanoutWake(wake) => Some(wake),
+                    _ => None,
+                },
+            )
             .await
+            .map(|(evidence, _)| evidence)
     }
 
     async fn assemble_checkpoint(
@@ -1258,6 +1328,7 @@ impl PipelineNativeAgentAssembler {
                     &composition.checkpoint_paths,
                 )
                 .await?;
+            let mut wake_rerun = false;
             let evidence = if let Some(authority) = node_recovery {
                 let visit = state
                     .inspect_node_recovery(&plan, profile.definition(), authority.receipt())
@@ -1272,15 +1343,26 @@ impl PipelineNativeAgentAssembler {
                 }
                 Some(visit.into_checkpoint())
             } else if recovery {
-                let evidence = state
-                    .inspect_checkpoint(&plan, profile.definition())
+                let (evidence, frontier) = state
+                    .inspect_checkpoint(
+                        &plan,
+                        profile.definition(),
+                        match &start {
+                            super::runtime::PipelineNativeStart::FanoutWake(wake) => Some(wake),
+                            _ => None,
+                        },
+                    )
                     .await?;
+                wake_rerun = frontier == super::session::RecoveryFrontier::WakePark;
+                // A lost wake's answered child may have stopped mid model call
+                // under this execution: it resumes that step (R). A model step of
+                // another execution is never restored.
                 state.model_scopes = state.model_scopes.with_pending_model_recovery();
                 Some(evidence)
             } else {
                 None
             };
-            let start = if recovery || node_recovery.is_some() {
+            let start = if (recovery && !wake_rerun) || node_recovery.is_some() {
                 super::runtime::PipelineNativeStart::Checkpoint
             } else {
                 start
@@ -1333,6 +1415,7 @@ impl PipelineNativeAgentAssembler {
                 start,
                 state,
                 node_runtimes,
+                self.fanout_composition(),
             )
             .await?;
             Ok((assembled, evidence))
@@ -1888,6 +1971,24 @@ pub(super) async fn materialize_saved_pipeline_tool(
             .ok_or_else(invalid_pipeline_tool_scope)?,
     )?;
     let scoped_proof = scopes.has_ordinary_applications();
+    // FU-249: a Parallel binds its checkpoint authority to the started root only, so a
+    // pipeline run as an Agent's tool that holds one, or runs a child that does, is refused
+    // typed before any model call instead of failing when the tool is called.
+    let parallel = definition.first_parallel_node().map_or_else(
+        || crate::agents::graph::compiler::refuse_child_parallel(&bound.runtimes),
+        |node| {
+            Err(PipelineConfigurationError::FanoutChildUnsupported {
+                node: node.to_owned(),
+                refusal: crate::agents::graph::compiler::FanoutChildRefusal::ContainsParallel,
+            })
+        },
+    );
+    if let Err(refusal) = parallel {
+        return Err(super::runtime::pipeline_configuration_assembly_error(
+            &refusal,
+            "the saved pipeline tool holds a Parallel node",
+        ));
+    }
     // FU-244: a static pause beneath a graph root is an authoring error of the composition
     // (the editor can fix it by removing the pause or the attachment), so it is refused with
     // the composition terminal, never skipped as unavailable.
