@@ -103,7 +103,7 @@ The full schema is in [Audit event schema](/reference/audit-event-schema).
 
 ### Limits
 
-- **A worker crash can lose recent steps.** The worker sends records in batches during the run and the rest before the run settles. Records still in a worker's memory when its process dies are lost. See [Reconstruct an agent run](/admin/enterprise-controls/reconstruct-a-run#gaps) for how such a gap shows.
+- **A worker crash can lose recent steps.** The worker sends records during the run (every 64 steps, or when the oldest unsent one is two seconds old) and the rest before the run settles. Records still in a worker's memory when its process dies are lost, and the worker that takes the run over records a `steps_possibly_lost` error step. See [Reconstruct an agent run](/admin/enterprise-controls/reconstruct-a-run#gaps) for how such a gap shows.
 - **Direct toolkit runs** (running a tool from the toolkit page) are not agent runs and produce no step records.
 - **A summarising index search** (`stepback_summary_index`) returns a model answer rather than documents, so its retrieval step lists no documents.
 - **Verification does not cross-check the anchor.** The verify request checks the run's own chain and reports how far it is anchored; to check the anchor itself, compare the run's head hash with the `run.steps.anchored` event in your SIEM or with the security audit verifier.
