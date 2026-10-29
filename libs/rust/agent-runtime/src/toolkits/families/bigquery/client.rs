@@ -15,6 +15,7 @@ use zeroize::Zeroizing;
 
 use super::config::BigQueryToolkitConfig;
 use super::format::Cell;
+use crate::egress::BuildForRun as _;
 use crate::toolkits::families::gcp::client::{
     GcpClientError, GcpClientErrorCode, access_token_from_response, service_account_token_request,
 };
@@ -261,7 +262,7 @@ pub(in crate::toolkits) trait BigQueryTransport: Send + Sync {
 }
 
 struct ReqwestBigQueryTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -314,7 +315,7 @@ pub(crate) struct BigQueryClient {
 
 impl BigQueryClient {
     pub(crate) fn new(config: BigQueryToolkitConfig) -> Result<Self, BigQueryClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -324,7 +325,7 @@ impl BigQueryClient {
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT_VALUE)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             config,

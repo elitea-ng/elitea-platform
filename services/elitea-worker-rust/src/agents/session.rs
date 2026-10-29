@@ -669,6 +669,9 @@ pub(crate) struct AuthorizedNativeCommandBinding {
     client_stream_id: String,
     client_message_id: String,
     sio_event: String,
+    /// The execution's public egress policy and ledger (#1490), the same
+    /// instance every path of this execution uses.
+    egress: std::sync::Arc<elitea_agent_runtime::egress::RunEgress>,
 }
 
 impl AuthorizedNativeCommandBinding {
@@ -701,7 +704,13 @@ impl AuthorizedNativeCommandBinding {
             client_stream_id: agent.client_stream_id.clone(),
             client_message_id: agent.client_message_id.clone(),
             sio_event: agent.sio_event.clone(),
+            egress: crate::protocol::egress::run_egress(command),
         }
+    }
+
+    /// The execution's public egress policy and ledger (#1490).
+    pub(crate) const fn egress(&self) -> &std::sync::Arc<elitea_agent_runtime::egress::RunEgress> {
+        &self.egress
     }
 
     #[cfg(test)]
@@ -716,6 +725,7 @@ impl AuthorizedNativeCommandBinding {
             client_stream_id: "conversation-1".to_owned(),
             client_message_id: "message-1".to_owned(),
             sio_event: "chat_predict".to_owned(),
+            egress: elitea_agent_runtime::egress::RunEgress::open(),
         }
     }
 

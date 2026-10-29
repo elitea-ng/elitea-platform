@@ -1084,6 +1084,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
         let policy = policy_for_guardrails(
             request.payload.toolkit_guardrails.as_ref(),
             &self.tool_policy,
+            command.egress(),
         )?;
         let (profile, plan, _, _) = super::runtime::admit_pipeline_plan(
             request,
@@ -1116,6 +1117,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
         let policy = policy_for_guardrails(
             request.payload.toolkit_guardrails.as_ref(),
             &self.tool_policy,
+            command.egress(),
         )?;
         let (profile, plan, _, _) = super::runtime::admit_pipeline_plan(
             request,
@@ -1198,6 +1200,7 @@ impl PipelineNativeAgentAssembler {
             let tool_policy = policy_for_guardrails(
                 assembly.request().payload.toolkit_guardrails.as_ref(),
                 &self.tool_policy,
+                assembly.egress(),
             )?;
             // #606, the pipeline twin of the ordinary path's read. `platform`
             // is optional here only because the injected-state test constructor

@@ -21,6 +21,8 @@
 //!   requests (host opt-in);
 //! * [`step_limit`] — the end of a run that used its model steps, and the
 //!   person's "Continue?" that runs it again on the same session;
+//! * [`egress`] — a run's public egress policy, the one HTTP client a
+//!   toolkit family builds, and the reached/refused host ledger (#1490);
 //! * [`toolkits`] — native toolkit families, the Streamable HTTP MCP client,
 //!   tool admission policy and the flat tool namespace;
 //! * [`platform`] — what the runtime writes to the platform
@@ -61,6 +63,7 @@ pub mod context_management;
 pub mod context_status;
 pub mod context_summary;
 pub mod edit_profile;
+pub mod egress;
 pub mod exact_number;
 pub mod graph;
 pub mod host;

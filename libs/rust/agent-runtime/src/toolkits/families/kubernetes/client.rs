@@ -14,6 +14,7 @@ use tokio::time::timeout;
 use zeroize::Zeroizing;
 
 use super::config::KubernetesToolkitConfig;
+use crate::egress::BuildForRun as _;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const API_TIMEOUT: Duration = Duration::from_secs(20);
@@ -213,7 +214,7 @@ pub(in crate::toolkits) trait KubernetesTransport: Send + Sync {
 }
 
 struct ReqwestKubernetesTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -266,7 +267,7 @@ pub(crate) struct KubernetesClient {
 
 impl KubernetesClient {
     pub(crate) fn new(config: KubernetesToolkitConfig) -> Result<Self, KubernetesClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -276,7 +277,7 @@ impl KubernetesClient {
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT_VALUE)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             config,

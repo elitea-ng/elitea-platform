@@ -1081,6 +1081,7 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
         let tool_policy = policy_for_guardrails(
             assembly.request().payload.toolkit_guardrails.as_ref(),
             &self.tool_policy,
+            assembly.egress(),
         )?;
         // The saved model request already contains resolved attachments. Do not
         // reread mutable documents while reconstructing this execution.
@@ -1115,6 +1116,7 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
             let tool_policy = policy_for_guardrails(
                 assembly.request().payload.toolkit_guardrails.as_ref(),
                 &self.tool_policy,
+                assembly.egress(),
             )?;
             // #606: this turn's attached documents are read HERE, before
             // admission builds the human message. It is infallible by design —

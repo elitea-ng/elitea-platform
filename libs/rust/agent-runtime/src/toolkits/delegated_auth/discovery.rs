@@ -148,17 +148,20 @@ impl DelegatedAuthorizationRequirement {
 }
 
 async fn fetch_metadata(url: &str) -> Option<Value> {
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+    use crate::egress::BuildForRun as _;
+    // Bound to the run in scope (#1490): a metadata host outside its egress
+    // allowlist is refused and counted, and discovery falls back as for any
+    // unreachable host.
+    let client = crate::egress::client_builder()
         .timeout(DISCOVERY_TIMEOUT)
+        .build_for_run()
+        .ok()?;
+    let request = client
+        .request(reqwest::Method::GET, reqwest::Url::parse(url).ok()?)
+        .header("accept", "application/json")
         .build()
         .ok()?;
-    let mut response = client
-        .get(url)
-        .header("accept", "application/json")
-        .send()
-        .await
-        .ok()?;
+    let mut response = client.execute(request).await.ok()?;
     if !response.status().is_success()
         || response
             .content_length()
