@@ -91,6 +91,12 @@ type Session struct {
 	ExpiresAt            time.Time
 	IdleTimeout          time.Duration
 	RevokedAt            *time.Time
+	// Ref is the session's NON-SECRET reference (shared 0200): what audit
+	// events and the runs a session started name it by. ID is the cookie
+	// value and never leaves this package's store.
+	Ref int64
+	// EndedAt is set once the row is recorded as ended (shared 0200).
+	EndedAt *time.Time
 }
 
 // Usable reports whether this row still authenticates its user at `now`, and
@@ -101,13 +107,83 @@ type Session struct {
 // and reporting it as "idle" would tell an operator the wrong story about a
 // sign-out they performed.
 func (s Session) Usable(now time.Time) error {
+	return s.UsableUnder(now, Bounds{})
+}
+
+// End reasons (browser_sessions.end_reason, shared 0200).
+const (
+	EndIdle     = "idle"
+	EndAbsolute = "absolute"
+	EndLogout   = "logout"
+	EndRevoked  = "revoked"
+)
+
+// Bounds is the administrator's session policy (the session_policy
+// Configuration section, ADR-0042 decision 5): a MAXIMUM idle timeout and a
+// MAXIMUM absolute lifetime. A zero field sets no maximum.
+//
+// Bounds only ever SHORTEN a session. A new session is stamped with its
+// lifetimes clamped to them (Clamp). An existing session is held to them
+// when it is validated (Deadline), because a row stamped before the
+// administrator set a maximum may carry a longer lifetime or no idle limit
+// at all, and a maximum that waited for those rows to age out would not be
+// one. A bound that is raised or removed never lengthens a row: the row's
+// own lifetimes stay the upper limit.
+type Bounds struct {
+	MaxIdleTimeout      time.Duration
+	MaxAbsoluteLifetime time.Duration
+}
+
+// Clamp applies the bounds to the lifetimes of a new session. An idle
+// timeout of 0 (no idle limit) becomes the maximum when one is set.
+func (b Bounds) Clamp(idle, lifetime time.Duration) (time.Duration, time.Duration) {
+	if b.MaxIdleTimeout > 0 && (idle <= 0 || idle > b.MaxIdleTimeout) {
+		idle = b.MaxIdleTimeout
+	}
+	if b.MaxAbsoluteLifetime > 0 && lifetime > b.MaxAbsoluteLifetime {
+		lifetime = b.MaxAbsoluteLifetime
+	}
+	return idle, lifetime
+}
+
+// EffectiveIdleTimeout is the idle timeout the row is held to under b.
+func (s Session) EffectiveIdleTimeout(b Bounds) time.Duration {
+	idle, _ := b.Clamp(s.IdleTimeout, 0)
+	return idle
+}
+
+// EffectiveExpiresAt is the absolute deadline the row is held to under b.
+func (s Session) EffectiveExpiresAt(b Bounds) time.Time {
+	if b.MaxAbsoluteLifetime > 0 {
+		if bounded := s.CreatedAt.Add(b.MaxAbsoluteLifetime); bounded.Before(s.ExpiresAt) {
+			return bounded
+		}
+	}
+	return s.ExpiresAt
+}
+
+// Deadline is the moment the session stops authenticating under b, if
+// nobody uses it again, and which deadline that is (EndIdle or
+// EndAbsolute): the earlier of the two.
+func (s Session) Deadline(b Bounds) (time.Time, string) {
+	absolute := s.EffectiveExpiresAt(b)
+	if idle := s.EffectiveIdleTimeout(b); idle > 0 {
+		if idleAt := s.LastSeenAt.Add(idle); idleAt.Before(absolute) {
+			return idleAt, EndIdle
+		}
+	}
+	return absolute, EndAbsolute
+}
+
+// UsableUnder is Usable with the administrator's bounds applied.
+func (s Session) UsableUnder(now time.Time, b Bounds) error {
 	if s.RevokedAt != nil {
 		return ErrRevoked
 	}
-	if !now.Before(s.ExpiresAt) {
+	if !now.Before(s.EffectiveExpiresAt(b)) {
 		return ErrExpired
 	}
-	if s.IdleTimeout > 0 && now.Sub(s.LastSeenAt) >= s.IdleTimeout {
+	if idle := s.EffectiveIdleTimeout(b); idle > 0 && now.Sub(s.LastSeenAt) >= idle {
 		return ErrIdle
 	}
 	return nil

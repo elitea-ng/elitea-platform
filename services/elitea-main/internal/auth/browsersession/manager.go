@@ -24,6 +24,28 @@ type Store interface {
 	RevokeAllForUser(ctx context.Context, userID int64, revokedAt time.Time) (int64, error)
 }
 
+// EndMarker is the optional store write that stamps a session ended
+// (ended_at, end_reason) the first time it is found past a deadline.
+// PostgresStore implements it; a store that does not leaves the stamp to
+// the sweep.
+type EndMarker interface {
+	MarkEnded(ctx context.Context, id, reason string, endedAt time.Time) error
+}
+
+// BoundsSource answers the administrator's session policy (the
+// session_policy Configuration section). An error before any good read
+// fails the call that needed it: a bound that cannot be read is not
+// treated as "no bound".
+type BoundsSource interface {
+	SessionBounds(ctx context.Context) (Bounds, error)
+}
+
+// BoundsFunc adapts a function to BoundsSource.
+type BoundsFunc func(ctx context.Context) (Bounds, error)
+
+// SessionBounds calls f.
+func (f BoundsFunc) SessionBounds(ctx context.Context) (Bounds, error) { return f(ctx) }
+
 // TouchInterval is the smallest gap between two writes of last_seen_at.
 //
 // WITHOUT IT EVERY AUTHENTICATED REQUEST IS A WRITE. The SPA issues tens of
@@ -42,6 +64,7 @@ const TouchInterval = time.Minute
 type Manager struct {
 	store  Store
 	policy Policy
+	bounds BoundsSource
 	now    func() time.Time
 	logger *slog.Logger
 }
@@ -73,6 +96,25 @@ func WithClock(now func() time.Time) ManagerOption {
 			m.now = now
 		}
 	}
+}
+
+// WithBounds holds every session to the administrator's session policy.
+// Without it only the per-row lifetimes apply.
+func WithBounds(source BoundsSource) ManagerOption {
+	return func(m *Manager) {
+		if source != nil {
+			m.bounds = source
+		}
+	}
+}
+
+// Bounds reads the administrator's session policy. Nil and an unbounded
+// manager answer no bounds.
+func (m *Manager) Bounds(ctx context.Context) (Bounds, error) {
+	if m == nil || m.bounds == nil {
+		return Bounds{}, nil
+	}
+	return m.bounds.SessionBounds(ctx)
 }
 
 // WithLogger replaces the logger.
@@ -108,21 +150,36 @@ type NewSession struct {
 // same concatenation is how one of them would end up writing a value the
 // reader refuses.
 func (m *Manager) Create(ctx context.Context, request NewSession) (string, error) {
+	value, _, err := m.CreateCookie(ctx, request)
+	return value, err
+}
+
+// CreateCookie is Create that also answers the absolute lifetime the row
+// was stamped with, which is the cookie's MaxAge. The lifetimes are the
+// deployment's policy clamped to the administrator's session policy
+// (Bounds.Clamp): a maximum set there shortens a new session, and an idle
+// timeout of 0 becomes the maximum idle timeout.
+func (m *Manager) CreateCookie(ctx context.Context, request NewSession) (string, time.Duration, error) {
 	if m == nil {
-		return "", errors.New("browsersession: no manager is configured")
+		return "", 0, errors.New("browsersession: no manager is configured")
 	}
 	if request.UserID <= 0 {
-		return "", fmt.Errorf("browsersession: user id %d is invalid", request.UserID)
+		return "", 0, fmt.Errorf("browsersession: user id %d is invalid", request.UserID)
 	}
 	switch request.Provider {
 	case ProviderOIDC, ProviderSAML, ProviderForm:
 	default:
-		return "", fmt.Errorf("browsersession: provider %q is not one this store accepts", request.Provider)
+		return "", 0, fmt.Errorf("browsersession: provider %q is not one this store accepts", request.Provider)
 	}
+	bounds, err := m.Bounds(ctx)
+	if err != nil {
+		return "", 0, fmt.Errorf("browsersession: read the session policy: %w", err)
+	}
+	idle, lifetime := bounds.Clamp(m.policy.IdleTimeout, m.policy.AbsoluteLifetime)
 
 	id, err := NewID()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	now := m.now().UTC()
 	session := Session{
@@ -133,16 +190,16 @@ func (m *Manager) Create(ctx context.Context, request NewSession) (string, error
 		ProviderSessionIndex: request.ProviderSessionIndex,
 		CreatedAt:            now,
 		LastSeenAt:           now,
-		ExpiresAt:            now.Add(m.policy.AbsoluteLifetime),
-		IdleTimeout:          m.policy.IdleTimeout,
+		ExpiresAt:            now.Add(lifetime),
+		IdleTimeout:          idle,
 	}
 	if err := m.store.Insert(ctx, session); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	m.logger.InfoContext(ctx, "browser session created",
 		"user_id", request.UserID, "provider", request.Provider,
-		"expires_at", session.ExpiresAt, "idle_timeout", m.policy.IdleTimeout)
-	return CookieValue(id), nil
+		"expires_at", session.ExpiresAt, "idle_timeout", idle)
+	return CookieValue(id), lifetime, nil
 }
 
 // Validate answers the session a cookie value names, and touches it.
@@ -169,8 +226,15 @@ func (m *Manager) Validate(ctx context.Context, cookieValue string) (Session, er
 	if err != nil {
 		return Session{}, err
 	}
+	bounds, err := m.Bounds(ctx)
+	if err != nil {
+		return Session{}, fmt.Errorf("browsersession: read the session policy: %w", err)
+	}
 	now := m.now().UTC()
-	if err := session.Usable(now); err != nil {
+	if err := session.UsableUnder(now, bounds); err != nil {
+		if errors.Is(err, ErrExpired) || errors.Is(err, ErrIdle) {
+			m.markEnded(ctx, session, bounds)
+		}
 		return Session{}, err
 	}
 	if now.Sub(session.LastSeenAt) >= TouchInterval {
@@ -184,6 +248,24 @@ func (m *Manager) Validate(ctx context.Context, cookieValue string) (Session, er
 	return session, nil
 }
 
+// markEnded stamps the session ended at its deadline, once. It is best
+// effort for the reason the touch is: the caller is refused either way, and
+// the sweep stamps a row this write missed.
+func (m *Manager) markEnded(ctx context.Context, session Session, bounds Bounds) {
+	if session.EndedAt != nil {
+		return
+	}
+	marker, ok := m.store.(EndMarker)
+	if !ok {
+		return
+	}
+	endedAt, reason := session.Deadline(bounds)
+	if err := marker.MarkEnded(ctx, session.ID, reason, endedAt); err != nil {
+		m.logger.WarnContext(ctx, "browser session end was not recorded",
+			"user_id", session.UserID, "session_ref", session.Ref, "err", err)
+	}
+}
+
 // User is the principal a validated session names.
 //
 // It carries no permission and no token id. apimw.Auth hands it to the
@@ -193,10 +275,11 @@ func (m *Manager) Validate(ctx context.Context, cookieValue string) (Session, er
 func (s Session) User() auth.User {
 	id := fmt.Sprintf("%d", s.UserID)
 	return auth.User{
-		ID:       id,
-		UserID:   id,
-		Email:    s.Email,
-		AuthType: "session",
+		ID:                id,
+		UserID:            id,
+		Email:             s.Email,
+		AuthType:          "session",
+		BrowserSessionRef: s.Ref,
 	}
 }
 

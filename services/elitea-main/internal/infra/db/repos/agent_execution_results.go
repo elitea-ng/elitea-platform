@@ -183,7 +183,7 @@ func (r *AgentExecutionResultsRepository) ProjectAgentExecution(ctx context.Cont
 				return loadErr
 			}
 			if inserted.CancellationRejected {
-				if err := materializeCanonicalCancellation(ctx, tx, record, false); err != nil {
+				if err := materializeCanonicalCancellation(ctx, tx, record, false, true); err != nil {
 					return err
 				}
 				cancellationWon = true

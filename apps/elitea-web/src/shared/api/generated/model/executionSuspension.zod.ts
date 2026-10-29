@@ -76,7 +76,7 @@ export const ExecutionSuspension = zod
     cancelled_runs: zod
       .int()
       .describe(
-        "The in-flight runs the suspension cancelled when it was created.",
+        "The in-flight run generations the suspension cancelled when it was created, for every scope (for toolkit_type, the runs whose recorded toolkit types contain the type).\n",
       ),
     active: zod.boolean(),
     resumed_at: zod.iso.datetime({ offset: true }).nullable(),

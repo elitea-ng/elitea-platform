@@ -101,3 +101,33 @@ func TestRunMemoryToolkitsIncludeSubAgentsRecursively(t *testing.T) {
 		t.Fatalf("without a reader = %v, %v", got, err)
 	}
 }
+
+// The run's toolkit types are recorded for the kill switch: the canonical
+// type of every frozen entry, its sub-agents' included, sorted and unique.
+// FrozenToolkitTypes reads only the run's own set (the legacy backfill).
+func TestRunToolkitTypesIncludeSubAgents(t *testing.T) {
+	t.Parallel()
+	service := (&AdmissionService{}).WithNestedMemoryToolkits(nestedTools{
+		{31, 41}: `[{"id":5,"type":"Jira","settings":{}},{"type":"application","settings":{"application_id":31,"application_version_id":41}}]`,
+	})
+	request := SubmitRequest{
+		Identity:     executionapp.AdmissionIdentity{ResourceProjectID: "7"},
+		CapabilityID: executiondomain.AgentApplicationCapability,
+		Input: &runtimev1.AgentExecutionInputV1{Application: []byte(`{"version_details":{"tools":[
+		    {"id":9,"type":"github","settings":{}},
+		    {"id":10,"type":"github","settings":{}},
+		    {"id":40,"type":"application","settings":{"application_id":31,"application_version_id":41}}]}}`)},
+	}
+	_, types, err := service.runToolkitSet(context.Background(), request)
+	if err != nil || !slices.Equal(types, []string{"application", "github", "jira"}) {
+		t.Fatalf("run toolkit types = %v, %v", types, err)
+	}
+	own, err := FrozenToolkitTypes(request.CapabilityID, request.Input)
+	if err != nil || !slices.Equal(own, []string{"application", "github"}) {
+		t.Fatalf("own toolkit types = %v, %v", own, err)
+	}
+	empty, err := FrozenToolkitTypes(executiondomain.AgentAdhocCapability, &runtimev1.AgentExecutionInputV1{Tools: []byte(`[]`)})
+	if err != nil || empty == nil || len(empty) != 0 {
+		t.Fatalf("no toolkits = %v, %v; want an empty, non-nil list", empty, err)
+	}
+}

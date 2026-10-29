@@ -601,6 +601,28 @@ WHERE execution_id = $1 AND generation = $2`,
 			return executionapp.AdmissionOutcome{}, fmt.Errorf("record the run's agent: %w", err)
 		}
 	}
+	// The run's toolkit types and browser session (shared 0201): a
+	// toolkit_type suspension cancels it in flight, and its session's audit
+	// events join it. ToolkitTypes is never nil from the admission service;
+	// an empty list records "no toolkit".
+	toolkitTypes := admission.ToolkitTypes
+	if toolkitTypes == nil {
+		toolkitTypes = []string{}
+	}
+	if err := stampAdmissionSafety(ctx, pgxExecutor{queryer: tx}, admission.Record.Job.ID,
+		int64(admission.Record.Job.Generation), admissionSafetyRecord{ToolkitTypes: toolkitTypes}); err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
+	// A continuation is a new execution of the same response. The whole-run
+	// wall cap counts from the start of the run it continues (ADR-0041
+	// decision 3), so it copies that run's start.
+	if admission.CurrentContinueTurn != nil {
+		if err := inheritContinuedRunStart(ctx, pgxExecutor{queryer: tx}, admission.Record.Job.ID,
+			int64(admission.Record.Job.Generation), admission.Binding.ClientStreamID,
+			admission.Binding.ClientMessageID); err != nil {
+			return executionapp.AdmissionOutcome{}, err
+		}
+	}
 	if admission.CurrentTurn != nil {
 		if err := insertCurrentApplicationTurn(
 			ctx,

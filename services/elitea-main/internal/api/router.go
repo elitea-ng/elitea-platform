@@ -214,6 +214,11 @@ type RouterConfig struct {
 	// 426 gate and the admin save that invalidates it. Nil builds one here
 	// from Pool and NativeClients — the shape every test uses.
 	NativePolicy *nativepolicy.Service
+	// SessionPolicyCache and RunCapsCache are the per-replica caches of the
+	// session_policy and run_caps sections; an admin save drops them. Nil
+	// leaves the cache TTL as the only refresh.
+	SessionPolicyCache admin.SectionInvalidator
+	RunCapsCache       admin.SectionInvalidator
 	// NativeAccess resolves the client of a native bearer token for the 426
 	// gate when the principal came from the edge's forwarded identity (which
 	// carries no client id). Nil skips that fallback.
@@ -2428,6 +2433,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// one cached policy discovery, the token response and the
 					// 426 gate read.
 					admin.WithNativeClientPolicy(nativePolicy),
+					admin.WithSessionPolicyCache(cfg.SessionPolicyCache),
+					admin.WithRunCapsCache(cfg.RunCapsCache),
 					admin.WithBrandingAssets(brandingAssets),
 					admin.WithMailer(adminMailer),
 					admin.WithEmailSettings(emailResolver.Store(), emailResolver),

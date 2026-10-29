@@ -242,6 +242,12 @@ func (r *IndexIngestJobsRepository) AdmitIndexIngest(ctx context.Context, admiss
 	if createdID != admission.Record.Job.ID {
 		return indexingapp.AdmissionOutcome{}, errors.New("index execution job insert changed identity")
 	}
+	// The run's toolkit type and browser session (shared 0201).
+	if err := stampAdmissionSafety(ctx, pgxExecutor{queryer: tx}, admission.Record.Job.ID,
+		int64(admission.Record.Job.Generation),
+		admissionSafetyRecord{ToolkitTypes: toolkitAdmissionTypes(ctx)}); err != nil {
+		return indexingapp.AdmissionOutcome{}, err
+	}
 	if err := txQueries.InsertIndexIngestJob(ctx, sqlcgen.InsertIndexIngestJobParams{
 		ExecutionID:                          admission.Record.Job.ID,
 		Generation:                           int64(admission.Record.Job.Generation),

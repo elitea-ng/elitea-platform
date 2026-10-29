@@ -398,6 +398,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return err
 	}
 
+	// The run-safety Configuration sections (#1496, #1498): the
+	// administrator's session policy and the whole-run wall cap, one cache
+	// each per replica, and the session lifecycle sweep and audit relay.
+	runSafetySections := newRunSafety(pool)
+	if err := startBrowserSessionLifecycle(ctx, pool, runSafetySections, logger); err != nil {
+		return err
+	}
+
 	// The domain-events Publisher — #876's second half. Every producer that
 	// wires it (pipeline run admission, agent version publish/unpublish,
 	// conversation create, artifact upload, moderation decision) reaches it
@@ -783,7 +791,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			if storeErr != nil {
 				return fmt.Errorf("compose the browser session store: %w", storeErr)
 			}
-			browserSessions, managerErr := browsersession.NewManager(store, sessionPolicy)
+			// The administrator's session policy (session_policy) bounds
+			// every session this manager creates or validates.
+			browserSessions, managerErr := browsersession.NewManager(store, sessionPolicy,
+				browsersession.WithBounds(runSafetySections.sessionBounds()))
 			if managerErr != nil {
 				return fmt.Errorf("compose the browser session manager: %w", managerErr)
 			}
@@ -2099,6 +2110,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			CredentialBroker:                 runtimeCredentialBroker,
 			SecurityInvalidations:            securityInvalidations,
 			ExecutionSuspensions:             executionSuspensions.gate,
+			MaxRunWall:                       runSafetySections.maxRunWall,
 			IndexScheduleMandates:            governedTriggers.IndexMandates,
 			IndexScheduleMandateGate:         governedTriggers.IndexGate,
 			ControlPool:                      runtimePools.Control,
@@ -2862,6 +2874,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		NativeClients:                 native.registry,
 		NativeStore:                   native.store,
 		NativePolicy:                  nativePolicy,
+		SessionPolicyCache:            runSafetySections.sessionPolicy,
+		RunCapsCache:                  runSafetySections.runCaps,
 		NativeAccess:                  native.validator,
 		NativeSecureCookies:           os.Getenv("COOKIE_SECURE") != "false",
 		Mailer:                        mailComposer,

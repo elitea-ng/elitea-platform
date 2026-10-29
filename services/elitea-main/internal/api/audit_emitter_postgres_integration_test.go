@@ -406,7 +406,7 @@ func newAuditEmitterPool(t *testing.T) *pgxpool.Pool {
 	// A suspension revokes the account's browser sessions and native device
 	// sessions in the same transaction (ADR-0025 WP3), so their tables exist
 	// here as they do on every migrated deployment.
-	for _, migration := range []string{"0117_browser_sessions.sql", "0141_native_auth.sql"} {
+	for _, migration := range []string{"0117_browser_sessions.sql", "0200_browser_session_lifecycle.sql", "0141_native_auth.sql"} {
 		file := filepath.Join("..", "..", "migrations", "shared", migration)
 		sql, err := os.ReadFile(file)
 		if err != nil {
