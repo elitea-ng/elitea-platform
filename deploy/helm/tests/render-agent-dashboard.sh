@@ -71,18 +71,39 @@ else:
     tvars = {v["name"]: v for v in dash["templating"]["list"]}
     if tvars.get("datasource", {}).get("type") != "datasource":
         fail.append("no `datasource` template variable of type datasource")
-    exprs = []
+    if tvars.get("pgdatasource", {}).get("query") != "grafana-postgresql-datasource":
+        fail.append("no `pgdatasource` template variable for the PostgreSQL data source")
+    exprs, sqls = [], []
     def walk(panels):
         for p in panels:
             walk(p.get("panels") or [])
+            # Per-agent panels read the database (an agent id is unbounded
+            # cardinality, so no Prometheus series carries it); every other
+            # panel reads Prometheus.
+            want = "${pgdatasource}" if (p.get("datasource") or {}).get("type") == "grafana-postgresql-datasource" else "${datasource}"
             ds = p.get("datasource")
-            if ds is not None and ds.get("uid") != "${datasource}":
-                fail.append(f"panel {p.get('title')!r}: datasource uid {ds.get('uid')!r} is not ${{datasource}}")
+            if ds is not None and ds.get("uid") != want:
+                fail.append(f"panel {p.get('title')!r}: datasource uid {ds.get('uid')!r} is not {want}")
             for t in p.get("targets") or []:
-                if (t.get("datasource") or {}).get("uid") != "${datasource}":
-                    fail.append(f"panel {p.get('title')!r}: target datasource is not ${{datasource}}")
-                exprs.append(t["expr"])
+                if (t.get("datasource") or {}).get("uid") != want:
+                    fail.append(f"panel {p.get('title')!r}: target datasource is not {want}")
+                if want == "${pgdatasource}":
+                    sqls.append(t["rawSql"])
+                else:
+                    exprs.append(t["expr"])
     walk(dash["panels"])
+    # The PostgreSQL panels read only these tables, the ones the docs tell the
+    # operator to grant the read-only Grafana role.
+    pg_allowed = {"elitea_runtime.run_step_heads", "elitea_runtime.run_steps", "gateway.llm_usage_events"}
+    pg_used = set()
+    for q in sqls:
+        pg_used |= set(re.findall(r"\b(?:FROM|JOIN)\s+([a-z_]+\.[a-z_]+)", q))
+        if "$__timeFilter(" not in q or "LIMIT" not in q:
+            fail.append("a PostgreSQL panel query is not bounded by $__timeFilter and LIMIT")
+    for name in sorted(pg_used - pg_allowed):
+        fail.append(f"a PostgreSQL panel reads {name}, outside the documented grant")
+    if len(sqls) != 3:
+        fail.append(f"want 3 per-agent PostgreSQL panels (runs, tool calls, spend), got {len(sqls)}")
     # Every metric a service exposes that the dashboard may use, and where it
     # is defined. A name outside this list is a metric nobody exports.
     allowed = {

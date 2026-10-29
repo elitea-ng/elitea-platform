@@ -1,7 +1,7 @@
 {
   "uid": "elitea-agent-runs",
   "title": "Elitea / Agent runs, errors, tool calls and spend",
-  "description": "Agent runs, errors, tool calls and spend from the metrics Elitea services actually export (elitea-main audit export, LLM gateway, scheduler). No Elitea service exports a per-agent (or per-application) label on any Prometheus series, and none is added for this dashboard: an agent id is unbounded cardinality. Every panel is platform-wide; per-agent figures come from the ADR-0042 run-step records and the usage ledger, not from Prometheus. There is no tool-call metric and no spend-amount metric: those rows say so instead of charting something else under that name.",
+  "description": "Agent runs, errors, tool calls and spend from the metrics Elitea services actually export (elitea-main audit export, LLM gateway, scheduler). No Elitea service exports a per-agent (or per-application) label on any Prometheus series, and none is added for this dashboard: an agent id is unbounded cardinality. Every panel is platform-wide; per-agent figures come from the ADR-0042 run-step records and the usage ledger, not from Prometheus. There is no tool-call metric and no spend-amount metric: those rows say so instead of charting something else under that name. Per-agent panels read the step records and the billing ledger through a read-only PostgreSQL data source.",
   "tags": [
     "elitea",
     "agents",
@@ -46,6 +46,18 @@
         "hide": 0,
         "options": [],
         "description": "Regex on the namespace label of the scraped series. .* also matches series scraped without one."
+      },
+      {
+        "name": "pgdatasource",
+        "label": "PostgreSQL (read-only)",
+        "type": "datasource",
+        "query": "grafana-postgresql-datasource",
+        "current": {},
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "options": [],
+        "description": "A read-only connection to the Elitea database, for the per-agent panels. Grant the Grafana role SELECT on elitea_runtime.run_step_heads, elitea_runtime.run_steps and gateway.llm_usage_events only."
       }
     ]
   },
@@ -64,6 +76,43 @@
       "panels": []
     },
     {
+      "id": 19,
+      "type": "table",
+      "title": "Runs, tool calls and errors by agent",
+      "description": "Per agent (application id) and project, top 50 by runs started in the time range, from the ADR-0042 step records through the PostgreSQL data source. Prometheus carries no per-agent label (unbounded cardinality), so this is the per-agent view.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${pgdatasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${pgdatasource}"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT h.project_id, h.application_id AS agent_id,\n  count(DISTINCT h.run_id) AS runs,\n  count(s.run_id) FILTER (WHERE s.kind = 'model_call') AS model_calls,\n  count(s.run_id) FILTER (WHERE s.kind = 'tool_call') AS tool_calls,\n  count(s.run_id) FILTER (WHERE s.kind = 'retrieval') AS retrievals,\n  count(s.run_id) FILTER (WHERE s.kind = 'error') AS errors,\n  count(DISTINCT h.run_id) FILTER (WHERE s.kind = 'error') AS runs_with_errors\nFROM elitea_runtime.run_step_heads h\nLEFT JOIN elitea_runtime.run_steps s ON s.run_id = h.run_id\nWHERE $__timeFilter(h.created_at)\nGROUP BY h.project_id, h.application_id\nORDER BY runs DESC\nLIMIT 50"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
       "type": "timeseries",
       "id": 2,
       "title": "Run-step records exported to the SIEM",
@@ -76,7 +125,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 1
+        "y": 10
       },
       "fieldConfig": {
         "defaults": {
@@ -120,7 +169,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 1
+        "y": 10
       },
       "fieldConfig": {
         "defaults": {
@@ -164,7 +213,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 9
+        "y": 18
       },
       "fieldConfig": {
         "defaults": {
@@ -208,7 +257,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 9
+        "y": 18
       },
       "fieldConfig": {
         "defaults": {
@@ -248,7 +297,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 17
+        "y": 26
       },
       "panels": []
     },
@@ -265,7 +314,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 18
+        "y": 27
       },
       "fieldConfig": {
         "defaults": {
@@ -309,7 +358,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 18
+        "y": 27
       },
       "fieldConfig": {
         "defaults": {
@@ -353,7 +402,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 18
+        "y": 27
       },
       "fieldConfig": {
         "defaults": {
@@ -447,23 +496,45 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 26
+        "y": 35
       },
       "panels": []
     },
     {
-      "type": "text",
-      "id": 11,
-      "title": "Tool calls: no metric exists",
+      "id": 20,
+      "type": "table",
+      "title": "Tool calls by agent and tool",
+      "description": "Tool-call step records (ADR-0042) per agent and tool, top 50, from the database through the PostgreSQL data source. Prometheus has no per-agent series: an agent id is unbounded cardinality.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${pgdatasource}"
+      },
       "gridPos": {
-        "h": 5,
+        "h": 9,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 36
       },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${pgdatasource}"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT s.project_id, s.application_id AS agent_id, s.toolkit_id, s.name AS tool, count(*) AS calls\nFROM elitea_runtime.run_steps s\nWHERE s.kind = 'tool_call' AND $__timeFilter(s.started_at)\nGROUP BY 1, 2, 3, 4\nORDER BY calls DESC\nLIMIT 50"
+        }
+      ],
       "options": {
-        "mode": "markdown",
-        "content": "**No Elitea service exports a tool-call metric.** The Rust worker (services/elitea-worker-rust) exports traces only (OTLP), no metrics, and elitea-main's OpenTelemetry instruments have no meter provider installed, so nothing they record reaches Prometheus.\n\nTool calls are recorded as ADR-0042 run-step records. Count them per agent and per tool where those records land: the SIEM (via the audit export, `source=run_step`) or the database. The *Run-step records exported* panel above is the platform-wide rate of all steps, tool calls included."
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
       }
     },
     {
@@ -475,23 +546,45 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 32
+        "y": 45
       },
       "panels": []
     },
     {
-      "type": "text",
-      "id": 13,
-      "title": "Spend: no amount metric exists",
+      "id": 21,
+      "type": "table",
+      "title": "Spend by agent",
+      "description": "Billed LLM spend per agent, top 50: the gateway billing ledger (gateway.llm_usage_events) joined to the run's step-record head on the execution id. Only runs that produced step records are attributed; spend outside agent runs is not shown here.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${pgdatasource}"
+      },
       "gridPos": {
-        "h": 4,
+        "h": 9,
         "w": 24,
         "x": 0,
-        "y": 33
+        "y": 46
       },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${pgdatasource}"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT h.project_id, h.application_id AS agent_id,\n  sum(u.cost_usd) AS cost_usd, sum(u.total_tokens) AS tokens, count(DISTINCT h.run_id) AS runs\nFROM gateway.llm_usage_events u\nJOIN elitea_runtime.run_step_heads h ON h.run_id = u.execution_id\nWHERE $__timeFilter(u.occurred_at)\nGROUP BY h.project_id, h.application_id\nORDER BY cost_usd DESC\nLIMIT 50"
+        }
+      ],
       "options": {
-        "mode": "markdown",
-        "content": "**No service exports spend as a metric**, per agent or in total: spend is accounted in the database (gateway.llm_budget_accumulators and the usage ledger), which is where a per-agent or per-project amount must be read. The panels below are the money-path integrity controls the gateway and scheduler do export: spend that was not priced, not billed or not written back."
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
       }
     },
     {
@@ -507,7 +600,7 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 37
+        "y": 55
       },
       "fieldConfig": {
         "defaults": {
@@ -552,7 +645,7 @@
         "h": 8,
         "w": 18,
         "x": 6,
-        "y": 37
+        "y": 55
       },
       "fieldConfig": {
         "defaults": {
@@ -641,7 +734,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 45
+        "y": 63
       },
       "fieldConfig": {
         "defaults": {
@@ -685,7 +778,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 45
+        "y": 63
       },
       "fieldConfig": {
         "defaults": {
@@ -738,7 +831,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 45
+        "y": 63
       },
       "fieldConfig": {
         "defaults": {
