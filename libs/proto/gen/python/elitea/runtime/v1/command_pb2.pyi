@@ -4,10 +4,11 @@ from elitea.runtime.v1 import input_pb2 as _input_pb2
 from elitea.runtime.v1 import security_context_pb2 as _security_context_pb2
 from elitea.runtime.v1 import toolkit_pb2 as _toolkit_pb2
 from elitea.runtime.v1 import validation_pb2 as _validation_pb2
+from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
-from collections.abc import Mapping as _Mapping
+from collections.abc import Iterable as _Iterable, Mapping as _Mapping
 from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
@@ -26,6 +27,12 @@ class WorkerCommandTypeV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_ADHOC: _ClassVar[WorkerCommandTypeV1]
     WORKER_COMMAND_TYPE_V1_TOOLKIT_CALL_TOOL: _ClassVar[WorkerCommandTypeV1]
     WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ: _ClassVar[WorkerCommandTypeV1]
+
+class WorkerEgressModeV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    WORKER_EGRESS_MODE_V1_UNSPECIFIED: _ClassVar[WorkerEgressModeV1]
+    WORKER_EGRESS_MODE_V1_OPEN: _ClassVar[WorkerEgressModeV1]
+    WORKER_EGRESS_MODE_V1_ALLOWLIST: _ClassVar[WorkerEgressModeV1]
 WORKER_COMMAND_TYPE_V1_UNSPECIFIED: WorkerCommandTypeV1
 WORKER_COMMAND_TYPE_V1_START: WorkerCommandTypeV1
 WORKER_COMMAND_TYPE_V1_RESUME: WorkerCommandTypeV1
@@ -38,9 +45,12 @@ WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_APPLICATION: WorkerCommandTypeV1
 WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_ADHOC: WorkerCommandTypeV1
 WORKER_COMMAND_TYPE_V1_TOOLKIT_CALL_TOOL: WorkerCommandTypeV1
 WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ: WorkerCommandTypeV1
+WORKER_EGRESS_MODE_V1_UNSPECIFIED: WorkerEgressModeV1
+WORKER_EGRESS_MODE_V1_OPEN: WorkerEgressModeV1
+WORKER_EGRESS_MODE_V1_ALLOWLIST: WorkerEgressModeV1
 
 class WorkerCommandV1(_message.Message):
-    __slots__ = ("protocol_revision", "command_id", "idempotency_key", "command_type", "execution_id", "generation", "dispatch_ordinal", "root_execution_id", "parent_execution_id", "parent_call_id", "tenant_id", "resource_project_id", "projection_project_id", "principal_ref", "input_bundle_ref", "capability_id", "capability_version", "resource_class", "isolation_class", "priority", "deadline_unix_millis", "traceparent", "tracestate", "limits_revision", "configuration_validation", "toolkit_available_tools", "index_ingest", "agent_execution", "toolkit_call_tool", "toolkit_execute_read", "security_context_ref")
+    __slots__ = ("protocol_revision", "command_id", "idempotency_key", "command_type", "execution_id", "generation", "dispatch_ordinal", "root_execution_id", "parent_execution_id", "parent_call_id", "tenant_id", "resource_project_id", "projection_project_id", "principal_ref", "input_bundle_ref", "capability_id", "capability_version", "resource_class", "isolation_class", "priority", "deadline_unix_millis", "traceparent", "tracestate", "limits_revision", "configuration_validation", "toolkit_available_tools", "index_ingest", "agent_execution", "toolkit_call_tool", "toolkit_execute_read", "security_context_ref", "egress_policy")
     PROTOCOL_REVISION_FIELD_NUMBER: _ClassVar[int]
     COMMAND_ID_FIELD_NUMBER: _ClassVar[int]
     IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
@@ -72,6 +82,7 @@ class WorkerCommandV1(_message.Message):
     TOOLKIT_CALL_TOOL_FIELD_NUMBER: _ClassVar[int]
     TOOLKIT_EXECUTE_READ_FIELD_NUMBER: _ClassVar[int]
     SECURITY_CONTEXT_REF_FIELD_NUMBER: _ClassVar[int]
+    EGRESS_POLICY_FIELD_NUMBER: _ClassVar[int]
     protocol_revision: str
     command_id: str
     idempotency_key: str
@@ -103,4 +114,13 @@ class WorkerCommandV1(_message.Message):
     toolkit_call_tool: _toolkit_pb2.ToolkitCallToolCommandV1
     toolkit_execute_read: _toolkit_pb2.ToolkitExecuteReadCommandV1
     security_context_ref: _security_context_pb2.ExecutionSecurityContextReferenceV1
-    def __init__(self, protocol_revision: _Optional[str] = ..., command_id: _Optional[str] = ..., idempotency_key: _Optional[str] = ..., command_type: _Optional[_Union[WorkerCommandTypeV1, str]] = ..., execution_id: _Optional[str] = ..., generation: _Optional[int] = ..., dispatch_ordinal: _Optional[int] = ..., root_execution_id: _Optional[str] = ..., parent_execution_id: _Optional[str] = ..., parent_call_id: _Optional[str] = ..., tenant_id: _Optional[str] = ..., resource_project_id: _Optional[str] = ..., projection_project_id: _Optional[str] = ..., principal_ref: _Optional[str] = ..., input_bundle_ref: _Optional[_Union[_input_pb2.ExecutionInputBundleReferenceV1, _Mapping]] = ..., capability_id: _Optional[str] = ..., capability_version: _Optional[str] = ..., resource_class: _Optional[str] = ..., isolation_class: _Optional[str] = ..., priority: _Optional[int] = ..., deadline_unix_millis: _Optional[int] = ..., traceparent: _Optional[str] = ..., tracestate: _Optional[str] = ..., limits_revision: _Optional[str] = ..., configuration_validation: _Optional[_Union[_validation_pb2.ConfigurationValidationCommandV1, _Mapping]] = ..., toolkit_available_tools: _Optional[_Union[_toolkit_pb2.ToolkitAvailableToolsCommandV1, _Mapping]] = ..., index_ingest: _Optional[_Union[_indexing_pb2.IndexIngestCommandV1, _Mapping]] = ..., agent_execution: _Optional[_Union[_agent_pb2.AgentExecutionCommandV1, _Mapping]] = ..., toolkit_call_tool: _Optional[_Union[_toolkit_pb2.ToolkitCallToolCommandV1, _Mapping]] = ..., toolkit_execute_read: _Optional[_Union[_toolkit_pb2.ToolkitExecuteReadCommandV1, _Mapping]] = ..., security_context_ref: _Optional[_Union[_security_context_pb2.ExecutionSecurityContextReferenceV1, _Mapping]] = ...) -> None: ...
+    egress_policy: WorkerEgressPolicyV1
+    def __init__(self, protocol_revision: _Optional[str] = ..., command_id: _Optional[str] = ..., idempotency_key: _Optional[str] = ..., command_type: _Optional[_Union[WorkerCommandTypeV1, str]] = ..., execution_id: _Optional[str] = ..., generation: _Optional[int] = ..., dispatch_ordinal: _Optional[int] = ..., root_execution_id: _Optional[str] = ..., parent_execution_id: _Optional[str] = ..., parent_call_id: _Optional[str] = ..., tenant_id: _Optional[str] = ..., resource_project_id: _Optional[str] = ..., projection_project_id: _Optional[str] = ..., principal_ref: _Optional[str] = ..., input_bundle_ref: _Optional[_Union[_input_pb2.ExecutionInputBundleReferenceV1, _Mapping]] = ..., capability_id: _Optional[str] = ..., capability_version: _Optional[str] = ..., resource_class: _Optional[str] = ..., isolation_class: _Optional[str] = ..., priority: _Optional[int] = ..., deadline_unix_millis: _Optional[int] = ..., traceparent: _Optional[str] = ..., tracestate: _Optional[str] = ..., limits_revision: _Optional[str] = ..., configuration_validation: _Optional[_Union[_validation_pb2.ConfigurationValidationCommandV1, _Mapping]] = ..., toolkit_available_tools: _Optional[_Union[_toolkit_pb2.ToolkitAvailableToolsCommandV1, _Mapping]] = ..., index_ingest: _Optional[_Union[_indexing_pb2.IndexIngestCommandV1, _Mapping]] = ..., agent_execution: _Optional[_Union[_agent_pb2.AgentExecutionCommandV1, _Mapping]] = ..., toolkit_call_tool: _Optional[_Union[_toolkit_pb2.ToolkitCallToolCommandV1, _Mapping]] = ..., toolkit_execute_read: _Optional[_Union[_toolkit_pb2.ToolkitExecuteReadCommandV1, _Mapping]] = ..., security_context_ref: _Optional[_Union[_security_context_pb2.ExecutionSecurityContextReferenceV1, _Mapping]] = ..., egress_policy: _Optional[_Union[WorkerEgressPolicyV1, _Mapping]] = ...) -> None: ...
+
+class WorkerEgressPolicyV1(_message.Message):
+    __slots__ = ("mode", "allow")
+    MODE_FIELD_NUMBER: _ClassVar[int]
+    ALLOW_FIELD_NUMBER: _ClassVar[int]
+    mode: WorkerEgressModeV1
+    allow: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, mode: _Optional[_Union[WorkerEgressModeV1, str]] = ..., allow: _Optional[_Iterable[str]] = ...) -> None: ...

@@ -74,7 +74,38 @@ message WorkerCommandV1 {
   // unchanged.
   ExecutionSecurityContextReferenceV1 security_context_ref = 65;
 
+  // The public egress policy for this command's outbound HTTP (ADR-0044
+  // decision 2, #1490). Absent means open: public hosts are unrestricted and
+  // only the SSRF rules apply. Main omits it while the platform's
+  // worker_egress mode is open, so commands are unchanged byte for byte.
+  WorkerEgressPolicyV1 egress_policy = 66;
+
   reserved 15, 26 to 31;
   reserved "grant_template_id";
   reserved 37 to 63;
+}
+
+// How a worker treats public hosts (ADR-0044 decision 2). Private, link-local,
+// metadata and reserved addresses stay refused by the SSRF guard in every
+// mode; this only narrows what is public.
+enum WorkerEgressModeV1 {
+  WORKER_EGRESS_MODE_V1_UNSPECIFIED = 0;
+  // Any public host. The same as an absent policy.
+  WORKER_EGRESS_MODE_V1_OPEN = 1;
+  // Only hosts matching `allow`. A refused host is the tool error
+  // `egress_host_not_allowed`, never a silent failure.
+  WORKER_EGRESS_MODE_V1_ALLOWLIST = 2;
+}
+
+// The run's public egress policy, assembled by Main from the platform's
+// entries, the project's entries, the approved hosts of the connectors in
+// use and each toolkit instance's base URL. It travels inside the signed
+// command, so a worker cannot widen it.
+message WorkerEgressPolicyV1 {
+  WorkerEgressModeV1 mode = 1;
+  // The egresslib grammar (`libs/go/egresslib`): host, host:port, *.domain,
+  // *.domain:port or a CIDR block. At most 1024 entries; a malformed entry
+  // fails the command closed.
+  repeated string allow = 2;
+  reserved 3 to 10;
 }
