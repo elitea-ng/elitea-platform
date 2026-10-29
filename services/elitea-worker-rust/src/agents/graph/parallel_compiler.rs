@@ -153,14 +153,12 @@ impl PipelineNodeRuntimes {
         else {
             return Ok(None);
         };
-        let path = if self.application_scope_path.is_empty() {
-            node.to_owned()
-        } else {
-            format!("{}/{node}", self.application_scope_path)
-        };
-        let descendants = format!("{path}/");
+        // The composition definitions are keyed relative to the pipeline these
+        // runtimes compile (a saved child's own nodes at its root), not by the
+        // absolute scope path (PM-2: a Parallel two Agent-node levels down).
+        let descendants = format!("{node}/");
         if !definitions.iter().any(|(key, definition)| {
-            (key == &path || key.starts_with(&descendants)) && definition.has_parallel_nodes()
+            (key == node || key.starts_with(&descendants)) && definition.has_parallel_nodes()
         }) {
             return Ok(None);
         }
@@ -418,11 +416,8 @@ fn reject_nested_parallel(
         .collect::<BTreeMap<_, _>>();
     if let Some(definitions) = runtimes.composition_definitions() {
         for node in owned.values() {
-            let path = if runtimes.application_scope_path.is_empty() {
-                node.id().to_owned()
-            } else {
-                format!("{}/{}", runtimes.application_scope_path, node.id())
-            };
+            // Keyed relative to the pipeline these runtimes compile (PM-2).
+            let path = node.id().to_owned();
             let descendants = format!("{path}/");
             // Code inside a fan-out child needs the Wave 3 Code-slot and
             // receipt work; refuse it by name until then, as Map does.
@@ -436,11 +431,8 @@ fn reject_nested_parallel(
             }
         }
         for node in owned.values() {
-            let path = if runtimes.application_scope_path.is_empty() {
-                node.id().to_owned()
-            } else {
-                format!("{}/{}", runtimes.application_scope_path, node.id())
-            };
+            // Keyed relative to the pipeline these runtimes compile (PM-2).
+            let path = node.id().to_owned();
             let descendants = format!("{path}/");
             if definitions.iter().any(|(key, definition)| {
                 (key == &path || key.starts_with(&descendants)) && definition.has_parallel_nodes()
