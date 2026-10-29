@@ -75,6 +75,11 @@ const (
 	// The execution is pinned to the governed profile but its command carries
 	// no security context reference. The job fails closed. Never retryable.
 	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_GOVERNED_CONTEXT_MISSING RuntimeErrorCodeV1 = 36
+	// Checkpoint recovery reached a frontier it cannot safely continue: a saved
+	// child pipeline's stored frontier is missing, unstamped, not a single
+	// frozen Agent node, does not match its frozen definition, or is not parked
+	// in a fixed Parallel. Nothing is repeated. Never retryable.
+	RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RECOVERY_FRONTIER_UNSUPPORTED RuntimeErrorCodeV1 = 37
 )
 
 // Enum value maps for RuntimeErrorCodeV1.
@@ -117,6 +122,7 @@ var (
 		34: "RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED",
 		35: "RUNTIME_ERROR_CODE_V1_GOVERNED_WORKER_REQUIRED",
 		36: "RUNTIME_ERROR_CODE_V1_GOVERNED_CONTEXT_MISSING",
+		37: "RUNTIME_ERROR_CODE_V1_RECOVERY_FRONTIER_UNSUPPORTED",
 	}
 	RuntimeErrorCodeV1_value = map[string]int32{
 		"RUNTIME_ERROR_CODE_V1_UNSPECIFIED":                   0,
@@ -156,6 +162,7 @@ var (
 		"RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED":              34,
 		"RUNTIME_ERROR_CODE_V1_GOVERNED_WORKER_REQUIRED":      35,
 		"RUNTIME_ERROR_CODE_V1_GOVERNED_CONTEXT_MISSING":      36,
+		"RUNTIME_ERROR_CODE_V1_RECOVERY_FRONTIER_UNSUPPORTED": 37,
 	}
 )
 
@@ -256,7 +263,7 @@ const file_elitea_runtime_v1_errors_proto_rawDesc = "" +
 	"\x0eRuntimeErrorV1\x129\n" +
 	"\x04code\x18\x01 \x01(\x0e2%.elitea.runtime.v1.RuntimeErrorCodeV1R\x04code\x12!\n" +
 	"\fsafe_message\x18\x02 \x01(\tR\vsafeMessage\x12\x1c\n" +
-	"\tretryable\x18\x03 \x01(\bR\tretryableJ\x04\b\x04\x10\x10*\xe7\r\n" +
+	"\tretryable\x18\x03 \x01(\bR\tretryableJ\x04\b\x04\x10\x10*\xa0\x0e\n" +
 	"\x12RuntimeErrorCodeV1\x12%\n" +
 	"!RUNTIME_ERROR_CODE_V1_UNSPECIFIED\x10\x00\x120\n" +
 	",RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY\x10\x01\x12.\n" +
@@ -295,7 +302,8 @@ const file_elitea_runtime_v1_errors_proto_rawDesc = "" +
 	"$RUNTIME_ERROR_CODE_V1_RESULT_REFUSED\x10!\x12*\n" +
 	"&RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED\x10\"\x122\n" +
 	".RUNTIME_ERROR_CODE_V1_GOVERNED_WORKER_REQUIRED\x10#\x122\n" +
-	".RUNTIME_ERROR_CODE_V1_GOVERNED_CONTEXT_MISSING\x10$BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	".RUNTIME_ERROR_CODE_V1_GOVERNED_CONTEXT_MISSING\x10$\x127\n" +
+	"3RUNTIME_ERROR_CODE_V1_RECOVERY_FRONTIER_UNSUPPORTED\x10%BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_errors_proto_rawDescOnce sync.Once

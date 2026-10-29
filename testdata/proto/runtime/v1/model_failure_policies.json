@@ -87,6 +87,11 @@
     "retryable": false
   },
   {
+    "code": "RECOVERY_FRONTIER_UNSUPPORTED",
+    "message": "This run stopped at a point where it cannot be safely continued. Nothing was repeated. Start it again, and share the support reference with your administrator if it happens again.",
+    "retryable": false
+  },
+  {
     "code": "PIPELINE_TOOL_FAILED",
     "message": "A pipeline tool call failed. Later nodes did not run. Review the support reference and completed actions before retrying; the tool may have started work.",
     "retryable": false

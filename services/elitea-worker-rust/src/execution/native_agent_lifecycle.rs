@@ -1608,6 +1608,18 @@ pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
     if crate::agents::application_tools::is_composition_size(error) {
         return RuntimeFailureKind::ApplicationCompositionTooLarge;
     }
+    // PM-2: a stored frontier the recovery walk refuses ends readable and
+    // typed; its distinct cause stays in the Worker's log.
+    if let Some(cause) = error
+        .cause()
+        .filter(|cause| crate::agents::session::is_recovery_frontier_cause(cause.code()))
+    {
+        tracing::warn!(
+            event = "pipeline_recovery_frontier_refused",
+            cause = cause.code(),
+        );
+        return RuntimeFailureKind::RecoveryFrontierUnsupported;
+    }
     match error.code() {
         NativeAgentAssemblyErrorCode::UnsupportedCapability
             if error.cause().is_some_and(|cause| {
@@ -1829,6 +1841,52 @@ mod taxonomy_tests {
         );
         assert_eq!(message, PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE);
         assert!(!retryable);
+    }
+
+    /// PM-2: every recovery-walk refusal ends as the registered, readable
+    /// `RECOVERY_FRONTIER_UNSUPPORTED` terminal (never the generic internal one);
+    /// any other invalid configuration keeps the internal terminal.
+    #[test]
+    fn a_recovery_walk_refusal_ends_as_the_registered_frontier_terminal() {
+        use crate::protocol::output::{
+            RECOVERY_FRONTIER_UNSUPPORTED_MESSAGE, runtime_error_policy,
+        };
+        use elitea_agent_runtime::assembly_error::{
+            NativeAgentAssemblyError, NativeAgentAssemblyErrorCode,
+        };
+
+        for cause in [
+            "pipeline.recovery.child_missing",
+            "pipeline.recovery.child_unstamped",
+            "pipeline.recovery.child_frontier_unsupported",
+            "pipeline.recovery.child_definition_mismatch",
+            "pipeline.recovery.child_not_parked",
+        ] {
+            let error = NativeAgentAssemblyError::new(
+                NativeAgentAssemblyErrorCode::InvalidConfiguration,
+                "the invocation-local native agent session could not be configured",
+            )
+            .with_cause(cause, None);
+            let kind = assembly_failure(&error);
+            assert_eq!(
+                kind,
+                RuntimeFailureKind::RecoveryFrontierUnsupported,
+                "{cause}"
+            );
+            let (code, message, retryable) = runtime_error_policy(kind);
+            assert_eq!(
+                code,
+                crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::RecoveryFrontierUnsupported
+            );
+            assert_eq!(message, RECOVERY_FRONTIER_UNSUPPORTED_MESSAGE);
+            assert!(!message.contains("pipeline.recovery"), "data-free text");
+            assert!(!retryable);
+        }
+        let other = NativeAgentAssemblyError::new(
+            NativeAgentAssemblyErrorCode::InvalidConfiguration,
+            "the invocation-local native agent session could not be configured",
+        );
+        assert_eq!(assembly_failure(&other), RuntimeFailureKind::Internal);
     }
 
     /// A saved child pipeline holding a Parallel (FU-249) ends as the
