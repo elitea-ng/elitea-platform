@@ -549,14 +549,15 @@ where
                 }
             };
             let occurred_at_unix_millis = clock.now_unix_millis();
+            if occurred_at_unix_millis <= 0 {
+                return Box::pin(run.close_no_ack("agent_lifecycle.invalid_clock", false)).await;
+            }
             for step in super::run_step_events::approval_request_steps(
                 &pause.event,
+                &steps.command_id,
                 occurred_at_unix_millis,
             ) {
                 steps.recorder.record(step);
-            }
-            if occurred_at_unix_millis <= 0 {
-                return Box::pin(run.close_no_ack("agent_lifecycle.invalid_clock", false)).await;
             }
             // ADR-0034 decision 7: a cloud-executor turn publishes its work
             // so far before the pause is reported; a failed publish fails the
@@ -716,6 +717,8 @@ where
 /// One run's step recorder and where it reports (ADR-0042, #1499).
 struct RunSteps<R> {
     recorder: Arc<crate::protocol::run_steps::RunStepRecorder>,
+    /// The command the steps belong to: the seed of replay-stable step ids.
+    command_id: String,
     control: Arc<AgentControlClient<R>>,
 }
 
@@ -738,13 +741,17 @@ impl<R: ControlRpc + 'static> RunSteps<R> {
         if super::run_step_events::is_continuation(payload) {
             recorder.mark_resumed();
         }
-        for step in
-            super::run_step_events::approval_decision_steps(payload, clock.now_unix_millis())
-        {
+        let command_id = run.trace_command_id().to_owned();
+        for step in super::run_step_events::approval_decision_steps(
+            payload,
+            &command_id,
+            clock.now_unix_millis(),
+        ) {
             recorder.record(step);
         }
         Self {
             recorder,
+            command_id,
             control: Arc::clone(control),
         }
     }

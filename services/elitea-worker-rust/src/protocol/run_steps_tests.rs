@@ -370,3 +370,196 @@ fn an_aged_step_flushes_early_unless_a_failed_report_is_backing_off() {
     recorder.drop_pending("test");
     assert!(!recorder.should_flush_early(), "dropped steps leave no age");
 }
+
+/// Main's bounds, written out independently of the worker's constants:
+/// services/elitea-main/internal/application/runevidence/service.go
+/// (`normalize`, `retrievalJSON`, `normalizeContent`). Main refuses the
+/// WHOLE report when one step exceeds any of them.
+mod main_bounds {
+    pub(super) const NODE_ID: usize = 256;
+    pub(super) const NAME: usize = 512;
+    pub(super) const TOOLKIT_ID: usize = 128;
+    pub(super) const SUMMARY: usize = 8 * 1024;
+    pub(super) const CITED_IDS: usize = 100;
+    pub(super) const ID: usize = 256;
+    pub(super) const QUERY: usize = 8 * 1024;
+    pub(super) const FILTERS: usize = 8 * 1024;
+    pub(super) const DOCUMENTS: usize = 100;
+    pub(super) const SOURCE: usize = 2048;
+    pub(super) const CONTENT: usize = 256 * 1024;
+}
+
+fn assert_within_main_bounds(step: &RunStepV1) {
+    use main_bounds as max;
+    assert!(uuid::Uuid::parse_str(&step.step_id).is_ok());
+    assert!(step.started_at_unix_ms > 0 && step.ended_at_unix_ms >= step.started_at_unix_ms);
+    assert!(step.node_id.len() <= max::NODE_ID, "node_id");
+    assert!(step.name.len() <= max::NAME, "name");
+    assert!(step.toolkit_id.len() <= max::TOOLKIT_ID, "toolkit_id");
+    assert!(step.summary_json.len() <= max::SUMMARY, "summary");
+    assert!(
+        serde_json::from_str::<Value>(&step.summary_json).is_ok_and(|value| value.is_object()),
+        "summary is an object"
+    );
+    assert!(step.cited_step_ids.len() <= max::CITED_IDS, "cited steps");
+    assert!(
+        step.cited_document_ids.len() <= max::CITED_IDS,
+        "cited documents"
+    );
+    for id in step.cited_step_ids.iter().chain(&step.cited_document_ids) {
+        assert!(id.len() <= max::ID, "cited id");
+    }
+    for side in [&step.inputs, &step.outputs].into_iter().flatten() {
+        assert!(side.content.len() <= max::CONTENT, "content");
+        assert!(["application/json", "text/plain"].contains(&side.media_type.as_str()));
+    }
+    if let Some(retrieval) = &step.retrieval {
+        assert!(retrieval.index_name.len() <= max::NAME, "index name");
+        assert!(retrieval.query.len() <= max::QUERY, "query");
+        assert!(retrieval.filters_json.len() <= max::FILTERS, "filters");
+        assert!(
+            retrieval.filters_json.is_empty()
+                || serde_json::from_str::<Value>(&retrieval.filters_json)
+                    .is_ok_and(|value| value.is_object()),
+            "filters are an object"
+        );
+        assert!(retrieval.documents.len() <= max::DOCUMENTS, "documents");
+        for document in &retrieval.documents {
+            assert!(document.document_id.len() <= max::ID, "document id");
+            assert!(document.source.len() <= max::SOURCE, "source");
+        }
+    }
+    assert!(
+        step.encoded_len() <= MAX_REPORT_BYTES,
+        "one step fits a report"
+    );
+}
+
+/// Every field at an over-limit value (multi-byte text, so cuts must land on
+/// UTF-8 boundaries) still yields steps Main accepts.
+#[test]
+fn a_step_with_every_field_over_the_limit_fits_mains_bounds() {
+    let recorder = RunStepRecorder::new("execution-1");
+    let long = |bytes: usize| "é".repeat(bytes / 2 + 7);
+    let documents: Vec<RetrievedDocument> = (0..150)
+        .map(|index| RetrievedDocument {
+            id: format!("{index:04}-{}", long(400)),
+            source: long(3_000),
+            score: f64::NAN,
+        })
+        .collect();
+    let mut retrieval = draft(RunStepKindV1::Retrieval, &long(1_000));
+    retrieval.node_id = long(1_000);
+    retrieval.toolkit_id = long(1_000);
+    retrieval.started_at_unix_ms = 0;
+    retrieval.ended_at_unix_ms = -1;
+    retrieval.inputs = Some(StepText::json(&json!({"q": long(400_000)})));
+    retrieval.outputs = Some(StepText::plain(long(400_000)));
+    for index in 0..40 {
+        retrieval = retrieval.summary(&format!("key-{index}-{}", long(300)), json!(long(1_000)));
+    }
+    retrieval.retrieval = Some(RetrievalDraft {
+        index_name: long(1_000),
+        query: long(20_000),
+        filters: Some(json!({"f": long(20_000)})),
+        top_k: u32::MAX,
+        documents: documents.clone(),
+    });
+    recorder.record(retrieval);
+    // 120 more retrievals: the output below cites more than 100 of each.
+    for index in 0..120 {
+        let mut extra = draft(RunStepKindV1::Retrieval, "search_index");
+        extra.retrieval = Some(RetrievalDraft {
+            index_name: "index".to_owned(),
+            query: String::new(),
+            filters: None,
+            top_k: 1,
+            documents: vec![RetrievedDocument {
+                id: format!("extra-{index:04}-{}", long(400)),
+                source: String::new(),
+                score: 1.0,
+            }],
+        });
+        recorder.record(extra);
+    }
+    let everything: Vec<String> = documents
+        .iter()
+        .map(|document| document.id.clone())
+        .chain((0..120).map(|index| format!("extra-{index:04}-{}", long(400))))
+        .collect();
+    let mut output = draft(RunStepKindV1::Output, "output");
+    output.outputs = Some(StepText::plain(everything.join(" ")));
+    recorder.record(output);
+    let mut steps = Vec::new();
+    loop {
+        let batch = recorder.next_batch();
+        if batch.is_empty() {
+            break;
+        }
+        recorder.acknowledge(batch.len());
+        steps.extend(batch);
+    }
+    assert_eq!(steps.len(), 122);
+    let output = steps.last().expect("output");
+    assert_eq!(output.cited_step_ids.len(), 100, "cited steps are capped");
+    assert_eq!(
+        output.cited_document_ids.len(),
+        100,
+        "cited documents are capped"
+    );
+    for step in &steps {
+        assert_within_main_bounds(step);
+    }
+}
+
+/// Main refuses a step whose start or end is unset (<= 0): a missing or
+/// unparseable timestamp becomes the wall clock, and the end never precedes
+/// the start.
+#[test]
+fn a_missing_timestamp_becomes_the_wall_clock() {
+    let before = now_unix_ms();
+    let recorder = RunStepRecorder::new("execution-1");
+    for (started, ended) in [
+        (0, 0),
+        (-5, 0),
+        (rfc3339_unix_ms("not a time"), 0),
+        (0, 77),
+        (88, 0),
+    ] {
+        let mut step = draft(RunStepKindV1::ModelCall, "model");
+        step.started_at_unix_ms = started;
+        step.ended_at_unix_ms = ended;
+        recorder.record(step);
+    }
+    let batch = recorder.next_batch();
+    for step in &batch {
+        assert!(step.started_at_unix_ms > 0);
+        assert!(step.ended_at_unix_ms >= step.started_at_unix_ms);
+    }
+    assert!(batch[0].started_at_unix_ms >= before);
+    assert_eq!(batch[3].started_at_unix_ms, 77, "a known end stands in");
+    assert_eq!(batch[3].ended_at_unix_ms, 77);
+    assert_eq!(batch[4].started_at_unix_ms, 88);
+    assert!(batch[4].ended_at_unix_ms >= before);
+}
+
+/// Binding a claim creates a recorder but records nothing: only a recorded
+/// step says an earlier attempt ran in this process.
+#[test]
+fn binding_a_claim_is_not_having_recorded() {
+    let registry = RunStepRegistry::default();
+    let identity = identity("execution-bound", 1);
+    registry.bind_claim(&identity, &ExecutionFenceV1::default());
+    let recorder = registry.find(&identity).expect("bound");
+    assert!(!recorder.has_recorded());
+    {
+        let _replay = recorder.suspend();
+        recorder.record(draft(RunStepKindV1::ToolCall, "replayed"));
+    }
+    assert!(
+        !recorder.has_recorded(),
+        "a suppressed replay is not a step"
+    );
+    recorder.record(draft(RunStepKindV1::ToolCall, "tool"));
+    assert!(recorder.has_recorded());
+}

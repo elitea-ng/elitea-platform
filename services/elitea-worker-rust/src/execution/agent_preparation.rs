@@ -1415,6 +1415,17 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
 
 #[cfg(test)]
 impl AuthorizedAgentRun {
+    /// The claim a recovered start of this run would report under.
+    pub(crate) fn test_claim_parts(
+        &self,
+    ) -> (
+        crate::protocol::elitea::runtime::v1::ExecutionIdentityV1,
+        crate::protocol::elitea::runtime::v1::ExecutionFenceV1,
+    ) {
+        let (identity, fence) = self.output_authority.claim_parts();
+        (identity.clone(), fence.clone())
+    }
+
     pub(crate) fn into_test_cleanup(self) -> (AgentExecutionRequest, ClaimLeaseMonitor) {
         (self.request, self.lease)
     }
