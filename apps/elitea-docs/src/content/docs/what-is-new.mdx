@@ -9,6 +9,12 @@ Elitea ships frequent, small releases. This page summarizes the most recent user
 
 A new [Enterprise controls](/admin/enterprise-controls/overview) section lists every agent-risk control the platform provides. For each control it says whether the control is available, partial or planned, where to configure it, what evidence it produces and what stays with your organisation's own systems. The section also includes a [shared responsibility](/admin/enterprise-controls/shared-responsibility) page, an [evidence guide for auditors](/admin/enterprise-controls/evidence-guide) and a [hardening checklist](/deployment/hardening-checklist).
 
+## Worker egress allowlist
+
+Platform administrators can limit the public hosts that agents, toolkits and MCP servers reach from the worker. **Configuration › Worker Egress** shows the hosts that runs reached in the last 30 days and copies them as an allowlist. In `allowlist` mode, a run may reach only those entries, its project's entries and the hosts of its own toolkits; any other host is a tool error that names the host. The default stays `open`. See [Least privilege and trust](/admin/enterprise-controls/least-privilege-and-trust).
+
+A stop of an agent's answer before it writes anything no longer deletes the question on a conversation under legal hold.
+
 ## Kill switch
 
 Administrators can stop one agent, one toolkit type, one project or the whole platform at once. Stopping an agent, a project or the platform cancels the runs already in progress. Nothing starts again until someone with authority resumes it, and every stop and resume is recorded in the audit trail. See [Runtime safety](/admin/enterprise-controls/runtime-safety) and the [emergency stop runbook](/deployment/emergency-stop-runbook).
