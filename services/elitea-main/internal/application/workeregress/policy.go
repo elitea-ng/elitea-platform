@@ -240,7 +240,7 @@ func Assemble(platform, project, toolkits []string) ([]string, error) {
 func (r *Resolver) toolkitHosts(ctx context.Context, command *runtimev1.WorkerCommandV1) ([]string, error) {
 	bundle := command.GetInputBundleRef().GetInputBundleId()
 	var entryID string
-	decode := HostsFromSettings
+	var decode func([]byte) ([]string, error)
 	switch {
 	case command.GetAgentExecution() != nil:
 		entryID, decode = command.GetAgentExecution().GetRequestEntryId(), HostsFromAgentInput
