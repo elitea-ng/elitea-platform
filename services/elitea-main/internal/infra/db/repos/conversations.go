@@ -1156,13 +1156,20 @@ func deleteConversationInTx(ctx context.Context, transaction pgx.Tx, projectID s
 
 	// The conversation's personal-memory taint (shared/0166) goes with the
 	// row: tenant/0149's AFTER DELETE trigger, which every delete path fires.
-	q := fmt.Sprintf(`DELETE FROM %s.chat_conversations WHERE id = $1`, s)
-	ct, err := transaction.Exec(ctx, q, id)
+	var conversationUUID string
+	q := fmt.Sprintf(`DELETE FROM %s.chat_conversations WHERE id = $1 RETURNING uuid::text`, s)
+	err = transaction.QueryRow(ctx, q, id).Scan(&conversationUUID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apierr.NotFound("conversation not found")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("conversations: delete: %w", err)
 	}
-	if ct.RowsAffected() == 0 {
-		return nil, apierr.NotFound("conversation not found")
+	// The content of the conversation's run steps (ADR-0042) goes with it,
+	// row first: marked expired here, its objects deleted by the step_content
+	// sweep's drain. The step records stay under the step_record policy.
+	if err := expireConversationStepContent(ctx, transaction, projectID, conversationUUID); err != nil {
+		return nil, err
 	}
 	if err := deleteConversationPin(ctx, transaction, projectID, id); err != nil {
 		return nil, err

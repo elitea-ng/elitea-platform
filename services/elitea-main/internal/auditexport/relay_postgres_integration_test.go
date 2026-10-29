@@ -596,3 +596,71 @@ func TestDeadLetterRecorderIsIdempotent(t *testing.T) {
 		t.Fatalf("rows=%d attempts=%d; one row per event and sink, latest attempt count", n, attempts)
 	}
 }
+
+const insertRunStepSQL = `
+INSERT INTO elitea_runtime.run_steps (run_id, seq, step_id, generation, project_id, kind, actor, started_at, ended_at,
+                                      inputs_digest, inputs_size, inputs_original_size, inputs_media_type, inputs_object_key,
+                                      prev_hash, hash)
+VALUES ('run-x', $1, gen_random_uuid(), 1, 3, 'tool_call', 'user:7', clock_timestamp(), clock_timestamp(),
+        decode(repeat('ab', 32), 'hex'), 4, 4, 'application/json', '3/runs/run-x/s/inputs',
+        decode(repeat('00', 32), 'hex'), decode(repeat('11', 32), 'hex'))
+RETURNING id`
+
+// The run_steps stream has its own position, exports digests and refs
+// (never content), and reports its backlog under its own stream label.
+func TestRunStepsRelayExportsStepRecordsOnItsOwnStream(t *testing.T) {
+	pool := newExportPool(t)
+	ctx := context.Background()
+	var ids []int64
+	for seq := 1; seq <= 4; seq++ {
+		var id int64
+		if err := pool.QueryRow(ctx, insertRunStepSQL, seq).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	insertAudit(t, pool, 2, 0)
+
+	metrics := NewMetrics()
+	monitor := Monitor{DB: pool, Metrics: metrics}
+	sink := &flakySink{}
+	cfg := AuditEventsConfig{Sinks: []Sink{sink}, BatchSize: 3, FromBeginning: true, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	relay, err := NewRunStepsRelay(pool, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(relay.Close)
+	backlog := func() string {
+		if err := monitor.Observe(ctx); err != nil {
+			t.Fatal(err)
+		}
+		var text strings.Builder
+		_ = metrics.WriteText(&text)
+		for _, line := range strings.Split(text.String(), "\n") {
+			if strings.HasPrefix(line, `elitea_audit_export_backlog{stream="run_steps"}`) {
+				return strings.TrimSpace(strings.TrimPrefix(line, `elitea_audit_export_backlog{stream="run_steps"}`))
+			}
+		}
+		return ""
+	}
+	sink.setDown(true)
+	_, _ = relay.Drain(ctx)
+	if got := backlog(); got != "4" {
+		t.Fatalf("run_steps backlog = %q, want 4", got)
+	}
+	sink.setDown(false)
+	if n := drainUntil(t, relay, 4); n != 4 {
+		t.Fatalf("drain = %d, want 4", n)
+	}
+	refs := sink.refs()
+	if len(refs) != 4 || refs[0] != fmt.Sprintf("run_step:%d", ids[0]) || refs[3] != fmt.Sprintf("run_step:%d", ids[3]) {
+		t.Fatalf("delivered = %v (the admin_audit rows belong to another stream)", refs)
+	}
+	var stream string
+	if err := pool.QueryRow(ctx, `SELECT stream FROM elitea_runtime.audit_export_cursors WHERE last_id = $1`, ids[3]).Scan(&stream); err != nil || stream != StreamRunSteps {
+		t.Fatalf("cursor stream = %q %v", stream, err)
+	}
+	if got := backlog(); got != "0" {
+		t.Fatalf("run_steps backlog after the drain = %q", got)
+	}
+}

@@ -52,8 +52,8 @@ spec:
         # receiver is down, refusing the credential, or too slow. Nothing is
         # lost (the events wait in their source tables and are re-sent), but
         # the SIEM is behind. Each rule here groups by the `stream` label and
-        # names it in its annotations, so a new export stream (ADR-0042's
-        # run-step evidence beside security_audit and admin_audit) alerts on
+        # names it in its annotations, so a new export stream (run_steps,
+        # ADR-0042 #1499, beside security_audit and admin_audit) alerts on
         # its own series with no rule change.
         - alert: EliteaAuditExportLag
           expr: max by (stream) (elitea_audit_export_lag_seconds) > {{ $lag }}

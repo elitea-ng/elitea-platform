@@ -143,6 +143,9 @@ func newPrivateServerSet(config PrivateServerConfig, services PrivateServices, l
 			return nil, err
 		}
 	}
+	// The worker's evidence reports are larger than every other control
+	// request (#1499): bounded per request type, not by raising the listener.
+	controlCodec.WithWorkerReportRequestLimits()
 	outputCodec, err := NewDirectionalStrictProtoCodec(config.OutputMaxRequestBytes, config.OutputMaxResponseBytes)
 	if err != nil {
 		return nil, err

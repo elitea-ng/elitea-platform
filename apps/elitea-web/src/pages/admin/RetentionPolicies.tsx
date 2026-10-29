@@ -36,6 +36,10 @@ function classLabel(dataClass: string): string {
       return t('pages.admin.retention.class.conversation', 'Conversations');
     case 'attachment':
       return t('pages.admin.retention.class.attachment', 'Attachments');
+    case 'step_content':
+      return t('pages.admin.retention.class.stepContent', 'Run step content');
+    case 'step_record':
+      return t('pages.admin.retention.class.stepRecord', 'Run step records');
     case 'gateway_request_log':
       return t('pages.admin.retention.class.gatewayRequestLog', 'LLM gateway request log');
     case 'admin_audit':

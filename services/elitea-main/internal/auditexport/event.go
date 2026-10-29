@@ -1,12 +1,13 @@
 // Package auditexport sends audit evidence to a customer's SIEM (ADR-0042
 // decision 3, issue #1494).
 //
-// Two streams feed it: the governed security audit outbox
+// Three streams feed it: the security audit outbox
 // (internal/securityaudit, whose relay offers each batch to an
 // securityaudit.Exporter and keeps the rows pending until the exporter
-// returns nil) and centry.audit_events (the HTTP access audit, tailed by
-// AuditEventsRelay in commit-safe order, with a persisted position per sink). Both are mapped to one
-// versioned envelope, elitea.audit.v1 (libs/jsonschema/audit/v1), and sent
+// returns nil), centry.audit_events (the HTTP access audit, tailed by
+// AuditEventsRelay in commit-safe order, with a persisted position per sink)
+// and elitea_runtime.run_steps (the step records of a run, the same relay on
+// stream run_steps). All are mapped to one versioned envelope, elitea.audit.v1 (libs/jsonschema/audit/v1), and sent
 // to every configured Sink: an OTLP logs collector or a signed webhook.
 //
 // Delivery is at least once. A sink is acknowledged only after the receiver
@@ -42,9 +43,11 @@ const (
 	// SourceAdminAudit is centry.audit_events, the HTTP access audit behind
 	// the admin Audit Trail.
 	SourceAdminAudit Source = "admin_audit"
-	// SourceRunStep, SourceApproval and SourceSuspension are reserved for the
-	// ADR-0042 evidence added later; no mapper produces them yet.
-	SourceRunStep    Source = "run_step"
+	// SourceRunStep is elitea_runtime.run_steps, the step records of a run
+	// (#1499), mapped by FromRunStep.
+	SourceRunStep Source = "run_step"
+	// SourceApproval and SourceSuspension are reserved for the ADR-0042
+	// evidence added later; no mapper produces them yet.
 	SourceApproval   Source = "approval"
 	SourceSuspension Source = "suspension"
 )
@@ -146,6 +149,10 @@ type SecurityAuditDetails struct {
 	RevocationEpoch      int64    `json:"revocation_epoch"`
 	Arrangement          string   `json:"arrangement,omitempty"`
 	OutboxSeq            int64    `json:"outbox_seq,omitempty"`
+	// ChainHead and ChainLength are set on run.steps.anchored: the anchored
+	// run's head hash and step count.
+	ChainHead   string `json:"chain_head,omitempty"`
+	ChainLength int64  `json:"chain_length,omitempty"`
 }
 
 // AdminAuditDetails is details for source admin_audit.
@@ -193,6 +200,8 @@ type storedSecurityEvent struct {
 		RevocationEpoch      int64    `json:"revocation_epoch"`
 		Arrangement          string   `json:"arrangement"`
 		CorrelationID        string   `json:"correlation_id"`
+		ChainHead            string   `json:"chain_head"`
+		ChainLength          int64    `json:"chain_length"`
 	} `json:"data"`
 }
 
@@ -273,6 +282,8 @@ func FromSecurityRecord(record securityaudit.Record) (Event, error) {
 			RevocationEpoch:      d.RevocationEpoch,
 			Arrangement:          d.Arrangement,
 			OutboxSeq:            record.Seq,
+			ChainHead:            d.ChainHead,
+			ChainLength:          d.ChainLength,
 		},
 		ref: string(SourceSecurityAudit) + ":" + strconv.FormatInt(record.Seq, 10),
 	}, nil

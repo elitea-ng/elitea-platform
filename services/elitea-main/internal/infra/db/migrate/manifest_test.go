@@ -902,6 +902,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// admin, and lifecycle.attestations.write and lifecycle.registry.mark_due
 	// to the project admin.
 	//
+	// 205: shared/0205_run_steps.sql, the step records of a run (ADR-0042
+	// decisions 1 and 2, #1499): elitea_runtime.run_step_heads (the per-run
+	// chain head and its anchor) and run_steps (append-only by trigger,
+	// hash-chained per run, content by digest and object key, export_txid
+	// for the audit export). Seeds the step_content and step_record platform
+	// retention rows (keep forever) and grants runs.evidence.read to
+	// super_admin, admin and the project admin.
+	//
 	// 206: shared/0206_audit_events_chain.sql, centry.audit_events chained
 	// from now on (ADR-0042 decision 3, #1499): nullable chain columns,
 	// elitea_runtime.audit_events_chain_heads (head lock and retention prune

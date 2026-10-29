@@ -2864,6 +2864,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err := startConversationRetention(ctx, pool, objectStore, logger); err != nil {
 		return fmt.Errorf("compose conversation retention: %w", err)
 	}
+	// Step evidence retention (ADR-0042, #1499): step_content and step_record
+	// keep forever until an administrator sets a maximum age.
+	if err := startStepRetention(ctx, pool, objectStore, logger); err != nil {
+		return fmt.Errorf("compose step retention: %w", err)
+	}
 
 	r := api.NewRouter(api.RouterConfig{
 		RetentionAdmin:                v2retention.NewHandler(dbrepos.NewRetentionPolicyRepo(pool)),

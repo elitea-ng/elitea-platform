@@ -2318,6 +2318,17 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			merger: egressAuditMerger, projects: repos.NewEgressRunSummaries(dependencies.ControlPool),
 		})
 	}
+	if dependencies.ControlPool != nil {
+		// The worker's step records (ADR-0042, #1499): persisted, chained per
+		// run and anchored into the tenant's security audit chain at
+		// settlement. Without an object store the digests are kept and the
+		// content is not.
+		runSteps, err := newRunStepsService(dependencies)
+		if err != nil {
+			return nil, err
+		}
+		controlServer.WithRunSteps(runSteps)
+	}
 	privateServers, err := runtimegrpc.NewPrivateServerSet(runtimegrpc.PrivateServerConfig{
 		ControlAddress:                  config.ControlAddress,
 		OutputAddress:                   config.OutputAddress,

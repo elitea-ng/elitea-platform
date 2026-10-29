@@ -73,7 +73,8 @@ func TestPlatformRefusals(t *testing.T) {
 		p    Policy
 		want error
 	}{
-		"unknown class":       {Policy{Class: "step_record"}, ErrUnknownClass},
+		"unknown class":       {Policy{Class: "chat_logs"}, ErrUnknownClass},
+		"step record floor":   {Policy{Class: ClassStepRecord, MaxAgeDays: days(3)}, ErrInvalid},
 		"gateway forever":     {Policy{Class: ClassGatewayRequestLog}, ErrForeverRefused},
 		"attachment max":      {Policy{Class: ClassAttachment, MaxAgeDays: days(30)}, ErrNotEnforced},
 		"audit below floor":   {Policy{Class: ClassAdminAudit, MaxAgeDays: days(3)}, ErrInvalid},
@@ -127,6 +128,20 @@ func TestValidateHold(t *testing.T) {
 	for _, h := range bad {
 		if err := ValidateHold(h); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%+v: got %v, want ErrInvalid", h, err)
+		}
+	}
+}
+
+// The step classes are enforced (#1499): a maximum and a project override are
+// accepted inside the bounds.
+func TestStepClassesAreEnforced(t *testing.T) {
+	for _, class := range []DataClass{ClassStepContent, ClassStepRecord} {
+		platform := Policy{Class: class, MaxAgeDays: days(365), AllowProjectOverride: true}
+		if err := ValidatePlatform(platform); err != nil {
+			t.Fatalf("%s platform: %v", class, err)
+		}
+		if err := ValidateOverride(platform, Policy{Class: class, ProjectID: id(7), MaxAgeDays: days(30)}); err != nil {
+			t.Fatalf("%s override: %v", class, err)
 		}
 	}
 }
