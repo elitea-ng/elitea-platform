@@ -911,9 +911,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// super_admin, admin and the project admin.
 	//
 	// 206: shared/0206_audit_events_chain.sql, centry.audit_events chained
-	// from now on (ADR-0042 decision 3, #1499): nullable chain columns,
+	// from now on (ADR-0042 decision 3, #1499): the side table
+	// elitea_runtime.audit_events_chain (one link per row; no column or index
+	// on the audit table, so no full scan under lock),
 	// elitea_runtime.audit_events_chain_heads (head lock and retention prune
-	// anchor), the canonical-form function, the BEFORE INSERT chain trigger
+	// anchor), the canonical-form function, the AFTER INSERT chain trigger
 	// and an append-only UPDATE guard on chained rows. No data apart from the
 	// head row, no permission.
 	require.EqualValues(t, 206, Head(shared))

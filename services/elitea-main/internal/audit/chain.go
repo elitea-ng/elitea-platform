@@ -3,16 +3,16 @@ package audit
 // The hash chain over centry.audit_events (ADR-0042 decision 3, issue #1499).
 //
 // Shared migration 0206 chains every inserted row in its inserting
-// transaction with a BEFORE INSERT trigger, so the batched recorder in this
+// transaction with an AFTER INSERT trigger that writes the row's link to the
+// side table elitea_runtime.audit_events_chain, so the batched recorder in this
 // package, the browser session relay and the cloud executor attestation are
 // all chained without each carrying a copy of the logic. The link is
 // securityaudit.ChainHash: sha256(prev_hash || canonical), where canonical is
-// centry.audit_event_canonical(row). This file verifies it with
+// centry.audit_event_canonical(row, partition, seq). This file verifies it with
 // securityaudit.ChainVerifier, reading the canonical form from that same
 // function so the bytes hashed and the bytes checked cannot drift apart.
 //
-// Rows written before 0206 have NULL chain columns and are counted, not
-// checked. Retention deletes the oldest rows as a contiguous prefix and moves
+// Rows written before 0206 have no link and are counted, not checked. Retention deletes the oldest rows as a contiguous prefix and moves
 // the head's prune anchor in the same statement
 // (services/elitea-scheduler/internal/auditretention), so verification starts
 // at the anchor rather than reporting the deleted prefix as missing.
@@ -78,16 +78,22 @@ SELECT last_seq, pruned_seq, pruned_hash
   FROM elitea_runtime.audit_events_chain_heads
  WHERE partition_key = $1`
 
-const chainUnchainedSQL = `SELECT count(*) FROM centry.audit_events WHERE partition_seq IS NULL`
+const chainUnchainedSQL = `
+SELECT count(*) FROM centry.audit_events e
+ WHERE NOT EXISTS (SELECT 1 FROM elitea_runtime.audit_events_chain c WHERE c.audit_id = e.id)`
 
 const chainAnchorSQL = `
-SELECT hash FROM centry.audit_events WHERE partition_key = $1 AND partition_seq = $2`
+SELECT hash FROM elitea_runtime.audit_events_chain WHERE partition_key = $1 AND partition_seq = $2`
 
 const chainPageSQL = `
-SELECT e.id, e.partition_key, e.partition_seq, centry.audit_event_canonical(e), e.prev_hash, e.hash
-  FROM centry.audit_events e
- WHERE e.partition_key = $1 AND e.partition_seq >= $2
- ORDER BY e.partition_seq
+SELECT c.audit_id, c.partition_key, c.partition_seq,
+       CASE WHEN e.id IS NULL THEN NULL
+            ELSE centry.audit_event_canonical(e, c.partition_key, c.partition_seq) END,
+       c.prev_hash, c.hash
+  FROM elitea_runtime.audit_events_chain c
+  LEFT JOIN centry.audit_events e ON e.id = c.audit_id
+ WHERE c.partition_key = $1 AND c.partition_seq >= $2
+ ORDER BY c.partition_seq
  LIMIT $3`
 
 // VerifyChain recomputes the chain from partition_seq from (0: from the
@@ -152,7 +158,12 @@ func VerifyChain(ctx context.Context, db ChainDB, from, limit int64) (ChainRepor
 	}
 
 	verifier := securityaudit.NewChainVerifierWith(ChainPartition, report.From, anchor,
-		func(row securityaudit.StoredRow) ([]byte, error) { return row.Event, nil })
+		func(row securityaudit.StoredRow) ([]byte, error) {
+			if row.Event == nil {
+				return nil, errors.New("row missing: the link's audit row is not stored")
+			}
+			return row.Event, nil
+		})
 	next := report.From
 	for report.Checked < limit {
 		page := min(int64(chainVerifyPage), limit-report.Checked)
@@ -164,13 +175,15 @@ func VerifyChain(ctx context.Context, db ChainDB, from, limit int64) (ChainRepor
 		for rows.Next() {
 			var (
 				row       securityaudit.StoredRow
-				canonical string
+				canonical *string
 			)
 			if err := rows.Scan(&row.Seq, &row.PartitionKey, &row.PartitionSeq, &canonical, &row.PrevHash, &row.Hash); err != nil {
 				rows.Close()
 				return report, fmt.Errorf("scan audit events: %w", err)
 			}
-			row.Event = []byte(canonical)
+			if canonical != nil {
+				row.Event = []byte(*canonical)
+			}
 			n++
 			if broken := verifier.Check(row); broken != nil {
 				rows.Close()

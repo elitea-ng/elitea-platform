@@ -187,8 +187,9 @@ func TestTheChainedStatementPrunesAPrefixAndMovesTheAnchor(t *testing.T) {
 	for _, statement := range []string{deleteChainedBatchSQL, deleteChainedBatchHeldSQL} {
 		for _, fragment := range []string{
 			"FOR UPDATE",
-			"partition_seq IS NULL",
-			"partition_seq > head.pruned_seq",
+			"NOT EXISTS (SELECT 1 FROM elitea_runtime.audit_events_chain",
+			"l.partition_seq > head.pruned_seq",
+			"DELETE FROM elitea_runtime.audit_events_chain",
 			"bool_and(expired) OVER (ORDER BY partition_seq)",
 			"SET pruned_seq = tip.partition_seq, pruned_hash = tip.hash",
 			"LIMIT $2",
@@ -203,7 +204,7 @@ func TestTheChainedStatementPrunesAPrefixAndMovesTheAnchor(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(deleteChainedBatchHeldSQL, "(export_txid, id) <= ($3::bigint, $4::bigint)") {
+	if !strings.Contains(deleteChainedBatchHeldSQL, "(e.export_txid, e.id) <= ($3::bigint, $4::bigint)") {
 		t.Error("the held chained statement does not stop at the export position")
 	}
 }

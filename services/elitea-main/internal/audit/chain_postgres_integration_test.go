@@ -190,8 +190,9 @@ SELECT clock_timestamp() - make_interval(secs => n), 'session', 'session.start',
 	want := int64(recorders*eventsPerWriter + selectWriters*selectsEach*rowsPerSelect)
 	var rows, distinct, lowest, highest int64
 	if err := pool.QueryRow(ctx, `
-SELECT count(*), count(DISTINCT partition_seq), min(partition_seq), max(partition_seq)
-  FROM centry.audit_events WHERE partition_key = '0'`).Scan(&rows, &distinct, &lowest, &highest); err != nil {
+SELECT count(*), count(DISTINCT l.partition_seq), min(l.partition_seq), max(l.partition_seq)
+  FROM centry.audit_events e JOIN elitea_runtime.audit_events_chain l ON l.audit_id = e.id
+ WHERE l.partition_key = '0'`).Scan(&rows, &distinct, &lowest, &highest); err != nil {
 		t.Fatal(err)
 	}
 	if rows != want || distinct != want || lowest != 1 || highest != want {
@@ -221,7 +222,9 @@ func TestTheHashIsChainHashOverTheCanonicalRowInAnySession(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows, err := conn.Query(ctx, `
-SELECT centry.audit_event_canonical(e), prev_hash, hash FROM centry.audit_events e ORDER BY partition_seq`)
+SELECT centry.audit_event_canonical(e, l.partition_key, l.partition_seq), l.prev_hash, l.hash
+  FROM elitea_runtime.audit_events_chain l JOIN centry.audit_events e ON e.id = l.audit_id
+ ORDER BY l.partition_seq`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,24 +287,40 @@ ALTER TABLE centry.audit_events ENABLE TRIGGER audit_events_append_only`); err !
 		t.Fatalf("mutated row 3: report %+v, break %+v", report, report.Break)
 	}
 
-	// A deleted middle row is reported at the missing position, and a deleted
-	// tail against the head.
-	if _, err := pool.Exec(ctx, `DELETE FROM centry.audit_events WHERE id = ANY($1)`, []int64{ids[2]}); err != nil {
+	// A deleted audit row leaves its link behind and is reported at its
+	// position; a deleted link (the audit row and its link both gone) at the
+	// gap; a deleted tail against the head.
+	if _, err := pool.Exec(ctx, `DELETE FROM centry.audit_events WHERE id = $1`, ids[2]); err != nil {
+		t.Fatal(err)
+	}
+	if report := verify(t, pool, 0, 0); report.Break == nil || report.Break.PartitionSeq != 3 ||
+		report.Break.Seq != ids[2] || !strings.Contains(report.Break.Reason, "row missing") {
+		t.Fatalf("deleted row 3: break %+v", report.Break)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM elitea_runtime.audit_events_chain WHERE audit_id = $1`, ids[2]); err != nil {
 		t.Fatal(err)
 	}
 	if report := verify(t, pool, 0, 0); report.Break == nil || report.Break.PartitionSeq != 3 ||
 		!strings.Contains(report.Break.Reason, "row missing") {
-		t.Fatalf("deleted row 3: break %+v", report.Break)
+		t.Fatalf("deleted link 3: break %+v", report.Break)
 	}
 	if report := verify(t, pool, 4, 0); report.Break == nil || report.Break.PartitionSeq != 3 {
-		t.Fatalf("from 4 with row 3 gone: break %+v", report.Break)
+		t.Fatalf("from 4 with link 3 gone: break %+v", report.Break)
 	}
-	if _, err := pool.Exec(ctx, `DELETE FROM centry.audit_events WHERE id = $1`, ids[4]); err != nil {
+	if _, err := pool.Exec(ctx, `
+DELETE FROM centry.audit_events WHERE id = $1;`, ids[4]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM elitea_runtime.audit_events_chain WHERE audit_id = $1`, ids[4]); err != nil {
 		t.Fatal(err)
 	}
 	if report := verify(t, pool, 5, 0); report.Break == nil || report.Break.PartitionSeq != 5 ||
 		!strings.Contains(report.Break.Reason, "the chain head is at partition_seq 5") {
 		t.Fatalf("deleted tail: break %+v", report.Break)
+	}
+	// A link cannot be rewritten to match a forged row.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.audit_events_chain SET hash = prev_hash WHERE audit_id = $1`, ids[0]); err == nil {
+		t.Fatal("a chain link was updated")
 	}
 }
 
@@ -311,18 +330,26 @@ ALTER TABLE centry.audit_events ENABLE TRIGGER audit_events_append_only`); err !
 // against PostgreSQL there with this migration applied).
 func pruneThrough(t *testing.T, pool *pgxpool.Pool, seq int64, moveAnchor bool) {
 	t.Helper()
-	statement := `DELETE FROM centry.audit_events WHERE partition_key = '0' AND partition_seq <= $1`
+	statement := `
+WITH links AS (
+    DELETE FROM elitea_runtime.audit_events_chain WHERE partition_key = '0' AND partition_seq <= $1
+    RETURNING audit_id
+)
+DELETE FROM centry.audit_events WHERE id IN (SELECT audit_id FROM links)`
 	if moveAnchor {
 		statement = `
 WITH tip AS (
-    SELECT partition_seq, hash FROM centry.audit_events WHERE partition_key = '0' AND partition_seq = $1
+    SELECT partition_seq, hash FROM elitea_runtime.audit_events_chain WHERE partition_key = '0' AND partition_seq = $1
+), links AS (
+    DELETE FROM elitea_runtime.audit_events_chain WHERE partition_key = '0' AND partition_seq <= $1
+    RETURNING audit_id
 ), anchor AS (
     UPDATE elitea_runtime.audit_events_chain_heads AS h
        SET pruned_seq = tip.partition_seq, pruned_hash = tip.hash, pruned_at = clock_timestamp()
       FROM tip WHERE h.partition_key = '0'
     RETURNING 1
 )
-DELETE FROM centry.audit_events WHERE partition_key = '0' AND partition_seq <= $1`
+DELETE FROM centry.audit_events WHERE id IN (SELECT audit_id FROM links)`
 	}
 	if _, err := pool.Exec(context.Background(), statement, seq); err != nil {
 		t.Fatalf("prune through %d: %v", seq, err)

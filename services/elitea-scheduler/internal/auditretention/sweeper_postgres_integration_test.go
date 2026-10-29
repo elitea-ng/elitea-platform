@@ -445,15 +445,18 @@ WITH head AS (
     SELECT last_seq, pruned_seq, pruned_hash
       FROM elitea_runtime.audit_events_chain_heads WHERE partition_key = '0'
 ), walked AS (
-    SELECT e.partition_seq, e.prev_hash, e.hash,
-           sha256(e.prev_hash || convert_to(centry.audit_event_canonical(e), 'UTF8')) AS recomputed,
-           lag(e.hash) OVER w AS prior_hash, lag(e.partition_seq) OVER w AS prior_seq
-      FROM centry.audit_events AS e
-     WHERE e.partition_seq IS NOT NULL
-    WINDOW w AS (ORDER BY e.partition_seq)
+    SELECT l.partition_seq, l.prev_hash, l.hash,
+           CASE WHEN e.id IS NOT NULL THEN
+               sha256(l.prev_hash || convert_to(centry.audit_event_canonical(e, l.partition_key, l.partition_seq), 'UTF8'))
+           END AS recomputed,
+           lag(l.hash) OVER w AS prior_hash, lag(l.partition_seq) OVER w AS prior_seq
+      FROM elitea_runtime.audit_events_chain AS l
+      LEFT JOIN centry.audit_events AS e ON e.id = l.audit_id
+    WINDOW w AS (ORDER BY l.partition_seq)
 )
 SELECT (SELECT count(*) FROM walked, head
-         WHERE walked.hash <> walked.recomputed
+         WHERE walked.recomputed IS NULL
+            OR walked.hash <> walked.recomputed
             OR walked.prev_hash <> COALESCE(walked.prior_hash, head.pruned_hash)
             OR walked.partition_seq <> COALESCE(walked.prior_seq + 1, head.pruned_seq + 1)),
        COALESCE((SELECT max(partition_seq) FROM walked), (SELECT pruned_seq FROM head)),

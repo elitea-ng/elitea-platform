@@ -60,15 +60,18 @@ newest entry is first.
 
 ## The audit trail is hash-chained (#1499)
 
-* **Shared migration 0206** adds four nullable columns to
-  `centry.audit_events` (`partition_key`, `partition_seq`, `prev_hash`,
-  `hash`; catalogue-only, no table rewrite), a unique partial index on the
-  chain position (built once, it reads the table), the head table
-  `elitea_runtime.audit_events_chain_heads`, and two triggers: every insert
-  is chained in its own transaction, and an `UPDATE` of a chained row is
-  refused. Rows written before the upgrade keep NULL chain columns and are
-  never checked. Nothing in the platform updates audit rows; a site script
-  that does will now fail with `a chained audit event is append-only`.
+* **Shared migration 0206** leaves `centry.audit_events` itself unchanged
+  apart from two triggers: no column, no index, no table scan, so it applies
+  in moments on any size of table. The chain lives in a new side table,
+  `elitea_runtime.audit_events_chain` (one link per audit row: `audit_id`,
+  position, `prev_hash`, `hash`), with the head table
+  `elitea_runtime.audit_events_chain_heads`. Every insert is chained in its
+  own transaction, an `UPDATE` that changes a chained row's content is
+  refused, and links are append-only. Rows written before the upgrade have
+  no link and are never checked. Nothing in the platform updates audit rows;
+  a site script that does will now fail with
+  `a chained audit event is append-only`. A script that deletes audit rows
+  directly leaves their links behind, and verification reports them missing.
 * **All audit writers serialise on one chain head.** At admin-request rates
   this is not measurable; a bulk import into `centry.audit_events` (for
   example replaying a legacy trail) runs one row at a time through the head.
@@ -76,14 +79,14 @@ newest entry is first.
   `admin_audit` sweep deletes chained rows oldest-position first and stops
   at the first row still inside the window, so an expired row written late
   (a session end) can keep rows behind it for up to one relay interval. It
-  records what it deleted in the head's prune anchor so verification still
-  passes.
+  deletes the links with their rows and records what it deleted in the
+  head's prune anchor so verification still passes.
 * **New admin route** `GET /api/v2/elitea_core/audit_chain_verify/administration`
   (operation `verifyAuditChain`, permission `models.admin.audit_trail.view`)
   verifies the chain and names the first break.
 * **The SIEM export** (`elitea.audit.v1`) now carries the optional `chain`
   object (`partition` `0`, `sequence`, `prev_hash`, `hash`) on `admin_audit`
-  events from chained rows. Receivers with a strict schema copy should take
+  events from chained rows (read from the side table). Receivers with a strict schema copy should take
   the updated `libs/jsonschema/audit/v1/event.schema.json`.
 
 ## Agent registry, change requests, release gate, recertification and attestations (#1497)

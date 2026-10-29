@@ -303,13 +303,14 @@ SELECT last_txid, last_id FROM elitea_runtime.audit_export_cursors WHERE stream 
 const auditColumns = `e.id, e.timestamp, e.user_id, e.user_email, e.project_id, e.event_type, e.action,
        e.http_method, e.http_route, e.status_code, e.duration_ms, e.is_error,
        e.entity_type, e.entity_id, e.entity_name, e.trace_id, e.span_id, e.parent_span_id,
-       e.partition_key, e.partition_seq, e.prev_hash, e.hash`
+       c.partition_key, c.partition_seq, c.prev_hash, c.hash`
 
 // selectLegacyRowsSQL reads rows inserted before 0196 (export_txid 0). That
 // set is closed: the migration's lock waited for every inserting transaction.
 const selectLegacyRowsSQL = `
 SELECT e.export_txid, ` + auditColumns + `
   FROM centry.audit_events e
+  LEFT JOIN elitea_runtime.audit_events_chain c ON c.audit_id = e.id
  WHERE e.export_txid = 0 AND e.id > $1
  ORDER BY e.id
  LIMIT $2`
@@ -320,6 +321,7 @@ SELECT e.export_txid, ` + auditColumns + `
 const selectRowsSQL = `
 SELECT e.export_txid, ` + auditColumns + `
   FROM centry.audit_events e
+  LEFT JOIN elitea_runtime.audit_events_chain c ON c.audit_id = e.id
  WHERE e.export_txid <> 0
    AND (e.export_txid, e.id) > ($1::bigint, $2::bigint)
    AND e.export_txid < pg_snapshot_xmin(pg_current_snapshot())::text::bigint

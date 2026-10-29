@@ -309,8 +309,9 @@ type AuditRow struct {
 	TraceID      string
 	SpanID       string
 	ParentSpanID string
-	// The chain position and links (shared migration 0206). Nil on a row
-	// written before the chain existed.
+	// The chain position and links (shared migration 0206, from
+	// elitea_runtime.audit_events_chain). Nil on a row written before the
+	// chain existed.
 	PartitionKey *string
 	PartitionSeq *int64
 	PrevHash     []byte

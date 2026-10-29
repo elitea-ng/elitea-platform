@@ -62,12 +62,13 @@ func TestAuditChainVerifyAnswersHoldingAndBroken(t *testing.T) {
 	}
 
 	var rowID int64
-	if err := pool.QueryRow(ctx, `SELECT id FROM centry.audit_events WHERE partition_seq = 2`).Scan(&rowID); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT audit_id FROM elitea_runtime.audit_events_chain WHERE partition_seq = 2`).Scan(&rowID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
 ALTER TABLE centry.audit_events DISABLE TRIGGER audit_events_append_only;
-UPDATE centry.audit_events SET status_code = 200, is_error = false WHERE partition_seq = 2;
+UPDATE centry.audit_events SET status_code = 200, is_error = false
+ WHERE id = (SELECT audit_id FROM elitea_runtime.audit_events_chain WHERE partition_seq = 2);
 ALTER TABLE centry.audit_events ENABLE TRIGGER audit_events_append_only`); err != nil {
 		t.Fatal(err)
 	}
