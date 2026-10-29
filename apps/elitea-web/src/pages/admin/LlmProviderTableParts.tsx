@@ -164,14 +164,21 @@ export function ProviderTable({
   const { onCheck, onRevalidate, onAdopt, checkResults, checkingId, revalidatingId } = rowActions;
   return (
     <TableContainer component={Paper} variant="outlined">
-      <Table size="small" data-testid="llm-providers-table">
+      {/* FIXED column widths, so a row's own content can never resize the
+          others. Auto layout let the live-check line below (and the busy
+          "Testing…"/"Re-validating…" labels) widen Status and narrow Actions,
+          re-wrapping and re-heighting EVERY row. Chromium then hit-tested the
+          rows React had not re-rendered at their pre-change offsets: in the
+          chat-stream-real journey a click on one row's Delete landed on the
+          NEXT row's Re-validate, on every retry, at every scroll position. */}
+      <Table size="small" data-testid="llm-providers-table" sx={{ tableLayout: 'fixed' }}>
         <TableHead>
           <TableRow>
-            <TableCell>{t('pages.admin.llmProviders.column.status', 'Status')}</TableCell>
+            <TableCell sx={{ width: '10rem' }}>{t('pages.admin.llmProviders.column.status', 'Status')}</TableCell>
             <TableCell>{t('pages.admin.llmProviders.column.name', 'Name')}</TableCell>
-            <TableCell>{t('pages.admin.llmProviders.column.provider', 'Provider')}</TableCell>
-            <TableCell>{t('pages.admin.llmProviders.column.endpoint', 'Endpoint')}</TableCell>
-            <TableCell align="right">
+            <TableCell sx={{ width: '7rem' }}>{t('pages.admin.llmProviders.column.provider', 'Provider')}</TableCell>
+            <TableCell sx={{ width: '10rem' }}>{t('pages.admin.llmProviders.column.endpoint', 'Endpoint')}</TableCell>
+            <TableCell align="right" sx={{ width: '10rem' }}>
               {t('pages.admin.llmProviders.column.actions', 'Actions')}
             </TableCell>
           </TableRow>
@@ -199,9 +206,11 @@ export function ProviderTable({
                     ProviderCheckResult's own header for why they never merge. */}
                 {checkResult !== undefined ? <ProviderCheckResult id={row.id} result={checkResult} /> : null}
               </TableCell>
-              <TableCell>{row.elitea_title}</TableCell>
+              {/* `anywhere`: under a fixed layout an unbroken title or URL
+                  would otherwise overflow into the next column. */}
+              <TableCell sx={{ overflowWrap: 'anywhere' }}>{row.elitea_title}</TableCell>
               <TableCell>{providerTypeLabel(row.type)}</TableCell>
-              <TableCell>
+              <TableCell sx={{ overflowWrap: 'anywhere' }}>
                 <Typography variant="bodySmall" color="text.secondary">
                   {row.endpoint === '' ? '—' : row.endpoint}
                 </Typography>
