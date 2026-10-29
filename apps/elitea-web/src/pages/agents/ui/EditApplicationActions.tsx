@@ -9,6 +9,7 @@ import { useNavigate } from '@tanstack/react-router';
 
 import { EntityLifecycleControls } from '@/features/agent-lifecycle';
 import { DeleteApplicationButton, ExportApplicationButton, applicationServerErrorMessage } from '@/features/agents';
+import { StopAgentButton } from '@/features/kill-switch';
 
 import { ChatWithAgentButton } from './ChatWithAgentButton';
 import { useForkTargetProjects } from '../lib/useForkTargetProjects';
@@ -115,6 +116,8 @@ export function EditApplicationActions({
         currentVersionId={currentVersionId}
         onError={handleExportError}
       />
+      {/* ADR-0041 decision 1: the project admin's kill switch for this agent. */}
+      <StopAgentButton projectId={projectId} applicationId={applicationId} onError={setError} />
       <DeleteApplicationButton
         applicationId={applicationId ?? ''}
         name={name}

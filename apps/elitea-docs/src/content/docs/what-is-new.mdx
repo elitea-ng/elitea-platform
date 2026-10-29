@@ -1,0 +1,48 @@
+---
+title: "What's new"
+description: "Recent user-visible changes to Elitea, summarized from the platform's release history."
+---
+
+Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
+
+## Enterprise controls documentation
+
+A new [Enterprise controls](/admin/enterprise-controls/overview) section lists every agent-risk control the platform provides. For each control it says whether the control is available, partial or planned, where to configure it, what evidence it produces and what stays with your organisation's own systems. The section also includes a [shared responsibility](/admin/enterprise-controls/shared-responsibility) page, an [evidence guide for auditors](/admin/enterprise-controls/evidence-guide) and a [hardening checklist](/deployment/hardening-checklist).
+
+## Worker egress allowlist
+
+Platform administrators can limit the public hosts that agents, toolkits and MCP servers reach from the worker. **Configuration › Worker Egress** shows the hosts that runs reached in the last 30 days and copies them as an allowlist. In `allowlist` mode, a run may reach only those entries, its project's entries and the hosts of its own toolkits; any other host is a tool error that names the host. The default stays `open`. See [Least privilege and trust](/admin/enterprise-controls/least-privilege-and-trust).
+
+A stop of an agent's answer before it writes anything no longer deletes the question on a conversation under legal hold.
+
+## Kill switch
+
+Administrators can stop one agent, one toolkit type, one project or the whole platform at once. Stopping an agent, a project or the platform cancels the runs already in progress. Nothing starts again until someone with authority resumes it, and every stop and resume is recorded in the audit trail. See [Runtime safety](/admin/enterprise-controls/runtime-safety) and the [emergency stop runbook](/deployment/emergency-stop-runbook).
+
+## Audit export to your SIEM
+
+Audit evidence can be sent to your SIEM over OpenTelemetry logs, or to a signed webhook, in one versioned schema. Export is off until an operator configures it. See [Audit event schema](/reference/audit-event-schema).
+
+## Data retention and legal hold
+
+Platform administrators can now set how long conversations, gateway request logs and audit records are kept, and place a legal hold on a project, an agent or a user. The defaults keep today's behaviour, so an upgrade deletes nothing new. A conversation under a legal hold cannot be deleted, not even by its owner.
+
+## Sign-in is single sign-on by default
+
+Deployments now sign people in through OIDC or SAML, with SCIM provisioning. The local username/password sign-in is off unless an operator turns it on, and every local user now needs a real e-mail address — none is invented from the login any more.
+
+## Client deployment readiness
+
+You can now configure a fresh deployment entirely from the UI — set the first global administrators, create a project, and add an AI provider — without running SQL by hand.
+
+## Platform parity wave
+
+A broad pass closed gaps across several areas at once: issue triage fixes, the toolkit catalogue, the support assistant bot, Inventory, and wiki source connections all received fixes and completions.
+
+## Post-release fixes
+
+Follow-up fixes landed for session handling, admin 403 errors, invite links, the maintenance splash screen, voice configuration, artifact bucket access-control lists, and the admin Tasks page. The secrets vault also gained write locking, so concurrent edits to the same secret no longer overwrite each other silently.
+
+<Info title="Looking for the full history">
+Detailed release notes are published as GitHub releases on the platform repository. This page lists only the changes that affect what you see or do in the product.
+</Info>

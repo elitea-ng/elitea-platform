@@ -772,6 +772,9 @@ func clientAuthorizationRequest(outcome toolkitcalltoolapp.RunOutcome) map[strin
 }
 
 func (h *remoteToolkitHandler) writeRunError(ctx context.Context, writer http.ResponseWriter, toolkitID int64, err error) {
+	if writeSafetyRefusal(writer, err) {
+		return
+	}
 	var pending *toolkitcalltoolapp.PendingRun
 	switch {
 	case errors.As(err, &pending) && pending.Replayed:
@@ -787,6 +790,13 @@ func (h *remoteToolkitHandler) writeRunError(ctx context.Context, writer http.Re
 			"ok": false, "error": "remote_toolkit_timeout", "task_id": pending.ExecutionID, "toolkit_id": toolkitID,
 			"message": "The tool did not finish within the bounded wait and is still running. Replay this request " +
 				"with the SAME Idempotency-Key and body to receive its result; a new key would run the tool again.",
+		})
+	case errors.Is(err, executionapp.ErrDispatchRefused):
+		// The run is already failed with this message (shared 0197): a
+		// worker egress allowlist that cannot be assembled.
+		refusal, _ := executionapp.AsDispatchRefusal(err)
+		desktopwire.WriteJSON(writer, http.StatusUnprocessableEntity, map[string]any{
+			"ok": false, "error": strings.ToLower(refusal.Code), "toolkit_id": toolkitID, "message": refusal.Message,
 		})
 	case errors.Is(err, toolkitcalltoolapp.ErrToolkitNotVisible):
 		desktopwire.WriteError(writer, http.StatusNotFound, "toolkit_not_found", "The toolkit was not found in this project.")

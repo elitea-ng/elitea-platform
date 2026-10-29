@@ -34,6 +34,11 @@
 #                      the Tauri host. No stack lane runs it, nothing under
 #                      apps/elitea-web or deploy imports it; ci-desktop.yml
 #                      builds it.
+#   apps/elitea-docs/**
+#                      the docs site (Astro Starlight). No journey exercises
+#                      it and nothing in the stack imports it; ci-docs.yml
+#                      builds and checks it. The web image copies its static
+#                      output, which changes no behaviour a lane observes.
 #   *.md at the repository root, or under docs/ or .github/
 #                      prose. NOT a .md anywhere else: services/** and
 #                      libs/** embed some (`//go:embed templates/README.md`
@@ -41,8 +46,6 @@
 #                      some with `?raw`, and fixtures are test input.
 #
 # NOT skipped, with the reason:
-#   apps/elitea-web/src/entries/docs/**  vite.config.ts imports from it
-#       (entries/docs/mdx/remark-mermaid) and the docs SPA ships in the web image.
 #   apps/elitea-web/src/entries/desktop/**  the main app imports from it
 #       (useLocalCodingAgent.ts imports its .md with `?raw`).
 #
@@ -54,7 +57,7 @@
 # points it at a fixture.
 set -euo pipefail
 
-SKIP_TREE='^(deploy/helm/|apps/elitea-desktop/)'
+SKIP_TREE='^(deploy/helm/|apps/elitea-desktop/|apps/elitea-docs/)'
 # A .md is prose only here: the repository root, docs/, .github/.
 MD_PROSE='^([^/]+|docs/.+|\.github/.+)\.md$'
 COMPOSE_DIR="${COMPOSE_DIR:-deploy}"

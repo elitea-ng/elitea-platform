@@ -61,6 +61,24 @@
 // trail that no later configuration change brings back. Refusing is loud and
 // reversible; clamping silently enforces a window the operator did not ask for.
 //
+// # Retention never outruns the SIEM export
+//
+// When elitea-main exports audit events to a SIEM (ADR-0042 decision 3), each
+// export sink keeps its position in elitea_runtime.audit_export_cursors
+// (stream 'admin_audit'). A pass reads the slowest sink's position first and
+// deletes only rows at or before it, so an expired row that has not yet
+// reached every receiver — during a long SIEM outage, say — stays until it
+// has. The table check and the read are separate statements: PostgreSQL
+// rejects a statement that names a missing table even under a false WHERE,
+// and the table exists only once migration 0196 ran. No row for the stream
+// means the export is off and nothing is held. A read failure fails the pass:
+// a destructive pass with an unknown export position deletes nothing.
+//
+// Switching the export off leaves its positions behind, and they keep holding
+// rows back; the pass logs a warning once the position is older than the
+// window. Delete the stream's rows to release them:
+// DELETE FROM elitea_runtime.audit_export_cursors WHERE stream = 'admin_audit'.
+//
 // # Where the window lives, and why it is not an admin setting
 //
 // Issue #619 asked for a decision between a `centry.platform_config` key, which
@@ -99,6 +117,8 @@ import (
 	"time"
 
 	"github.com/elitea-ng/elitea-platform/libs/go/routines"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/retentionpolicy"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -147,10 +167,46 @@ const deleteBatchSQL = `
 	 USING doomed
 	 WHERE victim.id = doomed.id`
 
-// Store is the slice of *pgxpool.Pool this package uses. One method: the
-// sweeper writes and never reads.
+// deleteBatchHeldSQL is deleteBatchSQL for a deployment that exports audit
+// events: only rows at or before the slowest export position ($3, $4 in
+// (export_txid, id) order) may go.
+const deleteBatchHeldSQL = `
+	WITH doomed AS (
+	    SELECT id
+	      FROM centry.audit_events
+	     WHERE timestamp < $1
+	       AND (export_txid, id) <= ($3::bigint, $4::bigint)
+	     ORDER BY timestamp
+	     LIMIT $2
+	       FOR UPDATE SKIP LOCKED
+	)
+	DELETE FROM centry.audit_events AS victim
+	 USING doomed
+	 WHERE victim.id = doomed.id`
+
+// exportCursorTableSQL and exportPositionSQL are two statements on purpose:
+// see the package doc.
+const (
+	exportCursorTableSQL = `SELECT to_regclass('elitea_runtime.audit_export_cursors') IS NOT NULL`
+	exportPositionSQL    = `
+	SELECT last_txid, last_id, updated_at
+	  FROM elitea_runtime.audit_export_cursors
+	 WHERE stream = 'admin_audit'
+	 ORDER BY last_txid, last_id
+	 LIMIT 1`
+)
+
+// Store is the slice of *pgxpool.Pool this package uses. It deletes rows, and
+// reads only the SIEM export's position.
 type Store interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// ExportHold is the SIEM export position a pass did not delete past.
+type ExportHold struct {
+	TxID, ID  int64
+	UpdatedAt time.Time
 }
 
 // Gate reports whether the platform is in a maintenance window. It is supplied
@@ -186,6 +242,15 @@ type Stats struct {
 	// Cutoff is the instant the pass compared against, kept so the log line and
 	// a test agree on which window was enforced.
 	Cutoff time.Time
+	// WindowDays is the window the pass enforced: the administrator's saved
+	// retention policy when there is one, else RetentionDays.
+	WindowDays int
+	// KeptForever is true when the pass deleted nothing because the policy
+	// (or a disabled deployment value) keeps the rows forever.
+	KeptForever bool
+	// HeldForExport is the SIEM export position the pass stopped at; nil when
+	// the export is off.
+	HeldForExport *ExportHold
 }
 
 // Sweeper deletes expired audit rows on a timer.
@@ -193,8 +258,77 @@ type Sweeper struct {
 	store  Store
 	gate   Gate
 	cfg    Config
+	policy retentionpolicy.Reader
 	logger *slog.Logger
 	now    func() time.Time
+}
+
+// NewWithPolicy is New for a sweeper that follows the administrator's
+// retention policy for `admin_audit` (ADR-0042 decision 4) once it is saved,
+// and RetentionDays until then. RetentionDays of zero is then not a refusal:
+// the sweeper runs and deletes nothing until a policy sets a maximum.
+func NewWithPolicy(store Store, gate Gate, cfg Config, policy retentionpolicy.Reader, logger *slog.Logger) (*Sweeper, error) {
+	if policy == nil {
+		return New(store, gate, cfg, logger)
+	}
+	envDays := cfg.RetentionDays
+	if envDays <= 0 {
+		cfg.RetentionDays = MinimumRetentionDays // passes New's checks; never used as a window
+	}
+	s, err := New(store, gate, cfg, logger)
+	if err != nil {
+		return nil, err
+	}
+	s.cfg.RetentionDays = envDays
+	s.policy = policy
+	return s, nil
+}
+
+// exportHold reads the slowest SIEM export position, or nil when the export
+// is off (no cursor table, or no row for the stream).
+func (s *Sweeper) exportHold(ctx context.Context) (*ExportHold, error) {
+	var exists bool
+	if err := s.store.QueryRow(ctx, exportCursorTableSQL).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+	var hold ExportHold
+	err := s.store.QueryRow(ctx, exportPositionSQL).Scan(&hold.TxID, &hold.ID, &hold.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &hold, nil
+}
+
+// windowDays resolves the window of one pass. ok is false when the pass must
+// delete nothing.
+func (s *Sweeper) windowDays(ctx context.Context) (days int, ok bool, err error) {
+	days = s.cfg.RetentionDays
+	if s.policy != nil {
+		decision, err := s.policy(ctx)
+		if err != nil {
+			// A destructive pass with an unknown policy deletes nothing.
+			return 0, false, err
+		}
+		if decision.Set {
+			if decision.MaxAgeDays == nil {
+				return 0, false, nil
+			}
+			days = *decision.MaxAgeDays
+		}
+	}
+	if days <= 0 {
+		return 0, false, nil
+	}
+	if days < MinimumRetentionDays {
+		return 0, false, fmt.Errorf("%w: %d days, floor is %d", ErrWindowTooShort, days, MinimumRetentionDays)
+	}
+	return days, true, nil
 }
 
 // New builds a Sweeper, or explains why there will not be one.
@@ -253,7 +387,7 @@ func (s *Sweeper) runOnce(ctx context.Context) (string, error) {
 		// busy loop against a database that is already unwell.
 		s.logger.Error("auditretention: sweep pass failed",
 			"err", err,
-			"window_days", s.cfg.RetentionDays,
+			"window_days", stats.WindowDays,
 			"deleted_before_failure", stats.Deleted,
 			"batches", stats.Batches)
 		return routines.OutcomeError, err
@@ -263,18 +397,33 @@ func (s *Sweeper) runOnce(ctx context.Context) (string, error) {
 			"window_days", s.cfg.RetentionDays)
 		return routines.OutcomeMaintenance, nil
 	}
+	if stats.KeptForever {
+		s.logger.Info("auditretention: the retention policy keeps audit events forever; not sweeping")
+		return routines.OutcomeOK, nil
+	}
 
 	// One line per pass, always — this is the only place an operator sees that
 	// the bound is enforced and by how much. A line emitted only when rows were
 	// deleted would make "the sweeper is running and there is nothing to
 	// delete" and "the sweeper never started" identical in the log.
 	s.logger.Info("auditretention: sweep pass complete",
-		"window_days", s.cfg.RetentionDays,
+		"window_days", stats.WindowDays,
 		"cutoff", stats.Cutoff.Format(time.RFC3339),
 		"deleted", stats.Deleted,
 		"batches", stats.Batches,
 		"drained", stats.Drained,
+		"held_for_export", stats.HeldForExport != nil,
 		"duration_ms", elapsed.Milliseconds())
+
+	if hold := stats.HeldForExport; hold != nil && hold.UpdatedAt.Before(stats.Cutoff) {
+		// Expired rows the SIEM export has not delivered are being kept. During
+		// an outage that is the point; if the export was switched off, its
+		// positions must be deleted to release them.
+		s.logger.Warn("auditretention: the SIEM export position has not moved within the retention window; expired rows after it are kept",
+			"export_position_updated_at", hold.UpdatedAt.Format(time.RFC3339),
+			"export_txid", hold.TxID, "export_id", hold.ID,
+			"hint", "if audit export was switched off: DELETE FROM elitea_runtime.audit_export_cursors WHERE stream = 'admin_audit'")
+	}
 
 	if !stats.Drained {
 		// The pass hit its ceiling with rows still eligible. Benign once — the
@@ -320,13 +469,32 @@ func (s *Sweeper) Sweep(ctx context.Context) (Stats, error) {
 		return stats, nil
 	}
 
-	stats.Cutoff = s.now().UTC().Add(-s.Window())
+	days, ok, err := s.windowDays(ctx)
+	if err != nil {
+		return stats, err
+	}
+	if !ok {
+		stats.KeptForever = true
+		return stats, nil
+	}
+	stats.WindowDays = days
+	stats.Cutoff = s.now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+
+	hold, err := s.exportHold(ctx)
+	if err != nil {
+		return stats, fmt.Errorf("read the audit export position: %w", err)
+	}
+	stats.HeldForExport = hold
+	statement, args := deleteBatchSQL, []any{stats.Cutoff, s.cfg.BatchSize}
+	if hold != nil {
+		statement, args = deleteBatchHeldSQL, []any{stats.Cutoff, s.cfg.BatchSize, hold.TxID, hold.ID}
+	}
 
 	for stats.Batches < s.cfg.MaxBatchesPerPass {
 		if err := ctx.Err(); err != nil {
 			return stats, err
 		}
-		tag, err := s.store.Exec(ctx, deleteBatchSQL, stats.Cutoff, s.cfg.BatchSize)
+		tag, err := s.store.Exec(ctx, statement, args...)
 		if err != nil {
 			return stats, err
 		}

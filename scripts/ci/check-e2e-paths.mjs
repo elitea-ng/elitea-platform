@@ -7,7 +7,8 @@
 // derives the inputs instead of trusting the list:
 //
 //   * every `build:` service of the compose files the lanes run: its
-//     Containerfile and every COPY source (from the build context), and
+//     Containerfile and every COPY source (from the build context) of the
+//     stages its `target` builds, and
 //   * every repository script the workflow or the local actions it uses call
 //     (`scripts/...` references in their YAML), and what each `.mjs` one
 //     imports: its relative imports, transitively, and for a bare package
@@ -97,19 +98,53 @@ export function covered(file, patterns, root = ROOT) {
   return false;
 }
 
-export function containerfileInputs(context, dockerfile) {
+// The stages a build of `target` runs: the target (the last stage when none
+// is named), every stage it is built FROM, and every stage a COPY --from of
+// one of them names, transitively. BuildKit skips the rest, so their COPY
+// sources are not inputs of that image.
+export function containerfileInputs(context, dockerfile, target) {
   const inputs = new Set([relativeToRoot(dockerfile)]);
   const text = fs.readFileSync(dockerfile, "utf8");
   const joined = text.replace(/\\\n/g, " ");
+  const stages = [];
   for (const line of splitlines(joined)) {
     const words = line.split(/\s+/).filter(Boolean);
-    if (!words.length || !["COPY", "ADD"].includes(words[0].toUpperCase())) continue;
+    if (!words.length) continue;
+    const op = words[0].toUpperCase();
+    if (op === "FROM") {
+      const rest = words.slice(1).filter((w) => !w.startsWith("--"));
+      const as = rest.findIndex((w) => w.toUpperCase() === "AS");
+      stages.push({ name: as >= 0 ? rest[as + 1] : String(stages.length), base: rest[0], uses: new Set(), sources: [] });
+      continue;
+    }
+    const stage = stages.at(-1);
+    if (!stage || !["COPY", "ADD"].includes(op)) continue;
+    const from = words.slice(1).find((w) => w.startsWith("--from="));
+    if (from) {
+      stage.uses.add(from.slice("--from=".length));
+      continue;
+    }
     const args = words.slice(1).filter((w) => !w.startsWith("--"));
-    if (words.slice(1).some((w) => w.startsWith("--from")) || args.some((a) => a.startsWith("<<"))) continue;
+    if (args.some((a) => a.startsWith("<<"))) continue;
     for (const source of args.slice(0, -1)) {
       if (source.includes("://")) continue; // ADD of a URL: not a repository input
-      inputs.add(relativeToRoot(resolve(join(context, source))));
+      stage.sources.push(source);
     }
+  }
+  const byName = new Map();
+  stages.forEach((stage, index) => byName.set(String(index), stage).set(stage.name, stage));
+  const start = target === undefined ? stages.at(-1) : byName.get(target);
+  if (start === undefined) throw new Error(`${relativeToRoot(dockerfile)} has no stage ${pyRepr(target ?? "")}`);
+  const reached = new Set();
+  const queue = [start];
+  while (queue.length) {
+    const stage = queue.shift();
+    if (reached.has(stage)) continue;
+    reached.add(stage);
+    for (const name of [stage.base, ...stage.uses]) if (byName.has(name)) queue.push(byName.get(name));
+  }
+  for (const stage of reached) {
+    for (const source of stage.sources) inputs.add(relativeToRoot(resolve(join(context, source))));
   }
   return inputs;
 }
@@ -210,7 +245,8 @@ export function main(log = console.log) {
       services += 1;
       const context = resolve(join(path.join(ROOT, "deploy"), String(build.context ?? ".")));
       const dockerfile = join(context, String(build.dockerfile ?? "Dockerfile"));
-      for (const file of containerfileInputs(context, dockerfile)) {
+      const target = build.target === undefined ? undefined : String(build.target);
+      for (const file of containerfileInputs(context, dockerfile, target)) {
         setDefault(file, `${compose} service ${name}`);
       }
     }

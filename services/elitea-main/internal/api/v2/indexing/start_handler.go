@@ -16,6 +16,7 @@ import (
 	toolkitrun "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/go-chi/chi/v5"
 )
@@ -290,6 +291,11 @@ func validTaskID(value string) bool {
 }
 
 func (h *StartHandler) writeStartError(w http.ResponseWriter, err error) {
+	if status, body, refused := safety.HTTPRefusal(err); refused {
+		// The kill switch (ADR-0041 decision 1): nothing was admitted.
+		writeJSON(w, status, body)
+		return
+	}
 	var capacity *executionapp.AdmissionCapacityError
 	var active *indexingapp.ActiveIndexConflictError
 	switch {

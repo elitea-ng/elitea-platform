@@ -354,7 +354,7 @@ func TestRetireNoAuthorityIndexIngestPersistsTerminalIntentInSameTransaction(t *
 			int64(42),
 			"CANCELLED",
 		}}}}},
-		rowResults: []scriptedRow{{values: []any{int64(42)}}},
+		rowResults: []scriptedRow{{values: []any{int64(42), "", ""}}},
 	}
 	store := &scriptedStore{scriptedExecutor: executor}
 	repository, err := newCommandOutboxRepository(store, "runtime:index:commands")

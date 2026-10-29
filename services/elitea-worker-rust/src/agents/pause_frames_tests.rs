@@ -373,7 +373,7 @@ fn a_member_pause_card_round_trips_for_a_sensitive_call_and_an_ask() {
     let (kind, interrupt_id, tool_call_id, parts) =
         fanout_member_card_parts(&card).expect("the card reads back");
     assert_eq!(kind, CardKind::ToolGuard);
-    assert!(!interrupt_id.is_empty());
+    assert_ne!(interrupt_id, "");
     assert_eq!(tool_call_id, "call-1");
     assert_eq!(
         parts.available_actions,

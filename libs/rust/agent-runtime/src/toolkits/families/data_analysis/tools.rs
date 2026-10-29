@@ -230,7 +230,7 @@ pub(crate) fn build_with(
     policy: &Arc<ToolAdmissionPolicy>,
     limits: Limits,
 ) -> Result<Option<BasicToolset>, DataAnalysisToolsetError> {
-    if policy.toolkit_decision(TOOLKIT_TYPE) == ToolAdmissionDecision::BlockedToolkit {
+    if policy.toolkit_decision(TOOLKIT_TYPE) != ToolAdmissionDecision::Allowed {
         return Ok(None);
     }
     let limits = Arc::new(limits);

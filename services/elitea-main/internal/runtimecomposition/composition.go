@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -34,6 +35,7 @@ import (
 	toolkitcallapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	workeregressapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workeregress"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -106,6 +108,13 @@ type Dependencies struct {
 	// on. The runtime plane carries it between replicas over NATS and checks
 	// governed runs' epochs at ClaimCommand and RenewLease. Nil: neither.
 	SecurityInvalidations *epoch.Hub
+	// ExecutionSuspensions is the kill switch's admission gate (ADR-0041
+	// decision 1, #1493), built at the composition root over
+	// elitea_runtime.execution_suspensions and shared with the admin API that
+	// sets and resumes suspensions. Every agent, index and direct toolkit
+	// admission store is wrapped with it, and the runtime plane carries its
+	// invalidations between replicas over NATS. Nil: no check (tests).
+	ExecutionSuspensions *safety.Gate
 	// IndexScheduleMandates and IndexScheduleMandateGate make every index
 	// schedule occurrence mandate-bound (#1122): built at the composition
 	// root only with credential governance on. Nil: the executor keeps the
@@ -344,6 +353,28 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, fmt.Errorf("construct runtime command producer: %w", err)
 	}
+	// Every worker command carries the run's public egress policy (ADR-0044
+	// decision 2): absent while the platform's worker_egress mode is open and
+	// the run is not governed, so those commands are unchanged byte for byte.
+	egressSources, err := repos.NewWorkerEgressSources(dependencies.AdmissionPool)
+	if err != nil {
+		return nil, fmt.Errorf("construct worker egress sources: %w", err)
+	}
+	// The platform section is read at most once per PlatformSettingsTTL (5s)
+	// per replica: an administrator's save reaches new commands within it.
+	egressPolicy, err := workeregressapp.NewResolver(workeregressapp.NewCachedPlatformReader(egressSources),
+		egressSources, egressSources, egressSources)
+	if err != nil {
+		return nil, err
+	}
+	// A policy that can never be assembled fails its run at once with a
+	// message naming the entry or the bound (shared 0197), instead of being
+	// retried until the deadline.
+	dispatchRefusals, err := repos.NewDispatchRefusals(dependencies.AdmissionPool)
+	if err != nil {
+		return nil, fmt.Errorf("construct dispatch refusals: %w", err)
+	}
+	producer.WithEgressPolicy(egressPolicy).WithDispatchRefusals(dispatchRefusals)
 
 	dispatchPolicy := repos.ValidationDispatchPolicy{
 
@@ -552,6 +583,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct index ingest producer: %w", err)
 		}
+		indexProducer.WithEgressPolicy(egressPolicy).WithDispatchRefusals(dispatchRefusals)
 		indexOutbox, err := repos.NewCommandOutboxRepository(dependencies.AdmissionPool, config.IndexIngestCommandStream)
 		if err != nil {
 			return nil, fmt.Errorf("construct index ingest command outbox: %w", err)
@@ -595,6 +627,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct tool-run producer: %w", err)
 		}
+		toolkitCallToolProducer.WithEgressPolicy(egressPolicy).WithDispatchRefusals(dispatchRefusals)
 		if config.ToolkitDiscoveryEnabled {
 			toolkitDiscoveryProducer, err = commandbus.NewToolkitAvailableToolsProducer(commandbus.ToolkitAvailableToolsProducerConfig{
 				Stream: toolkitRoute.stream, Consumer: toolkitRoute.consumer, ValidationStream: config.CommandStream, ProtocolRevision: protocolRevision, EnvelopeSchemaRevision: envelopeSchemaRevision, CapabilityVersion: toolkitCallToolCapabilityVersion, Limits: toolkitLimits,
@@ -602,6 +635,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			if err != nil {
 				return nil, err
 			}
+			toolkitDiscoveryProducer.WithEgressPolicy(egressPolicy).WithDispatchRefusals(dispatchRefusals)
 		}
 	}
 	var agentJobs *repos.AgentExecutionJobsRepository
@@ -658,6 +692,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct agent execution producer: %w", err)
 		}
+		agentProducer.WithEgressPolicy(egressPolicy).WithDispatchRefusals(dispatchRefusals)
 		// The catalogue project is the SAME id the freezer resolves shared
 		// models against, taken from the same place, so the one project a turn
 		// may borrow a published agent from and the one project it may borrow a
@@ -690,6 +725,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if dependencies.ConversationActivity != nil {
 			agentAdmissionStore = activityAdmissionStore{next: agentJobs, activity: dependencies.ConversationActivity}
 		}
+		agentAdmissionStore = guardAgentAdmissions(agentAdmissionStore, dependencies.ExecutionSuspensions)
 		agentAdmissions, admissionErr := agentexecutionapp.NewAdmissionService(
 			agentAdmissionStore,
 			agentInputs,
@@ -952,7 +988,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct direct toolkit execution jobs: %w", toolkitErr)
 		}
 		toolkitAdmissions, toolkitErr := toolkitexecutionapp.NewAdmissionService(
-			toolkitJobs,
+			guardToolkitExecute(toolkitJobs, dependencies.ExecutionSuspensions),
 			toolkitInputs,
 			nil,
 			currentRuntimeID,
@@ -1339,6 +1375,14 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 		if _, err := controlServer.WithGovernedEpochs(runs, revoker); err != nil {
 			return nil, fmt.Errorf("compose governed epoch checks: %w", err)
+		}
+	}
+	if dependencies.ExecutionSuspensions != nil {
+		publisherRoot, err = newPublisherSet(publisherRoot, suspensionInvalidationRunner{
+			gate: dependencies.ExecutionSuspensions, transport: natsSuspensionTransport{conn: runtimeNATS},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("compose suspension invalidation fan-out: %w", err)
 		}
 	}
 	if dependencies.SecurityInvalidations != nil {
@@ -1776,6 +1820,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			config,
 			indexDispatchPolicy,
 			indexRegistry,
+			dependencies.ExecutionSuspensions,
 			func(err error) {
 				dependencies.Logger.Error(
 					"current index metadata initialization requeued",
@@ -2149,6 +2194,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			toolkitCallToolDispatchPolicy,
 			0,
 			toolCallRecords,
+			dependencies.ExecutionSuspensions,
 			dependencies.Logger,
 			indexCatalogOption(indexCatalog),
 		)
@@ -2250,6 +2296,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	egressAuditServer, egressAuditMerger, err := newEgressAudit(config, dependencies)
 	if err != nil {
 		return nil, err
+	}
+	if egressAuditMerger != nil && dependencies.ControlPool != nil {
+		// The worker's own egress reports (ADR-0044 decision 2): the run's
+		// `worker` row beside the proxy's, final when the run settles.
+		controlServer.WithEgressSummaries(workerEgressSummaries{
+			merger: egressAuditMerger, projects: repos.NewEgressRunSummaries(dependencies.ControlPool),
+		})
 	}
 	privateServers, err := runtimegrpc.NewPrivateServerSet(runtimegrpc.PrivateServerConfig{
 		ControlAddress:                  config.ControlAddress,

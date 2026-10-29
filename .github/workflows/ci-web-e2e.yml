@@ -2014,8 +2014,10 @@ jobs:
             extra_args+=(--only "$ONLY")
             fail_flag="--fail-on-missing"
           fi
+          # The repository root is mounted, not just apps/elitea-web: the
+          # manifest and the WebP output live in apps/elitea-docs (#1510).
           docker run --rm --network host \
-            -v "$PWD":/work -w /work \
+            -v "$GITHUB_WORKSPACE":/repo -w /repo/apps/elitea-web \
             -e CI=true \
             -e E2E_REUSE_STACK=1 \
             -e E2E_PORT=8080 \
@@ -2032,7 +2034,7 @@ jobs:
         # collection below silently writes nothing.
         if: always()
         working-directory: apps/elitea-web
-        run: sudo chown -R "$(id -u):$(id -g)" playwright-results content/img 2>/dev/null || true
+        run: sudo chown -R "$(id -u):$(id -g)" playwright-results ../elitea-docs/src/screenshots 2>/dev/null || true
       - name: Collect the stack's own logs
         if: failure()
         continue-on-error: true
@@ -2049,7 +2051,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: docs-shots
-          path: apps/elitea-web/src/entries/docs/content/img/*.webp
+          path: apps/elitea-docs/src/screenshots/*.webp
           if-no-files-found: warn
           retention-days: 14
 

@@ -12,6 +12,7 @@ use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
 use super::config::SonarToolkitConfig;
+use crate::egress::BuildForRun as _;
 
 const ISSUE_SEARCH_PATH: &str = "/api/issues/search";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -227,7 +228,7 @@ pub(in crate::toolkits) trait SonarTransport: Send + Sync {
 }
 
 struct ReqwestSonarTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -284,7 +285,7 @@ pub(crate) struct SonarClient {
 
 impl SonarClient {
     pub(crate) fn new(config: SonarToolkitConfig) -> Result<Self, SonarClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
@@ -292,7 +293,7 @@ impl SonarClient {
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             config,

@@ -739,6 +739,9 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 	//	                    every web / host_intel toolkit resolution: which
 	//	                    providers are enabled, the default search provider,
 	//	                    and the direct-fetch switch and domain lists (#1238)
+	//	worker_egress     → platformconfig.LoadWorkerEgressSettings, read by
+	//	                    the worker egress policy resolver whenever a worker
+	//	                    command is prepared (ADR-0044 decision 2, #1490)
 	want := map[string]bool{
 		"resources": true, "mcp_configuration": true, "branding": true,
 		"agent_publishing": true, "skill_publishing": true,
@@ -751,6 +754,9 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		"cloud_executor": true,
 		// #1238: every web and host_intel toolkit resolution reads it.
 		"web_search": true,
+		// ADR-0044 decision 2 (#1490): every worker command's preparation
+		// reads it (workeregress.Resolver).
+		"worker_egress": true,
 	}
 	for id := range want {
 		if !available[id] {
@@ -986,6 +992,9 @@ func newConfigPool(t *testing.T) *pgxpool.Pool {
 	}
 	if _, err := pool.Exec(ctx, string(initial)); err != nil {
 		t.Fatalf("apply 001_initial.sql: %v", err)
+	}
+	if err := dbtest.InstallSuspensionTable(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 	// The naive-clock probe the dbtest template installs, after the last
 	// schema statement: a writer that stores the session-local clock in a

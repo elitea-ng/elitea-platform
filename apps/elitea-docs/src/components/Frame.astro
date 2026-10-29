@@ -1,0 +1,12 @@
+---
+interface Props {
+  caption?: string;
+}
+
+const { caption } = Astro.props;
+---
+
+<figure class="docs-frame">
+  <div class="docs-frame__content"><slot /></div>
+  {caption !== undefined && <figcaption class="docs-frame__caption">{caption}</figcaption>}
+</figure>

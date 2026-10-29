@@ -826,7 +826,18 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // staging a reference from scratch, and repinAgentIdentityBinding, the
 // re-pin of a binding to its version's computed definition digest. Admin
 // routes are not in the manifest, so its count is unchanged.
-const GENERATED_OPERATION_COUNT = 399;
+// 399 -> 406 (issue 1495, ADR-0042 decision 4): listRetentionPolicies,
+// setPlatformRetentionPolicy, set/deleteProjectRetentionOverride,
+// listLegalHolds, createLegalHold and releaseLegalHold, the data retention
+// and legal hold admin API. Admin routes are not in the manifest, so its
+// count is unchanged.
+// 406 -> 412 (issue 1493, ADR-0041): list/create/resumeExecutionSuspension
+// and list/create/resumeProjectExecutionSuspension, the kill switch of the
+// admin console and of the agent page.
+// 412 -> 413 (issue 1490, ADR-0044 decision 2): listWorkerEgressHosts, the
+// admin view of the hosts runs reached, to seed a worker egress allowlist.
+// Admin routes are not in the manifest, so its count is unchanged.
+const GENERATED_OPERATION_COUNT = 413;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1055,11 +1066,15 @@ const GENERATED_OPERATION_COUNT = 399;
  * configurations.listForPullRequests (the GitHub or GitLab configurations it is
  * chosen from), the cloud notice of the web chat (pages/chat). Generated.
  *
- * 288 -> 290 (Point 5 2a-2, fixed Parallel): chat.listExecutionInterrupts
+ * 288 -> 291 (issue 1493, ADR-0041 decision 1):
+ * settings.list/create/resumeProjectExecutionSuspension, the Stop agent
+ * action of the agent page (features/kill-switch). Generated.
+ *
+ * 291 -> 293 (Point 5 2a-2, fixed Parallel): chat.listExecutionInterrupts
  * and chat.decideExecutionInterrupt, the open fan-out cards of a response
  * and their decision (features/chat-messages interruptLedgerApi). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 290;
+const MANIFEST_ENTRY_COUNT = 293;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

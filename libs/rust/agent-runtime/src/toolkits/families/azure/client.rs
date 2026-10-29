@@ -15,6 +15,7 @@ use tokio::time::timeout;
 use zeroize::Zeroizing;
 
 use super::config::AzureToolkitConfig;
+use crate::egress::BuildForRun as _;
 
 const ARM_ORIGIN: &str = "https://management.azure.com";
 const TOKEN_ORIGIN: &str = "https://login.microsoftonline.com";
@@ -285,7 +286,7 @@ pub(in crate::toolkits) trait AzureTransport: Send + Sync {
 }
 
 struct ReqwestAzureTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -363,7 +364,7 @@ pub(crate) struct AzureClient {
 
 impl AzureClient {
     pub(crate) fn new(config: AzureToolkitConfig) -> Result<Self, AzureClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -373,7 +374,7 @@ impl AzureClient {
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT_VALUE)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             config,

@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
 use super::config::ZephyrToolkitConfig;
+use crate::egress::BuildForRun as _;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -238,7 +239,7 @@ pub(in crate::toolkits) trait ZephyrTransport: Send + Sync {
 }
 
 struct ReqwestZephyrTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -293,7 +294,7 @@ pub(crate) struct ZephyrClient {
 
 impl ZephyrClient {
     pub(crate) fn new(config: ZephyrToolkitConfig) -> Result<Self, ZephyrClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -303,7 +304,7 @@ impl ZephyrClient {
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT_VALUE)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             config,

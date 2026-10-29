@@ -10,6 +10,7 @@ use reqwest::{Method, Request, StatusCode, Url};
 use serde_json::{Map, Value, json};
 
 use super::config::GooglePlacesToolkitConfig;
+use crate::egress::BuildForRun as _;
 
 const GOOGLE_MAPS_ORIGIN: &str = "https://maps.googleapis.com";
 const GOOGLE_PLACES_ORIGIN: &str = "https://places.googleapis.com";
@@ -190,7 +191,7 @@ pub(in crate::toolkits) trait GooglePlacesTransport: Send + Sync {
 }
 
 struct ReqwestGooglePlacesTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -247,7 +248,7 @@ pub(crate) struct GooglePlacesClient {
 
 impl GooglePlacesClient {
     pub(crate) fn new(config: GooglePlacesToolkitConfig) -> Result<Self, GooglePlacesClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
@@ -255,7 +256,7 @@ impl GooglePlacesClient {
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             config,

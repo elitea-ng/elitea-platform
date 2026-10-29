@@ -1,0 +1,36 @@
+---
+title: "Hardening checklist"
+description: "The settings a regulated deployment turns on, in order, each with the page that explains it."
+---
+
+A default install favours getting started. A deployment that will be assessed against enterprise risk controls should work through this list. Each item links to the page that explains the setting, its default and what it changes for users.
+
+## Identity and credentials
+
+- [ ] Use SSO (OIDC or SAML) and SCIM provisioning. Assign project roles through groups, not by hand. See [Authentication](/admin/authentication).
+- [ ] Turn on the credential governance profile, so agents run under their own identity and every credential use needs an approved grant. See [Credential governance](/deployment/credential-governance) and its [runbook](/deployment/credential-governance-runbook).
+- [ ] Store toolkit secrets in Vault or OpenBao through the secret-store integration. See [Secrets](/admin/secrets).
+- [ ] Set personal access tokens to expire, and keep expiry notices on.
+
+## Tools and network
+
+- [ ] Restrict toolkit types per project, and block tools you do not use. See [App requests and toolkit types](/admin/app-requests-and-toolkit-types).
+- [ ] List destructive and outward-facing tools as sensitive, so every call pauses for approval. See [Sensitive action authorization](/how-tos/chat-conversations/sensitive-action-authorization-guardrail).
+- [ ] Keep the egress guard on. Add private hosts to the allow-list only when a toolkit needs them. See [Configuration](/deployment/configuration).
+- [ ] Seed the worker egress allowlist from **Configuration › Worker Egress**, then set its mode to `allowlist`. See [Least privilege and trust](/admin/enterprise-controls/least-privilege-and-trust).
+
+## Runtime safety
+
+- [ ] Decide who may stop agents and projects, and who may stop the whole platform. Grant the permissions to those roles only. See [Runtime safety](/admin/enterprise-controls/runtime-safety).
+- [ ] Keep the kill-switch self-test enabled, and alert on its last-success metric. See the [emergency stop runbook](/deployment/emergency-stop-runbook).
+- [ ] Set project budgets. A reached budget refuses further model calls. See [Budgets and LLM governance](/admin/budgets-and-governance).
+
+## Evidence and data
+
+- [ ] Configure the audit export to your SIEM, and keep the copy of record in WORM storage. See [Audit trail](/admin/audit-trail) and [Audit event schema](/reference/audit-event-schema).
+- [ ] Set the maximum retention for each data class to match your records schedule. Know how to place a legal hold before you need one. See [Audit evidence and retention](/admin/enterprise-controls/audit-evidence-and-retention).
+- [ ] Alert on audit-export lag and dead letters (the chart ships the rules).
+
+## Keep it current
+
+This checklist grows as the controls in the [catalogue](/admin/enterprise-controls/overview) ship. Re-read it after each upgrade: the "What's new" page lists every new control and its default.

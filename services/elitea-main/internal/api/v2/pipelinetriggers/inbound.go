@@ -31,6 +31,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
@@ -351,6 +352,13 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		} else {
 			h.completeDelivery(r.Context(), schema, trigger.TokenID, deliveryKey, outcome)
 		}
+	}
+	if status, body, refused := safety.HTTPRefusal(err); refused {
+		// The kill switch (ADR-0041 decision 1): the run is not started and
+		// the sender learns why; the trigger itself stays valid.
+		record(status, projectID, trigger.CreatedBy, trigger.VersionID, safety.ErrorCode)
+		writeJSON(w, status, body)
+		return
 	}
 	switch {
 	case governedStartRefused(err):

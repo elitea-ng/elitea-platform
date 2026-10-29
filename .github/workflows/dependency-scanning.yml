@@ -12,9 +12,9 @@ on:
   pull_request:
   schedule:
     # 06:41 UTC daily. Deliberately away from nightly-image-scan.yml's 05:17,
-    # deepwiki-real-engine.yml's Sunday 04:23 and the Saturday 02:00 UTC
-    # dependabot burst, so the cadence jobs do not contend for the free plan's
-    # 20-job concurrency window.
+    # deepwiki-real-engine.yml's Sunday 04:23 and the nightly dependabot run
+    # (03:00 Europe/Warsaw, 01:00/02:00 UTC), so the cadence jobs do not contend
+    # for the free plan's 20-job concurrency window.
     - cron: "41 6 * * *"
   workflow_dispatch:
 

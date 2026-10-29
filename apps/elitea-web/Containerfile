@@ -4,7 +4,7 @@
 # .github/workflows/publish.yml and Taskfile.yml — fixing defect D1 by
 # construction. Local builds: podman build -f apps/elitea-web/Containerfile .
 
-# ── Stage 1: build the SPA (three entries: app, admin, maintenance) ──────────
+# ── Stage 1: build the SPA (four entries: app, admin, maintenance, brand preview) ─
 FROM node:26-alpine AS builder
 
 # The repository layout is kept (the app at apps/elitea-web), because the app
@@ -24,14 +24,21 @@ COPY apps/elitea-web/src/ ./src/
 # Without this the SPA's history fallback answered those URLs with index.html
 # under a 200, so a "does the pack's logo resolve?" check passed on HTML.
 COPY apps/elitea-web/public/ ./public/
-# `npm run build` (below) runs `build:docs`, which runs
-# `node scripts/docs-build-search-index.mjs` before `vite build --mode docs`
-# (embedded-docs programme decision 2/6) — the one build target that needs a
-# script outside `src/`, so `scripts/` is copied only now, this late, rather
-# than widening the lockfile-first layer above.
-COPY apps/elitea-web/scripts/docs-build-search-index.mjs ./scripts/docs-build-search-index.mjs
 
 ENV NODE_OPTIONS="--max-old-space-size=4096"
+RUN npm run build
+
+# ── Stage 1b: build the docs site (apps/elitea-docs, Astro Starlight) ────────
+# Its own stage and lockfile, so a docs edit never invalidates the SPA build
+# above and vice versa. Served at /docs/ (DOCS_BASE). The one file it reads
+# from outside its app is the brand palette its diagrams are drawn in.
+FROM node:26-alpine AS docs-builder
+WORKDIR /build/apps/elitea-docs
+COPY apps/elitea-docs/package.json apps/elitea-docs/package-lock.json ./
+RUN npm ci
+COPY libs/ts/client-core/src/brand/tokens.json /build/libs/ts/client-core/src/brand/tokens.json
+COPY apps/elitea-docs/ ./
+ENV ASTRO_TELEMETRY_DISABLED=1 DOCS_BASE=/docs/
 RUN npm run build
 
 # ── Stage 2: serve the main SPA with nginx ────────────────────────────────────
@@ -85,20 +92,30 @@ RUN npm run build
 # hold different nginx and package versions. That is the trade, and the scan —
 # on every pull request, every push to main, and daily — is what makes it
 # visible and what proves the result.
-FROM nginx:stable-alpine
+# `spa` is the image without the docs site: the E2E and standalone stacks
+# build this target (their compose files say why), so a docs-only change
+# never rebuilds or reruns them. The release image is the last stage.
+FROM nginx:stable-alpine AS spa
 ADD https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/APKINDEX.tar.gz /usr/share/alpine-apkindex-stamp.tar.gz
 RUN apk upgrade --no-cache
 
 COPY --from=builder /build/apps/elitea-web/dist/app /usr/share/nginx/html/spa
-# Embedded docs SPA (embedded-docs programme decision 5): its own dist
-# directory, served by spa.conf's separate `/docs/` location block — never
-# merged into `spa/` above, so the two shells' `index.html`/`404.html`/
-# `assets/` never collide.
-COPY --from=builder /build/apps/elitea-web/dist/docs /usr/share/nginx/html/docs
+# One placeholder page at /docs/, so a stack built from `spa` still answers
+# there (standalone-stack.sh proves the edge routes /docs/ to this image).
+# The release stage's docs site replaces it.
+RUN mkdir -p /usr/share/nginx/html/docs && printf '%s\n' \
+    '<!doctype html><meta charset="utf-8"><title>Elitea AI Docs</title>' \
+    '<p>The documentation is in the release image. Locally: <code>npm run dev</code> in apps/elitea-docs.</p>' \
+    > /usr/share/nginx/html/docs/index.html
 COPY apps/elitea-web/nginx/spa.conf /etc/nginx/conf.d/default.conf
 # Included by every location block in spa.conf. nginx add_header does not merge
 # across levels, so the set must be included, not inherited.
 COPY apps/elitea-web/nginx/security-headers.conf /etc/nginx/snippets/security-headers.conf
+# The docs site's own CSP: the hashes of Starlight's inline scripts, and
+# WebAssembly for the search index (apps/elitea-docs/scripts/check-dist.mjs
+# checks them). In `spa` too, so spa.conf's /docs/ locations load; with no
+# pages they answer 404.
+COPY apps/elitea-web/nginx/docs-security-headers.conf /etc/nginx/snippets/docs-security-headers.conf
 # Cross-Origin-Opener-Policy, kept apart because the two OAuth popup landing
 # pages must not send it. That file records why.
 COPY apps/elitea-web/nginx/opener-isolation.conf /etc/nginx/snippets/opener-isolation.conf
@@ -107,3 +124,8 @@ RUN chmod +x /docker-entrypoint-config.sh
 
 EXPOSE 80
 CMD ["/docker-entrypoint-config.sh"]
+
+# The release image: the SPA plus the docs site, served by spa.conf's `/docs/`
+# location blocks. Never merged into `spa/`, so the two never share a file.
+FROM spa
+COPY --from=docs-builder /build/apps/elitea-docs/dist /usr/share/nginx/html/docs

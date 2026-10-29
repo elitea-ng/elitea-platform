@@ -1,0 +1,28 @@
+---
+title: "Shared responsibility"
+description: "What Elitea enforces, what it records, and what deliberately stays with your organisation's own systems — and how the two connect."
+---
+
+Elitea enforces controls at the points it owns: model traffic, tool calls, credentials, runs and configuration. It records what happened as evidence, and exports that evidence. It does **not** try to replace the systems a regulated organisation already runs for reviews, records, identity governance or security monitoring. Rebuilding those inside an AI platform would produce a weaker copy that your auditors would then have to assess separately.
+
+The table shows where the line sits and how Elitea integrates across it.
+
+| Responsibility | Lives in | What Elitea provides |
+| --- | --- | --- |
+| Architecture, legal and compliance, and model-risk reviews | Your GRC or ticketing system | Typed attestations on the agent or release, required by risk tier before release, and writable over the API (planned, [issue 1497](https://github.com/elitea-ng/elitea-platform/issues/1497)) |
+| Data owner approval and data accuracy | The data owner and your data catalogue | Credential use grants with an approver other than the proposer ([credential governance](/deployment/credential-governance)); data-owner attestations with an expiry (planned) |
+| Immutable storage of record (WORM) | Object storage with object lock, or your SIEM's archive tier | Hash-chained logs that make tampering detectable, exported in one versioned schema ([audit event schema](/reference/audit-event-schema)). Elitea does not claim WORM on its own database. |
+| Retention schedule | Your records-management policy | Per-class retention limits and legal hold that enforce the values you set ([audit evidence and retention](/admin/enterprise-controls/audit-evidence-and-retention)) |
+| Security monitoring, correlation and anomaly detection | Your SIEM or SOC | The evidence export, Prometheus metrics, and alert rules for platform health. A rule-based agent circuit breaker is planned. |
+| Paging and on-call | Your incident-management tool | Alerts, and the [emergency stop](/deployment/emergency-stop-runbook) that on-call staff use |
+| Access-review campaigns | Your identity governance (IGA) tool | SCIM provisioning and roles per project; an entitlement export is planned ([issue 1501](https://github.com/elitea-ng/elitea-platform/issues/1501)) |
+| Rotation of externally issued secrets | Your secret manager (Vault or OpenBao) or the issuing system | The secret-store integration, expiry on tokens and grants, and revocation ([secrets](/admin/secrets)) |
+| Content classifiers and harm taxonomy | Your trust-and-safety or compliance function | The gateway enforcement point and adapters to the classifier you choose (planned, [issue 1500](https://github.com/elitea-ng/elitea-platform/issues/1500)) |
+| Statistical drift on production traffic | Your ML-monitoring tool | The evidence stream as input, and an API to mark an agent as due for recertification (planned) |
+| Bias and fairness methodology | Your model-risk function | An evaluation harness that runs any suite and scoring dimension you define |
+| Business thresholds (amounts, novelty, risk appetite) | Your risk owners' written policy | Enforcement of the thresholds and tool categories you configure |
+| Network perimeter | Your network team | Egress guard, the [worker egress allowlist](/admin/enterprise-controls/least-privilege-and-trust) and the record of hosts each run reached |
+
+<Tip>
+In a risk assessment, cite this page alongside the [control catalogue](/admin/enterprise-controls/overview). A control your organisation provides is a dependency to record, not a gap.
+</Tip>

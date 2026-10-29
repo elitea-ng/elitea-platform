@@ -97,6 +97,68 @@ func (WorkerCommandTypeV1) EnumDescriptor() ([]byte, []int) {
 	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{0}
 }
 
+// How a worker treats public hosts (ADR-0044 decision 2). The policy narrows
+// which HOSTS a run may reach; it never widens the SSRF rule. Where the SSRF
+// guard applies (web_fetch and every redirect hop), private, link-local,
+// metadata and reserved addresses stay refused in every mode. Toolkit
+// clients (Jira, Confluence, GitHub, ...) never had the SSRF guard, because
+// they reach operator-approved on-prem hosts; for them this policy is the
+// only egress check. Endpoints the operator configured for the worker itself
+// (web-search provider origins admitted by ELITEA_WEB_EGRESS_ALLOWLIST) are
+// not judged by this policy, since Main cannot list them, but they are still
+// reported as reached.
+type WorkerEgressModeV1 int32
+
+const (
+	WorkerEgressModeV1_WORKER_EGRESS_MODE_V1_UNSPECIFIED WorkerEgressModeV1 = 0
+	// Any public host. The same as an absent policy.
+	WorkerEgressModeV1_WORKER_EGRESS_MODE_V1_OPEN WorkerEgressModeV1 = 1
+	// Only hosts matching `allow`. A refused host is the tool error
+	// `egress_host_not_allowed`, never a silent failure.
+	WorkerEgressModeV1_WORKER_EGRESS_MODE_V1_ALLOWLIST WorkerEgressModeV1 = 2
+)
+
+// Enum value maps for WorkerEgressModeV1.
+var (
+	WorkerEgressModeV1_name = map[int32]string{
+		0: "WORKER_EGRESS_MODE_V1_UNSPECIFIED",
+		1: "WORKER_EGRESS_MODE_V1_OPEN",
+		2: "WORKER_EGRESS_MODE_V1_ALLOWLIST",
+	}
+	WorkerEgressModeV1_value = map[string]int32{
+		"WORKER_EGRESS_MODE_V1_UNSPECIFIED": 0,
+		"WORKER_EGRESS_MODE_V1_OPEN":        1,
+		"WORKER_EGRESS_MODE_V1_ALLOWLIST":   2,
+	}
+)
+
+func (x WorkerEgressModeV1) Enum() *WorkerEgressModeV1 {
+	p := new(WorkerEgressModeV1)
+	*p = x
+	return p
+}
+
+func (x WorkerEgressModeV1) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (WorkerEgressModeV1) Descriptor() protoreflect.EnumDescriptor {
+	return file_elitea_runtime_v1_command_proto_enumTypes[1].Descriptor()
+}
+
+func (WorkerEgressModeV1) Type() protoreflect.EnumType {
+	return &file_elitea_runtime_v1_command_proto_enumTypes[1]
+}
+
+func (x WorkerEgressModeV1) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use WorkerEgressModeV1.Descriptor instead.
+func (WorkerEgressModeV1) EnumDescriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{1}
+}
+
 // WorkerCommandV1 is the immutable, reference-only command body allowed on the
 // command bus. It must never contain settings, prompts, files, results,
 // credentials, grant material, exceptions, or other bulk/protected content.
@@ -144,8 +206,13 @@ type WorkerCommandV1 struct {
 	// while the credential governance flag is off, so legacy bytes are
 	// unchanged.
 	SecurityContextRef *ExecutionSecurityContextReferenceV1 `protobuf:"bytes,65,opt,name=security_context_ref,json=securityContextRef,proto3" json:"security_context_ref,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// The public egress policy for this command's outbound HTTP (ADR-0044
+	// decision 2, #1490). Absent means open: public hosts are unrestricted.
+	// Main omits it while the platform's worker_egress mode is open, so
+	// commands are unchanged byte for byte.
+	EgressPolicy  *WorkerEgressPolicyV1 `protobuf:"bytes,66,opt,name=egress_policy,json=egressPolicy,proto3" json:"egress_policy,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WorkerCommandV1) Reset() {
@@ -414,6 +481,13 @@ func (x *WorkerCommandV1) GetSecurityContextRef() *ExecutionSecurityContextRefer
 	return nil
 }
 
+func (x *WorkerCommandV1) GetEgressPolicy() *WorkerEgressPolicyV1 {
+	if x != nil {
+		return x.EgressPolicy
+	}
+	return nil
+}
+
 type isWorkerCommandV1_CapabilityCommand interface {
 	isWorkerCommandV1_CapabilityCommand()
 }
@@ -454,11 +528,70 @@ func (*WorkerCommandV1_ToolkitCallTool) isWorkerCommandV1_CapabilityCommand() {}
 
 func (*WorkerCommandV1_ToolkitExecuteRead) isWorkerCommandV1_CapabilityCommand() {}
 
+// The run's public egress policy, assembled by Main from the platform's
+// entries, the project's entries, the approved hosts of the connectors in
+// use and each toolkit instance's base URL. It travels inside the signed
+// command, so a worker cannot widen it.
+type WorkerEgressPolicyV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Mode  WorkerEgressModeV1     `protobuf:"varint,1,opt,name=mode,proto3,enum=elitea.runtime.v1.WorkerEgressModeV1" json:"mode,omitempty"`
+	// The egresslib grammar (`libs/go/egresslib`): host, host:port, *.domain,
+	// *.domain:port or a CIDR block. At most 1024 entries; a malformed entry
+	// fails the command closed.
+	Allow         []string `protobuf:"bytes,2,rep,name=allow,proto3" json:"allow,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkerEgressPolicyV1) Reset() {
+	*x = WorkerEgressPolicyV1{}
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkerEgressPolicyV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkerEgressPolicyV1) ProtoMessage() {}
+
+func (x *WorkerEgressPolicyV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkerEgressPolicyV1.ProtoReflect.Descriptor instead.
+func (*WorkerEgressPolicyV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *WorkerEgressPolicyV1) GetMode() WorkerEgressModeV1 {
+	if x != nil {
+		return x.Mode
+	}
+	return WorkerEgressModeV1_WORKER_EGRESS_MODE_V1_UNSPECIFIED
+}
+
+func (x *WorkerEgressPolicyV1) GetAllow() []string {
+	if x != nil {
+		return x.Allow
+	}
+	return nil
+}
+
 var File_elitea_runtime_v1_command_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\n" +
-	"\x1felitea/runtime/v1/command.proto\x12\x11elitea.runtime.v1\x1a\x1delitea/runtime/v1/agent.proto\x1a elitea/runtime/v1/indexing.proto\x1a\x1delitea/runtime/v1/input.proto\x1a(elitea/runtime/v1/security_context.proto\x1a\x1felitea/runtime/v1/toolkit.proto\x1a\"elitea/runtime/v1/validation.proto\"\x8a\x0e\n" +
+	"\x1felitea/runtime/v1/command.proto\x12\x11elitea.runtime.v1\x1a\x1delitea/runtime/v1/agent.proto\x1a elitea/runtime/v1/indexing.proto\x1a\x1delitea/runtime/v1/input.proto\x1a(elitea/runtime/v1/security_context.proto\x1a\x1felitea/runtime/v1/toolkit.proto\x1a\"elitea/runtime/v1/validation.proto\"\xd8\x0e\n" +
 	"\x0fWorkerCommandV1\x12+\n" +
 	"\x11protocol_revision\x18\x01 \x01(\tR\x10protocolRevision\x12\x1d\n" +
 	"\n" +
@@ -496,8 +629,12 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\x0fagent_execution\x18# \x01(\v2*.elitea.runtime.v1.AgentExecutionCommandV1H\x00R\x0eagentExecution\x12Y\n" +
 	"\x11toolkit_call_tool\x18$ \x01(\v2+.elitea.runtime.v1.ToolkitCallToolCommandV1H\x00R\x0ftoolkitCallTool\x12b\n" +
 	"\x14toolkit_execute_read\x18@ \x01(\v2..elitea.runtime.v1.ToolkitExecuteReadCommandV1H\x00R\x12toolkitExecuteRead\x12h\n" +
-	"\x14security_context_ref\x18A \x01(\v26.elitea.runtime.v1.ExecutionSecurityContextReferenceV1R\x12securityContextRefB\x14\n" +
-	"\x12capability_commandJ\x04\b\x0f\x10\x10J\x04\b\x1a\x10 J\x04\b%\x10@R\x11grant_template_id*\x9f\x04\n" +
+	"\x14security_context_ref\x18A \x01(\v26.elitea.runtime.v1.ExecutionSecurityContextReferenceV1R\x12securityContextRef\x12L\n" +
+	"\regress_policy\x18B \x01(\v2'.elitea.runtime.v1.WorkerEgressPolicyV1R\fegressPolicyB\x14\n" +
+	"\x12capability_commandJ\x04\b\x0f\x10\x10J\x04\b\x1a\x10 J\x04\b%\x10@R\x11grant_template_id\"m\n" +
+	"\x14WorkerEgressPolicyV1\x129\n" +
+	"\x04mode\x18\x01 \x01(\x0e2%.elitea.runtime.v1.WorkerEgressModeV1R\x04mode\x12\x14\n" +
+	"\x05allow\x18\x02 \x03(\tR\x05allowJ\x04\b\x03\x10\v*\x9f\x04\n" +
 	"\x13WorkerCommandTypeV1\x12&\n" +
 	"\"WORKER_COMMAND_TYPE_V1_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cWORKER_COMMAND_TYPE_V1_START\x10\x01\x12!\n" +
@@ -511,7 +648,11 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"*WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_ADHOC\x10\t\x12,\n" +
 	"(WORKER_COMMAND_TYPE_V1_TOOLKIT_CALL_TOOL\x10\n" +
 	"\x12/\n" +
-	"+WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ\x10\vBTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"+WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ\x10\v*\x80\x01\n" +
+	"\x12WorkerEgressModeV1\x12%\n" +
+	"!WORKER_EGRESS_MODE_V1_UNSPECIFIED\x10\x00\x12\x1e\n" +
+	"\x1aWORKER_EGRESS_MODE_V1_OPEN\x10\x01\x12#\n" +
+	"\x1fWORKER_EGRESS_MODE_V1_ALLOWLIST\x10\x02BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_command_proto_rawDescOnce sync.Once
@@ -525,35 +666,39 @@ func file_elitea_runtime_v1_command_proto_rawDescGZIP() []byte {
 	return file_elitea_runtime_v1_command_proto_rawDescData
 }
 
-var file_elitea_runtime_v1_command_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_elitea_runtime_v1_command_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_elitea_runtime_v1_command_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_elitea_runtime_v1_command_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_elitea_runtime_v1_command_proto_goTypes = []any{
 	(WorkerCommandTypeV1)(0),                    // 0: elitea.runtime.v1.WorkerCommandTypeV1
-	(*WorkerCommandV1)(nil),                     // 1: elitea.runtime.v1.WorkerCommandV1
-	(*ExecutionInputBundleReferenceV1)(nil),     // 2: elitea.runtime.v1.ExecutionInputBundleReferenceV1
-	(*ConfigurationValidationCommandV1)(nil),    // 3: elitea.runtime.v1.ConfigurationValidationCommandV1
-	(*ToolkitAvailableToolsCommandV1)(nil),      // 4: elitea.runtime.v1.ToolkitAvailableToolsCommandV1
-	(*IndexIngestCommandV1)(nil),                // 5: elitea.runtime.v1.IndexIngestCommandV1
-	(*AgentExecutionCommandV1)(nil),             // 6: elitea.runtime.v1.AgentExecutionCommandV1
-	(*ToolkitCallToolCommandV1)(nil),            // 7: elitea.runtime.v1.ToolkitCallToolCommandV1
-	(*ToolkitExecuteReadCommandV1)(nil),         // 8: elitea.runtime.v1.ToolkitExecuteReadCommandV1
-	(*ExecutionSecurityContextReferenceV1)(nil), // 9: elitea.runtime.v1.ExecutionSecurityContextReferenceV1
+	(WorkerEgressModeV1)(0),                     // 1: elitea.runtime.v1.WorkerEgressModeV1
+	(*WorkerCommandV1)(nil),                     // 2: elitea.runtime.v1.WorkerCommandV1
+	(*WorkerEgressPolicyV1)(nil),                // 3: elitea.runtime.v1.WorkerEgressPolicyV1
+	(*ExecutionInputBundleReferenceV1)(nil),     // 4: elitea.runtime.v1.ExecutionInputBundleReferenceV1
+	(*ConfigurationValidationCommandV1)(nil),    // 5: elitea.runtime.v1.ConfigurationValidationCommandV1
+	(*ToolkitAvailableToolsCommandV1)(nil),      // 6: elitea.runtime.v1.ToolkitAvailableToolsCommandV1
+	(*IndexIngestCommandV1)(nil),                // 7: elitea.runtime.v1.IndexIngestCommandV1
+	(*AgentExecutionCommandV1)(nil),             // 8: elitea.runtime.v1.AgentExecutionCommandV1
+	(*ToolkitCallToolCommandV1)(nil),            // 9: elitea.runtime.v1.ToolkitCallToolCommandV1
+	(*ToolkitExecuteReadCommandV1)(nil),         // 10: elitea.runtime.v1.ToolkitExecuteReadCommandV1
+	(*ExecutionSecurityContextReferenceV1)(nil), // 11: elitea.runtime.v1.ExecutionSecurityContextReferenceV1
 }
 var file_elitea_runtime_v1_command_proto_depIdxs = []int32{
-	0, // 0: elitea.runtime.v1.WorkerCommandV1.command_type:type_name -> elitea.runtime.v1.WorkerCommandTypeV1
-	2, // 1: elitea.runtime.v1.WorkerCommandV1.input_bundle_ref:type_name -> elitea.runtime.v1.ExecutionInputBundleReferenceV1
-	3, // 2: elitea.runtime.v1.WorkerCommandV1.configuration_validation:type_name -> elitea.runtime.v1.ConfigurationValidationCommandV1
-	4, // 3: elitea.runtime.v1.WorkerCommandV1.toolkit_available_tools:type_name -> elitea.runtime.v1.ToolkitAvailableToolsCommandV1
-	5, // 4: elitea.runtime.v1.WorkerCommandV1.index_ingest:type_name -> elitea.runtime.v1.IndexIngestCommandV1
-	6, // 5: elitea.runtime.v1.WorkerCommandV1.agent_execution:type_name -> elitea.runtime.v1.AgentExecutionCommandV1
-	7, // 6: elitea.runtime.v1.WorkerCommandV1.toolkit_call_tool:type_name -> elitea.runtime.v1.ToolkitCallToolCommandV1
-	8, // 7: elitea.runtime.v1.WorkerCommandV1.toolkit_execute_read:type_name -> elitea.runtime.v1.ToolkitExecuteReadCommandV1
-	9, // 8: elitea.runtime.v1.WorkerCommandV1.security_context_ref:type_name -> elitea.runtime.v1.ExecutionSecurityContextReferenceV1
-	9, // [9:9] is the sub-list for method output_type
-	9, // [9:9] is the sub-list for method input_type
-	9, // [9:9] is the sub-list for extension type_name
-	9, // [9:9] is the sub-list for extension extendee
-	0, // [0:9] is the sub-list for field type_name
+	0,  // 0: elitea.runtime.v1.WorkerCommandV1.command_type:type_name -> elitea.runtime.v1.WorkerCommandTypeV1
+	4,  // 1: elitea.runtime.v1.WorkerCommandV1.input_bundle_ref:type_name -> elitea.runtime.v1.ExecutionInputBundleReferenceV1
+	5,  // 2: elitea.runtime.v1.WorkerCommandV1.configuration_validation:type_name -> elitea.runtime.v1.ConfigurationValidationCommandV1
+	6,  // 3: elitea.runtime.v1.WorkerCommandV1.toolkit_available_tools:type_name -> elitea.runtime.v1.ToolkitAvailableToolsCommandV1
+	7,  // 4: elitea.runtime.v1.WorkerCommandV1.index_ingest:type_name -> elitea.runtime.v1.IndexIngestCommandV1
+	8,  // 5: elitea.runtime.v1.WorkerCommandV1.agent_execution:type_name -> elitea.runtime.v1.AgentExecutionCommandV1
+	9,  // 6: elitea.runtime.v1.WorkerCommandV1.toolkit_call_tool:type_name -> elitea.runtime.v1.ToolkitCallToolCommandV1
+	10, // 7: elitea.runtime.v1.WorkerCommandV1.toolkit_execute_read:type_name -> elitea.runtime.v1.ToolkitExecuteReadCommandV1
+	11, // 8: elitea.runtime.v1.WorkerCommandV1.security_context_ref:type_name -> elitea.runtime.v1.ExecutionSecurityContextReferenceV1
+	3,  // 9: elitea.runtime.v1.WorkerCommandV1.egress_policy:type_name -> elitea.runtime.v1.WorkerEgressPolicyV1
+	1,  // 10: elitea.runtime.v1.WorkerEgressPolicyV1.mode:type_name -> elitea.runtime.v1.WorkerEgressModeV1
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_command_proto_init() }
@@ -580,8 +725,8 @@ func file_elitea_runtime_v1_command_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_command_proto_rawDesc), len(file_elitea_runtime_v1_command_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   1,
+			NumEnums:      2,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

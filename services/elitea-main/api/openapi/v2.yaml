@@ -6412,6 +6412,198 @@ components:
           type: string
           maxLength: 64
 
+    WorkerEgressReachedHost:
+      type: object
+      description: >
+        One public host the runs of one project and agent reached (ADR-0044
+        decision 2), summed over the window.
+      required: [project_id, agent_id, host, port, connections, executions, last_seen]
+      properties:
+        project_id: { type: integer, format: int64 }
+        agent_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: >
+            The agent (application) of the runs. Null for runs of no agent: an
+            ad hoc chat, a direct toolkit call, a tool discovery or an index run.
+        host: { type: string }
+        port: { type: integer }
+        connections: { type: integer, format: int64 }
+        executions:
+          type: integer
+          format: int64
+          description: How many runs reached the host.
+        last_seen: { type: string, format: date-time }
+
+    WorkerEgressRefusedHost:
+      type: object
+      description: >
+        One host refused for the runs of one project and agent. `reason` is
+        the refusal code, for example egress_host_not_allowed (outside the
+        run's worker egress allowlist) or an SSRF refusal; `port` is 0 when
+        the request named none that could be parsed.
+      required: [project_id, agent_id, host, port, reason, count, executions, last_seen]
+      properties:
+        project_id: { type: integer, format: int64 }
+        agent_id: { type: integer, format: int64, nullable: true }
+        host: { type: string }
+        port: { type: integer }
+        reason: { type: string }
+        count: { type: integer, format: int64 }
+        executions: { type: integer, format: int64 }
+        last_seen: { type: string, format: date-time }
+
+    WorkerEgressHostsResponse:
+      type: object
+      description: >
+        The hosts runs reached and were refused in the window, per project,
+        agent and host, most used first. Each list holds at most 5000 rows;
+        the matching truncated flag says when it was cut. The window can only
+        reach as far back as the stored summaries are kept
+        (ELITEA_EGRESS_AUDIT_RETENTION_DAYS, default 30).
+      required: [days, since, source, project_id, reached, refused, reached_truncated, refused_truncated]
+      properties:
+        days: { type: integer }
+        since: { type: string, format: date-time }
+        source:
+          type: string
+          enum: [worker, proxy, all]
+        project_id: { type: integer, format: int64, nullable: true }
+        reached:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerEgressReachedHost'
+        refused:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerEgressRefusedHost'
+        reached_truncated: { type: boolean }
+        refused_truncated: { type: boolean }
+
+    RetentionPolicy:
+      type: object
+      description: >
+        One row of the retention policy (ADR-0042 decision 4). A platform row
+        (`project_id` null) sets the bounds of a data class: `min_age_days` is
+        the shortest maximum a project override may set and `max_age_days` the
+        platform maximum (null keeps forever). A project override sets only
+        its own `max_age_days`, inside those bounds. `data_class` is one of
+        conversation, attachment, gateway_request_log, admin_audit or
+        security_audit.
+      required: [data_class, project_id, min_age_days, max_age_days,
+        allow_project_override, overrides_supported, floor_days, enforced_by,
+        updated_by, updated_at]
+      properties:
+        data_class: { type: string }
+        project_id: { type: integer, format: int64, nullable: true }
+        min_age_days: { type: integer }
+        max_age_days:
+          type: integer
+          nullable: true
+          description: Null keeps the data forever.
+        allow_project_override: { type: boolean }
+        overrides_supported:
+          type: boolean
+          description: Whether this data class takes project overrides at all.
+        floor_days:
+          type: integer
+          description: The shortest maximum the enforcing sweep accepts.
+        enforced_by:
+          type: string
+          description: What applies the maximum of this data class.
+        updated_by:
+          type: integer
+          format: int64
+          nullable: true
+          description: Null on a seeded row nobody has edited.
+        updated_at: { type: string, format: date-time }
+
+    RetentionPolicyListResponse:
+      type: object
+      required: [policies]
+      properties:
+        policies:
+          type: array
+          items:
+            $ref: '#/components/schemas/RetentionPolicy'
+
+    RetentionPolicyUpdate:
+      type: object
+      additionalProperties: false
+      description: >
+        The platform row of one data class. The PUT replaces the row, so all
+        three fields are required and an omitted one is refused with 400,
+        never reset to a default. A null `max_age_days` keeps the data
+        forever.
+      required: [min_age_days, max_age_days, allow_project_override]
+      properties:
+        min_age_days: { type: integer, minimum: 0 }
+        max_age_days: { type: integer, minimum: 1, nullable: true }
+        allow_project_override: { type: boolean }
+
+    RetentionOverrideUpdate:
+      type: object
+      additionalProperties: false
+      description: >
+        A project's own maximum age. It must lie inside the platform row's
+        bounds; null keeps forever, which only fits a platform row that also
+        keeps forever.
+      properties:
+        max_age_days: { type: integer, minimum: 1, nullable: true }
+
+    LegalHold:
+      type: object
+      description: >
+        A legal hold. While `active` it suspends every deletion of the
+        conversations it covers. `scope` is project (names `project_id`),
+        agent (names `project_id` and `agent_id`, the agent's own project) or
+        user (names `user_id`, the conversation owner).
+      required: [id, scope, project_id, agent_id, user_id, reason, active,
+        created_by, created_at, released_by, released_at, release_reason]
+      properties:
+        id: { type: integer, format: int64 }
+        scope: { type: string }
+        project_id: { type: integer, format: int64, nullable: true }
+        agent_id: { type: integer, format: int64, nullable: true }
+        user_id: { type: integer, format: int64, nullable: true }
+        reason: { type: string }
+        active: { type: boolean }
+        created_by: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        released_by: { type: integer, format: int64, nullable: true }
+        released_at: { type: string, format: date-time, nullable: true }
+        release_reason: { type: string, nullable: true }
+
+    LegalHoldListResponse:
+      type: object
+      required: [holds]
+      properties:
+        holds:
+          type: array
+          items:
+            $ref: '#/components/schemas/LegalHold'
+
+    LegalHoldCreate:
+      type: object
+      additionalProperties: false
+      required: [scope, reason]
+      description: >
+        `scope` is project, agent or user; name exactly the ids that scope
+        needs (see LegalHold).
+      properties:
+        scope: { type: string }
+        project_id: { type: integer, format: int64, minimum: 1 }
+        agent_id: { type: integer, format: int64, minimum: 1 }
+        user_id: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+
+    LegalHoldRelease:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: { type: string, maxLength: 2000 }
+
     AgentIdentityBinding:
       type: object
       description: >
@@ -6631,6 +6823,126 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Mandate'
+
+    ExecutionSuspension:
+      type: object
+      description: >
+        A kill-switch suspension (ADR-0041 decision 1). It is active while
+        resumed_at is null.
+      required: [id, scope, project_id, application_id, toolkit_type, reason,
+        actor_id, source, resume_requires, created_at, cancelled_runs, active,
+        resumed_at, resumed_by, resume_reason]
+      properties:
+        id: { type: integer, format: int64 }
+        scope:
+          type: string
+          description: One of platform, project, agent, toolkit_type.
+        project_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: Set for the project and agent scopes.
+        application_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: The agent (its application id in its project). Set for the agent scope.
+        toolkit_type:
+          type: string
+          nullable: true
+          description: The canonical toolkit type. Set for the toolkit_type scope.
+        reason: { type: string }
+        actor_id:
+          type: integer
+          format: int64
+          description: The user who suspended. 0 is the scheduled self-test.
+        source:
+          type: string
+          description: One of manual, breaker, certification, self_test.
+        resume_requires:
+          type: string
+          description: One of any_admin, governance_role, two_person.
+        created_at: { type: string, format: date-time }
+        cancelled_runs:
+          type: integer
+          description: The in-flight runs the suspension cancelled when it was created.
+        active: { type: boolean }
+        resumed_at: { type: string, format: date-time, nullable: true }
+        resumed_by: { type: integer, format: int64, nullable: true }
+        resume_reason: { type: string, nullable: true }
+      example:
+        id: 12
+        scope: agent
+        project_id: 7
+        application_id: 31
+        toolkit_type: null
+        reason: The agent sends repeated messages to customers
+        actor_id: 4
+        source: manual
+        resume_requires: any_admin
+        created_at: '2026-10-28T09:15:02Z'
+        cancelled_runs: 2
+        active: true
+        resumed_at: null
+        resumed_by: null
+        resume_reason: null
+
+    ExecutionSuspensionList:
+      type: object
+      required: [suspensions]
+      properties:
+        suspensions:
+          type: array
+          items: { $ref: '#/components/schemas/ExecutionSuspension' }
+
+    ExecutionSuspensionCreate:
+      type: object
+      additionalProperties: false
+      required: [scope, reason]
+      properties:
+        scope:
+          type: string
+          description: >
+            One of platform, project, agent, toolkit_type. The project surface
+            accepts project and agent only.
+        project_id:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 2147483647
+          description: >
+            The project of a project or agent suspension. The project surface
+            takes it from the path. Outside 1 to 2147483647 the request is
+            refused with 400.
+        application_id:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 2147483647
+          description: >
+            The agent of an agent suspension. Outside 1 to 2147483647 the
+            request is refused with 400.
+        toolkit_type:
+          type: string
+          description: The toolkit type of a toolkit_type suspension, for example github.
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        resume_requires:
+          type: string
+          description: One of any_admin (the default), governance_role, two_person.
+        confirm:
+          type: string
+          description: Must be STOP for the platform scope.
+
+    ExecutionSuspensionResume:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          maxLength: 1024
 
     CredentialReference:
       type: object
@@ -17007,6 +17319,133 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  /admin/execution_suspensions:
+    get:
+      operationId: listExecutionSuspensions
+      summary: List execution suspensions (kill switch)
+      description: >
+        The admin Kill switch page (ADR-0041 decision 1). Every suspension of
+        every scope, newest first. Gated on `safety.suspend` in the
+        administration mode.
+      tags: [admin]
+      parameters:
+        - name: active
+          in: query
+          required: false
+          description: true lists only the active suspensions; false or absent lists all, newest first.
+          schema: { type: boolean }
+        - name: project_id
+          in: query
+          required: false
+          description: Only the agent and project suspensions of this project.
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: The suspensions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutionSuspensionList' }
+        '400':
+          description: A malformed filter
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    post:
+      operationId: createExecutionSuspension
+      summary: Suspend execution of an agent, a project, a toolkit type or the platform
+      description: >
+        The kill switch (ADR-0041 decision 1). Admission refuses every new run
+        the suspension covers with the typed error `execution_suspended`, and
+        the same transaction cancels the in-flight runs it covers (platform,
+        project and agent scopes; `cancelled_runs` gives the count). A
+        toolkit_type suspension cancels nothing: new runs and new tool calls
+        through admission are refused, and runs already in flight keep the
+        toolkit until they end. The platform scope needs `confirm` set to
+        `STOP`. Gated on
+        `safety.suspend` in the administration mode. The audit record of the
+        request carries the action safety.suspension.created.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExecutionSuspensionCreate' }
+      responses:
+        '201':
+          description: The new active suspension
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutionSuspension' }
+        '400':
+          description: A malformed body, an unknown scope, a missing key or reason, or (code confirmation_required) a platform stop without the typed confirmation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks safety.suspend, or this surface may not suspend that scope
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: (code already_suspended) An active suspension already covers this target. The body also carries the existing suspension under `suspension`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/execution_suspensions/{suspension_id}:resume:
+    parameters:
+      - name: suspension_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: resumeExecutionSuspension
+      summary: Resume a suspension
+      description: >
+        Ends an active suspension. Admission accepts new runs again; cancelled
+        runs stay cancelled. The resume rule of the suspension applies:
+        any_admin lets any caller with safety.suspend resume it,
+        governance_role needs a platform administrator, and two_person needs a
+        platform administrator who is not the suspender. The body is empty or
+        has an optional `reason`. The audit record of the request carries the
+        action safety.suspension.resumed.
+      tags: [admin]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExecutionSuspensionResume' }
+      responses:
+        '200':
+          description: The suspension after the resume
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutionSuspension' }
+        '400':
+          description: A malformed suspension id or body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks safety.suspend, or (code resume_forbidden) the resume rule of the suspension does not let this caller resume it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such suspension on this surface
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The suspension was already resumed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
   /admin/platform_routines/administration:
     get:
       operationId: listPlatformRoutines
@@ -17083,6 +17522,304 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '503':
           description: This deployment has no routine registry configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/retention/policies:
+    get:
+      operationId: listRetentionPolicies
+      summary: List the retention policy of every data class
+      description: >
+        The admin Data retention page (ADR-0042 decision 4). Platform rows
+        first, then project overrides. Gated on `retention.manage`.
+      tags: [admin]
+      responses:
+        '200':
+          description: Every platform row and project override
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionPolicyListResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: This deployment has no retention policy store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/retention/policies/{data_class}:
+    parameters:
+      - name: data_class
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      operationId: setPlatformRetentionPolicy
+      summary: Set the platform bounds of one data class
+      description: >
+        Replaces the platform row. Takes effect on the enforcing sweep's next
+        pass. Gated on `retention.manage`; audited as
+        `retention.policy.update`.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetentionPolicyUpdate'
+      responses:
+        '200':
+          description: The row as stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionPolicy'
+        '400':
+          description: >
+            A missing field, an unknown data class, a maximum below the class
+            floor or the minimum, keep forever on the gateway log, a maximum on
+            attachments, or project overrides on a class that takes none
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: This deployment has no retention policy store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/retention/policies/{data_class}/projects/{project_id}:
+    parameters:
+      - name: data_class
+        in: path
+        required: true
+        schema: { type: string }
+      - name: project_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    put:
+      operationId: setProjectRetentionOverride
+      summary: Set a project's own maximum age for one data class
+      description: >
+        Refused unless the platform row allows overrides and the value lies
+        inside its bounds. Gated on `retention.manage`; audited as
+        `retention.override.set`.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetentionOverrideUpdate'
+      responses:
+        '200':
+          description: The override as stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionPolicy'
+        '400':
+          description: Outside the platform bounds, or overrides are not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such project or data class
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: This deployment has no retention policy store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    delete:
+      operationId: deleteProjectRetentionOverride
+      summary: Remove a project's override
+      description: >
+        The platform value applies again. Gated on `retention.manage`;
+        audited as `retention.override.delete`.
+      tags: [admin]
+      responses:
+        '204':
+          description: Removed
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No override for this project and data class
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: This deployment has no retention policy store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/worker_egress/hosts:
+    get:
+      operationId: listWorkerEgressHosts
+      summary: List the public hosts runs reached and were refused
+      description: >
+        The worker egress hosts view (ADR-0044 decision 2): the hosts the
+        runs of each project and agent reached and were refused in the last
+        `days` days, from the stored egress summaries, so an operator can seed
+        the platform's or a project's worker egress allowlist before switching
+        the `worker_egress` mode to allowlist. `source` selects the worker's
+        own HTTP clients (the default, what that allowlist governs), the
+        egress proxy (sandbox and code runs) or both. Gated on
+        `configuration.governance`.
+      tags: [admin]
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 90, default: 30 }
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [worker, proxy, all]
+            default: worker
+        - name: project_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: The hosts reached and refused in the window
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerEgressHostsResponse'
+        '400':
+          description: A days outside 1 to 90, an unknown source or a malformed project_id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: This deployment has no egress summary store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/legal_holds:
+    get:
+      operationId: listLegalHolds
+      summary: List legal holds
+      description: >
+        Newest first, at most 1000. `active=true` drops released holds. Gated
+        on `legal_hold.manage`.
+      tags: [admin]
+      parameters:
+        - name: active
+          in: query
+          required: false
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: The holds
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegalHoldListResponse'
+        '400':
+          description: active is not a boolean
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: This deployment has no retention policy store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    post:
+      operationId: createLegalHold
+      summary: Place a legal hold
+      description: >
+        Suspends deletion of every conversation the hold covers, by the
+        retention sweep and by a user's own delete (409). Gated on
+        `legal_hold.manage`; audited as `legal_hold.create`.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LegalHoldCreate'
+      responses:
+        '201':
+          description: The hold as stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegalHold'
+        '400':
+          description: An unknown scope, the wrong ids for the scope, or no reason
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: This deployment has no retention policy store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/legal_holds/{id}/release:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    post:
+      operationId: releaseLegalHold
+      summary: Release a legal hold
+      description: >
+        Deletion of what the hold covered resumes on the next sweep. A hold is
+        released once. Gated on `legal_hold.manage`; audited as
+        `legal_hold.release`.
+      tags: [admin]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LegalHoldRelease'
+      responses:
+        '200':
+          description: The released hold
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegalHold'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such hold
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The hold is already released
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: This deployment has no retention policy store
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -22255,6 +22992,121 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /elitea_core/execution_suspensions/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listProjectExecutionSuspensions
+      summary: List the suspensions of a project
+      description: >
+        The agent and project suspensions of this project, newest first.
+        Requires `safety.suspend` in the project (the project admin).
+      tags: [settings]
+      parameters:
+        - name: active
+          in: query
+          required: false
+          description: true lists only the active suspensions; false or absent lists all, newest first.
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: The suspensions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutionSuspensionList' }
+        '400':
+          description: A bad project id or filter
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    post:
+      operationId: createProjectExecutionSuspension
+      summary: Stop an agent of the project, or the whole project
+      description: >
+        The Stop agent action. Scope agent (with application_id) or project
+        only; project_id, if given, must be the project of the path. Admission
+        refuses the covered runs with `execution_suspended` and the in-flight
+        runs are cancelled. Requires `safety.suspend` in the project (the
+        project admin).
+      tags: [settings]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExecutionSuspensionCreate' }
+      responses:
+        '201':
+          description: The new active suspension
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutionSuspension' }
+        '400':
+          description: A malformed body, an unknown scope, a missing key or reason, or (code confirmation_required) a platform stop without the typed confirmation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks safety.suspend, or this surface may not suspend that scope
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: (code already_suspended) An active suspension already covers this target. The body also carries the existing suspension under `suspension`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /elitea_core/execution_suspensions/prompt_lib/{project_id}/{suspension_id}:resume:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: suspension_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: resumeProjectExecutionSuspension
+      summary: Resume a suspension of the project
+      description: >
+        Ends an agent or project suspension of this project. Only a
+        suspension with the resume rule any_admin can be resumed here; the
+        others need a platform administrator in the admin console. Requires
+        `safety.suspend` in the project (the project admin).
+      tags: [settings]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExecutionSuspensionResume' }
+      responses:
+        '200':
+          description: The suspension after the resume
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutionSuspension' }
+        '400':
+          description: A malformed suspension id or body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks safety.suspend, or (code resume_forbidden) the resume rule of the suspension does not let this caller resume it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such suspension on this surface
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The suspension was already resumed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
   /elitea_core/workspace_handoff/prompt_lib/{project_id}/{conversation_uuid}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'

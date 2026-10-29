@@ -429,7 +429,8 @@ impl OrdinaryNativeAgentAssembler {
                                 )),
                             ))
                         }),
-                        targets: pr::pull_request_targets(&tool_snapshot),
+                        // Bound to the run's egress policy (#1490).
+                        targets: pr::pull_request_targets(&tool_snapshot, tool_policy.egress()),
                         diff: Arc::new(crate::workspace_run::tools::TurnDiffSource::new(
                             Arc::clone(turn),
                         )),
@@ -443,6 +444,7 @@ impl OrdinaryNativeAgentAssembler {
                             )
                             .with_audit(turn.audit()),
                         ),
+                        egress: Arc::clone(tool_policy.egress()),
                     }
                     .toolset()
                 } else {
@@ -850,7 +852,8 @@ impl OrdinaryNativeAgentAssembler {
             .with_skipped_application_children(skipped_applications)
             .with_renamed_tools(renamed_tools)
             .with_left_out_toolkits(left_out_toolkits)
-            .with_toolkit_attribution(toolkit_attribution),
+            .with_toolkit_attribution(toolkit_attribution)
+            .with_egress(Arc::clone(tool_policy.egress())),
             fresh_execution_mode,
         ))
     }
@@ -1081,6 +1084,7 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
         let tool_policy = policy_for_guardrails(
             assembly.request().payload.toolkit_guardrails.as_ref(),
             &self.tool_policy,
+            assembly.egress(),
         )?;
         // The saved model request already contains resolved attachments. Do not
         // reread mutable documents while reconstructing this execution.
@@ -1115,6 +1119,7 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
             let tool_policy = policy_for_guardrails(
                 assembly.request().payload.toolkit_guardrails.as_ref(),
                 &self.tool_policy,
+                assembly.egress(),
             )?;
             // #606: this turn's attached documents are read HERE, before
             // admission builds the human message. It is infallible by design —

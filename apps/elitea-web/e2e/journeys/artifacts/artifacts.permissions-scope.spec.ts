@@ -75,7 +75,13 @@ test('bucket "Manage access" is visible in the shared Team project but must be a
     const privateOption = page.getByRole('option', { name: 'Private' });
     await expect(privateOption).toBeVisible({ timeout: 10_000 });
     await privateOption.click();
-    await page.waitForURL('**/artifacts**', { timeout: 15_000 });
+    // The URL is /app/artifacts before and after the switch, so waiting on it
+    // proves nothing; reading the id straight away could still see the Team
+    // project and create the "personal" bucket there (a webkit flake). Wait
+    // for the persisted selection itself to change.
+    await expect
+      .poll(() => page.evaluate(() => localStorage.getItem('el.project.id')), { timeout: 15_000 })
+      .not.toBe(teamProjectId);
 
     personalProjectId = await selectedProjectId(page);
     await ensureBucket(request, personalProjectId, PERSONAL_BUCKET);

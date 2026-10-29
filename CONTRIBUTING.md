@@ -12,7 +12,7 @@ Thank you for contributing.
 
 - Open a PR with a clear problem statement and scope.
 - Include tests that cover your changes.
-- Update the embedded docs (`apps/elitea-web/src/entries/docs`) when behavior or configuration changes.
+- Update the embedded docs (`apps/elitea-docs/src/content/docs`) when behavior or configuration changes.
 - Keep PRs small and reviewable when possible.
 
 ## Commit Messages

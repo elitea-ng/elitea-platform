@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.elitea.ai/audit/v1/event.schema.json",
+  "title": "elitea.audit.v1 evidence event",
+  "description": "One audit evidence event, as exported to a SIEM by the OTLP logs and signed webhook exporters (ADR-0042 decision 3). Producers: services/elitea-main/internal/auditexport maps securityaudit records and centry.audit_events rows to this envelope. OCSF mapping (https://schema.ocsf.io): event_id -> metadata.uid; time -> time; source -> metadata.product.feature.name; ocsf.class_uid / ocsf.category_uid -> class_uid / category_uid; tenant.project_id -> cloud.project_uid; actor.id -> actor.user.uid (actor.type decides user, service or agent); actor.email -> actor.user.email_addr; action -> activity_name; target.type / target.id / target.name -> resources[].type / uid / name; outcome -> status_id (success, failure) and authorization disposition (allow, deny); correlation.trace_id -> metadata.correlation_uid; details.http_method / http_route / status_code -> http_request.http_method / url.path / http_response.code. chain.* and details.* have no OCSF attribute and travel in unmapped. A field is omitted, never null, when it has no value, except tenant.project_id which is null for platform-wide events. Adding an optional field is not a version change; renaming, removing or retyping one, or adding a required one, is a new schema version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "event_id", "time", "source", "event_type", "tenant", "actor", "action", "outcome", "details"],
+  "properties": {
+    "schema": {
+      "const": "elitea.audit.v1",
+      "description": "The schema version. A consumer rejects or quarantines a version it does not know."
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Stable identifier of the event. Delivery is at least once, so a consumer deduplicates on it. A security audit event keeps its CloudEvents UUID; an audit_events row has a name-based UUID derived from its row id."
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the audited operation happened (UTC, RFC 3339)."
+    },
+    "source": {
+      "enum": ["security_audit", "admin_audit", "run_step", "approval", "suspension"],
+      "description": "Which evidence stream produced the event. security_audit is the governed security audit outbox; admin_audit is centry.audit_events (the HTTP access audit behind the admin Audit Trail). run_step, approval and suspension are reserved for ADR-0042 evidence added later."
+    },
+    "event_type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "The producer's event type: a CloudEvents type such as ai.elitea.security.v1.decision for security_audit, or the audit_events event_type (api, socketio, rpc, agent, tool, llm, schedule, admin_task) for admin_audit."
+    },
+    "ocsf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class_uid", "category_uid"],
+      "properties": {
+        "class_uid": { "type": "integer", "minimum": 1 },
+        "category_uid": { "type": "integer", "minimum": 1 }
+      },
+      "description": "The OCSF class when one fits (3003 Authorize Session, 3004 Entity Management, 3005 User Access Management, 6003 API Activity). Omitted when no class fits."
+    },
+    "tenant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id"],
+      "properties": {
+        "project_id": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "The tenant project. 0 is the platform partition of the security audit chain; null means the row carries no project."
+        }
+      }
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "enum": ["user", "principal", "agent", "system", "unknown"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 256, "description": "A user id, a principal reference or an agent identity reference. \"unknown\" when the producer recorded none." },
+        "email": { "type": "string", "maxLength": 256 },
+        "chain": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "description": "The RFC 8693 actor chain, outermost first, as references."
+        },
+        "fidelity": {
+          "enum": ["native_act", "configured_act", "azp_only", "attributed", "none"],
+          "description": "How faithfully the actor chain was established (ADR-0039 decision 5)."
+        }
+      }
+    },
+    "action": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "description": "The governed operation (credential.use, grant.revoke) or, for admin_audit, the label \"METHOD /route\"."
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "maxLength": 64 },
+        "id": { "type": "string", "maxLength": 256 },
+        "name": { "type": "string", "maxLength": 256 }
+      },
+      "description": "What the action acted on, when the producer recorded it."
+    },
+    "outcome": {
+      "enum": ["allow", "deny", "success", "failure", "unknown"],
+      "description": "allow and deny are authorisation decisions; success and failure are the result of an operation."
+    },
+    "correlation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "trace_id": { "type": "string", "maxLength": 64 },
+        "span_id": { "type": "string", "maxLength": 32 },
+        "parent_span_id": { "type": "string", "maxLength": 32 },
+        "correlation_id": { "type": "string", "maxLength": 256 }
+      }
+    },
+    "chain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["partition", "sequence", "prev_hash", "hash"],
+      "properties": {
+        "partition": { "type": "string", "pattern": "^(0|[1-9][0-9]{0,18})$", "description": "The hash chain partition (the tenant project id; 0 is the platform)." },
+        "sequence": { "type": "integer", "minimum": 1, "description": "Position in the partition chain: 1, 2, 3 with no gap." },
+        "prev_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Hex SHA-256 of the previous event; 64 zeros for the first event of a partition." },
+        "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Hex SHA-256 over prev_hash and the canonical stored event. Verify with the elitea-main security audit verifier; the hash covers the stored CloudEvents form, not this envelope." }
+      },
+      "description": "Present when the producer keeps a tamper-evident chain (security_audit today)."
+    },
+    "details": {
+      "type": "object",
+      "description": "Source-specific fields. The shape is fixed per source; run_step, approval and suspension add theirs later."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "source": { "const": "security_audit" } }, "required": ["source"] },
+      "then": {
+        "required": ["chain", "ocsf"],
+        "properties": { "details": { "$ref": "#/$defs/securityAuditDetails" } }
+      }
+    },
+    {
+      "if": { "properties": { "source": { "const": "admin_audit" } }, "required": ["source"] },
+      "then": {
+        "properties": { "details": { "$ref": "#/$defs/adminAuditDetails" } }
+      }
+    }
+  ],
+  "$defs": {
+    "securityAuditDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reasons", "authorization_epoch", "revocation_epoch"],
+      "properties": {
+        "reasons": { "type": "array", "maxItems": 32, "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,127}$" }, "description": "Stable reason codes." },
+        "calling_application_id": { "type": "string", "maxLength": 256 },
+        "authentication_ref": { "type": "string", "maxLength": 256 },
+        "agent_binding_id": { "type": "string", "maxLength": 256 },
+        "authority_id": { "type": "string", "maxLength": 256 },
+        "mandate_ref": { "type": "string", "maxLength": 256 },
+        "delegation_ref": { "type": "string", "maxLength": 256 },
+        "grant_ref": { "type": "string", "maxLength": 256 },
+        "workload_id": { "type": "string", "maxLength": 256 },
+        "execution_id": { "type": "string", "maxLength": 256 },
+        "invocation_id": { "type": "string", "maxLength": 256 },
+        "decision_id": { "type": "string", "maxLength": 256 },
+        "policy_revision_id": { "type": "string", "maxLength": 256 },
+        "authorization_epoch": { "type": "integer", "minimum": 0 },
+        "revocation_epoch": { "type": "integer", "minimum": 0 },
+        "arrangement": { "enum": ["A", "B", "C"] },
+        "outbox_seq": { "type": "integer", "minimum": 1, "description": "The global outbox sequence, for tracing a record to its row." }
+      }
+    },
+    "adminAuditDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["row_id", "is_error"],
+      "properties": {
+        "row_id": { "type": "integer", "minimum": 1, "description": "centry.audit_events.id." },
+        "http_method": { "type": "string", "maxLength": 10 },
+        "http_route": { "type": "string", "maxLength": 512, "description": "The matched route pattern, never the raw target." },
+        "status_code": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "duration_ms": { "type": "number", "minimum": 0 },
+        "is_error": { "type": "boolean" }
+      }
+    }
+  }
+}

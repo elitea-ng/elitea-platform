@@ -10,6 +10,7 @@ use reqwest::{Method, Request, StatusCode, Url};
 use serde_json::{Map, Value, json};
 
 use super::config::AzureSearchToolkitConfig;
+use crate::egress::BuildForRun as _;
 
 const API_VERSION: &str = "2024-07-01";
 const ACCEPT_VALUE: &str = "application/json;odata.metadata=none";
@@ -199,7 +200,7 @@ pub(in crate::toolkits) trait AzureSearchTransport: Send + Sync {
 }
 
 struct ReqwestAzureSearchTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -256,7 +257,7 @@ pub(crate) struct AzureSearchClient {
 
 impl AzureSearchClient {
     pub(crate) fn new(config: AzureSearchToolkitConfig) -> Result<Self, AzureSearchClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
@@ -264,7 +265,7 @@ impl AzureSearchClient {
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             config,

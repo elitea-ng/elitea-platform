@@ -11,6 +11,7 @@ use reqwest::{Method, Request, StatusCode, Url};
 use serde_json::Value;
 use zeroize::Zeroizing;
 
+use crate::egress::BuildForRun as _;
 use crate::toolkits::families::attachment_host::multipart_upload;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -263,7 +264,7 @@ pub(in crate::toolkits) trait ZephyrRestTransport: Send + Sync {
 }
 
 struct ReqwestZephyrRestTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -337,7 +338,7 @@ pub(crate) struct ZephyrRestClient {
 
 impl ZephyrRestClient {
     pub(crate) fn new(base: Url, token: Zeroizing<String>) -> Result<Self, ZephyrRestError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -346,7 +347,7 @@ impl ZephyrRestClient {
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT_VALUE)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             base,

@@ -30,6 +30,7 @@ const (
 	RuntimeControlService_PrepareSettlement_FullMethodName             = "/elitea.runtime.v1.RuntimeControlService/PrepareSettlement"
 	RuntimeControlService_RemoveIndex_FullMethodName                   = "/elitea.runtime.v1.RuntimeControlService/RemoveIndex"
 	RuntimeControlService_ClaimSteeringMessages_FullMethodName         = "/elitea.runtime.v1.RuntimeControlService/ClaimSteeringMessages"
+	RuntimeControlService_ReportEgressSummary_FullMethodName           = "/elitea.runtime.v1.RuntimeControlService/ReportEgressSummary"
 )
 
 // RuntimeControlServiceClient is the client API for RuntimeControlService service.
@@ -47,6 +48,7 @@ type RuntimeControlServiceClient interface {
 	PrepareSettlement(ctx context.Context, in *PrepareSettlementRequestV1, opts ...grpc.CallOption) (*PrepareSettlementResponseV1, error)
 	RemoveIndex(ctx context.Context, in *RemoveIndexRequestV1, opts ...grpc.CallOption) (*RemoveIndexResponseV1, error)
 	ClaimSteeringMessages(ctx context.Context, in *ClaimSteeringMessagesRequestV1, opts ...grpc.CallOption) (*ClaimSteeringMessagesResponseV1, error)
+	ReportEgressSummary(ctx context.Context, in *ReportEgressSummaryRequestV1, opts ...grpc.CallOption) (*ReportEgressSummaryResponseV1, error)
 }
 
 type runtimeControlServiceClient struct {
@@ -167,6 +169,16 @@ func (c *runtimeControlServiceClient) ClaimSteeringMessages(ctx context.Context,
 	return out, nil
 }
 
+func (c *runtimeControlServiceClient) ReportEgressSummary(ctx context.Context, in *ReportEgressSummaryRequestV1, opts ...grpc.CallOption) (*ReportEgressSummaryResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportEgressSummaryResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeControlService_ReportEgressSummary_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RuntimeControlServiceServer is the server API for RuntimeControlService service.
 // All implementations must embed UnimplementedRuntimeControlServiceServer
 // for forward compatibility.
@@ -182,6 +194,7 @@ type RuntimeControlServiceServer interface {
 	PrepareSettlement(context.Context, *PrepareSettlementRequestV1) (*PrepareSettlementResponseV1, error)
 	RemoveIndex(context.Context, *RemoveIndexRequestV1) (*RemoveIndexResponseV1, error)
 	ClaimSteeringMessages(context.Context, *ClaimSteeringMessagesRequestV1) (*ClaimSteeringMessagesResponseV1, error)
+	ReportEgressSummary(context.Context, *ReportEgressSummaryRequestV1) (*ReportEgressSummaryResponseV1, error)
 	mustEmbedUnimplementedRuntimeControlServiceServer()
 }
 
@@ -224,6 +237,9 @@ func (UnimplementedRuntimeControlServiceServer) RemoveIndex(context.Context, *Re
 }
 func (UnimplementedRuntimeControlServiceServer) ClaimSteeringMessages(context.Context, *ClaimSteeringMessagesRequestV1) (*ClaimSteeringMessagesResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ClaimSteeringMessages not implemented")
+}
+func (UnimplementedRuntimeControlServiceServer) ReportEgressSummary(context.Context, *ReportEgressSummaryRequestV1) (*ReportEgressSummaryResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReportEgressSummary not implemented")
 }
 func (UnimplementedRuntimeControlServiceServer) mustEmbedUnimplementedRuntimeControlServiceServer() {}
 func (UnimplementedRuntimeControlServiceServer) testEmbeddedByValue()                               {}
@@ -444,6 +460,24 @@ func _RuntimeControlService_ClaimSteeringMessages_Handler(srv interface{}, ctx c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RuntimeControlService_ReportEgressSummary_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportEgressSummaryRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeControlServiceServer).ReportEgressSummary(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeControlService_ReportEgressSummary_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeControlServiceServer).ReportEgressSummary(ctx, req.(*ReportEgressSummaryRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RuntimeControlService_ServiceDesc is the grpc.ServiceDesc for RuntimeControlService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -494,6 +528,10 @@ var RuntimeControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ClaimSteeringMessages",
 			Handler:    _RuntimeControlService_ClaimSteeringMessages_Handler,
+		},
+		{
+			MethodName: "ReportEgressSummary",
+			Handler:    _RuntimeControlService_ReportEgressSummary_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

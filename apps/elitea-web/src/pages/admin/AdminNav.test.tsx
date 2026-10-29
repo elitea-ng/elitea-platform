@@ -211,6 +211,13 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
   // platform has no toolkit-catalogue surface, so there is no legacy section
   // name to list beside it.
   'toolkit_catalogue.type.manage',
+  // migrations/shared/0195_retention_policy.sql (ADR-0042 decision 4),
+  // administration mode, super_admin and admin.
+  'retention.manage',
+  'legal_hold.manage',
+  // 001_initial.sql and migrations/shared/0194_execution_suspensions.sql
+  // (ADR-0041 decision 1), administration mode, super_admin and admin.
+  'safety.suspend',
 ]);
 
 /**

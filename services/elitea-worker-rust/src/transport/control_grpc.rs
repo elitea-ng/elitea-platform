@@ -23,13 +23,19 @@ use crate::protocol::elitea::runtime::v1::{
     ClaimSteeringMessagesRequestV1, ClaimSteeringMessagesResponseV1, ObserveDesiredStateRequestV1,
     ObserveDesiredStateResponseV1, PrepareSettlementRequestV1, PrepareSettlementResponseV1,
     RemoveIndexRequestV1, RemoveIndexResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1,
-    RustCompiledSnapshotPurposeV1, runtime_control_service_client::RuntimeControlServiceClient,
+    ReportEgressSummaryRequestV1, ReportEgressSummaryResponseV1, RustCompiledSnapshotPurposeV1,
+    runtime_control_service_client::RuntimeControlServiceClient,
 };
 
 const MAX_CONTROL_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_COMPILED_AUTH_REQUEST_BYTES: usize = 1024 * 1024 + 80 * 1024;
 const MAX_CONTROL_RESPONSE_BYTES: usize = 80 * 1024;
 const MAX_CONTROL_DEADLINE: Duration = Duration::from_mins(5);
+/// An egress summary carries up to 2 x 256 hosts of up to 253 bytes each.
+const MAX_EGRESS_SUMMARY_REQUEST_BYTES: usize = 256 * 1024;
+/// The summary is best effort and sits on the settlement path: it never
+/// waits long.
+const EGRESS_SUMMARY_DEADLINE: Duration = Duration::from_secs(5);
 const MAX_METADATA_BYTES: usize = 256;
 
 /// Immutable transport identity and deadline for every control call.
@@ -142,6 +148,17 @@ pub trait ControlRpc: Send + Sync {
         Err(Status::unimplemented("steering is unavailable"))
     }
 
+    /// `ReportEgressSummary` (#1490): the hosts this worker's HTTP clients
+    /// reached and refused for one execution, before settlement. A transport
+    /// that does not serve it answers `Unimplemented`; the report is best
+    /// effort and the run settles anyway.
+    async fn report_egress_summary(
+        &self,
+        _request: Request<ReportEgressSummaryRequestV1>,
+    ) -> Result<Response<ReportEgressSummaryResponseV1>, Status> {
+        Err(Status::unimplemented("the egress summary is unavailable"))
+    }
+
     async fn renew_lease(
         &self,
         request: Request<RenewLeaseRequestV1>,
@@ -236,6 +253,13 @@ impl ControlRpc for TonicControlRpc {
         request: Request<ClaimSteeringMessagesRequestV1>,
     ) -> Result<Response<ClaimSteeringMessagesResponseV1>, Status> {
         self.client.clone().claim_steering_messages(request).await
+    }
+
+    async fn report_egress_summary(
+        &self,
+        request: Request<ReportEgressSummaryRequestV1>,
+    ) -> Result<Response<ReportEgressSummaryResponseV1>, Status> {
+        self.client.clone().report_egress_summary(request).await
     }
 
     async fn renew_lease(
@@ -556,6 +580,34 @@ impl<R: ControlRpc> ControlGrpcClient<R> {
             _ => unavailable(),
         })?
         .into_inner();
+        validate_response(&response)?;
+        Ok(response)
+    }
+
+    /// Send one execution's egress summary (#1490), once, with a short
+    /// deadline. The caller treats every failure as best effort.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable size, configuration, or availability error; a
+    /// transport that does not serve the RPC is an `InvalidConfiguration`.
+    pub async fn report_egress_summary(
+        &self,
+        message: ReportEgressSummaryRequestV1,
+    ) -> Result<ReportEgressSummaryResponseV1, ControlGrpcError> {
+        let deadline = self.config.deadline.min(EGRESS_SUMMARY_DEADLINE);
+        let mut request = self.request_with_limit(message, MAX_EGRESS_SUMMARY_REQUEST_BYTES)?;
+        request.set_timeout(deadline);
+        let response = timeout(deadline, self.rpc.report_egress_summary(request))
+            .await
+            .map_err(|_| unavailable())?
+            .map_err(|status| match status.code() {
+                tonic::Code::Unimplemented => ControlGrpcError::InvalidConfiguration(
+                    "Main does not serve the egress summary on its control plane",
+                ),
+                _ => unavailable(),
+            })?
+            .into_inner();
         validate_response(&response)?;
         Ok(response)
     }

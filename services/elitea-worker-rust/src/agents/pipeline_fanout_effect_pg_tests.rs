@@ -684,10 +684,11 @@ async fn postgres_fanout_agent_branch_asks_and_resumes_with_the_answer() {
     assert_eq!(cards.len(), 1, "{cards:?}");
     assert_eq!(model_requests(&captured), 4);
     // The resumed Agent sees the answer to its question.
-    let last = captured.lock().expect("captured model requests");
-    let resumed = String::from_utf8_lossy(&last[3].body).into_owned();
+    let resumed = {
+        let last = captured.lock().expect("captured model requests");
+        String::from_utf8_lossy(&last[3].body).into_owned()
+    };
     assert!(resumed.contains("Staging"), "{resumed}");
-    drop(last);
     assert!(
         members
             .iter()
@@ -786,6 +787,7 @@ fn inline_llm_request(on_error: &str) -> super::super::request::AgentExecutionRe
 /// approved and rejected live while the run goes on, resume and join; only
 /// the approved tool runs, once, and nothing raises a legacy pause.
 #[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // One run: each card kind is raised, decided live and asserted in order.
 async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live() {
     let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");

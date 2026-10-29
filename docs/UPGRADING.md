@@ -4,6 +4,172 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Worker egress allowlist (#1490, off by default) and legal hold on stop (#1507)
+
+* **elitea-main: worker public egress policy (ADR-0044 decision 2).** A new
+  console section, **Configuration › Worker Egress** (`worker_egress`:
+  `mode` `open` | `allowlist`, `allowlist` up to 512 entries), and a project
+  configuration type `worker_egress` (`data.allowlist`, up to 256). The
+  default is `open`: commands are unchanged byte for byte, and nothing is
+  refused. In `allowlist` mode, and for every governed command whatever the
+  mode, Main signs a `WorkerCommandV1.egress_policy` into each command, and
+  the worker refuses any other host with the tool error
+  `egress_host_not_allowed`. **Before switching**, open the section's hosts
+  panel (or `GET /api/v2/admin/worker_egress/hosts`), copy the reached hosts
+  as an allowlist and review them. Toolkit, MCP and configuration URL hosts
+  are added per run automatically.
+* **Upgrade the worker before you switch the mode.** A worker from an
+  earlier release rejects a command that carries the new field (unknown
+  tags are refused at the wire layer), so in `allowlist` mode, and for
+  governed runs, its claims fail. In `open` mode the field is never sent and
+  an old worker keeps working.
+* **Shared migration 0197** adds `refusal_code` and `refusal_message` to
+  `elitea_runtime.command_outbox` (a `NOT VALID` CHECK, so existing rows are
+  not scanned). A command whose policy cannot be built (a malformed entry,
+  more than 1024 entries or 24 KiB) fails at once with
+  `EGRESS_POLICY_INVALID` and a message naming the entry and who fixes it,
+  instead of retrying until its deadline. The migration job applies it.
+* **Egress summaries are kept 30 days, not 7**, and the merger that turns
+  them into one audit event per run turn now always runs, also without the
+  egress proxy. Set `ELITEA_EGRESS_AUDIT_RETENTION_DAYS` (1 to 365) on
+  elitea-main to change the window. Expect the
+  `elitea_runtime.egress_run_summaries` table to grow with the longer window.
+* **Legal hold: a stop before output keeps the question.** Stopping an
+  agent's answer before it wrote anything used to delete the question and
+  the empty answer. On a conversation under a legal hold both are now kept,
+  and the answer is settled as stopped. Nothing to do.
+
+## Audit export to a SIEM (#1494, off by default)
+
+* **elitea-main: OTLP logs and signed webhook export of audit evidence
+  (ADR-0042 decision 3).** Set `main.env.ELITEA_AUDIT_EXPORT_OTLP_ENDPOINT`
+  and/or `ELITEA_AUDIT_EXPORT_WEBHOOK_URL` (with
+  `ELITEA_AUDIT_EXPORT_WEBHOOK_KEYS_FILE`) to export security audit events
+  and `centry.audit_events` as the `elitea.audit.v1` envelope
+  (`libs/jsonschema/audit/v1`). Both empty, as in every earlier release:
+  nothing changes, no relay starts, nothing dials out.
+* **Shared migration 0196** adds `elitea_runtime.audit_export_cursors` (one
+  position per stream and sink) and `audit_export_dead_letters`, and gives
+  `centry.audit_events` a column `export_txid` (the inserting transaction,
+  so the relay reads rows in commit order and never skips one that commits
+  late) with a partial index. Existing rows read 0: adding the column does
+  not rewrite the table, but building the index reads it once while holding
+  a lock that pauses audit writes, so on a very large table expect a short
+  pause during the migration. No data, no permission. The migration job
+  applies it.
+* **Delivery semantics.** Each sink keeps its own position: a healthy sink
+  is not sent events again while another is down. A webhook batch refused
+  with 400, 413 or 422 is split in halves down to single events; only a
+  single event refused on five passes is dead-lettered, alone. An
+  undecodable security outbox record is dead-lettered alone (sink `decode`)
+  instead of blocking the stream. The relay holds no database transaction
+  while it sends; one replica relays at a time through a session advisory
+  lock. A long-running write transaction delays export (lag alert) rather
+  than letting a row be skipped.
+* **elitea-scheduler: audit retention waits for the export.** While audit
+  export is on, the `centry.audit_events` sweep deletes nothing after the
+  slowest sink's position, so a long SIEM outage can grow the table past
+  its retention window until the receiver is back. If you switch the
+  export off, run `DELETE FROM elitea_runtime.audit_export_cursors WHERE
+  stream = 'admin_audit'` to release the held rows.
+* **With export on, the security audit relay changes meaning.** Without an
+  exporter it marked an outbox row exported when the row reached the durable
+  store. With one, a row stays pending until the receiver accepted it, so an
+  unreachable receiver grows the outbox backlog (the existing
+  `security_audit.backlog` figure and the new lag alert) instead of being
+  ignored. The outbox retention job deletes only exported rows, so an outage
+  also delays that cleanup. Nothing is dropped.
+* **Existing `audit_events` history is not exported by default.** The relay
+  starts at the newest row when it first runs. Set
+  `ELITEA_AUDIT_EXPORT_AUDIT_EVENTS_FROM=beginning` before the first start to
+  replay the table.
+* **New listener and chart objects.** With an exporter set, elitea-main serves
+  Prometheus `/metrics` on `:9464` (`ELITEA_AUDIT_EXPORT_METRICS_ADDR`; empty
+  disables it). The chart declares the port, renders a PodMonitor and a
+  PrometheusRule (`EliteaAuditExportLag`, `EliteaAuditExportBacklog`,
+  `EliteaAuditExportDeadLettered`) where `monitoring.coreos.com/v1` is served,
+  and mounts the optional Secret `main.auditExport.secretName` for the
+  webhook keys and OTLP headers. Where `networkPolicies` are on, name your
+  Prometheus in `networkPolicies.main.metricsFrom` to let it reach the port.
+* A webhook on a private or loopback address needs
+  `ELITEA_AUDIT_EXPORT_EGRESS_ALLOWLIST` to name it; plain `http` is accepted
+  only then. The OTLP endpoint is operator-set and is not subject to it.
+
+## Retention policy and legal hold (#1495)
+
+* **Shared migration 0195** adds `elitea_runtime.retention_policy`,
+  `elitea_runtime.legal_holds` and the journal
+  `elitea_runtime.conversation_attachment_cleanup`. It seeds one platform
+  row per data class with today's behaviour: conversations and attachments
+  keep forever, `gateway_request_log` 92 days, `admin_audit` 365 days,
+  `security_audit` keep forever. It grants `retention.manage` and
+  `legal_hold.manage` to `super_admin` and `admin`. Nothing new is deleted
+  after the upgrade.
+* **elitea-main: new routine `main.conversation_retention`** (hourly). It
+  deletes nothing until an administrator sets a maximum age for
+  `conversation` on the admin Data retention page. Then it deletes
+  conversations whose last message is older than the maximum, with their
+  attachment bytes, except conversations under a legal hold.
+* **Behaviour change: a user's delete of a conversation under an active
+  legal hold answers 409.** No hold exists after the upgrade.
+* **elitea-scheduler:** the audit and security audit outbox sweepers keep
+  `AUDIT_RETENTION_DAYS` and `SECURITY_AUDIT_OUTBOX_RETENTION_DAYS` until an
+  administrator saves the matching row. A saved row then wins. Both sweepers
+  now always start; with the env value at 0 and no saved row they delete
+  nothing, as before.
+* **elitea-llm-gateway:** the request log prune reads the
+  `gateway_request_log` row from the shared database on each hourly prune.
+  It keeps 92 days when the row is missing or unreadable. No new setting.
+  The gateway uses its existing `DATABASE_URL`; the role must be able to
+  read `elitea_runtime.retention_policy` (the standard single-role install
+  can).
+
+## Kill switch: execution suspensions (#1493, ADR-0041 decision 1)
+
+* **Migration 0194** adds `elitea_runtime.execution_suspensions` and the
+  column `elitea_runtime.agent_execution_jobs.application_id`. The migration
+  Job applies it on upgrade. Agent runs admitted before 0194 have no
+  `application_id`, so an agent-scope suspension does not cancel them; a
+  project or platform suspension does.
+* **New permission `safety.suspend`.** Granted to the administration roles
+  `super_admin` and `admin` (every scope) and to the project role `admin`,
+  including saved per-project `admin` roles (agent and project scope of that
+  project). Remove it from a role if those people must not stop execution.
+* **New NATS subject `elitea.rt.v1.safety.suspension`** (core NATS, ids only)
+  for the `elitea-main-runtime` identity, publish and subscribe. The chart
+  grants it. A deployment that keeps its own NATS authorization must add the
+  subject to that identity, or each replica sees a change only after its
+  10-second reload.
+* **New refusal code `execution_suspended` (HTTP 409)** on every run start and
+  continue path, and as the code of a refused tool call in the worker. A
+  replica that cannot read the suspensions at start-up refuses runs with HTTP
+  503 `suspension_state_unavailable` until it can. Clients that treat every
+  409 on a run start as "already running" must check the `code`.
+* **New routine `main.kill_switch_selftest`** (daily, on by default, paused
+  during maintenance) and the Prometheus gauge
+  `elitea_kill_switch_selftest_last_success_timestamp`. Change it in
+  **Admin › Schedules & Tasks**.
+* **What to do:** nothing to enable. Read the
+  [emergency stop runbook](../apps/elitea-docs/src/content/docs/deployment/emergency-stop-runbook.mdx),
+  decide who keeps `safety.suspend`, and add an alert on the gauge.
+
+## Documentation site moved to Astro Starlight
+
+* **The docs at `/docs/` are a separate app now (`apps/elitea-docs`).** The
+  web image still serves them at `/docs/`, from a docs build stage, with a
+  docs-only Content-Security-Policy (`docs-security-headers.conf`) that
+  allows `'wasm-unsafe-eval'` for the Pagefind search. Page URLs are
+  unchanged, except `/docs/integrations/toolkits/testIO_toolkit`, which is
+  now `/docs/integrations/toolkits/testio_toolkit`; the web image's nginx
+  answers the old URL with a 301 to the new one (GitHub Pages cannot). A
+  deployment that
+  replaces the image's nginx config must route `/docs/` the way
+  `apps/elitea-web/nginx/spa.conf` does: static files with
+  `try_files $uri $uri/ =404`, not a fallback to one HTML shell. The
+  standalone and E2E compose stacks now build the image's `spa` target,
+  which serves only a placeholder at `/docs/`; read the docs locally with
+  `npm run dev` in `apps/elitea-docs`.
+
 ## Governance follow-ups
 
 * **elitea-main: definition digest checked at admission (#1462, governance

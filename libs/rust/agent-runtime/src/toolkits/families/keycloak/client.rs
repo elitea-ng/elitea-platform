@@ -14,6 +14,7 @@ use tokio::time::timeout;
 use zeroize::Zeroizing;
 
 use super::config::KeycloakToolkitConfig;
+use crate::egress::BuildForRun as _;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const TOKEN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -209,7 +210,7 @@ pub(in crate::toolkits) trait KeycloakTransport: Send + Sync {
 }
 
 struct ReqwestKeycloakTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -262,7 +263,7 @@ pub(crate) struct KeycloakClient {
 
 impl KeycloakClient {
     pub(crate) fn new(config: KeycloakToolkitConfig) -> Result<Self, KeycloakClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -271,7 +272,7 @@ impl KeycloakClient {
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT_VALUE)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             config,

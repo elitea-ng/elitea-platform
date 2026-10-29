@@ -1,0 +1,7 @@
+---
+import { Badge as StarlightBadge } from '@astrojs/starlight/components';
+
+const text = (await Astro.slots.render('default')).trim();
+---
+
+<StarlightBadge text={text} variant="note" />

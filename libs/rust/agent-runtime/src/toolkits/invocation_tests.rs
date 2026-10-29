@@ -15,7 +15,9 @@ use tracing::instrument::WithSubscriber as _;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
-use super::invocation::{MaterializedToolsetErrorCode, admit_materialized_toolset};
+use super::invocation::{
+    MaterializedToolsetErrorCode, admit_materialized_toolset, policy_bound_tool_for_test,
+};
 use super::policy::ToolAdmissionPolicy;
 use super::{delegated_authorization_error_fixture, delegated_authorization_requirement};
 
@@ -102,6 +104,59 @@ async fn action_execution_preserves_call_identity_and_current_null_semantics() {
             .as_slice(),
         &[json!({"issue": 7, "nested": {"optional": null}})]
     );
+}
+
+fn suspended_policy(toolkit_types: &[&str]) -> Arc<ToolAdmissionPolicy> {
+    let runtime = json!({
+        "toolkit_security": {"suspended_toolkit_types": toolkit_types}
+    });
+    Arc::new(
+        ToolAdmissionPolicy::from_runtime_config(runtime.as_object().expect("runtime object"))
+            .expect("suspended fixture policy"),
+    )
+}
+
+#[tokio::test]
+async fn suspended_toolkit_type_is_filtered_from_the_toolset() {
+    let action = Arc::new(FixtureTool::new("read_issue"));
+    let toolset = admit_materialized_toolset(
+        "github-19",
+        "GitHub",
+        &suspended_policy(&["github"]),
+        vec![action.clone()],
+    )
+    .expect("admitted native toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("native ADK tools");
+
+    assert!(tools.is_empty());
+    assert_eq!(action.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn suspended_toolkit_type_refuses_the_call_with_execution_suspended() {
+    let action = Arc::new(FixtureTool::new("read_issue"));
+    let tool = policy_bound_tool_for_test(action.clone(), "Git-Hub", suspended_policy(&["GitHub"]))
+        .expect("policy-bound fixture tool");
+
+    let error = tool
+        .execute(context(), json!({"issue": 7}))
+        .await
+        .expect_err("a suspended toolkit type must not run");
+
+    assert_eq!(error.component, ErrorComponent::Guardrail);
+    assert_eq!(error.category, ErrorCategory::Forbidden);
+    assert_eq!(error.code, "execution_suspended");
+    assert_eq!(action.calls.load(Ordering::SeqCst), 0);
+
+    // Another type under the same policy still runs.
+    let other = Arc::new(FixtureTool::new("read_issue"));
+    let tool = policy_bound_tool_for_test(other.clone(), "jira", suspended_policy(&["GitHub"]))
+        .expect("policy-bound fixture tool");
+    tool.execute(context(), json!({"issue": 7}))
+        .await
+        .expect("an unsuspended type runs");
+    assert_eq!(other.calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

@@ -738,6 +738,15 @@ pub async fn materialize_mcp_toolsets_with_tokens_and_authorization(
     let mut authorization = DelegatedAuthorizationCatalog::default();
     for reference in references {
         let config = RemoteMcpConfig::parse(reference, mcp_tokens)?;
+        // A remote server outside the run's egress policy is never contacted
+        // (#1490); internal categories go to Main over gRPC, not a public host.
+        let endpoint = public_endpoint(&config);
+        if let Some(endpoint) = &endpoint
+            && policy.egress().check_url(endpoint).is_err()
+        {
+            push_egress_refused_toolset(reference, &config, endpoint, policy, &mut toolsets)?;
+            continue;
+        }
         let session = match connector.connect_session(&config).await {
             Ok(session) => session,
             Err(error) if error.code() == McpMaterializationErrorCode::AuthorizationRequired => {
@@ -787,6 +796,9 @@ pub async fn materialize_mcp_toolsets_with_tokens_and_authorization(
             }
             Err(error) => return Err(error),
         };
+        if let Some(endpoint) = &endpoint {
+            policy.egress().record_reached(endpoint);
+        }
         let (tools, listing) = discover_tools(&config, &session).await?;
         let tools = select_tools(tools, config.selected_tools(), config.excluded_tools())?;
         let redaction = Arc::new(config.error_redaction());
@@ -1001,6 +1013,128 @@ impl Tool for McpAuthorizationRequiredTool {
     ) -> adk_core::Result<Value> {
         authorization_error(&self.requirement)
     }
+}
+
+/// The public endpoint the run's egress policy judges; `None` for the
+/// categories Main serves internally over gRPC.
+fn public_endpoint(config: &RemoteMcpConfig) -> Option<reqwest::Url> {
+    if config.served_internally() {
+        return None;
+    }
+    reqwest::Url::parse(config.endpoint()).ok()
+}
+
+/// Push the toolset standing in for a remote MCP server the run's egress
+/// policy refuses (#1490): its selected tools stay listed and each call fails
+/// as `egress_host_not_allowed` naming the host. With no selection there is
+/// nothing to list, so the server is left out (the refusal is in the run's
+/// egress summary).
+fn push_egress_refused_toolset(
+    reference: &FrozenToolReference<'_>,
+    config: &RemoteMcpConfig,
+    endpoint: &reqwest::Url,
+    policy: &Arc<ToolAdmissionPolicy>,
+    toolsets: &mut Vec<Arc<dyn Toolset>>,
+) -> Result<(), McpMaterializationError> {
+    tracing::warn!(
+        event = "agent_toolkit_egress_refused",
+        toolkit_type = reference.tool_type(),
+        toolkit_name = reference.toolkit_name(),
+        "the MCP server's host is not on this run's egress allowlist"
+    );
+    let refusing = config
+        .selected_tools()
+        .iter()
+        .filter(|name| !contains_tool_name(config.excluded_tools(), name))
+        .map(|name| {
+            Arc::new(McpEgressRefusedTool::new(
+                name,
+                endpoint.clone(),
+                Arc::clone(policy.egress()),
+            )) as Arc<dyn Tool>
+        })
+        .collect::<Vec<_>>();
+    if refusing.is_empty() {
+        return Ok(());
+    }
+    let admitted = admit_materialized_toolset(
+        reference.toolkit_name(),
+        reference.tool_type(),
+        policy,
+        refusing,
+    )
+    .map_err(|error| materialized_toolset_error(error.code()))?;
+    toolsets.push(Arc::new(admitted) as Arc<dyn Toolset>);
+    Ok(())
+}
+
+/// A selected tool of a remote MCP server the run's egress policy refuses
+/// (#1490). Every call re-checks the endpoint, so the refusal is counted and
+/// the call fails as `egress_host_not_allowed` naming the host.
+struct McpEgressRefusedTool {
+    name: Box<str>,
+    endpoint: reqwest::Url,
+    /// The run whose policy refused the endpoint, named explicitly rather
+    /// than read from the scope.
+    egress: Arc<crate::egress::RunEgress>,
+}
+
+impl McpEgressRefusedTool {
+    fn new(name: &str, endpoint: reqwest::Url, egress: Arc<crate::egress::RunEgress>) -> Self {
+        Self {
+            name: name.into(),
+            endpoint,
+            egress,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for McpEgressRefusedTool {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &'static str {
+        "This MCP operation is unavailable: the server's host is not on this run's egress allowlist."
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({
+            "type": "object",
+            "additionalProperties": true,
+        }))
+    }
+
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        true
+    }
+
+    async fn execute(
+        &self,
+        _context: Arc<dyn ToolContext>,
+        _arguments: Value,
+    ) -> adk_core::Result<Value> {
+        match self.egress.check_url(&self.endpoint) {
+            Err(refused) => Err(refused.tool_error()),
+            // A policy that admits the host now is not this run's: the
+            // session was never opened, so there is nothing to call.
+            Ok(()) => Err(dependency_unavailable_tool_error()),
+        }
+    }
+}
+
+fn dependency_unavailable_tool_error() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Tool,
+        ErrorCategory::Unavailable,
+        "tool.execution.unavailable",
+        "tool dependency is unavailable",
+    )
 }
 
 fn authorization_error(requirement: &DelegatedAuthorizationRequirement) -> adk_core::Result<Value> {

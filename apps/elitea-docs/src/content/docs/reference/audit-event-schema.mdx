@@ -1,0 +1,201 @@
+---
+title: "Audit event schema"
+description: "The elitea.audit.v1 envelope Elitea sends to your SIEM: fields, an example, webhook signature verification and an OTLP collector configuration."
+---
+
+Every audit event Elitea exports, whatever its source and whichever transport carries it, is one JSON document in the `elitea.audit.v1` envelope. The machine-readable definition is a JSON Schema (draft 2020-12), `libs/jsonschema/audit/v1/event.schema.json` in the platform repository. Field names follow [OCSF](https://schema.ocsf.io) where a class fits.
+
+How to turn the export on is in [Post-install configuration](/deployment/configuration#export-audit-evidence-to-a-siem); what it guarantees is in [Audit trail](/admin/audit-trail#export-to-your-siem).
+
+## Versioning
+
+`schema` is always `elitea.audit.v1`. Adding an optional field is not a version change, so ignore fields you do not know. Renaming, removing or retyping a field, or making one required, is a new version (`elitea.audit.v2`); a consumer should quarantine a version it does not recognise rather than guess. A field with no value is omitted, never `null`, except `tenant.project_id`.
+
+## The envelope
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schema` | string | `elitea.audit.v1`. |
+| `event_id` | string | Stable identifier. Delivery is at least once, so **deduplicate on it**. A security audit event keeps its UUID; an audit trail row has a name-based UUID derived from its row id, so a replay carries the same id. |
+| `time` | RFC 3339 string | When the audited operation happened (UTC). |
+| `source` | enum | `security_audit` (the governed security audit outbox), `admin_audit` (`centry.audit_events`, the Audit Trail). `run_step`, `approval` and `suspension` are reserved for evidence added later. |
+| `event_type` | string | The producer's type: a CloudEvents type such as `ai.elitea.security.v1.decision`, or `api`, `socketio`, `rpc`, `agent`, `tool`, `llm`, `schedule`, `admin_task` for the Audit Trail. |
+| `ocsf` | object, optional | `class_uid` and `category_uid` when an OCSF class fits: 3003 Authorize Session, 3004 Entity Management, 3005 User Access Management, 6003 API Activity. |
+| `tenant.project_id` | integer or null | The tenant project. `0` is the platform partition of the security audit chain. |
+| `actor` | object | `type` (`user`, `principal`, `agent`, `system`, `unknown`), `id`, and optionally `email`, `chain` (the RFC 8693 actor chain, outermost first) and `fidelity` (`native_act`, `configured_act`, `azp_only`, `attributed`, `none`). |
+| `action` | string | The governed operation (`credential.use`, `grant.revoke`) or, for the Audit Trail, `METHOD /route`. |
+| `target` | object, optional | `type`, `id`, `name` of what the action acted on. |
+| `outcome` | enum | `allow` or `deny` for authorisation decisions; `success` or `failure` for operations; `unknown`. |
+| `correlation` | object, optional | `trace_id`, `span_id`, `parent_span_id`, `correlation_id`. |
+| `chain` | object, optional | `partition`, `sequence`, `prev_hash`, `hash` (hex SHA-256) when the source keeps a tamper-evident chain. Present on `security_audit` events. |
+| `details` | object | Fields specific to the source, listed below. |
+
+The OCSF mapping, in the schema's own description: `event_id` to `metadata.uid`, `time` to `time`, `source` to `metadata.product.feature.name`, `ocsf.*` to `class_uid` and `category_uid`, `tenant.project_id` to `cloud.project_uid`, `actor.id` to `actor.user.uid`, `actor.email` to `actor.user.email_addr`, `action` to `activity_name`, `target.*` to `resources[]`, `outcome` to `status_id` and the authorization disposition, `correlation.trace_id` to `metadata.correlation_uid`. `chain.*` and `details.*` have no OCSF attribute and travel in `unmapped`.
+
+### `details` for `security_audit`
+
+`reasons` (stable reason codes), `authorization_epoch`, `revocation_epoch`, `outbox_seq`, and, when set: `calling_application_id`, `authentication_ref`, `agent_binding_id`, `authority_id`, `mandate_ref`, `delegation_ref`, `grant_ref`, `workload_id`, `execution_id`, `invocation_id`, `decision_id`, `policy_revision_id`, `arrangement` (`A`, `B`, `C`). Every value is a reference or an identifier; an event never holds a token, a secret or a provider response.
+
+### `details` for `admin_audit`
+
+`row_id` (`centry.audit_events.id`), `is_error`, and, when recorded: `http_method`, `http_route` (the matched route pattern, never the raw URL), `status_code`, `duration_ms`.
+
+## Example
+
+A security audit decision, as a webhook batch carries it:
+
+```json
+{
+  "schema": "elitea.audit.v1",
+  "event_id": "0192f0c1-7b6e-7c3a-8f00-000000000001",
+  "time": "2026-10-28T09:30:00.123Z",
+  "source": "security_audit",
+  "event_type": "ai.elitea.security.v1.decision",
+  "ocsf": { "class_uid": 3003, "category_uid": 3 },
+  "tenant": { "project_id": 42 },
+  "actor": {
+    "type": "principal",
+    "id": "user:7",
+    "chain": ["agent:a1"],
+    "fidelity": "native_act"
+  },
+  "action": "credential.use",
+  "target": { "type": "credential", "id": "cred-5" },
+  "outcome": "deny",
+  "correlation": { "correlation_id": "corr-1" },
+  "chain": {
+    "partition": "42",
+    "sequence": 5,
+    "prev_hash": "0100000000000000000000000000000000000000000000000000000000000000",
+    "hash": "9f2c0b6e5d1a4c7e8b3d2f1a0c9e8d7b6a5f4e3d2c1b0a99887766554433221f"
+  },
+  "details": {
+    "reasons": ["grant.matched"],
+    "agent_binding_id": "binding-1",
+    "grant_ref": "grant-9",
+    "execution_id": "exec-3",
+    "policy_revision_id": "rev-2",
+    "authorization_epoch": 4,
+    "revocation_epoch": 1,
+    "arrangement": "B",
+    "outbox_seq": 105
+  }
+}
+```
+
+An Audit Trail event is the same envelope without `chain`:
+
+```json
+{
+  "schema": "elitea.audit.v1",
+  "event_id": "6b1c8c2e-3f0a-5d57-9a4e-2f4d1c6a7b90",
+  "time": "2026-10-28T09:31:12.5Z",
+  "source": "admin_audit",
+  "event_type": "api",
+  "ocsf": { "class_uid": 6003, "category_uid": 6 },
+  "tenant": { "project_id": 3 },
+  "actor": { "type": "user", "id": "7", "email": "alice@example.com" },
+  "action": "POST /api/v2/applications",
+  "target": { "type": "application", "id": "9", "name": "support-bot" },
+  "outcome": "success",
+  "correlation": { "trace_id": "0af7651916cd43dd8448eb211c80319c", "span_id": "b7ad6b7169203331" },
+  "details": {
+    "row_id": 1001,
+    "http_method": "POST",
+    "http_route": "/api/v2/applications",
+    "status_code": 201,
+    "duration_ms": 12.5,
+    "is_error": false
+  }
+}
+```
+
+## Signed webhook
+
+Elitea POSTs a JSON batch of up to 100 events:
+
+```json
+{ "schema": "elitea.audit.v1", "batch_id": "5d1c0f3a9b7e2a64c8f01d3e7b9a2c40", "events": [ { "...": "..." } ] }
+```
+
+| Header | Value |
+|---|---|
+| `X-Elitea-Signature` | `t=<unix seconds>,v1=<hex HMAC-SHA256>` |
+| `X-Elitea-Key-Id` | The `id` of the key that signed. |
+| `X-Elitea-Delivery` | The batch id. Stable across retries of one batch. |
+| `X-Elitea-Schema` | `elitea.audit.v1`. |
+
+The HMAC is computed over the ASCII timestamp, a dot, and the **exact request body bytes**, with the key named by `X-Elitea-Key-Id`. Verify before you decode the body, compare in constant time, and reject a timestamp more than five minutes from your clock. During a rotation your receiver holds both keys and picks one by the key id.
+
+Answer `2xx` to acknowledge. Any other answer, a timeout, or a connection error makes Elitea send the batch again, with backoff, until it is accepted. Answer `400`, `413` or `422` only for content you can never accept: Elitea then splits the batch in halves and sends each half as its own batch (with its own batch id), down to single events, so one bad or oversized event does not hold back the others. A single event refused on five passes is dead-lettered on its own. Redirects are not followed.
+
+<Tabs>
+<Tab title="Python">
+```python
+import hashlib, hmac, time
+
+KEYS = {"2026-10": b"<secret>", "2026-04": b"<previous secret>"}  # both during a rotation
+
+def verify(headers, body: bytes) -> bool:
+    key = KEYS.get(headers["X-Elitea-Key-Id"])
+    t, v1 = (p.split("=", 1)[1] for p in headers["X-Elitea-Signature"].split(","))
+    if key is None or abs(time.time() - int(t)) > 300:
+        return False
+    expected = hmac.new(key, t.encode() + b"." + body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, v1)
+```
+</Tab>
+<Tab title="Node.js">
+```js
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+const KEYS = { "2026-10": "<secret>", "2026-04": "<previous secret>" };
+
+export function verify(headers, body /* Buffer */) {
+  const key = KEYS[headers["x-elitea-key-id"]];
+  const [t, v1] = headers["x-elitea-signature"].split(",").map((p) => p.split("=")[1]);
+  if (!key || Math.abs(Date.now() / 1000 - Number(t)) > 300) return false;
+  const expected = createHmac("sha256", key).update(`${t}.`).update(body).digest("hex");
+  return expected.length === v1.length && timingSafeEqual(Buffer.from(expected), Buffer.from(v1));
+}
+```
+</Tab>
+</Tabs>
+
+## OTLP logs
+
+Each event is one OTLP log record: the whole envelope as a JSON string in the log body, event name `elitea.audit.event`, severity `WARN` for `deny` and `failure` outcomes and `INFO` otherwise, and the fields a SIEM filters on as flat attributes: `elitea.audit.schema`, `elitea.audit.event_id`, `elitea.audit.source`, `elitea.audit.event_type`, `elitea.audit.action`, `elitea.audit.outcome`, `elitea.audit.actor.type`, `elitea.audit.actor.id`, `elitea.audit.tenant.project_id`, `elitea.audit.ocsf.class_uid`. The resource carries `service.name` `elitea-main`.
+
+A collector that receives them and writes JSON lines to a file your log shipper reads:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  filter/elitea-audit:
+    logs:
+      log_record:
+        - 'attributes["elitea.audit.schema"] != "elitea.audit.v1"'
+  batch: {}
+
+exporters:
+  file:
+    path: /var/log/elitea/audit.jsonl
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [filter/elitea-audit, batch]
+      exporters: [file]
+```
+
+Point `ELITEA_AUDIT_EXPORT_OTLP_ENDPOINT` at `http://<collector>:4318` (protocol `http`) or `<collector>:4317` (protocol `grpc`). The collector may be on a private address; this endpoint is set by the operator, not by tenants, so it is not subject to the webhook egress allowlist.
+
+OTLP delivery is at least once too: Elitea does not advance until the collector acknowledges the request, so a collector restart repeats a batch. Deduplicate on `elitea.audit.event_id`.

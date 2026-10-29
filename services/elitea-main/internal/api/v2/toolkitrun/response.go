@@ -39,6 +39,7 @@ import (
 	"strings"
 
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 )
 
@@ -287,7 +288,23 @@ func lowerFirst(subject string) string {
 // failure becomes a status code, so a caller sees the same code from both
 // handlers.
 func WriteError(w http.ResponseWriter, err error) {
+	if status, body, refused := safety.HTTPRefusal(err); refused {
+		// The kill switch (ADR-0041 decision 1): 409 execution_suspended, or
+		// 503 when the suspension state could not be read. Nothing ran.
+		body["ok"] = false
+		writeJSON(w, status, body)
+		return
+	}
 	var pending *toolkitcalltoolapp.PendingRun
+	if refusal, refused := executionapp.AsDispatchRefusal(err); refused {
+		// Main refused to prepare the command (a worker egress allowlist
+		// that cannot be assembled, shared 0197): the run is already failed
+		// with this message, which says what is wrong and who fixes it.
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"ok": false, "reason": strings.ToLower(refusal.Code), "error": refusal.Message,
+		})
+		return
+	}
 	switch {
 	case errors.As(err, &pending):
 		// The execution is durable and STILL RUNNING; the request gave up, not
