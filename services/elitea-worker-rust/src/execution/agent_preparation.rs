@@ -963,6 +963,16 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
         &self.verified.command().execution_id
     }
 
+    pub(super) fn trace_command_id(&self) -> &str {
+        &self.verified.command().command_id
+    }
+
+    /// The authorized request payload the run's step records describe
+    /// (ADR-0042, #1499): its HITL decisions and continuation flags.
+    pub(super) const fn step_payload(&self) -> &crate::agents::AgentExecutionPayload {
+        &self.request.payload
+    }
+
     pub(super) const fn trace_generation(&self) -> u64 {
         self.verified.command().generation
     }
