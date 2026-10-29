@@ -17728,6 +17728,11 @@
                 "type": "string",
                 "format": "uuid"
               },
+              "release_id": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
               "user_ids": {
                 "type": "array",
                 "items": {
