@@ -111,7 +111,8 @@ describe('PipelineTestChat', () => {
       settings={{ llmSettings: { model_name: 'pipeline-model', model_project_id: '1' } }}
       disableChat={false} slotRef={undefined} identity={IDENTITY} user={USER}
     />);
-    expect(await screen.findByRole('button', { name: /Saved pipeline model/ })).toBeInTheDocument();
+    // The label waits for the models request; under the coverage shards that can take over 1 s.
+    expect(await screen.findByRole('button', { name: /Saved pipeline model/ }, { timeout: 5000 })).toBeInTheDocument();
     expect(routes.creates).toBe(0);
   });
 
