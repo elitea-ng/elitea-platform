@@ -1086,7 +1086,7 @@ func checkVersionComposition(ctx context.Context, q relationReader, schema, appl
 	saved.Kind = kind
 	saved.AgentNodes, saved.StaticPause = nil, false
 	if kind == applicationcomposition.KindPipeline {
-		saved.AgentNodes, saved.StaticPause, saved.ParallelNode = applicationcomposition.ReadPipeline(instructions)
+		saved.AgentNodes, saved.StaticPause, saved.ParallelNode, saved.LLMBranches = applicationcomposition.ReadPipeline(instructions)
 	}
 	err = applicationcomposition.CheckWithAncestors(ctx, source, id, &saved)
 	if refusal := applicationcomposition.Refusal(err); refusal != nil {

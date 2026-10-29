@@ -214,22 +214,22 @@ func TestTheOverrideIsTheVersionAboutToBeSaved(t *testing.T) {
 }
 
 func TestReadPipelineFindsAgentNodesAndStaticPauses(t *testing.T) {
-	nodes, paused, parallel := applicationcomposition.ReadPipeline("entry_point: a\ninterrupt_before: [b]\nnodes:\n  - id: a\n    type: agent\n    tool: worker\n  - id: b\n    type: llm\n  - &n\n    id: c\n    type: agent\n    tool: other\n")
+	nodes, paused, parallel, _ := applicationcomposition.ReadPipeline("entry_point: a\ninterrupt_before: [b]\nnodes:\n  - id: a\n    type: agent\n    tool: worker\n  - id: b\n    type: llm\n  - &n\n    id: c\n    type: agent\n    tool: other\n")
 	if !paused || parallel != "" || len(nodes) != 2 || nodes[0] != (applicationcomposition.AgentNode{ID: "a", Alias: "worker"}) || nodes[1].Alias != "other" {
 		t.Fatalf("nodes = %+v paused = %v parallel = %q", nodes, paused, parallel)
 	}
 	for _, text := range []string{"", "nodes: [", "- just a list", "interrupt_after: []\nnodes: []\n"} {
-		if nodes, paused, parallel := applicationcomposition.ReadPipeline(text); len(nodes) != 0 || paused || parallel != "" {
+		if nodes, paused, parallel, _ := applicationcomposition.ReadPipeline(text); len(nodes) != 0 || paused || parallel != "" {
 			t.Fatalf("%q: nodes = %+v paused = %v parallel = %q", text, nodes, paused, parallel)
 		}
 	}
-	if nodes, _, _ := applicationcomposition.ReadPipeline(strings.Repeat("x", 512*1024+1)); nodes != nil {
+	if nodes, _, _, _ := applicationcomposition.ReadPipeline(strings.Repeat("x", 512*1024+1)); nodes != nil {
 		t.Fatal("an over-bound definition is not parsed")
 	}
 }
 
 func TestReadPipelineFindsTheFirstParallelNode(t *testing.T) {
-	_, _, parallel := applicationcomposition.ReadPipeline("state:\n  joined: list\nentry_point: inner\nnodes:\n  - id: inner\n    type: parallel\n    branches: [{id: one, node: a}, {id: two, node: b}]\n    max_concurrency: 2\n    wait: all\n    output: [joined]\n    transition: END\n  - id: a\n    type: agent\n    tool: worker\n  - id: b\n    type: agent\n    tool: worker\n")
+	_, _, parallel, _ := applicationcomposition.ReadPipeline("state:\n  joined: list\nentry_point: inner\nnodes:\n  - id: inner\n    type: parallel\n    branches: [{id: one, node: a}, {id: two, node: b}]\n    max_concurrency: 2\n    wait: all\n    output: [joined]\n    transition: END\n  - id: a\n    type: agent\n    tool: worker\n  - id: b\n    type: agent\n    tool: worker\n")
 	if parallel != "inner" {
 		t.Fatalf("parallel = %q", parallel)
 	}
@@ -280,7 +280,7 @@ func TestAPipelineWithAParallelRunsInTheRootGraphOnly(t *testing.T) {
 }
 
 func TestReadPipelineMarksTheAgentNodesAParallelRunsAsBranches(t *testing.T) {
-	nodes, _, _ := applicationcomposition.ReadPipeline("state:\n  joined: list\nentry_point: fan\nnodes:\n  - id: fan\n    type: parallel\n    branches: [{id: one, node: a}]\n    max_concurrency: 1\n    wait: all\n    output: [joined]\n    transition: other\n  - id: a\n    type: agent\n    tool: worker\n  - id: other\n    type: agent\n    tool: worker\n    transition: END\n")
+	nodes, _, _, _ := applicationcomposition.ReadPipeline("state:\n  joined: list\nentry_point: fan\nnodes:\n  - id: fan\n    type: parallel\n    branches: [{id: one, node: a}]\n    max_concurrency: 1\n    wait: all\n    output: [joined]\n    transition: other\n  - id: a\n    type: agent\n    tool: worker\n  - id: other\n    type: agent\n    tool: worker\n    transition: END\n")
 	if len(nodes) != 2 || !nodes[0].Branch || nodes[1].Branch {
 		t.Fatalf("nodes = %+v", nodes)
 	}
@@ -516,6 +516,31 @@ func TestCheckpointPathsAdmitTheLimitAndRefuseOneMore(t *testing.T) {
 	expect(t, violation, applicationcomposition.BoundCheckpoints)
 	if !strings.Contains(violation.Error(), `"Wide flow"`) {
 		t.Fatalf("the refusal names the pipeline: %s", violation)
+	}
+}
+
+// PM-4: an inline LLM Parallel branch runs in its own checkpoint family, so
+// Main counts it against the same budget the Worker's collect_paths does.
+func TestCheckpointPathsCountInlineLLMBranches(t *testing.T) {
+	withNodes := func(agents, branches int) fakeSource {
+		root := applicationcomposition.Version{Kind: applicationcomposition.KindPipeline, Name: "Wide flow",
+			Attachments: []applicationcomposition.Attachment{{Alias: "a2", Identity: id(2)}}, LLMBranches: branches}
+		for n := 0; n < agents; n++ {
+			root.AgentNodes = append(root.AgentNodes, applicationcomposition.AgentNode{ID: fmt.Sprintf("n%d", n), Alias: "a2"})
+		}
+		return fakeSource{1: root, 2: agent("Leaf")}
+	}
+	limit := applicationcomposition.MaxCheckpointPaths
+	if violation := check(t, withNodes(limit-16, 16), 1); violation != nil {
+		t.Fatalf("112 Agent nodes and 16 inline branches must save: %v", violation)
+	}
+	expect(t, check(t, withNodes(limit-15, 16), 1), applicationcomposition.BoundCheckpoints)
+}
+
+func TestReadPipelineCountsOnlyParallelOwnedLLMNodes(t *testing.T) {
+	_, _, _, branches := applicationcomposition.ReadPipeline("state:\n  joined: list\nentry_point: fan\nnodes:\n  - id: fan\n    type: parallel\n    branches: [{id: one, node: a}, {id: two, node: b}, {id: three, node: c}]\n    max_concurrency: 2\n    wait: all\n    output: [joined]\n    transition: tail\n  - id: a\n    type: llm\n  - id: b\n    type: llm\n  - id: c\n    type: agent\n    tool: worker\n  - id: tail\n    type: llm\n    transition: END\n")
+	if branches != 2 {
+		t.Fatalf("inline LLM branches = %d, want 2 (the free LLM node and the Agent branch are not counted)", branches)
 	}
 }
 
