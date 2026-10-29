@@ -1358,7 +1358,10 @@ impl PipelineNativeAgentAssembler {
                             super::runtime::PipelineNativeStart::FanoutWake(wake) => Some(wake),
                             _ => None,
                         },
-                        &frozen_pipeline_aliases(&toolsets),
+                        &RootRecoveryLevel {
+                            aliases: frozen_pipeline_aliases(&toolsets),
+                            children: &composition.children,
+                        },
                     )
                     .await?;
                 wake_rerun = frontier == super::session::RecoveryFrontier::WakePark;
@@ -1960,6 +1963,33 @@ impl Toolset for StrictNodeToolset {
 
 /// The attachments Main froze as saved pipelines (their aliases): an Agent
 /// node running one may be a recovery frontier (FU-249).
+/// The root level of an assembly-time recovery walk: the saved-pipeline
+/// aliases Main froze in the run's tool snapshot, and the frozen saved
+/// pipelines the root's Agent nodes run (PM-2).
+struct RootRecoveryLevel<'a> {
+    aliases: BTreeSet<String>,
+    children: &'a BTreeMap<String, Arc<composition::AdmittedSavedPipeline>>,
+}
+
+impl super::session::FrozenRecoveryLevel for RootRecoveryLevel<'_> {
+    fn admitted_aliases(&self) -> BTreeSet<String> {
+        self.aliases.clone()
+    }
+
+    fn child(
+        &self,
+        alias: &str,
+    ) -> Option<(
+        &PipelineDefinition,
+        &dyn super::session::FrozenRecoveryLevel,
+    )> {
+        if !self.aliases.contains(alias) {
+            return None;
+        }
+        super::session::FrozenRecoveryLevel::child(self.children, alias)
+    }
+}
+
 fn frozen_pipeline_aliases(toolsets: &AdmittedToolSnapshot<'_>) -> BTreeSet<String> {
     toolsets
         .iter()

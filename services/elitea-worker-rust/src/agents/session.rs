@@ -1626,12 +1626,94 @@ impl PipelineStateServices {
             .map_err(|_| dependency_unavailable())
     }
 
+    /// The recovery walk below one frontier Agent node (FU-249, PM-2): it
+    /// returns the first-level child row the evidence binds. Deeper rows cannot
+    /// be read before assembly (their paths are admitted with the composition),
+    /// so the assembly-time walk (`validates`) checks every deeper level against
+    /// the frozen definitions and fails closed with a distinct cause: each
+    /// deeper row's activation stamp names its thread and the Agent node
+    /// definition Main froze, and the leaf is parked on an unowned Parallel
+    /// node of the frozen leaf definition.
+    async fn walk_child_frontier(
+        &self,
+        mut thread: String,
+        mut level: Option<(&PipelineDefinition, &dyn FrozenRecoveryLevel)>,
+        validates: bool,
+    ) -> Result<serde_json::Value, NativeAgentAssemblyError> {
+        use elitea_agent_runtime::graph::application_activation as activation;
+        let mut bound = None;
+        // The digest of the Agent node that stamps the next level's rows.
+        let mut stamped_by = None;
+        for depth in 0..MAX_RECOVERY_LEVELS {
+            let child = self
+                .checkpointer
+                .load(&thread)
+                .await
+                .map_err(|_| dependency_unavailable())?
+                .ok_or_else(|| child_refused(CHILD_MISSING))?;
+            if depth == 0 {
+                bound = Some(serde_json::to_value(&child).map_err(|_| invalid_configuration())?);
+            } else if !child
+                .metadata
+                .contains_key(activation::ACTIVATION_METADATA_KEY)
+            {
+                return Err(child_refused(CHILD_UNSTAMPED));
+            } else if validates
+                && (stamped_by.is_none()
+                    || activation::stamped_definition_digest(&child.metadata, &thread)
+                        != stamped_by)
+            {
+                return Err(child_refused(CHILD_DEFINITION_MISMATCH));
+            }
+            if super::graph::holds_parallel_occurrence(&child) {
+                if validates
+                    && !level.is_some_and(|(definition, _)| {
+                        definition.is_unowned_parallel(&child.pending_nodes[0])
+                    })
+                {
+                    return Err(child_refused(CHILD_FRONTIER_UNSUPPORTED));
+                }
+                return bound.ok_or_else(invalid_configuration);
+            }
+            let [pending] = child.pending_nodes.as_slice() else {
+                return Err(child_refused(CHILD_FRONTIER_UNSUPPORTED));
+            };
+            if !validates {
+                // Before assembly: one pending node is all the structure this
+                // inspect can see; assembly walks it to the occurrence.
+                return bound.ok_or_else(invalid_configuration);
+            }
+            let (child_definition, child_level) =
+                level.ok_or_else(|| child_refused(CHILD_DEFINITION_MISMATCH))?;
+            if !child_definition.has_node(pending) {
+                return Err(child_refused(CHILD_DEFINITION_MISMATCH));
+            }
+            let aliases = child_level.admitted_aliases();
+            if !child_definition
+                .recovery_frontier_supported(std::slice::from_ref(pending), &aliases)
+            {
+                return Err(child_refused(CHILD_FRONTIER_UNSUPPORTED));
+            }
+            // A supported ordinary node on the leaf: the child stopped outside
+            // any Parallel occurrence, so nothing resumes blind.
+            let alias = application_alias(child_definition, pending)
+                .ok_or_else(|| child_refused(CHILD_NOT_PARKED))?;
+            if !aliases.contains(alias) {
+                return Err(child_refused(CHILD_DEFINITION_MISMATCH));
+            }
+            stamped_by = child_definition.application_config_digest(pending);
+            level = child_level.child(alias);
+            thread = format!("{thread}/{pending}");
+        }
+        Err(child_refused(CHILD_NOT_PARKED))
+    }
+
     pub(super) async fn inspect_checkpoint(
         &self,
         plan: &OrdinaryNativeAgentPlan,
         definition: &PipelineDefinition,
         wake: Option<&super::graph::fanout_wake::FanoutWake>,
-        pipeline_aliases: &BTreeSet<String>,
+        frozen: &dyn FrozenRecoveryLevel,
     ) -> Result<(ValidatedModelCheckpoint, RecoveryFrontier), NativeAgentAssemblyError> {
         let checkpoint = self
             .checkpointer
@@ -1653,25 +1735,33 @@ impl PipelineStateServices {
             return Err(invalid_configuration());
         };
         if checkpoint.thread_id != plan.session_id.as_str()
-            || !definition.recovery_frontier_supported(&checkpoint.pending_nodes, pipeline_aliases)
+            || !definition
+                .recovery_frontier_supported(&checkpoint.pending_nodes, &frozen.admitted_aliases())
             || checkpoint.cleared_interrupt.is_some()
         {
             return Err(invalid_configuration());
         }
         // FU-249: an Agent node on the frontier resumes its saved child pipeline
         // only where the child is parked inside a fixed Parallel occurrence (its
-        // branches resume from their own checkpoints and receipts). Any other
-        // child frontier, an effectful node included, is not resumed blind.
+        // branches resume from their own checkpoints and receipts). PM-2: a child
+        // whose single pending node is itself an Agent node running a pipeline
+        // Main froze is walked down, level by level, to that occurrence. Any
+        // other child frontier, an effectful node included, is not resumed blind.
+        // The first-level child row is bound into the evidence; deeper rows
+        // cannot be read before assembly (their paths are admitted with the
+        // composition), so the assembly-time walk checks every deeper level
+        // against the frozen definitions and fails closed.
         let mut children = Vec::new();
         for node in definition.application_frontier_nodes(&checkpoint.pending_nodes) {
-            let child = self
-                .checkpointer
-                .load(&format!("{}/{node}", checkpoint.thread_id))
-                .await
-                .map_err(|_| dependency_unavailable())?
-                .filter(super::graph::holds_parallel_occurrence)
-                .ok_or_else(invalid_configuration)?;
-            children.push(serde_json::to_value(&child).map_err(|_| invalid_configuration())?);
+            let level = application_alias(definition, node).and_then(|alias| frozen.child(alias));
+            children.push(
+                self.walk_child_frontier(
+                    format!("{}/{node}", checkpoint.thread_id),
+                    level,
+                    frozen.validates(),
+                )
+                .await?,
+            );
         }
         // Bind all frontier data, including graph state, attempts and child receipts.
         // Convert through Value to order map keys before hashing.
@@ -1700,6 +1790,72 @@ impl PipelineStateServices {
             frontier,
         ))
     }
+}
+
+/// One level of the Main-frozen saved-pipeline composition a recovery walk may
+/// descend through (FU-249; PM-2: a Parallel below the first Agent-node level).
+pub(crate) trait FrozenRecoveryLevel: Send + Sync {
+    /// Whether the walk can check node kinds against frozen definitions here.
+    /// Before assembly only the first-level child is readable; assembly walks
+    /// every level against the frozen definitions (the same evidence, or the
+    /// run is refused).
+    fn validates(&self) -> bool {
+        true
+    }
+    /// The aliases of the saved pipelines Main froze at this level.
+    fn admitted_aliases(&self) -> BTreeSet<String>;
+    /// The frozen saved pipeline `alias` runs: its definition and its own level.
+    fn child(&self, alias: &str) -> Option<(&PipelineDefinition, &dyn FrozenRecoveryLevel)>;
+}
+
+/// Aliases only (before assembly): no frozen child definition to check.
+impl FrozenRecoveryLevel for BTreeSet<String> {
+    fn validates(&self) -> bool {
+        false
+    }
+
+    fn admitted_aliases(&self) -> BTreeSet<String> {
+        self.clone()
+    }
+
+    fn child(&self, _alias: &str) -> Option<(&PipelineDefinition, &dyn FrozenRecoveryLevel)> {
+        None
+    }
+}
+
+/// The most saved-pipeline levels a recovery walk descends (the composition
+/// depth bound).
+const MAX_RECOVERY_LEVELS: usize = super::pipeline::composition::MAX_PIPELINE_COMPOSITION_DEPTH;
+
+/// A recovery walk refusal (PM-2): typed, with a distinct cause per check.
+const CHILD_MISSING: &str = "pipeline.recovery.child_missing";
+const CHILD_UNSTAMPED: &str = "pipeline.recovery.child_unstamped";
+const CHILD_FRONTIER_UNSUPPORTED: &str = "pipeline.recovery.child_frontier_unsupported";
+const CHILD_DEFINITION_MISMATCH: &str = "pipeline.recovery.child_definition_mismatch";
+const CHILD_NOT_PARKED: &str = "pipeline.recovery.child_not_parked";
+
+fn child_refused(cause: &'static str) -> NativeAgentAssemblyError {
+    invalid_configuration().with_cause(cause, None)
+}
+
+/// Whether `code` is one of the recovery walk's refusals (PM-2).
+pub(crate) fn is_recovery_frontier_cause(code: &str) -> bool {
+    [
+        CHILD_MISSING,
+        CHILD_UNSTAMPED,
+        CHILD_FRONTIER_UNSUPPORTED,
+        CHILD_DEFINITION_MISMATCH,
+        CHILD_NOT_PARKED,
+    ]
+    .contains(&code)
+}
+
+/// The Agent node `node`'s saved-participant alias in `definition`.
+fn application_alias<'a>(definition: &'a PipelineDefinition, node: &str) -> Option<&'a str> {
+    definition
+        .application_nodes()
+        .find(|(id, _)| *id == node)
+        .map(|(_, selection)| selection.alias())
 }
 
 /// Where a pipeline's model-checkpoint recovery resumes.

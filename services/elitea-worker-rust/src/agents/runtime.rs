@@ -1135,6 +1135,28 @@ impl NativeAgentRuntimeError {
         self.upstream.as_ref().map(|error| error.code)
     }
 
+    /// Whether a fixed Parallel node refused an input or result past its
+    /// resource bound (PM-3). Reads only our own typed graph failure in the
+    /// source chain, never a provider message.
+    pub(crate) fn parallel_resource_exhausted(&self) -> bool {
+        let mut source = self
+            .upstream
+            .as_deref()
+            .map(|error| error as &(dyn std::error::Error + 'static));
+        for _ in 0..16 {
+            let Some(current) = source else {
+                return false;
+            };
+            if let Some(adk_rust::graph::GraphError::NodeExecutionFailed { message, .. }) =
+                current.downcast_ref()
+            {
+                return super::graph::is_parallel_resource_exhausted(message);
+            }
+            source = current.source();
+        }
+        false
+    }
+
     /// The upstream failure's message, for test assertions and diagnostics.
     #[cfg(test)]
     pub(crate) fn upstream_message_for_tests(&self) -> Option<&str> {
@@ -1420,6 +1442,30 @@ mod error_redaction_tests {
             NativeAgentRuntimeError::start_deferred().upstream_code(),
             None
         );
+    }
+
+    /// PM-3: a fixed Parallel resource-bound refusal, wrapped by the node that
+    /// ran it and by the graph agent, is recognised; any other node failure is not.
+    #[test]
+    fn a_parallel_resource_refusal_is_recognised_through_its_wrapping() {
+        let failure = |inner: &str| {
+            NativeAgentRuntimeError::event_failed(AdkError::from(
+                adk_rust::graph::GraphError::NodeExecutionFailed {
+                    node: "gather".to_owned(),
+                    message: format!("Node 'ask' execution failed: {inner}"),
+                },
+            ))
+        };
+        assert!(
+            failure("graph.parallel.resource_exhausted: the mapped input of LLM branch \"ask\" exceeds its 512 KiB bound")
+                .parallel_resource_exhausted()
+        );
+        assert!(
+            failure("graph.parallel.input_resource_exhausted: the parallel business snapshot exceeds its resource bound")
+                .parallel_resource_exhausted()
+        );
+        assert!(!failure("the pipeline LLM node failed").parallel_resource_exhausted());
+        assert!(!NativeAgentRuntimeError::invalid_state().parallel_resource_exhausted());
     }
 }
 

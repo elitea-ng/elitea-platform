@@ -56,6 +56,11 @@ enum RuntimeErrorCodeV1 {
   // The execution is pinned to the governed profile but its command carries
   // no security context reference. The job fails closed. Never retryable.
   RUNTIME_ERROR_CODE_V1_GOVERNED_CONTEXT_MISSING = 36;
+  // Checkpoint recovery reached a frontier it cannot safely continue: a saved
+  // child pipeline's stored frontier is missing, unstamped, not a single
+  // frozen Agent node, does not match its frozen definition, or is not parked
+  // in a fixed Parallel. Nothing is repeated. Never retryable.
+  RUNTIME_ERROR_CODE_V1_RECOVERY_FRONTIER_UNSUPPORTED = 37;
 }
 
 // RuntimeErrorV1 contains only a registered safe code/message pair. Detailed

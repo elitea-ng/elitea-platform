@@ -136,6 +136,10 @@ pub enum RuntimeFailureKind {
     /// An approved tool call was dispatched before the run stopped and its
     /// outcome was never recorded. It may have run; it is never repeated.
     RecoveryRefused,
+    /// Checkpoint recovery reached a frontier it cannot safely continue (PM-2:
+    /// a saved child pipeline's stored frontier fails the recovery walk).
+    /// Nothing is repeated; never retryable.
+    RecoveryFrontierUnsupported,
     Internal,
 }
 
@@ -822,6 +826,10 @@ pub(crate) const RECOVERY_REFUSED_UPSTREAM_CODE: &str = "agent.recovery_refused"
 pub(crate) const RECOVERY_REFUSED_DETAIL: &str =
     "the approved tool call may already have started; it was not repeated";
 
+/// Registered text of [`RuntimeFailureKind::RecoveryFrontierUnsupported`]; Main holds the
+/// same text. Data-free: the walk's distinct cause stays in the Worker's logs.
+pub(crate) const RECOVERY_FRONTIER_UNSUPPORTED_MESSAGE: &str = "This run stopped at a point where it cannot be safely continued. Nothing was repeated. Start it again, and share the support reference with your administrator if it happens again.";
+
 /// Registered text of [`RuntimeFailureKind::RecoveryRefused`]; Main holds the same text.
 pub(crate) const RECOVERY_REFUSED_MESSAGE: &str = "An approved tool call may have started before the run stopped, and its result was not recorded. It was not repeated. Check the target system before retrying, and share the support reference with your administrator.";
 
@@ -971,6 +979,11 @@ pub(crate) fn runtime_error_policy(
             RECOVERY_REFUSED_MESSAGE,
             false,
         ),
+        RuntimeFailureKind::RecoveryFrontierUnsupported => (
+            RuntimeErrorCodeV1::RecoveryFrontierUnsupported,
+            RECOVERY_FRONTIER_UNSUPPORTED_MESSAGE,
+            false,
+        ),
         RuntimeFailureKind::OutputContinuationExhausted => (
             RuntimeErrorCodeV1::OutputContinuationExhausted,
             "Continuation could not finish. The model response is incomplete.",
@@ -1088,6 +1101,7 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::Cancelled,
         RuntimeFailureKind::ResultRefused,
         RuntimeFailureKind::RecoveryRefused,
+        RuntimeFailureKind::RecoveryFrontierUnsupported,
         RuntimeFailureKind::OutputContinuationExhausted,
         RuntimeFailureKind::ModelTimeout,
         RuntimeFailureKind::ModelRateLimited,

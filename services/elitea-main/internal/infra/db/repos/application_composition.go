@@ -223,7 +223,7 @@ func (s *CompositionSource) Prefetch(ctx context.Context, ids []applicationcompo
 		version := applicationcomposition.Version{Kind: applicationcomposition.KindAgent, Name: name}
 		if agentType == "pipeline" {
 			version.Kind = applicationcomposition.KindPipeline
-			version.AgentNodes, version.StaticPause, version.ParallelNode = applicationcomposition.ReadPipeline(instructions)
+			version.AgentNodes, version.StaticPause, version.ParallelNode, version.LLMBranches = applicationcomposition.ReadPipeline(instructions)
 		}
 		s.cache[id] = cachedVersion{version: version, ok: true}
 		found[id.VersionID] = id

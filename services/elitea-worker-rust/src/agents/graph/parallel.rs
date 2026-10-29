@@ -2264,6 +2264,18 @@ fn graph_error_code(error: &GraphError) -> &'static str {
 }
 
 /// The innermost message of nested `Node '<id>' execution failed: ` wrappers.
+/// A fixed Parallel resource-bound refusal, through any node-failure wrapping
+/// (PM-3): the run's terminal keeps it as a typed resource limit.
+pub(crate) fn is_parallel_resource_exhausted(message: &str) -> bool {
+    let inner = unwrap_node_failures(message);
+    [
+        "graph.parallel.resource_exhausted: ",
+        "graph.parallel.input_resource_exhausted: ",
+    ]
+    .iter()
+    .any(|code| inner.starts_with(code))
+}
+
 fn unwrap_node_failures(mut message: &str) -> &str {
     while let Some(rest) = message.strip_prefix("Node '")
         && let Some((node, inner)) = rest.split_once("' execution failed: ")

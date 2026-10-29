@@ -43,6 +43,7 @@ import { ChatParticipantType, TOOL_ACTION_TYPES, ToolActionStatus } from '@/shar
 
 import type { MessageGroupWire, MessageParticipantWire } from '@/entities/message/lib/wire';
 import type { PersistedTraceSteps } from '@/entities/message/lib/traceSteps';
+import { withMemberThinkingSteps } from '@/entities/message/lib/traceSteps';
 import { convertTime, isParticipant, normaliseAssistantMessage, normaliseUserMessage } from '@/entities/message/lib/normalise';
 import type { SubAgentGroupable } from '@/entities/message/lib/subAgentGrouping';
 
@@ -308,7 +309,8 @@ export function convertMessagesToChatHistory(
     }
 
     // Convert AI answer using entities-level normaliser.
-    const persisted = persistedTraceStepsByGroup?.get(String(messageGroup.id));
+    // Member and sub-agent thinking rides the page's own `persisted_trace` rows.
+    const persisted = withMemberThinkingSteps(persistedTraceStepsByGroup?.get(String(messageGroup.id)), messageGroup.persisted_trace);
     const normalised = splitPersistedReasoning(
       normaliseAssistantMessage(messageGroup, sortedMessages, participants, persisted) as unknown as ChatMessage,
     );
