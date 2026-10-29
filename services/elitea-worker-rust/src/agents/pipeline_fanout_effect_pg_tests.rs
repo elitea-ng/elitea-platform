@@ -475,6 +475,32 @@ async fn run_keyed_deciding(
         .map_err(|error| error.to_string())
 }
 
+/// Run until the first `agent_interrupt_pending` frame is projected, then
+/// drop the run there: the process is lost the moment Main could ingest the
+/// card (PM-6). Returns that card.
+async fn run_until_first_card(
+    mut invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
+) -> Value {
+    invocation
+        .project_start(timestamp(1))
+        .expect("pipeline browser start");
+    let (mut run, mut projector, _completion) = invocation.start().expect("pipeline start");
+    loop {
+        let event = run
+            .next_event()
+            .await
+            .expect("the run streams until its first card")
+            .expect("a card before the run ends");
+        for frame in projector.project(&event).expect("projected frames") {
+            if frame.r#type == "agent_interrupt_pending" {
+                let metadata: Value =
+                    serde_json::from_slice(&frame.response_metadata).expect("card frame metadata");
+                return metadata["interrupt_card_v1"].clone();
+            }
+        }
+    }
+}
+
 /// The latest root checkpoint's joined entries.
 async fn joined(pool: &sqlx::PgPool) -> Option<Vec<Value>> {
     let state = sqlx::query_scalar::<_, String>(
@@ -695,6 +721,80 @@ async fn postgres_fanout_agent_branch_asks_and_resumes_with_the_answer() {
             .any(|member| member["fanout_v1"]["member"] == "second" && member["status"] == "end"),
         "{members:?}"
     );
+    let entries = joined(&db.pool).await.expect("joined entries");
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    for entry in &entries {
+        assert_eq!(entry["status"], "succeeded", "{entries:?}");
+    }
+    db.pool.close().await;
+}
+
+/// PM-6: an Agent member's card becomes decidable when Main ingests its frame.
+/// The process is lost right at that frame, before anything after it runs. A
+/// reclaim of the same execution decides the card: the member's forwarded
+/// confirmation was already durable in the root session, so the member resumes
+/// with the answer. The order holds because the confirmation and the card are
+/// events of one root stream, appended in order before each is yielded; with
+/// the confirmation removed the same decision is refused
+/// (`graph.parallel.decision_refused`), which keeps this test decisive.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_an_agent_member_lost_at_its_card_frame_is_decided_from_the_durable_confirmation()
+{
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let (first, _) = assembler(
+        &db.pool,
+        vec![
+            TestModelGatewayOutcome::Response(pipeline_text_response("first done")),
+            TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
+        ],
+        pipeline_connector(),
+        asking_agent(),
+    );
+    let request = request("continue");
+    let invocation = first
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .expect("assemble the fan-out pipeline");
+    let card = run_until_first_card(invocation).await;
+    assert_eq!(card["fanout_v1"]["member"], "second", "{card:?}");
+    assert_eq!(card["kind"], "ask_user", "{card:?}");
+    ledger.decide(
+        card["interrupt_key"].as_str().expect("card key"),
+        "answer",
+        Some("Staging"),
+    );
+    let (again, captured) = assembler(
+        &db.pool,
+        vec![
+            TestModelGatewayOutcome::Response(pipeline_text_response("second done")),
+            TestModelGatewayOutcome::Response(pipeline_text_response("third done")),
+        ],
+        pipeline_connector(),
+        asking_agent(),
+    );
+    let again = again.with_fanout_decisions_for_tests(ledger.client(2));
+    let invocation = recovered(&again, &request, EXECUTION, 2)
+        .await
+        .unwrap_or_else(|error| panic!("the lost run is reclaimed: {error}"));
+    run_collecting(invocation)
+        .await
+        .expect("the decided member resumes and the pipeline completes");
+    let resumed = {
+        let requests = captured.lock().expect("captured model requests");
+        String::from_utf8_lossy(&requests[0].body).into_owned()
+    };
+    assert!(resumed.contains("Staging"), "{resumed}");
     let entries = joined(&db.pool).await.expect("joined entries");
     assert_eq!(entries.len(), 3, "{entries:?}");
     for entry in &entries {
