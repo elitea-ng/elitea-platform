@@ -124,6 +124,10 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 			_ = tx.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
+	// The kill switch's fence (safety/fence.go), first.
+	if err := fenceSuspendedAdmission(ctx, pgxExecutor{queryer: tx}); err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
 	txQueries := sqlcgen.New(tx)
 	if err := lockCodeToolkitParent(ctx, tx, admission); err != nil {
 		return executionapp.AdmissionOutcome{}, err

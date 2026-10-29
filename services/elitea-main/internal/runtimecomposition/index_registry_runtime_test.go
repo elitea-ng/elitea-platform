@@ -12,7 +12,7 @@ import (
 func TestIndexRuntimeRefusesAMissingRegistry(t *testing.T) {
 	_, err := newCurrentIndexRuntime(
 		nil, nil, Config{IndexIngestDispatchEnabled: true},
-		repos.IndexIngestDispatchPolicy{}, nil, func(error) {},
+		repos.IndexIngestDispatchPolicy{}, nil, nil, func(error) {},
 	)
 	if err == nil || !strings.Contains(err.Error(), "needs the composed index registry") {
 		t.Fatalf("err = %v", err)
@@ -25,7 +25,7 @@ func TestIndexRuntimeRefusesAMissingRegistry(t *testing.T) {
 func TestIndexRuntimeAcceptsTheRegistry(t *testing.T) {
 	_, err := newCurrentIndexRuntime(
 		nil, nil, Config{IndexIngestDispatchEnabled: true},
-		repos.IndexIngestDispatchPolicy{}, &indexRegistryComposition{repo: &repos.IndexRegistryRepository{}}, func(error) {},
+		repos.IndexIngestDispatchPolicy{}, &indexRegistryComposition{repo: &repos.IndexRegistryRepository{}}, nil, func(error) {},
 	)
 	if err == nil || !strings.Contains(err.Error(), "dependencies are required") {
 		t.Fatalf("err = %v, want the dependency check", err)

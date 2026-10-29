@@ -397,6 +397,10 @@ func writeChildAuthorizationError(ctx context.Context, writer http.ResponseWrite
 }
 
 func writeChildStartError(ctx context.Context, writer http.ResponseWriter, err error) {
+	if writeSafetyRefusal(writer, err) {
+		// The kill switch (ADR-0041 decision 1) covers the nested agent.
+		return
+	}
 	switch {
 	case errors.Is(err, agentexecutionapp.ErrInvalidCurrentAgentStart),
 		errors.Is(err, agentexecutionapp.ErrInvalidAgentAdmission),

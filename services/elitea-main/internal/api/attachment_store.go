@@ -30,6 +30,13 @@ type attachmentRepoAdapter struct {
 // newAttachmentStore returns nil when pool is nil — mirrors
 // newArtifactHandler's own "no database configured, degrade gracefully"
 // convention (router.go) rather than erroring at router construction time.
+// NewConversationAttachmentStore is newAttachmentStore for the composition
+// root: the conversation retention sweep's journal drain deletes attachment
+// object records through the same store the conversation routes use.
+func NewConversationAttachmentStore(pool *pgxpool.Pool) v2convs.AttachmentStore {
+	return newAttachmentStore(pool)
+}
+
 func newAttachmentStore(pool *pgxpool.Pool) v2convs.AttachmentStore {
 	if pool == nil {
 		return nil

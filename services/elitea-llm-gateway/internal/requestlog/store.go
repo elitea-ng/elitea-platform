@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -218,6 +219,48 @@ func (s *Store) writeBatch(ctx context.Context, records []Record, legacy bool) e
 		return fmt.Errorf("write request log batch: %w", err)
 	}
 	return nil
+}
+
+// rowQuerier is the optional read half of the pool, used only for the
+// retention policy.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// RetentionPolicy reads the platform row of `gateway_request_log` from
+// elitea_runtime.retention_policy (elitea-main shared 0195). A database
+// without the table, a missing row or a null maximum is ok=false.
+func (s *Store) RetentionPolicy(ctx context.Context) (time.Duration, bool, error) {
+	if s == nil {
+		return 0, false, nil
+	}
+	q, ok := s.db.(rowQuerier)
+	if !ok {
+		return 0, false, nil
+	}
+	// Two statements: a query naming a table that does not exist fails at
+	// parse time, whatever its WHERE says.
+	var present bool
+	if err := q.QueryRow(ctx, `SELECT to_regclass('elitea_runtime.retention_policy') IS NOT NULL`).Scan(&present); err != nil {
+		return 0, false, fmt.Errorf("read request log retention policy: %w", err)
+	}
+	if !present {
+		return 0, false, nil
+	}
+	var days *int
+	err := q.QueryRow(ctx, `
+		SELECT max_age_days FROM elitea_runtime.retention_policy
+		 WHERE scope = 'platform' AND data_class = 'gateway_request_log'`).Scan(&days)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("read request log retention policy: %w", err)
+	}
+	if days == nil || *days < 1 {
+		return 0, false, nil
+	}
+	return time.Duration(*days) * 24 * time.Hour, true, nil
 }
 
 // Prune deletes expired rows.

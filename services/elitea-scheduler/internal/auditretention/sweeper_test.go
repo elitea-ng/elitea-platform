@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -31,6 +32,47 @@ type recordingStore struct {
 	removals []int64
 	err      error
 	calls    []recordedExec
+	// export is the SIEM export position the store reports; nil means the
+	// cursor table does not exist. exportNoRow reports the table with no row
+	// for the stream; queryErr fails the position read.
+	export      *ExportHold
+	exportNoRow bool
+	queryErr    error
+}
+
+type fakeRow struct {
+	values []any
+	err    error
+}
+
+func (r fakeRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	for i, d := range dest {
+		switch d := d.(type) {
+		case *bool:
+			*d = r.values[i].(bool)
+		case *int64:
+			*d = r.values[i].(int64)
+		case *time.Time:
+			*d = r.values[i].(time.Time)
+		}
+	}
+	return nil
+}
+
+func (s *recordingStore) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+	if s.queryErr != nil {
+		return fakeRow{err: s.queryErr}
+	}
+	if sql == exportCursorTableSQL {
+		return fakeRow{values: []any{s.export != nil || s.exportNoRow}}
+	}
+	if s.export == nil {
+		return fakeRow{err: pgx.ErrNoRows}
+	}
+	return fakeRow{values: []any{s.export.TxID, s.export.ID, s.export.UpdatedAt}}
 }
 
 type recordedExec struct {
@@ -378,7 +420,8 @@ func TestTheSweeperIsStartedByTheDaemon(t *testing.T) {
 	text := string(source)
 
 	for defect, fragment := range map[string]string{
-		"the sweeper is never constructed":                   "auditretention.New(",
+		"the sweeper is never constructed":                   "auditretention.NewWithPolicy(",
+		"the sweeper ignores the retention policy":           "retentionpolicy.ClassAdminAudit",
 		"the sweeper is constructed and never run":           "auditSweeper.Pass)",
 		"the sweeper reads its own switch instead of config": "cfg.AuditRetentionDays",
 		"the sweeper does not share the maintenance switch":  "maintenanceSwitch.Active",
@@ -422,5 +465,49 @@ func TestTheDeploymentFilesDeclareEveryKeyTheConfigReads(t *testing.T) {
 				t.Errorf("%s does not set %s, so no operator can change it there", path, key)
 			}
 		}
+	}
+}
+
+// TestAPassNeverDeletesPastTheSIEMExportPosition: with audit export on, an
+// expired row the export has not delivered yet survives the pass.
+func TestAPassNeverDeletesPastTheSIEMExportPosition(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+
+	for name, testCase := range map[string]struct {
+		store    *recordingStore
+		wantHeld bool
+	}{
+		"export off: no cursor table":   {store: &recordingStore{removals: []int64{1}}},
+		"export off: no row for stream": {store: &recordingStore{removals: []int64{1}, exportNoRow: true}},
+		"export on":                     {store: &recordingStore{removals: []int64{1}, export: &ExportHold{TxID: 900, ID: 42, UpdatedAt: at}}, wantHeld: true},
+	} {
+		sweeper := newTestSweeper(t, testCase.store, openGate, Config{RetentionDays: 30}, at)
+		stats, err := sweeper.Sweep(context.Background())
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		call := testCase.store.calls[0]
+		held := strings.Contains(call.sql, "export_txid")
+		if held != testCase.wantHeld || (stats.HeldForExport != nil) != testCase.wantHeld {
+			t.Fatalf("%s: held=%v stats=%+v, want held=%v", name, held, stats.HeldForExport, testCase.wantHeld)
+		}
+		if testCase.wantHeld && (call.args[2] != int64(900) || call.args[3] != int64(42)) {
+			t.Fatalf("%s: position args = %v", name, call.args)
+		}
+	}
+}
+
+// TestAnUnreadableExportPositionDeletesNothing: a destructive pass with an
+// unknown export position fails closed.
+func TestAnUnreadableExportPositionDeletesNothing(t *testing.T) {
+	t.Parallel()
+	store := &recordingStore{removals: []int64{1}, queryErr: errors.New("connection reset")}
+	sweeper := newTestSweeper(t, store, openGate, Config{RetentionDays: 30}, time.Now())
+	if _, err := sweeper.Sweep(context.Background()); err == nil {
+		t.Fatal("the pass went ahead without the export position")
+	}
+	if len(store.calls) != 0 {
+		t.Fatalf("issued %d DELETEs without the export position", len(store.calls))
 	}
 }

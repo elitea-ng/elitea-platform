@@ -14,15 +14,9 @@ describe('DeprecatedTips', () => {
     }
   });
 
-  it('gives the Condition node its own condition-node-migration link', () => {
+  it('links the docs section on deprecated node types, a page that exists', () => {
     expect(DeprecatedTips[PipelineNodeTypes.Condition]?.linkUrl).toBe(
-      '/docs/how-tos/pipelines/condition-node-migration',
-    );
-  });
-
-  it('gives Loop and LoopFromTool the same loop-node-migration link', () => {
-    expect(DeprecatedTips[PipelineNodeTypes.Loop]?.linkUrl).toBe(
-      DeprecatedTips[PipelineNodeTypes.LoopFromTool]?.linkUrl,
+      '/docs/how-tos/pipelines/nodes/overview#deprecated-node-types',
     );
   });
 

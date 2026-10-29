@@ -1,0 +1,28 @@
+---
+interface Props {
+  title: string;
+}
+
+const { title } = Astro.props;
+// The id a heading with this text would get (GitHub's slug rule), so a page
+// can link to an accordion as to a section; the script opens it on arrival.
+const id = title
+  .toLowerCase()
+  .trim()
+  .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+  .replace(/\s/g, '-');
+---
+
+<details class="docs-accordion" id={id}>
+  <summary class="docs-accordion__title">{title}</summary>
+  <div class="docs-accordion__body"><slot /></div>
+</details>
+
+<script>
+  function openTarget(): void {
+    const target = location.hash === '' ? null : document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    if (target instanceof HTMLDetailsElement) target.open = true;
+  }
+  openTarget();
+  addEventListener('hashchange', openTarget);
+</script>

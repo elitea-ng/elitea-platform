@@ -177,6 +177,11 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+            # The SIEM audit export's /metrics (ELITEA_AUDIT_EXPORT_METRICS_ADDR).
+            # Declared always; the process listens only with an exporter set.
+            - name: audit-metrics
+              containerPort: {{ .Values.main.auditExport.metrics.port }}
+              protocol: TCP
             {{- if .Values.main.runtime.enabled }}
             # The runtime plane's listeners (issue #382). The agent worker
             # dials all of them, so they must be reachable on the Service as
@@ -389,6 +394,13 @@ spec:
               mountPath: {{ .Values.egressProxy.signingKey.mountPath }}
               readOnly: true
             {{- end }}
+            {{- with (dig "auditExport" "secretName" "" .Values.main) }}
+            # The SIEM audit export's webhook keys and OTLP headers
+            # (main.auditExport). Read by internal/auditexport.
+            - name: audit-export
+              mountPath: {{ $.Values.main.auditExport.mountPath }}
+              readOnly: true
+            {{- end }}
             {{- with (dig "agentAssertion" "keysSecret" "" .Values.main) }}
             # The Elitea-native agent assertion keys (main.agentAssertion).
             # Read by eliteanative.ReadMountedKey through the kubelet links.
@@ -431,6 +443,13 @@ spec:
             items:
               - key: {{ .Values.egressProxy.signingKey.key }}
                 path: {{ .Values.egressProxy.signingKey.key }}
+        {{- end }}
+        {{- with (dig "auditExport" "secretName" "" .Values.main) }}
+        - name: audit-export
+          secret:
+            secretName: {{ . }}
+            # Readable by Main's non-root user: the pod sets no fsGroup.
+            defaultMode: 0444
         {{- end }}
         {{- with (dig "agentAssertion" "keysSecret" "" .Values.main) }}
         - name: agent-assertion-keys

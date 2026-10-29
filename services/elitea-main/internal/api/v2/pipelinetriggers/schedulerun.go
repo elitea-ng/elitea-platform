@@ -45,6 +45,7 @@ import (
 	"time"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
@@ -259,6 +260,12 @@ func (h *Handler) fireSchedule(
 		Authority:   authority,
 	})
 	switch {
+	case errors.Is(err, safety.ErrExecutionSuspended):
+		// The kill switch (ADR-0041 decision 1). The tenant table's result
+		// CHECK has no "suspended" value, so the row says failed and the
+		// detail says why; the next tick tries again.
+		result.Skipped++
+		record(resultFailed, "skipped: an administrator suspended execution ("+safety.ErrorCode+")", "")
 	case governedStartRefused(err):
 		result.Skipped++
 		_, detail := mandateSkip(runmandate.CodeMandateNotUsable)

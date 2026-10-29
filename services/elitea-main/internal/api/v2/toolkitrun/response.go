@@ -39,6 +39,7 @@ import (
 	"strings"
 
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 )
 
@@ -287,6 +288,13 @@ func lowerFirst(subject string) string {
 // failure becomes a status code, so a caller sees the same code from both
 // handlers.
 func WriteError(w http.ResponseWriter, err error) {
+	if status, body, refused := safety.HTTPRefusal(err); refused {
+		// The kill switch (ADR-0041 decision 1): 409 execution_suspended, or
+		// 503 when the suspension state could not be read. Nothing ran.
+		body["ok"] = false
+		writeJSON(w, status, body)
+		return
+	}
 	var pending *toolkitcalltoolapp.PendingRun
 	switch {
 	case errors.As(err, &pending):

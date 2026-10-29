@@ -51,7 +51,7 @@ conversation on the project event stream.
 - Main: `internal/infra/db/repos/execution_interrupts*.go`, `execution_interrupt_wakes.go`, `agent_claim_authority.go`,
   `internal/application/agentexecution/{continue_fanout_wake,fanout_wake_admitter}.go`,
   `internal/api/v2/events/*`, `internal/api/middleware/otel.go` (SSE flush), `internal/domain/{executioninterrupt,
-  pipelinelimits,applicationcomposition}/*`, migration `migrations/shared/0194_execution_interrupt_wakes.sql`.
+  pipelinelimits,applicationcomposition}/*`, migration `migrations/shared/0197_execution_interrupt_wakes.sql`.
 - Web: `src/features/chat-messages/**` (ledger hook, fan-out frames, cards, shared project stream),
   `src/features/pipelines/lib/graphParallelAdmission.helpers.ts`, `src/pages/pipelines/**` (test-chat refusal).
 
@@ -255,7 +255,9 @@ refused the model-checkpoint reclaim (473c27f27), the answered child was parked 
 `api.gen.go` were regenerated with the pinned tools (`scripts/contract/generate_proto.sh`, oapi-codegen v2.7.2).
 A later merge (2026-10-28) brought migration 0193. The base-branch check requires a new migration above main's
 head, so the park/wake migration is renumbered to `0194_execution_interrupt_wakes.sql` (manifest head 194); 0192
-stays a gap like 0189. Only the file name and its header line changed. main moved the turn checks into `validateAgentTurns`; the fan-out wake check
+stays a gap like 0189. Only the file name and its header line changed. A merge on 2026-10-29 brought main's 0194 (kill switch), 0195 (retention) and 0196 (audit
+export): the park/wake migration is renumbered again to `0197_execution_interrupt_wakes.sql` (manifest head 197), file
+name and header line only; the admission's two new main return paths now also return the (empty) resolved-frame list. main moved the turn checks into `validateAgentTurns`; the fan-out wake check
 moved with them, and the admission carries both `CurrentFanoutWakeTurn` and main's `GovernedCredentials`.
 `main` routed agent claims through a shared fresh-claim builder that dropped the fan-out opt-in; agent claims now use
 an agent builder with both opt-ins (`ordinary_agent_claims_opt_into_fanout_interrupt_decisions` caught it).

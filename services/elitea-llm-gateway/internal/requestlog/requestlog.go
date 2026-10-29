@@ -135,6 +135,12 @@ type Sink interface {
 	Prune(ctx context.Context, olderThan time.Time) (int64, error)
 }
 
+// PolicySource is implemented by a sink that can read the administrator's
+// retention policy. ok false means "no usable policy": the default applies.
+type PolicySource interface {
+	RetentionPolicy(ctx context.Context) (window time.Duration, ok bool, err error)
+}
+
 const (
 	// BufferSize bounds the in-memory queue. Sized for a burst rather than for
 	// an outage: at any sustained rate the flusher keeps up, and if it cannot,
@@ -160,10 +166,19 @@ const (
 	// label. 92 days covers 90 calendar days plus the partial first and last
 	// day a date-aligned window adds.
 	//
-	// A compiled constant rather than configuration, for the reason the
-	// scheduler's own retention is one: no deployment should be able to turn a
-	// log into an unbounded table by setting a variable.
+	// It is the DEFAULT. The administrator's retention policy (ADR-0042
+	// decision 4, issue #1495) sets the window: each prune reads the platform
+	// row of `gateway_request_log` from elitea_runtime.retention_policy (the
+	// shared database this gateway already reads centry.secrets_key from; no
+	// call to elitea-main). The policy cannot make the table unbounded: the
+	// admin API refuses keep-forever for this class, and a missing, null or
+	// unreadable row falls back to this value, so no deployment variable and
+	// no database state turns the log into an unbounded table.
 	RetentionWindow = 92 * 24 * time.Hour
+
+	// MaxRetentionWindow caps a policy value (100 years), matching the admin
+	// API's ceiling.
+	MaxRetentionWindow = 36500 * 24 * time.Hour
 
 	// pruneInterval is how often the writer deletes expired rows. Hourly is far
 	// more often than a 92-day window needs; it keeps each DELETE small, which
@@ -344,13 +359,33 @@ func (r *Recorder) prune() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	removed, err := r.sink.Prune(ctx, r.now().Add(-RetentionWindow))
+	window := r.retentionWindow(ctx)
+	removed, err := r.sink.Prune(ctx, r.now().Add(-window))
 	if err != nil {
 		r.logger.Error("requestlog: prune failed", "err", err)
 		return
 	}
 	if removed > 0 {
 		r.logger.Info("requestlog: pruned expired rows",
-			"removed", removed, "retention", RetentionWindow.String())
+			"removed", removed, "retention", window.String())
 	}
+}
+
+// retentionWindow is the window of one prune: the policy's when the sink can
+// read a usable one, else RetentionWindow.
+func (r *Recorder) retentionWindow(ctx context.Context) time.Duration {
+	source, ok := r.sink.(PolicySource)
+	if !ok {
+		return RetentionWindow
+	}
+	window, ok, err := source.RetentionPolicy(ctx)
+	if err != nil {
+		r.logger.Warn("requestlog: retention policy unreadable; using the default window",
+			"err", err, "retention", RetentionWindow.String())
+		return RetentionWindow
+	}
+	if !ok || window < 24*time.Hour || window > MaxRetentionWindow {
+		return RetentionWindow
+	}
+	return window
 }

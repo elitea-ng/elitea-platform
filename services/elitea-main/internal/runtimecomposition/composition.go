@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -106,6 +107,13 @@ type Dependencies struct {
 	// on. The runtime plane carries it between replicas over NATS and checks
 	// governed runs' epochs at ClaimCommand and RenewLease. Nil: neither.
 	SecurityInvalidations *epoch.Hub
+	// ExecutionSuspensions is the kill switch's admission gate (ADR-0041
+	// decision 1, #1493), built at the composition root over
+	// elitea_runtime.execution_suspensions and shared with the admin API that
+	// sets and resumes suspensions. Every agent, index and direct toolkit
+	// admission store is wrapped with it, and the runtime plane carries its
+	// invalidations between replicas over NATS. Nil: no check (tests).
+	ExecutionSuspensions *safety.Gate
 	// IndexScheduleMandates and IndexScheduleMandateGate make every index
 	// schedule occurrence mandate-bound (#1122): built at the composition
 	// root only with credential governance on. Nil: the executor keeps the
@@ -690,6 +698,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if dependencies.ConversationActivity != nil {
 			agentAdmissionStore = activityAdmissionStore{next: agentJobs, activity: dependencies.ConversationActivity}
 		}
+		agentAdmissionStore = guardAgentAdmissions(agentAdmissionStore, dependencies.ExecutionSuspensions)
 		agentAdmissions, admissionErr := agentexecutionapp.NewAdmissionService(
 			agentAdmissionStore,
 			agentInputs,
@@ -952,7 +961,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct direct toolkit execution jobs: %w", toolkitErr)
 		}
 		toolkitAdmissions, toolkitErr := toolkitexecutionapp.NewAdmissionService(
-			toolkitJobs,
+			guardToolkitExecute(toolkitJobs, dependencies.ExecutionSuspensions),
 			toolkitInputs,
 			nil,
 			currentRuntimeID,
@@ -1339,6 +1348,14 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 		if _, err := controlServer.WithGovernedEpochs(runs, revoker); err != nil {
 			return nil, fmt.Errorf("compose governed epoch checks: %w", err)
+		}
+	}
+	if dependencies.ExecutionSuspensions != nil {
+		publisherRoot, err = newPublisherSet(publisherRoot, suspensionInvalidationRunner{
+			gate: dependencies.ExecutionSuspensions, transport: natsSuspensionTransport{conn: runtimeNATS},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("compose suspension invalidation fan-out: %w", err)
 		}
 	}
 	if dependencies.SecurityInvalidations != nil {
@@ -1776,6 +1793,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			config,
 			indexDispatchPolicy,
 			indexRegistry,
+			dependencies.ExecutionSuspensions,
 			func(err error) {
 				dependencies.Logger.Error(
 					"current index metadata initialization requeued",
@@ -2149,6 +2167,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			toolkitCallToolDispatchPolicy,
 			0,
 			toolCallRecords,
+			dependencies.ExecutionSuspensions,
 			dependencies.Logger,
 			indexCatalogOption(indexCatalog),
 		)

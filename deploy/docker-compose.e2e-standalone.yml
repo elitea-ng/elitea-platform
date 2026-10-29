@@ -549,6 +549,10 @@ services:
     build:
       context: ..
       dockerfile: apps/elitea-web/Containerfile
+      # The image without the docs site (the release image adds it): no lane
+      # reads /docs/, and a docs-only change then rebuilds nothing here.
+      # Run the docs with `npm run dev` in apps/elitea-docs.
+      target: spa
     environment:
       VITE_SERVER_URL: "/api/v2"
       VITE_BASE_URI: "/app/"

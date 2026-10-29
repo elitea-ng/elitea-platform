@@ -595,4 +595,16 @@ describe('frozen results and memoization', () => {
     expect(second).not.toBe(first);
     expect(expectOk(second).vite_server_url).toBe('https://mutated.example');
   });
+
+  it('does not memoize a missing result: a config published later is read (desktop sign-in order)', () => {
+    // The desktop shell renders before sign-in and reads the basename
+    // (BrandDocumentHead) while no source defines the trio yet…
+    expect(getConfig().status).toBe('missing');
+
+    // …then launchApp publishes elitea_ui_config and imports the app.
+    setWindowConfig({ ...VALID_TRIO });
+    const resolved = getConfig();
+    expect(expectOk(resolved).vite_server_url).toBe(VALID_TRIO.vite_server_url);
+    expect(getConfig()).toBe(resolved);
+  });
 });

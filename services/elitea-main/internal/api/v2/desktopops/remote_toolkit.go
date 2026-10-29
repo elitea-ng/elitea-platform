@@ -772,6 +772,9 @@ func clientAuthorizationRequest(outcome toolkitcalltoolapp.RunOutcome) map[strin
 }
 
 func (h *remoteToolkitHandler) writeRunError(ctx context.Context, writer http.ResponseWriter, toolkitID int64, err error) {
+	if writeSafetyRefusal(writer, err) {
+		return
+	}
 	var pending *toolkitcalltoolapp.PendingRun
 	switch {
 	case errors.As(err, &pending) && pending.Replayed:

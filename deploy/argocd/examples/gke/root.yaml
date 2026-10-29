@@ -12,7 +12,7 @@
 # OCI repository registration and the ClusterSecretStore.
 #
 # The walkthrough is the embedded docs page "Deploy on GKE with Argo CD"
-# (apps/elitea-web/src/entries/docs/content/deployment/gke-argocd.mdx).
+# (apps/elitea-docs/src/content/docs/deployment/gke-argocd.mdx).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

@@ -15,9 +15,10 @@ import (
 // error keeps the whole batch unexported, and the relay offers it again.
 // Delivery is at least once, so a sink must deduplicate on EventID.
 //
-// libs/go/observability has no OTLP logs exporter today (traces only), so
-// this package ships LogExporter. An OTLP logs or webhook exporter
-// implements this interface and is selected by operator configuration.
+// This package ships LogExporter. The SIEM exporters, OTLP logs and the
+// signed webhook (#1494), live in internal/auditexport, which adapts them to
+// this interface (auditexport.SecurityExporter) and is selected by operator
+// configuration (ELITEA_AUDIT_EXPORT_*).
 type Exporter interface {
 	Name() string
 	Export(ctx context.Context, records []Record) error

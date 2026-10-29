@@ -62,10 +62,14 @@ import type {
   CredentialReferenceListResponse,
   CredentialUseGrant,
   CredentialUseGrantListResponse,
+  ExecutionSuspension,
+  ExecutionSuspensionList,
   ExternalAgentIdentity,
   ExternalAgentIdentityDriftResponse,
   ExternalAgentIdentityListResponse,
   GlobalUserInviteResult,
+  LegalHold,
+  LegalHoldListResponse,
   ListBrandingPackageVersions200,
   Mandate,
   MandateAttachment,
@@ -85,6 +89,8 @@ import type {
   PlatformSettings,
   ProjectCloudExecutorSwitch,
   PublishedAgentsListing,
+  RetentionPolicy,
+  RetentionPolicyListResponse,
   Role,
   SendBrandingTestEmail200,
   SystemInfo,
@@ -382,6 +388,70 @@ export const getCancelBackgroundJobResponseMock = (
   overrideResponse: Partial<Extract<OkResponse, object>> = {},
 ): OkResponse => ({ ok: faker.datatype.boolean(), ...overrideResponse });
 
+export const getListExecutionSuspensionsResponseMock = (
+  overrideResponse: Partial<Extract<ExecutionSuspensionList, object>> = {},
+): ExecutionSuspensionList => ({
+  suspensions: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: 12,
+    scope: "agent",
+    project_id: 7,
+    application_id: 31,
+    toolkit_type: null,
+    reason: "The agent sends repeated messages to customers",
+    actor_id: 4,
+    source: "manual",
+    resume_requires: "any_admin",
+    created_at: "2026-10-28T09:15:02Z",
+    cancelled_runs: 2,
+    active: true,
+    resumed_at: null,
+    resumed_by: null,
+    resume_reason: null,
+  })),
+  ...overrideResponse,
+});
+
+export const getCreateExecutionSuspensionResponseMock =
+  (): ExecutionSuspension => ({
+    id: 12,
+    scope: "agent",
+    project_id: 7,
+    application_id: 31,
+    toolkit_type: null,
+    reason: "The agent sends repeated messages to customers",
+    actor_id: 4,
+    source: "manual",
+    resume_requires: "any_admin",
+    created_at: "2026-10-28T09:15:02Z",
+    cancelled_runs: 2,
+    active: true,
+    resumed_at: null,
+    resumed_by: null,
+    resume_reason: null,
+  });
+
+export const getResumeExecutionSuspensionResponseMock =
+  (): ExecutionSuspension => ({
+    id: 12,
+    scope: "agent",
+    project_id: 7,
+    application_id: 31,
+    toolkit_type: null,
+    reason: "The agent sends repeated messages to customers",
+    actor_id: 4,
+    source: "manual",
+    resume_requires: "any_admin",
+    created_at: "2026-10-28T09:15:02Z",
+    cancelled_runs: 2,
+    active: true,
+    resumed_at: null,
+    resumed_by: null,
+    resume_reason: null,
+  });
+
 export const getListPlatformRoutinesResponseMock = (
   overrideResponse: Partial<Extract<PlatformRoutineListResponse, object>> = {},
 ): PlatformRoutineListResponse => ({
@@ -483,6 +553,136 @@ export const getUpdatePlatformRoutineResponseMock = (
     undefined,
   ]),
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getListRetentionPoliciesResponseMock = (
+  overrideResponse: Partial<Extract<RetentionPolicyListResponse, object>> = {},
+): RetentionPolicyListResponse => ({
+  policies: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    data_class: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    project_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    min_age_days: faker.number.int(),
+    max_age_days: faker.helpers.arrayElement([faker.number.int(), null]),
+    allow_project_override: faker.datatype.boolean(),
+    overrides_supported: faker.datatype.boolean(),
+    floor_days: faker.number.int(),
+    enforced_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    updated_by: faker.helpers.arrayElement([faker.number.int(), null]),
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  ...overrideResponse,
+});
+
+export const getSetPlatformRetentionPolicyResponseMock = (
+  overrideResponse: Partial<Extract<RetentionPolicy, object>> = {},
+): RetentionPolicy => ({
+  data_class: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  min_age_days: faker.number.int(),
+  max_age_days: faker.helpers.arrayElement([faker.number.int(), null]),
+  allow_project_override: faker.datatype.boolean(),
+  overrides_supported: faker.datatype.boolean(),
+  floor_days: faker.number.int(),
+  enforced_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  updated_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getSetProjectRetentionOverrideResponseMock = (
+  overrideResponse: Partial<Extract<RetentionPolicy, object>> = {},
+): RetentionPolicy => ({
+  data_class: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  min_age_days: faker.number.int(),
+  max_age_days: faker.helpers.arrayElement([faker.number.int(), null]),
+  allow_project_override: faker.datatype.boolean(),
+  overrides_supported: faker.datatype.boolean(),
+  floor_days: faker.number.int(),
+  enforced_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  updated_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getListLegalHoldsResponseMock = (
+  overrideResponse: Partial<Extract<LegalHoldListResponse, object>> = {},
+): LegalHoldListResponse => ({
+  holds: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    scope: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    project_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    agent_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    active: faker.datatype.boolean(),
+    created_by: faker.number.int(),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    released_by: faker.helpers.arrayElement([faker.number.int(), null]),
+    released_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    release_reason: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+  })),
+  ...overrideResponse,
+});
+
+export const getCreateLegalHoldResponseMock = (
+  overrideResponse: Partial<Extract<LegalHold, object>> = {},
+): LegalHold => ({
+  id: faker.number.int(),
+  scope: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  agent_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  active: faker.datatype.boolean(),
+  created_by: faker.number.int(),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  released_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  released_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  release_reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getReleaseLegalHoldResponseMock = (
+  overrideResponse: Partial<Extract<LegalHold, object>> = {},
+): LegalHold => ({
+  id: faker.number.int(),
+  scope: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  agent_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  active: faker.datatype.boolean(),
+  created_by: faker.number.int(),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  released_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  released_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  release_reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
   ...overrideResponse,
 });
 
@@ -2906,6 +3106,84 @@ export const getCancelBackgroundJobMockHandler = (
   );
 };
 
+export const getListExecutionSuspensionsMockHandler = (
+  overrideResponse?:
+    | ExecutionSuspensionList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ExecutionSuspensionList> | ExecutionSuspensionList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/execution_suspensions",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListExecutionSuspensionsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateExecutionSuspensionMockHandler = (
+  overrideResponse?:
+    | ExecutionSuspension
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExecutionSuspension> | ExecutionSuspension),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/execution_suspensions",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateExecutionSuspensionResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getResumeExecutionSuspensionMockHandler = (
+  overrideResponse?:
+    | ExecutionSuspension
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExecutionSuspension> | ExecutionSuspension),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/execution_suspensions/:suspensionId\\:resume",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getResumeExecutionSuspensionResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListPlatformRoutinesMockHandler = (
   overrideResponse?:
     | PlatformRoutineListResponse
@@ -2951,6 +3229,184 @@ export const getUpdatePlatformRoutineMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getUpdatePlatformRoutineResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListRetentionPoliciesMockHandler = (
+  overrideResponse?:
+    | RetentionPolicyListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<RetentionPolicyListResponse> | RetentionPolicyListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/retention/policies",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListRetentionPoliciesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSetPlatformRetentionPolicyMockHandler = (
+  overrideResponse?:
+    | RetentionPolicy
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<RetentionPolicy> | RetentionPolicy),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/admin/retention/policies/:dataClass",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetPlatformRetentionPolicyResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSetProjectRetentionOverrideMockHandler = (
+  overrideResponse?:
+    | RetentionPolicy
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<RetentionPolicy> | RetentionPolicy),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/admin/retention/policies/:dataClass/projects/:projectId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetProjectRetentionOverrideResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteProjectRetentionOverrideMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/admin/retention/policies/:dataClass/projects/:projectId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
+export const getListLegalHoldsMockHandler = (
+  overrideResponse?:
+    | LegalHoldListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<LegalHoldListResponse> | LegalHoldListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/legal_holds",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListLegalHoldsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateLegalHoldMockHandler = (
+  overrideResponse?:
+    | LegalHold
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<LegalHold> | LegalHold),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/legal_holds",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateLegalHoldResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getReleaseLegalHoldMockHandler = (
+  overrideResponse?:
+    | LegalHold
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<LegalHold> | LegalHold),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/legal_holds/:id/release",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getReleaseLegalHoldResponseMock(),
         { status: 200 },
       );
     },
@@ -4606,8 +5062,18 @@ export const getAdminMock = () => [
   getBulkInviteMembersMockHandler(),
   getListBackgroundJobsMockHandler(),
   getCancelBackgroundJobMockHandler(),
+  getListExecutionSuspensionsMockHandler(),
+  getCreateExecutionSuspensionMockHandler(),
+  getResumeExecutionSuspensionMockHandler(),
   getListPlatformRoutinesMockHandler(),
   getUpdatePlatformRoutineMockHandler(),
+  getListRetentionPoliciesMockHandler(),
+  getSetPlatformRetentionPolicyMockHandler(),
+  getSetProjectRetentionOverrideMockHandler(),
+  getDeleteProjectRetentionOverrideMockHandler(),
+  getListLegalHoldsMockHandler(),
+  getCreateLegalHoldMockHandler(),
+  getReleaseLegalHoldMockHandler(),
   getListAgentIdentityBindingsMockHandler(),
   getCreateAgentIdentityBindingMockHandler(),
   getApproveAgentIdentityBindingMockHandler(),

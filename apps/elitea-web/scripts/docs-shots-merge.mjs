@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * docs-shots-merge.mjs — folds content writers' staging shot files into
- * `src/entries/docs/shots.manifest.ts` (embedded-docs programme, unit W3).
+ * `apps/elitea-docs/shots.manifest.ts` (embedded-docs programme, unit W3).
  *
  * Writers author MDX in a scratchpad staging directory, not this worktree,
  * and drop one `shots.<batch>.json` per batch there: a JSON array of
@@ -34,7 +34,7 @@ import { fileURLToPath } from "node:url";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = resolve(SCRIPT_DIR, "..");
-const MANIFEST_PATH = join(WEB_ROOT, "src/entries/docs/shots.manifest.ts");
+const MANIFEST_PATH = join(WEB_ROOT, "../elitea-docs/shots.manifest.ts");
 const DEFAULT_VIEWPORT = { width: 1440, height: 900 };
 
 const REQUIRED_FIELDS = ["id", "route"];
