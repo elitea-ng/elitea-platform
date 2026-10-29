@@ -643,10 +643,12 @@ jobs:
 
   publish-image:
     name: Publish ${{ matrix.image.name }}
-    # Manifest, then sign, for one image — after EVERY image's scan passed
-    # (`needs: scan` is the whole scan matrix). This is the job that writes
-    # to the registry and mints the keyless signature, so it alone carries
-    # `packages: write` and `id-token: write`.
+    # Manifest, then sign and attest, for one image — after EVERY image's scan
+    # passed (`needs: scan` is the whole scan matrix). This is the job that
+    # writes to the registry and mints the keyless signature and attestations,
+    # so it alone carries `packages: write`, `id-token: write`,
+    # `attestations: write` and `artifact-metadata: write` (the storage record
+    # `push-to-registry` creates).
     needs: [release, build, scan]
     if: needs.release.outputs.new_release_published == 'true'
     runs-on: ubuntu-latest
@@ -654,6 +656,8 @@ jobs:
       contents: read
       packages: write
       id-token: write
+      attestations: write
+      artifact-metadata: write
     strategy:
       # See FAIL-FAST above.
       fail-fast: false
@@ -792,17 +796,101 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v4.1.2
 
-      - name: Sign ${{ matrix.image.name }} — keyless cosign on the multi-arch manifest
-        env:
-          COSIGN_EXPERIMENTAL: "1"
+      # Resolved once, here, so the signature, the provenance and the SBOMs
+      # below are all bound to the same digests, read from the index this job
+      # just created. A digest that does not resolve FAILS the step: an empty
+      # value would reach cosign and the attest action as a bare name.
+      - name: Resolve the ${{ matrix.image.name }} digests
+        id: digests
         run: |
+          set -euo pipefail
           VERSION="${{ needs.release.outputs.new_release_version }}"
           IMAGE="${{ env.REGISTRY }}/${{ matrix.image.name }}"
 
-          DIGEST=$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" \
-            --format '{{json .Manifest}}' | jq -r '.digest')
+          index="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --raw)"
+          INDEX_DIGEST="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" \
+            --format '{{json .Manifest}}' | jq -r '.digest')"
+          # The platform images, not BuildKit's own attestation manifests (the
+          # `unknown/unknown` entries the index also carries).
+          AMD64="$(jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' <<<"$index")"
+          ARM64="$(jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest' <<<"$index")"
 
-          cosign sign --yes "${IMAGE}@${DIGEST}"
+          for pair in "index:${INDEX_DIGEST}" "amd64:${AMD64}" "arm64:${ARM64}"; do
+            if ! [[ "${pair#*:}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::${IMAGE}:${VERSION} — no ${pair%%:*} digest (got '${pair#*:}')"
+              exit 1
+            fi
+          done
+
+          {
+            echo "image=${IMAGE}"
+            echo "index=${INDEX_DIGEST}"
+            echo "amd64=${AMD64}"
+            echo "arm64=${ARM64}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Sign ${{ matrix.image.name }} — keyless cosign on the multi-arch manifest
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: cosign sign --yes "${{ steps.digests.outputs.image }}@${{ steps.digests.outputs.index }}"
+
+      # ── Attest <image> ───────────────────────────────────────────────────────
+      #
+      # SLSA build provenance (which repository, workflow, commit and run made
+      # this artefact), signed through Sigstore with this job's OIDC identity,
+      # stored in GitHub's attestation API and pushed to GHCR as an OCI
+      # referrer. On the INDEX digest: that is what `docker pull <tag>`,
+      # `gh attestation verify oci://<tag>` and an admission controller resolve.
+      - name: Attest ${{ matrix.image.name }} — build provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.digests.outputs.image }}
+          subject-digest: ${{ steps.digests.outputs.index }}
+          push-to-registry: true
+
+      # One CycloneDX SBOM per PLATFORM image, attested to that platform's
+      # digest: each lists what is in the image that runs on that architecture,
+      # not a guess from the other one. Read from the registry (`remote`), so
+      # it is the pushed artefact and not a local copy. Packages only: the
+      # vulnerability verdict is the scan gate's job, and a vulnerability list
+      # frozen into a signed SBOM goes stale the day after the release.
+      - name: SBOM ${{ matrix.image.name }} (linux/amd64)
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_IMAGE_SRC: remote
+        with:
+          image-ref: ${{ steps.digests.outputs.image }}@${{ steps.digests.outputs.amd64 }}
+          format: cyclonedx
+          output: sbom-linux-amd64.cdx.json
+
+      - name: Attest ${{ matrix.image.name }} — SBOM (linux/amd64)
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.digests.outputs.image }}
+          subject-digest: ${{ steps.digests.outputs.amd64 }}
+          sbom-path: sbom-linux-amd64.cdx.json
+          push-to-registry: true
+
+      - name: SBOM ${{ matrix.image.name }} (linux/arm64)
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_IMAGE_SRC: remote
+        with:
+          image-ref: ${{ steps.digests.outputs.image }}@${{ steps.digests.outputs.arm64 }}
+          format: cyclonedx
+          output: sbom-linux-arm64.cdx.json
+
+      - name: Attest ${{ matrix.image.name }} — SBOM (linux/arm64)
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.digests.outputs.image }}
+          subject-digest: ${{ steps.digests.outputs.arm64 }}
+          sbom-path: sbom-linux-arm64.cdx.json
+          push-to-registry: true
 
   # ── Job 4: Package and push the Helm charts to the GHCR OCI registry ────────
   # The images are only half of a release. Until this job existed, a consumer
@@ -826,6 +914,13 @@ jobs:
     needs: [release, publish-image]
     if: needs.release.outputs.new_release_published == 'true'
     runs-on: ubuntu-latest
+    # The workflow's defaults plus the attestation scopes, as publish-image.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     strategy:
       fail-fast: false
       matrix:
@@ -1012,6 +1107,7 @@ jobs:
           ls -l "/tmp/charts/${{ matrix.chart }}-${VERSION}.tgz"
 
       - name: Push chart and sign it
+        id: push
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |
@@ -1039,6 +1135,16 @@ jobs:
           fi
 
           cosign sign --yes "${REGISTRY}/charts/${{ matrix.chart }}@${DIGEST}"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      # Build provenance on the digest `helm push` printed, as the signature
+      # above, and as publish-image attests each image.
+      - name: Attest chart — build provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/charts/${{ matrix.chart }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
       # A push that reported success and a chart a consumer can actually pull
       # are different claims. This asserts the second one, from the registry.
@@ -1075,6 +1181,8 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1202,23 +1310,55 @@ jobs:
           spctl --assess --type execute --verbose=4 macos/Elitea.app
           xcrun stapler validate macos/Elitea.app
 
-      - name: Attach the app to the release
+      - name: Package the release assets
         working-directory: apps/elitea-desktop/src-tauri/target/aarch64-apple-darwin/release/bundle
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.release.outputs.new_release_git_tag }}
           VERSION: ${{ needs.release.outputs.new_release_version }}
         run: |
           set -euo pipefail
-          zip_name="Elitea_${VERSION}_aarch64.app.zip"
-          dmg_name="Elitea_${VERSION}_aarch64.dmg"
+          mkdir -p "$RUNNER_TEMP/assets"
           # ditto keeps the code signature and the stapled ticket; zip(1) does not.
-          ditto -c -k --keepParent macos/Elitea.app "$RUNNER_TEMP/$zip_name"
+          ditto -c -k --keepParent macos/Elitea.app "$RUNNER_TEMP/assets/Elitea_${VERSION}_aarch64.app.zip"
           dmg="$(ls dmg/*.dmg)"
-          cp "$dmg" "$RUNNER_TEMP/$dmg_name"
+          cp "$dmg" "$RUNNER_TEMP/assets/Elitea_${VERSION}_aarch64.dmg"
+
+      # The SBOM is read from the lockfiles the app is built from: the Tauri
+      # shell's and the document sidecar's Cargo.lock, and elitea-web's
+      # package-lock.json (the bundle the shell serves). npm dev dependencies
+      # are left out, so the desktop's own package.json (the Tauri CLI, a
+      # build tool) contributes nothing. Every other app is skipped by name;
+      # a new app under apps/ that the desktop does not ship needs a line here.
+      - name: SBOM of the desktop app
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: apps
+          skip-dirs: apps/elitea-mobile,apps/elitea-docs,**/node_modules,**/target
+          format: cyclonedx
+          output: ${{ runner.temp }}/sbom-desktop.cdx.json
+
+      # Provenance and the SBOM for the exact files the release gets, before
+      # they are attached: an asset never sits on a release unattested.
+      - name: Attest the app — build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ runner.temp }}/assets/*
+
+      - name: Attest the app — SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ runner.temp }}/assets/*
+          sbom-path: ${{ runner.temp }}/sbom-desktop.cdx.json
+
+      - name: Attach the app to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.new_release_git_tag }}
+        run: |
+          set -euo pipefail
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-            "$RUNNER_TEMP/$dmg_name" "$RUNNER_TEMP/$zip_name"
-          echo "Attached ${dmg_name} and ${zip_name} to ${TAG}" >> "$GITHUB_STEP_SUMMARY"
+            "$RUNNER_TEMP"/assets/* "$RUNNER_TEMP/sbom-desktop.cdx.json"
+          echo "Attached $(cd "$RUNNER_TEMP/assets" && echo *) and sbom-desktop.cdx.json to ${TAG}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove the notarisation key
         if: always()

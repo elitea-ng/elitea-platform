@@ -5,6 +5,11 @@ description: "The settings a regulated deployment turns on, in order, each with 
 
 A default install favours getting started. A deployment that will be assessed against enterprise risk controls should work through this list. Each item links to the page that explains the setting, its default and what it changes for users.
 
+## Supply chain
+
+- [ ] Verify the signature and build provenance of the chart and images before you install or upgrade. Enforce the signature with an admission policy, so the cluster refuses an image the Elitea release workflow did not sign. See [Verify release artifacts](/deployment/verify-artifacts).
+- [ ] Import the image SBOMs into your vulnerability management, so a new CVE in a shipped package reaches you between releases.
+
 ## Identity and credentials
 
 - [ ] Use SSO (OIDC or SAML) and SCIM provisioning. Assign project roles through groups, not by hand. See [Authentication](/admin/authentication).

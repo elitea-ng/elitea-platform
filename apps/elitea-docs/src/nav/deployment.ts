@@ -35,6 +35,7 @@ export const deploymentTab: NavTab = {
         { kind: 'page', slug: 'deployment/credential-governance', title: 'Enterprise credential governance' },
         { kind: 'page', slug: 'deployment/credential-governance-runbook', title: 'Credential governance runbook' },
         { kind: 'page', slug: 'deployment/hardening-checklist', title: 'Hardening checklist' },
+        { kind: 'page', slug: 'deployment/verify-artifacts', title: 'Verify release artifacts' },
         { kind: 'page', slug: 'deployment/emergency-stop-runbook', title: 'Emergency stop runbook' },
       ],
     },
