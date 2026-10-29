@@ -1,0 +1,12 @@
+# Artifact Hub repository metadata for oci://ghcr.io/elitea-ng/charts/elitea
+# (https://artifacthub.io/docs/topics/repositories/helm-charts/).
+#
+# publish.yml's `chart` job pushes this file with every release, as the
+# `artifacthub.io` tag of the chart's package. It lives outside the chart
+# directory, so `helm package` does not ship it.
+#
+# repositoryID earns the Verified Publisher badge. Artifact Hub shows it when
+# the repository is added (Control Panel › Repositories); it is public, so it
+# is committed here rather than kept as a secret. Until it is set, the listing
+# works but is unverified.
+# repositoryID: <uuid from Artifact Hub>

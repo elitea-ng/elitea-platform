@@ -72,8 +72,10 @@ covers seeding a real model, the overlays and the `check` command.
 | `brand/` | The brand guide's sources ([`BRAND.md`](brand/BRAND.md)) |
 
 Architecture rules for contributors and coding agents are in [`AGENTS.md`](AGENTS.md).
-Images and the chart are published to `ghcr.io/elitea-ng` and signed with cosign
-([verify a release](https://elitea-ng.github.io/elitea-platform/deployment/operations)).
+Images and the chart are published to `ghcr.io/elitea-ng`, signed with cosign, and
+carry signed SLSA build provenance and SBOMs
+([verify a release](https://elitea-ng.github.io/elitea-platform/deployment/verify-artifacts)).
+The charts are listed on [Artifact Hub](https://artifacthub.io/packages/search?ts_query_web=elitea).
 
 ## Contributing
 

@@ -1089,6 +1089,58 @@ jobs:
 
           yq '{"version": .version, "appVersion": .appVersion}' "$CHART"
 
+      # Artifact Hub reads these two from the packaged chart, and both depend
+      # on the release, so they are stamped here and never committed:
+      #
+      #   artifacthub.io/images      what Artifact Hub scans for its security
+      #                              report. For the platform chart, every
+      #                              image publish-image released, read from
+      #                              that job's matrix so the list cannot drift
+      #                              from what was published; for a chart that
+      #                              deploys a pinned third-party image, that
+      #                              image (values.yaml `.image`).
+      #   artifacthub.io/prerelease  "true" for a nightly or dev version.
+      #
+      # Read back like every edit above: an empty image list publishes a
+      # listing whose security report scans nothing and reads as clean.
+      - name: Stamp the Artifact Hub annotations
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.release.outputs.new_release_version }}"
+          CHART="deploy/helm/${{ matrix.chart }}/Chart.yaml"
+          VALUES="deploy/helm/${{ matrix.chart }}/values.yaml"
+
+          if [ "${{ matrix.platformImageTag }}" = "true" ]; then
+            refs="$(yq -r '.jobs["publish-image"].strategy.matrix.image[].name' .github/workflows/publish.yml \
+              | sed "s#^#${REGISTRY}/#; s#\$#:${VERSION}#")"
+          else
+            refs="$(yq -r '.image' "$VALUES")"
+          fi
+
+          images=""
+          while IFS= read -r ref; do
+            [ -n "$ref" ] && [ "$ref" != "null" ] || continue
+            name="${ref##*/}"; name="${name%%[:@]*}"
+            images+="- name: ${name}"$'\n'"  image: ${ref}"$'\n'
+          done <<<"$refs"
+          if [ -z "$images" ]; then
+            echo "::error file=${CHART}::no image to list in artifacthub.io/images"
+            exit 1
+          fi
+
+          IMAGES="$images" yq -i '.annotations["artifacthub.io/images"] = strenv(IMAGES)' "$CHART"
+          prerelease=false
+          [[ "$VERSION" == *-* ]] && prerelease=true
+          PRERELEASE="$prerelease" yq -i '.annotations["artifacthub.io/prerelease"] = strenv(PRERELEASE)' "$CHART"
+
+          got="$(yq -r '.annotations["artifacthub.io/images"]' "$CHART" | yq -r 'length')"
+          want="$(grep -c '^- name: ' <<<"$images")"
+          if [ "$got" != "$want" ]; then
+            echo "::error file=${CHART}::artifacthub.io/images holds ${got} image(s), expected ${want}"
+            exit 1
+          fi
+          yq '.annotations' "$CHART"
+
       # The elitea chart's dependencies (the upstream nats and qdrant charts
       # and our elitea-sandbox-runtime) are not committed: build them from
       # Chart.lock, then prove every one resolved (`ok` only; an unknown status fails too,
@@ -1145,6 +1197,36 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/charts/${{ matrix.chart }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+      # The Artifact Hub repository metadata, as the `artifacthub.io` tag of
+      # the chart's package (deploy/helm/artifacthub/<chart>.yml). It is what
+      # proves the listing is ours (Verified Publisher), so it is pushed only
+      # once the file names the repository: before that, there is nothing for
+      # Artifact Hub to verify. The prune jobs never delete the tag (it is
+      # never a release's), and the version each push supersedes is untagged,
+      # which release-retention.yml sweeps.
+      - name: Is the Artifact Hub repository registered
+        id: artifacthub
+        run: |
+          META="deploy/helm/artifacthub/${{ matrix.chart }}.yml"
+          if [ "$(yq -r '.repositoryID // ""' "$META")" != "" ]; then
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice file=${META}::no repositoryID yet; the Artifact Hub metadata is not pushed"
+          fi
+
+      - name: Set up oras
+        if: steps.artifacthub.outputs.push == 'true'
+        uses: oras-project/setup-oras@v2.0.2
+        with:
+          version: 1.3.1
+
+      - name: Push the Artifact Hub repository metadata
+        if: steps.artifacthub.outputs.push == 'true'
+        run: |
+          oras push "${REGISTRY}/charts/${{ matrix.chart }}:artifacthub.io" \
+            --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
+            "deploy/helm/artifacthub/${{ matrix.chart }}.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml"
 
       # A push that reported success and a chart a consumer can actually pull
       # are different claims. This asserts the second one, from the registry.

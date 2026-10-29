@@ -10,5 +10,31 @@ description: >-
   touches nodes. GKE Sandbox and AKS Pod Sandboxing provide their own runtime
   and need no installer.
 type: application
+home: https://elitea-ng.github.io/elitea-platform/
+icon: https://raw.githubusercontent.com/elitea-ng/elitea-platform/main/apps/elitea-web/public/brand/logo-mark.svg
+sources:
+  - https://github.com/elitea-ng/elitea-platform
+keywords:
+  - gvisor
+  - sandbox
+  - runtimeclass
+  - containerd
+
+# Artifact Hub (https://artifacthub.io/docs/topics/annotations/helm/). The
+# static ones are here; the release job (publish.yml, `chart`) adds
+# `artifacthub.io/images` (every image it published, at the release version)
+# and `artifacthub.io/prerelease` to the packaged chart only.
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/category: security
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://elitea-ng.github.io/elitea-platform/
+    - name: Verify release artifacts
+      url: https://elitea-ng.github.io/elitea-platform/deployment/verify-artifacts
+    - name: Releases
+      url: https://github.com/elitea-ng/elitea-platform/releases
+    - name: support
+      url: https://github.com/elitea-ng/elitea-platform/issues
 version: 0.1.0
 appVersion: "20261005.0"

@@ -15,7 +15,7 @@ You need it only on clusters whose platform provides no sandbox runtime:
 | k3s | none | `mode: k3s` (the default) |
 
 The full procedure, from node labels to a verified cloud turn, is in
-[Cloud executor on Kubernetes](../../../apps/elitea-docs/src/content/docs/deployment/cloud-executor-kubernetes.mdx) (served at `/docs/deployment/cloud-executor-kubernetes`).
+[Cloud executor on Kubernetes](https://elitea-ng.github.io/elitea-platform/deployment/cloud-executor-kubernetes).
 
 ## What it does
 

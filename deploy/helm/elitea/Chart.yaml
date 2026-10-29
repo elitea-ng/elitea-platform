@@ -7,6 +7,34 @@ description: >-
   single values file, and externalizes PostgreSQL and object storage behind
   one connection contract.
 type: application
+home: https://elitea-ng.github.io/elitea-platform/
+icon: https://raw.githubusercontent.com/elitea-ng/elitea-platform/main/apps/elitea-web/public/brand/logo-mark.svg
+sources:
+  - https://github.com/elitea-ng/elitea-platform
+keywords:
+  - ai
+  - agents
+  - llm
+  - platform
+  - mcp
+  - rag
+
+# Artifact Hub (https://artifacthub.io/docs/topics/annotations/helm/). The
+# static ones are here; the release job (publish.yml, `chart`) adds
+# `artifacthub.io/images` (every image it published, at the release version)
+# and `artifacthub.io/prerelease` to the packaged chart only.
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/category: ai-machine-learning
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://elitea-ng.github.io/elitea-platform/
+    - name: Verify release artifacts
+      url: https://elitea-ng.github.io/elitea-platform/deployment/verify-artifacts
+    - name: Releases
+      url: https://github.com/elitea-ng/elitea-platform/releases
+    - name: support
+      url: https://github.com/elitea-ng/elitea-platform/issues
 
 # FIVE dependencies, fetched by `helm dependency build` from Chart.lock (all
 # pinned). charts/ is never committed (.gitignore).
