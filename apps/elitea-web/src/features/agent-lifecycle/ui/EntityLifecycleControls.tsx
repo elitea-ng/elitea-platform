@@ -13,6 +13,7 @@ import { lifecycleErrorMessage, useEntityLifecycle } from '../model/useEntityLif
 import { EntityLifecycleMenu } from './EntityLifecycleMenu';
 import { ForkEntityDialog, type ForkTargetProject } from './ForkEntityDialog';
 import { PublishVersionDialog } from './PublishVersionDialog';
+import { ReleaseHistoryDialog } from './ReleaseHistoryDialog';
 
 /**
  * The lifecycle controls, mounted on BOTH editors.
@@ -65,6 +66,7 @@ export function EntityLifecycleControls({
   const [error, setError] = useState<string>();
   const [publishOpen, setPublishOpen] = useState(false);
   const [forkOpen, setForkOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const lifecycle = useEntityLifecycle(projectId, entityId);
 
   const share = useCallback(
@@ -121,6 +123,7 @@ export function EntityLifecycleControls({
         {...(versionId === undefined ? {} : { onShareVersion: () => share(versionId) })}
         onShareEntity={() => share(undefined)}
         {...entityActionHandlers(onExport, onDelete)}
+        {...releaseHistoryHandler(entity, () => setHistoryOpen(true))}
         onFork={() => {
           setError(undefined);
           setNotice(undefined);
@@ -178,6 +181,13 @@ export function EntityLifecycleControls({
           );
         }}
       />
+      <ReleaseHistoryDialog
+        open={historyOpen}
+        projectId={projectId}
+        applicationId={numericId(entityId)}
+        versionId={versionId}
+        onClose={() => setHistoryOpen(false)}
+      />
       <ForkEntityDialog
         open={forkOpen}
         entityName={entityName}
@@ -227,6 +237,15 @@ function entityActionHandlers(
     ...(onExport === undefined ? {} : { onExport }),
     ...(onDelete === undefined ? {} : { onDelete }),
   };
+}
+
+/** Release history exists for agents only: a pipeline is never published. */
+function releaseHistoryHandler(entity: LifecycleEntity, open: () => void): { onReleaseHistory?: () => void } {
+  return entity === 'agents' ? { onReleaseHistory: open } : {};
+}
+
+function numericId(id: string | undefined): number | undefined {
+  return id === undefined ? undefined : Number(id);
 }
 
 /**
