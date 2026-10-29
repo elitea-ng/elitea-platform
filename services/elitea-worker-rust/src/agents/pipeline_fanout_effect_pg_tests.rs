@@ -684,10 +684,11 @@ async fn postgres_fanout_agent_branch_asks_and_resumes_with_the_answer() {
     assert_eq!(cards.len(), 1, "{cards:?}");
     assert_eq!(model_requests(&captured), 4);
     // The resumed Agent sees the answer to its question.
-    let last = captured.lock().expect("captured model requests");
-    let resumed = String::from_utf8_lossy(&last[3].body).into_owned();
+    let resumed = {
+        let last = captured.lock().expect("captured model requests");
+        String::from_utf8_lossy(&last[3].body).into_owned()
+    };
     assert!(resumed.contains("Staging"), "{resumed}");
-    drop(last);
     assert!(
         members
             .iter()
