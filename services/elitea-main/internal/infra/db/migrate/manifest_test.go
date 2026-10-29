@@ -886,7 +886,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// "one active continuation per response", and the open-card index a new
 	// turn supersedes through. No data, no permission.
 	//
-	// 203 is claimed by the release gate branch (ADR-0040 decision 4).
+	// 203: shared/0203_release_gates.sql, the evaluation release gate of
+	// ADR-0040 decision 4 (#1497): elitea_lifecycle.release_gate_suites
+	// (gate suite config, one regression suite per agent),
+	// release_gates (an UPDATE trigger writes the outcome and the override
+	// once) and release_gate_runs. No data, no permission.
 	//
 	// 204: shared/0204_agent_lifecycle_governance.sql, the agent registry,
 	// change requests with maker-checker approvals (a CHECK refuses an

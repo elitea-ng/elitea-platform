@@ -7193,6 +7193,312 @@ components:
       description: >
         NOTE(W2): internal/api/v2/agentreleases/handler.go, Handler.Revisions.
 
+    ReleaseGateCriterion:
+      type: object
+      required: [dimension_id, kind]
+      properties:
+        dimension_id: { type: string, description: The evaluation dimension the criterion scores. }
+        kind:
+          type: string
+          enum: [threshold, no_worse_than]
+          description: >
+            threshold needs the mean normalised score (0-100) of the
+            dimension to be at least min_score. no_worse_than needs it to
+            be at most max_drop points below the current release's.
+        min_score: { type: number, minimum: 0, maximum: 100, description: Set for threshold only. }
+        max_drop: { type: number, minimum: 0, maximum: 100, description: Set for no_worse_than only. }
+      description: >
+        NOTE(W2): internal/releasegate/types.go, Criterion.
+
+    ReleaseGateSuiteRequest:
+      type: object
+      required: [release_gate]
+      additionalProperties: false
+      properties:
+        release_gate:
+          type: boolean
+          description: true marks the dataset as a gate suite; false unmarks it and ignores the other fields.
+        regression:
+          type: boolean
+          description: The agent's regression suite. It also runs against the current release. One per agent.
+        criteria:
+          type: array
+          minItems: 1
+          maxItems: 5
+          items: { $ref: '#/components/schemas/ReleaseGateCriterion' }
+        reevaluate_every_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          nullable: true
+          description: >
+            Runs the agent's gate suites against its current release on
+            this cadence (the scheduled re-evaluation). null turns it off.
+      description: >
+        NOTE(W2): internal/api/v2/releasegates/handler.go, SuiteRequest.
+      example:
+        release_gate: true
+        regression: true
+        criteria:
+          - { dimension_id: '7', kind: threshold, min_score: 70 }
+          - { dimension_id: '8', kind: no_worse_than, max_drop: 5 }
+        reevaluate_every_days: 30
+
+    ReleaseGateSuite:
+      type: object
+      required: [application_id, dataset_id, release_gate]
+      properties:
+        application_id: { type: integer, format: int64 }
+        dataset_id: { type: integer, format: int64 }
+        release_gate: { type: boolean, description: false after an unmark; the other fields are then absent. }
+        regression: { type: boolean }
+        criteria:
+          type: array
+          items: { $ref: '#/components/schemas/ReleaseGateCriterion' }
+        reevaluate_every_days: { type: integer, nullable: true }
+        updated_by: { type: integer, format: int64, nullable: true }
+        updated_at: { type: string, format: date-time }
+        dataset_missing:
+          type: boolean
+          description: The dataset was deleted after it was marked. A gate fails this suite with gate_suite_not_runnable.
+      description: >
+        NOTE(W2): internal/api/v2/releasegates/handler.go, Suite.
+      example:
+        application_id: 31
+        dataset_id: 4
+        release_gate: true
+        regression: true
+        criteria:
+          - { dimension_id: '7', kind: threshold, min_score: 70 }
+        reevaluate_every_days: 30
+        updated_by: 4
+        updated_at: '2026-10-29T09:00:00Z'
+        dataset_missing: false
+
+    ReleaseGateSuiteList:
+      type: object
+      required: [total, rows]
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/ReleaseGateSuite' }
+      description: >
+        NOTE(W2): internal/api/v2/releasegates/handler.go, Handler.ListSuites.
+      example:
+        total: 1
+        rows:
+          - application_id: 31
+            dataset_id: 4
+            release_gate: true
+            regression: true
+            criteria:
+              - { dimension_id: '7', kind: threshold, min_score: 70 }
+            reevaluate_every_days: null
+            updated_by: 4
+            updated_at: '2026-10-29T09:00:00Z'
+            dataset_missing: false
+
+    ReleaseGateRun:
+      type: object
+      required: [dataset_id, role, application_version_id, eval_run_id, reused]
+      properties:
+        dataset_id: { type: integer, format: int64 }
+        role: { type: string, enum: [candidate, baseline] }
+        application_version_id: { type: integer, format: int64, nullable: true }
+        eval_run_id: { type: integer, format: int64, description: The evaluation run; its scorecard is the eval_results route. }
+        reused: { type: boolean, description: A baseline run that an earlier gate started (the reference run of a scheduled gate). }
+      description: >
+        NOTE(W2): internal/releasegate/types.go, GateRun.
+
+    ReleaseGateRegressedCase:
+      type: object
+      required: [case_id, name, dimension_ids]
+      properties:
+        case_id: { type: string }
+        name: { type: string, description: The start of the case input. Empty when the case was deleted. }
+        dimension_ids:
+          type: array
+          items: { type: string }
+      description: >
+        NOTE(W2): internal/releasegate/types.go, RegressedCase.
+
+    ReleaseGateFailure:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [gate_run_errored, gate_run_cancelled, gate_run_missing, gate_suite_not_runnable,
+            gate_dimension_unscored, gate_dimension_incomplete, gate_threshold_not_met,
+            gate_score_regressed, gate_regression, gate_schedule_actor_refused]
+        dataset_id: { type: integer, format: int64 }
+        role: { type: string, enum: [candidate, baseline] }
+        eval_run_id: { type: integer, format: int64 }
+        dimension_id: { type: string }
+        score: { type: number }
+        baseline: { type: number }
+        required: { type: number }
+        cases:
+          type: array
+          items: { $ref: '#/components/schemas/ReleaseGateRegressedCase' }
+          description: Set for gate_regression.
+        message: { type: string }
+      description: >
+        NOTE(W2): internal/releasegate/types.go, GateFailure.
+
+    ReleaseGateCriterionOutcome:
+      type: object
+      required: [dimension_id, kind, status, score, baseline, required]
+      properties:
+        dimension_id: { type: string }
+        kind: { type: string, enum: [threshold, no_worse_than] }
+        min_score: { type: number }
+        max_drop: { type: number }
+        status: { type: string, enum: [passed, failed, not_applicable, not_evaluated] }
+        score: { type: number, nullable: true }
+        baseline: { type: number, nullable: true }
+        required: { type: number, nullable: true }
+        note: { type: string }
+      description: >
+        NOTE(W2): internal/releasegate/types.go, CriterionOutcome.
+
+    ReleaseGateSuiteOutcome:
+      type: object
+      required: [dataset_id, regression, criteria, regressed_cases]
+      properties:
+        dataset_id: { type: integer, format: int64 }
+        regression: { type: boolean }
+        criteria:
+          type: array
+          items: { $ref: '#/components/schemas/ReleaseGateCriterionOutcome' }
+        regressed_cases:
+          type: array
+          items: { $ref: '#/components/schemas/ReleaseGateRegressedCase' }
+      description: >
+        NOTE(W2): internal/releasegate/types.go, SuiteOutcome.
+
+    ReleaseGateOverride:
+      type: object
+      required: [actor_id, reason, at]
+      properties:
+        actor_id: { type: integer, format: int64 }
+        reason: { type: string, maxLength: 200 }
+        at: { type: string, format: date-time }
+      description: >
+        NOTE(W2): internal/releasegate/types.go, Override.
+
+    ReleaseGate:
+      type: object
+      required: [id, application_id, kind, candidate_version_id, current_release_id, baseline_version_id,
+        state, suites, runs, outcome, failures, created_by, created_at, evaluated_at, override, blocks]
+      properties:
+        id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        kind:
+          type: string
+          enum: [change, scheduled]
+          description: change tests a candidate version; scheduled re-evaluates the current release.
+        candidate_version_id: { type: integer, format: int64 }
+        current_release_id: { type: integer, format: int64, nullable: true }
+        baseline_version_id: { type: integer, format: int64, nullable: true }
+        state: { type: string, enum: [pending, passed, failed] }
+        suites:
+          type: array
+          items: { $ref: '#/components/schemas/ReleaseGateSuite' }
+          description: The gate suites as they were when the gate started.
+        runs:
+          type: array
+          items: { $ref: '#/components/schemas/ReleaseGateRun' }
+        outcome:
+          type: array
+          items: { $ref: '#/components/schemas/ReleaseGateSuiteOutcome' }
+        failures:
+          type: array
+          items: { $ref: '#/components/schemas/ReleaseGateFailure' }
+        created_by: { type: integer, format: int64, nullable: true }
+        created_at: { type: string, format: date-time }
+        evaluated_at: { type: string, format: date-time, nullable: true }
+        override:
+          allOf: [{ $ref: '#/components/schemas/ReleaseGateOverride' }]
+          nullable: true
+          description: A governance-role holder accepted the failed gate. The state stays failed.
+        blocks: { type: boolean, description: true while the gate blocks approval (pending, or failed and not overridden). }
+      description: >
+        NOTE(W2): internal/api/v2/releasegates/handler.go, Gate.
+      example:
+        id: 12
+        application_id: 31
+        kind: change
+        candidate_version_id: 41
+        current_release_id: 7
+        baseline_version_id: 40
+        state: failed
+        suites:
+          - application_id: 31
+            dataset_id: 4
+            release_gate: true
+            regression: true
+            criteria:
+              - { dimension_id: '7', kind: threshold, min_score: 70 }
+            reevaluate_every_days: null
+            updated_by: 4
+            updated_at: '2026-10-29T09:00:00Z'
+            dataset_missing: false
+        runs:
+          - { dataset_id: 4, role: candidate, application_version_id: 41, eval_run_id: 90, reused: false }
+          - { dataset_id: 4, role: baseline, application_version_id: 40, eval_run_id: 91, reused: false }
+        outcome:
+          - dataset_id: 4
+            regression: true
+            criteria:
+              - { dimension_id: '7', kind: threshold, min_score: 70, status: passed, score: 75, baseline: null, required: 70 }
+            regressed_cases:
+              - { case_id: '18', name: 'And Rust?', dimension_ids: ['7'] }
+        failures:
+          - code: gate_regression
+            dataset_id: 4
+            eval_run_id: 90
+            cases:
+              - { case_id: '18', name: 'And Rust?', dimension_ids: ['7'] }
+            message: 1 case(s) passed on the current release and fail on the candidate
+        created_by: 4
+        created_at: '2026-10-29T09:10:00Z'
+        evaluated_at: '2026-10-29T09:14:00Z'
+        override:
+          actor_id: 6
+          reason: Case 18 asks about a retired product
+          at: '2026-10-29T09:30:00Z'
+        blocks: false
+
+    ReleaseGateList:
+      type: object
+      required: [total, rows]
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/ReleaseGate' }
+      description: >
+        NOTE(W2): internal/api/v2/releasegates/handler.go, Handler.ListGates.
+
+    ReleaseGateRefusal:
+      type: object
+      required: [error, code, message]
+      properties:
+        error: { type: string, description: 'The code again: some clients read error only.' }
+        code:
+          type: string
+          enum: [release_gate_invalid_config, release_gate_dataset_not_found, release_gate_not_found,
+            release_gate_regression_taken, release_gate_too_many_suites]
+        message: { type: string }
+      description: >
+        NOTE(W2): internal/api/v2/releasegates/handler.go, writeError.
+      example:
+        error: release_gate_regression_taken
+        code: release_gate_regression_taken
+        message: The agent already has a regression suite. Unmark it first.
+
     ExecutionSuspension:
       type: object
       description: >
@@ -23649,6 +23955,169 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/release_gate_suites/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: listReleaseGateSuites
+      summary: List the release gate suites of an agent
+      description: >
+        The evaluation datasets of the agent that are marked as release
+        gate suites, with their pass criteria. dataset_missing marks a
+        suite whose dataset was deleted. Requires
+        `models.applications.evaluation.dataset.read`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The gate suites
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReleaseGateSuiteList' }
+        '400':
+          description: A bad project or application id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/release_gate_suites/prompt_lib/{project_id}/{application_id}/{dataset_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: dataset_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    put:
+      operationId: putReleaseGateSuite
+      summary: Mark or unmark a dataset as a release gate suite
+      description: >
+        Marks an evaluation dataset of the agent (or a project dataset of
+        no agent) as a release gate suite, with one pass criterion per
+        dimension (at most 5), or unmarks it with release_gate false. A
+        gate runs every gate suite against the candidate version, and the
+        regression suite (and every suite with a no_worse_than criterion)
+        against the current release as well. An agent has at most one
+        regression suite and 10 gate suites. A gate already started keeps
+        the suites it started with. Requires
+        `models.applications.evaluation.dataset.update` and
+        `models.applications.publish.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReleaseGateSuiteRequest' }
+      responses:
+        '200':
+          description: The stored suite, or release_gate false after an unmark
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReleaseGateSuite' }
+        '400':
+          description: >
+            A bad id or a malformed body; (code release_gate_invalid_config,
+            with code and message as in ReleaseGateRefusal) a criterion that
+            is not valid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code release_gate_dataset_not_found) The dataset is not in this project, or belongs to another agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReleaseGateRefusal' }
+        '409':
+          description: >
+            (code release_gate_regression_taken) The agent already has a
+            regression suite; (code release_gate_too_many_suites) the agent
+            already has 10 gate suites.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReleaseGateRefusal' }
+
+  /elitea_core/release_gates/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: listReleaseGates
+      summary: List the release gates of an agent
+      description: >
+        The release gates of the agent, newest first (at most 50): change
+        gates of candidate versions and scheduled re-evaluations of the
+        current release. A pending gate whose runs finished is evaluated
+        before it is answered. Requires
+        `models.applications.evaluation.run.read`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The gates
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReleaseGateList' }
+        '400':
+          description: A bad project or application id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/release_gates/prompt_lib/{project_id}/{application_id}/{gate_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: gate_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getReleaseGate
+      summary: Read one release gate of an agent
+      description: >
+        The gate with its evaluation runs, the result per suite and
+        dimension, the typed failures (a regression lists the cases that
+        passed on the current release and fail on the candidate) and the
+        override. A gate is pending until every run is terminal; an
+        errored, cancelled or deleted run fails it. Requires
+        `models.applications.evaluation.run.read`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The gate
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReleaseGate' }
+        '400':
+          description: A bad project, application or gate id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code release_gate_not_found) The gate is not a gate of this agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReleaseGateRefusal' }
 
   /elitea_core/workspace_handoff/prompt_lib/{project_id}/{conversation_uuid}:
     parameters:
