@@ -27,6 +27,10 @@ newest entry is first.
   agent, a governance role holder sets its tier to `low`. Scripts and CI
   jobs that publish agents through the API must either target `low`-tier
   agents or drive the change request routes.
+* **Rollback of a governed agent needs the governance role.** A rollback
+  (`POST application_releases/.../rollback`) of an agent whose tier
+  requires approval answers **409 `change_request_required`** unless the
+  caller holds `models.applications.governance`.
 * **New 409 and 403 answers** on the change request routes:
   `self_approval_refused`, `approver_role_required`,
   `release_gate_pending`, `release_gate_failed`, `attestation_missing`,

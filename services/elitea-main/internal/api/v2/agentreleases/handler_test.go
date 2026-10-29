@@ -12,6 +12,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
@@ -172,5 +173,46 @@ func TestRollbackEntityNameCarriesTheReason(t *testing.T) {
 	}
 	if got := rollbackEntityName(31, 5, "regression in v6"); got != "application:31 from release:5 reason: regression in v6" {
 		t.Fatalf("with reason: %q", got)
+	}
+}
+
+type fakeGovernor struct{ err error }
+
+func (f fakeGovernor) CheckDirectPublish(context.Context, int64, int64) error { return f.err }
+
+// TestRollbackOfGovernedAgentNeedsTheGovernanceRole proves a rollback of an
+// agent whose tier needs approval answers 409 change_request_required
+// without the governance role, and goes through (audited) with it.
+func TestRollbackOfGovernedAgentNeedsTheGovernanceRole(t *testing.T) {
+	governed := fakeGovernor{err: agentlifecycle.Refuse(agentlifecycle.ChangeRequiredCode, "needs a change request")}
+	for _, c := range []struct {
+		name       string
+		governor   fakeGovernor
+		governance bool
+		want       int
+	}{
+		{"governed, author", governed, false, http.StatusConflict},
+		{"governed, governance role", governed, true, http.StatusOK},
+		{"low tier", fakeGovernor{}, false, http.StatusOK},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			store := &fakeStore{}
+			holds := func(*http.Request) (bool, error) { return c.governance, nil }
+			recorder, slot := serve(t, NewHandler(store, WithGovernance(c.governor, holds)), http.MethodPost,
+				"/application_releases/prompt_lib/7/31/5/rollback", `{"reason":"bad"}`, true)
+			if recorder.Code != c.want {
+				t.Fatalf("status %d, want %d: %s", recorder.Code, c.want, recorder.Body)
+			}
+			_, annotated := slot.Read()
+			if c.want == http.StatusConflict {
+				if !strings.Contains(recorder.Body.String(), agentlifecycle.ChangeRequiredCode) || store.rollbackActor != 0 || annotated {
+					t.Fatalf("refused rollback: body %s, store actor %d, annotated %v", recorder.Body, store.rollbackActor, annotated)
+				}
+				return
+			}
+			if store.rollbackActor != 4 || !annotated {
+				t.Fatalf("rollback not done or not audited: actor %d, annotated %v", store.rollbackActor, annotated)
+			}
+		})
 	}
 }

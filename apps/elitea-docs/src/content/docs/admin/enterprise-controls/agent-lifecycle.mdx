@@ -75,7 +75,7 @@ A platform administrator can raise these numbers (up to 5) in the [tier policy](
 
 **The final approval publishes.** The approval that completes the tier's requirement publishes the candidate in the same transaction and records the [release](#releases-revisions-and-rollback). The change request moves to `published` and the agent becomes `certified`, with a recertify-by date from its tier's cadence.
 
-**One open change request per agent.** A second one is refused (409 `change_request_open`). If the candidate version was saved again or published after the request was submitted, or, for a recertification, the agent's current release changed, the approval is refused (409 `change_request_stale`). Withdraw the request and submit a new one, so that approvers review what will be published. The author or a governance role holder can withdraw a request; an approver can reject it with a reason.
+**One open change request per agent.** A second one is refused (409 `change_request_open`). At submit, the platform records the candidate's draft revision and a digest of everything its release would record: the definition, the attached toolkits with their settings and selected tools, skills and sub-agents, and the configurations the toolkits reference. A recertification certifies the release that is current at submit. If the candidate changes while it is being submitted, the submit is refused (409 `change_request_stale`) and the request stays a draft. If the candidate version was saved again or published after the request was submitted, an attachment changed, or, for a recertification, the agent's current release changed, the approval is refused (409 `change_request_stale`). Withdraw the request and submit a new one, so that approvers review what will be published. The author or a governance role holder can withdraw a request; an approver can reject it with a reason.
 
 **Low-tier publishes are recorded too.** A direct publish of an agent that needs no approval records a self-approved change request, so every release has one.
 
@@ -152,7 +152,7 @@ A database trigger refuses any change to a release except marking it withdrawn. 
 
 **Runs record their release.** A run of a published agent records the id of the release it executes (`agent_execution_jobs.release_id`). A run can also name a release explicitly (`release_id` on the chat start body); it then executes that release, even a withdrawn one, unless the agent has sub-agents (see Limits).
 
-**Rollback re-points the current release.** A user with the permission to publish (`models.applications.publish.post`) can make an earlier published release current again. New runs then execute that release. Runs already in progress keep the release they started with.
+**Rollback re-points the current release.** A user with the permission to publish (`models.applications.publish.post`) can make an earlier published release current again. A rollback needs no change request, so for an agent whose tier needs approval it also needs the governance role (`models.applications.governance`); without it the rollback is refused with 409 `change_request_required`. New runs then execute that release. Runs already in progress keep the release they started with.
 
 **Drift is refused, not hidden.** When a run executes a release that is not the agent's live version (an explicit release id, or after a rollback), the platform reads the live toolkit settings and configurations and compares them with the release's pins. If any of them changed, the run is refused with HTTP 409 `release_toolkit_drifted`, which names the toolkit and the reason. A rollback to a release whose toolkits drifted is refused the same way. The platform never runs an old release with new toolkit settings without telling you.
 
@@ -177,10 +177,10 @@ The same data is available with the API:
 | --- | --- | --- |
 | `GET /api/v2/elitea_core/application_releases/prompt_lib/{project_id}/{application_id}` | `models.applications.versions.get` | Every release, newest first |
 | `GET /api/v2/elitea_core/application_releases/prompt_lib/{project_id}/{application_id}/{release_id}` | `models.applications.version.details` | One release with its definition, pins and changes against the release before it |
-| `POST /api/v2/elitea_core/application_releases/prompt_lib/{project_id}/{application_id}/{release_id}/rollback` | `models.applications.publish.post` | Body `{"reason": "..."}` (at most 200 characters); answers the releases it moved from and to |
+| `POST /api/v2/elitea_core/application_releases/prompt_lib/{project_id}/{application_id}/{release_id}/rollback` | `models.applications.publish.post`; for an agent whose tier needs approval, also `models.applications.governance` | Body `{"reason": "..."}` (at most 200 characters); answers the releases it moved from and to |
 | `GET /api/v2/elitea_core/version_revisions/prompt_lib/{project_id}/{application_id}/{version_id}` | `models.applications.versions.get` | The version's revisions with their diffs |
 
-A rollback is refused with 400 when the reason is longer than 200 characters, with 404 `release_not_found`, or with 409 and `application_not_published`, `release_already_published`, `release_withdrawn` or `release_toolkit_drifted`.
+A rollback is refused with 400 when the reason is longer than 200 characters, with 404 `release_not_found`, or with 409 and `application_not_published`, `release_already_published`, `release_withdrawn`, `release_toolkit_drifted` or `change_request_required` (an agent whose tier needs approval, rolled back without the governance role).
 
 ### Evidence
 

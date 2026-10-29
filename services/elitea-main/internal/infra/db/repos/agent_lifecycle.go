@@ -18,6 +18,7 @@ package repos
 // on its row.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -48,6 +49,12 @@ type CandidatePublisher interface {
 	AnnouncePublished(ctx context.Context, projectID int64, published agentlifecycle.PublishedCandidate)
 }
 
+// CandidateDigester digests what a release of a version would record, in
+// the caller's transaction (*AgentReleases.CandidateDigestTx).
+type CandidateDigester interface {
+	CandidateDigestTx(ctx context.Context, tx pgx.Tx, projectID, applicationID, versionID int64) ([32]byte, error)
+}
+
 // PolicySource reads the platform's tier table (the agent_lifecycle
 // Configuration section).
 type PolicySource func(ctx context.Context) (agentlifecycle.Policy, error)
@@ -59,7 +66,10 @@ type AgentLifecycle struct {
 	policy    PolicySource
 	gate      agentlifecycle.ReleaseGate
 	publisher CandidatePublisher
-	now       func() time.Time
+	// digester takes the candidate digest at submit and the final
+	// approval. Without it only the version's revisions are compared.
+	digester CandidateDigester
+	now      func() time.Time
 	// suspensionResumed is told the id of every certification suspension
 	// an approval resumed, after the commit (the kill switch gate's
 	// invalidation).
@@ -91,6 +101,12 @@ func (s *AgentLifecycle) ComposePublisher(publisher CandidatePublisher) {
 	if s != nil {
 		s.publisher = publisher
 	}
+}
+
+// WithCandidateDigester sets the candidate digest (freshness of the
+// attachments a release records).
+func WithCandidateDigester(digester CandidateDigester) AgentLifecycleOption {
+	return func(s *AgentLifecycle) { s.digester = digester }
 }
 
 // WithLifecyclePolicy sets the tier table source. Without it the store
@@ -977,6 +993,15 @@ func isUniqueViolation(err error, constraint string) bool {
 // SubmitChangeRequest submits the proposer's draft: the publish checks run
 // on a release candidate, the release gate starts, and the requirement of
 // the agent's tier is recorded.
+//
+// The candidate is pinned before anything runs: its draft revision and its
+// candidate digest (definition and attachments), and, for a
+// recertification, the version of the release published now. The publish
+// checks and the gate then run outside the transaction; inside it the
+// revision, the digest and the published release are read again, and any
+// change answers change_request_stale without moving to submitted. A gate
+// started for a candidate that went stale is not attached: it settles on
+// the gate routine's next pass and nothing reads it.
 func (s *AgentLifecycle) SubmitChangeRequest(ctx context.Context, projectID, applicationID, changeID, actorID int64) (agentlifecycle.ChangeRequest, error) {
 	draft, err := readChangeRequest(ctx, s.pool, projectID, applicationID, changeID, false)
 	if err != nil {
@@ -988,24 +1013,45 @@ func (s *AgentLifecycle) SubmitChangeRequest(ctx context.Context, projectID, app
 	if actorID != draft.ProposedBy {
 		return agentlifecycle.ChangeRequest{}, agentlifecycle.Refuse(agentlifecycle.ProposerOnlyCode, "Only the author of a change request can submit it.")
 	}
+	head, headVersion, err := headRelease(ctx, s.pool, projectID, applicationID)
+	if err != nil {
+		return agentlifecycle.ChangeRequest{}, err
+	}
+	candidateVersionID := draft.CandidateVersionID
+	if draft.Kind == agentlifecycle.KindRecertification {
+		// The release published now, not the one at create time: a publish
+		// or a rollback in between moved it.
+		if head == 0 {
+			return agentlifecycle.ChangeRequest{}, agentlifecycle.Refuse(agentlifecycle.NotReleasedCode, "The agent has no published release to recertify.")
+		}
+		candidateVersionID = headVersion
+	}
+	revision, err := latestRevision(ctx, s.pool, projectID, candidateVersionID)
+	if err != nil {
+		return agentlifecycle.ChangeRequest{}, err
+	}
+	var digest []byte
+	if err := s.inTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		digest, err = s.candidateDigest(ctx, tx, projectID, applicationID, candidateVersionID)
+		return err
+	}); err != nil {
+		return agentlifecycle.ChangeRequest{}, err
+	}
 	if draft.Kind == agentlifecycle.KindRelease {
 		if s.publisher == nil {
 			return agentlifecycle.ChangeRequest{}, errors.New("agent lifecycle: no publish path is composed")
 		}
 		if err := s.publisher.PrecheckCandidate(ctx, agentlifecycle.PublishCandidate{
-			ProjectID: projectID, ApplicationID: applicationID, VersionID: draft.CandidateVersionID,
+			ProjectID: projectID, ApplicationID: applicationID, VersionID: candidateVersionID,
 			VersionName: draft.VersionName, Category: draft.Category, PublisherID: draft.ProposedBy,
 		}); err != nil {
 			return agentlifecycle.ChangeRequest{}, err
 		}
 	}
-	head, _, err := headRelease(ctx, s.pool, projectID, applicationID)
-	if err != nil {
-		return agentlifecycle.ChangeRequest{}, err
-	}
 	// The gate's runs make their model calls for the user of ctx: the
 	// proposer, who submits.
-	gateID, err := s.gate.StartGate(ctx, projectID, applicationID, draft.CandidateVersionID, head)
+	gateID, err := s.gate.StartGate(ctx, projectID, applicationID, candidateVersionID, head)
 	if err != nil {
 		return agentlifecycle.ChangeRequest{}, fmt.Errorf("agent lifecycle: start the release gate: %w", err)
 	}
@@ -1032,22 +1078,40 @@ func (s *AgentLifecycle) SubmitChangeRequest(ctx context.Context, projectID, app
 				fmt.Sprintf("A %s-tier agent needs no approval. Withdraw this request and publish directly.", registry.Tier),
 				map[string]any{"risk_tier": string(registry.Tier)})
 		}
-		revision, err := latestRevision(ctx, tx, projectID, current.CandidateVersionID)
+		// What the checks and the gate saw must still be the candidate.
+		stale := agentlifecycle.Refuse(agentlifecycle.StaleCode,
+			"The agent changed while this change request was being submitted. Submit it again.")
+		nowHead, _, err := headRelease(ctx, tx, projectID, applicationID)
 		if err != nil {
 			return err
 		}
-		if current.Kind == agentlifecycle.KindRecertification && head == 0 {
-			return agentlifecycle.Refuse(agentlifecycle.NotReleasedCode, "The agent has no published release to recertify.")
+		if nowHead != head {
+			return stale
+		}
+		nowRevision, err := latestRevision(ctx, tx, projectID, candidateVersionID)
+		if err != nil {
+			return err
+		}
+		if nowRevision != revision {
+			return stale
+		}
+		nowDigest, err := s.candidateDigest(ctx, tx, projectID, applicationID, candidateVersionID)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(nowDigest, digest) {
+			return stale
 		}
 		submitted, err = scanChangeRequest(tx.QueryRow(ctx, `
 UPDATE elitea_lifecycle.change_requests
 SET state = 'submitted', submitted_at = clock_timestamp(), updated_at = clock_timestamp(), risk_tier = $4,
     required_approvals = $5, required_governance_approvals = $6, gate_id = $7, candidate_revision_id = $8,
-    current_release_id = $9
+    current_release_id = $9, candidate_version_id = $10, candidate_digest = $11
 WHERE tenant_project_id = $1 AND application_id = $2 AND id = $3
 RETURNING `+changeRequestColumns,
 			projectID, applicationID, changeID, string(registry.Tier), requirement.Approvals,
-			requirement.GovernanceApprovals, nullablePositive(gateID), nullablePositive(revision), nullablePositive(head)))
+			requirement.GovernanceApprovals, nullablePositive(gateID), nullablePositive(revision), nullablePositive(head),
+			nullablePositive(candidateVersionID), digest))
 		if err != nil {
 			return fmt.Errorf("agent lifecycle: submit the change request: %w", err)
 		}
@@ -1060,6 +1124,19 @@ RETURNING `+changeRequestColumns,
 			"agent_change_request", changeRef(applicationID, changeID), reasons...))
 	})
 	return submitted, err
+}
+
+// candidateDigest is the candidate digest of versionID in tx, nil when no
+// digester is composed.
+func (s *AgentLifecycle) candidateDigest(ctx context.Context, tx pgx.Tx, projectID, applicationID, versionID int64) ([]byte, error) {
+	if s.digester == nil {
+		return nil, nil
+	}
+	digest, err := s.digester.CandidateDigestTx(ctx, tx, projectID, applicationID, versionID)
+	if err != nil {
+		return nil, fmt.Errorf("agent lifecycle: digest the candidate: %w", err)
+	}
+	return digest[:], nil
 }
 
 // Approval is one approval asked for.
@@ -1212,8 +1289,11 @@ WHERE id = $1`, change.ID, requirement.Approvals, requirement.GovernanceApproval
 }
 
 // checkFresh refuses an approval of a candidate that changed since it was
-// submitted: a release candidate saved again or published meanwhile, or a
-// recertification whose published release moved.
+// submitted: a release candidate saved again or published meanwhile, a
+// recertification whose published release moved, or a candidate whose
+// digest (its definition with its toolkit, skill and sub-agent attachments
+// and the configurations they pin) differs from the one taken at submit.
+// The revisions see the version row only; the digest sees the attachments.
 func (s *AgentLifecycle) checkFresh(ctx context.Context, tx pgx.Tx, change agentlifecycle.ChangeRequest) error {
 	stale := agentlifecycle.Refuse(agentlifecycle.StaleCode,
 		"The agent changed after this change request was submitted. Withdraw it and submit a new one.")
@@ -1225,20 +1305,36 @@ func (s *AgentLifecycle) checkFresh(ctx context.Context, tx pgx.Tx, change agent
 		if head == 0 || head != change.CurrentReleaseID {
 			return stale
 		}
+	} else {
+		revision, err := latestRevision(ctx, tx, change.ProjectID, change.CandidateVersionID)
+		if err != nil {
+			return err
+		}
+		if revision != change.CandidateRevisionID {
+			return stale
+		}
+		_, status, err := candidateVersion(ctx, tx, change.ProjectID, change.CandidateVersionID)
+		if err != nil {
+			return err
+		}
+		if status == "published" || status == "embedded" {
+			return stale
+		}
+	}
+	var submitted []byte
+	if err := tx.QueryRow(ctx, `SELECT candidate_digest FROM elitea_lifecycle.change_requests WHERE id = $1`,
+		change.ID).Scan(&submitted); err != nil {
+		return fmt.Errorf("agent lifecycle: read the candidate digest: %w", err)
+	}
+	if submitted == nil || s.digester == nil {
+		// Submitted without a digester: the revisions are the only record.
 		return nil
 	}
-	revision, err := latestRevision(ctx, tx, change.ProjectID, change.CandidateVersionID)
+	current, err := s.candidateDigest(ctx, tx, change.ProjectID, change.ApplicationID, change.CandidateVersionID)
 	if err != nil {
 		return err
 	}
-	if revision != change.CandidateRevisionID {
-		return stale
-	}
-	_, status, err := candidateVersion(ctx, tx, change.ProjectID, change.CandidateVersionID)
-	if err != nil {
-		return err
-	}
-	if status == "published" || status == "embedded" {
+	if !bytes.Equal(current, submitted) {
 		return stale
 	}
 	return nil

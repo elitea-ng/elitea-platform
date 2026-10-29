@@ -112,6 +112,11 @@ CREATE TABLE IF NOT EXISTS elitea_lifecycle.change_requests (
     -- The draft revision (0198 version_revisions.id) submitted. An approval
     -- after a later save is refused: approvers approve what they saw.
     candidate_revision_id          bigint CHECK (candidate_revision_id IS NULL OR candidate_revision_id > 0),
+    -- SHA-256 over what the release would record (the definition digest
+    -- and the toolkit pins, so toolkit, skill and sub-agent attachments
+    -- too), taken at submit and recomputed at the final approval: an
+    -- attachment edit leaves version_revisions alone but changes this.
+    candidate_digest               bytea CHECK (candidate_digest IS NULL OR length(candidate_digest) = 32),
     version_name                   text CHECK (version_name IS NULL OR length(version_name) BETWEEN 1 AND 128),
     category                       text NOT NULL DEFAULT '' CHECK (length(category) <= 64),
     summary                        text NOT NULL CHECK (length(summary) BETWEEN 1 AND 2000),

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -20,15 +21,17 @@ import (
 // The fixture is the agent releases fixture: project 1, agent 31, draft
 // version 41.
 
-func newLifecycleTestStore(t *testing.T, pool *pgxpool.Pool, policy agentlifecycle.Policy) *AgentLifecycle {
+func newLifecycleTestStore(t *testing.T, pool *pgxpool.Pool, policy agentlifecycle.Policy, options ...AgentLifecycleOption) *AgentLifecycle {
 	t.Helper()
 	appender, err := securityaudit.NewPostgresAppender("elitea-main-test")
 	if err != nil {
 		t.Fatal(err)
 	}
+	releases, _ := newReleaseTestStores(t, pool)
+	options = append([]AgentLifecycleOption{WithCandidateDigester(releases)}, options...)
 	store, err := NewAgentLifecycle(pool, appender, func(context.Context) (agentlifecycle.Policy, error) {
 		return policy, nil
-	})
+	}, options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,5 +408,165 @@ WHERE scope = 'agent' AND scope_key = '31' AND resumed_at IS NULL`).Scan(&active
 	outcome, err := store.ApproveChangeRequest(ctx, Approval{ProjectID: 1, ApplicationID: 31, ChangeID: change.ID, ApproverID: 8})
 	if err != nil || !outcome.Complete {
 		t.Fatalf("approve at low = %+v, %v", outcome, err)
+	}
+}
+
+// lifecycleTestPublisher is the publish path of a release change request
+// in these tests: the checks pass (after onPrecheck), and the publish
+// copies the candidate into version 141 and records its release.
+type lifecycleTestPublisher struct {
+	t          *testing.T
+	pool       *pgxpool.Pool
+	releases   *AgentReleases
+	onPrecheck func()
+}
+
+func (p *lifecycleTestPublisher) PrecheckCandidate(context.Context, agentlifecycle.PublishCandidate) error {
+	if p.onPrecheck != nil {
+		p.onPrecheck()
+	}
+	return nil
+}
+
+func (p *lifecycleTestPublisher) PublishCandidateTx(ctx context.Context, tx pgx.Tx, candidate agentlifecycle.PublishCandidate) (agentlifecycle.PublishedCandidate, error) {
+	if _, err := tx.Exec(ctx, `
+INSERT INTO p_1.application_versions (
+    id, application_id, name, status, author_id, uuid, llm_settings, instructions,
+    conversation_starters, welcome_message, agent_type, meta, pipeline_settings, created_at)
+SELECT 141, application_id, $2, 'published', author_id, gen_random_uuid(), llm_settings, instructions,
+       conversation_starters, welcome_message, agent_type, meta, pipeline_settings, created_at
+FROM p_1.application_versions WHERE id = $1`, candidate.VersionID, candidate.VersionName); err != nil {
+		return agentlifecycle.PublishedCandidate{}, err
+	}
+	releaseID, err := p.releases.RecordPublishedTx(ctx, tx, 1, 31, 141, candidate.VersionID, candidate.VersionName, 7)
+	if err != nil {
+		return agentlifecycle.PublishedCandidate{}, err
+	}
+	return agentlifecycle.PublishedCandidate{ApplicationID: 31, PublishedVersionID: 141,
+		SourceVersionID: candidate.VersionID, ReleaseID: releaseID, VersionName: candidate.VersionName}, nil
+}
+
+func (p *lifecycleTestPublisher) AnnouncePublished(context.Context, int64, agentlifecycle.PublishedCandidate) {}
+
+func raiseToMedium(t *testing.T, store *AgentLifecycle) {
+	t.Helper()
+	medium := agentlifecycle.TierMedium
+	if _, err := store.UpdateRegistry(t.Context(), 1, 31, RegistryActor{UserID: 11}, agentlifecycle.RegistryUpdate{Tier: &medium}); err != nil {
+		t.Fatalf("raise the tier: %v", err)
+	}
+}
+
+// editAttachment changes the toolkit selection of draft version 41: an
+// attachment edit that writes no version revision.
+func editAttachment(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `
+UPDATE p_1.entity_tool_mapping SET selected_tools = '["list_products","list_features"]'::jsonb
+WHERE entity_version_id = 41 AND tool_id = 51`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAgentLifecycle_AttachmentEditAfterSubmitIsStale proves the final
+// approval refuses a candidate whose attachments changed after submit,
+// although its version row and revisions did not, and that an unchanged
+// candidate publishes.
+func TestAgentLifecycle_AttachmentEditAfterSubmitIsStale(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedAgentReleaseFixture(t, pool)
+	releases, _ := newReleaseTestStores(t, pool)
+	publisher := &lifecycleTestPublisher{t: t, pool: pool, releases: releases}
+	store := newLifecycleTestStore(t, pool, agentlifecycle.DefaultPolicy(), WithLifecyclePublisher(publisher))
+	ctx := t.Context()
+	raiseToMedium(t, store)
+	create := func() agentlifecycle.ChangeRequest {
+		change, err := store.CreateChangeRequest(ctx, agentlifecycle.NewChangeRequest{
+			ProjectID: 1, ApplicationID: 31, Kind: agentlifecycle.KindRelease, CandidateVersionID: 41,
+			VersionName: "v1", Summary: "First release.", ProposedBy: 7,
+		})
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if _, err := store.SubmitChangeRequest(ctx, 1, 31, change.ID, 7); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		return change
+	}
+	change := create()
+	var digest []byte
+	if err := pool.QueryRow(ctx, `SELECT candidate_digest FROM elitea_lifecycle.change_requests WHERE id = $1`,
+		change.ID).Scan(&digest); err != nil || len(digest) != 32 {
+		t.Fatalf("candidate digest = %x, %v", digest, err)
+	}
+	editAttachment(t, pool)
+	_, err := store.ApproveChangeRequest(ctx, Approval{ProjectID: 1, ApplicationID: 31, ChangeID: change.ID, ApproverID: 8})
+	requireRefusal(t, err, agentlifecycle.StaleCode)
+
+	if _, err := store.WithdrawChangeRequest(ctx, 1, 31, change.ID, 7, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	change = create()
+	outcome, err := store.ApproveChangeRequest(ctx, Approval{ProjectID: 1, ApplicationID: 31, ChangeID: change.ID, ApproverID: 8})
+	if err != nil || outcome.Published == nil {
+		t.Fatalf("approve an unchanged candidate = %+v, %v", outcome, err)
+	}
+}
+
+// TestAgentLifecycle_EditDuringSubmitIsStale proves the candidate is
+// pinned before the publish checks run: an attachment edit while they run
+// answers change_request_stale and leaves the request a draft.
+func TestAgentLifecycle_EditDuringSubmitIsStale(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedAgentReleaseFixture(t, pool)
+	releases, _ := newReleaseTestStores(t, pool)
+	publisher := &lifecycleTestPublisher{t: t, pool: pool, releases: releases}
+	publisher.onPrecheck = func() { editAttachment(t, pool) }
+	store := newLifecycleTestStore(t, pool, agentlifecycle.DefaultPolicy(), WithLifecyclePublisher(publisher))
+	ctx := t.Context()
+	raiseToMedium(t, store)
+	change, err := store.CreateChangeRequest(ctx, agentlifecycle.NewChangeRequest{
+		ProjectID: 1, ApplicationID: 31, Kind: agentlifecycle.KindRelease, CandidateVersionID: 41,
+		VersionName: "v1", Summary: "First release.", ProposedBy: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.SubmitChangeRequest(ctx, 1, 31, change.ID, 7)
+	requireRefusal(t, err, agentlifecycle.StaleCode)
+	got, err := store.GetChangeRequest(ctx, 1, 31, change.ID)
+	if err != nil || got.State != agentlifecycle.ChangeDraft || got.GateID != 0 {
+		t.Fatalf("after a stale submit = %+v, %v", got, err)
+	}
+}
+
+// TestAgentLifecycle_RecertificationPinsHeadAtSubmit proves a
+// recertification certifies the release published at submit, not the one
+// published when it was created.
+func TestAgentLifecycle_RecertificationPinsHeadAtSubmit(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedAgentReleaseFixture(t, pool)
+	releases, _ := newReleaseTestStores(t, pool)
+	releaseTestPublish(t, pool, releases, 41, 141, "v1")
+	store := newLifecycleTestStore(t, pool, agentlifecycle.DefaultPolicy())
+	ctx := t.Context()
+	raiseToMedium(t, store)
+	change, err := store.CreateChangeRequest(ctx, agentlifecycle.NewChangeRequest{
+		ProjectID: 1, ApplicationID: 31, Kind: agentlifecycle.KindRecertification, Summary: "Review.", ProposedBy: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := releaseTestPublish(t, pool, releases, 41, 142, "v2")
+	submitted, err := store.SubmitChangeRequest(ctx, 1, 31, change.ID, 7)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if submitted.CandidateVersionID != 142 || submitted.CurrentReleaseID != second.ID {
+		t.Fatalf("submitted candidate = %d, release %d; want 142, %d",
+			submitted.CandidateVersionID, submitted.CurrentReleaseID, second.ID)
+	}
+	outcome, err := store.ApproveChangeRequest(ctx, Approval{ProjectID: 1, ApplicationID: 31, ChangeID: change.ID, ApproverID: 8})
+	if err != nil || outcome.Change.ReleaseID != second.ID {
+		t.Fatalf("approve = %+v, %v", outcome, err)
 	}
 }

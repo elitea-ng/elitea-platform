@@ -4435,9 +4435,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Post("/unpublish/prompt_lib/{projectID}/{versionID}", coreHandler.Unpublish)
 				// Agent releases and draft revisions (ADR-0040 decision 2).
 				// A rollback changes what the agent runs, so it takes the
-				// publish permission; the reads take the version reads'.
+				// publish permission, and for an agent whose tier needs
+				// approval the governance role too (resolved in the
+				// handler); the reads take the version reads'.
 				{
-					releases := v2agentreleases.NewHandler(agentReleases)
+					releases := v2agentreleases.NewHandler(agentReleases, v2agentreleases.WithGovernance(agentLifecycle,
+						apimw.HoldsResolvedPermission(coreResolver, platformauth.PermissionModeDefault, agentlifecycle.GovernancePermission)))
 					r.With(projectPermission("models.applications.versions.get")).
 						Get(v2agentreleases.ReleasesPath, releases.List)
 					r.With(projectPermission("models.applications.version.details")).

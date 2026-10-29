@@ -7113,7 +7113,8 @@ components:
         code:
           type: string
           enum: [release_not_found, release_toolkit_drifted, application_not_published,
-            release_already_published, release_withdrawn, release_withdrawn_dependencies_removed]
+            release_already_published, release_withdrawn, release_withdrawn_dependencies_removed,
+            change_request_required]
         message: { type: string }
         reason:
           type: string
@@ -24320,7 +24321,8 @@ paths:
         (not withdrawn), must not already be the published release, and its
         toolkit pins must still match the live toolkits and configurations.
         The audit trail records application_release.rolled_back. Requires
-        `models.applications.publish.post`.
+        `models.applications.publish.post`; for an agent whose risk tier
+        needs approval (ADR-0040), also `models.applications.governance`.
       tags: [applications]
       requestBody:
         required: false
@@ -24351,7 +24353,9 @@ paths:
             release; (code release_already_published) the release is already
             the published release; (code release_withdrawn) the release was
             withdrawn; (code release_toolkit_drifted) a toolkit or
-            configuration the release pinned changed after it was published.
+            configuration the release pinned changed after it was published;
+            (code change_request_required) the agent's tier needs approval
+            and the caller does not hold the governance role.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ApplicationReleaseRefusal' }

@@ -22,6 +22,7 @@ package repos
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -108,6 +109,65 @@ func (s *AgentReleases) RecordPublishedTx(ctx context.Context, tx pgx.Tx, projec
 		return 0, err
 	}
 	return release.ID, nil
+}
+
+// CandidateDigestTx is the digest of what a release of versionID would
+// record, read in the caller's transaction: SHA-256 over the version's
+// definition digest (the projection, toolkit settings, selections and
+// skill and sub-agent attachments included) and its encoded toolkit pins
+// (the configurations they resolve to). A change request takes it at
+// submit and again at the final approval (ADR-0040): an attachment edit
+// changes it although the version row and its revisions do not. It binds
+// the transaction to the project's schema, as RecordPublishedTx does.
+func (s *AgentReleases) CandidateDigestTx(ctx context.Context, tx pgx.Tx, projectID, applicationID, versionID int64) ([32]byte, error) {
+	var candidate [32]byte
+	if s == nil {
+		return candidate, errors.New("agent releases: no database")
+	}
+	application, applicationOK := currentAgentDatabaseID(applicationID)
+	version, versionOK := currentAgentDatabaseID(versionID)
+	if projectID <= 0 || !applicationOK || !versionOK {
+		return candidate, errors.New("agent releases: invalid candidate")
+	}
+	if err := tenant.BindProject(ctx, tx, tenant.Project{ID: projectID}); err != nil {
+		return candidate, fmt.Errorf("agent releases: %w", err)
+	}
+	executor := pgxExecutor{queryer: tx}
+	if err := lockVersionToolkits(ctx, executor, projectID, applicationID, versionID); err != nil {
+		return candidate, err
+	}
+	row, err := executor.ResolveCurrentApplicationVersionDetails(ctx, sqlcgen.ResolveCurrentApplicationVersionDetailsParams{
+		ApplicationVersionID: version, ApplicationID: application,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return candidate, agentrelease.ErrNotFound
+	}
+	if err != nil {
+		return candidate, fmt.Errorf("agent releases: read the candidate definition: %w", err)
+	}
+	projection := []byte(row.ApplicationVersionDetailsJson)
+	digest, err := agentidentity.VersionDefinitionDigest(projectID, applicationID, versionID, projection)
+	if err != nil {
+		return candidate, fmt.Errorf("agent releases: digest the candidate definition: %w", err)
+	}
+	definition, projected, err := agentrelease.SplitDefinition(projection)
+	if err != nil {
+		return candidate, err
+	}
+	pins, err := s.pinToolkits(ctx, executor, projectID, applicationID, versionID, definition, projected)
+	if err != nil {
+		return candidate, err
+	}
+	encodedPins, err := json.Marshal(pins)
+	if err != nil {
+		return candidate, err
+	}
+	hash := sha256.New()
+	hash.Write([]byte("elitea.lifecycle.candidate.v1\x00"))
+	hash.Write(digest[:])
+	hash.Write(encodedPins)
+	copy(candidate[:], hash.Sum(nil))
+	return candidate, nil
 }
 
 // recordRelease is RecordRelease's body in the caller's transaction.
