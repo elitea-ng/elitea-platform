@@ -1150,14 +1150,34 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
         .expect("apply checkpoint migration");
     let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
     let tool_calls = Arc::new(AtomicUsize::new(0));
+    // Each branch gets its own replies, in its own order, whatever order the
+    // branches' requests arrive in (a loaded run interleaves them).
     let (platform, model_facade, captured) = saved_runtime(
         vec![
-            TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
-            TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(pipeline_text_response("resumed done")),
-            TestModelGatewayOutcome::Response(pipeline_text_response("resumed done")),
-            TestModelGatewayOutcome::Response(pipeline_text_response("resumed done")),
+            TestModelGatewayOutcome::ResponseForRequest {
+                marker: "Work on ask",
+                response: pipeline_ask_user_call_response(),
+            },
+            TestModelGatewayOutcome::ResponseForRequest {
+                marker: "Work on ask",
+                response: pipeline_text_response("resumed done"),
+            },
+            TestModelGatewayOutcome::ResponseForRequest {
+                marker: "Work on guard",
+                response: pipeline_mcp_tool_call_response(),
+            },
+            TestModelGatewayOutcome::ResponseForRequest {
+                marker: "Work on guard",
+                response: pipeline_text_response("resumed done"),
+            },
+            TestModelGatewayOutcome::ResponseForRequest {
+                marker: "Work on deny",
+                response: pipeline_mcp_tool_call_response(),
+            },
+            TestModelGatewayOutcome::ResponseForRequest {
+                marker: "Work on deny",
+                response: pipeline_text_response("resumed done"),
+            },
         ],
         effectful_agent(),
     );
@@ -1166,8 +1186,8 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
         SessionLimits::default(),
         CheckpointLimits::default(),
         sensitive_pipeline_mcp_policy(),
-        platform,
-        model_facade,
+        Arc::clone(&platform),
+        Arc::clone(&model_facade),
     )
     .with_mcp_connector(Arc::new(PipelineMcpConnector {
         connections: Arc::new(AtomicUsize::new(0)),
@@ -1198,7 +1218,46 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
         }
     })
     .await
-    .expect("the answered and approved branches resume and the pipeline completes");
+    .expect("the answered and approved branches resume and the pipeline completes or parks");
+    // The last card can be raised after the runner's last decision fetch: the
+    // run then parks, and its wake (a new execution) resumes that branch with
+    // its decision. Either way every branch resumes once and the join follows.
+    if joined(&db.pool)
+        .await
+        .is_none_or(|entries| entries.is_empty())
+    {
+        let mut wake = inline_llm_request("continue");
+        wake.payload.user_input = super::super::request::UserInput::Text(String::new());
+        wake.payload.meta.insert(
+            crate::agents::graph::fanout_wake::FANOUT_WAKE_META_KEY.to_owned(),
+            json!({"schema": "elitea.pipeline.fanout-wake.v1",
+                "response_message_id": "10000000-0000-4000-8000-000000000043",
+                "decision_revision": 1,
+                "parked_execution_id": EXECUTION,
+                "parked_generation": GENERATION}),
+        );
+        let invocation = PipelineNativeAgentAssembler::postgres(
+            db.pool.clone(),
+            SessionLimits::default(),
+            CheckpointLimits::default(),
+            sensitive_pipeline_mcp_policy(),
+            platform,
+            model_facade,
+        )
+        .with_mcp_connector(Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::clone(&tool_calls),
+            read_only: false,
+        }))
+        .with_fixed_parallel_for_tests()
+        .with_fanout_decisions_for_tests(ledger.client(2))
+        .assemble(claim(&wake, 2))
+        .await
+        .expect("assemble the wake");
+        run_collecting(invocation)
+            .await
+            .expect("the wake resumes the decided branch and joins");
+    }
     let kinds = cards
         .iter()
         .map(|card| {
@@ -1209,6 +1268,9 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
             )
         })
         .collect::<Vec<_>>();
+    // All three cards, whatever order the branches raised them in.
+    let mut kinds = kinds;
+    kinds.sort();
     assert_eq!(
         kinds,
         ["first:ask_user", "second:tool_guard", "third:tool_guard"]
