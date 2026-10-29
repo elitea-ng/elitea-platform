@@ -78,6 +78,7 @@ func TestMalformedReportsAreRefused(t *testing.T) {
 	ctx := peerContext("elitea-egress-proxy")
 	for name, mutate := range map[string]func(*runtimev1.ReportRunSummaryRequestV1){
 		"no replica":     func(r *runtimev1.ReportRunSummaryRequestV1) { r.ReplicaId = "" },
+		"the worker's":   func(r *runtimev1.ReportRunSummaryRequestV1) { r.ReplicaId = "worker" },
 		"bad execution":  func(r *runtimev1.ReportRunSummaryRequestV1) { r.ExecutionId = "a b" },
 		"no project":     func(r *runtimev1.ReportRunSummaryRequestV1) { r.ProjectId = 0 },
 		"negative bytes": func(r *runtimev1.ReportRunSummaryRequestV1) { r.BytesUp = -1 },

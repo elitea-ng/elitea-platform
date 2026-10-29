@@ -1,0 +1,30 @@
+package commandbus
+
+// The worker egress policy (ADR-0044 decision 2) on every producer that
+// prepares a WorkerCommandV1: each wraps the one Producer whose
+// prepareCommand assembles it, so these only reach it.
+
+// WithEgressPolicy makes the agent execution and direct toolkit read commands
+// carry their policy.
+func (p *AgentExecutionProducer) WithEgressPolicy(resolver EgressPolicyResolver) *AgentExecutionProducer {
+	p.producer.WithEgressPolicy(resolver)
+	return p
+}
+
+// WithEgressPolicy makes the index ingest commands carry their policy.
+func (p *IndexIngestProducer) WithEgressPolicy(resolver EgressPolicyResolver) *IndexIngestProducer {
+	p.producer.WithEgressPolicy(resolver)
+	return p
+}
+
+// WithEgressPolicy makes the tool-call commands carry their policy.
+func (p *ToolkitCallToolProducer) WithEgressPolicy(resolver EgressPolicyResolver) *ToolkitCallToolProducer {
+	p.producer.WithEgressPolicy(resolver)
+	return p
+}
+
+// WithEgressPolicy makes the tool discovery commands carry their policy.
+func (p *ToolkitAvailableToolsProducer) WithEgressPolicy(resolver EgressPolicyResolver) *ToolkitAvailableToolsProducer {
+	p.producer.WithEgressPolicy(resolver)
+	return p
+}

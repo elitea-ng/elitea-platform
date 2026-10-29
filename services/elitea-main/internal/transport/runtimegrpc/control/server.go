@@ -116,6 +116,9 @@ type Server struct {
 	// epochs checks a governed run's revocation epochs at claim and lease
 	// renewal (#1121); nil with the governance flag off.
 	epochs *governedEpochs
+	// egressSummaries keeps the worker's egress reports (ADR-0044
+	// decision 2); nil answers ReportEgressSummary UNSUPPORTED_CAPABILITY.
+	egressSummaries EgressSummaries
 }
 
 // AdmissionPinReader reads the credential profile an execution was admitted
@@ -543,6 +546,9 @@ func (s *Server) PrepareSettlement(ctx context.Context, request *runtimev1.Prepa
 		code, message, retryable := safeRuntimeError(err)
 		return settlementRejection(code, message, retryable), nil
 	}
+	// The run settled: no further egress report can come for this turn, so
+	// its worker row is final.
+	s.settleWorkerEgress(ctx, fence.ExecutionID)
 	return &runtimev1.PrepareSettlementResponseV1{
 		SettlementReceiptId: receipt.ID,
 		Outcome:             settlementOutcomeProto(receipt.Outcome),

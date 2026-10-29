@@ -60,6 +60,23 @@ type Producer struct {
 	config   ProducerConfig
 	signer   CommandSigner
 	appender StreamAppender
+	egress   EgressPolicyResolver
+}
+
+// EgressPolicyResolver answers the public egress policy a command carries
+// (ADR-0044 decision 2; workeregress.Resolver). Nil means open, and the
+// policy field stays absent. An error refuses the command: it is never
+// signed without the policy it should carry.
+type EgressPolicyResolver interface {
+	WorkerEgressPolicy(ctx context.Context, command *runtimev1.WorkerCommandV1) (*runtimev1.WorkerEgressPolicyV1, error)
+}
+
+// WithEgressPolicy makes every command this producer prepares carry its
+// assembled worker egress policy. Without it (a composition that never
+// wires the resolver) commands carry none, which is open.
+func (p *Producer) WithEgressPolicy(resolver EgressPolicyResolver) *Producer {
+	p.egress = resolver
+	return p
 }
 
 func NewProducer(config ProducerConfig, signer CommandSigner, appender StreamAppender) (*Producer, error) {
@@ -90,6 +107,13 @@ func (p *Producer) PrepareValidation(ctx context.Context, dispatch executionapp.
 }
 
 func (p *Producer) prepareCommand(ctx context.Context, command *runtimev1.WorkerCommandV1) (executionapp.PreparedCommandEnvelope, error) {
+	if p.egress != nil && command != nil {
+		policy, err := p.egress.WorkerEgressPolicy(ctx, command)
+		if err != nil {
+			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker egress policy: %w", err)
+		}
+		command.EgressPolicy = policy
+	}
 	if err := validateBoundedStrings(command, p.config.Limits.MaxStringBytes); err != nil {
 		return executionapp.PreparedCommandEnvelope{}, err
 	}

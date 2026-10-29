@@ -6412,6 +6412,75 @@ components:
           type: string
           maxLength: 64
 
+    WorkerEgressReachedHost:
+      type: object
+      description: >
+        One public host the runs of one project and agent reached (ADR-0044
+        decision 2), summed over the window.
+      required: [project_id, agent_id, host, port, connections, executions, last_seen]
+      properties:
+        project_id: { type: integer, format: int64 }
+        agent_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: >
+            The agent (application) of the runs. Null for runs of no agent: an
+            ad hoc chat, a direct toolkit call, a tool discovery or an index run.
+        host: { type: string }
+        port: { type: integer }
+        connections: { type: integer, format: int64 }
+        executions:
+          type: integer
+          format: int64
+          description: How many runs reached the host.
+        last_seen: { type: string, format: date-time }
+
+    WorkerEgressRefusedHost:
+      type: object
+      description: >
+        One host refused for the runs of one project and agent. `reason` is
+        the refusal code, for example egress_host_not_allowed (outside the
+        run's worker egress allowlist) or an SSRF refusal; `port` is 0 when
+        the request named none that could be parsed.
+      required: [project_id, agent_id, host, port, reason, count, executions, last_seen]
+      properties:
+        project_id: { type: integer, format: int64 }
+        agent_id: { type: integer, format: int64, nullable: true }
+        host: { type: string }
+        port: { type: integer }
+        reason: { type: string }
+        count: { type: integer, format: int64 }
+        executions: { type: integer, format: int64 }
+        last_seen: { type: string, format: date-time }
+
+    WorkerEgressHostsResponse:
+      type: object
+      description: >
+        The hosts runs reached and were refused in the window, per project,
+        agent and host, most used first. Each list holds at most 5000 rows;
+        the matching truncated flag says when it was cut. The window can only
+        reach as far back as the stored summaries are kept
+        (ELITEA_EGRESS_AUDIT_RETENTION_DAYS, default 30).
+      required: [days, since, source, project_id, reached, refused, reached_truncated, refused_truncated]
+      properties:
+        days: { type: integer }
+        since: { type: string, format: date-time }
+        source:
+          type: string
+          enum: [worker, proxy, all]
+        project_id: { type: integer, format: int64, nullable: true }
+        reached:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerEgressReachedHost'
+        refused:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerEgressRefusedHost'
+        reached_truncated: { type: boolean }
+        refused_truncated: { type: boolean }
+
     RetentionPolicy:
       type: object
       description: >
@@ -17590,6 +17659,56 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '503':
           description: This deployment has no retention policy store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/worker_egress/hosts:
+    get:
+      operationId: listWorkerEgressHosts
+      summary: List the public hosts runs reached and were refused
+      description: >
+        The worker egress hosts view (ADR-0044 decision 2): the hosts the
+        runs of each project and agent reached and were refused in the last
+        `days` days, from the stored egress summaries, so an operator can seed
+        the platform's or a project's worker egress allowlist before switching
+        the `worker_egress` mode to allowlist. `source` selects the worker's
+        own HTTP clients (the default, what that allowlist governs), the
+        egress proxy (sandbox and code runs) or both. Gated on
+        `configuration.governance`.
+      tags: [admin]
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 90, default: 30 }
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [worker, proxy, all]
+            default: worker
+        - name: project_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: The hosts reached and refused in the window
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerEgressHostsResponse'
+        '400':
+          description: A days outside 1 to 90, an unknown source or a malformed project_id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: This deployment has no egress summary store
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

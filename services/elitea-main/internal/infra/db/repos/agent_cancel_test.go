@@ -78,7 +78,9 @@ func TestCurrentAgentCancelRepositoryProjectsRetainedSalvagedAndDeletedResponses
 	} {
 		t.Run(name, func(t *testing.T) {
 			executor := &currentAgentCancelExecutorStub{
-				scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{{values: []any{int64(9)}}}},
+				// The turn's conversation, then the legal hold probe (#1507):
+				// no hold table, so the stop is not kept for a hold.
+				scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{{values: []any{int64(9)}}, {values: []any{false}}}},
 				cancelRow: sqlcgen.CancelCurrentAgentExecutionRow{
 					ResponseMessageGroupID: 51,
 					QuestionMessageGroupID: &questionID,
