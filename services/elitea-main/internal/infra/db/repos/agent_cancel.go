@@ -290,8 +290,6 @@ func (repository *CurrentAgentCancelRepository) SettleGovernedRefusal(
 
 var _ agentexecutionapp.GovernedRefusalSettler = (*CurrentAgentCancelRepository)(nil)
 
-// holdReader lets the cancel transaction answer conversationHeld, whose
-// querier returns pgx.Row.
 // stopKeepsHeldTurn answers whether a stop keeps the turn for a legal hold.
 // The lookup runs under a savepoint, so a failed read (it aborts nothing of
 // the stop's transaction) is logged and answered as held: keeping the rows
@@ -320,6 +318,8 @@ func stopKeepsHeldTurn(ctx context.Context, tx sqlExecutor, projectID, conversat
 	return held
 }
 
+// holdReader lets the cancel transaction answer conversationHeld, whose
+// querier returns pgx.Row.
 type holdReader struct{ tx sqlExecutor }
 
 func (r holdReader) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {

@@ -123,6 +123,14 @@ func TestProducerRecordsARefusedPolicy(t *testing.T) {
 		t.Fatalf("an unrecorded refusal: %v", err)
 	}
 
+	// The row was no longer refusable (prepared elsewhere, claimed, retired):
+	// nothing is durable, so it is never answered as a refusal.
+	stale := &refusalRecorderStub{err: executionapp.ErrDispatchNotRefused}
+	_, err = prepareWithRefusals(t, &egressResolverStub{err: refusalStub{message: "fix it"}}, stale)
+	if !errors.Is(err, executionapp.ErrDispatchNotRefused) || errors.Is(err, executionapp.ErrDispatchRefused) {
+		t.Fatalf("a refusal that was not recorded: %v", err)
+	}
+
 	transient := &refusalRecorderStub{}
 	_, err = prepareWithRefusals(t, &egressResolverStub{err: errors.New("database down")}, transient)
 	if err == nil || errors.Is(err, executionapp.ErrDispatchRefused) || len(transient.calls) != 0 {

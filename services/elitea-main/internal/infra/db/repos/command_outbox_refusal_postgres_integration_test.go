@@ -2,11 +2,13 @@ package repos
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenant"
@@ -62,9 +64,10 @@ FROM elitea_runtime.command_outbox WHERE outbox_id = $1`, seed.outboxID).Scan(&c
 		t.Fatalf("refusal code=%q message=%q due=%v", code, message, due)
 	}
 
-	// A prepared command is published as prepared: the refusal is a no-op.
-	if err := refusals.RefuseDispatch(ctx, prepared.Fence.ExecutionID, 1, refusalCodeEgressPolicyInvalid, refusalTestMessage); err != nil {
-		t.Fatal(err)
+	// A prepared command is published as prepared: nothing is recorded, and
+	// the refusal says so (an unrecorded refusal is never reported as one).
+	if err := refusals.RefuseDispatch(ctx, prepared.Fence.ExecutionID, 1, refusalCodeEgressPolicyInvalid, refusalTestMessage); !errors.Is(err, executionapp.ErrDispatchNotRefused) {
+		t.Fatalf("a refusal of a prepared row: %v, want ErrDispatchNotRefused", err)
 	}
 	assertPostgresCount(t, ctx, pool, 0, `SELECT count(*) FROM elitea_runtime.command_outbox WHERE outbox_id = $1 AND refusal_code IS NOT NULL`, preparedSeed.outboxID)
 	// The CHECK refuses the same on a prepared row written directly.
@@ -94,9 +97,9 @@ WHERE execution_id = $1 AND generation = 1`, frame.Fence.ExecutionID).Scan(&stat
 	assertPostgresCount(t, ctx, pool, 1, `SELECT count(*) FROM elitea_runtime.execution_replay_events WHERE execution_id = $1 AND event_type = 'execution.failed' AND event_bytes = $2`, frame.Fence.ExecutionID, want)
 	assertPostgresCount(t, ctx, pool, 0, `SELECT count(*) FROM elitea_runtime.execution_replay_events WHERE execution_id = $1 AND event_bytes = $2`, frame.Fence.ExecutionID, deadlineRetirementEventBytes)
 
-	// A refusal after the run settled is a no-op.
-	if err := refusals.RefuseDispatch(ctx, frame.Fence.ExecutionID, 1, refusalCodeEgressPolicyInvalid, "again"); err != nil {
-		t.Fatal(err)
+	// A refusal after the run settled records nothing and says so.
+	if err := refusals.RefuseDispatch(ctx, frame.Fence.ExecutionID, 1, refusalCodeEgressPolicyInvalid, "again"); !errors.Is(err, executionapp.ErrDispatchNotRefused) {
+		t.Fatalf("a refusal of a settled run: %v, want ErrDispatchNotRefused", err)
 	}
 }
 

@@ -8,7 +8,7 @@
  * has its own per-project allowlists, and copying them here would widen the
  * worker's list.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -25,6 +25,9 @@ import { t } from '@/shared/i18n';
 import { allowlistFromReached, useWorkerEgressHosts } from './api/adminWorkerEgressApi';
 
 const WINDOWS = [7, 30, 90] as const;
+
+/** How long the button says "Copied" after a copy. */
+const COPIED_MS = 2000;
 
 function agentLabel(agentId: number | null): string {
   return agentId === null ? t('pages.admin.workerEgress.noAgent', 'No agent') : String(agentId);
@@ -64,7 +67,15 @@ export function WorkerEgressHostsPanel() {
 }
 
 function Toolbar({ days, onDays, data }: { readonly days: number; readonly onDays: (days: number) => void; readonly data: Hosts }) {
-  const [copied, setCopied] = useState(false);
+  // "Copied" belongs to the list that was copied: another window, or a
+  // refetch that changed the list, shows the button again, as does the timeout.
+  const [copiedFrom, setCopiedFrom] = useState<Hosts>(undefined);
+  const copied = copiedFrom !== undefined && copiedFrom === data;
+  useEffect(() => {
+    if (copiedFrom === undefined) return undefined;
+    const timer = setTimeout(() => setCopiedFrom(undefined), COPIED_MS);
+    return () => clearTimeout(timer);
+  }, [copiedFrom]);
   const reached = data?.reached ?? [];
   return (
     <Box sx={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -85,7 +96,7 @@ function Toolbar({ days, onDays, data }: { readonly days: number; readonly onDay
         variant="secondary"
         disabled={reached.length === 0}
         onClick={() => {
-          void handleCopy(allowlistFromReached(reached).join('\n')).then(() => setCopied(true));
+          void handleCopy(allowlistFromReached(reached).join('\n')).then(() => setCopiedFrom(data));
         }}
         sx={{ textTransform: 'none' }}
       >

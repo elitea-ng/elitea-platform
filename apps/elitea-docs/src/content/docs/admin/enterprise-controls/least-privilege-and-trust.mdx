@@ -28,11 +28,13 @@ The main service builds the allowlist for each run when it sends the run to a wo
 - the **project entries**, from the project's `worker_egress` setting;
 - the host of every URL that the run's toolkits, MCP servers and configurations are configured with (for example, a Jira toolkit's base URL);
 - the fixed API hosts that a toolkit type always calls, even when its settings do not name them (for example, `api.figma.com` for Figma, `graph.microsoft.com` for SharePoint, and `*.googleapis.com` for Google Cloud toolkits);
+- for an OpenAPI toolkit, the host of its specification URL and the host that its operations call: the `base_url` setting when it is set, otherwise the first `servers` entry of the specification, with each `{variable}` replaced by its `default`;
+- for a GitHub toolkit with the base URL `https://api.github.com`, the host `github.com`, which the pull-request push of a workspace uses (a GitHub Enterprise base URL already names its push host);
 - for a governed run, the target hosts of the credentials that the run may use (for example, Microsoft Graph for a SharePoint credential).
 
 Only toolkit and configuration **settings** add hosts. User input, chat history and tool arguments never add a host, so nothing that a user or a document types can widen a run's allowlist. A project entry only adds hosts to that project's runs. It does not change the mode, which is the platform's decision.
 
-The allowlist travels inside the signed worker command, so a worker cannot widen it. The worker enforces it on every outbound connection of the run: web fetches and every redirect hop, all toolkit clients, OpenAPI tools, delegated sign-in token calls, remote MCP servers, index runs, and the pull-request push of a workspace. A refused call fails with the tool error `egress_host_not_allowed`, which names the host. The agent sees this error and can report it. The call never fails silently.
+The allowlist travels inside the signed worker command, so a worker cannot widen it. The worker enforces it on every outbound connection of the run: web fetches and every redirect hop, all toolkit clients, OpenAPI tools, delegated sign-in token calls and metadata discovery, remote MCP servers, index runs, and the pull-request push of a workspace. A client opened outside any run is refused too: the worker has no unrestricted default. A refused call fails with the tool error `egress_host_not_allowed`, which names the host. The agent sees this error and can report it. The call never fails silently.
 
 The allowlist narrows the existing rules. It never widens them. For web fetches, private, link-local, cloud-metadata and reserved addresses stay refused in every mode, even if an entry names them.
 
@@ -76,6 +78,7 @@ A chat answer shows this as `error_code: egress_policy_invalid`. A synchronous t
 - The worker's summary does not count bytes (`bytes_up` and `bytes_down` are 0). If the worker restarts before it sends the summary, or if the run is not settled within 12 hours, that summary is lost. The refusal itself still reaches the agent and the run's events.
 - An index run counts each request to a host, not each document.
 - A remote MCP server with no selected tools is checked when the run starts, and appears only in the refused hosts if it is refused.
+- The main service does not download an OpenAPI specification that a toolkit names by URL. If that specification's first server is an absolute URL on a different host, set the toolkit's `base_url`, or add that host to the platform or project entries. A relative server, or no server, uses the host of the specification URL, which is added automatically.
 
 ### Configure and use
 
@@ -97,7 +100,7 @@ A chat answer shows this as `error_code: egress_policy_invalid`. A synchronous t
     ```
   </Step>
   <Step title="Switch the mode">
-    Set **Mode** to `allowlist` and save. Each replica of the main service reads the section again after at most 5 seconds, so new runs use the allowlist within 5 seconds. Runs in flight keep the policy that they started with.
+    Set **Mode** to `allowlist` and save. Each replica of the main service reads the section again after at most 5 seconds, so new runs use the allowlist within 5 seconds. If the database cannot be read, a replica keeps the last value that it read and tries again after a short wait (from 0.5 seconds, doubled after each failure, up to 30 seconds). Runs in flight keep the policy that they started with.
   </Step>
   <Step title="Watch the refused hosts">
     For the first days, check the refused hosts in the panel. A refused host that a real workflow needs is either added to the platform or project list, or is a call that the allowlist correctly stopped.

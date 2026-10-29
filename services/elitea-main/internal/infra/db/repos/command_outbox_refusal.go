@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
@@ -42,8 +43,11 @@ func NewDispatchRefusals(pool *pgxpool.Pool) (*DispatchRefusals, error) {
 // RefuseDispatch records the refusal on the run's never-prepared outbox row
 // and moves its deadline to now. An agent run's answer is settled as the
 // error at once (the chat meta a stream reload reads), the way a refused
-// governed continuation's is. A row already prepared, retired or claimed is
-// left alone: it is no longer this dispatch's to refuse.
+// governed continuation's is. A row already prepared, retired or claimed, or
+// a run no longer PENDING/DISPATCHED, is left alone (it is no longer this
+// dispatch's to refuse) and answers executionapp.ErrDispatchNotRefused, so
+// the producer reports an ordinary error, not a refusal that was never made
+// durable.
 func (r *DispatchRefusals) RefuseDispatch(ctx context.Context, executionID string, generation uint64, code, message string) error {
 	if r == nil || r.pool == nil {
 		return errors.New("dispatch refusals database is required")
@@ -85,7 +89,7 @@ WHERE o.execution_id = $1
 RETURNING j.capability_id, j.projection_project_id`,
 		executionID, int64(generation), code, message).Scan(&capability, &projectionProjectID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
+		return executionapp.ErrDispatchNotRefused
 	}
 	if err != nil {
 		return fmt.Errorf("record the dispatch refusal: %w", err)

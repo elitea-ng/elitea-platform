@@ -108,7 +108,10 @@ func (p *Producer) WithDispatchRefusals(recorder DispatchRefusalRecorder) *Produ
 
 // refuse makes a refusal durable and answers it as an
 // executionapp.DispatchRefusal. A failure to record it is an ordinary error:
-// the dispatch is retried and records it then.
+// the dispatch is retried and records it then. So is a refusal the recorder
+// did not record because the row is no longer refusable
+// (executionapp.ErrDispatchNotRefused): the next pass acts on the row's
+// actual state, and no caller reports a refusal that is not durable.
 func (p *Producer) refuse(ctx context.Context, command *runtimev1.WorkerCommandV1, refusal policyRefusal) error {
 	if p.refusals == nil {
 		return fmt.Errorf("assemble the worker egress policy: %w", refusal)

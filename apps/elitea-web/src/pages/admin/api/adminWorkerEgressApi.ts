@@ -29,6 +29,17 @@ export function useWorkerEgressHosts(days: number) {
 }
 
 /**
+ * One allowlist entry in the egresslib grammar (libs/go/egresslib ParseEntry):
+ * an IPv6 literal is bare without a port (`2001:db8::1`) and bracketed with
+ * one (`[2001:db8::1]:8443`); unbracketed, its last group would be read as
+ * part of the address, never as the port.
+ */
+function allowlistEntry(host: string, port?: number): string {
+  if (port === undefined) return host;
+  return host.includes(':') ? `[${host}]:${port}` : `${host}:${port}`;
+}
+
+/**
  * The allowlist entries that would admit every reached host, and no more: a
  * bare `host` (any port) when that host was only reached on the scheme
  * defaults, or with no port recorded; otherwise one `host:port` per port it
@@ -38,7 +49,8 @@ export function useWorkerEgressHosts(days: number) {
 export function allowlistFromReached(reached: readonly { host: string; port: number }[]): string[] {
   const ports = new Map<string, Set<number>>();
   for (const row of reached) {
-    const host = row.host.toLowerCase();
+    // A recorded IPv6 host may carry its URL brackets: the entry adds them back.
+    const host = row.host.toLowerCase().replace(/^\[(.*)\]$/, '$1');
     if (host === '') continue;
     const seen = ports.get(host) ?? new Set<number>();
     seen.add(row.port);
@@ -48,9 +60,9 @@ export function allowlistFromReached(reached: readonly { host: string; port: num
   for (const [host, seen] of ports) {
     const onlyDefaults = [...seen].every((port) => port === 80 || port === 443);
     if (seen.has(0) || onlyDefaults) {
-      entries.push(host);
+      entries.push(allowlistEntry(host));
     } else {
-      for (const port of [...seen].sort((a, b) => a - b)) entries.push(`${host}:${port}`);
+      for (const port of [...seen].sort((a, b) => a - b)) entries.push(allowlistEntry(host, port));
     }
   }
   return entries.sort();

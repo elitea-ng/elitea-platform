@@ -148,7 +148,8 @@ func TestAllowlistMergesAndDedupesTheSources(t *testing.T) {
 	if policy.GetMode() != runtimev1.WorkerEgressModeV1_WORKER_EGRESS_MODE_V1_ALLOWLIST {
 		t.Fatalf("mode %v", policy.GetMode())
 	}
-	want := []string{"*.pypi.org", "10.0.0.0/8", "api.github.com", "example.com", "jira.corp.example", "mcp.example.com"}
+	// github.com: the GitHub toolkit's git remote, derived from its API base.
+	want := []string{"*.pypi.org", "10.0.0.0/8", "api.github.com", "example.com", "github.com", "jira.corp.example", "mcp.example.com"}
 	if !slices.Equal(policy.GetAllow(), want) {
 		t.Fatalf("allow = %v, want %v", policy.GetAllow(), want)
 	}
@@ -169,7 +170,7 @@ func TestGovernedForcesTheAllowlist(t *testing.T) {
 	if err != nil || policy.GetMode() != runtimev1.WorkerEgressModeV1_WORKER_EGRESS_MODE_V1_ALLOWLIST {
 		t.Fatalf("governed: %v %v", policy, err)
 	}
-	want := []string{"api.github.com", "contoso.sharepoint.com", "graph.microsoft.com", "jira.corp.example", "mcp.example.com"}
+	want := []string{"api.github.com", "contoso.sharepoint.com", "github.com", "graph.microsoft.com", "jira.corp.example", "mcp.example.com"}
 	if !slices.Equal(policy.GetAllow(), want) {
 		t.Fatalf("governed allow = %v, want %v", policy.GetAllow(), want)
 	}

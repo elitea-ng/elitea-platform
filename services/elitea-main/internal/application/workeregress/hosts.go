@@ -127,12 +127,19 @@ func (w *hostWalk) value(value any, depth int) {
 	switch typed := value.(type) {
 	case map[string]any:
 		for key, child := range typed {
+			if w.toolkitType == openAPIToolkitType && isOpenAPISpecKey(key) {
+				// The spec's own `url` fields (a contact, a licence, a
+				// second server) are never called: openAPIHosts reads the
+				// hosts the worker does contact.
+				continue
+			}
 			if text, ok := child.(string); ok {
 				if urlField(key) {
 					if host, ok := bareLabelHost(w.toolkitType, key, text); ok {
 						w.hosts = append(w.hosts, host)
 					} else if host, ok := hostOf(text); ok {
 						w.hosts = append(w.hosts, host)
+						w.hosts = append(w.hosts, derivedHosts(w.toolkitType, key, host)...)
 					}
 				}
 				continue

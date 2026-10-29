@@ -68,7 +68,34 @@ func HostsForToolkit(toolkitType string, content []byte) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(toolkitType) == openAPIToolkitType {
+		hosts = append(hosts, openAPIHosts(content)...)
+	}
 	return append(hosts, ImplicitToolkitHosts(toolkitType)...), nil
+}
+
+// openAPIToolkitType is the worker's OpenAPI toolkit type (openapi_hosts.go).
+const openAPIToolkitType = "openapi"
+
+// githubAPIHost and githubWebHost are the API and the web/git origin of
+// github.com. A GitHub toolkit's `base_url` names the API, but a workspace
+// `git_push` goes to the forge's web origin, which the worker derives from
+// it (libs/rust/agent-runtime/src/toolkits/workspace_pull_request.rs
+// `github_web_origin`): `api.github.com` is `github.com`, and GitHub
+// Enterprise's `https://host/api/v3` is `host` (the base URL's own host,
+// already admitted). GitLab's web origin is its base URL's host too.
+const (
+	githubAPIHost = "api.github.com"
+	githubWebHost = "github.com"
+)
+
+// derivedHosts answers the hosts a type's worker reaches from a URL field
+// besides the field's own host.
+func derivedHosts(toolkitType, key, host string) []string {
+	if strings.TrimSpace(toolkitType) == "github" && strings.EqualFold(key, "base_url") && host == githubAPIHost {
+		return []string{githubWebHost}
+	}
+	return nil
 }
 
 // HostsFromTypedToolkit reads a toolkit document that names its own type

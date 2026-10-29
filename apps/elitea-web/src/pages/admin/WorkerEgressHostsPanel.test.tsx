@@ -75,6 +75,23 @@ describe('WorkerEgressHostsPanel', () => {
     });
     expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument();
   });
+
+  it('stops saying "Copied" when the window changes, and after a moment', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<WorkerEgressHostsPanel />);
+
+    await screen.findByText('api.github.com');
+    await user.click(screen.getByRole('button', { name: 'Copy as allowlist' }));
+    await screen.findByRole('button', { name: 'Copied' });
+    await user.click(screen.getByRole('combobox', { name: 'Time window' }));
+    await user.click(await screen.findByRole('option', { name: 'Last 7 days' }));
+    await waitFor(() => expect(queries.some((query) => query.includes('days=7'))).toBe(true));
+    expect(await screen.findByRole('button', { name: 'Copy as allowlist' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Copy as allowlist' }));
+    await screen.findByRole('button', { name: 'Copied' });
+    expect(await screen.findByRole('button', { name: 'Copy as allowlist' }, { timeout: 3000 })).toBeInTheDocument();
+  });
 });
 
 describe('allowlistFromReached', () => {
@@ -92,5 +109,16 @@ describe('allowlistFromReached', () => {
         { host: '', port: 443 },
       ]),
     ).toEqual(['a.example:443', 'a.example:8443', 'b.example:8080', 'b.example:9090', 'c.example', 'd.example']);
+  });
+
+  it('brackets an IPv6 literal that carries a port, as the egresslib grammar needs', () => {
+    expect(
+      allowlistFromReached([
+        { host: '2001:db8::1', port: 8443 },
+        { host: '[2001:DB8::2]', port: 9443 },
+        { host: '[2001:db8::3]', port: 443 },
+        { host: '2001:db8::4', port: 0 },
+      ]),
+    ).toEqual(['2001:db8::3', '2001:db8::4', '[2001:db8::1]:8443', '[2001:db8::2]:9443']);
   });
 });
