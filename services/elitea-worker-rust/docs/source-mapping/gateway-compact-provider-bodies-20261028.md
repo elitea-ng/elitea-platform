@@ -248,7 +248,7 @@ The stack was torn down after recording (`stack.sh down --name ctx403 --volumes`
 - Project-context parity with the current platform:
   - With no activation description, the current platform puts the context straight into the instructions under a
     `# Project Context` markdown heading and offers no tool
-    (`pylon_main/plugins/elitea_core/utils/project_context_utils.py:8-22`).
+    (the current platform's `elitea_core/utils/project_context_utils.py:8-22`).
   - Only with an activation description does it withhold the content and bind `read_project_context`
     (`elitea_sdk/runtime/middleware/project_context.py`).
   - The Worker renders an `<active_instruction …>` block and still exposes `read_project_context` when the context is
