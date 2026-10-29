@@ -42,16 +42,16 @@ toolkit-data-analysis = ["dep:elitea-office-core"]
 # every host that links this crate apply the same [patch.crates-io], so the
 # runtime always runs on the patched agent loop.
 adk-agent = { version = "~2.2.0", default-features = false }
-adk-core = { version = "~2.2.0", default-features = false }
-adk-graph = { version = "~2.2.0", default-features = false }
+adk-core = { version = "~2.3.0", default-features = false }
+adk-graph = { version = "~2.3.0", default-features = false }
 # `context-compaction`: `context_management` builds the runner's compaction
 # config.
 adk-runner = { version = "~2.2.0", default-features = false, features = ["context-compaction"] }
-adk-session = { version = "~2.2.0", default-features = false }
+adk-session = { version = "~2.3.0", default-features = false }
 # `http-transport`: the Streamable HTTP MCP client both hosts use. It links
 # reqwest 0.13, whose default rustls provider is aws-lc-rs (EXTRACTION.md,
 # finding 3).
-adk-tool = { version = "~2.2.0", default-features = false, features = ["http-transport"] }
+adk-tool = { version = "~2.3.0", default-features = false, features = ["http-transport"] }
 # Leftmost-longest multi-pattern matching for `replace_placeholders` (one pass
 # over the original text). Already locked through regex.
 aho-corasick = { version = "1.1.5", default-features = false, features = ["std"] }
@@ -75,7 +75,7 @@ elitea-platform-rpc = { path = "../platform-rpc" }
 elitea-office-core = { path = "../office-core", optional = true }
 # The Figma family applies a caller-supplied output `regexp` the way the SDK's
 # Python `re` does, lookaround included (its documented example uses one).
-fancy-regex = "0.18.0"
+fancy-regex = "0.19.2"
 futures = { version = "0.3.34", default-features = false, features = ["std", "async-await"] }
 hmac = "0.13.0"
 # The confluence family renders Confluence's page HTML as Markdown, as the
@@ -89,14 +89,14 @@ unicode-general-category = "1.1.0"
 # The SharePoint OneNote readers decode the page markup's character
 # references as Python's `html.parser` does. Already locked in this workspace
 # (html-to-markdown-rs).
-html-escape = "0.2.15"
+html-escape = "0.3.0"
 http = "1.5.0"
 http-body-util = "0.1.5"
 hyper = { version = "1.11.1", default-features = false, features = ["client", "http1", "http2"] }
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "http2", "native-tokio", "ring"] }
 hyper-util = { version = "0.1.21", default-features = false, features = ["client-legacy", "http1", "http2", "tokio"] }
 md-5 = "0.11.0"
-minijinja = { version = "2.24.0", default-features = false, features = ["builtins", "fuel", "serde"] }
+minijinja = { version = "3.0.3", default-features = false, features = ["builtins", "fuel", "serde"] }
 percent-encoding = "2.3.2"
 regex = "1.13.1"
 reqwest = { version = "0.12.28", default-features = false, features = ["http2", "json", "multipart", "rustls-tls-native-roots", "stream"] }
@@ -114,7 +114,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 # `canonical`).
 serde_json = { version = "1.0.151", features = ["raw_value"] }
 serde_yaml_ng = "0.10.0"
-sqlx = { version = "0.8.6", optional = true, default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "mysql", "chrono", "bigdecimal", "json", "uuid"] }
+sqlx = { version = "0.9.0", optional = true, default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "mysql", "chrono", "bigdecimal", "json", "uuid"] }
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
@@ -125,7 +125,7 @@ zeroize = "1.9.0"
 # `get_report_by_id` and `create_excel_report` read Carrier's zip result
 # archives and `get_report_by_id` writes the errors-log zip. The same
 # version and features `elitea-office-core` pins, already in the lock.
-zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
+zip = { version = "=9.1.1", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 elitea-connectors = { path = "../connectors", default-features = false, features = ["providers", "reqwest-012", "test-support"] }
