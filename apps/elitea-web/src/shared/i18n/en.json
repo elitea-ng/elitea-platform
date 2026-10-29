@@ -5166,5 +5166,6 @@
   "features.agentLifecycle.releases.tabReleases": "Releases",
   "features.agentLifecycle.releases.tabRevisions": "Revisions of this version",
   "features.agentLifecycle.releases.title": "Release history",
-  "features.agentLifecycle.releases.withdrawn": "Withdrawn"
+  "features.agentLifecycle.releases.withdrawn": "Withdrawn",
+  "features.agentLifecycle.releases.notSaved": "Save the agent first; its history starts with its first saved version."
 }

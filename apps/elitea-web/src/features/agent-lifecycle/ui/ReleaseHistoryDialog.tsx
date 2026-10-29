@@ -17,7 +17,6 @@ import TableCell from '@mui/material/TableCell';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Tabs from '@mui/material/Tabs';
-import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import type { ApplicationRelease, ApplicationReleaseChange } from '@/shared/api/generated/model';
@@ -26,10 +25,10 @@ import { t } from '@/shared/i18n';
 import {
   useApplicationRelease,
   useApplicationReleases,
-  useRollbackRelease,
   useVersionRevisions,
 } from '../api/releasesApi';
 import { lifecycleErrorMessage } from '../model/useEntityLifecycle';
+import { RollbackReleaseDialog } from './RollbackReleaseDialog';
 
 /**
  * The agent's release history (ADR-0040 decision 2, #1492).
@@ -115,6 +114,9 @@ function ReleasesTab({
   const releases = useApplicationReleases(projectId, applicationId, open);
   const [selected, setSelected] = useState<number>();
   const [target, setTarget] = useState<ApplicationRelease>();
+  // A disabled query stays pending forever: without an agent there is
+  // nothing to fetch, so say so instead of spinning.
+  if (projectId === undefined || applicationId === undefined) return <NotSaved />;
   if (releases.isPending) return <CircularProgress size="1.5rem" />;
   if (releases.isError) {
     return <Alert severity="error">{lifecycleErrorMessage(releases.error)}</Alert>;
@@ -160,7 +162,7 @@ function ReleasesTab({
           releaseId={selected}
         />
       )}
-      <RollbackDialog
+      <RollbackReleaseDialog
         projectId={projectId}
         applicationId={applicationId}
         target={target}
@@ -262,6 +264,7 @@ function RevisionsTab({
   readonly versionId: number | undefined;
 }): ReactNode {
   const revisions = useVersionRevisions(projectId, applicationId, versionId, true);
+  if (projectId === undefined || applicationId === undefined || versionId === undefined) return <NotSaved />;
   if (revisions.isPending) return <CircularProgress size="1.5rem" />;
   if (revisions.isError) return <Alert severity="error">{lifecycleErrorMessage(revisions.error)}</Alert>;
   if (revisions.data.rows.length === 0) {
@@ -301,6 +304,14 @@ function RevisionsTab({
   );
 }
 
+function NotSaved(): ReactNode {
+  return (
+    <Typography variant="bodyMedium">
+      {t('features.agentLifecycle.releases.notSaved', 'Save the agent first; its history starts with its first saved version.')}
+    </Typography>
+  );
+}
+
 function ChangeList({ changes }: { readonly changes: readonly ApplicationReleaseChange[] }): ReactNode {
   if (changes.length === 0) {
     return (
@@ -329,67 +340,6 @@ function ChangeList({ changes }: { readonly changes: readonly ApplicationRelease
         </Typography>
       ))}
     </Box>
-  );
-}
-
-function RollbackDialog({
-  projectId,
-  applicationId,
-  target,
-  onClose,
-}: {
-  readonly projectId: string | undefined;
-  readonly applicationId: number | undefined;
-  readonly target: ApplicationRelease | undefined;
-  readonly onClose: () => void;
-}): ReactNode {
-  const [reason, setReason] = useState('');
-  const rollback = useRollbackRelease(projectId, applicationId);
-  const close = (): void => {
-    setReason('');
-    rollback.reset();
-    onClose();
-  };
-  return (
-    <Dialog
-      open={target !== undefined}
-      onClose={close}
-      data-testid="release-rollback-dialog"
-    >
-      <DialogTitle>
-        {t('features.agentLifecycle.releases.rollbackTitle', 'Roll back to release #{{id}}?', { id: target?.id ?? '' })}
-      </DialogTitle>
-      <DialogContent>
-        <Typography variant="bodyMedium">
-          {t(
-            'features.agentLifecycle.releases.rollbackBody',
-            'New runs of this agent will use this release. Runs already in progress keep the release they started with.',
-          )}
-        </Typography>
-        <TextField
-          fullWidth
-          margin="normal"
-          label={t('features.agentLifecycle.releases.reason', 'Reason (recorded in the audit event)')}
-          value={reason}
-          onChange={(event) => setReason(event.target.value.slice(0, 200))}
-        />
-        {rollback.isError && <Alert severity="error">{lifecycleErrorMessage(rollback.error)}</Alert>}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={close}>{t('features.agentLifecycle.releases.cancel', 'Cancel')}</Button>
-        <Button
-          variant="contained"
-          disabled={target === undefined || rollback.isPending}
-          data-testid="release-rollback-confirm"
-          onClick={() => {
-            if (target === undefined) return;
-            rollback.mutate({ releaseId: target.id, reason: reason.trim() }, { onSuccess: close });
-          }}
-        >
-          {t('features.agentLifecycle.releases.rollbackConfirm', 'Roll back')}
-        </Button>
-      </DialogActions>
-    </Dialog>
   );
 }
 

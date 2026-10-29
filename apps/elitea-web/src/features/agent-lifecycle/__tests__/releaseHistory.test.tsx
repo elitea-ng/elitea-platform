@@ -131,4 +131,23 @@ describe('ReleaseHistoryDialog', () => {
     expect(within(list).getByText('replace /llm_settings/temperature: 0.7')).toBeInTheDocument();
     expect(within(list).getByText('The version as it was before its first recorded save.')).toBeInTheDocument();
   });
+
+  it('says the agent is not saved yet instead of loading forever when there is no version', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ReleaseHistoryDialog
+        open
+        projectId="7"
+        applicationId={31}
+        versionId={undefined}
+        onClose={() => undefined}
+      />,
+    );
+
+    await user.click(await screen.findByRole('tab', { name: 'Revisions of this version' }));
+
+    expect(
+      await screen.findByText('Save the agent first; its history starts with its first saved version.'),
+    ).toBeInTheDocument();
+  });
 });
