@@ -4,6 +4,29 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Agent releases, revisions and rollback (#1492)
+
+* **Shared migration 0198** creates `elitea_lifecycle.application_releases`
+  (immutable: an UPDATE trigger refuses every change except withdrawal),
+  `application_release_heads` (the current release per agent) and
+  `version_revisions`. **Shared migration 0199** adds
+  `agent_execution_jobs.release_id`. No data is copied: versions published
+  before the upgrade have no release until they are published again, and
+  run as before.
+* **Published versions are read-only on every route.** The HTTP check that
+  refused saving a published version is now enforced in the repository, so
+  an application PUT that carried a nested published version (which skipped
+  the check) is refused too. Edit a draft and publish it instead.
+* **Every version save writes a revision** in the same transaction. A
+  database built without migration 0198 (for example a hand-made dev
+  database) fails every save until it is migrated.
+* **New 409 answers on run start:** `release_toolkit_drifted` when a run
+  names a release (or the agent was rolled back to one) whose toolkit
+  settings or configurations changed since it was published, and the
+  rollback refusals `application_not_published`,
+  `release_already_published`, `release_withdrawn`. A run of the live
+  published version is never refused for drift.
+
 ## Session policy, whole-run cap and the toolkit-type stop (#1496, #1498)
 
 * **Shared migration 0200** adds to `elitea_auth.browser_sessions` a
