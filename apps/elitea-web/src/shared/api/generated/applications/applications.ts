@@ -4258,7 +4258,7 @@ export const getRollbackApplicationReleaseUrl = (
 };
 
 /**
- * Points the agent's published release at this release. A run that names no release then executes it. The release must be published (not withdrawn), must not already be the published release, and its toolkit pins must still match the live toolkits and configurations. The audit trail records application_release.rolled_back. Requires `models.applications.publish.post`.
+ * Points the agent's published release at this release. A run that names no release then executes it. The release must be published (not withdrawn), must not already be the published release, and its toolkit pins must still match the live toolkits and configurations. The audit trail records application_release.rolled_back. Requires `models.applications.publish.post`; for an agent whose risk tier needs approval (ADR-0040), also `models.applications.governance`.
  * @summary Roll the agent back to an earlier release
  */
 export const rollbackApplicationRelease = async (
@@ -8839,7 +8839,7 @@ export type putReleaseGateSuiteResponse401 = {
 };
 
 export type putReleaseGateSuiteResponse403 = {
-  data: N403Response;
+  data: ErrorResponse;
   status: 403;
 };
 
@@ -8879,7 +8879,7 @@ export const getPutReleaseGateSuiteUrl = (
 };
 
 /**
- * Marks an evaluation dataset of the agent (or a project dataset of no agent) as a release gate suite, with one pass criterion per dimension (at most 5), or unmarks it with release_gate false. A gate runs every gate suite against the candidate version, and the regression suite (and every suite with a no_worse_than criterion) against the current release as well. An agent has at most one regression suite and 10 gate suites. A gate already started keeps the suites it started with. Requires `models.applications.evaluation.dataset.update` and `models.applications.publish.post`.
+ * Marks an evaluation dataset of the agent (or a project dataset of no agent) as a release gate suite, with one pass criterion per dimension (at most 5), or unmarks it with release_gate false. A gate runs every gate suite against the candidate version, and the regression suite (and every suite with a no_worse_than criterion) against the current release as well. An agent has at most one regression suite and 10 gate suites. A gate already started keeps the suites it started with. Requires `models.applications.evaluation.dataset.update` and `models.applications.publish.post`. For an agent whose risk tier needs approval (ADR-0040), a change that loosens the gate (unmark a suite, unset regression, remove a criterion or change its kind, lower min_score, raise max_drop) also requires `models.applications.governance`; adding or tightening does not.
  * @summary Mark or unmark a dataset as a release gate suite
  */
 export const putReleaseGateSuite = async (
@@ -8939,7 +8939,7 @@ export const getPutReleaseGateSuiteQueryKey = (
 
 export const getPutReleaseGateSuiteQueryOptions = <
   TData = Awaited<ReturnType<typeof putReleaseGateSuite>>,
-  TError = ErrorResponse | N401Response | N403Response | ReleaseGateRefusal,
+  TError = ErrorResponse | N401Response | ReleaseGateRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -9000,11 +9000,11 @@ export type PutReleaseGateSuiteQueryResult = NonNullable<
   Awaited<ReturnType<typeof putReleaseGateSuite>>
 >;
 export type PutReleaseGateSuiteQueryError =
-  ErrorResponse | N401Response | N403Response | ReleaseGateRefusal;
+  ErrorResponse | N401Response | ReleaseGateRefusal;
 
 export function usePutReleaseGateSuite<
   TData = Awaited<ReturnType<typeof putReleaseGateSuite>>,
-  TError = ErrorResponse | N401Response | N403Response | ReleaseGateRefusal,
+  TError = ErrorResponse | N401Response | ReleaseGateRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -9034,7 +9034,7 @@ export function usePutReleaseGateSuite<
 };
 export function usePutReleaseGateSuite<
   TData = Awaited<ReturnType<typeof putReleaseGateSuite>>,
-  TError = ErrorResponse | N401Response | N403Response | ReleaseGateRefusal,
+  TError = ErrorResponse | N401Response | ReleaseGateRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -9064,7 +9064,7 @@ export function usePutReleaseGateSuite<
 };
 export function usePutReleaseGateSuite<
   TData = Awaited<ReturnType<typeof putReleaseGateSuite>>,
-  TError = ErrorResponse | N401Response | N403Response | ReleaseGateRefusal,
+  TError = ErrorResponse | N401Response | ReleaseGateRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -9090,7 +9090,7 @@ export function usePutReleaseGateSuite<
 
 export function usePutReleaseGateSuite<
   TData = Awaited<ReturnType<typeof putReleaseGateSuite>>,
-  TError = ErrorResponse | N401Response | N403Response | ReleaseGateRefusal,
+  TError = ErrorResponse | N401Response | ReleaseGateRefusal,
 >(
   projectId: string,
   applicationId: number,

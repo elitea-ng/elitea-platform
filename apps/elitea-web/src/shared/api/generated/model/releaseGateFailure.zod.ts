@@ -56,6 +56,7 @@ export const ReleaseGateFailure = zod
       "gate_score_regressed",
       "gate_regression",
       "gate_schedule_actor_refused",
+      "gate_start_failed",
     ]),
     dataset_id: zod.int().optional(),
     role: zod.enum(["candidate", "baseline"]).optional(),
