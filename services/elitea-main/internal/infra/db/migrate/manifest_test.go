@@ -885,7 +885,19 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// elitea_runtime.execution_interrupt_wakes with the partial unique index
 	// "one active continuation per response", and the open-card index a new
 	// turn supersedes through. No data, no permission.
-	require.EqualValues(t, 202, Head(shared))
+	//
+	// 203 is claimed by the release gate branch (ADR-0040 decision 4).
+	//
+	// 204: shared/0204_agent_lifecycle_governance.sql, the agent registry,
+	// change requests with maker-checker approvals (a CHECK refuses an
+	// approver who is the proposer), attestations and the backfill marker
+	// (ADR-0040 decisions 1, 3, 5 and 6, #1497). Backfills a registry row per
+	// application (medium; low in a personal project) and a legacy_unreviewed
+	// change request per published version. Grants
+	// models.applications.governance to super_admin, admin and the project
+	// admin, and lifecycle.attestations.write and lifecycle.registry.mark_due
+	// to the project admin.
+	require.EqualValues(t, 204, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

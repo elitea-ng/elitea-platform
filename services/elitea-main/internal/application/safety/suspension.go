@@ -91,6 +91,13 @@ const Permission = "safety.suspend"
 // ErrorCode is the typed refusal a covered run start answers.
 const ErrorCode = "execution_suspended"
 
+// CertificationLapsedCode is the refusal of a run of an agent stopped by a
+// suspension of source certification: its certification lapsed under the
+// suspend lapse action (ADR-0040 decision 5). The agent lifecycle
+// recertification routine writes such suspensions and the approval of the
+// agent's recertification resumes them.
+const CertificationLapsedCode = "agent_certification_lapsed"
+
 // PlatformStopConfirmation is the typed confirmation a platform suspension
 // needs, in the UI and on the wire.
 const PlatformStopConfirmation = "STOP"
@@ -232,6 +239,18 @@ type SuspendedError struct {
 	Scope        Scope
 	ProjectID    int64
 	Key          string
+	// Source is who wrote the suspension. A certification suspension
+	// answers CertificationLapsedCode.
+	Source Source
+}
+
+// Code is the typed refusal code: execution_suspended, or
+// agent_certification_lapsed for a suspension of source certification.
+func (e *SuspendedError) Code() string {
+	if e.Source == SourceCertification {
+		return CertificationLapsedCode
+	}
+	return ErrorCode
 }
 
 func (e *SuspendedError) Error() string {
@@ -250,6 +269,9 @@ func (e *SuspendedError) Is(target error) bool { return target == ErrExecutionSu
 
 // Message is the caller-safe sentence of the refusal.
 func (e *SuspendedError) Message() string {
+	if e.Source == SourceCertification {
+		return "This agent's certification lapsed. Recertify the agent to run it again."
+	}
 	switch e.Scope {
 	case ScopePlatform:
 		return "An administrator stopped all agent execution on this platform."
@@ -268,7 +290,7 @@ func (e *SuspendedError) Message() string {
 func (e *SuspendedError) Body() map[string]any {
 	body := map[string]any{
 		"error":         e.Message(),
-		"code":          ErrorCode,
+		"code":          e.Code(),
 		"message":       e.Message(),
 		"scope":         string(e.Scope),
 		"suspension_id": e.SuspensionID,
@@ -307,5 +329,5 @@ func HTTPRefusal(err error) (status int, body map[string]any, ok bool) {
 }
 
 func refusal(s Suspension) *SuspendedError {
-	return &SuspendedError{SuspensionID: s.ID, Scope: s.Target.Scope, ProjectID: s.Target.ProjectID, Key: s.Target.Key()}
+	return &SuspendedError{SuspensionID: s.ID, Scope: s.Target.Scope, ProjectID: s.Target.ProjectID, Key: s.Target.Key(), Source: s.Source}
 }

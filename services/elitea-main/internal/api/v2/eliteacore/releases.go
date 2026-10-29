@@ -55,7 +55,7 @@ func releaseActorID(r *http.Request) int64 {
 // recordPublishedRelease records the release of the version a publish
 // created, in the publish transaction. It answers 0 when the deployment
 // records no releases.
-func (h *Handler) recordPublishedRelease(ctx context.Context, tx pgx.Tx, r *http.Request, projectID string, applicationID, versionID int, sourceVersionID, name string) (int64, error) {
+func (h *Handler) recordPublishedRelease(ctx context.Context, tx pgx.Tx, actorID int64, projectID string, applicationID, versionID int, sourceVersionID, name string) (int64, error) {
 	if h.releases == nil {
 		return 0, nil
 	}
@@ -64,7 +64,7 @@ func (h *Handler) recordPublishedRelease(ctx context.Context, tx pgx.Tx, r *http
 		return 0, fmt.Errorf("project id %q is not a number", projectID)
 	}
 	source, _ := strconv.ParseInt(sourceVersionID, 10, 64)
-	return h.releases.RecordPublishedTx(ctx, tx, project, int64(applicationID), int64(versionID), source, name, releaseActorID(r))
+	return h.releases.RecordPublishedTx(ctx, tx, project, int64(applicationID), int64(versionID), source, name, actorID)
 }
 
 // withdrawReleases withdraws the releases of the versions an unpublish

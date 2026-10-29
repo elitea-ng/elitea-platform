@@ -34,6 +34,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
 	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
@@ -115,6 +116,10 @@ type Handler struct {
 	// releases records agent releases on publish and withdraws them on
 	// unpublish (releases.go, ADR-0040 decision 2). nil records none.
 	releases ReleaseRecorder
+	// governor holds a direct publish to the agent's tier and records its
+	// change request (publish_core.go, ADR-0040 decision 3). nil governs
+	// nothing.
+	governor PublishGovernor
 }
 
 // EventEmitter is the seam to internal/events.Publisher, declared locally so
@@ -1116,188 +1121,36 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Verify version exists and is not 'base'
-	//
-	// `author_id` rides along for the attribution the published row carries.
-	// It is the FALLBACK, not the answer: the person who publishes an agent
-	// need not be the person who wrote the draft, so the acting principal wins
-	// where there is one (publishActorID below).
-	var appID int
-	var vName, vStatus, agentType string
-	var vAuthorID int
-	err := h.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT application_id, name, status, COALESCE(agent_type, ''), COALESCE(author_id, 0) FROM %s.application_versions WHERE id = $1`, s), versionID).Scan(&appID, &vName, &vStatus, &agentType, &vAuthorID)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "version not found"})
-		return
-	}
-	if agentType == "pipeline" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "pipeline_not_publishable", "msg": "pipeline agents cannot be published"})
-		return
-	}
-	if vStatus == "published" {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "version is already published"})
+	// The checks before the clone: the version, its name, its category, its
+	// model and the validation gate (publish_core.go).
+	appID, vAuthorID, refusal := h.publishPrecheck(ctx, s, projectID, versionID,
+		body.VersionName, body.Category, publishValidation{token: body.ValidationToken, callerID: publishCallerID(r)})
+	if refusal != nil {
+		writeJSON(w, refusal.Status, refusal.Body)
 		return
 	}
 
-	// Pre-check: does a version with this name already exist for this application?
-	var nameExists bool
-	_ = h.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT EXISTS(SELECT 1 FROM %s.application_versions WHERE application_id = $1 AND name = $2)`, s),
-		appID, body.VersionName).Scan(&nameExists) // failure leaves nameExists=false, safe to continue
-	if nameExists {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-			"error": "validation_failed",
-			"validation_result": map[string]any{
-				"issues": []map[string]any{
-					{"rule": "version_name_exists_in_source", "field": "version_name", "issue": "version name already exists", "source": "deterministic"},
-				},
-			},
-		})
-		return
-	}
-
-	// Validate category if provided
-	validCategories := map[string]bool{
-		"Business Analyst": true, "Quality Assurance": true, "Development": true,
-		"DevOps": true, "Project Management": true, "Knowledge & Documentation": true,
-		"Elitea": true, "Epam": true, "Other": true,
-	}
-	if body.Category != "" && !validCategories[body.Category] {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-			"error": "validation_failed",
-			"validation_result": map[string]any{
-				"issues": []map[string]any{
-					{"rule": "invalid_category", "field": "category", "issue": "unknown category", "source": "deterministic"},
-				},
-			},
-		})
-		return
-	}
-
-	// Hard-check: the model must come from the public project (runs before
-	// validation).
-	//
-	// ONE project, resolved once. This used to accept `PUBLIC_PROJECT_ID`
-	// (default 1) OR `SHARED_PROJECT_ID` (default 4), which made the guard
-	// admit a second project no other surface knew about and that the
-	// reference does not have: legacy `_check_shared_llm` compares against a
-	// single `public_project_id`. Both names still resolve, as deprecated
-	// aliases of ELITEA_AI_PROJECT_ID — see internal/publicproject.
-	publicProjID := publicproject.IDString()
-	var llmSettingsStr *string
-	_ = h.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT llm_settings::text FROM %s.application_versions WHERE id = $1`, s), versionID).Scan(&llmSettingsStr) // failure leaves nil, safe
-	if llmSettingsStr != nil {
-		var llmSettings map[string]any
-		_ = json.Unmarshal([]byte(*llmSettingsStr), &llmSettings) // DB jsonb column; malformed means empty map
-		if modelProjID, ok := llmSettings["model_project_id"]; ok && modelProjID != nil {
-			mpid := fmt.Sprintf("%v", modelProjID)
-			if mpid != publicProjID {
-				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "llm_not_shared"})
-				return
-			}
-			// The model IS the catalogue's — and the catalogue's own models are
-			// no longer one set. A platform model carries a GRANT, and a
-			// published agent is offered to every project that reads the
-			// catalogue, so it may only name a model granted to all of them.
-			// Same code, because it is the same finding; the `msg` names the
-			// scope that was found. See publish_model_grant.go.
-			if refusal := h.publishGrantRefusal(ctx, llmSettings); refusal != "" {
-				writeJSON(w, http.StatusBadRequest, map[string]any{
-					"error": "llm_not_shared", "msg": refusal,
-				})
-				return
-			}
-		}
-	}
-
-	// Validation gate: if no token provided, run inline validation
-	if body.ValidationToken == "" {
-		valResult, _ := h.runPublishValidation(ctx, s, projectID, publishCallerID(r), versionID, body.VersionName)
-		if valResult != nil && valResult["status"] == "FAIL" {
-			criticals, _ := valResult["critical_issues"].([]map[string]any)
-			issues := make([]map[string]any, len(criticals))
-			for i, c := range criticals {
-				issues[i] = map[string]any{"rule": c["field"], "message": c["issue"]}
-				if r, ok := c["rule"]; ok {
-					issues[i]["rule"] = r
-				}
-			}
-			valResult["issues"] = issues
-			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-				"error":             "validation_failed",
-				"validation_result": valResult,
-			})
-			return
-		}
-	} else {
-		// The token is VERIFIED, not merely shaped.
-		//
-		// This used to accept any string of sixteen or more lowercase
-		// hexadecimal characters, which made the quality gate optional for
-		// anyone willing to type one: the token was never recorded, never
-		// bound to a version and never looked up (issue 855). It is now a
-		// signed grant that names the version it was issued for and carries
-		// its own expiry — see publish_validation_token.go.
-		if verdict := verifyPublishValidationToken(body.ValidationToken, versionID,
-			h.publishTokenContentHash(ctx, s, versionID), time.Now()); verdict != publishTokenValid {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": "validation_token_invalid",
-				"msg":   publishTokenRefusal(verdict),
-			})
+	// Agent lifecycle governance (ADR-0040 decision 3): a tier that needs
+	// approval publishes only through an approved change request, so a
+	// direct publish answers 409 change_request_required before anything is
+	// written. The transaction below checks the tier again under the
+	// registry row's lock.
+	if h.governor != nil {
+		if err := h.governor.CheckDirectPublish(ctx, parseProjectID(projectID), int64(appID)); err != nil {
+			writeGovernanceError(ctx, w, err)
 			return
 		}
 	}
-
-	// Clone: insert a new version with status 'published' using same application_id
-	//
-	// The overlay is MARSHALLED rather than formatted. It used to be built with
-	// fmt.Sprintf, which put a caller-supplied category straight inside a JSON
-	// string literal; the category is whitelisted above, so nothing could reach
-	// it, but a second key added later would not have been.
-	//
-	// `published_by` is the key the operator's published-agents dashboard reads
-	// (admin_published_agents.go). The SKILL publish path has always written it
-	// (internal/api/v2/skillpublish/publish.go); this path wrote only
-	// `source_version_id` and `category`, so the dashboard's "published by"
-	// column was null for every agent on every deployment, permanently, and an
-	// operator could not tell an unattributed publish from an unmeasured one.
-	// It rides into the catalogue twin as well, because the twin copies this
-	// row's meta (catalog_mirror.go).
-	var cloneID int
-	overlay := map[string]any{"source_version_id": versionID}
-	if publishedBy, ok := publishActorID(ctx, vAuthorID); ok {
-		overlay["published_by"] = publishedBy
-	}
-	if body.Category != "" {
-		overlay["category"] = body.Category
-	}
-	metaOverlayJSON, overlayErr := json.Marshal(overlay)
-	if overlayErr != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent"})
-		return
-	}
-	metaOverlay := string(metaOverlayJSON)
-	cloneQ := fmt.Sprintf(`
-		INSERT INTO %s.application_versions
-			(application_id, name, status, author_id, llm_settings, instructions,
-			 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, created_at)
-		SELECT application_id, $2, 'published', author_id, llm_settings, instructions,
-			   conversation_starters, welcome_message, agent_type,
-			   COALESCE(meta, '{}'::jsonb) || $3::jsonb,
-			   pipeline_settings,
-			   now() AT TIME ZONE 'UTC'
-		FROM %s.application_versions WHERE id = $1
-		RETURNING id`, s, s)
 
 	// A publish is all-or-nothing, for the reason ForkAgent is
-	// (internal/api/oapiserver/publishing.go). The version clone and the two
-	// attachment copies below run in one transaction. The tool copy used to run on
-	// the pool with its error discarded, so a failed copy published a version and
+	// (internal/api/oapiserver/publishing.go). The version clone, the two
+	// attachment copies, the catalogue twin, the sub-agent copies and the
+	// release run in one transaction. The tool copy used to run on the pool
+	// with its error discarded, so a failed copy published a version and
 	// answered 200. The user then saw a published agent that had lost every
-	// toolkit, and nothing was logged. A published shell is worse than a refusal
-	// the caller can retry, because the caller cannot see that it must retry.
+	// toolkit, and nothing was logged. A published shell is worse than a
+	// refusal the caller can retry, because the caller cannot see that it
+	// must retry.
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent"})
@@ -1305,100 +1158,30 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op once Commit has run
 
-	err = tx.QueryRow(ctx, cloneQ, versionID, body.VersionName, metaOverlay).Scan(&cloneID)
-	if err != nil {
-		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "_application_version_name_uc") {
-			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-				"error": "validation_failed",
-				"validation_result": map[string]any{
-					"issues": []map[string]any{
-						{"rule": "version_name_exists_in_source", "field": "version_name", "issue": "version name already exists", "source": "deterministic"},
-					},
-				},
-			})
+	publishedBy, hasPublisher := publishActorID(ctx, vAuthorID)
+	outcome, refusal := h.publishTx(ctx, tx, publishWrite{
+		schema: s, projectID: projectID, appID: appID, versionID: versionID,
+		versionName: body.VersionName, category: body.Category,
+		publishedBy: publishedBy, hasPublisher: hasPublisher, releaseActorID: releaseActorID(r),
+	})
+	if refusal != nil {
+		writeJSON(w, refusal.Status, refusal.Body)
+		return
+	}
+
+	// The change request of this direct publish, approved by the publisher
+	// alone, recorded in the same transaction for the audit trail.
+	if h.governor != nil {
+		source, _ := strconv.ParseInt(versionID, 10, 64)
+		if err := h.governor.RecordDirectPublishTx(ctx, tx, agentlifecycle.DirectPublish{
+			ProjectID: parseProjectID(projectID), ApplicationID: int64(appID),
+			SourceVersionID: source, PublishedVersionID: int64(outcome.cloneID),
+			ReleaseID: outcome.releaseID, VersionName: body.VersionName, Category: body.Category,
+			ActorID: releaseActorID(r),
+		}); err != nil {
+			writeGovernanceError(ctx, w, err)
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-
-	// Clone entity_tool_mapping rows from source version to new published version.
-	// The copy keeps the source `entity_type` and `entity_id`: the clone above
-	// selects the source `application_id`, so the published version belongs to the
-	// same agent, and the chat read joins `entity_id` to that application
-	// (internal/db/queries/agent_chat.sql:107).
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`
-		INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at)
-		SELECT $2, entity_id, entity_type, tool_id, selected_tools, now() AT TIME ZONE 'UTC'
-		FROM %s.entity_tool_mapping WHERE entity_version_id = $1`, s, s), versionID, cloneID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent tool attachments"})
-		return
-	}
-
-	// Clone entity_skill_mapping rows from source version to new published version.
-	// Publish copied tool mappings only, so a published agent carried no skills
-	// (#351). Fork sets the precedent it now matches
-	// (internal/api/oapiserver/publishing.go:149).
-	//
-	// The table has no `entity_id` column (001_initial.sql:422-432): a skill
-	// attachment is keyed by (entity_version_id, skill_id, entity_type) alone.
-	// `entity_type` is carried from the source row rather than defaulted, because
-	// it is part of that key and the chat read matches on it
-	// (internal/db/queries/agent_chat.sql:132). `skill_version_id` rides along
-	// because the same read LEFT JOINs it for the skill instructions — dropping it
-	// publishes a named skill with an empty body.
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`
-		INSERT INTO %s.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
-		SELECT $2, entity_type, skill_id, skill_version_id, now() AT TIME ZONE 'UTC'
-		FROM %s.entity_skill_mapping WHERE entity_version_id = $1`, s, s), versionID, cloneID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent skill attachments"})
-		return
-	}
-
-	// The catalogue twin, in the SAME transaction as the clone.
-	//
-	// Without it a publish from any project other than the public one wrote a
-	// `published` row into a schema ELITEA Catalog never reads: the Published
-	// tab listed the agent and the catalogue stayed empty, with no error on
-	// either side. See catalog_mirror.go for why the twin carries no tool or
-	// skill attachments.
-	twin, mirrorErr := mirrorPublishedVersion(ctx, tx, s, projectID, appID, cloneID, body.VersionName, body.Category)
-	if mirrorErr != nil {
-		if errors.Is(mirrorErr, errCatalogVersionNameTaken) {
-			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-				"error": "validation_failed",
-				"validation_result": map[string]any{
-					"issues": []map[string]any{
-						{"rule": "version_name_exists_in_catalog", "field": "version_name", "issue": "version name already published to the catalog", "source": "deterministic"},
-					},
-				},
-			})
-			return
-		}
-		slog.ErrorContext(ctx, "publish: catalog mirror failed", "schema", s, "version_id", cloneID, "error", mirrorErr)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent to the catalog"})
-		return
-	}
-
-	// Embed sub-agents: clone application_tools of type 'application'
-	// recursively, in the publish transaction. The release below pins the
-	// embedded copies, so they commit with it or not at all.
-	if err := h.embedSubAgents(ctx, tx, s, projectID, versionID, cloneID); err != nil {
-		slog.ErrorContext(ctx, "publish: embed the sub-agents", "schema", s, "version_id", cloneID, "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent sub-agents"})
-		return
-	}
-
-	// The release of this publish (ADR-0040 decision 2), recorded last in
-	// the same transaction, so its digest is the definition a run reads and
-	// a publish never commits without its release: a failure here answers
-	// 500 and leaves the agent as it was, and a retry publishes again.
-	releaseID, err := h.recordPublishedRelease(ctx, tx, r, projectID, appID, cloneID, versionID, body.VersionName)
-	if err != nil {
-		slog.ErrorContext(ctx, "publish: record the agent release",
-			"project_id", projectID, "application_id", appID, "version_id", cloneID, "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to record the agent release"})
-		return
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -1406,46 +1189,8 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// `public_agent_id` and `public_version_id` name the rows in the AUTHOR's
-	// schema, which is what they have always named and what
-	// publish_tool_copy_postgres_integration_test.go and
-	// publish_skill_copy_postgres_integration_test.go read them for. The
-	// catalogue rows are a different pair, so they get their own two keys
-	// rather than a changed meaning of these.
-	//
-	// The catalogue keys are OMITTED when there is no twin — that is, when the
-	// author already stands in the public project and the clone above IS the
-	// catalogue row. A zero would read as "the catalogue has row 0".
-	// `source_version_id` names the DRAFT this publish was made from, and it
-	// agrees with the key of the same name in the published row's own stored
-	// meta (the overlay above). It used to repeat `public_version_id` — the id
-	// of the row this request had just created — so a client following the
-	// response back to the version the author keeps editing arrived at the
-	// published copy instead, and the two answers to "where did this come
-	// from?" disagreed inside one response.
-	response := map[string]any{
-		"public_agent_id":   strconv.Itoa(appID),
-		"public_version_id": strconv.Itoa(cloneID),
-		"version_name":      body.VersionName,
-		"source_version_id": versionID,
-	}
-	if twin.VersionID != 0 {
-		response["catalog_agent_id"] = strconv.Itoa(twin.ApplicationID)
-		response["catalog_version_id"] = strconv.Itoa(twin.VersionID)
-	}
-	// Omitted only when the deployment records no releases.
-	if releaseID > 0 {
-		response["release_id"] = strconv.FormatInt(releaseID, 10)
-	}
-	if h.events != nil {
-		h.events.Emit(ctx, projectID, "agent.version.published", map[string]any{
-			"application_id":     appID,
-			"published_agent_id": cloneID,
-			"source_version_id":  versionID,
-			"version_name":       body.VersionName,
-		})
-	}
-	writeJSON(w, http.StatusOK, response)
+	h.announcePublished(ctx, projectID, appID, outcome.cloneID, versionID, body.VersionName)
+	writeJSON(w, http.StatusOK, publishResponse(appID, versionID, body.VersionName, outcome))
 }
 
 // deleteEmbeddedSubAgents removes the EMBEDDED COPIES a publish made under

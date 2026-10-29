@@ -499,6 +499,35 @@ WHERE r.tenant_project_id = $1 AND r.application_id = $2 AND r.id = $3`,
 	return release, nil
 }
 
+// ReleaseDrifted reports whether a release no longer reconstructs: a
+// pinned toolkit or configuration changed since it was recorded
+// (release_toolkit_drifted). The recertification routine reads it for the
+// certified release of every certified agent (ADR-0040 decision 5). A
+// release that is not there is not drifted.
+func (s *AgentReleases) ReleaseDrifted(ctx context.Context, projectID, applicationID, releaseID int64) (bool, error) {
+	if s == nil || s.projects == nil {
+		return false, errors.New("agent releases: no database")
+	}
+	drifted := false
+	err := s.projects.WithinProjectTx(ctx, projectID, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx sqlExecutor) error {
+		release, err := readRelease(ctx, tx, projectID, applicationID, releaseID, true)
+		if errors.Is(err, agentrelease.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		_, err = reconstructRelease(ctx, tx, s.publicProjectID, release)
+		var drift *agentrelease.DriftError
+		if errors.As(err, &drift) || errors.Is(err, agentrelease.ErrDefinitionUnreadable) {
+			drifted = true
+			return nil
+		}
+		return err
+	})
+	return drifted, err
+}
+
 // WithdrawVersions marks the releases of the unpublished versions withdrawn
 // and moves each affected application's published release to its newest
 // release still published, or removes it when none is.
