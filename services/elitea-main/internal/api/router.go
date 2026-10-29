@@ -65,6 +65,7 @@ import (
 	v2projectinfo "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
 	v2projects "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projects"
 	v2promptcontextreads "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
+	v2releasegates "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/releasegates"
 	v2retention "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/retention"
 	v2safety "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/safety"
 	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
@@ -110,6 +111,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/releasegate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimclient"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimdirectory"
 	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
@@ -437,6 +439,9 @@ type RouterConfig struct {
 	// invisibly absent. The run START route reports the row it wrote either
 	// way, so a queued run is never claimed to be running.
 	EvalOrchestrator v2evaluation.Enqueuer
+	// ReleaseGate is the evaluation release gate (ADR-0040 decision 4). Nil
+	// leaves its four routes registered, answering 503.
+	ReleaseGate *releasegate.Gate
 	// OnProjectProvisioner, when set, is called once with the one shared project
 	// provisioner, after it is built. The process uses it to start the
 	// project-deletion reconciler (#1211) over the same provisioner the routes
@@ -4012,6 +4017,25 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Post("/eval_run_cancel/prompt_lib/{projectID}/{runID}", runHandler.Cancel)
 					r.With(requireRunRead).
 						Get("/eval_results/prompt_lib/{projectID}/{runID}", runHandler.Results)
+				}
+
+				// The evaluation release gate (ADR-0040 decision 4). Marking
+				// a dataset as a gate suite changes what a release must pass,
+				// so the write takes the publish permission as well as the
+				// dataset update permission. The reads take the evaluation
+				// reads. A gate is started and overridden by the change
+				// request flow, not by a route.
+				{
+					gates := v2releasegates.NewHandler(cfg.ReleaseGate)
+					r.With(evaluationGate(v2evaluation.PermissionDatasetRead)).
+						Get(v2releasegates.SuitesPath, gates.ListSuites)
+					r.With(evaluationGate(v2evaluation.PermissionDatasetUpdate),
+						projectPermission("models.applications.publish.post")).
+						Put(v2releasegates.SuitePath, gates.PutSuite)
+					r.With(evaluationGate(v2evaluation.PermissionRunRead)).
+						Get(v2releasegates.GatesPath, gates.ListGates)
+					r.With(evaluationGate(v2evaluation.PermissionRunRead)).
+						Get(v2releasegates.GatePath, gates.GetGate)
 				}
 
 				// Conversations

@@ -90,6 +90,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/facade"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
 	providerproxy "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/proxy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/releasegate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
@@ -2619,6 +2620,19 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		evalOrchestrator = orchestrator
 	}
 
+	// The evaluation release gate (ADR-0040 decision 4) starts its runs
+	// through the run route's starter, onto the orchestrator above. Its
+	// routine settles finished gates and starts the scheduled
+	// re-evaluations (decision 5).
+	var releaseGate *releasegate.Gate
+	if pool != nil {
+		releaseGate, err = composeReleaseGate(ctx, pool, evalRunsRepo, evalDimensionsRepository(pool),
+			evalOrchestrator, legacyrbac.NewPostgresResolver(pool), logger)
+		if err != nil {
+			return err
+		}
+	}
+
 	// The admin LLM Proxy section reads the gateway's own enforcement status.
 	// It uses the shared gateway client; the GovernanceStatus call carries no
 	// identity, because the gateway verifies none on it.
@@ -3015,6 +3029,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		EvalDatasetsRepo: evalDatasetsRepository(pool),
 		EvalRunsRepo:     evalRunsRepo,
 		EvalOrchestrator: evalOrchestrator,
+		ReleaseGate:      releaseGate,
 		// WebhookRepo is the sixth instance of the same defect, and it hid one
 		// step deeper than the other five. Its gate mounts a subrouter —
 		// `r.Mount("/webhooks/prompt_lib/{projectID}", webhook.NewHandler(...).Routes())`

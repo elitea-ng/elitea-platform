@@ -841,7 +841,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // getApplicationRelease, rollbackApplicationRelease and
 // listVersionRevisions, the agent releases and draft revisions. No web
 // code calls them yet, so the manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 417;
+// 417 -> 421 (issue 1497, ADR-0040 decision 4): listReleaseGateSuites,
+// putReleaseGateSuite, listReleaseGates and getReleaseGate, the evaluation
+// release gate. No web code calls them yet, so the manifest count is
+// unchanged.
+const GENERATED_OPERATION_COUNT = 421;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
