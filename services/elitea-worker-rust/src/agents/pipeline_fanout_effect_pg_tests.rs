@@ -765,7 +765,10 @@ async fn postgres_fanout_agent_branch_asks_and_resumes_with_the_answer() {
     let (members, cards) = run_deciding(invocation, &|card| {
         let key = card["interrupt_key"].as_str().expect("card key");
         match (card["fanout_v1"]["member"].as_str(), card["kind"].as_str()) {
-            (Some("second"), Some("ask_user")) => ledger.decide(key, "answer", Some("Staging")),
+            (Some("second"), Some("ask_user")) => {
+                ledger.decide(key, "answer", Some("Staging"));
+                decided.notify_one();
+            }
             other => panic!("unexpected card {other:?}"),
         }
         decided.notify_one();

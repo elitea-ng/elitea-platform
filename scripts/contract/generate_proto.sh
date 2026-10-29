@@ -21,27 +21,34 @@ check_version() {
   fi
 }
 
-check_version "buf" "$(buf --version)" "1.71.0"
+# The versions come from libs/proto/toolchain.lock, the one place they are
+# pinned (CI installs from it, and checks pyproject.toml agrees with it).
+pinned() {
+  "${python_bin}" -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' \
+    "${proto_root}/toolchain.lock" "$1"
+}
+
+check_version "buf" "$(buf --version)" "$(pinned buf)"
 check_version \
   "protoc-gen-go" \
   "$(protoc-gen-go --version | awk '{print $2}')" \
-  "v1.36.11"
+  "v$(pinned protoc-gen-go)"
 check_version \
   "protoc-gen-go-grpc" \
   "$(protoc-gen-go-grpc --version | awk '{print $2}')" \
-  "1.5.1"
+  "$(pinned protoc-gen-go-grpc)"
 check_version \
   "grpcio-tools" \
   "$(PYTHONPATH="${python_tools}${PYTHONPATH:+:${PYTHONPATH}}" "${python_bin}" -c 'import importlib.metadata as m; print(m.version("grpcio-tools"))')" \
-  "1.84.1"
+  "$(pinned grpcio-tools)"
 check_version \
   "grpcio-tools protoc" \
   "$(PYTHONPATH="${python_tools}${PYTHONPATH:+:${PYTHONPATH}}" "${python_bin}" -m grpc_tools.protoc --version | awk '{print $2}')" \
-  "35.1"
+  "$(pinned grpcio-tools-protoc)"
 check_version \
   "protobuf Python runtime" \
   "$(PYTHONPATH="${python_tools}${PYTHONPATH:+:${PYTHONPATH}}" "${python_bin}" -c 'import importlib.metadata as m; print(m.version("protobuf"))')" \
-  "7.36.2"
+  "$(pinned protobuf-python)"
 
 cd "${proto_root}"
 buf lint .

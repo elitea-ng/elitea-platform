@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll } from 'vitest';
 import { setupServer } from 'msw/node';
+import { cleanup, configure } from '@testing-library/react';
 
 // [S1] `toBeInTheDocument`/`toHaveTextContent`/etc. — every `shared/ui`
 // component test in this unit asserts against the rendered DOM via these
@@ -21,6 +22,16 @@ import '@testing-library/jest-dom/vitest';
 import { installWebStorageShim } from '@/shared/lib/webstorage.testshim';
 
 import { handlers } from './msw/handlers/index';
+
+// `findBy*`/`waitFor` give up after 1 s by default. CI runs this suite in five
+// shards on 4-vCPU runners with V8 coverage on, which makes a render several
+// times slower than on a laptop, so a correct test that waits for a lazy chunk
+// or a chained query timed out on whichever file the shard split happened to
+// load heavily (#1531 hit two different files on consecutive runs). One
+// generous ceiling here keeps that out of individual tests: a passing wait
+// still returns as soon as its assertion holds, and only a genuinely failing
+// one takes longer to report.
+configure({ asyncUtilTimeout: 5_000 });
 
 const shimmedStorages = installWebStorageShim();
 
@@ -112,6 +123,14 @@ afterEach(() => {
   // test — an isolation leak that shows up as tests passing alone and failing
   // in-suite (WorkspaceComposer's composer drafts did, on the vitest 5 bump).
   // So clear BOTH stores, whoever provides them, not only the shimmed ones.
+  //
+  // Unmount first. A component may write storage as it unmounts (the composer
+  // saves its draft then), and testing-library's own unmount hook is an
+  // afterEach whose order against this one depends on import order: importing
+  // `@testing-library/react` here, for `configure`, put it after this clear,
+  // and every WorkspaceComposer test started with the previous test's draft.
+  // `cleanup()` is idempotent, so its own hook running later is harmless.
+  cleanup();
   for (const name of new Set<string>([...shimmedStorages, 'localStorage', 'sessionStorage'])) {
     try {
       (globalThis as unknown as Record<string, Storage | undefined>)[name]?.clear();

@@ -112,6 +112,26 @@ jobs:
         if: steps.changes.outputs.changed == 'true'
         with:
           python-version: "3.12"
+      # Dependabot bumps grpcio, grpcio-tools and protobuf in pyproject.toml
+      # only. The generator and this job install from toolchain.lock, so a
+      # bump that skips the lock would pass here with stubs from the old
+      # version. Both files must name the same versions.
+      - name: pyproject.toml pins match toolchain.lock
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          lock=libs/proto/toolchain.lock
+          status=0
+          for pin in grpcio grpcio-tools protobuf; do
+            key="$pin"
+            [ "$pin" = protobuf ] && key=protobuf-python
+            want="$(jq -r --arg key "$key" '.[$key]' "$lock")"
+            got="$(grep -oE "\"${pin}==[^\"]+\"" libs/proto/pyproject.toml | sed -E 's/.*==([^"]+)"/\1/')"
+            if [ "$got" != "$want" ]; then
+              echo "::error file=libs/proto/pyproject.toml::${pin} is ${got:-unpinned} in pyproject.toml but ${want} in toolchain.lock. Set toolchain.lock (and grpcio-tools-protoc to the protoc that grpcio-tools bundles) to the new version, then run scripts/contract/generate_proto.sh and commit the stubs."
+              status=1
+            fi
+          done
+          exit "$status"
       - name: Install the pinned protobuf toolchain
         if: steps.changes.outputs.changed == 'true'
         run: |
