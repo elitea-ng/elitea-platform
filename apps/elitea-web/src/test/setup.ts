@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll } from 'vitest';
 import { setupServer } from 'msw/node';
-import { configure } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 
 // [S1] `toBeInTheDocument`/`toHaveTextContent`/etc. — every `shared/ui`
 // component test in this unit asserts against the rendered DOM via these
@@ -123,6 +123,14 @@ afterEach(() => {
   // test — an isolation leak that shows up as tests passing alone and failing
   // in-suite (WorkspaceComposer's composer drafts did, on the vitest 5 bump).
   // So clear BOTH stores, whoever provides them, not only the shimmed ones.
+  //
+  // Unmount first. A component may write storage as it unmounts (the composer
+  // saves its draft then), and testing-library's own unmount hook is an
+  // afterEach whose order against this one depends on import order: importing
+  // `@testing-library/react` here, for `configure`, put it after this clear,
+  // and every WorkspaceComposer test started with the previous test's draft.
+  // `cleanup()` is idempotent, so its own hook running later is harmless.
+  cleanup();
   for (const name of new Set<string>([...shimmedStorages, 'localStorage', 'sessionStorage'])) {
     try {
       (globalThis as unknown as Record<string, Storage | undefined>)[name]?.clear();
