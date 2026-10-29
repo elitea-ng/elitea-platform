@@ -130,9 +130,15 @@ impl Fixture {
 }
 
 fn hash_file(path: &Path) -> Option<String> {
-    std::fs::read(path)
-        .ok()
-        .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
+    use std::fmt::Write as _;
+    std::fs::read(path).ok().map(|bytes| {
+        Sha256::digest(bytes)
+            .iter()
+            .fold(String::with_capacity(64), |mut hex, byte| {
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            })
+    })
 }
 
 fn walk(root: &Path, dir: &Path, skip_git: bool, out: &mut BTreeMap<String, String>) {

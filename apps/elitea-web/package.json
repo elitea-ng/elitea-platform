@@ -126,7 +126,7 @@
     "istanbul-reports": "3.2.0",
     "jsdom": "30.0.1",
     "knip": "6.43.0",
-    "msw": "3.0.3",
+    "msw": "2.15.0",
     "orval": "8.33.0",
     "oxlint": "1.89.0",
     "oxlint-tsgolint": "7.0.2005",
@@ -141,5 +141,10 @@
     "vite-plugin-svgr": "5.2.0",
     "vite-tsconfig-paths": "6.1.1",
     "vitest": "5.0.5"
+  },
+  "overrides": {
+    "@hookform/resolvers": {
+      "ajv-formats": "$ajv-formats"
+    }
   }
 }

@@ -22,7 +22,7 @@ encoding_rs = "0.8.42"
 # HTML to markdown, as the SDK's `markdownify` does. Defaults off: no metadata
 # pass, no image codecs. The version agent-runtime locks.
 html-to-markdown-rs = { version = "3.17.2", default-features = false, optional = true }
-tokio = { version = "1.53.1", features = ["rt"], optional = true }
+tokio = { version = "1.54.1", features = ["rt"], optional = true }
 # Pinned exactly, like the grammars (libs/rust/README.md): extraction output
 # is a function of the version, and the crate moves fast. Only the formats
 # below: pure-Rust PDF (no PDFium), Office (DOCX/PPTX/ODT/RTF/EPUB, legacy

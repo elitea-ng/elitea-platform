@@ -38,7 +38,7 @@ class WorkspaceRunSpecV1(_message.Message):
     pids_limit: int
     wall_seconds: int
     egress_proxy: bool
-    def __init__(self, revision: _Optional[int] = ..., name: _Optional[str] = ..., workspace_bytes: _Optional[int] = ..., egress: bool = ..., cpu_millis: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., pids_limit: _Optional[int] = ..., wall_seconds: _Optional[int] = ..., egress_proxy: bool = ...) -> None: ...
+    def __init__(self, revision: _Optional[int] = ..., name: _Optional[str] = ..., workspace_bytes: _Optional[int] = ..., egress: _Optional[bool] = ..., cpu_millis: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., pids_limit: _Optional[int] = ..., wall_seconds: _Optional[int] = ..., egress_proxy: _Optional[bool] = ...) -> None: ...
 
 class StartWorkspaceRunRequestV1(_message.Message):
     __slots__ = ("grant", "spec")
@@ -52,7 +52,7 @@ class StartWorkspaceRunResponseV1(_message.Message):
     __slots__ = ("created",)
     CREATED_FIELD_NUMBER: _ClassVar[int]
     created: bool
-    def __init__(self, created: bool = ...) -> None: ...
+    def __init__(self, created: _Optional[bool] = ...) -> None: ...
 
 class WorkspaceRunLimitsV1(_message.Message):
     __slots__ = ("max_files", "max_file_bytes", "max_total_bytes")
@@ -86,7 +86,7 @@ class WorkspaceRunExecInputV1(_message.Message):
     open: WorkspaceRunExecOpenV1
     stdin: bytes
     stdin_end: bool
-    def __init__(self, open: _Optional[_Union[WorkspaceRunExecOpenV1, _Mapping]] = ..., stdin: _Optional[bytes] = ..., stdin_end: bool = ...) -> None: ...
+    def __init__(self, open: _Optional[_Union[WorkspaceRunExecOpenV1, _Mapping]] = ..., stdin: _Optional[bytes] = ..., stdin_end: _Optional[bool] = ...) -> None: ...
 
 class WorkspaceRunExecExitV1(_message.Message):
     __slots__ = ("exit_code", "failure_code")
@@ -116,4 +116,4 @@ class DestroyWorkspaceRunResponseV1(_message.Message):
     __slots__ = ("destroyed",)
     DESTROYED_FIELD_NUMBER: _ClassVar[int]
     destroyed: bool
-    def __init__(self, destroyed: bool = ...) -> None: ...
+    def __init__(self, destroyed: _Optional[bool] = ...) -> None: ...

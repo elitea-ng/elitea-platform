@@ -75,9 +75,16 @@ export function CopyToClipboardButton({
     >
       <Typography variant="bodyMedium">{label}</Typography>
       {tooltip !== undefined ? (
+        // `describeChild`: the button already has a visible label (the value),
+        // so the tooltip DESCRIBES it (aria-describedby) instead of replacing
+        // its name with an aria-label. Without it the accessible name
+        // ("Copy to clipboard") does not contain the visible text, which is
+        // WCAG 2.5.3 Label in Name (axe `label-content-name-mismatch`): a
+        // voice-control user who says what they see cannot reach the button.
         <Tooltip
           title={tooltip}
           placement="top"
+          describeChild
         >
           {button}
         </Tooltip>

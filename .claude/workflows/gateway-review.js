@@ -12,7 +12,7 @@ export const meta = {
 // args = diff base ref (default: origin/main). Pass a ref to review a branch.
 const BASE = (typeof args === 'string' && args.trim()) ? args.trim() : 'origin/main'
 const ROOT = 'services/elitea-llm-gateway'
-const BUILD = `Gateway is a standalone go1.26.4 module — build/test with \`cd ${ROOT} && GOWORK=off go test -race ./...\` and \`GOWORK=off golangci-lint run ./...\`. It is NOT in go.work. elitea-main/scheduler are in go.work. Money is int64 nano-USD (never float). Authoritative policy: ${ROOT}/CLAUDE.md + DECISIONS.md.`
+const BUILD = `Gateway is a standalone go1.27 module (go.mod 1.27.3; the workspace is on 1.26) — build/test with \`cd ${ROOT} && GOWORK=off go test -race ./...\` and \`GOWORK=off golangci-lint run ./...\`. It is NOT in go.work. elitea-main/scheduler are in go.work. Money is int64 nano-USD (never float). Authoritative policy: ${ROOT}/CLAUDE.md + DECISIONS.md.`
 const CONTEXT = `Review the CHANGED code on this branch (git diff against ${BASE}). This is the LiteLLM->Bifrost gateway (budget enforcement + edge). Prior review found bugs in three recurring classes — hunt them specifically: (1) BUILT-BUT-NOT-WIRED: a component/lifecycle method exists + unit-tests green but is never called from the composition root (cmd/.../main.go) — verify every Start/Drain/gate is actually invoked; (2) HELM ENV DRIFT: code reads an env var the chart can't set; (3) UNMETERED PATH: a /llm endpoint that skips the budget gate. Also: money-path precision, fail-closed policy, trust boundary, spec §2.5 error shapes, concurrency, and TEST QUALITY (tests that pass without proving their claim). Be adversarial: file:line + a concrete failing scenario. Empty findings for a sound area is a valid, useful answer.`
 
 const F_ITEM = {

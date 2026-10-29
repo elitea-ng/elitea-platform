@@ -36,7 +36,12 @@ fn embedded_prompts_match_the_manifest() {
         .map(|(file, text)| {
             (
                 (*file).to_owned(),
-                format!("{:x}", Sha256::digest(text.as_bytes())),
+                Sha256::digest(text.as_bytes())
+                    .iter()
+                    .fold(String::new(), |mut hex, byte| {
+                        let _ = std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"));
+                        hex
+                    }),
             )
         })
         .collect();

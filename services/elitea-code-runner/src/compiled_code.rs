@@ -37,7 +37,7 @@ impl ContentSha256 {
         Ok(Self(value))
     }
     pub(crate) fn of(bytes: &[u8]) -> Self {
-        Self(format!("{:x}", Sha256::digest(bytes)))
+        Self(crate::workspace_content::hex(&Sha256::digest(bytes)))
     }
     pub(crate) fn as_str(&self) -> &str {
         &self.0
@@ -120,7 +120,7 @@ pub(crate) fn domain_hash(domain: &[u8], bytes: &[u8]) -> ContentSha256 {
     hash.update(domain);
     hash.update((bytes.len() as u64).to_be_bytes());
     hash.update(bytes);
-    ContentSha256(format!("{:x}", hash.finalize()))
+    ContentSha256(crate::workspace_content::hex(&hash.finalize()))
 }
 #[allow(dead_code)] // Shared with PID 1 contract validation; used by the Rust adapter.
 pub(crate) fn prepared_fingerprint(bytes: &[u8]) -> ContentSha256 {
@@ -314,7 +314,10 @@ pub(crate) fn hash_regular(path: &Path, limit: u64) -> io::Result<(ContentSha256
     if bytes != expected {
         return Err(invalid());
     }
-    Ok((ContentSha256(format!("{:x}", hash.finalize())), bytes))
+    Ok((
+        ContentSha256(crate::workspace_content::hex(&hash.finalize())),
+        bytes,
+    ))
 }
 pub(crate) fn immutable_file(path: &Path, bytes: &[u8], executable: bool) -> io::Result<()> {
     let parent = path.parent().ok_or_else(invalid)?;

@@ -247,7 +247,7 @@ async fn a_database_on_the_released_texts_upgrades() {
                 .replace("CREATE EXTENSION IF NOT EXISTS vector;", "")
                 .replace(" VECTOR ", " real[] ")
                 .replace(" VECTOR  ", " real[]  ");
-            sqlx::raw_sql(&sql)
+            sqlx::raw_sql(sqlx::AssertSqlSafe(&*sql))
                 .execute(&pool)
                 .await
                 .expect("released text");
@@ -265,13 +265,13 @@ async fn a_database_on_the_released_texts_upgrades() {
     assert!(relation_exists(&pool, "public.wiki_node_embeddings").await);
     assert!(relation_exists(&pool, "deepwiki_build.wiki_node_embeddings").await);
     let embedding = if available { "'[1,2,3]'" } else { "'{1,2,3}'" };
-    sqlx::raw_sql(&format!(
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "INSERT INTO wikis (project_id, wiki_id, repo, branch, embedding_model, embedding_dim) \
              VALUES (1, 'w', 'r', 'main', 'm', 3);
          INSERT INTO wiki_nodes (project_id, wiki_id, node_id, source_text) VALUES (1, 'w', 'n0', 'x');
          INSERT INTO wiki_node_embeddings (project_id, wiki_id, node_id, embedding) \
              VALUES (1, 'w', 'n0', {embedding});"
-    ))
+    )))
     .execute(&pool)
     .await
     .expect("an index published by the previous release");
@@ -565,11 +565,12 @@ async fn the_embedding_model_columns_exist_and_the_migration_leaves_the_dead_bra
         "wiki_bm25_terms",
         "wiki_bm25_postings",
     ] {
-        let branches: Vec<String> =
-            sqlx::query_scalar(&format!("SELECT branch FROM {table} ORDER BY branch"))
-                .fetch_all(&pool)
-                .await
-                .expect("branches");
+        let branches: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT branch FROM {table} ORDER BY branch"
+        )))
+        .fetch_all(&pool)
+        .await
+        .expect("branches");
         assert_eq!(branches, ["bm25", "fts"], "{table}");
     }
     // The engine's cleanup removes the dead branch and only that.
@@ -587,11 +588,12 @@ async fn the_embedding_model_columns_exist_and_the_migration_leaves_the_dead_bra
         "wiki_bm25_terms",
         "wiki_bm25_postings",
     ] {
-        let branches: Vec<String> =
-            sqlx::query_scalar(&format!("SELECT branch FROM {table} ORDER BY branch"))
-                .fetch_all(&pool)
-                .await
-                .expect("branches");
+        let branches: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT branch FROM {table} ORDER BY branch"
+        )))
+        .fetch_all(&pool)
+        .await
+        .expect("branches");
         assert_eq!(branches, ["fts"], "{table}");
     }
 }
@@ -638,10 +640,11 @@ async fn the_project_scope_migration_deletes_the_unattributable_index() {
         "deepwiki_build.builds",
         "deepwiki_build.wiki_nodes",
     ] {
-        let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
-            .fetch_one(&pool)
-            .await
-            .expect("count");
+        let count: i64 =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+                .fetch_one(&pool)
+                .await
+                .expect("count");
         assert_eq!(count, 0, "{table}");
     }
     // A row without a project is refused from now on.

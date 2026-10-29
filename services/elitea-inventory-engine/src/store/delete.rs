@@ -194,10 +194,11 @@ async fn remove_checked(
         "inventory_graph.sources",
         "inventory_graph.documents",
     ]) {
-        *count = sqlx::query_scalar(&format!(
+        // `table` is one of the constant names above, never input.
+        *count = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "WITH d AS (DELETE FROM {table} WHERE project_id = $1 AND application_id = $2 RETURNING 1)
              SELECT count(*) FROM d"
-        ))
+        )))
         .bind(key.project_id)
         .bind(key.application_id)
         .fetch_one(&mut *transaction)

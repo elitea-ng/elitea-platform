@@ -170,7 +170,7 @@ class ArtifactPutObjectHeadV1(_message.Message):
     media_type: str
     overwrite: bool
     claim: ArtifactRuntimeClaimV1
-    def __init__(self, project_id: _Optional[int] = ..., bucket: _Optional[str] = ..., key: _Optional[str] = ..., media_type: _Optional[str] = ..., overwrite: bool = ..., claim: _Optional[_Union[ArtifactRuntimeClaimV1, _Mapping]] = ...) -> None: ...
+    def __init__(self, project_id: _Optional[int] = ..., bucket: _Optional[str] = ..., key: _Optional[str] = ..., media_type: _Optional[str] = ..., overwrite: _Optional[bool] = ..., claim: _Optional[_Union[ArtifactRuntimeClaimV1, _Mapping]] = ...) -> None: ...
 
 class ArtifactPutObjectRequestV1(_message.Message):
     __slots__ = ("head", "data")

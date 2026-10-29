@@ -586,7 +586,10 @@ pub(crate) fn lines_to_breaks(package: &[u8], l: &Limits) -> Result<Vec<u8>> {
         if entry.is_dir() {
             continue;
         }
-        let name = entry.name().to_owned();
+        let name = entry
+            .name()
+            .map_err(|e| OfficeError::Malformed(format!("package: {e}")))?
+            .into_owned();
         let xml = std::path::Path::new(&name)
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("xml") || ext.eq_ignore_ascii_case("rels"));

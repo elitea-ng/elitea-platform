@@ -16,7 +16,7 @@ zavora-docx = "=0.1.4"
 zavora-xlsx = { version = "=0.1.2", default-features = false }
 # The platform's own zip (services/elitea-doc-extractor pins the same version).
 # `deflate` is what the lock already resolves for it (flate2 + zlib-rs).
-zip = { version = "=9.1.1", default-features = false, features = ["deflate"] }
+zip = { version = "=9.1.3", default-features = false, features = ["deflate"] }
 quick-xml = "0.42.0"
 # Decode and downscale for render copies only. The same png/jpeg/gif feature
 # set the renderers (svg2pdf) already link, so the lock does not change.

@@ -587,7 +587,13 @@ pub(super) fn commit_hash(bytes: &[u8]) -> String {
     for chunk in bytes.utf8_chunks() {
         hasher.update(chunk.valid().as_bytes());
     }
-    format!("{:x}", hasher.finalize())
+    hasher
+        .finalize()
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            let _ = std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"));
+            hex
+        })
 }
 
 /// An artifact object's full key from the key relative to the folder.

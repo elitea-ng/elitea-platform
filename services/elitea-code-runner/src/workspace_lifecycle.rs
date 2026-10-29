@@ -243,7 +243,7 @@ fn verify_file(path: &Path, bytes: u64, expected: &str, executable: bool) -> io:
         };
         hash.update(&buffer[..n]);
     }
-    if total != bytes || format!("{:x}", hash.finalize()) != expected {
+    if total != bytes || crate::workspace_content::hex(&hash.finalize()) != expected {
         return Err(invalid());
     };
     Ok(())
@@ -284,7 +284,7 @@ fn write_file(
             remaining -= n as u64;
         }
         eof(input)?;
-        if format!("{:x}", hash.finalize()) != entry.sha256 {
+        if crate::workspace_content::hex(&hash.finalize()) != entry.sha256 {
             return Err(invalid());
         };
         file.sync_all()?;

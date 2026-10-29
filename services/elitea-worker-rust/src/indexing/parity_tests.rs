@@ -242,7 +242,12 @@ fn a_repository_file_carries_the_sdks_code_keys_and_prints_its_path() {
 
 fn sha256_hex(text: &str) -> String {
     use sha2::{Digest as _, Sha256};
-    format!("{:x}", Sha256::digest(text.as_bytes()))
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            let _ = std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"));
+            hex
+        })
 }
 
 // ---- gap 7: the attested-empty guard --------------------------------------

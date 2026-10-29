@@ -5,8 +5,9 @@
 # fact. Until #427 it was not: the ci-go.yml Lint job named two modules of
 # nine, and `task lint` ran in one.
 #
-# services/elitea-llm-gateway is outside go.work on purpose (Go 1.26.4,
-# GOWORK=off) and ci-gateway.yml lints it on its own. workspace-run.sh names
+# services/elitea-llm-gateway is outside go.work on purpose (Go 1.27 series,
+# GOWORK=off) and ci-gateway.yml lints it on its own, with a golangci-lint
+# built with Go 1.27. workspace-run.sh names
 # that module in every summary, so its absence here stays visible.
 #
 # All findings from these linters are fixed in-tree rather than excluded, so the

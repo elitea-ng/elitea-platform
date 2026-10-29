@@ -479,7 +479,7 @@ func TestStreamContext_PreservesIdentityValues(t *testing.T) {
 	if got, _ := ctx.Value(schemas.BifrostContextKeyVirtualKey).(string); got != "4242" {
 		t.Errorf("virtual key = %q, want 4242 (per-project credentials resolve from this)", got)
 	}
-	if got, _ := ctx.Value(schemas.BifrostContextKeyUserID).(string); got != "user-7" {
+	if got, _ := ctx.Value(schemas.BifrostContextKeyUserID).(string); got != "user-7" { //nolint:staticcheck // SA1019: the key the handler sets
 		t.Errorf("user id = %q, want user-7", got)
 	}
 	// The whole point: the request's cancellation must NOT reach it. Fire the

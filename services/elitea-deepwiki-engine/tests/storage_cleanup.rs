@@ -68,11 +68,13 @@ async fn seed(pool: &PgPool, wiki: &str, branch: &str, docs: i32) {
 }
 
 async fn count(pool: &PgPool, table: &str, branch: &str) -> i64 {
-    sqlx::query_scalar(&format!("SELECT count(*) FROM {table} WHERE branch = $1"))
-        .bind(branch)
-        .fetch_one(pool)
-        .await
-        .expect("count")
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) FROM {table} WHERE branch = $1"
+    )))
+    .bind(branch)
+    .fetch_one(pool)
+    .await
+    .expect("count")
 }
 
 #[tokio::test(flavor = "multi_thread")]

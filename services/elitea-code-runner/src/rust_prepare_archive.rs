@@ -33,7 +33,18 @@ pub(crate) struct ArchiveRecord {
 }
 
 pub(crate) fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    lower_hex(&Sha256::digest(bytes))
+}
+
+/// Lowercase hex of a digest: sha2 0.11 digests no longer implement `LowerHex`.
+pub(crate) fn lower_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
 }
 
 fn content_error() -> PrepareError {
@@ -84,7 +95,7 @@ fn stream_digest(reader: &mut impl Read, limit: u64, deadline: Instant) -> Resul
         deadline_check(deadline)?;
         let length = reader.read(&mut buffer).map_err(io_error)?;
         if length == 0 {
-            return Ok((format!("{:x}", hash.finalize()), count));
+            return Ok((lower_hex(&hash.finalize()), count));
         }
         count += length as u64;
         if count > limit {
@@ -474,7 +485,7 @@ pub(crate) fn extract_archive(
             hash.update(&buffer[..count]);
             output.write_all(&buffer[..count]).map_err(io_error)?;
         }
-        if bytes != record.bytes || format!("{:x}", hash.finalize()) != record.sha256 {
+        if bytes != record.bytes || lower_hex(&hash.finalize()) != record.sha256 {
             return Err(integrity_error());
         }
         #[cfg(unix)]

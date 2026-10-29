@@ -7,7 +7,7 @@ from elitea.runtime.v1 import compiled_code_pb2 as elitea_dot_runtime_dot_v1_dot
 from elitea.runtime.v1 import control_pb2 as elitea_dot_runtime_dot_v1_dot_control__pb2
 from elitea.runtime.v1 import sandbox_pb2 as elitea_dot_runtime_dot_v1_dot_sandbox__pb2
 
-GRPC_GENERATED_VERSION = '1.76.0'
+GRPC_GENERATED_VERSION = '1.84.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -27,7 +27,7 @@ if _version_not_supported:
     )
 
 
-class RuntimeControlServiceStub(object):
+class RuntimeControlServiceStub:
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -98,7 +98,7 @@ class RuntimeControlServiceStub(object):
                 _registered_method=True)
 
 
-class RuntimeControlServiceServicer(object):
+class RuntimeControlServiceServicer:
     """Missing associated documentation comment in .proto file."""
 
     def AuthorizeSandboxJob(self, request, context):
@@ -244,7 +244,7 @@ def add_RuntimeControlServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class RuntimeControlService(object):
+class RuntimeControlService:
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod

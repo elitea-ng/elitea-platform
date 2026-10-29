@@ -16,10 +16,10 @@ serde = { version = "1.0.228", features = ["derive"] }
 # Default features only, like code-parsers: this crate does not need
 # `preserve_order` (the JSON chunker keeps key order in its own value type),
 # so the desktop host can link it without turning that feature on.
-serde_json = "1.0.151"
+serde_json = "1.0.154"
 # The oversized-piece split of the code chunker, as the Inventory engine
 # chunks a file (services/elitea-inventory-engine/src/extract/chunk.rs).
-text-splitter = { version = "0.33.0", features = ["code"] }
+text-splitter = { version = "0.33.1", features = ["code"] }
 # cl100k_base, and r50k_base (the SDK's "gpt2" encoding) for the
 # unknown-language token split. Compiled in: no runtime download.
 tiktoken-rs = "0.12.1"
@@ -28,7 +28,7 @@ tree-sitter = "=0.27.1"
 
 [dev-dependencies]
 # Pins the SDK prompts by digest (content-source already locks it).
-sha2 = "0.11.0"
+sha2 = "0.11.1"
 
 [lints]
 workspace = true

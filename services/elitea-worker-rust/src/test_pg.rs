@@ -152,7 +152,7 @@ fn raw_pool_options() -> PgPoolOptions {
     PgPoolOptions::new().after_connect(move |connection, _| {
         let statement = statement.clone();
         Box::pin(async move {
-            connection.execute(statement.as_str()).await?;
+            connection.execute(sqlx::AssertSqlSafe(statement)).await?;
             Ok(())
         })
     })
@@ -164,7 +164,7 @@ pub(crate) async fn connect(options: &TestConnectOptions) -> Result<PgConnection
     use sqlx::ConnectOptions as _;
     let mut connection = options.0.connect().await?;
     connection
-        .execute(set_time_zone_statement(&time_zone()).as_str())
+        .execute(sqlx::AssertSqlSafe(set_time_zone_statement(&time_zone())))
         .await?;
     Ok(connection)
 }

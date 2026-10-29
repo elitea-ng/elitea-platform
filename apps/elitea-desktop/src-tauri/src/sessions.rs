@@ -220,7 +220,12 @@ pub fn session_key(deployment: &str, user_id: i64, conversation_uuid: &str) -> S
     hash.update(user_id.to_string().as_bytes());
     hash.update([0]);
     hash.update(conversation_uuid.to_ascii_lowercase().as_bytes());
-    format!("{:x}", hash.finalize())
+    lower_hex(&hash.finalize())
+}
+
+/// Lowercase hex of a digest: sha2 0.11 digests no longer implement `LowerHex`.
+fn lower_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// What a session's tool responses were read under: a digest of `path_deny`
@@ -235,7 +240,7 @@ pub fn policy_fingerprint(path_deny: &[String]) -> String {
         hash.update(pattern.as_bytes());
         hash.update([0]);
     }
-    format!("{:x}", hash.finalize())
+    lower_hex(&hash.finalize())
 }
 
 /// One event to store, with what the row records about it.

@@ -58,7 +58,10 @@ pub(crate) fn apply(package: &[u8], ops: &[NameOp], l: &Limits) -> Result<Vec<u8
         if entry.is_dir() {
             continue;
         }
-        let name = entry.name().to_owned();
+        let name = entry
+            .name()
+            .map_err(|e| OfficeError::Malformed(format!("package: {e}")))?
+            .into_owned();
         // A part over the cap is an error, never a shortened part.
         let cap = if ext_is(&name, "xml") || ext_is(&name, "rels") {
             l.max_xml_large_part_bytes_xlsx
