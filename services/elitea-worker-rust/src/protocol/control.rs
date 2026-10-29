@@ -2409,10 +2409,12 @@ impl<R> AgentControlClient<R> {
 
     /// Start step recording for an attempt that takes over a run another
     /// claim began (settlement recovery, model-checkpoint or node recovery;
-    /// ADR-0042, #1499). When this process holds no recorder for the command,
+    /// ADR-0042, #1499). When this process recorded no step for the command,
     /// the earlier attempt ran elsewhere (or this worker restarted), so its
     /// unreported steps may be gone: an `error` step `steps_possibly_lost`
-    /// opens the recovered attempt and makes the gap explicit. The claim is
+    /// opens the recovered attempt and makes the gap explicit. "Held" means
+    /// this process recorded a step for the command, not that a recorder
+    /// exists (authorization binds the claim, creating one). The claim is
     /// bound so early reports go under it.
     pub(crate) fn begin_recovered_run_steps(
         &self,
@@ -2420,7 +2422,12 @@ impl<R> AgentControlClient<R> {
         fence: &ExecutionFenceV1,
         at_unix_ms: i64,
     ) {
-        let prior = self.steps.find(identity).is_some();
+        // Not mere recorder existence: binding the claim (on authorization)
+        // creates one before this runs.
+        let prior = self
+            .steps
+            .find(identity)
+            .is_some_and(|recorder| recorder.has_recorded());
         self.steps.bind_claim(identity, fence);
         if prior {
             return;

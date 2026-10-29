@@ -46,12 +46,23 @@ pub(crate) const MAX_REPORT_BYTES: usize = 1024 * 1024;
 /// Steps one execution may hold unsent. Early flushing keeps the buffer near
 /// 64; only a Main that stays unreachable for a long run fills it.
 const MAX_BUFFERED_STEPS: usize = 4_096;
-const MAX_NAME_BYTES: usize = 256;
-const MAX_ID_BYTES: usize = 128;
+// Main's bounds: every step must fit them, or Main refuses the WHOLE report
+// non-retryably (and the buffered steps are lost). Mirrors
+// services/elitea-main/internal/application/runevidence/service.go
+// (`MaxNodeIDBytes`, `MaxNameBytes`, `MaxToolkitIDBytes`, `MaxIDBytes`,
+// `MaxCitedIDs`, `MaxQueryBytes`, `MaxFiltersBytes`, the 2048-byte source in
+// `retrievalJSON`); keep them in step.
+const MAX_NODE_ID_BYTES: usize = 256;
+const MAX_NAME_BYTES: usize = 512;
+const MAX_TOOLKIT_ID_BYTES: usize = 128;
+const MAX_DOCUMENT_ID_BYTES: usize = 256;
+const MAX_CITED_IDS: usize = 100;
 const MAX_QUERY_BYTES: usize = 8 * 1024;
 const MAX_FILTERS_BYTES: usize = 8 * 1024;
-const MAX_DOCUMENT_ID_BYTES: usize = 512;
 const MAX_SOURCE_BYTES: usize = 2 * 1024;
+/// The namespace of deterministic step ids (UUID v5).
+const STEP_ID_NAMESPACE: uuid::Uuid =
+    uuid::Uuid::from_u128(0x6a2f_4c1e_9b3d_4e57_8a10_c5d2_e7f3_0b49);
 /// A summary string value longer than this is cut when the summary must
 /// shrink to fit [`MAX_STEP_SUMMARY_BYTES`].
 const MAX_SUMMARY_STRING_BYTES: usize = 512;
@@ -146,6 +157,9 @@ pub(crate) struct RetrievalDraft {
 /// One step as the runtime describes it; [`RunStepRecorder::record`] bounds
 /// it and gives it its id.
 pub(crate) struct StepDraft {
+    /// A deterministic id for a step that may be recorded again (a replayed
+    /// decision): Main stores a `step_id` once. `None` draws a random one.
+    pub(crate) step_id: Option<String>,
     pub(crate) kind: RunStepKindV1,
     pub(crate) name: String,
     pub(crate) node_id: String,
@@ -161,6 +175,7 @@ pub(crate) struct StepDraft {
 impl StepDraft {
     pub(crate) fn new(kind: RunStepKindV1, name: impl Into<String>, at_unix_ms: i64) -> Self {
         Self {
+            step_id: None,
             kind,
             name: name.into(),
             node_id: String::new(),
@@ -172,6 +187,19 @@ impl StepDraft {
             outputs: None,
             retrieval: None,
         }
+    }
+
+    /// Give the step a deterministic id (UUID v5 over the command and
+    /// `parts`), so recording it again yields the same `step_id`.
+    #[must_use]
+    pub(crate) fn stable_id(mut self, command_id: &str, parts: &[&str]) -> Self {
+        let mut name = command_id.to_owned();
+        for part in parts {
+            name.push('\u{1f}');
+            name.push_str(part);
+        }
+        self.step_id = Some(uuid::Uuid::new_v5(&STEP_ID_NAMESPACE, name.as_bytes()).to_string());
+        self
     }
 
     #[must_use]
@@ -461,20 +489,44 @@ fn citations(text: &str, retrievals: &[RecordedRetrieval]) -> (Vec<String>, Vec<
     (steps, documents)
 }
 
+/// A step's start and end as Main accepts them: both set (> 0) and in
+/// order. A missing or unparseable time is the wall clock now.
+fn step_times(started_at_unix_ms: i64, ended_at_unix_ms: i64) -> (i64, i64) {
+    let now = || now_unix_ms().max(1);
+    let started = if started_at_unix_ms > 0 {
+        started_at_unix_ms
+    } else if ended_at_unix_ms > 0 {
+        ended_at_unix_ms
+    } else {
+        now()
+    };
+    let ended = if ended_at_unix_ms > 0 {
+        ended_at_unix_ms
+    } else {
+        now().max(started)
+    };
+    (started, ended.max(started))
+}
+
 fn into_step(draft: StepDraft, retrievals: &[RecordedRetrieval]) -> RunStepV1 {
-    let step_id = uuid::Uuid::new_v4().to_string();
-    let (cited_step_ids, cited_document_ids) = match (&draft.kind, &draft.outputs) {
+    let step_id = draft
+        .step_id
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let (mut cited_step_ids, cited_document_ids) = match (&draft.kind, &draft.outputs) {
         (RunStepKindV1::Output, Some(outputs)) => citations(&outputs.text, retrievals),
         _ => (Vec::new(), Vec::new()),
     };
+    cited_step_ids.truncate(MAX_CITED_IDS);
+    let (started_at_unix_ms, ended_at_unix_ms) =
+        step_times(draft.started_at_unix_ms, draft.ended_at_unix_ms);
     RunStepV1 {
         step_id,
         kind: draft.kind as i32,
-        started_at_unix_ms: draft.started_at_unix_ms,
-        ended_at_unix_ms: draft.ended_at_unix_ms.max(draft.started_at_unix_ms),
-        node_id: bounded_owned(draft.node_id, MAX_NAME_BYTES),
+        started_at_unix_ms,
+        ended_at_unix_ms,
+        node_id: bounded_owned(draft.node_id, MAX_NODE_ID_BYTES),
         name: bounded_owned(draft.name, MAX_NAME_BYTES),
-        toolkit_id: bounded_owned(draft.toolkit_id, MAX_ID_BYTES),
+        toolkit_id: bounded_owned(draft.toolkit_id, MAX_TOOLKIT_ID_BYTES),
         summary_json: bounded_summary(&draft.summary),
         retrieval: draft.retrieval.as_ref().map(retrieval_summary),
         inputs: draft.inputs.as_ref().map(step_content),
@@ -482,6 +534,7 @@ fn into_step(draft: StepDraft, retrievals: &[RecordedRetrieval]) -> RunStepV1 {
         cited_step_ids,
         cited_document_ids: cited_document_ids
             .iter()
+            .take(MAX_CITED_IDS)
             .map(|id| bounded(id, MAX_DOCUMENT_ID_BYTES))
             .collect(),
     }
@@ -504,6 +557,9 @@ struct RecorderState {
     /// This generation continues an earlier one (a HITL decision, an
     /// authorization, a Continue).
     resumed: bool,
+    /// This process recorded a step for the command (a recorder created by
+    /// binding a claim alone has not).
+    recorded_any: bool,
 }
 
 /// The step buffer of one command. Shared by every path that runs part of
@@ -541,6 +597,7 @@ impl RunStepRecorder {
             if state.suspended > 0 {
                 return Ok(None);
             }
+            state.recorded_any = true;
             if state.pending.len() >= MAX_BUFFERED_STEPS {
                 return Err(());
             }
@@ -577,6 +634,13 @@ impl RunStepRecorder {
         SuspendedRecording {
             recorder: Arc::clone(self),
         }
+    }
+
+    /// Whether this process recorded a step for the command: an earlier
+    /// attempt ran HERE, so a takeover has no unseen gap.
+    #[must_use]
+    pub(crate) fn has_recorded(&self) -> bool {
+        self.with_state(|state| state.recorded_any)
     }
 
     pub(crate) fn mark_resumed(&self) {
