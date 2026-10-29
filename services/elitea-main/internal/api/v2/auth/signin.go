@@ -34,14 +34,16 @@ func issueBrowserSession(
 	r *http.Request,
 ) bool {
 	if manager != nil {
-		value, err := manager.Create(r.Context(), request)
+		// The lifetime is the row's, after the administrator's session
+		// policy clamped it, so the cookie never outlives its row.
+		value, lifetime, err := manager.CreateCookie(r.Context(), request)
 		if err != nil {
 			slog.Error("the browser session could not be created",
 				"err", err, "provider", request.Provider, "user_id", request.UserID)
 			http.Error(w, "session could not be created", http.StatusInternalServerError)
 			return false
 		}
-		browsersession.SetCookie(w, value, secureCookies, manager.Policy().AbsoluteLifetime)
+		browsersession.SetCookie(w, value, secureCookies, lifetime)
 		return true
 	}
 

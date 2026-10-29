@@ -8,9 +8,9 @@ package eliteacore_test
 // down: the parent agent now carries its own skills, and the sub-agent embedded
 // into it did not.
 //
-// These tests never assert on the status code. A 200 from Publish is exactly
-// what the defect produced, and the embed keeps answering 200 after this change
-// (see TestEmbedKeepsTheStatusWhenTheSkillCopyFails). Every assertion reads the
+// These tests do not trust the status code alone: a 200 from Publish is exactly
+// what the defect produced. (A failed copy now fails the publish, see
+// TestEmbedSkillCopyFailureFailsThePublish.) Every assertion reads the
 // mapping rows back out of the database, through the predicate the chat read
 // uses (internal/db/queries/agent_chat.sql:126-132): entity_version_id AND
 // entity_type, with skill_versions LEFT JOINed for the instructions. There is no
@@ -135,17 +135,17 @@ func TestEmbedCarriesSubAgentSkillAttachments(t *testing.T) {
 	}
 }
 
-// TestEmbedKeepsTheStatusWhenTheSkillCopyFails pins the decision this issue
-// turns on, and states what a user sees when the copy fails.
+// TestEmbedSkillCopyFailureFailsThePublish pins what a failed embed copy
+// does now that the embed runs in the publish transaction (ADR-0040
+// decision 2: the release a publish records pins the embedded copies, so
+// they commit with it or not at all).
 //
-// The embed runs after the publish transaction has committed (handler.go, the
-// Commit before the embedSubAgents call). The publish cannot be withdrawn, so
-// the caller keeps its 200 and its published agent, and the embedded sub-agent
-// is there but carries no skills. What changes is that the failure is no longer
-// discarded: it is reported on the service log, which is the only channel left
-// once the transaction is durable. This test holds both halves of that
-// statement, so neither can drift into a comment nobody checks.
-func TestEmbedKeepsTheStatusWhenTheSkillCopyFails(t *testing.T) {
+// The embed used to run after the publish had committed, so a failed copy
+// answered 200 with a published agent whose embedded sub-agent had no
+// skills, and only the log said so. Now the publish fails whole: 500, no
+// published row, no embedded copy, the failure on the log, and the source
+// sub-agent untouched. The author retries a publish that did not happen.
+func TestEmbedSkillCopyFailureFailsThePublish(t *testing.T) {
 	pool := newPublishCopyPool(t)
 	createLegacyApplicationTools(t, pool)
 	fixture := seedEmbedSkillFixture(t, pool)
@@ -167,24 +167,24 @@ ALTER TABLE p_1.entity_skill_mapping ADD CONSTRAINT embed_copy_must_fail CHECK (
 		"version_name":     "v-one",
 		"validation_token": publishCopyToken(t, pool, fixture.parentVersionID),
 	})
-	// The publish is durable before the embed starts. Reporting a failure here
-	// would tell the caller to retry a publish that already succeeded.
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("publish status = %d, want %d — the publish had already committed: %s",
-			recorder.Code, http.StatusOK, recorder.Body.String())
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("publish status = %d, want %d — a failed embed must fail the publish: %s",
+			recorder.Code, http.StatusInternalServerError, recorder.Body.String())
 	}
 
-	// The sub-agent is embedded and linked, and holds no skills. That is the
-	// degraded state the log has to describe.
-	embeddedVersionID := embeddedVersionIDOf(t, ctx, pool, fixture.subVersionID)
-	if copied := readEmbedSkillAttachments(t, ctx, pool, embeddedVersionID); len(copied) != 0 {
-		t.Fatalf("the failing constraint let %d skill attachments through", len(copied))
+	var published, embedded int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FILTER (WHERE status = 'published'), count(*) FILTER (WHERE status = 'embedded')
+FROM p_1.application_versions`).Scan(&published, &embedded); err != nil {
+		t.Fatal(err)
+	}
+	if published != 0 || embedded != 0 {
+		t.Fatalf("a failed publish left %d published and %d embedded rows", published, embedded)
 	}
 
-	if entry := log.String(); !strings.Contains(entry, "embed_sub_agents: skill attachment copy failed") {
+	if entry := log.String(); !strings.Contains(entry, "publish: embed the sub-agents") ||
+		!strings.Contains(entry, "copy the skill attachments of sub-agent version "+strconv.Itoa(fixture.subVersionID)) {
 		t.Errorf("the failed skill copy was not reported on the log; log was:\n%s", entry)
-	} else if !strings.Contains(entry, strconv.Itoa(embeddedVersionID)) {
-		t.Errorf("the report names no embedded version, so an operator cannot find the sub-agent; log was:\n%s", entry)
 	}
 
 	// The source sub-agent version must still hold its own attachments.

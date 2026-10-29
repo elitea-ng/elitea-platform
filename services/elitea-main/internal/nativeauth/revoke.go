@@ -52,10 +52,14 @@ func RevokeUserSessions(ctx context.Context, tx pgx.Tx, userID int64, reason str
 		}
 	}
 	// The same SQL as browsersession.PostgresStore.RevokeAllForUser, on the
-	// caller's transaction.
+	// caller's transaction. The end (shared 0200) is what the session audit
+	// relay turns into a session.revoke event, so the event exists only if
+	// the caller's transaction commits.
 	if _, err := tx.Exec(ctx, `
 		UPDATE elitea_auth.browser_sessions
-		SET revoked_at = now()
+		SET revoked_at = now(),
+		    ended_at = COALESCE(ended_at, now()),
+		    end_reason = COALESCE(end_reason, 'revoked')
 		WHERE user_id = $1 AND revoked_at IS NULL`, userID); err != nil {
 		return 0, fmt.Errorf("nativeauth: revoke browser sessions: %w", err)
 	}

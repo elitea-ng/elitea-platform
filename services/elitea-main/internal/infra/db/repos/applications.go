@@ -785,8 +785,26 @@ func insertVersion(ctx context.Context, q querier, s, applicationID string, v ap
 	return ver, nil
 }
 
+// UpdateVersion saves one version and appends its revision
+// (version_revisions.go) in one transaction.
 func (r *ApplicationsRepo) UpdateVersion(ctx context.Context, projectID, applicationID, versionID string, v applications.Version) (applications.Version, error) {
-	return r.updateVersion(ctx, r.pool, projectID, applicationID, versionID, v)
+	if _, err := tenantSchema(projectID); err != nil {
+		return applications.Version{}, err
+	}
+	project, err := parseProjectID(projectID)
+	if err != nil {
+		return applications.Version{}, apierr.BadRequest("invalid project id")
+	}
+	var ver applications.Version
+	err = tenant.NewExecutor(r.pool).WithinTx(ctx, tenant.Project{ID: project}, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		ver, err = r.updateVersion(ctx, tx, projectID, applicationID, versionID, v)
+		return err
+	})
+	if err != nil {
+		return applications.Version{}, err
+	}
+	return ver, nil
 }
 
 // UpdateWithVersion writes the application fields and the nested version in
@@ -934,6 +952,22 @@ func (r *ApplicationsRepo) updateVersion(ctx context.Context, q relationReader, 
 		return r.GetVersion(ctx, projectID, applicationID, versionID)
 	}
 
+	// The state this save changes, read under the row lock: the baseline of
+	// the version's first revision (version_revisions.go).
+	before, err := readVersionRevisionState(ctx, q, s, applicationID, versionID, true)
+	if errors.Is(err, errVersionRevisionStateMissing) {
+		return applications.Version{}, apierr.NotFound("version not found")
+	}
+	if err != nil {
+		return applications.Version{}, fmt.Errorf("applications: update version: %w", err)
+	}
+	// A published or embedded version is a release's row: it is never edited
+	// in place, by this path or by the application save that nests a
+	// version (UpdateWithVersion), which used to skip the HTTP guard.
+	if status, _ := before["status"].(string); status == "published" || status == "embedded" {
+		return applications.Version{}, apierr.BadRequest("Published version can not be updated. Unpublish first.")
+	}
+
 	args = append(args, applicationID, versionID)
 	// …and the owning agent's `updated_at`, for the reason insertVersion
 	// stamps it: a version save IS the save a user made to the agent.
@@ -959,6 +993,19 @@ func (r *ApplicationsRepo) updateVersion(ctx context.Context, q relationReader, 
 		if errors.As(err, &pgErr) && pgErr.Code == "22021" {
 			return applications.Version{}, apierr.BadRequest("the version contains a character that cannot be stored")
 		}
+		return applications.Version{}, fmt.Errorf("applications: update version: %w", err)
+	}
+	// Every save appends its revision in the same transaction (ADR-0040
+	// decision 2): the in-place UPDATE above no longer loses who changed
+	// what, and when.
+	after, err := readVersionRevisionState(ctx, q, s, applicationID, versionID, false)
+	if err != nil {
+		return applications.Version{}, fmt.Errorf("applications: update version: %w", err)
+	}
+	project, _ := parseProjectID(projectID)
+	application, _ := strconv.ParseInt(applicationID, 10, 64)
+	version, _ := strconv.ParseInt(versionID, 10, 64)
+	if err := appendVersionRevision(ctx, q, project, application, version, before, after, v.EditorID); err != nil {
 		return applications.Version{}, fmt.Errorf("applications: update version: %w", err)
 	}
 	return ver, nil

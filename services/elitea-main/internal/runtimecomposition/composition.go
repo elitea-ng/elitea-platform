@@ -115,6 +115,11 @@ type Dependencies struct {
 	// admission store is wrapped with it, and the runtime plane carries its
 	// invalidations between replicas over NATS. Nil: no check (tests).
 	ExecutionSuspensions *safety.Gate
+	// MaxRunWall answers the whole-run wall cap of an agent run
+	// (run_caps.max_wall_seconds, ADR-0041 decision 3; 0 is off). The
+	// control plane cancels a run past it at lease renewal with
+	// cancel_reason cap_reached. Nil: no cap (tests).
+	MaxRunWall func(ctx context.Context) (time.Duration, error)
 	// IndexScheduleMandates and IndexScheduleMandateGate make every index
 	// schedule occurrence mandate-bound (#1122): built at the composition
 	// root only with credential governance on. Nil: the executor keeps the
@@ -1339,6 +1344,15 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 		if _, err := controlServer.WithGovernedEpochs(runs, revoker); err != nil {
 			return nil, fmt.Errorf("compose governed epoch checks: %w", err)
+		}
+	}
+	if dependencies.MaxRunWall != nil {
+		wallCaps, err := repos.NewRunWallCapRepository(dependencies.ControlPool)
+		if err != nil {
+			return nil, fmt.Errorf("compose the run wall cap: %w", err)
+		}
+		if _, err := controlServer.WithRunWallCap(dependencies.MaxRunWall, wallCaps); err != nil {
+			return nil, fmt.Errorf("compose the run wall cap: %w", err)
 		}
 	}
 	if dependencies.ExecutionSuspensions != nil {

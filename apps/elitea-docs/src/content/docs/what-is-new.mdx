@@ -9,6 +9,14 @@ Elitea ships frequent, small releases. This page summarizes the most recent user
 
 A new [Enterprise controls](/admin/enterprise-controls/overview) section lists every agent-risk control the platform provides. For each control it says whether the control is available, partial or planned, where to configure it, what evidence it produces and what stays with your organisation's own systems. The section also includes a [shared responsibility](/admin/enterprise-controls/shared-responsibility) page, an [evidence guide for auditors](/admin/enterprise-controls/evidence-guide) and a [hardening checklist](/deployment/hardening-checklist).
 
+## Agent releases and rollback
+
+Publishing an agent now records an immutable release, and every save of a version records who changed what. Open **Release history** from the agent's **⋮** menu to see each release, what changed, and to roll back to an earlier release in one step. Published versions can no longer be changed in place. See [Agent lifecycle](/admin/enterprise-controls/agent-lifecycle).
+
+## Session policy and run time cap
+
+Platform administrators can set a maximum idle timeout and a maximum lifetime for browser sessions, and a maximum time for one agent run. Every session start, expiry, sign-out and revocation is now an audit event. Stopping a toolkit type with the kill switch now also cancels the runs in progress that use it. All new limits are off until you set them. See [Session policy](/admin/authentication#session-policy) and [Runtime safety](/admin/enterprise-controls/runtime-safety#whole-run-time-cap).
+
 ## Worker egress allowlist
 
 Platform administrators can limit the public hosts that agents, toolkits and MCP servers reach from the worker. **Configuration › Worker Egress** shows the hosts that runs reached in the last 30 days and copies them as an allowlist. In `allowlist` mode, a run may reach only those entries, its project's entries and the hosts of its own toolkits; any other host is a tool error that names the host. The default stays `open`. See [Least privilege and trust](/admin/enterprise-controls/least-privilege-and-trust).

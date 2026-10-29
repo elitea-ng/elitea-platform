@@ -18,6 +18,8 @@ A default install favours getting started. A deployment that will be assessed ag
 - [ ] List destructive and outward-facing tools as sensitive, so every call pauses for approval. See [Sensitive action authorization](/how-tos/chat-conversations/sensitive-action-authorization-guardrail).
 - [ ] Keep the egress guard on. Add private hosts to the allow-list only when a toolkit needs them. See [Configuration](/deployment/configuration).
 - [ ] Seed the worker egress allowlist from **Configuration › Worker Egress**, then set its mode to `allowlist`. See [Least privilege and trust](/admin/enterprise-controls/least-privilege-and-trust).
+- [ ] Set a maximum idle timeout and session lifetime under **Configuration › Session Policy**. See [Authentication](/admin/authentication#session-policy).
+- [ ] Set **Maximum Run Time** under **Configuration › Run Caps** above your longest legitimate run. See [Runtime safety](/admin/enterprise-controls/runtime-safety#whole-run-time-cap).
 
 ## Runtime safety
 

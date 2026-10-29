@@ -55,6 +55,9 @@ import type {
   ApplicationList,
   ApplicationRelationList,
   ApplicationRelationUpdatedResponse,
+  ApplicationReleaseDetail,
+  ApplicationReleaseList,
+  ApplicationReleaseRollback,
   ApplicationUpdatedResponse,
   ApplicationVersionDetail,
   ApplicationVersionDetailExpanded,
@@ -95,6 +98,7 @@ import type {
   TrendingAuthor,
   UnpublishResponse,
   UploadedIconsList,
+  VersionRevisionList,
   VersionValidatorResponse,
 } from "../model";
 
@@ -1112,6 +1116,150 @@ export const getGetEvalScorecardResponseMock = (
   ).map(() => ({
     key: faker.string.alpha({ length: { min: 10, max: 20 } }),
     reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  ...overrideResponse,
+});
+
+export const getListApplicationReleasesResponseMock = (
+  overrideResponse: Partial<Extract<ApplicationReleaseList, object>> = {},
+): ApplicationReleaseList => ({
+  total: faker.number.int(),
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: 41,
+    application_id: 31,
+    application_version_id: 118,
+    source_version_id: 117,
+    name: "v2",
+    definition_digest:
+      "3f1d0c9a6b7e45d2a1c08f6e9b3d2a7c5e4f1b0a9d8c7e6f5a4b3c2d1e0f9a8b",
+    state: "published",
+    is_published_release: true,
+    published_by: 4,
+    created_at: "2026-10-28T09:15:02Z",
+    withdrawn_at: null,
+    withdrawn_by: null,
+  })),
+  ...overrideResponse,
+});
+
+export const getGetApplicationReleaseResponseMock =
+  (): ApplicationReleaseDetail => ({
+    id: 41,
+    application_id: 31,
+    application_version_id: 118,
+    source_version_id: 117,
+    name: "v2",
+    definition_digest:
+      "3f1d0c9a6b7e45d2a1c08f6e9b3d2a7c5e4f1b0a9d8c7e6f5a4b3c2d1e0f9a8b",
+    state: "published",
+    is_published_release: true,
+    published_by: 4,
+    created_at: "2026-10-28T09:15:02Z",
+    withdrawn_at: null,
+    withdrawn_by: null,
+    definition: {
+      id: 118,
+      application_id: 31,
+      name: "v2",
+      status: "published",
+      instructions: "Answer briefly and cite sources.",
+      tools: [{ id: 55, type: "github", name: "GitHub" }],
+    },
+    toolkit_pins: [
+      {
+        index: 0,
+        toolkit_id: 55,
+        type: "github",
+        settings_sha256:
+          "1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c",
+        projected_settings_sha256:
+          "2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d",
+        selected_tools: ["list_issues"],
+        configurations: [],
+        credential_reference_ids: [],
+      },
+    ],
+    previous_release_id: 40,
+    changes: [
+      {
+        path: "/definition/instructions",
+        op: "replace",
+        before: "Answer briefly.",
+        after: "Answer briefly and cite sources.",
+      },
+    ],
+  });
+
+export const getRollbackApplicationReleaseResponseMock =
+  (): ApplicationReleaseRollback => ({
+    from: {
+      id: 42,
+      application_id: 31,
+      application_version_id: 121,
+      source_version_id: 117,
+      name: "v3",
+      definition_digest:
+        "4a2e1d0b9c8f7e6d5c4b3a291807f6e5d4c3b2a19087f6e5d4c3b2a190807f6e",
+      state: "published",
+      is_published_release: false,
+      published_by: 4,
+      created_at: "2026-10-28T11:40:10Z",
+      withdrawn_at: null,
+      withdrawn_by: null,
+    },
+    to: {
+      id: 41,
+      application_id: 31,
+      application_version_id: 118,
+      source_version_id: 117,
+      name: "v2",
+      definition_digest:
+        "3f1d0c9a6b7e45d2a1c08f6e9b3d2a7c5e4f1b0a9d8c7e6f5a4b3c2d1e0f9a8b",
+      state: "published",
+      is_published_release: true,
+      published_by: 4,
+      created_at: "2026-10-28T09:15:02Z",
+      withdrawn_at: null,
+      withdrawn_by: null,
+    },
+    reason: "v3 answers in the wrong language",
+  });
+
+export const getListVersionRevisionsResponseMock = (
+  overrideResponse: Partial<Extract<VersionRevisionList, object>> = {},
+): VersionRevisionList => ({
+  total: faker.number.int(),
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: 903,
+    revision: 2,
+    kind: "save",
+    actor_id: 4,
+    created_at: "2026-10-28T10:02:44Z",
+    snapshot: {
+      name: "base",
+      status: "draft",
+      agent_type: "openai",
+      instructions: "Answer briefly and cite sources.",
+      welcome_message: "",
+      llm_settings: { model_name: "gpt-5" },
+      conversation_starters: [],
+      meta: {},
+      pipeline_settings: {},
+    },
+    diff: [
+      {
+        path: "/instructions",
+        op: "replace",
+        before: "Answer briefly.",
+        after: "Answer briefly and cite sources.",
+      },
+    ],
   })),
   ...overrideResponse,
 });
@@ -2845,6 +2993,10 @@ export const getPublishApplicationResponseMock = (
   overrideResponse: Partial<Extract<PublishSuccessResponse, object>> = {},
 ): PublishSuccessResponse => ({
   public_agent_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  release_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   public_version_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   version_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
   source_version_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -6414,6 +6566,110 @@ export const getGetEvalScorecardMockHandler = (
   );
 };
 
+export const getListApplicationReleasesMockHandler = (
+  overrideResponse?:
+    | ApplicationReleaseList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ApplicationReleaseList> | ApplicationReleaseList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/application_releases/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListApplicationReleasesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetApplicationReleaseMockHandler = (
+  overrideResponse?:
+    | ApplicationReleaseDetail
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ApplicationReleaseDetail> | ApplicationReleaseDetail),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/application_releases/prompt_lib/:projectId/:applicationId/:releaseId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetApplicationReleaseResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRollbackApplicationReleaseMockHandler = (
+  overrideResponse?:
+    | ApplicationReleaseRollback
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ApplicationReleaseRollback> | ApplicationReleaseRollback),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/application_releases/prompt_lib/:projectId/:applicationId/:releaseId/rollback",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRollbackApplicationReleaseResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListVersionRevisionsMockHandler = (
+  overrideResponse?:
+    | VersionRevisionList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<VersionRevisionList> | VersionRevisionList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/version_revisions/prompt_lib/:projectId/:applicationId/:versionId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListVersionRevisionsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getResolveApplicationVersionMockHandler = (
   overrideResponse?:
     | ResolvedApplicationVersion
@@ -8147,6 +8403,10 @@ export const getApplicationsMock = () => [
   getGetEvalRunMockHandler(),
   getCancelEvalRunMockHandler(),
   getGetEvalScorecardMockHandler(),
+  getListApplicationReleasesMockHandler(),
+  getGetApplicationReleaseMockHandler(),
+  getRollbackApplicationReleaseMockHandler(),
+  getListVersionRevisionsMockHandler(),
   getResolveApplicationVersionMockHandler(),
   getPredictLLMMockHandler(),
   getGenerateApplicationDraftMockHandler(),

@@ -253,6 +253,12 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 	if createdID != admission.Record.Job.ID {
 		return executionapp.AdmissionOutcome{}, errors.New("tool-run execution job insert changed identity")
 	}
+	// The run's toolkit type and browser session (shared 0201).
+	if err := stampAdmissionSafety(ctx, pgxExecutor{queryer: tx}, admission.Record.Job.ID,
+		int64(admission.Record.Job.Generation),
+		admissionSafetyRecord{ToolkitTypes: toolkitAdmissionTypes(ctx)}); err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
 	if err := bindCodeToolkitChild(ctx, tx, admission); err != nil {
 		return executionapp.AdmissionOutcome{}, err
 	}

@@ -180,6 +180,9 @@ func (g *GovernedCredentials) Freeze(ctx context.Context, request SubmitRequest)
 		return nil, nil, ErrInvalidAgentAdmission
 	}
 	ctx = configurationapp.WithGovernedRun(ctx)
+	// A release run binds the binding of the release's own version row
+	// (release.go); the admission transaction reads the same one.
+	versionID = bindingVersionID(request.Release, versionID)
 	bindingID, boundDigest, found, err := g.bindings.UsableBindingForVersion(ctx, tenant, versionID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("governed credentials: read the agent binding: %w", err)
@@ -194,7 +197,14 @@ func (g *GovernedCredentials) Freeze(ctx context.Context, request SubmitRequest)
 		// The canonical digest of the version the run executes (#1462). An
 		// unattended run's mandate names its binding, which the admission
 		// transaction compares with this digest as well.
-		if err := g.checkDefinition(ctx, tenant, application, freeze); err != nil {
+		if request.Release != nil {
+			// A release run (ADR-0040 decision 2) executes the release's
+			// definition, which the start resolver read from the immutable
+			// release and checked against its toolkit pins. Its digest is
+			// the release's, whatever the version row holds now.
+			freeze.DefinitionChecked = true
+			freeze.DefinitionDigest = request.Release.DefinitionDigest
+		} else if err := g.checkDefinition(ctx, tenant, application, freeze); err != nil {
 			return nil, nil, err
 		}
 	}

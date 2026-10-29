@@ -299,6 +299,7 @@ func newDirectoryPool(t *testing.T) *pgxpool.Pool {
 		// The deactivation hook (ADR-0025 WP3) revokes native device
 		// sessions and browser sessions in the suspension's transaction.
 		"../../migrations/shared/0117_browser_sessions.sql",
+		"../../migrations/shared/0200_browser_session_lifecycle.sql",
 		"../../migrations/shared/0141_native_auth.sql",
 	} {
 		migration, err := os.ReadFile(file)

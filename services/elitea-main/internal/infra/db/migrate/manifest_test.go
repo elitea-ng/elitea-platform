@@ -856,7 +856,29 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// cannot be assembled (ADR-0044 decision 2, #1490). The row's deadline is
 	// moved to now, so the existing deadline retirement settles it; no
 	// retirement or terminal error code is added. No data, no permission.
-	require.EqualValues(t, 197, Head(shared))
+	//
+	// 198: shared/0198_agent_releases.sql, immutable digest-addressed agent
+	// releases with toolkit pins (elitea_lifecycle.application_releases, an
+	// UPDATE trigger keeps them immutable), the published-release pointer
+	// (application_release_heads) and draft revisions (version_revisions)
+	// (ADR-0040 decision 2, #1492). It depends on no other schema. No data,
+	// no permission.
+	//
+	// 199: shared/0199_agent_execution_release.sql,
+	// agent_execution_jobs.release_id, the release a run executed (ADR-0040
+	// decision 2, #1492). No data, no permission.
+	//
+	// 200: shared/0200_browser_session_lifecycle.sql, the session records of
+	// ADR-0042 decision 5 (#1496): browser_sessions.ref (a non-secret session
+	// reference), ended_at and end_reason, and the audit relay's marks.
+	// Existing rows are marked audited; no permission.
+	//
+	// 201: shared/0201_execution_run_safety.sql, what admission records for
+	// the runtime safety controls (#1496, #1498): execution_jobs.toolkit_types
+	// (a toolkit_type suspension cancels in-flight runs), browser_session_ref,
+	// run_started_at (the whole-run wall cap) and cancel_reason (cap_reached).
+	// Nullable columns only. No data, no permission.
+	require.EqualValues(t, 201, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -44,7 +44,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
@@ -266,9 +265,9 @@ func (h *Handler) fireSchedule(
 		// detail says why; the next tick tries again.
 		result.Skipped++
 		record(resultFailed, "skipped: an administrator suspended execution ("+safety.ErrorCode+")", "")
-	case governedStartRefused(err):
+	case governedStartRefusal(err) != "":
 		result.Skipped++
-		_, detail := mandateSkip(runmandate.CodeMandateNotUsable)
+		_, detail := mandateSkip(governedStartRefusal(err))
 		record(resultSkippedMandateUnusable, detail, "")
 	case errors.Is(err, ErrRunForbidden):
 		result.Skipped++

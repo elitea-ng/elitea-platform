@@ -45,6 +45,59 @@ A stored secret is never shown in the clear — the field renders a mask, and th
 Deleting a provider also deletes its stored secret, which cannot be recovered. To stop using a provider for new logins without losing its configuration, turn off "use this provider for logins" instead of deleting it.
 </Warning>
 
+## Session policy
+
+### The risk
+
+A browser session that never expires, or that stays valid while nobody uses it, extends the time an attacker can use a stolen session or an unattended computer. Your identity provider decides how often people sign in, but the platform's own session decides how long a signed-in browser keeps working.
+
+### What is enforced
+
+Every browser session has an absolute expiry and an idle timeout. Under **Configuration › Session Policy**, a platform administrator (permission `runtime.plugins`) sets two maximums:
+
+| Setting | Effect | Range |
+| --- | --- | --- |
+| **Maximum Idle Timeout (seconds)** | A session with no request for this long is ended. A session that had no idle limit gets this limit. | 0 (no maximum), or 60 to 2592000 (30 days) |
+| **Maximum Session Lifetime (seconds)** | A session is ended this long after sign-in, whatever its activity. | 0 (no maximum), or 60 to 31536000 (365 days) |
+
+Both are 0 by default, so an upgrade keeps the session lifetimes of earlier releases.
+
+A maximum applies to new sessions when they are created, and the cookie lifetime follows it. It also applies to existing sessions: each request checks the session against the earlier of its own deadline and the deadline the maximum gives. When you lower a maximum, sessions that are already past it end at their next request. Raising a maximum never makes an existing session last longer.
+
+Each replica of the main service reads the policy again after at most 15 seconds, and at once on the replica that saved it. If the policy cannot be read, sign-in fails with 500 and requests with a session fail with 503. The platform does not let a session through without its bound.
+
+### Evidence
+
+Each session has a reference number that is not secret (`browser_sessions.ref`). The platform writes one audit event for each step of a session's life:
+
+| Action | When |
+| --- | --- |
+| `session.start` | A browser signed in. |
+| `session.expire` | The session passed its idle timeout or its absolute lifetime. `entity_name` gives the reason, `idle` or `absolute`. |
+| `session.logout` | The user signed out. |
+| `session.revoke` | The server ended the session: for example, an administrator deactivated the user, or SCIM deprovisioned them. |
+
+```json
+{
+  "event_type": "session",
+  "action": "session.expire",
+  "user_id": 4,
+  "entity_type": "browser_session",
+  "entity_id": 42,
+  "entity_name": "provider=oidc reason=idle",
+  "duration_ms": 3600000
+}
+```
+
+`duration_ms` is the age of the session when it ended. A background job writes these events within about a minute, exactly once each, and an expiry carries the time the session actually ended. The events go to your SIEM with the other audit events (see [Audit evidence and retention](/admin/enterprise-controls/audit-evidence-and-retention)). No cookie or token value is ever written.
+
+Every run that a browser session started records the session's reference (`execution_jobs.browser_session_ref`), so you can join a run to the session that started it. Runs started with an API token have no session reference.
+
+### Customer responsibility
+
+- Set the sign-in frequency and multi-factor policy in your identity provider. The session policy limits how long a browser stays signed in after that.
+- Choose maximums that match your organisation's policy for unattended devices.
+
 ## Connect an identity provider with SCIM
 
 SCIM lets an identity provider push its directory. It creates accounts when people join and deactivates them when they leave. The SCIM endpoint is `/api/v2/scim/v2`.
