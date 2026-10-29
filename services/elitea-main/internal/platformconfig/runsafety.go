@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/singleflight"
 )
 
 // SectionSessionPolicy is the administrator's bound on browser sessions
@@ -153,53 +154,150 @@ func missingTable(err error) bool {
 // an administrator saves it. A save invalidates this replica at once; other
 // replicas see it within the TTL.
 //
-// A failed read keeps the last good value. Before the first good read, the
-// error is returned and the caller decides.
+// The read never runs under the cache's lock, and at most one runs at a
+// time (singleflight). While a stale value is refreshed, other callers get
+// that value at once instead of queueing behind the database; only callers
+// with no value at all wait for the read in flight. A failed read keeps the
+// last good value and backs off (sectionRefreshBackoff, doubling up to
+// sectionRefreshMaxBackoff), so a slow or failing database costs one bounded
+// read per backoff, not one per call. Before the first good read, the error
+// is returned and the caller decides (the session and lease paths fail
+// closed).
 type CachedSection[T any] struct {
-	load func(context.Context) (T, error)
-	ttl  time.Duration
-	now  func() time.Time
+	load    func(context.Context) (T, error)
+	ttl     time.Duration
+	timeout time.Duration
+	now     func() time.Time
+	group   singleflight.Group
 
-	mu       sync.Mutex
-	value    T
-	loadedAt time.Time
-	loaded   bool
+	mu         sync.Mutex
+	value      T
+	loadedAt   time.Time
+	loaded     bool
+	refreshing bool
+	lastErr    error
+	failures   int
+	retryAt    time.Time
+	// generation counts Invalidate calls. A read that started before an
+	// Invalidate may predate the save that caused it, so its value is kept
+	// but not treated as fresh.
+	generation uint64
 }
 
 // DefaultSectionTTL is how long a replica keeps a cached section.
 const DefaultSectionTTL = 15 * time.Second
+
+// Bounds of one refresh of a cached section.
+const (
+	// sectionRefreshTimeout bounds one read, which runs detached from the
+	// caller that started it (its result serves every caller).
+	sectionRefreshTimeout = 5 * time.Second
+	// sectionRefreshBackoff is the wait after a first failed read; each
+	// further failure doubles it, up to sectionRefreshMaxBackoff.
+	sectionRefreshBackoff    = 500 * time.Millisecond
+	sectionRefreshMaxBackoff = 30 * time.Second
+)
 
 // NewCachedSection builds the cache. A ttl of 0 is DefaultSectionTTL.
 func NewCachedSection[T any](load func(context.Context) (T, error), ttl time.Duration) *CachedSection[T] {
 	if ttl <= 0 {
 		ttl = DefaultSectionTTL
 	}
-	return &CachedSection[T]{load: load, ttl: ttl, now: time.Now}
+	return &CachedSection[T]{load: load, ttl: ttl, timeout: sectionRefreshTimeout, now: time.Now}
 }
 
 // Get answers the cached value, reading it again once the TTL passed.
 func (c *CachedSection[T]) Get(ctx context.Context) (T, error) {
+	var zero T
+	c.mu.Lock()
+	now := c.now()
+	value, loaded, lastErr := c.value, c.loaded, c.lastErr
+	switch {
+	case loaded && now.Sub(c.loadedAt) < c.ttl:
+		c.mu.Unlock()
+		return value, nil
+	case now.Before(c.retryAt):
+		// A read failed recently: no read until the backoff is over.
+		c.mu.Unlock()
+		if loaded {
+			return value, nil
+		}
+		return zero, lastErr
+	case loaded && c.refreshing:
+		// Another caller refreshes the stale value: serve it meanwhile.
+		c.mu.Unlock()
+		return value, nil
+	}
+	c.refreshing = true
+	c.mu.Unlock()
+
+	// With no value yet, every caller waits for the one read in flight.
+	result := c.group.DoChan("section", func() (any, error) {
+		return c.refresh(context.WithoutCancel(ctx))
+	})
+	select {
+	case done := <-result:
+		if done.Err != nil {
+			if loaded {
+				return value, nil
+			}
+			return zero, done.Err
+		}
+		fresh, _ := done.Val.(T)
+		return fresh, nil
+	case <-ctx.Done():
+		if loaded {
+			return value, nil
+		}
+		return zero, ctx.Err()
+	}
+}
+
+// refresh reads the section once and records the outcome. A caller that
+// joined late, after the read it waited for had finished, gets that read.
+func (c *CachedSection[T]) refresh(ctx context.Context) (T, error) {
+	c.mu.Lock()
+	if c.loaded && c.now().Sub(c.loadedAt) < c.ttl {
+		value := c.value
+		c.refreshing = false
+		c.mu.Unlock()
+		return value, nil
+	}
+	generation := c.generation
+	c.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	value, err := c.load(ctx)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.refreshing = false
 	now := c.now()
-	if c.loaded && now.Sub(c.loadedAt) < c.ttl {
-		return c.value, nil
-	}
-	value, err := c.load(ctx)
 	if err != nil {
-		if c.loaded {
-			return c.value, nil
+		c.failures++
+		backoff := sectionRefreshBackoff
+		for i := 1; i < c.failures && backoff < sectionRefreshMaxBackoff; i++ {
+			backoff *= 2
 		}
+		c.lastErr, c.retryAt = err, now.Add(min(backoff, sectionRefreshMaxBackoff))
 		var zero T
 		return zero, err
 	}
-	c.value, c.loadedAt, c.loaded = value, now, true
+	c.value, c.loaded = value, true
+	if generation == c.generation {
+		c.loadedAt = now
+	}
+	c.lastErr, c.failures, c.retryAt = nil, 0, time.Time{}
 	return value, nil
 }
 
-// Invalidate makes the next Get read the section again.
+// Invalidate makes the next Get read the section again, even inside a
+// failure backoff: a save on this replica is a reason to look now.
 func (c *CachedSection[T]) Invalidate() {
 	c.mu.Lock()
 	c.loadedAt = time.Time{}
+	c.retryAt = time.Time{}
+	c.generation++
 	c.mu.Unlock()
 }
