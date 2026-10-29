@@ -16,11 +16,14 @@
 //
 //   - the platform's entries (platform_config `worker_egress.allowlist`);
 //   - the project's entries (its `worker_egress` project setting);
-//   - the host of every URL a toolkit, MCP server or configuration in the
-//     command is configured with (HostsFromSettings): the frozen toolkit set of
-//     an agent run, the toolkit of a direct read, a tool call or a tool
-//     discovery, the toolkit an index ingest reads, the configuration a
-//     validation checks.
+//   - the host of every URL a toolkit or MCP server in the command is
+//     configured with (HostsFromSettings), plus the hosts its toolkit type
+//     calls from a compiled-in endpoint (ImplicitToolkitHosts): the frozen
+//     toolkit set of an agent run, the toolkit of a direct read, a tool call
+//     or a tool discovery, the toolkit an index ingest reads.
+//
+// A configuration validation opens no connection (it is schema-only), so it
+// carries the effective mode with no entries and is never refused.
 //
 // Only the toolkits' SETTINGS are read, never user input, chat history or tool
 // arguments, so nothing a caller types can widen a run's allowlist.
@@ -135,6 +138,16 @@ func (r *Resolver) WorkerEgressPolicy(ctx context.Context, command *runtimev1.Wo
 	if settings.Mode != platformconfig.WorkerEgressAllowlist && !governed {
 		return nil, nil
 	}
+	if command.GetConfigurationValidation() != nil {
+		// A configuration validation is schema-only: the worker checks the
+		// settings against its pinned catalog and opens no connection
+		// (services/elitea-worker-rust/src/validation/mod.rs,
+		// execution/toolkit_delivery_processor.rs validate_configuration;
+		// its one fetch is the input, from Main). It carries the mode with
+		// no entries, which refuses every public host, and is never
+		// refused: nothing it reads could widen or break that.
+		return &runtimev1.WorkerEgressPolicyV1{Mode: runtimev1.WorkerEgressModeV1_WORKER_EGRESS_MODE_V1_ALLOWLIST, Allow: []string{}}, nil
+	}
 	projectID, err := strconv.ParseInt(command.GetResourceProjectId(), 10, 64)
 	if err != nil || projectID <= 0 {
 		return nil, refuse("The run names no project, so its worker egress allowlist cannot be assembled.")
@@ -234,13 +247,15 @@ func (r *Resolver) toolkitHosts(ctx context.Context, command *runtimev1.WorkerCo
 	case command.GetToolkitExecuteRead() != nil:
 		entryID, decode = command.GetToolkitExecuteRead().GetRequestEntryId(), HostsFromToolkitReadInput
 	case command.GetToolkitCallTool() != nil:
-		entryID = command.GetToolkitCallTool().GetSettingsEntryId()
+		call := command.GetToolkitCallTool()
+		entryID = call.GetSettingsEntryId()
+		decode = func(content []byte) ([]string, error) { return HostsForToolkit(call.GetToolkitType(), content) }
 	case command.GetToolkitAvailableTools() != nil:
-		entryID = command.GetToolkitAvailableTools().GetSettingsEntryId()
+		discovery := command.GetToolkitAvailableTools()
+		entryID = discovery.GetSettingsEntryId()
+		decode = func(content []byte) ([]string, error) { return HostsForToolkit(discovery.GetToolkitType(), content) }
 	case command.GetIndexIngest() != nil:
-		entryID = command.GetIndexIngest().GetToolkitConfigurationEntryId()
-	case command.GetConfigurationValidation() != nil:
-		entryID = command.GetConfigurationValidation().GetSettingsEntryId()
+		entryID, decode = command.GetIndexIngest().GetToolkitConfigurationEntryId(), HostsFromTypedToolkit
 	default:
 		return nil, nil
 	}

@@ -428,6 +428,8 @@ type EliteaRuntimeCommandOutbox struct {
 	RetiredAt                    pgtype.Timestamptz `db:"retired_at" json:"retired_at"`
 	RetirementCode               *string            `db:"retirement_code" json:"retirement_code"`
 	LastVisibilityAt             pgtype.Timestamptz `db:"last_visibility_at" json:"last_visibility_at"`
+	RefusalCode                  *string            `db:"refusal_code" json:"refusal_code"`
+	RefusalMessage               *string            `db:"refusal_message" json:"refusal_message"`
 }
 
 type EliteaRuntimeConfigurationLifecycleOutbox struct {

@@ -37,6 +37,33 @@ var (
 	_ workeregress.GovernedTargetReader = (*WorkerEgressSources)(nil)
 )
 
+// workerEgressTxKey carries an open transaction the sources read through.
+type workerEgressTxKey struct{}
+
+// withWorkerEgressTx makes the sources read the command's input entries and
+// security context through tx: an admission that prepares its command inside
+// its own uncommitted transaction (the synchronous tool call) wrote those
+// rows there, and a pool connection cannot see them until the commit.
+func withWorkerEgressTx(ctx context.Context, tx pgx.Tx) context.Context {
+	return context.WithValue(ctx, workerEgressTxKey{}, tx)
+}
+
+// workerEgressQuerier is what the sources read through: the pool, or the
+// admission's transaction.
+type workerEgressQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// querier answers the admission's transaction when ctx carries one, else the
+// pool.
+func (s *WorkerEgressSources) querier(ctx context.Context) workerEgressQuerier {
+	if tx, ok := ctx.Value(workerEgressTxKey{}).(pgx.Tx); ok && tx != nil {
+		return tx
+	}
+	return s.pool
+}
+
 // NewWorkerEgressSources reads through pool.
 func NewWorkerEgressSources(pool *pgxpool.Pool) (*WorkerEgressSources, error) {
 	if pool == nil {
@@ -53,7 +80,10 @@ func (s *WorkerEgressSources) WorkerEgressSettings(ctx context.Context) (platfor
 // WorkerEgressProjectEntries reads the project's own entries. A project with
 // no row has none. An undecodable row is an error, never "none": the assembly
 // then refuses the command instead of silently dropping the project's hosts.
-// The entries are returned as stored; the assembly validates them.
+// The entries are returned as stored; the assembly validates them. It always
+// reads through the pool, never an admission's transaction: no admission
+// writes this row, and a missing tenant table (undefinedTable) inside the
+// admission's transaction would abort it.
 func (s *WorkerEgressSources) WorkerEgressProjectEntries(ctx context.Context, projectID int64) ([]string, error) {
 	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
 	if err != nil {
@@ -80,9 +110,10 @@ SELECT data FROM %s.configuration WHERE type = $1 ORDER BY id LIMIT 1`, schema),
 	return setting.Allowlist, nil
 }
 
-// InputEntries reads the named entries of one input bundle.
+// InputEntries reads the named entries of one input bundle (through the
+// admission's transaction when ctx carries one: withWorkerEgressTx).
 func (s *WorkerEgressSources) InputEntries(ctx context.Context, inputBundleID string, entryIDs []string) (map[string][]byte, error) {
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.querier(ctx).Query(ctx, `
 SELECT entry_id, content_bytes
 FROM elitea_runtime.input_bundle_entries
 WHERE input_bundle_id = $1 AND entry_id = ANY($2::text[])`, inputBundleID, entryIDs)
@@ -113,7 +144,9 @@ WHERE input_bundle_id = $1 AND entry_id = ANY($2::text[])`, inputBundleID, entry
 // toolkit frozen at its digest alone resolves, per operation, to the run's
 // one usable grant, so every active `use` grant of the agent binding for that
 // toolkit counts. Each target answers its canonical identity and, when set,
-// its audience (the host a delegated token is used against).
+// its audience (the host a delegated token is used against). It reads
+// through the admission's transaction when ctx carries one
+// (withWorkerEgressTx): the context is written by that admission.
 func (s *WorkerEgressSources) GovernedEgressTargets(ctx context.Context, reference *runtimev1.ExecutionSecurityContextReferenceV1) ([]string, error) {
 	contentID := reference.GetContentEntryId()
 	if !securitycontext.IsContentID(contentID) || len(reference.GetDigest().GetValue()) != len(runtimedomain.Digest{}) {
@@ -121,7 +154,8 @@ func (s *WorkerEgressSources) GovernedEgressTargets(ctx context.Context, referen
 	}
 	executionID := strings.TrimPrefix(contentID, securitycontext.ContentIDPrefix)
 	var contextBytes, digest []byte
-	err := s.pool.QueryRow(ctx, `
+	db := s.querier(ctx)
+	err := db.QueryRow(ctx, `
 SELECT context_bytes, digest
 FROM elitea_runtime.execution_security_contexts
 WHERE execution_id = $1`, executionID).Scan(&contextBytes, &digest)
@@ -158,7 +192,7 @@ WHERE execution_id = $1`, executionID).Scan(&contextBytes, &digest)
 	if !agentIdentityIsUUID(binding) {
 		binding = ""
 	}
-	rows, err := s.pool.Query(ctx, `
+	rows, err := db.Query(ctx, `
 SELECT t.target_identity, t.audience
 FROM elitea_identity.target_bindings AS t
 WHERE t.tenant_project_id = $1 AND t.id = ANY($2::uuid[])

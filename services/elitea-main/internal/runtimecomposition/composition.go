@@ -355,7 +355,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, fmt.Errorf("construct worker egress sources: %w", err)
 	}
-	egressPolicy, err := workeregressapp.NewResolver(egressSources, egressSources, egressSources, egressSources)
+	// The platform section is read at most once per PlatformSettingsTTL (5s)
+	// per replica: an administrator's save reaches new commands within it.
+	egressPolicy, err := workeregressapp.NewResolver(workeregressapp.NewCachedPlatformReader(egressSources),
+		egressSources, egressSources, egressSources)
 	if err != nil {
 		return nil, err
 	}

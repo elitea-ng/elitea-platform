@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
@@ -132,13 +133,9 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 			}
 			// A stop is never refused for a legal hold (it is a safety
 			// control), but on a held conversation it keeps the question
-			// rather than deleting an empty turn (#1507).
-			held := false
-			if conversationID > 0 {
-				if held, err = conversationHeld(ctx, holdReader{tx}, strconv.Itoa(int(projectID)), conversationID); err != nil {
-					return err
-				}
-			}
+			// rather than deleting an empty turn (#1507). Nor does it fail
+			// when the hold cannot be read: it keeps the turn then.
+			held := stopKeepsHeldTurn(ctx, tx, int64(projectID), conversationID, row.ExecutionID)
 			projection, projectionErr := queries.ProjectCurrentAgentStop(
 				ctx,
 				sqlcgen.ProjectCurrentAgentStopParams{
@@ -295,6 +292,34 @@ var _ agentexecutionapp.GovernedRefusalSettler = (*CurrentAgentCancelRepository)
 
 // holdReader lets the cancel transaction answer conversationHeld, whose
 // querier returns pgx.Row.
+// stopKeepsHeldTurn answers whether a stop keeps the turn for a legal hold.
+// The lookup runs under a savepoint, so a failed read (it aborts nothing of
+// the stop's transaction) is logged and answered as held: keeping the rows
+// is the safe direction, and a stop must never fail for the hold lookup.
+func stopKeepsHeldTurn(ctx context.Context, tx sqlExecutor, projectID, conversationID int64, executionID string) bool {
+	if conversationID <= 0 {
+		return false
+	}
+	if _, err := tx.Exec(ctx, `SAVEPOINT stop_legal_hold_lookup`); err != nil {
+		slog.WarnContext(ctx, "agent stop: legal hold lookup unavailable; keeping the turn",
+			"execution_id", executionID, "project_id", projectID, "err", err)
+		return true
+	}
+	held, err := conversationHeld(ctx, holdReader{tx}, strconv.FormatInt(projectID, 10), conversationID)
+	if err != nil {
+		slog.WarnContext(ctx, "agent stop: legal hold lookup failed; keeping the turn",
+			"execution_id", executionID, "project_id", projectID, "conversation_id", conversationID, "err", err)
+		if _, rollbackErr := tx.Exec(ctx, `ROLLBACK TO SAVEPOINT stop_legal_hold_lookup`); rollbackErr != nil {
+			slog.WarnContext(ctx, "agent stop: roll back the legal hold lookup", "execution_id", executionID, "err", rollbackErr)
+		}
+		return true
+	}
+	if _, err := tx.Exec(ctx, `RELEASE SAVEPOINT stop_legal_hold_lookup`); err != nil {
+		slog.WarnContext(ctx, "agent stop: release the legal hold lookup", "execution_id", executionID, "err", err)
+	}
+	return held
+}
+
 type holdReader struct{ tx sqlExecutor }
 
 func (r holdReader) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {

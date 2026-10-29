@@ -23,11 +23,16 @@ var errUnreadableSettings = errors.New("the command's toolkit settings are not r
 
 // HostsFromSettings returns the hosts of the URL-valued fields of a settings
 // document (a toolkit's settings, an MCP server's, a configuration's), at any
-// depth: a field whose name is `url`, `endpoint`, `host` or `api_base`, or
+// depth: a field whose name is `url`, `endpoint`, `host`, `api_base` or
+// `server` (Rally's instance, families/rally/config.rs), or
 // ends in `_url`, `_endpoint` or `_host`. A value without a scheme is read as
 // https. Only http, https, ws and wss URLs count, and a host the egresslib
 // grammar does not accept (a template, a blank) is skipped.
 func HostsFromSettings(content []byte) ([]string, error) {
+	return hostsFromSettingsOfType("", content)
+}
+
+func hostsFromSettingsOfType(toolkitType string, content []byte) ([]string, error) {
 	if len(bytes.TrimSpace(content)) == 0 {
 		return nil, nil
 	}
@@ -37,13 +42,13 @@ func HostsFromSettings(content []byte) ([]string, error) {
 	if err := decoder.Decode(&document); err != nil {
 		return nil, errUnreadableSettings
 	}
-	walk := hostWalk{}
+	walk := hostWalk{toolkitType: toolkitType}
 	walk.value(document, 0)
 	return walk.hosts, nil
 }
 
 // HostsFromAgentInput reads an agent run's frozen toolkit set: the settings
-// of every entry of the input's `tools` (an ad hoc run) and of its
+// (and the type's compiled-in hosts, HostsForToolkit) of every entry of the input's `tools` (an ad hoc run) and of its
 // application's `version_details.tools` (an application run). Instructions,
 // user input, chat history and every other field are never read.
 func HostsFromAgentInput(content []byte) ([]string, error) {
@@ -61,11 +66,16 @@ func HostsFromAgentInput(content []byte) ([]string, error) {
 			return errUnreadableSettings
 		}
 		for _, entry := range entries {
+			var toolkitType string
+			if raw, ok := entry["type"]; ok {
+				_ = json.Unmarshal(raw, &toolkitType) // a non-string type names no family
+			}
 			settings, ok := entry["settings"]
 			if !ok {
+				hosts = append(hosts, ImplicitToolkitHosts(toolkitType)...)
 				continue
 			}
-			found, err := HostsFromSettings(settings)
+			found, err := HostsForToolkit(toolkitType, settings)
 			if err != nil {
 				return err
 			}
@@ -100,12 +110,13 @@ func HostsFromToolkitReadInput(content []byte) ([]string, error) {
 	if err := proto.Unmarshal(content, input); err != nil {
 		return nil, errors.New("the direct toolkit input is not readable")
 	}
-	return HostsFromSettings(input.GetToolkit())
+	return HostsForToolkit(input.GetToolkitType(), input.GetToolkit())
 }
 
 type hostWalk struct {
-	nodes int
-	hosts []string
+	toolkitType string
+	nodes       int
+	hosts       []string
 }
 
 func (w *hostWalk) value(value any, depth int) {
@@ -118,7 +129,9 @@ func (w *hostWalk) value(value any, depth int) {
 		for key, child := range typed {
 			if text, ok := child.(string); ok {
 				if urlField(key) {
-					if host, ok := hostOf(text); ok {
+					if host, ok := bareLabelHost(w.toolkitType, key, text); ok {
+						w.hosts = append(w.hosts, host)
+					} else if host, ok := hostOf(text); ok {
 						w.hosts = append(w.hosts, host)
 					}
 				}
@@ -136,7 +149,7 @@ func (w *hostWalk) value(value any, depth int) {
 func urlField(key string) bool {
 	key = strings.ToLower(key)
 	switch key {
-	case "url", "endpoint", "host", "api_base":
+	case "url", "endpoint", "host", "api_base", "server":
 		return true
 	}
 	return strings.HasSuffix(key, "_url") || strings.HasSuffix(key, "_endpoint") || strings.HasSuffix(key, "_host")
