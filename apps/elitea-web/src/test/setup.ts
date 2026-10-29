@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll } from 'vitest';
 import { setupServer } from 'msw/node';
+import { configure } from '@testing-library/react';
 
 // [S1] `toBeInTheDocument`/`toHaveTextContent`/etc. — every `shared/ui`
 // component test in this unit asserts against the rendered DOM via these
@@ -21,6 +22,16 @@ import '@testing-library/jest-dom/vitest';
 import { installWebStorageShim } from '@/shared/lib/webstorage.testshim';
 
 import { handlers } from './msw/handlers/index';
+
+// `findBy*`/`waitFor` give up after 1 s by default. CI runs this suite in five
+// shards on 4-vCPU runners with V8 coverage on, which makes a render several
+// times slower than on a laptop, so a correct test that waits for a lazy chunk
+// or a chained query timed out on whichever file the shard split happened to
+// load heavily (#1531 hit two different files on consecutive runs). One
+// generous ceiling here keeps that out of individual tests: a passing wait
+// still returns as soon as its assertion holds, and only a genuinely failing
+// one takes longer to report.
+configure({ asyncUtilTimeout: 5_000 });
 
 const shimmedStorages = installWebStorageShim();
 
