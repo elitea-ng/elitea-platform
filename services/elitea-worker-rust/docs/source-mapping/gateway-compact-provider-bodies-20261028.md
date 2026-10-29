@@ -180,25 +180,62 @@ probes guard it (Resilience).
 
 | Component × phase | Before | After | Evidence |
 |---|---|---|---|
-| LLM gateway × model call (before first token), run with an active instruction or markup in content | **F**: typed `model_gateway.forbidden`, every attempt, behind an edge that scores indented bodies | Not refused for this cause. Other refusals keep their typed failure (F). | `TestProviderBodiesAreCompact`; live before/after above |
+| LLM gateway × model call (before first token), run with an active instruction or markup in content | **F**: typed `model_gateway.forbidden`, every attempt, behind an edge that scores indented bodies | Not refused for this cause. Other refusals keep their typed failure (F). | `TestProviderBodiesAreCompact`; live before/after; browser A/B on `ctx403` (executions `3077849a…` → `0d8e2e74…`, `29949835…`) |
 
 No other rows change.
 
 ## Real-browser evidence
 
-**Not collected. Blocked.** The rules forbid starting an image build or a stack below ~30 GiB free. When the fix was
-ready, `/System/Volumes/Data` had 22 GiB free. The only stack with the project-context fixture is `fanpar`, which
-belongs to another session and may not be redeployed without the user's approval.
+Collected 2026-10-29 on my own stack `ctx403` (`http://ctx403.localhost:19400`, Chrome, mock OIDC subject
+`admin@centry.user`). No response mocks. Real model `eu.anthropic.claude-haiku-4-5-20251001-v1:0` through the
+OpenAI-compatible credential of project 1 (`https://dev.elitea.ai/llm/v1`).
 
-What remains: build `elitea-llm-gateway` from this branch and run the §3b binary check. Then, on a stack with project
-118's context enabled, run an Agent and an ad hoc chat ("what is the project verification color?"), confirm the
-answer names LIME-953, and reload the conversation. The PR stays a draft until this is done.
+The stack was brought up with `production-profile.pre-defaults-20261019/stack.sh up` (real-model dump
+`product-real-models-main-d5e966074.dump`). `verify-profile` passed 50 of 50, both before and after the gateway swap.
+
+Images:
+
+| Service | Image |
+|---|---|
+| Main | `elitea-main:2a2-be5a8ed4c` |
+| Worker | `elitea-worker-rust:2a2-be5a8ed4c` |
+| Web | `elitea-web:2a2-be5a8ed4c` |
+| Supervisor | `elitea-sandbox-supervisor:2a2-40178539e` |
+| Runners | `elitea-code-runner:ctx403-be5a8ed4c-{deno,rust}` (built from `be5a8ed4c`, which contains #1160) |
+| Gateway, control | `elitea-llm-gateway:main-d5e966074-verify` (`108750a4…`) |
+| Gateway, this branch | `elitea-llm-gateway:ctx403-a7dd93bcc` (`983856f9…`) |
+
+These are the same Main, Worker, Web and Supervisor images as the stack where the refusal was first seen. Only the
+gateway changes between the two runs, so the A/B isolates this change.
+
+§3b binary check (`stack.sh binary-check <image> "providerwire: bifrost provider bodies are still indented" --path
+/elitea-llm-gateway`):
+
+- `ctx403-a7dd93bcc`: count=1, OK;
+- `main-d5e966074-verify`: count=0 (control).
+
+Fixture: Settings → Project Context in project 2 (Private), created through the UI. It is enabled, with no activation
+description, and its content is "The revision verification color is LIME-953. Always include this exact code when
+asked for the project verification color." The saved Agent "Context color agent ctx403" (id 170, version 196) was
+created through the UI with the model set to Haiku.
+
+| Run | Gateway | Execution | Result in the browser | Logs |
+|---|---|---|---|---|
+| Ad hoc chat 887, "What is the project verification color?" | control | `3077849a49f1a302cd210c9458475dc8` (FAILED) | "The model service denied access. Ask an administrator to check the model credentials and project permissions." | Gateway `llm_provider_refusal` status 403, `gateway_origin:false`. Worker `model_gateway.forbidden`, `tool_count=1`. |
+| Ad hoc chat 888, same question | this branch | `0d8e2e74d861d5db3181f8f448a36579` (SUCCEEDED) | "The project verification color is LIME-953." | 2 model calls, `tool_count=1`, 0 refusals |
+| Saved Agent 170, chat 890, same question | this branch | `299498353c64a990114c1913f8aa7664` (SUCCEEDED) | The model called `read_project_context` (tool card with the frozen content), then answered "The project verification color is LIME-953." | 2 model calls, `tool_count=1`, 0 refusals |
+
+After a reload:
+- chats 888 and 890 still show the LIME-953 answers;
+- chat 887 still shows the refusal.
+
+The stack was torn down after recording (`stack.sh down --name ctx403 --volumes`).
 
 ## Fixtures
 
-None created by this change. Project 118 and its project context were created by the session working on FU-246
-(PR #1511). That context was `enabled:false` when this investigation read it, so the project-context run cannot be
-repeated on `fanpar` as it stands. The replay used the frozen input bundle of the refused run.
+- Bisect and live proof: the frozen input bundle of the refused `fanpar` run (project 118, created by the FU-246
+  session). Nothing was changed on `fanpar`.
+- Browser proof: the project context and Agent 170 on my own stack were created through the UI, as described above.
 
 ## Follow-ups
 
@@ -208,5 +245,15 @@ repeated on `fanpar` as it stands. The replay used the frozen input bundle of th
   the body. The gateway already returns "upstream provider returned an HTML error page (status 403)" for an edge page
   (`internal/llmproxy/httpio.go:238`). The Worker could read the bounded body as it does for 400 and stop blaming the
   project.
+- Project-context parity with the current platform:
+  - With no activation description, the current platform puts the context straight into the instructions under a
+    `# Project Context` markdown heading and offers no tool
+    (`pylon_main/plugins/elitea_core/utils/project_context_utils.py:8-22`).
+  - Only with an activation description does it withhold the content and bind `read_project_context`
+    (`elitea_sdk/runtime/middleware/project_context.py`).
+  - The Worker renders an `<active_instruction …>` block and still exposes `read_project_context` when the context is
+    already active (`libs/rust/agent-runtime/src/instruction_authority.rs:234`, `toolsets`).
+  - This is not the cause of the refusal: the current platform sends compact JSON through LiteLLM. It is a
+    behavioural difference to settle separately.
 - The Worker-side content workarounds made for the 2026-10-19 HITL refusals (see that note) are no longer needed for
   this upstream. Keep or revert them deliberately.
