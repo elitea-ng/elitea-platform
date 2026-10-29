@@ -22,6 +22,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/changesync"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextsettings"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
@@ -825,7 +826,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := h.repo.Create(r.Context(), projectID, conv)
 	if err != nil {
-		apierr.Write(w, err)
+		writeRepoError(w, err)
 		return
 	}
 	if h.events != nil {
@@ -1521,7 +1522,7 @@ func (h *Handler) AddParticipant(w http.ResponseWriter, r *http.Request) {
 	}
 	addedIDs, err := h.repo.AddParticipants(r.Context(), projectID, conversationID, bodyList)
 	if err != nil {
-		apierr.Write(w, err)
+		writeRepoError(w, err)
 		return
 	}
 
@@ -1671,7 +1672,7 @@ func (h *Handler) UpdateEntitySettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.UpdateEntitySettings(r.Context(), projectID, conversationID, participantID, body); err != nil {
-		apierr.Write(w, err)
+		writeRepoError(w, err)
 		return
 	}
 	if participant != nil {
@@ -2208,6 +2209,18 @@ func metaOrEmpty(meta map[string]any) map[string]any {
 		return map[string]any{}
 	}
 	return meta
+}
+
+// writeRepoError answers a participant write's failure. A composition refusal
+// carries its registered code next to the named text, as the attach route
+// answers it (the pipeline editor's test chat shows the text for that code
+// only, FU-249); anything else keeps apierr's plain body.
+func writeRepoError(w http.ResponseWriter, err error) {
+	if refusal := applicationcomposition.Refusal(err); refusal != nil {
+		writeJSON(w, refusal.Status, map[string]any{"error": refusal.Message, "code": refusal.Code})
+		return
+	}
+	apierr.Write(w, err)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

@@ -2076,6 +2076,87 @@ async fn postgres_a_wake_lost_inside_a_child_pipeline_resumes_the_answered_branc
     db.pool.close().await;
 }
 
+/// FU-249 follow-up: the child pipeline's Parallel parked, only branch `a`
+/// answered; in the wake `a`'s resumed model call fails. Under On Error
+/// `continue` `a` ends failed, `b` and `c` are re-raised and park again: the
+/// failed branch never ends the run or drops the other branches' cards.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_branch_failing_in_a_child_pipeline_wake_keeps_the_other_cards() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let (first, _) = assembler(
+        &db.pool,
+        (0..3)
+            .map(|_| TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()))
+            .collect(),
+        pipeline_connector(),
+        parallel_child_pipeline(),
+    );
+    let request = child_parallel_request();
+    let invocation = first
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the child fan-out: {error}"));
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .expect("the child's Parallel parks the run");
+    let parked_keys = cards
+        .iter()
+        .map(|card| {
+            card["interrupt_key"]
+                .as_str()
+                .expect("a card key")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(parked_keys.len(), 3, "{cards:?}");
+    ledger.decide(&parked_keys[0], "answer", Some("Staging"));
+
+    let (woken, _) = assembler(
+        &db.pool,
+        (0..4)
+            .map(|_| TestModelGatewayOutcome::Unavailable)
+            .collect(),
+        pipeline_connector(),
+        parallel_child_pipeline(),
+    );
+    let wake = child_parallel_wake();
+    let invocation = woken
+        .with_fanout_decisions_for_tests(ledger.client(2))
+        .assemble(claim(&wake, 2))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
+    let (members, cards) = run_collecting(invocation)
+        .await
+        .expect("a failed branch parks the others again, never fails the run");
+    assert!(
+        members
+            .iter()
+            .any(|member| member["fanout_v1"]["member"] == "a" && member["status"] == "failed"),
+        "{members:?}"
+    );
+    let keys = cards
+        .iter()
+        .filter_map(|card| card["interrupt_key"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        keys,
+        [parked_keys[1].as_str(), parked_keys[2].as_str()],
+        "{cards:?}"
+    );
+    db.pool.close().await;
+}
+
 /// PM-2: a Parallel two Agent-node levels down (root → `delegate` → saved P1
 /// → `inner` → saved P2 holding the Parallel). Park, answer `a`, lose the wake
 /// while `a`'s resumed model call is in flight: the reclaim walks the frozen
