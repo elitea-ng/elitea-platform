@@ -1968,6 +1968,12 @@ pub(crate) enum TestModelGatewayOutcome {
         marker: &'static str,
         response: Response<Body>,
     },
+    /// Served in order, but only once `gate` is notified: a branch whose reply
+    /// must wait for something the test does (a card decided live).
+    ResponseAfter {
+        gate: Arc<tokio::sync::Notify>,
+        response: Response<Body>,
+    },
     Unavailable,
     Pending,
     /// End the test process at this model request: a Worker that dies after
@@ -2060,6 +2066,10 @@ impl ModelGatewayTransport for TestModelGatewayTransport {
             TestModelGatewayOutcome::Response(response)
             | TestModelGatewayOutcome::ResponseForModel { response, .. }
             | TestModelGatewayOutcome::ResponseForRequest { response, .. } => Ok(response),
+            TestModelGatewayOutcome::ResponseAfter { gate, response } => {
+                gate.notified().await;
+                Ok(response)
+            }
             TestModelGatewayOutcome::Unavailable => Err(ModelGatewayTransportError::Unavailable),
             TestModelGatewayOutcome::Pending => std::future::pending().await,
             TestModelGatewayOutcome::ExitProcess(code) => std::process::exit(code),

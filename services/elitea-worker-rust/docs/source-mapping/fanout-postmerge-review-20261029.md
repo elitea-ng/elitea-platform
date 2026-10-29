@@ -46,6 +46,16 @@ PM-7, PM-8, PM-11, PM-12 and the named gaps are FU-255 to FU-261 in `FOLLOWUPS-2
   projector needed an explicit inline-member route.
 - **Test timing.** The real-PG "lose mid model call" step dropped the run after a fixed 800 ms, which failed under load.
   It now waits for the model request itself.
+- **A live decision can land after the activation parked.** That is correct, because Main then wakes the parked run.
+  But the tests that decide a card while the run streams assumed the decision always arrives first, and flaked under
+  load:
+  - FU-246's `postgres_fanout_agent_branch_asks_and_resumes_with_the_answer` (#1511) failed in CI on #1528 with 3
+    model requests where it expected 4;
+  - locally, PM-1's crash child outlived the approval, and PM-6's third branch failed before its drop.
+
+  The fix: the member that could finish first now answers only once the cards are decided
+  (`TestModelGatewayOutcome::ResponseAfter`), and PM-6's dropped first process keeps that call in flight (`Pending`).
+  The module then passed 5 of 5 runs at 16 test threads (34 passed each, 0 skipped); before, 2 of 3 runs failed.
 
 ## Changed paths
 

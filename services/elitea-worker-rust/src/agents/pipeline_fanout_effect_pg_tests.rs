@@ -769,11 +769,18 @@ async fn postgres_fanout_agent_branches_approve_and_reject_their_own_calls() {
         .expect("apply checkpoint migration");
     let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
     let tool_calls = Arc::new(AtomicUsize::new(0));
+    // `third` answers only once both cards are decided, so the activation is
+    // still running when they are: the live path, never a park and wake.
+    let decided = Arc::new(tokio::sync::Notify::new());
+    let decisions = AtomicUsize::new(0);
     let (platform, model_facade, captured) = saved_runtime(
         vec![
             TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
             TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(pipeline_text_response("done")),
+            TestModelGatewayOutcome::ResponseAfter {
+                gate: Arc::clone(&decided),
+                response: pipeline_text_response("done"),
+            },
             TestModelGatewayOutcome::Response(pipeline_text_response("done")),
             TestModelGatewayOutcome::Response(pipeline_text_response("done")),
         ],
@@ -805,6 +812,9 @@ async fn postgres_fanout_agent_branches_approve_and_reject_their_own_calls() {
             (Some("first"), Some("tool_guard")) => ledger.decide(key, "approve", None),
             (Some("second"), Some("tool_guard")) => ledger.decide(key, "reject", None),
             other => panic!("unexpected card {other:?}"),
+        }
+        if decisions.fetch_add(1, Ordering::AcqRel) == 1 {
+            decided.notify_one();
         }
     })
     .await
@@ -841,12 +851,17 @@ async fn postgres_fanout_agent_branch_asks_and_resumes_with_the_answer() {
         .await
         .expect("apply checkpoint migration");
     let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    // `third` answers only once the card is decided: the live path.
+    let decided = Arc::new(tokio::sync::Notify::new());
     let (assembler, captured) = assembler(
         &db.pool,
         vec![
             TestModelGatewayOutcome::Response(pipeline_text_response("first done")),
             TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
-            TestModelGatewayOutcome::Response(pipeline_text_response("third done")),
+            TestModelGatewayOutcome::ResponseAfter {
+                gate: Arc::clone(&decided),
+                response: pipeline_text_response("third done"),
+            },
             TestModelGatewayOutcome::Response(pipeline_text_response("second done")),
         ],
         Arc::new(PipelineMcpConnector {
@@ -868,6 +883,7 @@ async fn postgres_fanout_agent_branch_asks_and_resumes_with_the_answer() {
             (Some("second"), Some("ask_user")) => ledger.decide(key, "answer", Some("Staging")),
             other => panic!("unexpected card {other:?}"),
         }
+        decided.notify_one();
     })
     .await
     .expect("the answered member resumes and the pipeline completes");
@@ -920,6 +936,9 @@ async fn postgres_an_agent_member_lost_at_its_card_frame_is_decided_from_the_dur
         vec![
             TestModelGatewayOutcome::Response(pipeline_text_response("first done")),
             TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
+            // `third` may start before the run is dropped at the card: its
+            // call stays in flight instead of failing the branch durably.
+            TestModelGatewayOutcome::Pending,
         ],
         pipeline_connector(),
         asking_agent(),
@@ -3004,12 +3023,18 @@ async fn postgres_fanout_effect_child() {
     match std::env::var(PHASE_ENV).expect("phase").as_str() {
         "crash" if mode == "approved_effect" => {
             let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+            // `third` runs while `second` waits on its card, and answers only
+            // once the card is approved: the approval is taken live, never
+            // after the activation parked.
+            let decided = Arc::new(tokio::sync::Notify::new());
             let (platform, model_facade, _) = saved_runtime(
-                // `third` runs while `second` waits on its card.
                 vec![
                     TestModelGatewayOutcome::Response(pipeline_text_response("first done")),
                     TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
-                    TestModelGatewayOutcome::Response(pipeline_text_response("third done")),
+                    TestModelGatewayOutcome::ResponseAfter {
+                        gate: Arc::clone(&decided),
+                        response: pipeline_text_response("third done"),
+                    },
                 ],
                 effectful_agent(),
             );
@@ -3037,6 +3062,7 @@ async fn postgres_fanout_effect_child() {
                     (Some("second"), Some("tool_guard")) => ledger.decide(key, "approve", None),
                     other => panic!("crash: unexpected card {other:?}"),
                 }
+                decided.notify_one();
             })
             .await;
             panic!("crash: the process outlived the approved call: {outcome:?}");
