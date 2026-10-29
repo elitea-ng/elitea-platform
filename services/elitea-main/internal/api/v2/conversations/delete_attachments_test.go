@@ -556,3 +556,34 @@ func TestDeleteMessage_DeletesAcrossSeveralBuckets(t *testing.T) {
 	assertStrings(t, "deleted object keys", obj.deleted, []string{"conv/new.pdf", "conv/old.pdf"})
 	assertStrings(t, "surviving metadata rows", att.recordedKeys(), nil)
 }
+
+// heldRepo is a repository that reports an active legal hold.
+type heldRepo struct{ *mockRepo }
+
+func (heldRepo) ConversationHeld(context.Context, string, string) (bool, error) { return true, nil }
+
+// A legal hold (ADR-0042 decision 4) keeps a conversation's files: the
+// conversation-wide delete answers 409 BEFORE any byte is removed, because the
+// bytes go first and the repository's own refusal would come too late.
+func TestDeleteAttachments_LegalHoldRefusesBeforeBytes(t *testing.T) {
+	var ops []string
+	att := newFakeAttachmentStore()
+	att.seedBucket(1, "chat-attachments", 7)
+	att.seedObject(7, "conv-abc/one.txt")
+	obj := newDeleteFakeObjectStore(&ops, "conv-abc/one.txt")
+
+	stripped := false
+	h := conversations.NewHandler(heldRepo{metaStrippingRepo(&stripped)}).
+		WithObjectStore(obj).
+		WithAttachmentStore(&opsLoggingAttachmentStore{fakeAttachmentStore: att, ops: &ops})
+
+	rec := doDeleteAttachments(t, h, "1", "conv-abc")
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(obj.deleted) != 0 || len(ops) != 0 || stripped {
+		t.Fatalf("a held conversation lost attachments: deleted %v ops %v stripped %v", obj.deleted, ops, stripped)
+	}
+	assertStrings(t, "remaining metadata rows", att.recordedKeys(), []string{"conv-abc/one.txt"})
+}

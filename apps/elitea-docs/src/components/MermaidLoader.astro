@@ -1,0 +1,85 @@
+---
+/**
+ * Renders every ```mermaid diagram on the page (src/plugins/remark-mermaid.ts
+ * leaves a <pre> with the chart source), in the Elitea palette of the
+ * current colour scheme, and again when the reader switches it. Mermaid is
+ * loaded only on a page that has a diagram.
+ */
+---
+
+<script>
+  type Tokens = typeof import('../../../../libs/ts/client-core/src/brand/tokens.json');
+
+  function themeFor(tokens: Tokens, dark: boolean) {
+    const s = tokens.schemes[dark ? 'dark' : 'light'];
+    const font = tokens.typography.ui.stack;
+    return {
+      startOnLoad: false,
+      securityLevel: 'strict' as const,
+      theme: 'base' as const,
+      fontFamily: font,
+      themeVariables: {
+        darkMode: dark,
+        background: s.bg,
+        fontFamily: font,
+        primaryColor: s.elevated,
+        primaryTextColor: s.text,
+        primaryBorderColor: s.borderStrong,
+        secondaryColor: s.surface,
+        tertiaryColor: s.surface,
+        lineColor: s.textMuted,
+        textColor: s.text,
+        mainBkg: s.elevated,
+        nodeBorder: s.borderStrong,
+        clusterBkg: s.surface,
+        clusterBorder: s.border,
+        edgeLabelBackground: s.bg,
+        actorBkg: s.elevated,
+        actorBorder: s.borderStrong,
+        actorTextColor: s.text,
+        signalColor: s.textMuted,
+        signalTextColor: s.text,
+        noteBkgColor: s.surface,
+        noteBorderColor: s.border,
+        noteTextColor: s.text,
+      },
+    };
+  }
+
+  let rendering = 0;
+
+  async function renderAll(): Promise<void> {
+    const figures = [...document.querySelectorAll<HTMLElement>('figure.docs-mermaid')];
+    if (figures.length === 0) return;
+    const run = ++rendering;
+    // Only a page with a diagram loads mermaid and the brand tokens.
+    const [{ default: mermaid }, { default: tokens }] = await Promise.all([
+      import('mermaid'),
+      import('../../../../libs/ts/client-core/src/brand/tokens.json'),
+    ]);
+    if (run !== rendering) return;
+    mermaid.initialize(themeFor(tokens, document.documentElement.dataset['theme'] === 'dark'));
+    for (const [index, figure] of figures.entries()) {
+      const source = figure.querySelector('pre.docs-mermaid__source')?.textContent ?? '';
+      try {
+        const { svg } = await mermaid.render(`docs-mermaid-${run}-${index}`, source);
+        if (run !== rendering) return;
+        figure.querySelector('.docs-mermaid__diagram')?.remove();
+        const diagram = document.createElement('div');
+        diagram.className = 'docs-mermaid__diagram';
+        diagram.innerHTML = svg;
+        figure.append(diagram);
+        figure.dataset['rendered'] = 'true';
+      } catch {
+        if (run !== rendering) return;
+        figure.dataset['rendered'] = 'error';
+      }
+    }
+  }
+
+  void renderAll();
+  new MutationObserver(() => void renderAll()).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme'],
+  });
+</script>

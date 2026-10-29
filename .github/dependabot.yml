@@ -15,8 +15,8 @@
 #
 # HOW THE ECOSYSTEMS ARE SPLIT. ONE ENTRY PER ECOSYSTEM, listing every
 # manifest directory under `directories`, and EVERY entry that opens pull
-# requests joins the one multi-ecosystem group `weekly` with `patterns: ["*"]`.
-# That makes dependabot open ONE pull request per week for the whole
+# requests joins the one multi-ecosystem group `nightly` with `patterns: ["*"]`.
+# That makes dependabot keep ONE pull request open for the whole
 # repository — actions, Go, Cargo, pip and npm together — so CI runs once on
 # the combined change instead of once per ecosystem against the free plan's
 # 20-job cap. (Before: one grouped PR per ecosystem, five a week; before that,
@@ -26,25 +26,36 @@
 # not name.
 #
 # THE COST OF ONE PULL REQUEST: one red bump holds every other one. Fix it on
-# the branch (pin the package back with a reason and an `ignore` entry below),
-# never by merging the PR red. Security-alert updates still arrive as their
-# own pull requests; GitHub opens those outside the group.
+# the branch — adopt the bump (a major's code changes belong there too) or, if
+# it truly cannot land yet, pin it back with a reason and an `ignore` entry
+# below — never by merging the PR red.
 #
-# GROUPING IS DELIBERATE. Each group takes ALL update levels (major, minor,
-# patch) into the same pull request. A major bump landing alongside minor and
-# patch ones needs the same review either way, so splitting it out only
-# doubled the PR count without buying a safer default. What the groups do NOT
-# take are the packages under `ignore`, each with the reason it is pinned by
-# something dependabot cannot see (a toolchain floor, a frozen runtime
-# profile, a peer constraint in another manifest). The 2026-09-02 burst — ten
-# grouped bumps merged with their CI cancelled, main red for an evening — is
-# the measurement behind every one of those entries.
+# SECURITY UPDATES ARE OFF, AND THAT IS A REPOSITORY SETTING, NOT THIS FILE.
+# GitHub opens a security-update PR per alert per directory, outside every
+# group and on no schedule: on 2026-10-28 one zip/rustls/seroval/node-forge
+# advisory burst opened six of them at once next to the grouped PR, each with
+# its full CI matrix. So "Dependabot security updates" is disabled
+# (Settings → Code security, or `gh api -X DELETE
+# repos/elitea-ng/elitea-platform/automated-security-fixes`); Dependabot ALERTS
+# stay on. A patched version reaches main through the nightly group, which
+# bumps to latest, majors included, unless the package is under `ignore`
+# below. Do not turn the setting back on to "get the fix faster": it brings
+# back one PR per advisory per directory.
 #
-# SCHEDULE. The group's: Saturday 03:00 Europe/Warsaw, outside working hours
-# and outside the 20-job concurrency window a weekday push competes for. An
-# entry inside the group carries no schedule of its own (the group's wins).
-# The two silenced pip entries keep theirs — they open nothing and sit outside
-# the group.
+# MAJORS ARE IN, ON PURPOSE (owner, 2026-10-28). The group takes ALL update
+# levels — major, minor, patch, and the breaking 0.x minors — and nothing is
+# held back for being a major: the PR is reviewed and the code adopted on its
+# branch before merge, so a pin that only says "this major needs work" just
+# hides the work. What `ignore` still holds is narrower: a release known to be
+# BROKEN (a regression upstream, measured, with the lift condition stated) and
+# a package an ADR says moves only by hand. Do not add a major-only ignore to
+# make the PR green; do the migration on the branch.
+#
+# SCHEDULE. The group's: nightly at 03:00 Europe/Warsaw, outside working
+# hours and outside the 20-job concurrency window a daytime push competes for.
+# With `open-pull-requests-limit: 1` a night with new releases refreshes the
+# one open PR rather than opening a second. An entry inside the group carries
+# no schedule of its own (the group's wins).
 #
 # WHAT DEPENDABOT CANNOT DO HERE, stated so the next reader does not assume
 # coverage that is absent:
@@ -67,10 +78,9 @@
 version: 2
 
 multi-ecosystem-groups:
-  weekly:
+  nightly:
     schedule:
-      interval: weekly
-      day: saturday
+      interval: daily
       time: "03:00"
       timezone: "Europe/Warsaw"
     open-pull-requests-limit: 1
@@ -96,7 +106,7 @@ updates:
       - /.github/actions/npm-cache
       - /.github/actions/pull-stack-images
       - /.github/actions/stack-images
-    multi-ecosystem-group: weekly
+    multi-ecosystem-group: nightly
     patterns: ["*"]
 
   - package-ecosystem: gomod
@@ -117,82 +127,72 @@ updates:
       - /conformance/nativeclient
       - /conformance/governed
       - /deploy/governed-mocks
-    multi-ecosystem-group: weekly
+    multi-ecosystem-group: nightly
     patterns: ["*"]
-    ignore:
-      # bifrost core 1.8 requires Go 1.27; the gateway ships on golang:1.26-trixie
-      # with GOTOOLCHAIN=local and is tested on the 1.26 series
-      # (scripts/ci/check-gateway-toolchain.sh). Moving the toolchain is a
-      # deliberate change of image, runner and gate, not a dependency bump (#653).
-      - dependency-name: github.com/maximhq/bifrost/core
-        update-types: ["version-update:semver-minor", "version-update:semver-major"]
 
+  # CARGO IS THREE ENTRIES, NOT ONE, and all three stay in the `nightly` group,
+  # so it is still one pull request. Each entry is one Dependabot job, and a
+  # job is cancelled at ~55 minutes: the single ten-directory entry ran 43-46
+  # min when it finished and was cancelled mid-resolution on 2026-10-23,
+  # 10-24 and three times on 10-28 (once majors were unlocked), and a
+  # cancelled ecosystem means the multi-ecosystem PR is never opened. The
+  # split balances lockfile size (~1.6-1.8k packages per entry). A new crate
+  # directory goes into the lightest entry, never a fourth unrelated list.
   - package-ecosystem: cargo
     directories:
+      - /libs/rust
       - /services/elitea-worker-rust
       - /services/elitea-code-runner
       - /services/elitea-code-runner/adapters/rust
-      - /services/elitea-deepwiki-engine
-      - /libs/rust
-      - /services/elitea-inventory-engine
-      - /services/elitea-vector
-      - /services/elitea-doc-extractor
-      - /apps/elitea-desktop/src-tauri
-      # The desktop's document extractor: xberg in a lockfile of its own.
-      - /apps/elitea-desktop/doc-extract-sidecar
-    multi-ecosystem-group: weekly
+    multi-ecosystem-group: nightly
     patterns: ["*"]
     ignore:
-      # xberg 1.3.6 (the document extractor, pinned exactly) declares
-      # `zip >= 7.0.0` and does not compile against zip 9 (`ZipFile::name`
-      # became a Result). services/elitea-doc-extractor pins zip =8.6.0 so its
-      # fresh lock resolves what the engines' locks already hold; a bump of
-      # zip alone is a red build there until xberg moves.
-      - dependency-name: zip
-        update-types: ["version-update:semver-major"]
       # libs/rust/office-core pins zavora-slide, zavora-docx and zavora-xlsx
       # exactly, and its sub-crates move only with them (ADR-0032 decision 5):
       # a bump is a reviewed PR that reruns the hostile corpus, never a scanner
       # PR. tests/isolation.rs asserts the locked version of every zavora-*.
+      # Repeated in all three cargo entries: every workspace that path-depends
+      # on libs/rust carries zavora-* in its own lock.
       - dependency-name: "zavora-*"
-      # sqlx 0.x minors change the query/executor associated types the SQL
-      # client and the checkpointer are written against (0.9 broke both, #661).
-      - dependency-name: sqlx
-        update-types: ["version-update:semver-minor", "version-update:semver-major"]
-      # The OpenTelemetry crates move as a set WITH tracing-opentelemetry,
-      # which is the bridge src/diagnostics.rs actually builds its layer from.
-      # tracing-opentelemetry 0.33.0 is the newest release and it requires
-      # opentelemetry ^0.32.0, so a bump of the three crates below does not
-      # fail to resolve — cargo keeps BOTH majors in the lock, compiles the
-      # bridge against 0.32 and our code against 0.33, and the build dies on
-      # `SdkTracer: Tracer is not satisfied` plus two `Context` type mismatches
-      # (#992). The set moves when tracing-opentelemetry ships a release that
-      # takes the new major, not one crate at a time.
-      - dependency-name: opentelemetry
-      - dependency-name: opentelemetry-otlp
-      - dependency-name: opentelemetry_sdk
+
+  - package-ecosystem: cargo
+    directories:
+      - /services/elitea-inventory-engine
+      - /services/elitea-deepwiki-engine
+      - /services/elitea-doc-extractor
+    multi-ecosystem-group: nightly
+    patterns: ["*"]
+    ignore:
+      # libs/rust/office-core pins zavora-slide, zavora-docx and zavora-xlsx
+      # exactly, and its sub-crates move only with them (ADR-0032 decision 5):
+      # a bump is a reviewed PR that reruns the hostile corpus, never a scanner
+      # PR. tests/isolation.rs asserts the locked version of every zavora-*.
+      # Repeated in all three cargo entries: every workspace that path-depends
+      # on libs/rust carries zavora-* in its own lock.
+      - dependency-name: "zavora-*"
+
+  - package-ecosystem: cargo
+    directories:
+      - /apps/elitea-desktop/src-tauri
+      # The desktop's document extractor: xberg in a lockfile of its own.
+      - /apps/elitea-desktop/doc-extract-sidecar
+      - /services/elitea-vector
+    multi-ecosystem-group: nightly
+    patterns: ["*"]
+    ignore:
+      # libs/rust/office-core pins zavora-slide, zavora-docx and zavora-xlsx
+      # exactly, and its sub-crates move only with them (ADR-0032 decision 5):
+      # a bump is a reviewed PR that reruns the hostile corpus, never a scanner
+      # PR. tests/isolation.rs asserts the locked version of every zavora-*.
+      # Repeated in all three cargo entries: every workspace that path-depends
+      # on libs/rust carries zavora-* in its own lock.
+      - dependency-name: "zavora-*"
 
   - package-ecosystem: pip
     directories:
       - /libs/proto
-    multi-ecosystem-group: weekly
+    multi-ecosystem-group: nightly
     patterns: ["*"]
-    ignore:
-      # libs/proto is installed next to the python worker, which requires
-      # protobuf < 7; a major here cannot resolve with it (#667).
-      - dependency-name: protobuf
-        update-types: ["version-update:semver-major"]
-      # grpcio-tools is the SAME constraint one level down, and it is the one
-      # nothing here would have caught: from 1.82.0 it requires
-      # protobuf >= 7.35.1, so `pip install ./libs/proto[generate]` becomes
-      # ResolutionImpossible against the protobuf == 6.33.6 pinned above.
-      # No CI job installs the `generate` extra, so #800 went green on a
-      # manifest that
-      # cannot be installed. It is also a generator pin: toolchain.lock and
-      # the version assertions in scripts/contract/generate_proto.sh name
-      # 1.76.0 and protoc 31.1, and moving it rewrites every file under
-      # gen/. It moves with protobuf 7 and a regeneration, not on its own.
-      - dependency-name: grpcio-tools
 
   # /scripts/ci is the CI checks' one dependency (`yaml`, exact pin), installed
   # with `npm ci --prefix scripts/ci` for the runner's node.
@@ -200,41 +200,11 @@ updates:
     directories:
       - /apps/elitea-web
       - /apps/elitea-desktop
+      - /apps/elitea-docs
       - /scripts/ci
-    multi-ecosystem-group: weekly
+    multi-ecosystem-group: nightly
     patterns: ["*"]
     ignore:
-      # Babel 8 plugins need @babel/core 8, and the web app is on core 7 (#682).
-      - dependency-name: "@babel/*"
-        update-types: ["version-update:semver-major"]
-      # vitest 5 has no Storybook that admits it. @storybook/addon-vitest@10.6.0
-      # (the newest release; 11.x is alpha) peers on `vitest ^3||^4` and
-      # `@vitest/browser-playwright ^4`, so a tree carrying vitest 5 is
-      # UNRESOLVABLE: `npm install` in apps/elitea-web exits ERESOLVE, which
-      # also means dependabot cannot build the next update for this directory.
-      # `npm ci` still installs it — it replays the lockfile without resolving —
-      # which is why PR #994's CI got far enough to fail on other things, and
-      # why the storybook suite passed (67 files, 272 tests) on a tree npm
-      # refuses to construct. Green tests do not make the tree installable.
-      # Lift this the day addon-vitest ships a `^5` peer.
-      - dependency-name: vitest
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@vitest/*"
-        update-types: ["version-update:semver-major"]
-      # mermaid 12 bundles ELK and makes it the DEFAULT layout engine (11
-      # shipped it as the separate @mermaid-js/layout-elk, which this app never
-      # installed). Two consequences, neither of them a dependency update:
-      #   - a 435.8 KiB gzip `elk-*` route chunk appears in BOTH the app and
-      #     docs builds, 185.8 KiB over the 250 KiB per-chunk budget (§3.5);
-      #   - every diagram silently changes appearance — 12 also moves the
-      #     default theme to redux-color and the default look to `neo`, and
-      #     neither MermaidDiagram nor docs/components/Mermaid.tsx pins
-      #     `layout`/`theme`/`look`, so they would take all three defaults.
-      # That is a product change for chat and /docs diagrams and belongs in its
-      # own reviewed PR (pin layout: dagre + look: classic, decide on the elk
-      # payload), not in a 45-package group bump.
-      - dependency-name: mermaid
-        update-types: ["version-update:semver-major"]
       # orval 8.34.0 regressed multipart `format: binary` fields: every
       # `file: zod.instanceof(File)` it used to emit became `file: zod.unknown()`.
       # Two consequences across the six upload operations (branding package
@@ -265,25 +235,6 @@ updates:
       # FormData internals; re-run `npm run test:unit` to confirm.
       - dependency-name: jsdom
         versions: [">= 30.1.0"]
-      # msw 3 is a migration, not a bump (PR #1049 tried 3.0.1). Measured on
-      # that tree, swapping ONLY msw back to 2.15.0 turns the same files green:
-      #   - `server.listen({ onUnhandledRequest })` is gone (now
-      #     `onUnhandledFrame`): TS2353 in src/test/setup.ts, and at runtime
-      #     the R-M5 'error' fence silently falls back to 'warn';
-      #   - multipart bodies die in handler lookup ("AbortError ... Premature
-      #     close" / "unhandled exception during the handler lookup"), taking
-      #     out every upload test (artifacts, skill/application icon, branding,
-      #     support-assistant attachments);
-      #   - the XHR interceptor now surfaces the CORS preflight, so cross-origin
-      #     XHR tests hit an unhandled `OPTIONS`; the abort-wiring test fails;
-      #   - unhandled peripheral requests (support_assistant/config,
-      #     project_budget) now break the render in AppShell/ToolMenu/
-      #     GenerateAgentButton tests (~30 tests in ~20 files in all).
-      # Do it in its own PR: rename the option (setup.ts, the R-M5 selftest and
-      # fixtures, ~20 test comments), re-check multipart on a later 3.x, add the
-      # missing handlers.
-      - dependency-name: msw
-        update-types: ["version-update:semver-major"]
       # playwright 1.63.0 stops exposing the body of a response the PAGE has
       # consumed as a Blob. `Response.text()` returns "" where 1.62.1 returns the
       # document, so chat.sharing S4/S5 — which read the conversation_export

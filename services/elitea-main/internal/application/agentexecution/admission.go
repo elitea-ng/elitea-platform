@@ -62,6 +62,22 @@ type Admission struct {
 	GovernedCredentials *GovernedCredentialFreeze
 }
 
+// ApplicationID is the agent of the admission: the application of a current
+// turn, a regeneration or a continuation; 0 for an ad hoc chat. The admission
+// records it on the run (so an agent suspension can cancel it) and the kill
+// switch's admission check keys an agent suspension on it.
+func (a Admission) ApplicationID() int64 {
+	switch {
+	case a.CurrentTurn != nil:
+		return a.CurrentTurn.ApplicationID
+	case a.CurrentRegenerateTurn != nil:
+		return a.CurrentRegenerateTurn.ApplicationID
+	case a.CurrentContinueTurn != nil:
+		return a.CurrentContinueTurn.ApplicationID
+	}
+	return 0
+}
+
 type AtomicAdmissionStore interface {
 	AdmitAgentExecution(context.Context, Admission) (executionapp.AdmissionOutcome, error)
 }

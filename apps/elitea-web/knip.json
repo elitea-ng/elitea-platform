@@ -6,10 +6,6 @@
     "src/entries/brand-preview/main.tsx",
     // ADR-0029: the desktop client's bundled UI (vite build --mode desktop).
     "src/entries/desktop/main.tsx",
-    // The docs SPA (embedded-docs programme decision 1): index.html AND
-    // 404.html both load this same main.tsx, so one entry covers both built
-    // HTML inputs (vite.config.ts's `docs` mode, rollupOptions.input).
-    "src/entries/docs/main.tsx",
     "scripts/*.mjs",
     // The live-target Playwright config: knip's playwright plugin only
     // picks up playwright.config.ts, so the live config's imports from

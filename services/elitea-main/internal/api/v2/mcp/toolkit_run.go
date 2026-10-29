@@ -134,6 +134,9 @@ func (h *Handler) runToolkitTool(
 }
 
 func toolkitRunError(tool Tool, err error) map[string]any {
+	if refused, ok := suspendedResult(tool.Name, err); ok {
+		return refused
+	}
 	var pending *toolkitcalltoolapp.PendingRun
 	switch {
 	case errors.As(err, &pending):

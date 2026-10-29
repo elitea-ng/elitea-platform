@@ -35,7 +35,7 @@ import { t } from '@/shared/i18n';
  * was 100% admin-configured with no default, so a fresh deployment (or any
  * deployment whose admin never visited Admin > Features > Help Center)
  * showed "No links configured" everywhere. These defaults point at REAL,
- * shipped pages of the embedded docs SPA (`src/entries/docs/content/**`,
+ * shipped pages of the docs site (`apps/elitea-docs/src/content/docs/**`,
  * served under the brand pack's `product.docsUrl`, `/docs/` by default —
  * `docsLink()`'s own header) — verified against that content tree's actual
  * file slugs (`content-registry.ts`'s `slugFromPath`), not invented paths.

@@ -983,6 +983,8 @@ func TestCurrentRegenerateMapsTheHandedOffThreadRefusals(t *testing.T) {
 	for err, code := range map[error]string{
 		agentexecutionapp.ErrLocalWorkTurn:      "local_work_turn",
 		agentexecutionapp.ErrCloudTurnNotNewest: "cloud_turn_not_newest",
+		// A legal hold keeps the answer a regenerate would delete.
+		agentexecutionapp.ErrConversationLegalHold: "legal_hold",
 	} {
 		useCase := &currentStartUseCaseStub{err: err}
 		route := newCurrentStartRoute(t, useCase, currentStartPermissionResolverFunc(func(

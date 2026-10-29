@@ -80,6 +80,7 @@ func TestAuditPolicySelectsAdministrativeMutationsAndRefusalsOnly(t *testing.T) 
 		{"scim provisioning", http.MethodPost, "/api/v2/scim/v2/Users", 201, true},
 		{"project lifecycle", http.MethodPost, "/api/v2/projects/project/administration", 200, true},
 		{"budget change", http.MethodPut, "/api/v2/elitea_core/project_budget/administration/3/budget", 200, true},
+		{"agent stop (kill switch)", http.MethodPost, "/api/v2/elitea_core/execution_suspensions/prompt_lib/7", 201, true},
 
 		// Refusals on an audited surface are kept even though they are reads:
 		// "who tried to reach something they could not" is the question.

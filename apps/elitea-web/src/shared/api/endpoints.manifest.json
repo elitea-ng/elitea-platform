@@ -3406,6 +3406,36 @@
       "responseSchema": "ConfigurationListResponse",
       "fixture": null,
       "usedBy": ["pages/chat"]
+    },
+    {
+      "id": "settings.listProjectExecutionSuspensions",
+      "method": "GET",
+      "path": "/elitea_core/execution_suspensions/prompt_lib/{project_id}",
+      "operationId": "listProjectExecutionSuspensions",
+      "source": "generated",
+      "responseSchema": "ExecutionSuspensionList",
+      "fixture": null,
+      "usedBy": ["features/kill-switch"]
+    },
+    {
+      "id": "settings.createProjectExecutionSuspension",
+      "method": "POST",
+      "path": "/elitea_core/execution_suspensions/prompt_lib/{project_id}",
+      "operationId": "createProjectExecutionSuspension",
+      "source": "generated",
+      "responseSchema": "ExecutionSuspension",
+      "fixture": null,
+      "usedBy": ["features/kill-switch"]
+    },
+    {
+      "id": "settings.resumeProjectExecutionSuspension",
+      "method": "POST",
+      "path": "/elitea_core/execution_suspensions/prompt_lib/{project_id}/{suspension_id}:resume",
+      "operationId": "resumeProjectExecutionSuspension",
+      "source": "generated",
+      "responseSchema": "ExecutionSuspension",
+      "fixture": null,
+      "usedBy": ["features/kill-switch"]
     }
   ]
 }

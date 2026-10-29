@@ -719,6 +719,16 @@
     },
     {
       "file": null,
+      "route": "/admin/app/retention",
+      "targetComponent": "src/pages/admin/Retention.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Data retention and legal holds (ADR-0042 decision 4, issue 1495). WIRED and NOT snapshotted yet — see the EXEMPT entry in scripts/check-visual-coverage.mjs.",
+      "surface": "admin",
+      "baseline": null
+    },
+    {
+      "file": null,
       "route": "/admin/app/governance",
       "targetComponent": "src/pages/admin/GatewayGovernance.tsx",
       "theme": "dark",
@@ -756,6 +766,16 @@
       "notes": "The outbound e-mail settings: the eight-control form, the per-field source tag (database / environment / unset), the write-only password with its \"no password stored\" placeholder, and the test-message box. This stack configures no relay, so the reference is the \"not configured\" state with the server's own reason — the honest finished screen, not scaffolding.",
       "surface": "admin",
       "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-email-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/kill-switch",
+      "targetComponent": "src/pages/admin/KillSwitch.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "The kill switch (ADR-0041 decision 1): the active execution suspensions with Resume, and Suspend for an agent, a project, a toolkit type or the platform (the platform stop behind the typed word STOP). The E2E stack seeds no suspension, so the reference is the empty table.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-kill-switch-visual-linux.png"
     },
     {
       "file": null,

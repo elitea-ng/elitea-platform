@@ -69,6 +69,8 @@ runs:
           echo "hash=$hash"
         } >> "$GITHUB_OUTPUT"
         echo "go cache key inputs (${#files[@]} file(s)):"; printf '  %s\n' "${files[@]}" | LC_ALL=C sort -u
+        # The module directories, for the download step below.
+        printf '%s\n' "${files[@]}" | xargs -n1 dirname | LC_ALL=C sort -u | paste -sd' ' - | sed 's/^/moddirs=/' >> "$GITHUB_OUTPUT"
     - name: Restore the Go caches (save on a run on main)
       id: cache
       if: steps.go.outputs.skip != 'true'
@@ -80,3 +82,28 @@ runs:
         key: go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-${{ steps.go.outputs.hash }}
         restore-keys: |
           go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-
+    # Without an exact hit, modules the restored cache lacks were fetched
+    # lazily by whichever later step first needed them (go vet, go test), with
+    # no retry: one reset HTTP/2 stream from proxy.golang.org failed the job
+    # (#1504, "stream error: stream ID 95; INTERNAL_ERROR"). Fetch them here,
+    # retried, so a dropped download costs a retry instead of the job.
+    # GOWORK=off: each go.sum is its own module's complete list.
+    - name: Download Go modules (retried)
+      if: steps.go.outputs.skip != 'true' && steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        MODDIRS: ${{ steps.go.outputs.moddirs }}
+      run: |
+        set -euo pipefail
+        cd "$GITHUB_WORKSPACE"
+        for dir in $MODDIRS; do
+          # A go.work.sum names the workspace root, which is not a module;
+          # its modules are listed through their own go.sum lines.
+          [ -f "$dir/go.mod" ] || continue
+          for attempt in 1 2 3 4; do
+            if (cd "$dir" && GOWORK=off go mod download); then break; fi
+            if [ "$attempt" = 4 ]; then echo "::error::go mod download failed four times in $dir"; exit 1; fi
+            echo "::warning::go mod download failed in $dir (attempt $attempt); retrying"
+            sleep $((attempt * 10))
+          done
+        done

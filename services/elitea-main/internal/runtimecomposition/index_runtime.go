@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"time"
 
 	indexingapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
@@ -67,6 +68,7 @@ func newCurrentIndexRuntime(
 	config Config,
 	policy repos.IndexIngestDispatchPolicy,
 	registry *indexRegistryComposition,
+	suspensions *safety.Gate,
 	reportInitializationFailure func(error),
 ) (*currentIndexRuntime, error) {
 	// The index registry is the one metadata store of the runtime (the Rust
@@ -168,7 +170,7 @@ func newCurrentIndexRuntime(
 	if err != nil {
 		return nil, fmt.Errorf("construct current index cancellation service: %w", err)
 	}
-	admissions, err := indexingapp.NewAdmissionService(jobs, bundleFactory, nil, currentRuntimeID)
+	admissions, err := indexingapp.NewAdmissionService(guardIndexAdmissions(jobs, suspensions), bundleFactory, nil, currentRuntimeID)
 	if err != nil {
 		return nil, err
 	}
