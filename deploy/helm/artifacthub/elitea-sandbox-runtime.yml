@@ -7,6 +7,6 @@
 #
 # repositoryID earns the Verified Publisher badge. Artifact Hub shows it when
 # the repository is added (Control Panel › Repositories); it is public, so it
-# is committed here rather than kept as a secret. Until it is set, the listing
-# works but is unverified.
-# repositoryID: <uuid from Artifact Hub>
+# is committed here rather than kept as a secret. Without it the listing works
+# but is unverified, and the release does not push this file.
+repositoryID: d89c1268-6a47-4d82-bda9-cfbcbc312bc0
