@@ -27,6 +27,7 @@ import (
 	scimapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/scim"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
+	v2agentreleases "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentreleases"
 	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2apps "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applications"
 	v2applicationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
@@ -2059,8 +2060,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2secrets.WithPlatformDefaultSecretPolicy(cfg.Pool),
 		v2secrets.WithPermissionResolver(permissionResolver),
 	)
+	// Agent releases (ADR-0040 decision 2): publish records one, unpublish
+	// withdraws them, and the release routes below read and roll back.
+	// NewAgentReleases fails only without a pool; the store then stays nil
+	// and the release routes answer 503.
+	var agentReleases *dbrepos.AgentReleases
+	if cfg.Pool != nil {
+		agentReleases, _ = dbrepos.NewAgentReleases(cfg.Pool)
+	}
 	coreHandler := v2core.NewHandler(
 		cfg.Pool,
+		v2core.WithReleases(agentReleases),
 		v2core.WithMemoryUserJournal(memoryUserJournal),
 		v2core.WithPermissionResolver(permissionResolver),
 		v2core.WithObjectStore(cfg.ObjectStore),
@@ -4364,6 +4374,19 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requirePublish).Post("/publish/prompt_lib/{projectID}/{versionID}", coreHandler.Publish)
 				r.With(projectPermission("models.applications.unpublish.post")).
 					Post("/unpublish/prompt_lib/{projectID}/{versionID}", coreHandler.Unpublish)
+				// Agent releases and draft revisions (ADR-0040 decision 2).
+				// A rollback changes what the agent runs, so it takes the
+				// publish permission; the reads take the version reads'.
+				{
+					releases := v2agentreleases.NewHandler(agentReleases)
+					r.With(projectPermission("models.applications.versions.get")).
+						Get(v2agentreleases.ReleasesPath, releases.List)
+					r.With(projectPermission("models.applications.version.details")).
+						Get(v2agentreleases.ReleasePath, releases.Get)
+					r.With(requirePublish).Post(v2agentreleases.RollbackPath, releases.Rollback)
+					r.With(projectPermission("models.applications.versions.get")).
+						Get(v2agentreleases.RevisionsPath, releases.Revisions)
+				}
 				r.With(requirePublish).
 					Get("/publish_validate/prompt_lib/{projectID}/{versionID}", coreHandler.PublishValidate)
 				r.With(requirePublish).

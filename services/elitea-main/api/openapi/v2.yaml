@@ -3853,6 +3853,19 @@ components:
         is_mentioning_everyone:
           type: boolean
           description: '`@everyone`: every project member except the sender is notified.'
+        release_id:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            Runs one release of the participant's agent, published or
+            withdrawn (listApplicationReleases). Absent or 0 runs the
+            participant's version, which is the agent's published release
+            when that version is published. Only for
+            `agent.execute.application.v1`. A release that is not a release
+            of the agent answers 404 `release_not_found`; a release whose
+            pinned toolkits or configurations changed answers 409
+            `release_toolkit_drifted` (ApplicationReleaseRefusal).
 
     ChatRegenerateRequest:
       type: object
@@ -6823,6 +6836,355 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Mandate'
+
+    ApplicationRelease:
+      type: object
+      description: >
+        An immutable release of an agent (ADR-0040 decision 2). The publish
+        that made it recorded it; definition_digest is the SHA-256 definition
+        digest of the published version. NOTE(W2):
+        internal/api/v2/agentreleases/handler.go, ReleaseSummary.
+      required: [id, application_id, application_version_id, source_version_id,
+        name, definition_digest, state, is_published_release, published_by,
+        created_at, withdrawn_at, withdrawn_by]
+      properties:
+        id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        application_version_id:
+          type: integer
+          format: int64
+          description: The version row the publish created.
+        source_version_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: The draft the publish was made from.
+        name: { type: string, description: The version name of the publish. }
+        definition_digest:
+          type: string
+          description: Lower-case hex SHA-256 of the definition (64 characters).
+        state:
+          type: string
+          enum: [published, withdrawn]
+          description: withdrawn after its version was unpublished. A withdrawn release still runs by id.
+        is_published_release:
+          type: boolean
+          description: The release a run that names no release executes.
+        published_by: { type: integer, format: int64, nullable: true }
+        created_at: { type: string, format: date-time }
+        withdrawn_at: { type: string, format: date-time, nullable: true }
+        withdrawn_by: { type: integer, format: int64, nullable: true }
+      example:
+        id: 41
+        application_id: 31
+        application_version_id: 118
+        source_version_id: 117
+        name: v2
+        definition_digest: 3f1d0c9a6b7e45d2a1c08f6e9b3d2a7c5e4f1b0a9d8c7e6f5a4b3c2d1e0f9a8b
+        state: published
+        is_published_release: true
+        published_by: 4
+        created_at: '2026-10-28T09:15:02Z'
+        withdrawn_at: null
+        withdrawn_by: null
+
+    ApplicationReleaseList:
+      type: object
+      required: [total, rows]
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/ApplicationRelease' }
+      description: >
+        NOTE(W2): internal/api/v2/agentreleases/handler.go, Handler.List.
+
+    ApplicationReleaseConfigurationPin:
+      type: object
+      description: >
+        One configuration reference in a toolkit's settings. A private
+        reference resolves in the personal project of the user who runs the
+        agent, so only its path and title are pinned. A non-private one pins
+        the configuration it resolved to and the SHA-256 of its data
+        (configuration_uuid empty when it resolved to none).
+      required: [path, elitea_title, private]
+      properties:
+        path: { type: string, description: JSON Pointer of the reference in the toolkit settings. }
+        elitea_title: { type: string }
+        private: { type: boolean }
+        credential_reference_id: { type: string }
+        configuration_uuid: { type: string }
+        project_id: { type: integer, format: int64 }
+        data_sha256: { type: string }
+      example:
+        path: /github_configuration
+        elitea_title: team-github
+        private: false
+        configuration_uuid: 6b0f9e4c-2a1d-4c3b-9e8f-7a6b5c4d3e2f
+        project_id: 7
+        data_sha256: 9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b
+
+    ApplicationReleaseToolkitPin:
+      type: object
+      description: >
+        One toolkit of a release, by its position in the definition. Digests
+        and identifiers only, never a setting value.
+      required: [index, toolkit_id, type, settings_sha256, projected_settings_sha256,
+        selected_tools, configurations, credential_reference_ids]
+      properties:
+        index: { type: integer }
+        toolkit_id: { type: integer, format: int64 }
+        type: { type: string }
+        settings_sha256:
+          type: string
+          description: SHA-256 of the stored toolkit settings (canonical JSON).
+        projected_settings_sha256:
+          type: string
+          description: SHA-256 of the settings the definition carried (the agent's selection applied).
+        selected_tools:
+          description: The agent's tool selection for this toolkit, or null.
+          nullable: true
+          x-elitea-passthrough: >-
+            NOTE(W2): entity_tool_mapping.selected_tools copied as JSON
+            (internal/infra/db/repos/agent_releases.go:245-252); normally an
+            array of tool names.
+        configurations:
+          type: array
+          items: { $ref: '#/components/schemas/ApplicationReleaseConfigurationPin' }
+        credential_reference_ids:
+          type: array
+          items: { type: string }
+      example:
+        index: 0
+        toolkit_id: 55
+        type: github
+        settings_sha256: 1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c
+        projected_settings_sha256: 2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d
+        selected_tools: [list_issues]
+        configurations: []
+        credential_reference_ids: []
+
+    ApplicationReleaseChange:
+      type: object
+      description: One change between two documents. before is null for add, after is null for remove.
+      required: [path, op, before, after]
+      properties:
+        path: { type: string, description: JSON Pointer of the changed value. }
+        op: { type: string, enum: [add, remove, replace] }
+        before:
+          x-elitea-passthrough: >-
+            NOTE(W2): any JSON value of the compared document
+            (internal/domain/agentrelease/diff.go:11-17).
+        after:
+          x-elitea-passthrough: >-
+            NOTE(W2): any JSON value of the compared document
+            (internal/domain/agentrelease/diff.go:11-17).
+      example:
+        path: /definition/instructions
+        op: replace
+        before: Answer briefly.
+        after: Answer briefly and cite sources.
+
+    ApplicationReleaseDetail:
+      allOf:
+        - $ref: '#/components/schemas/ApplicationRelease'
+        - type: object
+          required: [definition, toolkit_pins, previous_release_id, changes]
+          properties:
+            definition:
+              type: object
+              additionalProperties: true
+              description: The version definition the release runs, with every toolkit's settings removed.
+              x-elitea-passthrough: >-
+                NOTE(W2): the stored application_version_details_json
+                projection (internal/infra/db/repos/agent_releases.go:111-124);
+                its shape is the version details document.
+            toolkit_pins:
+              type: array
+              items: { $ref: '#/components/schemas/ApplicationReleaseToolkitPin' }
+            previous_release_id:
+              type: integer
+              format: int64
+              nullable: true
+              description: The release before this one; null for the first.
+            changes:
+              type: array
+              description: The changes against the previous release (definition and toolkit pins).
+              items: { $ref: '#/components/schemas/ApplicationReleaseChange' }
+      description: >
+        NOTE(W2): internal/api/v2/agentreleases/handler.go, Handler.Get.
+      example:
+        id: 41
+        application_id: 31
+        application_version_id: 118
+        source_version_id: 117
+        name: v2
+        definition_digest: 3f1d0c9a6b7e45d2a1c08f6e9b3d2a7c5e4f1b0a9d8c7e6f5a4b3c2d1e0f9a8b
+        state: published
+        is_published_release: true
+        published_by: 4
+        created_at: '2026-10-28T09:15:02Z'
+        withdrawn_at: null
+        withdrawn_by: null
+        definition:
+          id: 118
+          application_id: 31
+          name: v2
+          status: published
+          instructions: Answer briefly and cite sources.
+          tools: [{ id: 55, type: github, name: GitHub }]
+        toolkit_pins:
+          - index: 0
+            toolkit_id: 55
+            type: github
+            settings_sha256: 1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c
+            projected_settings_sha256: 2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d
+            selected_tools: [list_issues]
+            configurations: []
+            credential_reference_ids: []
+        previous_release_id: 40
+        changes:
+          - path: /definition/instructions
+            op: replace
+            before: Answer briefly.
+            after: Answer briefly and cite sources.
+
+    ApplicationReleaseRollbackRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          maxLength: 1024
+          description: Why the agent is rolled back. Stored with the published release pointer.
+      example:
+        reason: v3 answers in the wrong language
+
+    ApplicationReleaseRollback:
+      type: object
+      required: [from, to, reason]
+      properties:
+        from: { $ref: '#/components/schemas/ApplicationRelease' }
+        to: { $ref: '#/components/schemas/ApplicationRelease' }
+        reason: { type: string }
+      description: >
+        NOTE(W2): internal/api/v2/agentreleases/handler.go, Handler.Rollback.
+      example:
+        from:
+          id: 42
+          application_id: 31
+          application_version_id: 121
+          source_version_id: 117
+          name: v3
+          definition_digest: 4a2e1d0b9c8f7e6d5c4b3a291807f6e5d4c3b2a19087f6e5d4c3b2a190807f6e
+          state: published
+          is_published_release: false
+          published_by: 4
+          created_at: '2026-10-28T11:40:10Z'
+          withdrawn_at: null
+          withdrawn_by: null
+        to:
+          id: 41
+          application_id: 31
+          application_version_id: 118
+          source_version_id: 117
+          name: v2
+          definition_digest: 3f1d0c9a6b7e45d2a1c08f6e9b3d2a7c5e4f1b0a9d8c7e6f5a4b3c2d1e0f9a8b
+          state: published
+          is_published_release: true
+          published_by: 4
+          created_at: '2026-10-28T09:15:02Z'
+          withdrawn_at: null
+          withdrawn_by: null
+        reason: v3 answers in the wrong language
+
+    ApplicationReleaseRefusal:
+      type: object
+      required: [error, code, message]
+      properties:
+        error: { type: string, description: 'The code again: some clients read error only.' }
+        code:
+          type: string
+          enum: [release_not_found, release_toolkit_drifted, application_not_published,
+            release_already_published, release_withdrawn]
+        message: { type: string }
+        reason:
+          type: string
+          enum: [toolkit_set_changed, toolkit_missing, toolkit_settings_changed,
+            configuration_missing, configuration_changed, definition_mismatch]
+          description: Set for release_toolkit_drifted.
+        toolkit_id:
+          type: integer
+          format: int64
+          description: Set for release_toolkit_drifted when one toolkit drifted.
+      description: >
+        NOTE(W2): internal/domain/agentrelease/refusal.go, HTTPRefusal, and
+        internal/api/v2/agentreleases/handler.go, writeError. A run start
+        that names a release answers the same body for 404 and 409.
+      example:
+        error: release_toolkit_drifted
+        code: release_toolkit_drifted
+        reason: toolkit_settings_changed
+        toolkit_id: 55
+        message: A toolkit or configuration this release pinned changed after it was published. Publish a new release, or roll back to a release whose toolkits still match.
+
+    VersionRevision:
+      type: object
+      required: [id, revision, kind, actor_id, created_at, snapshot, diff]
+      properties:
+        id: { type: integer, format: int64 }
+        revision: { type: integer, minimum: 1 }
+        kind:
+          type: string
+          enum: [baseline, save]
+          description: baseline is the state the first save found; save is one save.
+        actor_id: { type: integer, format: int64, nullable: true }
+        created_at: { type: string, format: date-time }
+        snapshot:
+          type: object
+          additionalProperties: true
+          description: The version fields after the save (name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, meta, pipeline_settings).
+          x-elitea-passthrough: >-
+            NOTE(W2): jsonb_build_object of the version row
+            (internal/infra/db/repos/version_revisions.go:31-41); llm_settings,
+            meta and pipeline_settings are stored jsonb.
+        diff:
+          type: array
+          items: { $ref: '#/components/schemas/ApplicationReleaseChange' }
+      description: >
+        NOTE(W2): internal/api/v2/agentreleases/handler.go, Revision.
+      example:
+        id: 903
+        revision: 2
+        kind: save
+        actor_id: 4
+        created_at: '2026-10-28T10:02:44Z'
+        snapshot:
+          name: base
+          status: draft
+          agent_type: openai
+          instructions: Answer briefly and cite sources.
+          welcome_message: ''
+          llm_settings: { model_name: gpt-5 }
+          conversation_starters: []
+          meta: {}
+          pipeline_settings: {}
+        diff:
+          - path: /instructions
+            op: replace
+            before: Answer briefly.
+            after: Answer briefly and cite sources.
+
+    VersionRevisionList:
+      type: object
+      required: [total, rows]
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/VersionRevision' }
+      description: >
+        NOTE(W2): internal/api/v2/agentreleases/handler.go, Handler.Revisions.
 
     ExecutionSuspension:
       type: object
@@ -9849,6 +10211,12 @@ components:
       required: [public_agent_id, public_version_id, version_name, source_version_id]
       properties:
         public_agent_id: { type: string }
+        release_id:
+          type: string
+          description: >
+            The release this publish recorded (listApplicationReleases).
+            Absent when no release could be recorded; the publish itself
+            stands.
         public_version_id: { type: string }
         version_name: { type: string }
         source_version_id:
@@ -23107,6 +23475,169 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /elitea_core/application_releases/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: listApplicationReleases
+      summary: List the releases of an agent
+      description: >
+        The releases of the agent, newest first (at most 500). Each publish
+        records one immutable release, addressed by the digest of its
+        definition. A release stays after its version is unpublished, with
+        state withdrawn. is_published_release marks the release the agent
+        runs when a run names no release. Requires
+        `models.applications.versions.get`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The releases
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApplicationReleaseList' }
+        '400':
+          description: A bad project or application id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/application_releases/prompt_lib/{project_id}/{application_id}/{release_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: release_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getApplicationRelease
+      summary: Read one release of an agent
+      description: >
+        The release with its definition (toolkit settings removed: they can
+        hold credentials), one pin per toolkit (identifiers and SHA-256
+        digests only), and the changes against the release before it.
+        Requires `models.applications.version.details`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The release
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApplicationReleaseDetail' }
+        '400':
+          description: A bad project, application or release id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code release_not_found) The release is not a release of this agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApplicationReleaseRefusal' }
+
+  /elitea_core/application_releases/prompt_lib/{project_id}/{application_id}/{release_id}/rollback:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: release_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: rollbackApplicationRelease
+      summary: Roll the agent back to an earlier release
+      description: >
+        Points the agent's published release at this release. A run that
+        names no release then executes it. The release must be published
+        (not withdrawn), must not already be the published release, and its
+        toolkit pins must still match the live toolkits and configurations.
+        The audit trail records application_release.rolled_back. Requires
+        `models.applications.publish.post`.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApplicationReleaseRollbackRequest' }
+      responses:
+        '200':
+          description: The published release before and after the rollback
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApplicationReleaseRollback' }
+        '400':
+          description: A bad id, a malformed body, or a reason longer than 1024 characters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code release_not_found) The release is not a release of this agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApplicationReleaseRefusal' }
+        '409':
+          description: >
+            (code application_not_published) The agent has no published
+            release; (code release_already_published) the release is already
+            the published release; (code release_withdrawn) the release was
+            withdrawn; (code release_toolkit_drifted) a toolkit or
+            configuration the release pinned changed after it was published.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApplicationReleaseRefusal' }
+
+  /elitea_core/version_revisions/prompt_lib/{project_id}/{application_id}/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: version_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: listVersionRevisions
+      summary: List the draft revisions of a version
+      description: >
+        Every save of the version appends one revision: the saved fields,
+        the user, the time and the changes against the revision before it
+        (at most 500, newest first). Revision 1 of kind baseline is the
+        state the first save found. A save that changes nothing appends
+        nothing. Toolkit and skill attachments are not in a revision; a
+        release pins them. Requires `models.applications.versions.get`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The revisions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VersionRevisionList' }
+        '400':
+          description: A bad project, application or version id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
   /elitea_core/workspace_handoff/prompt_lib/{project_id}/{conversation_uuid}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'

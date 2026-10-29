@@ -46,6 +46,8 @@ import { ChatStartAttachment } from "./chatStartAttachment.zod";
 
 export const chatSendRequestPayloadSkillsMax = 5;
 
+export const chatSendRequestReleaseIdMin = 0;
+
 export const ChatSendRequest = zod
   .object({
     payload: zod.object({
@@ -93,6 +95,13 @@ export const ChatSendRequest = zod
       .optional()
       .describe(
         "`@everyone`: every project member except the sender is notified.",
+      ),
+    release_id: zod
+      .int()
+      .min(chatSendRequestReleaseIdMin)
+      .optional()
+      .describe(
+        "Runs one release of the participant's agent, published or withdrawn (listApplicationReleases). Absent or 0 runs the participant's version, which is the agent's published release when that version is published. Only for `agent.execute.application.v1`. A release that is not a release of the agent answers 404 `release_not_found`; a release whose pinned toolkits or configurations changed answers 409 `release_toolkit_drifted` (ApplicationReleaseRefusal).\n",
       ),
   })
   .describe(
