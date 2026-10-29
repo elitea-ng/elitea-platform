@@ -882,6 +882,91 @@ fn inline_llm_request(on_error: &str) -> super::super::request::AgentExecutionRe
     request
 }
 
+/// PM-5: an inline LLM branch streams like an Agent member. Its model text
+/// reaches the browser as model frames under its own member tier (named by
+/// its node), never as a run-level frame and never ending the run.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_inline_llm_branches_stream_their_text_under_their_member_tier() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let (platform, model_facade, _) = saved_runtime(
+        [
+            "ask streamed answer",
+            "guard streamed answer",
+            "deny streamed answer",
+        ]
+        .into_iter()
+        .map(|text| TestModelGatewayOutcome::Response(pipeline_text_response(text)))
+        .collect(),
+        effectful_agent(),
+    );
+    let assembler = PipelineNativeAgentAssembler::postgres(
+        db.pool.clone(),
+        SessionLimits::default(),
+        CheckpointLimits::default(),
+        sensitive_pipeline_mcp_policy(),
+        platform,
+        model_facade,
+    )
+    .with_mcp_connector(pipeline_connector())
+    .with_fixed_parallel_for_tests()
+    .with_fanout_decisions_for_tests(
+        crate::agents::graph::fanout_test_ledger::TestLedger::new().client(1),
+    );
+    let request = inline_llm_request("continue");
+    let mut invocation = assembler
+        .assemble(claim(&request, 1))
+        .await
+        .expect("assemble inline LLM branches");
+    invocation
+        .project_start(timestamp(1))
+        .expect("pipeline browser start");
+    let (mut run, mut projector, completion) = invocation.start().expect("pipeline start");
+    let mut streamed = std::collections::BTreeMap::<String, String>::new();
+    while let Some(event) = run.next_event().await.expect("the run streams") {
+        for frame in projector.project(&event).expect("projected frames") {
+            if frame.r#type != "agent_llm_chunk" {
+                continue;
+            }
+            let metadata: Value =
+                serde_json::from_slice(&frame.response_metadata).unwrap_or_default();
+            let content: Value = serde_json::from_slice(&frame.content).unwrap_or_default();
+            let tier = metadata["parent_agent_path"][0]["name"]
+                .as_str()
+                .unwrap_or("ROOT")
+                .to_owned();
+            streamed
+                .entry(tier)
+                .or_default()
+                .push_str(content.as_str().unwrap_or_default());
+        }
+    }
+    completion.select().await.expect("the pipeline completes");
+    for branch in ["ask", "guard", "deny"] {
+        assert_eq!(
+            streamed.get(branch).map(String::as_str),
+            Some(format!("{branch} streamed answer").as_str()),
+            "{streamed:?}"
+        );
+    }
+    // The run's own text is only its result (the join), never a branch's
+    // streamed text ahead of it.
+    let root = streamed.get("ROOT").map_or("", String::as_str);
+    assert!(
+        root.starts_with("```json") && root.contains("\"branch_id\": \"first\""),
+        "{streamed:?}"
+    );
+    db.pool.close().await;
+}
+
 /// T-2A D1: inline LLM branches each pause with their own card (an
 /// `ask_user` question and two sensitive-tool approvals), are answered,
 /// approved and rejected live while the run goes on, resume and join; only

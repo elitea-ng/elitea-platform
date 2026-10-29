@@ -243,6 +243,40 @@ impl crate::agents::graph::llm::PipelineLlmAgentFactory for ParallelLlmEvents {
     }
 }
 
+/// An inline LLM Parallel branch's factory: its node events go through the
+/// branch's member-scoped sender (PM-5).
+struct InlineBranchEvents {
+    inner: Arc<dyn crate::agents::graph::llm::PipelineLlmAgentFactory>,
+    events: PipelineNodeEventSender,
+}
+
+impl crate::agents::graph::llm::PipelineLlmAgentFactory for InlineBranchEvents {
+    fn build(
+        &self,
+        definition: &crate::agents::graph::llm::LlmNodeDefinition,
+        input: &crate::agents::graph::llm::LlmExecutionInput,
+        output_schema: Option<serde_json::Value>,
+        replay: Option<&crate::agents::graph::llm::PipelineLlmReplayEnvelope>,
+        scope: &crate::agents::graph::llm::PipelineModelScope,
+    ) -> Result<
+        crate::agents::graph::llm::PipelineLlmAgentBinding,
+        crate::agents::graph::llm::LlmExecutionError,
+    > {
+        self.inner
+            .build(definition, input, output_schema, replay, scope)
+    }
+
+    fn event_sender(&self) -> Option<PipelineNodeEventSender> {
+        Some(self.events.clone())
+    }
+
+    fn for_fanout_branch(
+        &self,
+    ) -> Option<Arc<dyn crate::agents::graph::llm::PipelineLlmAgentFactory>> {
+        None
+    }
+}
+
 impl PipelineDefinition {
     pub(crate) fn has_parallel_nodes(&self) -> bool {
         self.nodes
@@ -658,6 +692,31 @@ impl CompilerParallelBranches {
                     "the fixed Parallel LLM branch runtime is unavailable".to_owned(),
                 )
             })?;
+        // PM-5: a root-level inline branch's model text and tool calls stream
+        // under its member tier, through the same proved branch scope an Agent
+        // member uses; the member sender keeps its failures as join data. A
+        // branch inside a saved child pipeline does not stream yet (FU-260).
+        let nested = super::super::node_events::PipelineNodeEventScope::from_state(
+            execution.parent_event_scope_value(),
+        )
+        .map_err(|_| {
+            GraphError::InvalidGraph("the fixed Parallel parent event scope is invalid".to_owned())
+        })?
+        .is_some();
+        let factory = match self.events.as_ref().filter(|_| !nested) {
+            Some(events) => {
+                let events = events.for_inline_llm_branch(execution).map_err(|_| {
+                    GraphError::InvalidGraph(
+                        "the fixed Parallel event branch is unproved".to_owned(),
+                    )
+                })?;
+                Arc::new(InlineBranchEvents {
+                    inner: factory,
+                    events,
+                }) as Arc<dyn crate::agents::graph::llm::PipelineLlmAgentFactory>
+            }
+            None => factory,
+        };
         let checkpointer = execution.checkpointer();
         let node = LlmNode::new(definition.clone(), self.state_types.clone(), factory)
             .with_parallel_inputs();
