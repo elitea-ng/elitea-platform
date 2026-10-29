@@ -1089,6 +1089,103 @@ async fn session_writer_lock_wait_fails_typed_instead_of_waiting_forever() {
     assert_eq!(stored.events().len(), 1);
 }
 
+/// #1534: a caller that stops polling a session write (a stream yielding
+/// while a tool batch's append is pinned beside it) must not park the write
+/// mid-transaction on the writer row. The write runs to its commit on its
+/// own, and the next write from this process gets the row without waiting
+/// out the lock timeout.
+#[tokio::test(flavor = "current_thread")]
+async fn a_session_write_its_caller_stops_polling_still_commits_and_releases_the_writer() {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL unpolled session write test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_schema(&database.pool).await;
+    let service = PostgresSessionService::activate(
+        database.pool.clone(),
+        authority_for("claim-1", 1, 1, [0x23; 32]),
+        bounded_limits(Duration::from_secs(2), Duration::from_secs(30)),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("activate session writer");
+    let session = service
+        .create(CreateRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: Some("session-1".to_owned()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .expect("create durable session");
+    let identity = session.try_identity().expect("identity");
+    let event = |id: &str| {
+        let mut event = Event::with_id(id, "invocation-1");
+        event.author = "user".to_owned();
+        event.llm_response.content = Some(Content::new("user").with_text(id));
+        event
+            .actions
+            .state_delta
+            .insert("turn".to_owned(), json!(id));
+        event
+    };
+
+    let parked = service.append_event_for_identity(AppendEventRequest {
+        identity: identity.clone(),
+        event: event("parked"),
+    });
+    let mut parked = std::pin::pin!(parked);
+    // One poll starts the write; the caller then never polls it again
+    // until the end, like a stream suspended at a yield.
+    let first =
+        std::future::poll_fn(|context| std::task::Poll::Ready(parked.as_mut().poll(context))).await;
+    assert!(first.is_pending(), "the write is still in flight");
+    let started = std::time::Instant::now();
+    loop {
+        let stored: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM elitea_runtime.agent_session_events WHERE session_id = 'session-1'",
+        )
+        .fetch_one(&database.pool)
+        .await
+        .expect("count events");
+        if stored == 1 {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the unpolled write never committed"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let next = std::time::Instant::now();
+    service
+        .append_event_for_identity(AppendEventRequest {
+            identity: identity.clone(),
+            event: event("next"),
+        })
+        .await
+        .expect("the next write takes the writer row");
+    assert!(
+        next.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        next.elapsed()
+    );
+    parked.await.expect("the parked write committed");
+    let stored = service
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: "session-1".to_owned(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("reload");
+    assert_eq!(stored.events().len(), 2);
+    database.pool.close().await;
+}
+
 #[tokio::test]
 async fn an_idle_session_transaction_releases_its_writer_locks() {
     let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {

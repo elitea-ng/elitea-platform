@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -403,6 +404,45 @@ impl fmt::Debug for PostgresSessionService {
 }
 
 impl PostgresSessionService {
+    /// This writer, owned: what a [`Self::driven`] transaction runs on.
+    fn owned(&self) -> Self {
+        Self {
+            pool: self.pool.clone(),
+            authority: self.authority.clone(),
+            limits: self.limits,
+            state_writer_lease: Arc::clone(&self.state_writer_lease),
+            parent: self.parent.clone(),
+            replay_equivalence: self.replay_equivalence,
+        }
+    }
+
+    /// Run one transactional session operation so that it finishes even
+    /// while its caller is not polled (#1534).
+    ///
+    /// A caller may suspend mid-operation: a stream that yields while a tool
+    /// batch is pinned beside it (the vendored LLM agent drains tool progress
+    /// with `select!` and yields each event while the batch's dispatch
+    /// future waits) parks a dispatch-journal or approved-call append right
+    /// after it locked the writer row and updated `agent_sessions`. The
+    /// Runner then persists the yielded event under that same row lock, and
+    /// nothing polls the parked append to commit it: the backend sits idle in
+    /// transaction until `lock_timeout` fails the run. A
+    /// [`DrivenTask`](crate::agents::driven::DrivenTask) moves the operation
+    /// to its own task the first time it is pending, so a transaction, once
+    /// begun, runs to its commit or rollback whatever the caller does.
+    /// Dropping the call still aborts it (and rolls back), as before.
+    async fn driven<T, W>(
+        &self,
+        span: &tracing::Span,
+        work: impl FnOnce(Self) -> W,
+    ) -> adk_rust::Result<Result<T, PostgresSessionError>>
+    where
+        T: Send + 'static,
+        W: Future<Output = Result<T, PostgresSessionError>> + Send + 'static,
+    {
+        crate::agents::driven::DrivenTask::new(work(self.owned()).instrument(span.clone())).await
+    }
+
     /// Activate this claim as the only current writer for the exact session.
     pub(crate) async fn activate(
         pool: PgPool,
@@ -1109,61 +1149,9 @@ WHERE tenant_id = $1
         .map_err(storage_error)?;
         Ok(())
     }
-}
 
-#[async_trait]
-impl SessionService for PostgresSessionService {
-    async fn create(&self, req: CreateRequest) -> adk_rust::Result<Box<dyn Session>> {
-        let span = session_operation_span("create");
-        let result = self.create_session(req).instrument(span.clone()).await;
-        record_session_result(&span, &result);
-        result.map_err(PostgresSessionError::into_adk)
-    }
-
-    async fn get(&self, req: GetRequest) -> adk_rust::Result<Box<dyn Session>> {
-        let span = session_operation_span("get");
-        let result = self.get_session(req).instrument(span.clone()).await;
-        record_session_result(&span, &result);
-        result.map_err(|error| match error {
-            PostgresSessionError::InvalidScope => AdkError::new(
-                ErrorComponent::Session,
-                ErrorCategory::NotFound,
-                "session.not_found",
-                "the durable session was not found",
-            ),
-            other => other.into_adk(),
-        })
-    }
-
-    async fn list(&self, req: ListRequest) -> adk_rust::Result<Vec<Box<dyn Session>>> {
-        req.try_app_name()?;
-        req.try_user_id()?;
-        self.require_app_user(&req.app_name, &req.user_id)
-            .map_err(PostgresSessionError::into_adk)?;
-        let limit = req.limit.unwrap_or(1);
-        if limit > self.limits.max_events {
-            return Err(PostgresSessionError::ResourceExhausted.into_adk());
-        }
-        if limit == 0 || req.offset.unwrap_or(0) > 0 {
-            return Ok(Vec::new());
-        }
-        match self
-            .get_session(GetRequest {
-                app_name: req.app_name,
-                user_id: req.user_id,
-                session_id: self.authority.session_id.clone(),
-                num_recent_events: Some(0),
-                after: None,
-            })
-            .await
-        {
-            Ok(session) => Ok(vec![session]),
-            Err(PostgresSessionError::InvalidScope) => Ok(Vec::new()),
-            Err(error) => Err(error.into_adk()),
-        }
-    }
-
-    async fn delete(&self, req: DeleteRequest) -> adk_rust::Result<()> {
+    /// The session delete, under the current writer.
+    async fn delete_session(&self, req: DeleteRequest) -> adk_rust::Result<()> {
         req.try_identity()?;
         self.require_identity(&req.app_name, &req.user_id, &req.session_id)
             .map_err(PostgresSessionError::into_adk)?;
@@ -1207,6 +1195,77 @@ WHERE tenant_id = $1
             .map_err(PostgresSessionError::into_adk)?;
         Ok(())
     }
+}
+
+#[async_trait]
+impl SessionService for PostgresSessionService {
+    async fn create(&self, req: CreateRequest) -> adk_rust::Result<Box<dyn Session>> {
+        let span = session_operation_span("create");
+        let result = self
+            .driven(
+                &span,
+                |writer| async move { writer.create_session(req).await },
+            )
+            .await?;
+        record_session_result(&span, &result);
+        result.map_err(PostgresSessionError::into_adk)
+    }
+
+    async fn get(&self, req: GetRequest) -> adk_rust::Result<Box<dyn Session>> {
+        let span = session_operation_span("get");
+        let result = self
+            .driven(&span, |writer| async move { writer.get_session(req).await })
+            .await?;
+        record_session_result(&span, &result);
+        result.map_err(|error| match error {
+            PostgresSessionError::InvalidScope => AdkError::new(
+                ErrorComponent::Session,
+                ErrorCategory::NotFound,
+                "session.not_found",
+                "the durable session was not found",
+            ),
+            other => other.into_adk(),
+        })
+    }
+
+    async fn list(&self, req: ListRequest) -> adk_rust::Result<Vec<Box<dyn Session>>> {
+        req.try_app_name()?;
+        req.try_user_id()?;
+        self.require_app_user(&req.app_name, &req.user_id)
+            .map_err(PostgresSessionError::into_adk)?;
+        let limit = req.limit.unwrap_or(1);
+        if limit > self.limits.max_events {
+            return Err(PostgresSessionError::ResourceExhausted.into_adk());
+        }
+        if limit == 0 || req.offset.unwrap_or(0) > 0 {
+            return Ok(Vec::new());
+        }
+        let get = GetRequest {
+            app_name: req.app_name,
+            user_id: req.user_id,
+            session_id: self.authority.session_id.clone(),
+            num_recent_events: Some(0),
+            after: None,
+        };
+        let span = session_operation_span("list");
+        match self
+            .driven(&span, |writer| async move { writer.get_session(get).await })
+            .await?
+        {
+            Ok(session) => Ok(vec![session]),
+            Err(PostgresSessionError::InvalidScope) => Ok(Vec::new()),
+            Err(error) => Err(error.into_adk()),
+        }
+    }
+
+    async fn delete(&self, req: DeleteRequest) -> adk_rust::Result<()> {
+        let span = session_operation_span("delete");
+        self.driven(&span, |writer| async move {
+            Ok(writer.delete_session(req).await)
+        })
+        .await?
+        .unwrap_or_else(|error: PostgresSessionError| Err(error.into_adk()))
+    }
 
     async fn append_event(&self, session_id: &str, event: Event) -> adk_rust::Result<()> {
         self.require_identity(
@@ -1221,7 +1280,11 @@ WHERE tenant_id = $1
             adk_rust::SessionId::try_from(self.authority.session_id.as_str())?,
         );
         let span = session_operation_span("append_event");
-        let result = self.append(&identity, event).instrument(span.clone()).await;
+        let result = self
+            .driven(&span, |writer| async move {
+                writer.append(&identity, event).await
+            })
+            .await?;
         record_session_result(&span, &result);
         result.map_err(PostgresSessionError::into_adk)
     }
@@ -1229,9 +1292,10 @@ WHERE tenant_id = $1
     async fn append_event_for_identity(&self, req: AppendEventRequest) -> adk_rust::Result<()> {
         let span = session_operation_span("append_event");
         let result = self
-            .append(&req.identity, req.event)
-            .instrument(span.clone())
-            .await;
+            .driven(&span, |writer| async move {
+                writer.append(&req.identity, req.event).await
+            })
+            .await?;
         record_session_result(&span, &result);
         result.map_err(PostgresSessionError::into_adk)
     }
