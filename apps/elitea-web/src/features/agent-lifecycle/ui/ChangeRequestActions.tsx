@@ -67,6 +67,17 @@ export function ChangeRequestActions({ projectId, applicationId, request }: Chan
         slotProps={{ htmlInput: { maxLength: 500, 'data-testid': 'change-request-note' } }}
       />
       <Box sx={rowSx}>
+        {request.state === 'draft' && (
+          <Button
+            variant="contained"
+            size="small"
+            disabled={action.isPending}
+            onClick={() => run({ kind: 'submit', id: request.id })}
+            data-testid="change-request-submit"
+          >
+            {t('features.agentLifecycle.changeRequest.submit', 'Submit')}
+          </Button>
+        )}
         {request.state === 'submitted' && (
           <Button
             variant="contained"

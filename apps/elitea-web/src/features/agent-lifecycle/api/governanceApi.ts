@@ -108,7 +108,7 @@ export function useReleaseGate(
 /**
  * Creates a change request and submits it, in that order. Two calls because
  * the server keeps a draft state between them; the request dialog has no use
- * for a draft, so it never leaves one behind unless the submit is refused.
+ * for a draft, so a refused submit withdraws it.
  */
 export function useRequestChange(projectId: string | undefined, applicationId: number | undefined) {
   const queryClient = useQueryClient();
@@ -117,15 +117,26 @@ export function useRequestChange(projectId: string | undefined, applicationId: n
       const created = unwrapBody(
         await createAgentChangeRequest(projectId ?? '', applicationId ?? 0, body),
       ) as AgentChangeRequest;
-      return unwrapBody(
-        await submitAgentChangeRequest(projectId ?? '', applicationId ?? 0, created.id),
-      ) as AgentChangeRequest;
+      try {
+        return unwrapBody(
+          await submitAgentChangeRequest(projectId ?? '', applicationId ?? 0, created.id),
+        ) as AgentChangeRequest;
+      } catch (error) {
+        // An agent holds one open request. A draft left by a refused submit
+        // would make every retry from the dialog answer
+        // change_request_open, so withdraw it before reporting the refusal.
+        await withdrawAgentChangeRequest(projectId ?? '', applicationId ?? 0, created.id, {
+          reason: 'Submit refused',
+        }).catch(() => undefined);
+        throw error;
+      }
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: changeRequestsKey(projectId, applicationId) }),
   });
 }
 
 export type ChangeRequestAction =
+  | { readonly kind: 'submit'; readonly id: number }
   | { readonly kind: 'approve'; readonly id: number; readonly note: string }
   | { readonly kind: 'reject'; readonly id: number; readonly reason: string }
   | { readonly kind: 'withdraw'; readonly id: number; readonly reason: string }
@@ -144,6 +155,8 @@ async function runAction(
 ): Promise<ChangeRequestActionOutcome> {
   const reason = 'reason' in action && action.reason !== '' ? { reason: action.reason } : {};
   switch (action.kind) {
+    case 'submit':
+      return { changeRequest: unwrapBody(await submitAgentChangeRequest(projectId, applicationId, action.id)) as AgentChangeRequest };
     case 'approve': {
       const outcome = unwrapBody(
         await approveAgentChangeRequest(projectId, applicationId, action.id, action.note === '' ? {} : { note: action.note }),

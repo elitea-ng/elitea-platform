@@ -5349,5 +5349,6 @@
   "pages.admin.agentRegistry.subtitle": "Every agent across projects with its owners, risk tier and certification. Edit a record from the agent’s ⋮ › Governance.",
   "pages.admin.agentRegistry.title": "Agent registry",
   "pages.admin.agentRegistry.truncated": "The JSON export stopped at its row limit. Narrow the filters.",
-  "pages.admin.nav.agentRegistry": "Agent registry"
+  "pages.admin.nav.agentRegistry": "Agent registry",
+  "features.agentLifecycle.changeRequest.submit": "Submit"
 }
