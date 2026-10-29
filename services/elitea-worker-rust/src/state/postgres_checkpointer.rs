@@ -1247,7 +1247,7 @@ impl PostgresCheckpointer {
     }
 
     /// Run one checkpoint operation on an owned handle of this writer, driven
-    /// to completion (see [`persist_driven`]).
+    /// to completion (see `persist_driven`).
     async fn persist<T, W>(
         &self,
         operation: &'static str,
@@ -1750,7 +1750,7 @@ async fn begin_bounded(
 }
 
 /// What a driven checkpoint operation that never finished fails with
-/// (see [`persist_driven`]).
+/// (see `persist_driven`).
 impl From<sqlx::Error> for PostgresCheckpointError {
     fn from(source: sqlx::Error) -> Self {
         storage_error(source)
