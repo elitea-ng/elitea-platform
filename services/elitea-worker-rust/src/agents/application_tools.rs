@@ -3402,6 +3402,7 @@ impl ApplicationAssemblyState<'_> {
                 .model_scopes
                 .as_ref()
                 .map(|scopes| scopes.with_application_tools(child_tools.agent_tool_names())),
+            egress: Arc::clone(self.policy.egress()),
         });
         Ok(Arc::new(BuiltApplication {
             saved_agent_fingerprint,
@@ -3833,6 +3834,8 @@ struct LazyNestedAgent {
     internal_tools: InternalToolCatalog,
     parallel_applications: bool,
     model_scopes: Option<ModelScopeSessions>,
+    /// The run's egress policy, for delegated-auth discovery (#1490).
+    egress: Arc<elitea_agent_runtime::egress::RunEgress>,
 }
 
 #[async_trait]
@@ -3995,7 +3998,7 @@ impl LazyNestedAgent {
             |checkpoint| checkpoint.wrap(agent.clone()),
         );
         let agent = self.profile.instruction_plan().wrap(agent);
-        let agent = delegated_authorization_agent(agent, authorization);
+        let agent = delegated_authorization_agent(agent, authorization, Arc::clone(&self.egress));
         Ok(clarifying_question_agent(agent, self.internal_tools))
     }
 

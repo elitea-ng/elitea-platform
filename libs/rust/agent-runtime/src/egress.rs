@@ -206,6 +206,14 @@ impl RunEgress {
         Self::new(PublicPolicy::Open)
     }
 
+    /// No public host at all: an empty allowlist. What a client gets when it
+    /// is built outside any run ([`current`]), and the default of a holder
+    /// that was never handed its run's policy.
+    #[must_use]
+    pub fn closed() -> Arc<Self> {
+        Self::new(PublicPolicy::Allowlist(Allowlist::default()))
+    }
+
     #[must_use]
     pub const fn policy(&self) -> &PublicPolicy {
         &self.policy
@@ -339,24 +347,52 @@ tokio::task_local! {
     static CALL: Arc<CallRefusal>;
 }
 
+/// Whether a client built outside any run reaches every public host. Only
+/// this crate's own unit tests, which build family clients directly against
+/// local fixtures; every other build fails CLOSED (#1490 review).
+const UNSCOPED_IS_OPEN: bool = cfg!(test);
+
 fn shared_open() -> Arc<RunEgress> {
     static OPEN: OnceLock<Arc<RunEgress>> = OnceLock::new();
     Arc::clone(OPEN.get_or_init(RunEgress::open))
 }
 
-/// The run in scope, or an open one outside any run (a test, a host that
-/// lends no policy).
+/// The policy of a client built outside any run: closed (no public host),
+/// and logged, since every path that sends for a run must name it — through
+/// materialization's [`scope`], a tool call's `attributed`, or an explicit
+/// [`RunEgress`]. A task-local does not cross `tokio::spawn`, so a missing
+/// scope is a bug this refuses instead of silently opening.
+fn unscoped(open: bool) -> Arc<RunEgress> {
+    if open {
+        return shared_open();
+    }
+    tracing::warn!(
+        event = "egress_unscoped_client",
+        "an HTTP client was built outside any run's egress scope; it reaches no public host"
+    );
+    RunEgress::closed()
+}
+
+/// The run in scope. Outside any run a client reaches NO public host
+/// (fail-closed): a path that sends on behalf of a run must put it in scope
+/// or hand it over explicitly.
 #[must_use]
 pub fn current() -> Arc<RunEgress> {
     CURRENT
         .try_with(Arc::clone)
-        .unwrap_or_else(|_| shared_open())
+        .unwrap_or_else(|_| unscoped(UNSCOPED_IS_OPEN))
 }
 
 /// Run `future` with `egress` as the run in scope: every client built inside
 /// it is bound to `egress`.
 pub async fn scope<F: Future>(egress: Arc<RunEgress>, future: F) -> F::Output {
     CURRENT.scope(egress, future).await
+}
+
+/// [`scope`] for synchronous code: every client built inside `build` is
+/// bound to `egress` (a constructor that is not async, run at assembly).
+pub fn scope_sync<R>(egress: Arc<RunEgress>, build: impl FnOnce() -> R) -> R {
+    CURRENT.sync_scope(egress, build)
 }
 
 /// The first refusal the tool call in progress met, if any (the call keeps

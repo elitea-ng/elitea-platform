@@ -729,7 +729,8 @@ impl PipelineNativeAgentAssembler {
             }
         }
         let toolsets = freeze_toolsets_by_alias(toolsets).await?;
-        let direct_tool_resolver = build_direct_tool_resolver(profile, &toolsets)?;
+        let direct_tool_resolver =
+            build_direct_tool_resolver(profile, &toolsets, tool_policy.egress())?;
         // One assembly path for the whole graph: its shared skipped set feeds the notice (FU-243).
         let materialization = ApplicationMaterializationPath::native_graph(continuation);
         let application_runtime = context
@@ -1365,6 +1366,8 @@ struct NativePipelineLlmAgentFactory {
 
 struct NativePipelineDirectToolResolver {
     tools: BTreeMap<(String, String), ResolvedDirectTool>,
+    /// The run's egress policy, for delegated-auth discovery (#1490).
+    egress: Arc<elitea_agent_runtime::egress::RunEgress>,
 }
 
 #[path = "pipeline/parallel_application_resolver.rs"]
@@ -1601,6 +1604,10 @@ impl PipelineDirectToolResolver for NativePipelineDirectToolResolver {
             .get(&(selection.alias().to_owned(), selection.tool().to_owned()))
             .cloned()
             .ok_or(DirectToolExecutionError::Unavailable)
+    }
+
+    fn egress(&self) -> Arc<elitea_agent_runtime::egress::RunEgress> {
+        Arc::clone(&self.egress)
     }
 }
 
@@ -2271,7 +2278,8 @@ async fn bind_saved_pipeline_runtimes(
         }
     }
     let toolsets = freeze_toolsets_by_alias(toolsets).await?;
-    let direct_tool_resolver = build_direct_tool_resolver(profile, &toolsets)?;
+    let direct_tool_resolver =
+        build_direct_tool_resolver(profile, &toolsets, runtime.tool_policy.egress())?;
     let guarded_interrupt_kinds = guarded_interrupt_kinds(profile, &delegated_authorization);
     let llm_factory = profile.definition().has_llm_nodes().then(|| {
         Arc::new(NativePipelineLlmAgentFactory {
@@ -2406,6 +2414,7 @@ async fn freeze_toolsets_by_alias(
 fn build_direct_tool_resolver(
     profile: &PipelineExecutionProfile,
     toolsets: &BTreeMap<String, FrozenToolset>,
+    egress: &Arc<elitea_agent_runtime::egress::RunEgress>,
 ) -> Result<Option<Arc<dyn PipelineDirectToolResolver>>, NativeAgentAssemblyError> {
     let selections = profile
         .definition()
@@ -2450,7 +2459,10 @@ fn build_direct_tool_resolver(
             );
         }
     }
-    Ok(Some(Arc::new(NativePipelineDirectToolResolver { tools })))
+    Ok(Some(Arc::new(NativePipelineDirectToolResolver {
+        tools,
+        egress: Arc::clone(egress),
+    })))
 }
 
 fn validate_application_selection(

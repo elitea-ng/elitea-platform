@@ -665,8 +665,19 @@ fn github_web_origin(base: &Url) -> Option<Url> {
 /// The GitHub and GitLab toolkits of a turn's frozen snapshot, each with its
 /// own client (its own credentials, never shared with the toolkit's
 /// toolset). A toolkit whose settings do not parse is left out.
+///
+/// Each client is bound to `egress`, the run's policy (#1490): they are built
+/// at assembly, outside any egress scope, and keep the run they were built
+/// under for every later request (`open_pull_request`).
 #[must_use]
-pub fn pull_request_targets(snapshot: &AdmittedToolSnapshot<'_>) -> Vec<PullRequestTarget> {
+pub fn pull_request_targets(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    egress: &Arc<RunEgress>,
+) -> Vec<PullRequestTarget> {
+    crate::egress::scope_sync(Arc::clone(egress), || targets_in_scope(snapshot))
+}
+
+fn targets_in_scope(snapshot: &AdmittedToolSnapshot<'_>) -> Vec<PullRequestTarget> {
     snapshot
         .iter()
         .filter(|reference| reference.kind() == FrozenToolKind::Configured)
@@ -1468,6 +1479,57 @@ mod tests {
                 count: 1,
             }]
         );
+    }
+
+    /// #1490 review: a bound toolkit's forge client is built at assembly,
+    /// outside any egress scope, and keeps the run it was built under. It is
+    /// bound to the run handed over: `open_pull_request` to a host the run's
+    /// allowlist leaves out (here the API host) is refused and counted in
+    /// THAT run's ledger — not sent under a fallback policy.
+    #[tokio::test]
+    async fn bound_toolkit_targets_are_held_to_the_runs_egress() {
+        use super::super::snapshot::FrozenToolSnapshot;
+        use super::pull_request_targets;
+
+        let version = serde_json::json!({"tools": [{
+            "id": 7,
+            "type": "github",
+            "toolkit_name": "team-github",
+            "settings": {
+                "github_configuration": {
+                    "configuration_type": "github",
+                    "base_url": "https://api.github.com",
+                    "access_token": "fixture-token"
+                },
+                "repository": "EliteaAI/elitea-platform",
+                "active_branch": "feature/runtime",
+                "base_branch": "main",
+                "selected_tools": []
+            }
+        }]});
+        let policy =
+            crate::toolkits::ToolAdmissionPolicy::new(&[], &std::collections::BTreeMap::new())
+                .expect("policy");
+        let snapshot =
+            FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+                .expect("snapshot")
+                .apply_policy(&policy);
+        // The git remote's host is allowed; the API host is not.
+        let run = RunEgress::new(PublicPolicy::allowlist(["github.com"]).expect("policy"));
+        let targets = pull_request_targets(&snapshot, &run);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].web_host(), "github.com");
+        assert!(
+            targets[0]
+                .open_request("cloud-change", "main", "title", "body")
+                .await
+                .is_err()
+        );
+        let summary = run.summary();
+        assert_eq!(summary.reached, Vec::<HostCount>::new());
+        assert_eq!(summary.refused.len(), 1);
+        assert_eq!(summary.refused[0].host, "api.github.com");
+        assert_eq!(summary.refused[0].port, 443);
     }
 
     use super::{

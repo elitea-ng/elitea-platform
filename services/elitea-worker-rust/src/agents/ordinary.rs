@@ -429,7 +429,8 @@ impl OrdinaryNativeAgentAssembler {
                                 )),
                             ))
                         }),
-                        targets: pr::pull_request_targets(&tool_snapshot),
+                        // Bound to the run's egress policy (#1490).
+                        targets: pr::pull_request_targets(&tool_snapshot, tool_policy.egress()),
                         diff: Arc::new(crate::workspace_run::tools::TurnDiffSource::new(
                             Arc::clone(turn),
                         )),
@@ -851,7 +852,8 @@ impl OrdinaryNativeAgentAssembler {
             .with_skipped_application_children(skipped_applications)
             .with_renamed_tools(renamed_tools)
             .with_left_out_toolkits(left_out_toolkits)
-            .with_toolkit_attribution(toolkit_attribution),
+            .with_toolkit_attribution(toolkit_attribution)
+            .with_egress(Arc::clone(tool_policy.egress())),
             fresh_execution_mode,
         ))
     }

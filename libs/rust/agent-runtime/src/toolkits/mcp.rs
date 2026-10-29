@@ -1046,7 +1046,13 @@ fn push_egress_refused_toolset(
         .selected_tools()
         .iter()
         .filter(|name| !contains_tool_name(config.excluded_tools(), name))
-        .map(|name| Arc::new(McpEgressRefusedTool::new(name, endpoint.clone())) as Arc<dyn Tool>)
+        .map(|name| {
+            Arc::new(McpEgressRefusedTool::new(
+                name,
+                endpoint.clone(),
+                Arc::clone(policy.egress()),
+            )) as Arc<dyn Tool>
+        })
         .collect::<Vec<_>>();
     if refusing.is_empty() {
         return Ok(());
@@ -1068,13 +1074,17 @@ fn push_egress_refused_toolset(
 struct McpEgressRefusedTool {
     name: Box<str>,
     endpoint: reqwest::Url,
+    /// The run whose policy refused the endpoint, named explicitly rather
+    /// than read from the scope.
+    egress: Arc<crate::egress::RunEgress>,
 }
 
 impl McpEgressRefusedTool {
-    fn new(name: &str, endpoint: reqwest::Url) -> Self {
+    fn new(name: &str, endpoint: reqwest::Url, egress: Arc<crate::egress::RunEgress>) -> Self {
         Self {
             name: name.into(),
             endpoint,
+            egress,
         }
     }
 }
@@ -1109,8 +1119,7 @@ impl Tool for McpEgressRefusedTool {
         _context: Arc<dyn ToolContext>,
         _arguments: Value,
     ) -> adk_core::Result<Value> {
-        let egress = crate::egress::current();
-        match egress.check_url(&self.endpoint) {
+        match self.egress.check_url(&self.endpoint) {
             Err(refused) => Err(refused.tool_error()),
             // A policy that admits the host now is not this run's: the
             // session was never opened, so there is nothing to call.

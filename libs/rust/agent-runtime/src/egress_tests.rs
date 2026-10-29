@@ -318,3 +318,21 @@ fn no_toolkit_builds_an_unbound_reqwest_client() {
         "build toolkit HTTP clients with crate::egress::client_builder().build_for_run(): {offenders:?}"
     );
 }
+
+/// #1490 review: outside any run a client reaches NO public host. This
+/// crate's unit tests pass `open` (they build family clients directly
+/// against local fixtures); every other build passes `false`, which
+/// `tests/egress_unscoped.rs` proves through the real `current()`.
+#[test]
+fn a_client_built_outside_any_run_fails_closed() {
+    let unscoped = unscoped(false);
+    assert!(!unscoped.policy().is_open());
+    assert!(unscoped.check("api.example.com", 443).is_err());
+    assert!(
+        unscoped
+            .check_url(&url("https://api.example.com/v1"))
+            .is_err()
+    );
+    let closed = RunEgress::closed();
+    assert!(closed.check("203.0.113.9", 443).is_err());
+}

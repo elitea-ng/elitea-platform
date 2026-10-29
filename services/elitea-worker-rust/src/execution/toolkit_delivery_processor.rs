@@ -1555,8 +1555,10 @@ where
             }
             _ => return Err(RuntimeFailureKind::InvalidInput),
         };
+        // Discovery is held to the command's egress policy and lands in its
+        // ledger (#1490): the request's policy carries the command's run.
         let resolved = lease
-            .run_pre_invocation(requirement.resolve_public_metadata())
+            .run_pre_invocation(requirement.resolve_public_metadata(request.policy().egress()))
             .await
             .map_err(|error| lease_failure(&error))?;
         let metadata = resolved
