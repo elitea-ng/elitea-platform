@@ -1,0 +1,3759 @@
+{
+ "park": [
+  {
+   "type": "agent_start",
+   "response_metadata": {
+    "invoked_skills": [],
+    "should_continue": false
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_start",
+   "response_metadata": {
+    "metadata": {
+     "ls_model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+    },
+    "model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "timestamp_start": "2026-10-29T08:47:21.325400760+00:00",
+    "tool_name": "Thinking step",
+    "tool_run_id": "dbf581c7-925d-4021-8b3a-cc513325fb00"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_end",
+   "response_metadata": {
+    "thinking_steps": [
+     {
+      "message": {
+       "response_metadata": {
+        "metadata": {},
+        "model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "tool_name": null
+       }
+      },
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:47:21.325400760+00:00",
+      "timestamp_start": "2026-10-29T08:47:21.325400760+00:00",
+      "tool_run_id": "dbf581c7-925d-4021-8b3a-cc513325fb00",
+      "type": "ChatGeneration"
+     }
+    ],
+    "tool_run_id": "dbf581c7-925d-4021-8b3a-cc513325fb00"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "project_id": 118,
+    "thinking_steps": [
+     {
+      "message": {
+       "response_metadata": {
+        "metadata": {},
+        "model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "tool_name": null
+       }
+      },
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:47:21.325400760+00:00",
+      "timestamp_start": "2026-10-29T08:47:21.325400760+00:00",
+      "tool_run_id": "dbf581c7-925d-4021-8b3a-cc513325fb00",
+      "type": "ChatGeneration"
+     }
+    ],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {}
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_tool_start",
+   "response_metadata": {
+    "error": null,
+    "finish_reason": null,
+    "metadata": {
+     "agent_type": "pipeline",
+     "display_name": "FP inner parallel",
+     "original_name": "FP inner parallel",
+     "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+     "parent_agent_path": [],
+     "sibling_ordinal": 1,
+     "toolkit_type": "pipeline"
+    },
+    "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "parent_agent_path": [],
+    "run_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "sibling_ordinal": 1,
+    "timestamp_finish": null,
+    "timestamp_start": "2026-10-29T08:47:21.325400760+00:00",
+    "tool_inputs": {
+     "task": "FU-249: pick colours for my bell and lights."
+    },
+    "tool_meta": {
+     "display_name": "FP inner parallel",
+     "metadata": {
+      "agent_type": "pipeline",
+      "display_name": "FP inner parallel",
+      "original_name": "FP inner parallel",
+      "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "parent_agent_path": [],
+      "sibling_ordinal": 1,
+      "toolkit_type": "pipeline"
+     },
+     "name": "FP inner parallel"
+    },
+    "tool_name": "FP inner parallel",
+    "tool_output": null,
+    "tool_run_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "project_id": 118,
+    "thinking_steps": [],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {
+     "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0": {
+      "error": null,
+      "finish_reason": null,
+      "metadata": {
+       "agent_type": "pipeline",
+       "display_name": "FP inner parallel",
+       "original_name": "FP inner parallel",
+       "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "parent_agent_path": [],
+       "sibling_ordinal": 1,
+       "toolkit_type": "pipeline"
+      },
+      "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "parent_agent_path": [],
+      "run_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "sibling_ordinal": 1,
+      "timestamp_finish": null,
+      "timestamp_start": "2026-10-29T08:47:21.325400760+00:00",
+      "tool_inputs": {
+       "task": "FU-249: pick colours for my bell and lights."
+      },
+      "tool_meta": {
+       "display_name": "FP inner parallel",
+       "metadata": {
+        "agent_type": "pipeline",
+        "display_name": "FP inner parallel",
+        "original_name": "FP inner parallel",
+        "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "parent_agent_path": [],
+        "sibling_ordinal": 1,
+        "toolkit_type": "pipeline"
+       },
+       "name": "FP inner parallel"
+      },
+      "tool_name": "FP inner parallel",
+      "tool_output": null,
+      "tool_run_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0"
+     }
+    }
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_fanout_member",
+   "response_metadata": {
+    "fanout_member_status_v1": {
+     "fanout_v1": {
+      "activation": "507c9051038c582e",
+      "kind": "parallel",
+      "member": "bell",
+      "node": "inner",
+      "ordinal": 1,
+      "total": 2
+     },
+     "open_interrupts": 0,
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel"
+      },
+      {
+       "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "name": "FP ask",
+       "sibling_ordinal": 1
+      }
+     ],
+     "schema": "elitea.pipeline.fanout-member-status.v1",
+     "status": "start"
+    },
+    "fanout_v1": {
+     "activation": "507c9051038c582e",
+     "kind": "parallel",
+     "member": "bell",
+     "node": "inner",
+     "ordinal": 1,
+     "total": 2
+    },
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel"
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ]
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_fanout_member",
+   "response_metadata": {
+    "fanout_member_status_v1": {
+     "fanout_v1": {
+      "activation": "507c9051038c582e",
+      "kind": "parallel",
+      "member": "lights",
+      "node": "inner",
+      "ordinal": 2,
+      "total": 2
+     },
+     "open_interrupts": 0,
+     "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel"
+      },
+      {
+       "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+       "name": "FP ask",
+       "sibling_ordinal": 2
+      }
+     ],
+     "schema": "elitea.pipeline.fanout-member-status.v1",
+     "status": "start"
+    },
+    "fanout_v1": {
+     "activation": "507c9051038c582e",
+     "kind": "parallel",
+     "member": "lights",
+     "node": "inner",
+     "ordinal": 2,
+     "total": 2
+    },
+    "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel"
+     },
+     {
+      "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "name": "FP ask",
+      "sibling_ordinal": 2
+     }
+    ]
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_start",
+   "response_metadata": {
+    "metadata": {
+     "ls_model_name": "nested-model",
+     "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+     "parent_agent_name": "FP inner parallel",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      }
+     ]
+    },
+    "model_name": "nested-model",
+    "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "timestamp_start": "2026-10-29T08:47:21.354968760+00:00",
+    "tool_name": "Thinking step",
+    "tool_run_id": "a10a0f73-4884-4330-b102-fa9b6738fdef"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_end",
+   "response_metadata": {
+    "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "thinking_steps": [
+     {
+      "message": {
+       "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "parent_agent_name": "FP inner parallel",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        }
+       ],
+       "response_metadata": {
+        "metadata": {},
+        "model_name": "nested-model",
+        "tool_name": null
+       }
+      },
+      "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "parent_agent_name": "FP inner parallel",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       }
+      ],
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:47:21.354968760+00:00",
+      "timestamp_start": "2026-10-29T08:47:21.354968760+00:00",
+      "tool_run_id": "a10a0f73-4884-4330-b102-fa9b6738fdef",
+      "type": "ChatGeneration"
+     }
+    ],
+    "tool_run_id": "a10a0f73-4884-4330-b102-fa9b6738fdef"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "project_id": 118,
+    "thinking_steps": [
+     {
+      "message": {
+       "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "parent_agent_name": "FP inner parallel",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        }
+       ],
+       "response_metadata": {
+        "metadata": {},
+        "model_name": "nested-model",
+        "tool_name": null
+       }
+      },
+      "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "parent_agent_name": "FP inner parallel",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       }
+      ],
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:47:21.354968760+00:00",
+      "timestamp_start": "2026-10-29T08:47:21.354968760+00:00",
+      "tool_run_id": "a10a0f73-4884-4330-b102-fa9b6738fdef",
+      "type": "ChatGeneration"
+     }
+    ],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {}
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_tool_start",
+   "response_metadata": {
+    "error": null,
+    "finish_reason": null,
+    "metadata": {
+     "agent_type": "pipeline",
+     "display_name": "FP ask",
+     "original_name": "FP ask",
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP inner parallel",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      }
+     ],
+     "sibling_ordinal": 1,
+     "toolkit_type": "pipeline"
+    },
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "run_id": "pipeline-v2:ask_bell:c67cd65deac145849b03edfef79a13ec37a30ef5e2946babfd285b5cb8a5ba0d:0",
+    "sibling_ordinal": 1,
+    "timestamp_finish": null,
+    "timestamp_start": "2026-10-29T08:47:21.354968760+00:00",
+    "tool_inputs": {
+     "task": "Choose a colour for the bell"
+    },
+    "tool_meta": {
+     "display_name": "FP ask",
+     "metadata": {
+      "agent_type": "pipeline",
+      "display_name": "FP ask",
+      "original_name": "FP ask",
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP inner parallel",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       }
+      ],
+      "sibling_ordinal": 1,
+      "toolkit_type": "pipeline"
+     },
+     "name": "FP ask",
+     "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+     "parent_agent_name": "FP inner parallel",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      }
+     ]
+    },
+    "tool_name": "FP ask",
+    "tool_output": null,
+    "tool_run_id": "pipeline-v2:ask_bell:c67cd65deac145849b03edfef79a13ec37a30ef5e2946babfd285b5cb8a5ba0d:0"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "project_id": 118,
+    "thinking_steps": [],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {
+     "pipeline-v2:ask_bell:c67cd65deac145849b03edfef79a13ec37a30ef5e2946babfd285b5cb8a5ba0d:0": {
+      "error": null,
+      "finish_reason": null,
+      "metadata": {
+       "agent_type": "pipeline",
+       "display_name": "FP ask",
+       "original_name": "FP ask",
+       "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "parent_agent_name": "FP inner parallel",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        }
+       ],
+       "sibling_ordinal": 1,
+       "toolkit_type": "pipeline"
+      },
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP inner parallel",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       }
+      ],
+      "run_id": "pipeline-v2:ask_bell:c67cd65deac145849b03edfef79a13ec37a30ef5e2946babfd285b5cb8a5ba0d:0",
+      "sibling_ordinal": 1,
+      "timestamp_finish": null,
+      "timestamp_start": "2026-10-29T08:47:21.354968760+00:00",
+      "tool_inputs": {
+       "task": "Choose a colour for the bell"
+      },
+      "tool_meta": {
+       "display_name": "FP ask",
+       "metadata": {
+        "agent_type": "pipeline",
+        "display_name": "FP ask",
+        "original_name": "FP ask",
+        "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "parent_agent_name": "FP inner parallel",
+        "parent_agent_path": [
+         {
+          "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+          "name": "FP inner parallel",
+          "sibling_ordinal": 1
+         }
+        ],
+        "sibling_ordinal": 1,
+        "toolkit_type": "pipeline"
+       },
+       "name": "FP ask",
+       "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "parent_agent_name": "FP inner parallel",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        }
+       ]
+      },
+      "tool_name": "FP ask",
+      "tool_output": null,
+      "tool_run_id": "pipeline-v2:ask_bell:c67cd65deac145849b03edfef79a13ec37a30ef5e2946babfd285b5cb8a5ba0d:0"
+     }
+    }
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_start",
+   "response_metadata": {
+    "metadata": {
+     "ls_model_name": "nested-model",
+     "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+     "parent_agent_name": "FP inner parallel",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      }
+     ]
+    },
+    "model_name": "nested-model",
+    "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "timestamp_start": "2026-10-29T08:47:21.360552551+00:00",
+    "tool_name": "Thinking step",
+    "tool_run_id": "5995f7ee-a6f0-4f42-a914-6c5fc6da4d5b"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_end",
+   "response_metadata": {
+    "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "thinking_steps": [
+     {
+      "message": {
+       "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "parent_agent_name": "FP inner parallel",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        }
+       ],
+       "response_metadata": {
+        "metadata": {},
+        "model_name": "nested-model",
+        "tool_name": null
+       }
+      },
+      "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "parent_agent_name": "FP inner parallel",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       }
+      ],
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:47:21.360552551+00:00",
+      "timestamp_start": "2026-10-29T08:47:21.360552551+00:00",
+      "tool_run_id": "5995f7ee-a6f0-4f42-a914-6c5fc6da4d5b",
+      "type": "ChatGeneration"
+     }
+    ],
+    "tool_run_id": "5995f7ee-a6f0-4f42-a914-6c5fc6da4d5b"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "project_id": 118,
+    "thinking_steps": [
+     {
+      "message": {
+       "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "parent_agent_name": "FP inner parallel",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        }
+       ],
+       "response_metadata": {
+        "metadata": {},
+        "model_name": "nested-model",
+        "tool_name": null
+       }
+      },
+      "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "parent_agent_name": "FP inner parallel",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       }
+      ],
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:47:21.360552551+00:00",
+      "timestamp_start": "2026-10-29T08:47:21.360552551+00:00",
+      "tool_run_id": "5995f7ee-a6f0-4f42-a914-6c5fc6da4d5b",
+      "type": "ChatGeneration"
+     }
+    ],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {}
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_tool_start",
+   "response_metadata": {
+    "error": null,
+    "finish_reason": null,
+    "metadata": {
+     "agent_type": "pipeline",
+     "display_name": "FP ask",
+     "original_name": "FP ask",
+     "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+     "parent_agent_name": "FP inner parallel",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      }
+     ],
+     "sibling_ordinal": 2,
+     "toolkit_type": "pipeline"
+    },
+    "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "run_id": "pipeline-v2:ask_lights:6373852c84590ded65e619150be3e141d80b41e164154a18e5808b7a7ff1b797:0",
+    "sibling_ordinal": 2,
+    "timestamp_finish": null,
+    "timestamp_start": "2026-10-29T08:47:21.360552551+00:00",
+    "tool_inputs": {
+     "task": "Choose a colour for the lights"
+    },
+    "tool_meta": {
+     "display_name": "FP ask",
+     "metadata": {
+      "agent_type": "pipeline",
+      "display_name": "FP ask",
+      "original_name": "FP ask",
+      "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "parent_agent_name": "FP inner parallel",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       }
+      ],
+      "sibling_ordinal": 2,
+      "toolkit_type": "pipeline"
+     },
+     "name": "FP ask",
+     "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+     "parent_agent_name": "FP inner parallel",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      }
+     ]
+    },
+    "tool_name": "FP ask",
+    "tool_output": null,
+    "tool_run_id": "pipeline-v2:ask_lights:6373852c84590ded65e619150be3e141d80b41e164154a18e5808b7a7ff1b797:0"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "project_id": 118,
+    "thinking_steps": [],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {
+     "pipeline-v2:ask_lights:6373852c84590ded65e619150be3e141d80b41e164154a18e5808b7a7ff1b797:0": {
+      "error": null,
+      "finish_reason": null,
+      "metadata": {
+       "agent_type": "pipeline",
+       "display_name": "FP ask",
+       "original_name": "FP ask",
+       "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+       "parent_agent_name": "FP inner parallel",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        }
+       ],
+       "sibling_ordinal": 2,
+       "toolkit_type": "pipeline"
+      },
+      "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "parent_agent_name": "FP inner parallel",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       }
+      ],
+      "run_id": "pipeline-v2:ask_lights:6373852c84590ded65e619150be3e141d80b41e164154a18e5808b7a7ff1b797:0",
+      "sibling_ordinal": 2,
+      "timestamp_finish": null,
+      "timestamp_start": "2026-10-29T08:47:21.360552551+00:00",
+      "tool_inputs": {
+       "task": "Choose a colour for the lights"
+      },
+      "tool_meta": {
+       "display_name": "FP ask",
+       "metadata": {
+        "agent_type": "pipeline",
+        "display_name": "FP ask",
+        "original_name": "FP ask",
+        "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+        "parent_agent_name": "FP inner parallel",
+        "parent_agent_path": [
+         {
+          "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+          "name": "FP inner parallel",
+          "sibling_ordinal": 1
+         }
+        ],
+        "sibling_ordinal": 2,
+        "toolkit_type": "pipeline"
+       },
+       "name": "FP ask",
+       "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "parent_agent_name": "FP inner parallel",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        }
+       ]
+      },
+      "tool_name": "FP ask",
+      "tool_output": null,
+      "tool_run_id": "pipeline-v2:ask_lights:6373852c84590ded65e619150be3e141d80b41e164154a18e5808b7a7ff1b797:0"
+     }
+    }
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_context_status",
+   "response_metadata": {
+    "context_status": {
+     "auto_output": true,
+     "budget_mode": "balanced",
+     "compaction_target_tokens": 40238,
+     "compaction_trigger_tokens": 241431,
+     "estimated_input_tokens": 389,
+     "phase": "measured",
+     "reserved_output_tokens": 1024,
+     "safety_margin_tokens": 2720,
+     "total_tokens": 272000,
+     "usable_input_tokens": 268256,
+     "version": 1
+    },
+    "model_scope": "pipeline_node",
+    "node_name": "ask",
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ]
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_context_status",
+   "response_metadata": {
+    "context_status": {
+     "auto_output": true,
+     "budget_mode": "balanced",
+     "compaction_target_tokens": 40238,
+     "compaction_trigger_tokens": 241431,
+     "estimated_input_tokens": 390,
+     "phase": "measured",
+     "reserved_output_tokens": 1024,
+     "safety_margin_tokens": 2720,
+     "total_tokens": 272000,
+     "usable_input_tokens": 268256,
+     "version": 1
+    },
+    "model_scope": "pipeline_node",
+    "node_name": "ask",
+    "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "name": "FP ask",
+      "sibling_ordinal": 2
+     }
+    ]
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_context_status",
+   "response_metadata": {
+    "context_status": {
+     "auto_output": true,
+     "budget_mode": "balanced",
+     "compaction_target_tokens": 40238,
+     "compaction_trigger_tokens": 241431,
+     "estimated_input_tokens": 389,
+     "phase": "measured",
+     "provider_usage": {
+      "input_tokens": 873,
+      "output_tokens": 159
+     },
+     "reserved_output_tokens": 1024,
+     "safety_margin_tokens": 2720,
+     "total_tokens": 272000,
+     "usable_input_tokens": 268256,
+     "version": 1
+    },
+    "model_scope": "pipeline_node",
+    "node_name": "ask",
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ]
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_start",
+   "response_metadata": {
+    "metadata": {
+     "langgraph_node": "ask",
+     "ls_model_name": "nested-model",
+     "original_name": "ask",
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      },
+      {
+       "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "name": "FP ask",
+       "sibling_ordinal": 1
+      }
+     ]
+    },
+    "model_name": "nested-model",
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ],
+    "timestamp_start": "2026-10-29T08:47:24.724942095+00:00",
+    "tool_name": "ask",
+    "tool_run_id": "p1:RnvKCgR89w5EXEdsifgFzmZKoQcXRv1rfpkgjwXKV-8/ask_bell:ask:1_llm_1793263641370634218"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_end",
+   "response_metadata": {
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ],
+    "thinking_steps": [
+     {
+      "message": {
+       "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "parent_agent_name": "FP ask",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        },
+        {
+         "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+         "name": "FP ask",
+         "sibling_ordinal": 1
+        }
+       ],
+       "response_metadata": {
+        "metadata": {
+         "langgraph_node": "ask",
+         "original_name": "ask"
+        },
+        "model_name": "nested-model",
+        "tool_name": "ask"
+       }
+      },
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP ask",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       },
+       {
+        "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "name": "FP ask",
+        "sibling_ordinal": 1
+       }
+      ],
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:47:24.724942095+00:00",
+      "timestamp_start": "2026-10-29T08:47:24.724942095+00:00",
+      "tool_run_id": "p1:RnvKCgR89w5EXEdsifgFzmZKoQcXRv1rfpkgjwXKV-8/ask_bell:ask:1_llm_1793263641370634218",
+      "type": "ChatGeneration"
+     }
+    ],
+    "tool_run_id": "p1:RnvKCgR89w5EXEdsifgFzmZKoQcXRv1rfpkgjwXKV-8/ask_bell:ask:1_llm_1793263641370634218"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ],
+    "project_id": 118,
+    "thinking_steps": [
+     {
+      "message": {
+       "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "parent_agent_name": "FP ask",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        },
+        {
+         "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+         "name": "FP ask",
+         "sibling_ordinal": 1
+        }
+       ],
+       "response_metadata": {
+        "metadata": {
+         "langgraph_node": "ask",
+         "original_name": "ask"
+        },
+        "model_name": "nested-model",
+        "tool_name": "ask"
+       }
+      },
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP ask",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       },
+       {
+        "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "name": "FP ask",
+        "sibling_ordinal": 1
+       }
+      ],
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:47:24.724942095+00:00",
+      "timestamp_start": "2026-10-29T08:47:24.724942095+00:00",
+      "tool_run_id": "p1:RnvKCgR89w5EXEdsifgFzmZKoQcXRv1rfpkgjwXKV-8/ask_bell:ask:1_llm_1793263641370634218",
+      "type": "ChatGeneration"
+     }
+    ],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {}
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_tool_start",
+   "response_metadata": {
+    "error": null,
+    "finish_reason": null,
+    "metadata": {
+     "langgraph_node": "ask",
+     "original_name": "ask",
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      },
+      {
+       "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "name": "FP ask",
+       "sibling_ordinal": 1
+      }
+     ]
+    },
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ],
+    "run_id": "tooluse_LZXMW6RPx2A6HlStlHB9PW",
+    "timestamp_finish": null,
+    "timestamp_start": "2026-10-29T08:47:24.724942095+00:00",
+    "tool_inputs": {
+     "questions": [
+      {
+       "allow_other": true,
+       "header": "Bell Colour",
+       "options": [
+        {
+         "description": "A bold, vibrant red",
+         "label": "Red"
+        },
+        {
+         "description": "A cool, calming blue",
+         "label": "Blue"
+        },
+        {
+         "description": "A classic, shiny gold",
+         "label": "Gold"
+        },
+        {
+         "description": "A fresh, natural green",
+         "label": "Green"
+        }
+       ],
+       "question": "Which colour would you like for the bell?"
+      }
+     ]
+    },
+    "tool_meta": {
+     "metadata": {
+      "langgraph_node": "ask",
+      "original_name": "ask",
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP ask",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       },
+       {
+        "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "name": "FP ask",
+        "sibling_ordinal": 1
+       }
+      ]
+     },
+     "name": "ask_user",
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      },
+      {
+       "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "name": "FP ask",
+       "sibling_ordinal": 1
+      }
+     ]
+    },
+    "tool_name": "ask_user",
+    "tool_output": null,
+    "tool_run_id": "tooluse_LZXMW6RPx2A6HlStlHB9PW"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ],
+    "project_id": 118,
+    "thinking_steps": [],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {
+     "tooluse_LZXMW6RPx2A6HlStlHB9PW": {
+      "error": null,
+      "finish_reason": null,
+      "metadata": {
+       "langgraph_node": "ask",
+       "original_name": "ask",
+       "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "parent_agent_name": "FP ask",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        },
+        {
+         "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+         "name": "FP ask",
+         "sibling_ordinal": 1
+        }
+       ]
+      },
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP ask",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       },
+       {
+        "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "name": "FP ask",
+        "sibling_ordinal": 1
+       }
+      ],
+      "run_id": "tooluse_LZXMW6RPx2A6HlStlHB9PW",
+      "timestamp_finish": null,
+      "timestamp_start": "2026-10-29T08:47:24.724942095+00:00",
+      "tool_inputs": {
+       "questions": [
+        {
+         "allow_other": true,
+         "header": "Bell Colour",
+         "options": [
+          {
+           "description": "A bold, vibrant red",
+           "label": "Red"
+          },
+          {
+           "description": "A cool, calming blue",
+           "label": "Blue"
+          },
+          {
+           "description": "A classic, shiny gold",
+           "label": "Gold"
+          },
+          {
+           "description": "A fresh, natural green",
+           "label": "Green"
+          }
+         ],
+         "question": "Which colour would you like for the bell?"
+        }
+       ]
+      },
+      "tool_meta": {
+       "metadata": {
+        "langgraph_node": "ask",
+        "original_name": "ask",
+        "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "parent_agent_name": "FP ask",
+        "parent_agent_path": [
+         {
+          "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+          "name": "FP inner parallel",
+          "sibling_ordinal": 1
+         },
+         {
+          "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+          "name": "FP ask",
+          "sibling_ordinal": 1
+         }
+        ]
+       },
+       "name": "ask_user",
+       "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "parent_agent_name": "FP ask",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        },
+        {
+         "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+         "name": "FP ask",
+         "sibling_ordinal": 1
+        }
+       ]
+      },
+      "tool_name": "ask_user",
+      "tool_output": null,
+      "tool_run_id": "tooluse_LZXMW6RPx2A6HlStlHB9PW"
+     }
+    }
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_interrupt_pending",
+   "response_metadata": {
+    "fanout_v1": {
+     "activation": "507c9051038c582e",
+     "kind": "parallel",
+     "member": "bell",
+     "node": "inner",
+     "ordinal": 1,
+     "total": 2
+    },
+    "interrupt_card_v1": {
+     "available_actions": [
+      "answer"
+     ],
+     "display": {
+      "guardrail_type": "clarifying_question",
+      "message": "Which colour would you like for the bell?",
+      "node_name": "ask",
+      "tool_args_json": "{\"questions\":[{\"allow_other\":true,\"header\":\"Bell Colour\",\"id\":\"q1\",\"multiSelect\":false,\"optional\":false,\"options\":[{\"description\":\"A bold, vibrant red\",\"label\":\"Red\"},{\"description\":\"A cool, calming blue\",\"label\":\"Blue\"},{\"description\":\"A classic, shiny gold\",\"label\":\"Gold\"},{\"description\":\"A fresh, natural green\",\"label\":\"Green\"}],\"question\":\"Which colour would you like for the bell?\"}]}",
+      "tool_call_id": "tooluse_LZXMW6RPx2A6HlStlHB9PW",
+      "tool_name": "ask_user"
+     },
+     "fanout_v1": {
+      "activation": "507c9051038c582e",
+      "kind": "parallel",
+      "member": "bell",
+      "node": "inner",
+      "ordinal": 1,
+      "total": 2
+     },
+     "interrupt_id": "hitl_gq1:5Rv5exwsfAcQysHjDreeRUXFB0bDyVQf2uLhoJFrHuQ",
+     "interrupt_key": "2c571d43336c79762bf2af62934fffb6cd1d1d8be73cb6b3191cb5bd45eeba4c",
+     "kind": "ask_user",
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel"
+      },
+      {
+       "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "name": "FP ask",
+       "sibling_ordinal": 1
+      }
+     ],
+     "payload_sha256": "ab2f4336551418f7f8a39efc8184da1a9c5dcd74255c617fb9de6fa0ac265b20",
+     "schema": "elitea.pipeline.fanout-interrupt-card.v1"
+    },
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel"
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ],
+    "pause_progress": true
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_fanout_member",
+   "response_metadata": {
+    "fanout_member_status_v1": {
+     "fanout_v1": {
+      "activation": "507c9051038c582e",
+      "kind": "parallel",
+      "member": "bell",
+      "node": "inner",
+      "ordinal": 1,
+      "total": 2
+     },
+     "open_interrupts": 1,
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel"
+      },
+      {
+       "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "name": "FP ask",
+       "sibling_ordinal": 1
+      }
+     ],
+     "schema": "elitea.pipeline.fanout-member-status.v1",
+     "status": "paused"
+    },
+    "fanout_v1": {
+     "activation": "507c9051038c582e",
+     "kind": "parallel",
+     "member": "bell",
+     "node": "inner",
+     "ordinal": 1,
+     "total": 2
+    },
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel"
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ]
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_context_status",
+   "response_metadata": {
+    "context_status": {
+     "auto_output": true,
+     "budget_mode": "balanced",
+     "compaction_target_tokens": 40238,
+     "compaction_trigger_tokens": 241431,
+     "estimated_input_tokens": 390,
+     "phase": "measured",
+     "provider_usage": {
+      "input_tokens": 873,
+      "output_tokens": 193
+     },
+     "reserved_output_tokens": 1024,
+     "safety_margin_tokens": 2720,
+     "total_tokens": 272000,
+     "usable_input_tokens": 268256,
+     "version": 1
+    },
+    "model_scope": "pipeline_node",
+    "node_name": "ask",
+    "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "name": "FP ask",
+      "sibling_ordinal": 2
+     }
+    ]
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_start",
+   "response_metadata": {
+    "metadata": {
+     "langgraph_node": "ask",
+     "ls_model_name": "nested-model",
+     "original_name": "ask",
+     "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      },
+      {
+       "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+       "name": "FP ask",
+       "sibling_ordinal": 2
+      }
+     ]
+    },
+    "model_name": "nested-model",
+    "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "name": "FP ask",
+      "sibling_ordinal": 2
+     }
+    ],
+    "timestamp_start": "2026-10-29T08:47:24.941205553+00:00",
+    "tool_name": "ask",
+    "tool_run_id": "p1:I0tjWeZW1xfqu-IOsR8rZ0lKVXOLirvhCr5IQYqm8Hs/ask_lights:ask:2_llm_1793263641375006676"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_end",
+   "response_metadata": {
+    "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "name": "FP ask",
+      "sibling_ordinal": 2
+     }
+    ],
+    "thinking_steps": [
+     {
+      "message": {
+       "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+       "parent_agent_name": "FP ask",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        },
+        {
+         "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+         "name": "FP ask",
+         "sibling_ordinal": 2
+        }
+       ],
+       "response_metadata": {
+        "metadata": {
+         "langgraph_node": "ask",
+         "original_name": "ask"
+        },
+        "model_name": "nested-model",
+        "tool_name": "ask"
+       }
+      },
+      "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "parent_agent_name": "FP ask",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       },
+       {
+        "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+        "name": "FP ask",
+        "sibling_ordinal": 2
+       }
+      ],
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:47:24.941205553+00:00",
+      "timestamp_start": "2026-10-29T08:47:24.941205553+00:00",
+      "tool_run_id": "p1:I0tjWeZW1xfqu-IOsR8rZ0lKVXOLirvhCr5IQYqm8Hs/ask_lights:ask:2_llm_1793263641375006676",
+      "type": "ChatGeneration"
+     }
+    ],
+    "tool_run_id": "p1:I0tjWeZW1xfqu-IOsR8rZ0lKVXOLirvhCr5IQYqm8Hs/ask_lights:ask:2_llm_1793263641375006676"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "name": "FP ask",
+      "sibling_ordinal": 2
+     }
+    ],
+    "project_id": 118,
+    "thinking_steps": [
+     {
+      "message": {
+       "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+       "parent_agent_name": "FP ask",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        },
+        {
+         "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+         "name": "FP ask",
+         "sibling_ordinal": 2
+        }
+       ],
+       "response_metadata": {
+        "metadata": {
+         "langgraph_node": "ask",
+         "original_name": "ask"
+        },
+        "model_name": "nested-model",
+        "tool_name": "ask"
+       }
+      },
+      "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "parent_agent_name": "FP ask",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       },
+       {
+        "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+        "name": "FP ask",
+        "sibling_ordinal": 2
+       }
+      ],
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:47:24.941205553+00:00",
+      "timestamp_start": "2026-10-29T08:47:24.941205553+00:00",
+      "tool_run_id": "p1:I0tjWeZW1xfqu-IOsR8rZ0lKVXOLirvhCr5IQYqm8Hs/ask_lights:ask:2_llm_1793263641375006676",
+      "type": "ChatGeneration"
+     }
+    ],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {}
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_tool_start",
+   "response_metadata": {
+    "error": null,
+    "finish_reason": null,
+    "metadata": {
+     "langgraph_node": "ask",
+     "original_name": "ask",
+     "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      },
+      {
+       "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+       "name": "FP ask",
+       "sibling_ordinal": 2
+      }
+     ]
+    },
+    "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "name": "FP ask",
+      "sibling_ordinal": 2
+     }
+    ],
+    "run_id": "tooluse_v3jwwRH7uTiC19E4sRJNLO",
+    "timestamp_finish": null,
+    "timestamp_start": "2026-10-29T08:47:24.941205553+00:00",
+    "tool_inputs": {
+     "questions": [
+      {
+       "allow_other": true,
+       "header": "Light Colour",
+       "options": [
+        {
+         "description": "A warm, bold red",
+         "label": "Red"
+        },
+        {
+         "description": "A cool, calming blue",
+         "label": "Blue"
+        },
+        {
+         "description": "A fresh, natural green",
+         "label": "Green"
+        },
+        {
+         "description": "A bright, cheerful yellow",
+         "label": "Yellow"
+        },
+        {
+         "description": "A clean, neutral white",
+         "label": "White"
+        },
+        {
+         "description": "A rich, vibrant purple",
+         "label": "Purple"
+        }
+       ],
+       "question": "Which colour would you like for the lights?"
+      }
+     ]
+    },
+    "tool_meta": {
+     "metadata": {
+      "langgraph_node": "ask",
+      "original_name": "ask",
+      "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "parent_agent_name": "FP ask",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       },
+       {
+        "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+        "name": "FP ask",
+        "sibling_ordinal": 2
+       }
+      ]
+     },
+     "name": "ask_user",
+     "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      },
+      {
+       "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+       "name": "FP ask",
+       "sibling_ordinal": 2
+      }
+     ]
+    },
+    "tool_name": "ask_user",
+    "tool_output": null,
+    "tool_run_id": "tooluse_v3jwwRH7uTiC19E4sRJNLO"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "name": "FP ask",
+      "sibling_ordinal": 2
+     }
+    ],
+    "project_id": 118,
+    "thinking_steps": [],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {
+     "tooluse_v3jwwRH7uTiC19E4sRJNLO": {
+      "error": null,
+      "finish_reason": null,
+      "metadata": {
+       "langgraph_node": "ask",
+       "original_name": "ask",
+       "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+       "parent_agent_name": "FP ask",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        },
+        {
+         "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+         "name": "FP ask",
+         "sibling_ordinal": 2
+        }
+       ]
+      },
+      "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "parent_agent_name": "FP ask",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       },
+       {
+        "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+        "name": "FP ask",
+        "sibling_ordinal": 2
+       }
+      ],
+      "run_id": "tooluse_v3jwwRH7uTiC19E4sRJNLO",
+      "timestamp_finish": null,
+      "timestamp_start": "2026-10-29T08:47:24.941205553+00:00",
+      "tool_inputs": {
+       "questions": [
+        {
+         "allow_other": true,
+         "header": "Light Colour",
+         "options": [
+          {
+           "description": "A warm, bold red",
+           "label": "Red"
+          },
+          {
+           "description": "A cool, calming blue",
+           "label": "Blue"
+          },
+          {
+           "description": "A fresh, natural green",
+           "label": "Green"
+          },
+          {
+           "description": "A bright, cheerful yellow",
+           "label": "Yellow"
+          },
+          {
+           "description": "A clean, neutral white",
+           "label": "White"
+          },
+          {
+           "description": "A rich, vibrant purple",
+           "label": "Purple"
+          }
+         ],
+         "question": "Which colour would you like for the lights?"
+        }
+       ]
+      },
+      "tool_meta": {
+       "metadata": {
+        "langgraph_node": "ask",
+        "original_name": "ask",
+        "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+        "parent_agent_name": "FP ask",
+        "parent_agent_path": [
+         {
+          "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+          "name": "FP inner parallel",
+          "sibling_ordinal": 1
+         },
+         {
+          "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+          "name": "FP ask",
+          "sibling_ordinal": 2
+         }
+        ]
+       },
+       "name": "ask_user",
+       "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+       "parent_agent_name": "FP ask",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        },
+        {
+         "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+         "name": "FP ask",
+         "sibling_ordinal": 2
+        }
+       ]
+      },
+      "tool_name": "ask_user",
+      "tool_output": null,
+      "tool_run_id": "tooluse_v3jwwRH7uTiC19E4sRJNLO"
+     }
+    }
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_interrupt_pending",
+   "response_metadata": {
+    "fanout_v1": {
+     "activation": "507c9051038c582e",
+     "kind": "parallel",
+     "member": "lights",
+     "node": "inner",
+     "ordinal": 2,
+     "total": 2
+    },
+    "interrupt_card_v1": {
+     "available_actions": [
+      "answer"
+     ],
+     "display": {
+      "guardrail_type": "clarifying_question",
+      "message": "Which colour would you like for the lights?",
+      "node_name": "ask",
+      "tool_args_json": "{\"questions\":[{\"allow_other\":true,\"header\":\"Light Colour\",\"id\":\"q1\",\"multiSelect\":false,\"optional\":false,\"options\":[{\"description\":\"A warm, bold red\",\"label\":\"Red\"},{\"description\":\"A cool, calming blue\",\"label\":\"Blue\"},{\"description\":\"A fresh, natural green\",\"label\":\"Green\"},{\"description\":\"A bright, cheerful yellow\",\"label\":\"Yellow\"},{\"description\":\"A clean, neutral white\",\"label\":\"White\"},{\"description\":\"A rich, vibrant purple\",\"label\":\"Purple\"}],\"question\":\"Which colour would you like for the lights?\"}]}",
+      "tool_call_id": "tooluse_v3jwwRH7uTiC19E4sRJNLO",
+      "tool_name": "ask_user"
+     },
+     "fanout_v1": {
+      "activation": "507c9051038c582e",
+      "kind": "parallel",
+      "member": "lights",
+      "node": "inner",
+      "ordinal": 2,
+      "total": 2
+     },
+     "interrupt_id": "hitl_gq1:X-1Ef0bDxacc3RMXYu13BNlJ2tUQ_Q6F5j1Vdyk8USI",
+     "interrupt_key": "76c9c6f78e375d48e6262748580c29331b02e8156df35f6e9a17b73b952b4aa0",
+     "kind": "ask_user",
+     "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel"
+      },
+      {
+       "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+       "name": "FP ask",
+       "sibling_ordinal": 2
+      }
+     ],
+     "payload_sha256": "24f366d8f8adf6a168d90f91b47a6631711d9b07ad00778cd56f6fdac076440f",
+     "schema": "elitea.pipeline.fanout-interrupt-card.v1"
+    },
+    "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel"
+     },
+     {
+      "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "name": "FP ask",
+      "sibling_ordinal": 2
+     }
+    ],
+    "pause_progress": true
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_fanout_member",
+   "response_metadata": {
+    "fanout_member_status_v1": {
+     "fanout_v1": {
+      "activation": "507c9051038c582e",
+      "kind": "parallel",
+      "member": "lights",
+      "node": "inner",
+      "ordinal": 2,
+      "total": 2
+     },
+     "open_interrupts": 1,
+     "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel"
+      },
+      {
+       "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+       "name": "FP ask",
+       "sibling_ordinal": 2
+      }
+     ],
+     "schema": "elitea.pipeline.fanout-member-status.v1",
+     "status": "paused"
+    },
+    "fanout_v1": {
+     "activation": "507c9051038c582e",
+     "kind": "parallel",
+     "member": "lights",
+     "node": "inner",
+     "ordinal": 2,
+     "total": 2
+    },
+    "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel"
+     },
+     {
+      "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "name": "FP ask",
+      "sibling_ordinal": 2
+     }
+    ]
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_hitl_interrupt",
+   "content": "Parallel branches paused.",
+   "response_metadata": {
+    "chat_project_id": 118,
+    "fanout_parked_v1": {
+     "decision_revision_seen": 0,
+     "pending": [
+      {
+       "interrupt_id": "hitl_gq1:5Rv5exwsfAcQysHjDreeRUXFB0bDyVQf2uLhoJFrHuQ",
+       "interrupt_key": "2c571d43336c79762bf2af62934fffb6cd1d1d8be73cb6b3191cb5bd45eeba4c"
+      },
+      {
+       "interrupt_id": "hitl_gq1:X-1Ef0bDxacc3RMXYu13BNlJ2tUQ_Q6F5j1Vdyk8USI",
+       "interrupt_key": "76c9c6f78e375d48e6262748580c29331b02e8156df35f6e9a17b73b952b4aa0"
+      }
+     ],
+     "schema": "elitea.pipeline.fanout-parked.v1"
+    },
+    "pause_progress": true,
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_hitl_interrupt",
+   "content": "Parallel branches paused.",
+   "response_metadata": {
+    "chat_project_id": 118,
+    "fanout_parked_v1": {
+     "decision_revision_seen": 0,
+     "pending": [
+      {
+       "interrupt_id": "hitl_gq1:5Rv5exwsfAcQysHjDreeRUXFB0bDyVQf2uLhoJFrHuQ",
+       "interrupt_key": "2c571d43336c79762bf2af62934fffb6cd1d1d8be73cb6b3191cb5bd45eeba4c"
+      },
+      {
+       "interrupt_id": "hitl_gq1:X-1Ef0bDxacc3RMXYu13BNlJ2tUQ_Q6F5j1Vdyk8USI",
+       "interrupt_key": "76c9c6f78e375d48e6262748580c29331b02e8156df35f6e9a17b73b952b4aa0"
+      }
+     ],
+     "schema": "elitea.pipeline.fanout-parked.v1"
+    },
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_hitl_resolved",
+   "response_metadata": {
+    "interrupt_resolved_v1": {
+     "action": "answer",
+     "interrupt_id": "hitl_gq1:5Rv5exwsfAcQysHjDreeRUXFB0bDyVQf2uLhoJFrHuQ",
+     "interrupt_key": "2c571d43336c79762bf2af62934fffb6cd1d1d8be73cb6b3191cb5bd45eeba4c",
+     "revision": 2,
+     "schema": "elitea.pipeline.fanout-interrupt-resolved.v1",
+     "state": "DECIDED"
+    }
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  }
+ ],
+ "wake": [
+  {
+   "type": "agent_start",
+   "response_metadata": {
+    "invoked_skills": [],
+    "should_continue": true
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_start",
+   "response_metadata": {
+    "metadata": {
+     "ls_model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+    },
+    "model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "timestamp_start": "2026-10-29T08:47:21.325400760+00:00",
+    "tool_name": "Thinking step",
+    "tool_run_id": "dbf581c7-925d-4021-8b3a-cc513325fb00"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_end",
+   "response_metadata": {
+    "thinking_steps": [
+     {
+      "message": {
+       "response_metadata": {
+        "metadata": {},
+        "model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "tool_name": null
+       }
+      },
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:47:21.325400760+00:00",
+      "timestamp_start": "2026-10-29T08:47:21.325400760+00:00",
+      "tool_run_id": "dbf581c7-925d-4021-8b3a-cc513325fb00",
+      "type": "ChatGeneration"
+     }
+    ],
+    "tool_run_id": "dbf581c7-925d-4021-8b3a-cc513325fb00"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "project_id": 118,
+    "thinking_steps": [
+     {
+      "message": {
+       "response_metadata": {
+        "metadata": {},
+        "model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "tool_name": null
+       }
+      },
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:47:21.325400760+00:00",
+      "timestamp_start": "2026-10-29T08:47:21.325400760+00:00",
+      "tool_run_id": "dbf581c7-925d-4021-8b3a-cc513325fb00",
+      "type": "ChatGeneration"
+     }
+    ],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {}
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_tool_start",
+   "response_metadata": {
+    "error": null,
+    "finish_reason": null,
+    "metadata": {
+     "agent_type": "pipeline",
+     "display_name": "FP inner parallel",
+     "original_name": "FP inner parallel",
+     "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+     "parent_agent_path": [],
+     "sibling_ordinal": 1,
+     "toolkit_type": "pipeline"
+    },
+    "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "parent_agent_path": [],
+    "run_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "sibling_ordinal": 1,
+    "timestamp_finish": null,
+    "timestamp_start": "2026-10-29T08:47:21.325400760+00:00",
+    "tool_inputs": {
+     "task": "FU-249: pick colours for my bell and lights."
+    },
+    "tool_meta": {
+     "display_name": "FP inner parallel",
+     "metadata": {
+      "agent_type": "pipeline",
+      "display_name": "FP inner parallel",
+      "original_name": "FP inner parallel",
+      "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "parent_agent_path": [],
+      "sibling_ordinal": 1,
+      "toolkit_type": "pipeline"
+     },
+     "name": "FP inner parallel"
+    },
+    "tool_name": "FP inner parallel",
+    "tool_output": null,
+    "tool_run_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "project_id": 118,
+    "thinking_steps": [],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {
+     "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0": {
+      "error": null,
+      "finish_reason": null,
+      "metadata": {
+       "agent_type": "pipeline",
+       "display_name": "FP inner parallel",
+       "original_name": "FP inner parallel",
+       "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "parent_agent_path": [],
+       "sibling_ordinal": 1,
+       "toolkit_type": "pipeline"
+      },
+      "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "parent_agent_path": [],
+      "run_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "sibling_ordinal": 1,
+      "timestamp_finish": null,
+      "timestamp_start": "2026-10-29T08:47:21.325400760+00:00",
+      "tool_inputs": {
+       "task": "FU-249: pick colours for my bell and lights."
+      },
+      "tool_meta": {
+       "display_name": "FP inner parallel",
+       "metadata": {
+        "agent_type": "pipeline",
+        "display_name": "FP inner parallel",
+        "original_name": "FP inner parallel",
+        "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "parent_agent_path": [],
+        "sibling_ordinal": 1,
+        "toolkit_type": "pipeline"
+       },
+       "name": "FP inner parallel"
+      },
+      "tool_name": "FP inner parallel",
+      "tool_output": null,
+      "tool_run_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0"
+     }
+    }
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_interrupt_pending",
+   "response_metadata": {
+    "fanout_v1": {
+     "activation": "507c9051038c582e",
+     "kind": "parallel",
+     "member": "lights",
+     "node": "inner",
+     "ordinal": 2,
+     "total": 2
+    },
+    "interrupt_card_v1": {
+     "available_actions": [
+      "answer"
+     ],
+     "display": {
+      "guardrail_type": "clarifying_question",
+      "message": "Which colour would you like for the lights?",
+      "node_name": "ask",
+      "tool_args_json": "{\"questions\":[{\"allow_other\":true,\"header\":\"Light Colour\",\"id\":\"q1\",\"multiSelect\":false,\"optional\":false,\"options\":[{\"description\":\"A warm, bold red\",\"label\":\"Red\"},{\"description\":\"A cool, calming blue\",\"label\":\"Blue\"},{\"description\":\"A fresh, natural green\",\"label\":\"Green\"},{\"description\":\"A bright, cheerful yellow\",\"label\":\"Yellow\"},{\"description\":\"A clean, neutral white\",\"label\":\"White\"},{\"description\":\"A rich, vibrant purple\",\"label\":\"Purple\"}],\"question\":\"Which colour would you like for the lights?\"}]}",
+      "tool_call_id": "tooluse_v3jwwRH7uTiC19E4sRJNLO",
+      "tool_name": "ask_user"
+     },
+     "fanout_v1": {
+      "activation": "507c9051038c582e",
+      "kind": "parallel",
+      "member": "lights",
+      "node": "inner",
+      "ordinal": 2,
+      "total": 2
+     },
+     "interrupt_id": "hitl_gq1:X-1Ef0bDxacc3RMXYu13BNlJ2tUQ_Q6F5j1Vdyk8USI",
+     "interrupt_key": "76c9c6f78e375d48e6262748580c29331b02e8156df35f6e9a17b73b952b4aa0",
+     "kind": "ask_user",
+     "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel"
+      },
+      {
+       "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+       "name": "FP ask",
+       "sibling_ordinal": 2
+      }
+     ],
+     "payload_sha256": "24f366d8f8adf6a168d90f91b47a6631711d9b07ad00778cd56f6fdac076440f",
+     "schema": "elitea.pipeline.fanout-interrupt-card.v1"
+    },
+    "parent_agent_call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel"
+     },
+     {
+      "call_id": "fo1_2ac13452dbf01ea960e9a5b6372d65c93257781fe43839fa7a23706c5a0de907",
+      "name": "FP ask",
+      "sibling_ordinal": 2
+     }
+    ],
+    "pause_progress": true
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_fanout_member",
+   "response_metadata": {
+    "fanout_member_status_v1": {
+     "fanout_v1": {
+      "activation": "507c9051038c582e",
+      "kind": "parallel",
+      "member": "bell",
+      "node": "inner",
+      "ordinal": 1,
+      "total": 2
+     },
+     "open_interrupts": 0,
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel"
+      },
+      {
+       "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "name": "FP ask",
+       "sibling_ordinal": 1
+      }
+     ],
+     "schema": "elitea.pipeline.fanout-member-status.v1",
+     "status": "start"
+    },
+    "fanout_v1": {
+     "activation": "507c9051038c582e",
+     "kind": "parallel",
+     "member": "bell",
+     "node": "inner",
+     "ordinal": 1,
+     "total": 2
+    },
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel"
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ]
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_start",
+   "response_metadata": {
+    "metadata": {
+     "ls_model_name": "nested-model",
+     "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+     "parent_agent_name": "FP inner parallel",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      }
+     ]
+    },
+    "model_name": "nested-model",
+    "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "timestamp_start": "2026-10-29T08:58:31.852435959+00:00",
+    "tool_name": "Thinking step",
+    "tool_run_id": "64c01f2f-8fdf-4255-9c6b-128159df42c2"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_end",
+   "response_metadata": {
+    "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "thinking_steps": [
+     {
+      "message": {
+       "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "parent_agent_name": "FP inner parallel",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        }
+       ],
+       "response_metadata": {
+        "metadata": {},
+        "model_name": "nested-model",
+        "tool_name": null
+       }
+      },
+      "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "parent_agent_name": "FP inner parallel",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       }
+      ],
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:58:31.852435959+00:00",
+      "timestamp_start": "2026-10-29T08:58:31.852435959+00:00",
+      "tool_run_id": "64c01f2f-8fdf-4255-9c6b-128159df42c2",
+      "type": "ChatGeneration"
+     }
+    ],
+    "tool_run_id": "64c01f2f-8fdf-4255-9c6b-128159df42c2"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "project_id": 118,
+    "thinking_steps": [
+     {
+      "message": {
+       "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "parent_agent_name": "FP inner parallel",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        }
+       ],
+       "response_metadata": {
+        "metadata": {},
+        "model_name": "nested-model",
+        "tool_name": null
+       }
+      },
+      "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "parent_agent_name": "FP inner parallel",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       }
+      ],
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:58:31.852435959+00:00",
+      "timestamp_start": "2026-10-29T08:58:31.852435959+00:00",
+      "tool_run_id": "64c01f2f-8fdf-4255-9c6b-128159df42c2",
+      "type": "ChatGeneration"
+     }
+    ],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {}
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_tool_start",
+   "response_metadata": {
+    "error": null,
+    "finish_reason": null,
+    "metadata": {
+     "agent_type": "pipeline",
+     "display_name": "FP ask",
+     "original_name": "FP ask",
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP inner parallel",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      }
+     ],
+     "sibling_ordinal": 1,
+     "toolkit_type": "pipeline"
+    },
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "run_id": "pipeline-v2:ask_bell:c67cd65deac145849b03edfef79a13ec37a30ef5e2946babfd285b5cb8a5ba0d:0",
+    "sibling_ordinal": 1,
+    "timestamp_finish": null,
+    "timestamp_start": "2026-10-29T08:58:31.852435959+00:00",
+    "tool_inputs": {
+     "task": "Choose a colour for the bell"
+    },
+    "tool_meta": {
+     "display_name": "FP ask",
+     "metadata": {
+      "agent_type": "pipeline",
+      "display_name": "FP ask",
+      "original_name": "FP ask",
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP inner parallel",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       }
+      ],
+      "sibling_ordinal": 1,
+      "toolkit_type": "pipeline"
+     },
+     "name": "FP ask",
+     "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+     "parent_agent_name": "FP inner parallel",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      }
+     ]
+    },
+    "tool_name": "FP ask",
+    "tool_output": null,
+    "tool_run_id": "pipeline-v2:ask_bell:c67cd65deac145849b03edfef79a13ec37a30ef5e2946babfd285b5cb8a5ba0d:0"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "project_id": 118,
+    "thinking_steps": [],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {
+     "pipeline-v2:ask_bell:c67cd65deac145849b03edfef79a13ec37a30ef5e2946babfd285b5cb8a5ba0d:0": {
+      "error": null,
+      "finish_reason": null,
+      "metadata": {
+       "agent_type": "pipeline",
+       "display_name": "FP ask",
+       "original_name": "FP ask",
+       "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "parent_agent_name": "FP inner parallel",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        }
+       ],
+       "sibling_ordinal": 1,
+       "toolkit_type": "pipeline"
+      },
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP inner parallel",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       }
+      ],
+      "run_id": "pipeline-v2:ask_bell:c67cd65deac145849b03edfef79a13ec37a30ef5e2946babfd285b5cb8a5ba0d:0",
+      "sibling_ordinal": 1,
+      "timestamp_finish": null,
+      "timestamp_start": "2026-10-29T08:58:31.852435959+00:00",
+      "tool_inputs": {
+       "task": "Choose a colour for the bell"
+      },
+      "tool_meta": {
+       "display_name": "FP ask",
+       "metadata": {
+        "agent_type": "pipeline",
+        "display_name": "FP ask",
+        "original_name": "FP ask",
+        "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "parent_agent_name": "FP inner parallel",
+        "parent_agent_path": [
+         {
+          "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+          "name": "FP inner parallel",
+          "sibling_ordinal": 1
+         }
+        ],
+        "sibling_ordinal": 1,
+        "toolkit_type": "pipeline"
+       },
+       "name": "FP ask",
+       "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "parent_agent_name": "FP inner parallel",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        }
+       ]
+      },
+      "tool_name": "FP ask",
+      "tool_output": null,
+      "tool_run_id": "pipeline-v2:ask_bell:c67cd65deac145849b03edfef79a13ec37a30ef5e2946babfd285b5cb8a5ba0d:0"
+     }
+    }
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_start",
+   "response_metadata": {
+    "metadata": {
+     "langgraph_node": "ask",
+     "ls_model_name": "nested-model",
+     "original_name": "ask",
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      },
+      {
+       "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "name": "FP ask",
+       "sibling_ordinal": 1
+      }
+     ]
+    },
+    "model_name": "nested-model",
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ],
+    "timestamp_start": "2026-10-29T08:58:31.862520292+00:00",
+    "tool_name": "ask",
+    "tool_run_id": "p1:RnvKCgR89w5EXEdsifgFzmZKoQcXRv1rfpkgjwXKV-8/ask_bell:ask:3_llm_1793264311862495292"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_llm_end",
+   "response_metadata": {
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ],
+    "thinking_steps": [
+     {
+      "message": {
+       "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "parent_agent_name": "FP ask",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        },
+        {
+         "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+         "name": "FP ask",
+         "sibling_ordinal": 1
+        }
+       ],
+       "response_metadata": {
+        "metadata": {
+         "langgraph_node": "ask",
+         "original_name": "ask"
+        },
+        "model_name": "nested-model",
+        "tool_name": "ask"
+       }
+      },
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP ask",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       },
+       {
+        "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "name": "FP ask",
+        "sibling_ordinal": 1
+       }
+      ],
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:58:31.862520292+00:00",
+      "timestamp_start": "2026-10-29T08:58:31.862520292+00:00",
+      "tool_run_id": "p1:RnvKCgR89w5EXEdsifgFzmZKoQcXRv1rfpkgjwXKV-8/ask_bell:ask:3_llm_1793264311862495292",
+      "type": "ChatGeneration"
+     }
+    ],
+    "tool_run_id": "p1:RnvKCgR89w5EXEdsifgFzmZKoQcXRv1rfpkgjwXKV-8/ask_bell:ask:3_llm_1793264311862495292"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ],
+    "project_id": 118,
+    "thinking_steps": [
+     {
+      "message": {
+       "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "parent_agent_name": "FP ask",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        },
+        {
+         "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+         "name": "FP ask",
+         "sibling_ordinal": 1
+        }
+       ],
+       "response_metadata": {
+        "metadata": {
+         "langgraph_node": "ask",
+         "original_name": "ask"
+        },
+        "model_name": "nested-model",
+        "tool_name": "ask"
+       }
+      },
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP ask",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       },
+       {
+        "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "name": "FP ask",
+        "sibling_ordinal": 1
+       }
+      ],
+      "text": "",
+      "thinking": "",
+      "timestamp_finish": "2026-10-29T08:58:31.862520292+00:00",
+      "timestamp_start": "2026-10-29T08:58:31.862520292+00:00",
+      "tool_run_id": "p1:RnvKCgR89w5EXEdsifgFzmZKoQcXRv1rfpkgjwXKV-8/ask_bell:ask:3_llm_1793264311862495292",
+      "type": "ChatGeneration"
+     }
+    ],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {}
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_tool_start",
+   "response_metadata": {
+    "error": null,
+    "finish_reason": null,
+    "metadata": {
+     "langgraph_node": "ask",
+     "original_name": "ask",
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      },
+      {
+       "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "name": "FP ask",
+       "sibling_ordinal": 1
+      }
+     ]
+    },
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ],
+    "run_id": "tooluse_LZXMW6RPx2A6HlStlHB9PW",
+    "timestamp_finish": null,
+    "timestamp_start": "2026-10-29T08:58:31.862520292+00:00",
+    "tool_inputs": {
+     "questions": [
+      {
+       "allow_other": true,
+       "header": "Bell Colour",
+       "options": [
+        {
+         "description": "A bold, vibrant red",
+         "label": "Red"
+        },
+        {
+         "description": "A cool, calming blue",
+         "label": "Blue"
+        },
+        {
+         "description": "A classic, shiny gold",
+         "label": "Gold"
+        },
+        {
+         "description": "A fresh, natural green",
+         "label": "Green"
+        }
+       ],
+       "question": "Which colour would you like for the bell?"
+      }
+     ]
+    },
+    "tool_meta": {
+     "metadata": {
+      "langgraph_node": "ask",
+      "original_name": "ask",
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP ask",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       },
+       {
+        "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "name": "FP ask",
+        "sibling_ordinal": 1
+       }
+      ]
+     },
+     "name": "ask_user",
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      },
+      {
+       "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "name": "FP ask",
+       "sibling_ordinal": 1
+      }
+     ]
+    },
+    "tool_name": "ask_user",
+    "tool_output": null,
+    "tool_run_id": "tooluse_LZXMW6RPx2A6HlStlHB9PW"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ],
+    "project_id": 118,
+    "thinking_steps": [],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {
+     "tooluse_LZXMW6RPx2A6HlStlHB9PW": {
+      "error": null,
+      "finish_reason": null,
+      "metadata": {
+       "langgraph_node": "ask",
+       "original_name": "ask",
+       "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "parent_agent_name": "FP ask",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        },
+        {
+         "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+         "name": "FP ask",
+         "sibling_ordinal": 1
+        }
+       ]
+      },
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP ask",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       },
+       {
+        "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "name": "FP ask",
+        "sibling_ordinal": 1
+       }
+      ],
+      "run_id": "tooluse_LZXMW6RPx2A6HlStlHB9PW",
+      "timestamp_finish": null,
+      "timestamp_start": "2026-10-29T08:58:31.862520292+00:00",
+      "tool_inputs": {
+       "questions": [
+        {
+         "allow_other": true,
+         "header": "Bell Colour",
+         "options": [
+          {
+           "description": "A bold, vibrant red",
+           "label": "Red"
+          },
+          {
+           "description": "A cool, calming blue",
+           "label": "Blue"
+          },
+          {
+           "description": "A classic, shiny gold",
+           "label": "Gold"
+          },
+          {
+           "description": "A fresh, natural green",
+           "label": "Green"
+          }
+         ],
+         "question": "Which colour would you like for the bell?"
+        }
+       ]
+      },
+      "tool_meta": {
+       "metadata": {
+        "langgraph_node": "ask",
+        "original_name": "ask",
+        "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "parent_agent_name": "FP ask",
+        "parent_agent_path": [
+         {
+          "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+          "name": "FP inner parallel",
+          "sibling_ordinal": 1
+         },
+         {
+          "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+          "name": "FP ask",
+          "sibling_ordinal": 1
+         }
+        ]
+       },
+       "name": "ask_user",
+       "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "parent_agent_name": "FP ask",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        },
+        {
+         "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+         "name": "FP ask",
+         "sibling_ordinal": 1
+        }
+       ]
+      },
+      "tool_name": "ask_user",
+      "tool_output": null,
+      "tool_run_id": "tooluse_LZXMW6RPx2A6HlStlHB9PW"
+     }
+    }
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_tool_end",
+   "response_metadata": {
+    "error": null,
+    "finish_reason": "stop",
+    "metadata": {
+     "langgraph_node": "ask",
+     "original_name": "ask",
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      },
+      {
+       "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "name": "FP ask",
+       "sibling_ordinal": 1
+      }
+     ]
+    },
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ],
+    "run_id": "tooluse_LZXMW6RPx2A6HlStlHB9PW",
+    "timestamp_finish": "2026-10-29T08:58:31.866971625+00:00",
+    "timestamp_start": "2026-10-29T08:58:31.862520292+00:00",
+    "tool_inputs": {
+     "questions": [
+      {
+       "allow_other": true,
+       "header": "Bell Colour",
+       "options": [
+        {
+         "description": "A bold, vibrant red",
+         "label": "Red"
+        },
+        {
+         "description": "A cool, calming blue",
+         "label": "Blue"
+        },
+        {
+         "description": "A classic, shiny gold",
+         "label": "Gold"
+        },
+        {
+         "description": "A fresh, natural green",
+         "label": "Green"
+        }
+       ],
+       "question": "Which colour would you like for the bell?"
+      }
+     ]
+    },
+    "tool_meta": {
+     "metadata": {
+      "langgraph_node": "ask",
+      "original_name": "ask",
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP ask",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       },
+       {
+        "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "name": "FP ask",
+        "sibling_ordinal": 1
+       }
+      ]
+     },
+     "name": "ask_user",
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      },
+      {
+       "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "name": "FP ask",
+       "sibling_ordinal": 1
+      }
+     ]
+    },
+    "tool_name": "ask_user",
+    "tool_output": "\"User answered: gold\"",
+    "tool_run_id": "tooluse_LZXMW6RPx2A6HlStlHB9PW"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ],
+    "project_id": 118,
+    "thinking_steps": [],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {
+     "tooluse_LZXMW6RPx2A6HlStlHB9PW": {
+      "error": null,
+      "finish_reason": "stop",
+      "metadata": {
+       "langgraph_node": "ask",
+       "original_name": "ask",
+       "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "parent_agent_name": "FP ask",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        },
+        {
+         "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+         "name": "FP ask",
+         "sibling_ordinal": 1
+        }
+       ]
+      },
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP ask",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       },
+       {
+        "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "name": "FP ask",
+        "sibling_ordinal": 1
+       }
+      ],
+      "run_id": "tooluse_LZXMW6RPx2A6HlStlHB9PW",
+      "timestamp_finish": "2026-10-29T08:58:31.866971625+00:00",
+      "timestamp_start": "2026-10-29T08:58:31.862520292+00:00",
+      "tool_inputs": {
+       "questions": [
+        {
+         "allow_other": true,
+         "header": "Bell Colour",
+         "options": [
+          {
+           "description": "A bold, vibrant red",
+           "label": "Red"
+          },
+          {
+           "description": "A cool, calming blue",
+           "label": "Blue"
+          },
+          {
+           "description": "A classic, shiny gold",
+           "label": "Gold"
+          },
+          {
+           "description": "A fresh, natural green",
+           "label": "Green"
+          }
+         ],
+         "question": "Which colour would you like for the bell?"
+        }
+       ]
+      },
+      "tool_meta": {
+       "metadata": {
+        "langgraph_node": "ask",
+        "original_name": "ask",
+        "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "parent_agent_name": "FP ask",
+        "parent_agent_path": [
+         {
+          "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+          "name": "FP inner parallel",
+          "sibling_ordinal": 1
+         },
+         {
+          "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+          "name": "FP ask",
+          "sibling_ordinal": 1
+         }
+        ]
+       },
+       "name": "ask_user",
+       "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "parent_agent_name": "FP ask",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        },
+        {
+         "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+         "name": "FP ask",
+         "sibling_ordinal": 1
+        }
+       ]
+      },
+      "tool_name": "ask_user",
+      "tool_output": "\"User answered: gold\"",
+      "tool_run_id": "tooluse_LZXMW6RPx2A6HlStlHB9PW"
+     }
+    }
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_context_status",
+   "response_metadata": {
+    "context_status": {
+     "auto_output": true,
+     "budget_mode": "balanced",
+     "compaction_target_tokens": 40238,
+     "compaction_trigger_tokens": 241431,
+     "estimated_input_tokens": 557,
+     "phase": "measured",
+     "reserved_output_tokens": 1024,
+     "safety_margin_tokens": 2720,
+     "total_tokens": 272000,
+     "usable_input_tokens": 268256,
+     "version": 1
+    },
+    "model_scope": "pipeline_node",
+    "node_name": "ask",
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ]
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_tool_error",
+   "content": "The task failed.",
+   "response_metadata": {
+    "error": "The task failed.",
+    "finish_reason": "error",
+    "metadata": {
+     "agent_type": "pipeline",
+     "display_name": "FP ask",
+     "original_name": "FP ask",
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP inner parallel",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      }
+     ],
+     "sibling_ordinal": 1,
+     "toolkit_type": "pipeline"
+    },
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "run_id": "pipeline-v2:ask_bell:c67cd65deac145849b03edfef79a13ec37a30ef5e2946babfd285b5cb8a5ba0d:0",
+    "sibling_ordinal": 1,
+    "timestamp_finish": "2026-10-29T08:59:02.153900292+00:00",
+    "timestamp_start": "2026-10-29T08:58:31.852435959+00:00",
+    "tool_inputs": {
+     "task": "Choose a colour for the bell"
+    },
+    "tool_meta": {
+     "display_name": "FP ask",
+     "metadata": {
+      "agent_type": "pipeline",
+      "display_name": "FP ask",
+      "original_name": "FP ask",
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP inner parallel",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       }
+      ],
+      "sibling_ordinal": 1,
+      "toolkit_type": "pipeline"
+     },
+     "name": "FP ask",
+     "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+     "parent_agent_name": "FP inner parallel",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel",
+       "sibling_ordinal": 1
+      }
+     ]
+    },
+    "tool_name": "FP ask",
+    "tool_output": null,
+    "tool_run_id": "pipeline-v2:ask_bell:c67cd65deac145849b03edfef79a13ec37a30ef5e2946babfd285b5cb8a5ba0d:0"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "partial_message",
+   "response_metadata": {
+    "additional_response_meta": {},
+    "chat_project_id": 118,
+    "invoked_skills": [],
+    "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+    "parent_agent_name": "FP inner parallel",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel",
+      "sibling_ordinal": 1
+     }
+    ],
+    "project_id": 118,
+    "thinking_steps": [],
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6",
+    "tool_calls": {
+     "pipeline-v2:ask_bell:c67cd65deac145849b03edfef79a13ec37a30ef5e2946babfd285b5cb8a5ba0d:0": {
+      "error": "The task failed.",
+      "finish_reason": "error",
+      "metadata": {
+       "agent_type": "pipeline",
+       "display_name": "FP ask",
+       "original_name": "FP ask",
+       "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "parent_agent_name": "FP inner parallel",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        }
+       ],
+       "sibling_ordinal": 1,
+       "toolkit_type": "pipeline"
+      },
+      "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "parent_agent_name": "FP inner parallel",
+      "parent_agent_path": [
+       {
+        "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+        "name": "FP inner parallel",
+        "sibling_ordinal": 1
+       }
+      ],
+      "run_id": "pipeline-v2:ask_bell:c67cd65deac145849b03edfef79a13ec37a30ef5e2946babfd285b5cb8a5ba0d:0",
+      "sibling_ordinal": 1,
+      "timestamp_finish": "2026-10-29T08:59:02.153900292+00:00",
+      "timestamp_start": "2026-10-29T08:58:31.852435959+00:00",
+      "tool_inputs": {
+       "task": "Choose a colour for the bell"
+      },
+      "tool_meta": {
+       "display_name": "FP ask",
+       "metadata": {
+        "agent_type": "pipeline",
+        "display_name": "FP ask",
+        "original_name": "FP ask",
+        "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+        "parent_agent_name": "FP inner parallel",
+        "parent_agent_path": [
+         {
+          "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+          "name": "FP inner parallel",
+          "sibling_ordinal": 1
+         }
+        ],
+        "sibling_ordinal": 1,
+        "toolkit_type": "pipeline"
+       },
+       "name": "FP ask",
+       "parent_agent_call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "parent_agent_name": "FP inner parallel",
+       "parent_agent_path": [
+        {
+         "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+         "name": "FP inner parallel",
+         "sibling_ordinal": 1
+        }
+       ]
+      },
+      "tool_name": "FP ask",
+      "tool_output": null,
+      "tool_run_id": "pipeline-v2:ask_bell:c67cd65deac145849b03edfef79a13ec37a30ef5e2946babfd285b5cb8a5ba0d:0"
+     }
+    }
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_fanout_member",
+   "response_metadata": {
+    "fanout_member_status_v1": {
+     "fanout_v1": {
+      "activation": "507c9051038c582e",
+      "kind": "parallel",
+      "member": "bell",
+      "node": "inner",
+      "ordinal": 1,
+      "total": 2
+     },
+     "open_interrupts": 0,
+     "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+     "parent_agent_name": "FP ask",
+     "parent_agent_path": [
+      {
+       "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+       "name": "FP inner parallel"
+      },
+      {
+       "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+       "name": "FP ask",
+       "sibling_ordinal": 1
+      }
+     ],
+     "schema": "elitea.pipeline.fanout-member-status.v1",
+     "status": "failed"
+    },
+    "fanout_v1": {
+     "activation": "507c9051038c582e",
+     "kind": "parallel",
+     "member": "bell",
+     "node": "inner",
+     "ordinal": 1,
+     "total": 2
+    },
+    "parent_agent_call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+    "parent_agent_name": "FP ask",
+    "parent_agent_path": [
+     {
+      "call_id": "pipeline-v2:inner_call:6f7ffe7f89b0f1f37bbe8edabc2b381f57b80d118d7f65c73891745644c773a6:0",
+      "name": "FP inner parallel"
+     },
+     {
+      "call_id": "fo1_f285d646db0969d09622c3922b8b46d0cd02599e4ae0fe0795744f648e62da17",
+      "name": "FP ask",
+      "sibling_ordinal": 1
+     }
+    ]
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_hitl_interrupt",
+   "content": "Parallel branches paused.",
+   "response_metadata": {
+    "chat_project_id": 118,
+    "fanout_parked_v1": {
+     "decision_revision_seen": 1,
+     "pending": [
+      {
+       "interrupt_id": "hitl_gq1:X-1Ef0bDxacc3RMXYu13BNlJ2tUQ_Q6F5j1Vdyk8USI",
+       "interrupt_key": "76c9c6f78e375d48e6262748580c29331b02e8156df35f6e9a17b73b952b4aa0"
+      }
+     ],
+     "schema": "elitea.pipeline.fanout-parked.v1"
+    },
+    "pause_progress": true,
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_hitl_interrupt",
+   "content": "Parallel branches paused.",
+   "response_metadata": {
+    "chat_project_id": 118,
+    "fanout_parked_v1": {
+     "decision_revision_seen": 1,
+     "pending": [
+      {
+       "interrupt_id": "hitl_gq1:X-1Ef0bDxacc3RMXYu13BNlJ2tUQ_Q6F5j1Vdyk8USI",
+       "interrupt_key": "76c9c6f78e375d48e6262748580c29331b02e8156df35f6e9a17b73b952b4aa0"
+      }
+     ],
+     "schema": "elitea.pipeline.fanout-parked.v1"
+    },
+    "thread_id": "3aa2dfda-62a1-4e4f-9ce0-8bf12aab2cd6"
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  },
+  {
+   "type": "agent_hitl_resolved",
+   "response_metadata": {
+    "interrupt_resolved_v1": {
+     "action": "answer",
+     "interrupt_id": "hitl_gq1:X-1Ef0bDxacc3RMXYu13BNlJ2tUQ_Q6F5j1Vdyk8USI",
+     "interrupt_key": "76c9c6f78e375d48e6262748580c29331b02e8156df35f6e9a17b73b952b4aa0",
+     "revision": 2,
+     "schema": "elitea.pipeline.fanout-interrupt-resolved.v1",
+     "state": "DECIDED"
+    }
+   },
+   "execution_generation": "9cd7bb0a-c454-4a1c-94d9-72c802e809b1"
+  }
+ ]
+}
