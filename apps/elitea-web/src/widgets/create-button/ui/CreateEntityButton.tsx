@@ -159,8 +159,12 @@ function CreateEntityTrigger({
     // makes the entity picker completely unreachable whenever the sidebar
     // is collapsed, and fires a direct navigation against a possibly-stale
     // `activeKind` on every simple/unrecognised route.
+    // With visible text the tooltip DESCRIBES the button (axe 4.14
+    // label-content-name-mismatch / WCAG 2.5.3: "Create New" as aria-label
+    // hid the visible "Create"); collapsed, it has no text, so the tooltip
+    // stays its name.
     return (
-      <Tooltip title={CREATE_NEW_TOOLTIP()}>
+      <Tooltip title={CREATE_NEW_TOOLTIP()} describeChild={!collapsed}>
         <BaseBtn
           variant="special"
           disabled={disabled}
@@ -177,7 +181,7 @@ function CreateEntityTrigger({
 
   return (
     <>
-      <Tooltip title={CREATE_NEW_TOOLTIP()}>
+      <Tooltip title={CREATE_NEW_TOOLTIP()} describeChild>
         <BaseBtn
           variant="special"
           disabled={disabled}
