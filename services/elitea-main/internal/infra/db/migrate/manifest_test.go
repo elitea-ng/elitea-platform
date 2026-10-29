@@ -901,7 +901,15 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// models.applications.governance to super_admin, admin and the project
 	// admin, and lifecycle.attestations.write and lifecycle.registry.mark_due
 	// to the project admin.
-	require.EqualValues(t, 204, Head(shared))
+	//
+	// 205: shared/0205_run_steps.sql, the step records of a run (ADR-0042
+	// decisions 1 and 2, #1499): elitea_runtime.run_step_heads (the per-run
+	// chain head and its anchor) and run_steps (append-only by trigger,
+	// hash-chained per run, content by digest and object key, export_txid
+	// for the audit export). Seeds the step_content and step_record platform
+	// retention rows (keep forever) and grants runs.evidence.read to
+	// super_admin, admin and the project admin.
+	require.EqualValues(t, 205, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

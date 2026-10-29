@@ -65,7 +65,7 @@ export const RetentionPolicy = zod
     updated_at: zod.iso.datetime({ offset: true }),
   })
   .describe(
-    "One row of the retention policy (ADR-0042 decision 4). A platform row (`project_id` null) sets the bounds of a data class: `min_age_days` is the shortest maximum a project override may set and `max_age_days` the platform maximum (null keeps forever). A project override sets only its own `max_age_days`, inside those bounds. `data_class` is one of conversation, attachment, gateway_request_log, admin_audit or security_audit.\n",
+    "One row of the retention policy (ADR-0042 decision 4). A platform row (`project_id` null) sets the bounds of a data class: `min_age_days` is the shortest maximum a project override may set and `max_age_days` the platform maximum (null keeps forever). A project override sets only its own `max_age_days`, inside those bounds. `data_class` is one of conversation, attachment, step_content, step_record, gateway_request_log, admin_audit or security_audit.\n",
   );
 
 export type RetentionPolicy = zod.input<typeof RetentionPolicy>;

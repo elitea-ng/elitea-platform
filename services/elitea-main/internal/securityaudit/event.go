@@ -64,6 +64,11 @@ const (
 	// change (agent.registry.tier_changed), a certification state change
 	// (agent.certification.*) or an attestation (agent.attestation.*).
 	TypeAgentLifecycle EventType = "ai.elitea.security.v1.agent.lifecycle"
+	// TypeRunStepsAnchored anchors a run's step record chain (ADR-0042,
+	// #1499): ChainHead is the hex hash of the run's last step and
+	// ChainLength its step count, at settlement. Written on every install,
+	// whatever the credential governance profile.
+	TypeRunStepsAnchored EventType = "ai.elitea.security.v1.run.steps.anchored"
 )
 
 // OCSF class and category uids (https://schema.ocsf.io).
@@ -92,6 +97,7 @@ var ocsfClasses = map[EventType]int{
 	TypeAgentSession:            OCSFClassAuthorizeSession,
 	TypeProbe:                   OCSFClassAPIActivity,
 	TypeAgentLifecycle:          OCSFClassEntityManagement,
+	TypeRunStepsAnchored:        OCSFClassAPIActivity,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.
@@ -211,6 +217,13 @@ type SecurityEvent struct {
 	Arrangement        Arrangement
 	// CorrelationID is the trace or request correlation id.
 	CorrelationID string
+
+	// ChainHead and ChainLength anchor another chain into this one: the hex
+	// SHA-256 head and the number of links (TypeRunStepsAnchored). Empty and
+	// 0 on every other event, and then absent from the canonical form, so
+	// the events chained before these fields existed still verify.
+	ChainHead   string
+	ChainLength int64
 }
 
 // PartitionKey is the chain partition of the event.
@@ -231,6 +244,8 @@ var (
 	reasonPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.:-]{0,127}$`)
 	// jwtLike is three base64url segments starting with a JSON header.
 	jwtLike = regexp.MustCompile(`eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.`)
+	// chainHeadPattern is a lower-case hex SHA-256.
+	chainHeadPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 // Validate checks the event before it is chained. The appender calls it.
@@ -271,6 +286,12 @@ func (e SecurityEvent) Validate() error {
 	case "", FidelityNativeAct, FidelityConfiguredAct, FidelityAZPOnly, FidelityAttributed, FidelityNone:
 	default:
 		return fmt.Errorf("%w: unknown actor fidelity", ErrInvalidEvent)
+	}
+	if e.ChainLength < 0 {
+		return fmt.Errorf("%w: chain_length must not be negative", ErrInvalidEvent)
+	}
+	if e.ChainHead != "" && !chainHeadPattern.MatchString(e.ChainHead) {
+		return fmt.Errorf("%w: chain_head must be a hex SHA-256", ErrInvalidEvent)
 	}
 	if e.AuthorizationEpoch < 0 || e.RevocationEpoch < 0 {
 		return fmt.Errorf("%w: an epoch must not be negative", ErrInvalidEvent)
@@ -319,6 +340,7 @@ func (e SecurityEvent) stringFields() map[string]string {
 		"resource_id":            e.ResourceID,
 		"policy_revision_id":     e.PolicyRevisionID,
 		"correlation_id":         e.CorrelationID,
+		"chain_head":             e.ChainHead,
 	}
 }
 
@@ -391,6 +413,8 @@ type eventData struct {
 	RevocationEpoch      int64    `json:"revocation_epoch"`
 	Arrangement          string   `json:"arrangement,omitempty"`
 	CorrelationID        string   `json:"correlation_id,omitempty"`
+	ChainHead            string   `json:"chain_head,omitempty"`
+	ChainLength          int64    `json:"chain_length,omitempty"`
 }
 
 // FormatSequence renders a partition sequence as the CloudEvents `sequence`
@@ -452,6 +476,8 @@ func (e SecurityEvent) Canonical(partitionSeq int64) ([]byte, error) {
 			RevocationEpoch:      e.RevocationEpoch,
 			Arrangement:          string(e.Arrangement),
 			CorrelationID:        e.CorrelationID,
+			ChainHead:            e.ChainHead,
+			ChainLength:          e.ChainLength,
 		},
 	}
 	return marshalEnvelope(env)

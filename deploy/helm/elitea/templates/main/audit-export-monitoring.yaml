@@ -51,7 +51,8 @@ spec:
         # The oldest undelivered audit event is older than the threshold: the
         # receiver is down, refusing the credential, or too slow. Nothing is
         # lost (the events wait in their source tables and are re-sent), but
-        # the SIEM is behind. A stream is "security_audit" or "admin_audit".
+        # the SIEM is behind. A stream is "security_audit", "admin_audit" or
+        # "run_steps" (step records of agent runs, ADR-0042 #1499).
         - alert: EliteaAuditExportLag
           expr: max by (stream) (elitea_audit_export_lag_seconds) > {{ $lag }}
           for: 5m

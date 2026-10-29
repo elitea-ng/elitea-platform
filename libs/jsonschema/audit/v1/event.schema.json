@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.elitea.ai/audit/v1/event.schema.json",
   "title": "elitea.audit.v1 evidence event",
-  "description": "One audit evidence event, as exported to a SIEM by the OTLP logs and signed webhook exporters (ADR-0042 decision 3). Producers: services/elitea-main/internal/auditexport maps securityaudit records and centry.audit_events rows to this envelope. OCSF mapping (https://schema.ocsf.io): event_id -> metadata.uid; time -> time; source -> metadata.product.feature.name; ocsf.class_uid / ocsf.category_uid -> class_uid / category_uid; tenant.project_id -> cloud.project_uid; actor.id -> actor.user.uid (actor.type decides user, service or agent); actor.email -> actor.user.email_addr; action -> activity_name; target.type / target.id / target.name -> resources[].type / uid / name; outcome -> status_id (success, failure) and authorization disposition (allow, deny); correlation.trace_id -> metadata.correlation_uid; details.http_method / http_route / status_code -> http_request.http_method / url.path / http_response.code. chain.* and details.* have no OCSF attribute and travel in unmapped. A field is omitted, never null, when it has no value, except tenant.project_id which is null for platform-wide events. Adding an optional field is not a version change; renaming, removing or retyping one, or adding a required one, is a new schema version.",
+  "description": "One audit evidence event, as exported to a SIEM by the OTLP logs and signed webhook exporters (ADR-0042 decision 3). Producers: services/elitea-main/internal/auditexport maps securityaudit records, centry.audit_events rows and elitea_runtime.run_steps rows (the step records of a run) to this envelope. OCSF mapping (https://schema.ocsf.io): event_id -> metadata.uid; time -> time; source -> metadata.product.feature.name; ocsf.class_uid / ocsf.category_uid -> class_uid / category_uid; tenant.project_id -> cloud.project_uid; actor.id -> actor.user.uid (actor.type decides user, service or agent); actor.email -> actor.user.email_addr; action -> activity_name; target.type / target.id / target.name -> resources[].type / uid / name; outcome -> status_id (success, failure) and authorization disposition (allow, deny); correlation.trace_id -> metadata.correlation_uid; details.http_method / http_route / status_code -> http_request.http_method / url.path / http_response.code. chain.* and details.* have no OCSF attribute and travel in unmapped. A field is omitted, never null, when it has no value, except tenant.project_id which is null for platform-wide events. Adding an optional field is not a version change; renaming, removing or retyping one, or adding a required one, is a new schema version.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "event_id", "time", "source", "event_type", "tenant", "actor", "action", "outcome", "details"],
@@ -24,13 +24,13 @@
     },
     "source": {
       "enum": ["security_audit", "admin_audit", "run_step", "approval", "suspension"],
-      "description": "Which evidence stream produced the event. security_audit is the governed security audit outbox; admin_audit is centry.audit_events (the HTTP access audit behind the admin Audit Trail). run_step, approval and suspension are reserved for ADR-0042 evidence added later."
+      "description": "Which evidence stream produced the event. security_audit is the security audit outbox; admin_audit is centry.audit_events (the HTTP access audit behind the admin Audit Trail); run_step is one step record of an agent or pipeline run (ADR-0042 decision 1). approval and suspension are reserved for ADR-0042 evidence added later."
     },
     "event_type": {
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "description": "The producer's event type: a CloudEvents type such as ai.elitea.security.v1.decision for security_audit, or the audit_events event_type (api, socketio, rpc, agent, tool, llm, schedule, admin_task) for admin_audit."
+      "description": "The producer's event type: a CloudEvents type such as ai.elitea.security.v1.decision for security_audit, or the audit_events event_type (api, socketio, rpc, agent, tool, llm, schedule, admin_task) for admin_audit, or run_step.<kind> (model_call, tool_call, retrieval, approval, delegation, cap, error, output) for run_step."
     },
     "ocsf": {
       "type": "object",
@@ -109,16 +109,16 @@
       "additionalProperties": false,
       "required": ["partition", "sequence", "prev_hash", "hash"],
       "properties": {
-        "partition": { "type": "string", "pattern": "^(0|[1-9][0-9]{0,18})$", "description": "The hash chain partition (the tenant project id; 0 is the platform)." },
+        "partition": { "type": "string", "pattern": "^(0|[1-9][0-9]{0,18}|run:[\\x21-\\x7e]{1,128})$", "description": "The hash chain partition: the tenant project id (0 is the platform) for security_audit, run:<run id> for run_step (one chain per run)." },
         "sequence": { "type": "integer", "minimum": 1, "description": "Position in the partition chain: 1, 2, 3 with no gap." },
         "prev_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Hex SHA-256 of the previous event; 64 zeros for the first event of a partition." },
-        "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Hex SHA-256 over prev_hash and the canonical stored event. Verify with the elitea-main security audit verifier; the hash covers the stored CloudEvents form, not this envelope." }
+        "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Hex SHA-256 over prev_hash and the canonical stored event. Verify with the elitea-main security audit verifier (security_audit) or the run's verify route (run_step); the hash covers the stored form, not this envelope. A run's chain is anchored into its tenant's security_audit chain by an ai.elitea.security.v1.run.steps.anchored event whose details carry chain_head and chain_length." }
       },
-      "description": "Present when the producer keeps a tamper-evident chain (security_audit today)."
+      "description": "Present when the producer keeps a tamper-evident chain (security_audit and run_step)."
     },
     "details": {
       "type": "object",
-      "description": "Source-specific fields. The shape is fixed per source; run_step, approval and suspension add theirs later."
+      "description": "Source-specific fields. The shape is fixed per source; approval and suspension add theirs later."
     }
   },
   "allOf": [
@@ -133,6 +133,13 @@
       "if": { "properties": { "source": { "const": "admin_audit" } }, "required": ["source"] },
       "then": {
         "properties": { "details": { "$ref": "#/$defs/adminAuditDetails" } }
+      }
+    },
+    {
+      "if": { "properties": { "source": { "const": "run_step" } }, "required": ["source"] },
+      "then": {
+        "required": ["chain"],
+        "properties": { "details": { "$ref": "#/$defs/runStepDetails" } }
       }
     }
   ],
@@ -158,7 +165,9 @@
         "authorization_epoch": { "type": "integer", "minimum": 0 },
         "revocation_epoch": { "type": "integer", "minimum": 0 },
         "arrangement": { "enum": ["A", "B", "C"] },
-        "outbox_seq": { "type": "integer", "minimum": 1, "description": "The global outbox sequence, for tracing a record to its row." }
+        "outbox_seq": { "type": "integer", "minimum": 1, "description": "The global outbox sequence, for tracing a record to its row." },
+        "chain_head": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "On ai.elitea.security.v1.run.steps.anchored: the hex hash of the anchored run's last step." },
+        "chain_length": { "type": "integer", "minimum": 1, "description": "On ai.elitea.security.v1.run.steps.anchored: the anchored run's step count." }
       }
     },
     "adminAuditDetails": {
@@ -172,6 +181,71 @@
         "status_code": { "type": "integer", "minimum": 100, "maximum": 599 },
         "duration_ms": { "type": "number", "minimum": 0 },
         "is_error": { "type": "boolean" }
+      }
+    },
+    "runStepDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One step record. It carries digests and references of the step's inputs and outputs, never the content: the content stays in the platform's object storage under its own retention (step_content) and is read through the run evidence API.",
+      "required": ["row_id", "run_id", "step_id", "seq", "generation", "kind", "started_at", "ended_at", "summary", "cited_step_ids", "cited_document_ids", "inputs", "outputs"],
+      "properties": {
+        "row_id": { "type": "integer", "minimum": 1, "description": "elitea_runtime.run_steps.id." },
+        "run_id": { "type": "string", "minLength": 1, "maxLength": 128, "description": "The run (execution) id; also correlation.correlation_id." },
+        "step_id": { "type": "string", "format": "uuid", "description": "The worker's step id, unique per run." },
+        "seq": { "type": "integer", "minimum": 1, "description": "Position in the run, equal to chain.sequence." },
+        "generation": { "type": "integer", "minimum": 1, "description": "The execution generation that reported the step (a resumed run is a new generation)." },
+        "kind": { "enum": ["model_call", "tool_call", "retrieval", "approval", "delegation", "cap", "error", "output"] },
+        "application_id": { "type": "integer", "minimum": 1, "description": "The agent or pipeline, when the run is one." },
+        "release_id": { "type": "integer", "minimum": 1, "description": "The agent release the run executed (ADR-0040)." },
+        "definition_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "The release's canonical definition digest." },
+        "node_id": { "type": "string", "maxLength": 256 },
+        "name": { "type": "string", "maxLength": 512, "description": "Tool, model, approval or delegation target, cap name or error code, by kind." },
+        "toolkit_id": { "type": "string", "maxLength": 128 },
+        "started_at": { "type": "string", "format": "date-time" },
+        "ended_at": { "type": "string", "format": "date-time" },
+        "summary": { "type": "object", "description": "Small structured fields per kind (model, token counts, decision, cap value, error code), at most 8 KiB." },
+        "retrieval": {
+          "type": "object",
+          "description": "Retrieval steps: the index, query, filters, top_k and the returned documents with scores and ranks.",
+          "properties": {
+            "index_name": { "type": "string" },
+            "query": { "type": "string" },
+            "filters": { "type": "object" },
+            "top_k": { "type": "integer", "minimum": 0 },
+            "documents": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "required": ["document_id", "score", "rank"],
+                "properties": {
+                  "document_id": { "type": "string" },
+                  "source": { "type": "string" },
+                  "score": { "type": "number" },
+                  "rank": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        },
+        "cited_step_ids": { "type": "array", "maxItems": 100, "items": { "type": "string" } },
+        "cited_document_ids": { "type": "array", "maxItems": 100, "items": { "type": "string" } },
+        "inputs": { "$ref": "#/$defs/runStepContentRef" },
+        "outputs": { "$ref": "#/$defs/runStepContentRef" }
+      }
+    },
+    "runStepContentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["size", "original_size", "truncated", "filtered"],
+      "properties": {
+        "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Hex SHA-256 of the stored content; absent when the side was empty or filtered to nothing." },
+        "size": { "type": "integer", "minimum": 0 },
+        "original_size": { "type": "integer", "minimum": 0, "description": "Size before the worker cut it." },
+        "truncated": { "type": "boolean" },
+        "filtered": { "type": "boolean", "description": "The toolkit's evidence_fields setting filtered the stored tool result." },
+        "media_type": { "enum": ["application/json", "text/plain"] },
+        "ref": { "type": "string", "maxLength": 1100, "description": "<bucket>/<key> of the stored object; absent once the content expired." }
       }
     }
   }

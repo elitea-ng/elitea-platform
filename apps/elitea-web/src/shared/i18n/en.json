@@ -5014,6 +5014,8 @@
   "pages.admin.retention.class.conversation": "Conversations",
   "pages.admin.retention.class.gatewayRequestLog": "LLM gateway request log",
   "pages.admin.retention.class.securityAudit": "Security audit outbox",
+  "pages.admin.retention.class.stepContent": "Run step content",
+  "pages.admin.retention.class.stepRecord": "Run step records",
   "pages.admin.retention.column.class": "Data class",
   "pages.admin.retention.column.max": "Maximum (days)",
   "pages.admin.retention.column.min": "Minimum (days)",

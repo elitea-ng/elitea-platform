@@ -3049,6 +3049,11 @@ main:
     # "now" (default) starts at the newest audit_events row; "beginning"
     # replays the whole table on the first run.
     ELITEA_AUDIT_EXPORT_AUDIT_EVENTS_FROM: "now"
+    # "true" | "false": also export the step records of agent and pipeline
+    # runs (elitea_runtime.run_steps, ADR-0042, default true): digests and
+    # references, never the content. "now" (default) | "beginning" as above.
+    ELITEA_AUDIT_EXPORT_RUN_STEPS: "true"
+    ELITEA_AUDIT_EXPORT_RUN_STEPS_FROM: "now"
     ELITEA_AUDIT_EXPORT_BATCH_SIZE: "200"
     ELITEA_AUDIT_EXPORT_INTERVAL: "5s"
     # A batch the receiver refuses as malformed (400, 413, 422) this many times

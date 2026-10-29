@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/elitea-ng/elitea-platform/libs/go/observability"
@@ -21,14 +22,18 @@ import (
 // Environment variables. Secrets are never values here: the webhook keys and
 // the OTLP headers are files, mounted from a Secret.
 const (
-	EnvOTLPEndpoint      = "ELITEA_AUDIT_EXPORT_OTLP_ENDPOINT"
-	EnvOTLPProtocol      = "ELITEA_AUDIT_EXPORT_OTLP_PROTOCOL"
-	EnvOTLPHeadersFile   = "ELITEA_AUDIT_EXPORT_OTLP_HEADERS_FILE"
-	EnvWebhookURL        = "ELITEA_AUDIT_EXPORT_WEBHOOK_URL"
-	EnvWebhookKeysFile   = "ELITEA_AUDIT_EXPORT_WEBHOOK_KEYS_FILE"
-	EnvEgressAllowlist   = "ELITEA_AUDIT_EXPORT_EGRESS_ALLOWLIST"
-	EnvAuditEvents       = "ELITEA_AUDIT_EXPORT_AUDIT_EVENTS"
-	EnvAuditEventsFrom   = "ELITEA_AUDIT_EXPORT_AUDIT_EVENTS_FROM"
+	EnvOTLPEndpoint    = "ELITEA_AUDIT_EXPORT_OTLP_ENDPOINT"
+	EnvOTLPProtocol    = "ELITEA_AUDIT_EXPORT_OTLP_PROTOCOL"
+	EnvOTLPHeadersFile = "ELITEA_AUDIT_EXPORT_OTLP_HEADERS_FILE"
+	EnvWebhookURL      = "ELITEA_AUDIT_EXPORT_WEBHOOK_URL"
+	EnvWebhookKeysFile = "ELITEA_AUDIT_EXPORT_WEBHOOK_KEYS_FILE"
+	EnvEgressAllowlist = "ELITEA_AUDIT_EXPORT_EGRESS_ALLOWLIST"
+	EnvAuditEvents     = "ELITEA_AUDIT_EXPORT_AUDIT_EVENTS"
+	EnvAuditEventsFrom = "ELITEA_AUDIT_EXPORT_AUDIT_EVENTS_FROM"
+	// EnvRunSteps exports elitea_runtime.run_steps (default true) and
+	// EnvRunStepsFrom chooses where a new sink starts (now or beginning).
+	EnvRunSteps          = "ELITEA_AUDIT_EXPORT_RUN_STEPS"
+	EnvRunStepsFrom      = "ELITEA_AUDIT_EXPORT_RUN_STEPS_FROM"
 	EnvBatchSize         = "ELITEA_AUDIT_EXPORT_BATCH_SIZE"
 	EnvInterval          = "ELITEA_AUDIT_EXPORT_INTERVAL"
 	EnvMaxPermanent      = "ELITEA_AUDIT_EXPORT_MAX_PERMANENT_ATTEMPTS"
@@ -57,6 +62,11 @@ type Config struct {
 	// AuditEventsFromBeginning replays the existing audit_events table on the
 	// first run.
 	AuditEventsFromBeginning bool
+	// RunSteps exports the run step records (#1499).
+	RunSteps bool
+	// RunStepsFromBeginning replays the existing step records on a sink's
+	// first run.
+	RunStepsFromBeginning bool
 
 	BatchSize            int
 	Interval             time.Duration
@@ -70,7 +80,7 @@ func (c Config) Enabled() bool { return c.OTLPEndpoint != "" || c.WebhookURL != 
 // EnvNames lists every variable, for "is anything configured" checks and docs.
 var EnvNames = []string{
 	EnvOTLPEndpoint, EnvOTLPProtocol, EnvOTLPHeadersFile, EnvWebhookURL, EnvWebhookKeysFile,
-	EnvEgressAllowlist, EnvAuditEvents, EnvAuditEventsFrom, EnvBatchSize, EnvInterval,
+	EnvEgressAllowlist, EnvAuditEvents, EnvAuditEventsFrom, EnvRunSteps, EnvRunStepsFrom, EnvBatchSize, EnvInterval,
 	EnvMaxPermanent, EnvMetricsAddr,
 }
 
@@ -151,6 +161,21 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		cfg.AuditEventsFromBeginning = true
 	default:
 		return fail(EnvAuditEventsFrom, "must be now or beginning")
+	}
+	cfg.RunSteps = true
+	if v := get(EnvRunSteps); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fail(EnvRunSteps, "must be true or false")
+		}
+		cfg.RunSteps = b
+	}
+	switch from := get(EnvRunStepsFrom); from {
+	case "", defaultAuditFromMode:
+	case "beginning":
+		cfg.RunStepsFromBeginning = true
+	default:
+		return fail(EnvRunStepsFrom, "must be now or beginning")
 	}
 	cfg.BatchSize = DefaultBatchSize
 	if v := get(EnvBatchSize); v != "" {
@@ -311,7 +336,7 @@ func (s *Service) SecurityExporter() securityaudit.Exporter {
 	return SecurityExporter{Sink: s.sinks, DeadLetters: s.deadLetters, Metrics: s.metrics, Logger: s.logger}
 }
 
-// Run starts the audit_events relay, the backlog monitor and, when
+// Run starts the audit_events and run_steps relays, the backlog monitor and, when
 // ELITEA_AUDIT_EXPORT_METRICS_ADDR is set, the metrics listener. It blocks
 // until ctx ends. securityEnabled reports the security audit stream too.
 func (s *Service) Run(ctx context.Context, securityEnabled bool) error {
@@ -335,18 +360,37 @@ func (s *Service) Run(ctx context.Context, securityEnabled bool) error {
 		}()
 	}
 
-	if !s.cfg.AuditEvents {
-		<-ctx.Done()
-		return nil
+	var relays []*AuditEventsRelay
+	if s.cfg.AuditEvents {
+		relay, err := NewAuditEventsRelay(s.db, AuditEventsConfig{
+			Sinks: s.sinks, FromBeginning: s.cfg.AuditEventsFromBeginning,
+			Interval: s.cfg.Interval, BatchSize: s.cfg.BatchSize, Logger: s.logger,
+		})
+		if err != nil {
+			return err
+		}
+		relays = append(relays, relay)
 	}
-	relay, err := NewAuditEventsRelay(s.db, AuditEventsConfig{
-		Sinks: s.sinks, FromBeginning: s.cfg.AuditEventsFromBeginning,
-		Interval: s.cfg.Interval, BatchSize: s.cfg.BatchSize, Logger: s.logger,
-	})
-	if err != nil {
-		return err
+	if s.cfg.RunSteps {
+		relay, err := NewRunStepsRelay(s.db, AuditEventsConfig{
+			Sinks: s.sinks, FromBeginning: s.cfg.RunStepsFromBeginning,
+			Interval: s.cfg.Interval, BatchSize: s.cfg.BatchSize, Logger: s.logger,
+		})
+		if err != nil {
+			return err
+		}
+		relays = append(relays, relay)
 	}
-	relay.Run(ctx)
+	var wg sync.WaitGroup
+	for _, relay := range relays {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			relay.Run(ctx)
+		}()
+	}
+	<-ctx.Done()
+	wg.Wait()
 	return nil
 }
 

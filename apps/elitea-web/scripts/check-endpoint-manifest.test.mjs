@@ -854,7 +854,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // overrideAgentChangeRequestGate) and attestations
 // (listAgentAttestations, recordAgentAttestation, revokeAgentAttestation).
 // The web app now calls 16 of them (see MANIFEST_ENTRY_COUNT below).
-const GENERATED_OPERATION_COUNT = 436;
+// 436 -> 440 (issue 1499, ADR-0042 decisions 1 and 2): listRunSteps,
+// verifyRunSteps, getRunStepContent and listConversationRuns, the step
+// records of a run. No web code calls them yet, so the manifest count is
+// unchanged.
+const GENERATED_OPERATION_COUNT = 440;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

@@ -42,13 +42,17 @@ func auditExportAtBoot(
 		return nil, nil, err
 	}
 	go func() {
-		if runErr := service.Run(ctx, admission.Governed()); runErr != nil && ctx.Err() == nil {
+		// The security audit stream is relayed on every install (anchors and
+		// lifecycle events are appended with the governed profile off), so its
+		// backlog is always reported.
+		if runErr := service.Run(ctx, true); runErr != nil && ctx.Err() == nil {
 			logger.Error("audit export relay stopped", "err", runErr)
 		}
 	}()
 	logger.Info("audit export started",
 		"otlp", cfg.OTLPEndpoint != "", "webhook", cfg.WebhookURL != "",
-		"audit_events", cfg.AuditEvents, "security_audit", admission.Governed())
+		"audit_events", cfg.AuditEvents, "run_steps", cfg.RunSteps, "security_audit", true,
+		"governed", admission.Governed())
 	return service, service.Close, nil
 }
 

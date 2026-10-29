@@ -167,6 +167,12 @@ components:
       schema:
         type: string
       description: Project identifier (extracted from URL path)
+    RunStepRunId:
+      name: run_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 128 }
+      description: The run (execution) id.
     Limit:
       name: limit
       in: query
@@ -6505,8 +6511,8 @@ components:
         the shortest maximum a project override may set and `max_age_days` the
         platform maximum (null keeps forever). A project override sets only
         its own `max_age_days`, inside those bounds. `data_class` is one of
-        conversation, attachment, gateway_request_log, admin_audit or
-        security_audit.
+        conversation, attachment, step_content, step_record,
+        gateway_request_log, admin_audit or security_audit.
       required: [data_class, project_id, min_age_days, max_age_days,
         allow_project_override, overrides_supported, floor_days, enforced_by,
         updated_by, updated_at]
@@ -7830,6 +7836,143 @@ components:
         revoked_by: null
         revoke_reason: ''
         valid: true
+
+    RunStepRun:
+      type: object
+      description: >
+        A run's head: its step count, the hash of its last step, and how far
+        its chain is anchored in the tenant's security audit chain.
+      required: [run_id, project_id, application_id, conversation_uuid, message_id, steps, head_hash, anchored_seq, anchored_at, created_at, updated_at]
+      properties:
+        run_id: { type: string }
+        project_id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64, nullable: true }
+        conversation_uuid: { type: string, nullable: true }
+        message_id: { type: string, nullable: true }
+        steps: { type: integer, format: int64 }
+        head_hash: { type: string }
+        anchored_seq: { type: integer, format: int64 }
+        anchored_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    RunStepContentInfo:
+      type: object
+      description: "One content side of a step: its digest and status, never the bytes."
+      required: [status, digest, size, original_size, truncated, filtered, media_type]
+      properties:
+        status: { type: string, enum: [stored, expired, empty, not_stored] }
+        digest: { type: string, nullable: true, description: Hex SHA-256 of the stored content. }
+        size: { type: integer, format: int64 }
+        original_size: { type: integer, format: int64 }
+        truncated: { type: boolean }
+        filtered: { type: boolean, description: "The toolkit's evidence_fields filtered the stored result." }
+        media_type: { type: string }
+
+    RunStep:
+      type: object
+      description: >
+        NOTE(W2): internal/api/v2/runevidence/handler.go, Step. One step
+        record; `hash` = SHA-256(prev_hash || canonical record).
+      required: [seq, step_id, generation, kind, actor, release_id, definition_digest, node_id, name, toolkit_id,
+        started_at, ended_at, summary, retrieval, cited_step_ids, cited_document_ids, inputs, outputs,
+        prev_hash, hash, recorded_at, content_expired_at, content_expired_policy]
+      properties:
+        seq: { type: integer, format: int64 }
+        step_id: { type: string }
+        generation: { type: integer, format: int64 }
+        kind: { type: string, enum: [model_call, tool_call, retrieval, approval, delegation, cap, error, output] }
+        actor: { type: string, description: "user:<id>, or agent:<binding id> for a governed run." }
+        release_id: { type: integer, format: int64, nullable: true }
+        definition_digest: { type: string, nullable: true }
+        node_id: { type: string }
+        name: { type: string }
+        toolkit_id: { type: string }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        summary: { type: object, additionalProperties: true }
+        retrieval: { type: object, additionalProperties: true, nullable: true }
+        cited_step_ids: { type: array, items: { type: string } }
+        cited_document_ids: { type: array, items: { type: string } }
+        inputs: { $ref: '#/components/schemas/RunStepContentInfo' }
+        outputs: { $ref: '#/components/schemas/RunStepContentInfo' }
+        prev_hash: { type: string }
+        hash: { type: string }
+        recorded_at: { type: string, format: date-time }
+        content_expired_at: { type: string, format: date-time, nullable: true }
+        content_expired_policy: { type: string, nullable: true }
+
+    RunStepsPage:
+      type: object
+      required: [run, steps, next_after_seq]
+      properties:
+        run: { $ref: '#/components/schemas/RunStepRun' }
+        steps:
+          type: array
+          items: { $ref: '#/components/schemas/RunStep' }
+        next_after_seq: { type: integer, format: int64, nullable: true, description: The after_seq of the next page; null on the last. }
+
+    RunStepsBreak:
+      type: object
+      required: [seq, reason]
+      properties:
+        seq: { type: integer, format: int64 }
+        reason: { type: string }
+
+    RunStepsVerification:
+      type: object
+      required: [run_id, ok, steps, verified, head_hash, anchored_seq, break]
+      properties:
+        run_id: { type: string }
+        ok: { type: boolean }
+        steps: { type: integer, format: int64 }
+        verified: { type: integer, format: int64 }
+        head_hash: { type: string }
+        anchored_seq: { type: integer, format: int64 }
+        break:
+          allOf: [{ $ref: '#/components/schemas/RunStepsBreak' }]
+          nullable: true
+
+    RunStepContent:
+      type: object
+      description: >
+        One side of a step. `content` is set only for status stored, as
+        UTF-8 text or, when the bytes are not valid UTF-8, base64
+        (`encoding`). An expired side carries `expired_at` and `policy`.
+      required: [run_id, step_id, side, status, digest, media_type, truncated, filtered, encoding, content, expired_at, policy]
+      properties:
+        run_id: { type: string }
+        step_id: { type: string }
+        side: { type: string, enum: [inputs, outputs] }
+        status: { type: string, enum: [stored, expired, empty, not_stored] }
+        digest: { type: string, nullable: true }
+        media_type: { type: string }
+        truncated: { type: boolean }
+        filtered: { type: boolean }
+        encoding: { type: string, enum: [utf-8, base64], nullable: true }
+        content: { type: string, nullable: true }
+        expired_at: { type: string, format: date-time, nullable: true }
+        policy: { type: string, nullable: true }
+
+    ConversationRun:
+      type: object
+      required: [run_id, message_id, steps, anchored, started_at, updated_at]
+      properties:
+        run_id: { type: string }
+        message_id: { type: string, nullable: true }
+        steps: { type: integer, format: int64 }
+        anchored: { type: boolean }
+        started_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ConversationRunList:
+      type: object
+      required: [conversation_uuid, runs]
+      properties:
+        conversation_uuid: { type: string }
+        runs:
+          type: array
+          items: { $ref: '#/components/schemas/ConversationRun' }
 
     AgentAttestationList:
       type: object
@@ -24981,6 +25124,136 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+
+  /elitea_core/run_steps/prompt_lib/{project_id}/{run_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/RunStepRunId'
+    get:
+      operationId: listRunSteps
+      summary: List the step records of a run
+      description: >
+        The run's head and a page of its step records in seq order (ADR-0042
+        decision 1): every model call, tool call, retrieval, approval,
+        delegation, cap, error and output, with the digests and sizes of its
+        inputs and outputs, never the content. Requires `runs.evidence.read`.
+      tags: [applications]
+      parameters:
+        - name: after_seq
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 0 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 200 }
+      responses:
+        '200':
+          description: The run and a page of its steps
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunStepsPage' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/run_steps/prompt_lib/{project_id}/{run_id}/verify:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/RunStepRunId'
+    get:
+      operationId: verifyRunSteps
+      summary: Verify the hash chain of a run
+      description: >
+        Recomputes the run's chain from its stored step records and checks
+        it against the run's head: ok, or the first seq that does not verify
+        and why. Expired content does not break the chain (the chain covers
+        the content's digest, not its bytes). Requires `runs.evidence.read`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The verification result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunStepsVerification' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/run_steps/prompt_lib/{project_id}/{run_id}/{step_id}/{side}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/RunStepRunId'
+      - name: step_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: side
+        in: path
+        required: true
+        schema: { type: string, enum: [inputs, outputs] }
+    get:
+      operationId: getRunStepContent
+      summary: Read the inputs or outputs of one step
+      description: >
+        One side's stored content, checked against the digest in its step
+        record (ADR-0042 decision 2). Every read of stored content is
+        recorded in the audit trail before it is answered, and a read the
+        trail cannot record is refused (503). Content past the step_content
+        policy answers status expired with `expired_at` and `policy`.
+        Requires `runs.evidence.read`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The content, or why there is none
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunStepContent' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409':
+          description: The stored content is missing or does not match its recorded digest
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: Step content storage is not configured or unreachable, or the read could not be audited
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /elitea_core/conversation_runs/prompt_lib/{project_id}/{conversation_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: listConversationRuns
+      summary: List the runs of a conversation
+      description: >
+        The runs a conversation started, newest first (at most 1000), each
+        with its step count and the chat response message it produced.
+        Requires `runs.evidence.read`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The conversation's runs
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationRunList' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
 
   /elitea_core/version_revisions/prompt_lib/{project_id}/{application_id}/{version_id}:
     parameters:

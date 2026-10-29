@@ -68,8 +68,9 @@ type Relay struct {
 	alerting     bool
 }
 
-// NewRelay builds the relay. Start it with Run only while the governance flag
-// is on.
+// NewRelay builds the relay. elitea-main runs it on every install (#1499):
+// run step anchors and agent lifecycle events are appended whatever the
+// governance flag.
 func NewRelay(db TxStarter, cfg RelayConfig) (*Relay, error) {
 	if db == nil {
 		return nil, errors.New("security audit relay needs a database")

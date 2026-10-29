@@ -91,6 +91,7 @@ import type {
   BatchReplaceVersionReferencesParams,
   CapabilityUnavailableResponse,
   ClientUpgradeRequiredResponse,
+  ConversationRunList,
   DefaultIcon,
   DeleteApplicationVersionParams,
   DesktopOperationError,
@@ -138,6 +139,7 @@ import type {
   ListProjectIconsParams,
   ListProjectsParams,
   ListPublicApplicationsParams,
+  ListRunStepsParams,
   MandateRefusal,
   N400Response,
   N401Response,
@@ -182,6 +184,9 @@ import type {
   ReleaseGateSuiteRequest,
   ResolvedApplicationVersion,
   RunPipelineInboundTriggerParams,
+  RunStepContent,
+  RunStepsPage,
+  RunStepsVerification,
   SaveApplicationNewVersionBody,
   SetAgentAttachmentStorageBody,
   SetDefaultVersionRequest,
@@ -8329,6 +8334,1030 @@ export function useRevokeAgentAttestation<
     projectId,
     attestationId,
     agentLifecycleReason,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listRunStepsResponse200 = {
+  data: RunStepsPage;
+  status: 200;
+};
+
+export type listRunStepsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listRunStepsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listRunStepsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listRunStepsResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type listRunStepsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listRunStepsResponseSuccess = listRunStepsResponse200 & {
+  headers: Headers;
+};
+export type listRunStepsResponseError = (
+  | listRunStepsResponse400
+  | listRunStepsResponse401
+  | listRunStepsResponse403
+  | listRunStepsResponse404
+  | listRunStepsResponse500
+) & {
+  headers: Headers;
+};
+
+export type listRunStepsResponse =
+  listRunStepsResponseSuccess | listRunStepsResponseError;
+
+export const getListRunStepsUrl = (
+  projectId: string,
+  runId: string,
+  params?: ListRunStepsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/run_steps/prompt_lib/${projectId}/${runId}?${stringifiedParams}`
+    : `/elitea_core/run_steps/prompt_lib/${projectId}/${runId}`;
+};
+
+/**
+ * The run's head and a page of its step records in seq order (ADR-0042 decision 1): every model call, tool call, retrieval, approval, delegation, cap, error and output, with the digests and sizes of its inputs and outputs, never the content. Requires `runs.evidence.read`.
+ * @summary List the step records of a run
+ */
+export const listRunSteps = async (
+  projectId: string,
+  runId: string,
+  params?: ListRunStepsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listRunStepsResponse> => {
+  return eliteaFetch<listRunStepsResponse>(
+    getListRunStepsUrl(projectId, runId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListRunStepsQueryKey = (
+  projectId: string,
+  runId: string,
+  params?: ListRunStepsParams,
+) => {
+  return [
+    `/elitea_core/run_steps/prompt_lib/${projectId}/${runId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListRunStepsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listRunSteps>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  params?: ListRunStepsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listRunSteps>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListRunStepsQueryKey(projectId, runId, params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listRunSteps>>> = ({
+    signal,
+  }) => listRunSteps(projectId, runId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      runId !== null &&
+      runId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listRunSteps>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListRunStepsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listRunSteps>>
+>;
+export type ListRunStepsQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useListRunSteps<
+  TData = Awaited<ReturnType<typeof listRunSteps>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  params: undefined | ListRunStepsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listRunSteps>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRunSteps>>,
+          TError,
+          Awaited<ReturnType<typeof listRunSteps>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListRunSteps<
+  TData = Awaited<ReturnType<typeof listRunSteps>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  params?: ListRunStepsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listRunSteps>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRunSteps>>,
+          TError,
+          Awaited<ReturnType<typeof listRunSteps>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListRunSteps<
+  TData = Awaited<ReturnType<typeof listRunSteps>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  params?: ListRunStepsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listRunSteps>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the step records of a run
+ */
+
+export function useListRunSteps<
+  TData = Awaited<ReturnType<typeof listRunSteps>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  params?: ListRunStepsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listRunSteps>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListRunStepsQueryOptions(
+    projectId,
+    runId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type verifyRunStepsResponse200 = {
+  data: RunStepsVerification;
+  status: 200;
+};
+
+export type verifyRunStepsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type verifyRunStepsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type verifyRunStepsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type verifyRunStepsResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type verifyRunStepsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type verifyRunStepsResponseSuccess = verifyRunStepsResponse200 & {
+  headers: Headers;
+};
+export type verifyRunStepsResponseError = (
+  | verifyRunStepsResponse400
+  | verifyRunStepsResponse401
+  | verifyRunStepsResponse403
+  | verifyRunStepsResponse404
+  | verifyRunStepsResponse500
+) & {
+  headers: Headers;
+};
+
+export type verifyRunStepsResponse =
+  verifyRunStepsResponseSuccess | verifyRunStepsResponseError;
+
+export const getVerifyRunStepsUrl = (projectId: string, runId: string) => {
+  return `/elitea_core/run_steps/prompt_lib/${projectId}/${runId}/verify`;
+};
+
+/**
+ * Recomputes the run's chain from its stored step records and checks it against the run's head: ok, or the first seq that does not verify and why. Expired content does not break the chain (the chain covers the content's digest, not its bytes). Requires `runs.evidence.read`.
+ * @summary Verify the hash chain of a run
+ */
+export const verifyRunSteps = async (
+  projectId: string,
+  runId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<verifyRunStepsResponse> => {
+  return eliteaFetch<verifyRunStepsResponse>(
+    getVerifyRunStepsUrl(projectId, runId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getVerifyRunStepsQueryKey = (projectId: string, runId: string) => {
+  return [
+    `/elitea_core/run_steps/prompt_lib/${projectId}/${runId}/verify`,
+  ] as const;
+};
+
+export const getVerifyRunStepsQueryOptions = <
+  TData = Awaited<ReturnType<typeof verifyRunSteps>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof verifyRunSteps>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getVerifyRunStepsQueryKey(projectId, runId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof verifyRunSteps>>> = ({
+    signal,
+  }) => verifyRunSteps(projectId, runId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      runId !== null &&
+      runId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof verifyRunSteps>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type VerifyRunStepsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof verifyRunSteps>>
+>;
+export type VerifyRunStepsQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useVerifyRunSteps<
+  TData = Awaited<ReturnType<typeof verifyRunSteps>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof verifyRunSteps>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof verifyRunSteps>>,
+          TError,
+          Awaited<ReturnType<typeof verifyRunSteps>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useVerifyRunSteps<
+  TData = Awaited<ReturnType<typeof verifyRunSteps>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof verifyRunSteps>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof verifyRunSteps>>,
+          TError,
+          Awaited<ReturnType<typeof verifyRunSteps>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useVerifyRunSteps<
+  TData = Awaited<ReturnType<typeof verifyRunSteps>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof verifyRunSteps>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Verify the hash chain of a run
+ */
+
+export function useVerifyRunSteps<
+  TData = Awaited<ReturnType<typeof verifyRunSteps>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof verifyRunSteps>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getVerifyRunStepsQueryOptions(projectId, runId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getRunStepContentResponse200 = {
+  data: RunStepContent;
+  status: 200;
+};
+
+export type getRunStepContentResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type getRunStepContentResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getRunStepContentResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getRunStepContentResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getRunStepContentResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type getRunStepContentResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getRunStepContentResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type getRunStepContentResponseSuccess = getRunStepContentResponse200 & {
+  headers: Headers;
+};
+export type getRunStepContentResponseError = (
+  | getRunStepContentResponse400
+  | getRunStepContentResponse401
+  | getRunStepContentResponse403
+  | getRunStepContentResponse404
+  | getRunStepContentResponse409
+  | getRunStepContentResponse500
+  | getRunStepContentResponse503
+) & {
+  headers: Headers;
+};
+
+export type getRunStepContentResponse =
+  getRunStepContentResponseSuccess | getRunStepContentResponseError;
+
+export const getGetRunStepContentUrl = (
+  projectId: string,
+  runId: string,
+  stepId: string,
+  side: "inputs" | "outputs",
+) => {
+  return `/elitea_core/run_steps/prompt_lib/${projectId}/${runId}/${stepId}/${side}`;
+};
+
+/**
+ * One side's stored content, checked against the digest in its step record (ADR-0042 decision 2). Every read of stored content is recorded in the audit trail before it is answered, and a read the trail cannot record is refused (503). Content past the step_content policy answers status expired with `expired_at` and `policy`. Requires `runs.evidence.read`.
+ * @summary Read the inputs or outputs of one step
+ */
+export const getRunStepContent = async (
+  projectId: string,
+  runId: string,
+  stepId: string,
+  side: "inputs" | "outputs",
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getRunStepContentResponse> => {
+  return eliteaFetch<getRunStepContentResponse>(
+    getGetRunStepContentUrl(projectId, runId, stepId, side),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetRunStepContentQueryKey = (
+  projectId: string,
+  runId: string,
+  stepId: string,
+  side: "inputs" | "outputs",
+) => {
+  return [
+    `/elitea_core/run_steps/prompt_lib/${projectId}/${runId}/${stepId}/${side}`,
+  ] as const;
+};
+
+export const getGetRunStepContentQueryOptions = <
+  TData = Awaited<ReturnType<typeof getRunStepContent>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  stepId: string,
+  side: "inputs" | "outputs",
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getRunStepContent>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetRunStepContentQueryKey(projectId, runId, stepId, side);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getRunStepContent>>
+  > = ({ signal }) =>
+    getRunStepContent(projectId, runId, stepId, side, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      runId !== null &&
+      runId !== undefined &&
+      stepId !== null &&
+      stepId !== undefined &&
+      side !== null &&
+      side !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getRunStepContent>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetRunStepContentQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getRunStepContent>>
+>;
+export type GetRunStepContentQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | ErrorResponse
+  | N500Response;
+
+export function useGetRunStepContent<
+  TData = Awaited<ReturnType<typeof getRunStepContent>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  stepId: string,
+  side: "inputs" | "outputs",
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getRunStepContent>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRunStepContent>>,
+          TError,
+          Awaited<ReturnType<typeof getRunStepContent>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetRunStepContent<
+  TData = Awaited<ReturnType<typeof getRunStepContent>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  stepId: string,
+  side: "inputs" | "outputs",
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getRunStepContent>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRunStepContent>>,
+          TError,
+          Awaited<ReturnType<typeof getRunStepContent>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetRunStepContent<
+  TData = Awaited<ReturnType<typeof getRunStepContent>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  stepId: string,
+  side: "inputs" | "outputs",
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getRunStepContent>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read the inputs or outputs of one step
+ */
+
+export function useGetRunStepContent<
+  TData = Awaited<ReturnType<typeof getRunStepContent>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ErrorResponse
+    | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  stepId: string,
+  side: "inputs" | "outputs",
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getRunStepContent>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetRunStepContentQueryOptions(
+    projectId,
+    runId,
+    stepId,
+    side,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listConversationRunsResponse200 = {
+  data: ConversationRunList;
+  status: 200;
+};
+
+export type listConversationRunsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listConversationRunsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listConversationRunsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listConversationRunsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listConversationRunsResponseSuccess =
+  listConversationRunsResponse200 & {
+    headers: Headers;
+  };
+export type listConversationRunsResponseError = (
+  | listConversationRunsResponse400
+  | listConversationRunsResponse401
+  | listConversationRunsResponse403
+  | listConversationRunsResponse500
+) & {
+  headers: Headers;
+};
+
+export type listConversationRunsResponse =
+  listConversationRunsResponseSuccess | listConversationRunsResponseError;
+
+export const getListConversationRunsUrl = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return `/elitea_core/conversation_runs/prompt_lib/${projectId}/${conversationUuid}`;
+};
+
+/**
+ * The runs a conversation started, newest first (at most 1000), each with its step count and the chat response message it produced. Requires `runs.evidence.read`.
+ * @summary List the runs of a conversation
+ */
+export const listConversationRuns = async (
+  projectId: string,
+  conversationUuid: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listConversationRunsResponse> => {
+  return eliteaFetch<listConversationRunsResponse>(
+    getListConversationRunsUrl(projectId, conversationUuid),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListConversationRunsQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return [
+    `/elitea_core/conversation_runs/prompt_lib/${projectId}/${conversationUuid}`,
+  ] as const;
+};
+
+export const getListConversationRunsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listConversationRuns>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversationRuns>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListConversationRunsQueryKey(projectId, conversationUuid);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listConversationRuns>>
+  > = ({ signal }) =>
+    listConversationRuns(projectId, conversationUuid, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listConversationRuns>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListConversationRunsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listConversationRuns>>
+>;
+export type ListConversationRunsQueryError =
+  N400Response | N401Response | N403Response | N500Response;
+
+export function useListConversationRuns<
+  TData = Awaited<ReturnType<typeof listConversationRuns>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversationRuns>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listConversationRuns>>,
+          TError,
+          Awaited<ReturnType<typeof listConversationRuns>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListConversationRuns<
+  TData = Awaited<ReturnType<typeof listConversationRuns>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversationRuns>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listConversationRuns>>,
+          TError,
+          Awaited<ReturnType<typeof listConversationRuns>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListConversationRuns<
+  TData = Awaited<ReturnType<typeof listConversationRuns>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversationRuns>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the runs of a conversation
+ */
+
+export function useListConversationRuns<
+  TData = Awaited<ReturnType<typeof listConversationRuns>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConversationRuns>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListConversationRunsQueryOptions(
+    projectId,
+    conversationUuid,
     options,
   );
 

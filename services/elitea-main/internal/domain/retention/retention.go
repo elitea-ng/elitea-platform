@@ -22,7 +22,10 @@
 //     row (services/elitea-llm-gateway/internal/requestlog).
 //   - admin_audit, security_audit: elitea-scheduler's audit sweepers, once an
 //     administrator has saved the row.
-//   - step_content, step_record: reserved; refused until their data exists.
+//   - step_content, step_record: elitea-main's step retention routines
+//     (internal/application/runevidence): main.step_content_retention
+//     expires and deletes stored step content by its recorded time;
+//     main.step_record_retention deletes whole runs by their last step.
 package retention
 
 import (
@@ -45,10 +48,10 @@ const (
 	ClassSecurityAudit     DataClass = "security_audit"
 )
 
-// Classes are the data classes a policy can be stored for today. The reserved
-// step classes are not in it.
+// Classes are the data classes a policy can be stored for.
 var Classes = []DataClass{
-	ClassConversation, ClassAttachment, ClassGatewayRequestLog, ClassAdminAudit, ClassSecurityAudit,
+	ClassConversation, ClassAttachment, ClassStepContent, ClassStepRecord,
+	ClassGatewayRequestLog, ClassAdminAudit, ClassSecurityAudit,
 }
 
 // MaxAgeCeilingDays bounds every age at 100 years: a larger number is a typo,
@@ -70,8 +73,11 @@ type classRules struct {
 }
 
 var rules = map[DataClass]classRules{
-	ClassConversation:      {floorDays: 1, forever: true, overridable: true, enforced: true},
-	ClassAttachment:        {floorDays: 1, forever: true, overridable: false, enforced: false},
+	ClassConversation: {floorDays: 1, forever: true, overridable: true, enforced: true},
+	ClassAttachment:   {floorDays: 1, forever: true, overridable: false, enforced: false},
+	ClassStepContent:  {floorDays: 1, forever: true, overridable: true, enforced: true},
+	// A step record is evidence: its floor is the admin audit's.
+	ClassStepRecord:        {floorDays: 7, forever: true, overridable: true, enforced: true},
 	ClassGatewayRequestLog: {floorDays: 1, forever: false, overridable: false, enforced: true},
 	ClassAdminAudit:        {floorDays: 7, forever: true, overridable: false, enforced: true},
 	ClassSecurityAudit:     {floorDays: 1, forever: true, overridable: false, enforced: true},

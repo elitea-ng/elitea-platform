@@ -122,6 +122,9 @@ type Server struct {
 	// egressSummaries keeps the worker's egress reports (ADR-0044
 	// decision 2); nil answers ReportEgressSummary UNSUPPORTED_CAPABILITY.
 	egressSummaries EgressSummaries
+	// runSteps stores the worker's step records (ADR-0042, #1499); nil
+	// answers ReportRunSteps UNSUPPORTED_CAPABILITY.
+	runSteps RunSteps
 }
 
 // AdmissionPinReader reads the credential profile an execution was admitted
@@ -555,6 +558,9 @@ func (s *Server) PrepareSettlement(ctx context.Context, request *runtimev1.Prepa
 	// The command settled: no further egress report can come for this turn,
 	// so its worker row is final.
 	s.settleWorkerEgress(ctx, fence)
+	// The worker flushed every step before settling: anchor the run's step
+	// chain into the tenant's security audit chain.
+	s.anchorRunSteps(ctx, fence.ExecutionID)
 	return &runtimev1.PrepareSettlementResponseV1{
 		SettlementReceiptId: receipt.ID,
 		Outcome:             settlementOutcomeProto(receipt.Outcome),
