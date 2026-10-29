@@ -7951,8 +7951,24 @@ components:
         toolkit_id: { type: string }
         started_at: { type: string, format: date-time }
         ended_at: { type: string, format: date-time }
-        summary: { type: object, additionalProperties: true }
-        retrieval: { type: object, additionalProperties: true, nullable: true }
+        summary:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the step's summary as the worker reported it, a JSON
+            object of at most 8 KiB whose fields differ by step kind (model,
+            token counts, decision, cap value, error code). Main validates
+            only that it is a bounded object (internal/application/runevidence/service.go:445)
+            and returns it verbatim (internal/api/v2/runevidence/handler.go:354).
+        retrieval:
+          type: object
+          nullable: true
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): a retrieval step's index_name, query, top_k, documents
+            and the caller's own filters object, whose keys are the index's
+            metadata fields. Main builds it (internal/application/runevidence/service.go:400)
+            and returns it verbatim (internal/api/v2/runevidence/handler.go:354).
         cited_step_ids: { type: array, items: { type: string } }
         cited_document_ids: { type: array, items: { type: string } }
         inputs: { $ref: '#/components/schemas/RunStepContentInfo' }

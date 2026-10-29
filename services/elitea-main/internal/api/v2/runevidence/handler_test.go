@@ -42,6 +42,20 @@ func (f *fakeStore) StepsPage(_ context.Context, _ int64, _ string, after int64,
 	return out, nil
 }
 
+func (f *fakeStore) VerifyRun(ctx context.Context, projectID int64, runID string) (repos.RunVerification, error) {
+	head, err := f.Head(ctx, projectID, runID)
+	if err != nil {
+		return repos.RunVerification{}, err
+	}
+	var v runevidence.Verifier
+	for _, r := range f.records {
+		if b := v.Next(r); b != nil {
+			return repos.RunVerification{Head: head, Verified: v.Count(), Break: b}, nil
+		}
+	}
+	return repos.RunVerification{Head: head, Verified: v.Count(), Break: v.Finish(head.LastSeq, head.LastHash)}, nil
+}
+
 func (f *fakeStore) Step(_ context.Context, _ int64, _ string, stepID string) (runevidence.Record, error) {
 	for _, r := range f.records {
 		if r.StepID == stepID {

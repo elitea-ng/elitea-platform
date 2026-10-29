@@ -7,6 +7,11 @@
 --       hold, retention and the conversation's run list), and how far the
 --       head has been anchored into the tenant's security audit chain.
 --
+--       anchor_requested_at is set when the run's settlement is prepared;
+--       the main.run_step_anchor routine (every minute) anchors those heads
+--       off the settlement path, and step_record's hourly pass anchors any
+--       settled run a mark missed.
+--
 --   elitea_runtime.run_steps
 --       One row per step the worker reported (ReportRunSteps). The worker's
 --       step_id is the idempotency key (unique per run); Main assigns seq
@@ -16,8 +21,14 @@
 --       expiry, and covers the content by digest, never by value
 --       (internal/application/runevidence). The content itself is in object
 --       storage (ADR-0016) under the platform-scoped `run-evidence` bucket,
---       key <project>/runs/<run>/<step_id>/<inputs|outputs>: a retried report
---       overwrites the same key, so a failed persist leaves no orphan.
+--       key <project>/runs/<run>/<step_id>/<inputs|outputs>. The content is
+--       written BEFORE the row's transaction, so a persist that fails (and
+--       a worker that never retries) would leave an object no row names:
+--       each key is first journalled in run_step_content_pending, committed
+--       ahead of the write, and the persist transaction removes the entries
+--       of the rows it stored. The step_content routine deletes the object
+--       of an entry older than an hour whose step row does not name it, then
+--       the entry (row-first journal, as #1245).
 --
 --       Retention: the step_content sweeper sets content_expired_at and
 --       content_expired_policy, then deletes the objects and clears the
@@ -55,6 +66,7 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.run_step_heads (
                         CHECK (octet_length(last_hash) = 32),
     anchored_seq        bigint NOT NULL DEFAULT 0 CHECK (anchored_seq >= 0 AND anchored_seq <= last_seq),
     anchored_at         timestamptz,
+    anchor_requested_at timestamptz,
     created_at          timestamptz NOT NULL DEFAULT clock_timestamp(),
     updated_at          timestamptz NOT NULL DEFAULT clock_timestamp()
 );
@@ -70,6 +82,21 @@ CREATE INDEX IF NOT EXISTS run_step_heads_conversation
 CREATE INDEX IF NOT EXISTS run_step_heads_unanchored
     ON elitea_runtime.run_step_heads (updated_at)
     WHERE anchored_seq < last_seq;
+-- Settled runs waiting for main.run_step_anchor.
+CREATE INDEX IF NOT EXISTS run_step_heads_anchor_requested
+    ON elitea_runtime.run_step_heads (anchor_requested_at)
+    WHERE anchor_requested_at IS NOT NULL AND anchored_seq < last_seq;
+
+-- The row-first journal of step content written ahead of its row.
+CREATE TABLE IF NOT EXISTS elitea_runtime.run_step_content_pending (
+    object_key  text NOT NULL PRIMARY KEY CHECK (length(object_key) BETWEEN 1 AND 1024),
+    run_id      text NOT NULL CHECK (length(run_id) BETWEEN 1 AND 128),
+    step_id     uuid NOT NULL,
+    project_id  bigint NOT NULL CHECK (project_id > 0),
+    created_at  timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS run_step_content_pending_age
+    ON elitea_runtime.run_step_content_pending (created_at);
 
 CREATE TABLE IF NOT EXISTS elitea_runtime.run_steps (
     id                      bigserial PRIMARY KEY,

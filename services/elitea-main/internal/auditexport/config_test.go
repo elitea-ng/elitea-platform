@@ -205,3 +205,20 @@ func TestConfigFromEnv(t *testing.T) {
 		t.Fatalf("grpc: %v %+v", err, grpc)
 	}
 }
+
+// Step record retention waits only for the sinks exporting run_steps now.
+func TestRunStepsSinks(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cfg  Config
+		want []string
+	}{
+		"export off":   {Config{RunSteps: true}, []string{}},
+		"stream off":   {Config{OTLPEndpoint: "collector:4317", WebhookURL: "https://siem", RunSteps: false}, []string{}},
+		"both sinks":   {Config{OTLPEndpoint: "collector:4317", WebhookURL: "https://siem", RunSteps: true}, []string{"otlp", "webhook"}},
+		"webhook only": {Config{WebhookURL: "https://siem", RunSteps: true}, []string{"webhook"}},
+	} {
+		if got := tc.cfg.RunStepsSinks(); strings.Join(got, ",") != strings.Join(tc.want, ",") || got == nil {
+			t.Fatalf("%s: %v", name, got)
+		}
+	}
+}

@@ -11,16 +11,19 @@ import (
 )
 
 // RunSteps persists the worker's step records (ADR-0042 decision 1, #1499)
-// and anchors a run's chain when it settles (*runevidence.Service).
+// and, when a run settles, asks for its chain to be anchored
+// (*runevidence.Service).
 type RunSteps interface {
 	// Report stores the claimed generation's steps and returns how many were
 	// new. runevidence.ErrInvalidReport refuses the report as malformed.
 	Report(ctx context.Context, executionID string, generation uint64, steps []runevidence.StepInput) (int, error)
-	// Anchor appends the run's head to the tenant's security audit chain.
-	Anchor(ctx context.Context, executionID string) error
+	// RequestAnchor marks the run for main.run_step_anchor, which appends its
+	// head to the tenant's security audit chain within about a minute. It
+	// takes no chain lock, so settlements do not serialise on the chain.
+	RequestAnchor(ctx context.Context, executionID string) error
 }
 
-// WithRunSteps serves ReportRunSteps and anchors each run's step chain when
+// WithRunSteps serves ReportRunSteps and requests each run's anchor when
 // its settlement is prepared. Nil answers UNSUPPORTED_CAPABILITY.
 func (s *Server) WithRunSteps(steps RunSteps) *Server {
 	s.runSteps = steps
@@ -69,16 +72,16 @@ func (s *Server) ReportRunSteps(ctx context.Context, request *runtimev1.ReportRu
 	return &runtimev1.ReportRunStepsResponseV1{Accepted: uint32(accepted)}, nil
 }
 
-// anchorRunSteps is best effort: a settlement never fails because its anchor
-// could not be written. The step_record routine anchors every settled run
-// whose head moved since its last anchor, so a missed anchor is late, not
-// lost.
-func (s *Server) anchorRunSteps(ctx context.Context, executionID string) {
+// requestRunStepAnchor is best effort and off the chain: settlement only
+// marks the run's head, and main.run_step_anchor appends the anchor. A
+// missed mark is caught by step_record's hourly pass, which anchors every
+// settled run whose head moved, so an anchor is late, never lost.
+func (s *Server) requestRunStepAnchor(ctx context.Context, executionID string) {
 	if s.runSteps == nil {
 		return
 	}
-	if err := s.runSteps.Anchor(ctx, executionID); err != nil {
-		slog.WarnContext(ctx, "run step chain not anchored at settlement; the retention routine retries",
+	if err := s.runSteps.RequestAnchor(ctx, executionID); err != nil {
+		slog.WarnContext(ctx, "run step anchor not requested at settlement; the step_record routine anchors it",
 			"execution_id", executionID, "err", err)
 	}
 }

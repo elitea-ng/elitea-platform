@@ -22,6 +22,11 @@ newest entry is first.
   `evidence_fields` setting (a list of top-level field names) keeps only
   those fields of its JSON results; a malformed value is refused on save
   with **400 `invalid_evidence_fields`**.
+* **Anchoring runs off the settlement path.** Settlement only marks the
+  run; the new routine `main.run_step_anchor` (every minute, listed under
+  Administration → Schedules, paused in maintenance) appends the anchor,
+  so a run is anchored within about a minute of ending.
+  `main.step_record_retention` anchors any settled run a mark missed.
 * **The security audit relay now runs on every install**, not only with the
   governed credential profile, so the anchor events
   (`ai.elitea.security.v1.run.steps.anchored`, carrying `chain_head` and
@@ -41,10 +46,13 @@ newest entry is first.
   Administration → Retention (floors 1 and 7 days, overridable per project,
   enforced). Two new routines, hourly and listed under Administration →
   Schedules: `main.step_content_retention` (expires content past the
-  maximum, rows first, then deletes the objects) and
-  `main.step_record_retention` (anchors runs whose anchor was missed, then
-  deletes whole runs past the maximum once every export sink has passed
-  them). Both skip what an active legal hold covers and pause in
+  maximum, rows first, then deletes the objects, and deletes content
+  objects whose step record never landed an hour after they were written,
+  tracked in `elitea_runtime.run_step_content_pending`) and
+  `main.step_record_retention` (anchors settled runs whose anchor was
+  missed, then deletes whole runs past the maximum once every sink that
+  currently exports `run_steps` has passed them; the position of a removed
+  sink or a disabled stream holds nothing). Both skip what an active legal hold covers and pause in
   maintenance. Deleting a conversation expires its runs' step content
   (policy `conversation_deleted`); the records stay under `step_record`.
 * **New routes** (each needs `runs.evidence.read`):

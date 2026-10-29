@@ -50,7 +50,6 @@ const (
 
 	defaultPage = 200
 	maxPage     = 1000
-	verifyPage  = 1000
 	maxRunID    = 128
 )
 
@@ -58,6 +57,9 @@ const (
 type Store interface {
 	Head(ctx context.Context, projectID int64, runID string) (repos.RunHead, error)
 	StepsPage(ctx context.Context, projectID int64, runID string, afterSeq int64, limit int) ([]runevidence.Record, error)
+	// VerifyRun recomputes the run's chain against its head from one
+	// snapshot.
+	VerifyRun(ctx context.Context, projectID int64, runID string) (repos.RunVerification, error)
 	Step(ctx context.Context, projectID int64, runID, stepID string) (runevidence.Record, error)
 	ConversationRuns(ctx context.Context, projectID int64, conversationUUID string) ([]repos.ConversationRun, error)
 	RecordContentRead(ctx context.Context, userID, projectID int64, runID, stepID string, side runevidence.Side, route string) error
@@ -225,44 +227,23 @@ func (h *Handler) ListSteps(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page)
 }
 
-// Verify recomputes the run's chain page by page against its head.
+// Verify recomputes the run's chain against its head. The head and every
+// page are read in one REPEATABLE READ snapshot (repos.RunSteps.VerifyRun),
+// so a run still reporting steps, or a sweep running, does not read as a
+// break.
 func (h *Handler) Verify(w http.ResponseWriter, r *http.Request) {
 	projectID, runID, ok := h.run(w, r)
 	if !ok {
 		return
 	}
-	head, err := h.store.Head(r.Context(), projectID, runID)
+	result, err := h.store.VerifyRun(r.Context(), projectID, runID)
 	if err != nil {
 		writeError(r.Context(), w, err)
 		return
 	}
-	var (
-		verifier runevidence.Verifier
-		broken   *runevidence.Break
-		after    int64
-	)
-	for broken == nil {
-		records, err := h.store.StepsPage(r.Context(), projectID, runID, after, verifyPage)
-		if err != nil {
-			writeError(r.Context(), w, err)
-			return
-		}
-		for _, record := range records {
-			if broken = verifier.Next(record); broken != nil {
-				break
-			}
-			after = record.Seq
-		}
-		if len(records) < verifyPage {
-			break
-		}
-	}
-	if broken == nil {
-		broken = verifier.Finish(head.LastSeq, head.LastHash)
-	}
 	writeJSON(w, http.StatusOK, Verification{
-		RunID: runID, OK: broken == nil, Steps: head.LastSeq, Verified: verifier.Count(),
-		HeadHash: hex.EncodeToString(head.LastHash), AnchoredSeq: head.AnchoredSeq, Break: broken,
+		RunID: runID, OK: result.Break == nil, Steps: result.Head.LastSeq, Verified: result.Verified,
+		HeadHash: hex.EncodeToString(result.Head.LastHash), AnchoredSeq: result.Head.AnchoredSeq, Break: result.Break,
 	})
 }
 

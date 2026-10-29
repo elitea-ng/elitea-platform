@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runevidence"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
@@ -24,6 +25,9 @@ import (
 type RunSteps struct {
 	pool     *pgxpool.Pool
 	appender securityaudit.Appender
+	// afterVerifyHead runs between VerifyRun's head read and its step reads
+	// (tests append steps there).
+	afterVerifyHead func()
 }
 
 var (
@@ -231,9 +235,15 @@ func (s *RunSteps) Append(ctx context.Context, run runevidence.RunContext, recor
 		return 0, err
 	}
 	accepted := 0
+	var journalled []string
 	for _, r := range records {
 		if stored[r.StepID] {
 			continue
+		}
+		for _, key := range []string{r.Inputs.ObjectKey, r.Outputs.ObjectKey} {
+			if key != "" {
+				journalled = append(journalled, key)
+			}
 		}
 		stored[r.StepID] = true
 		r.RunID, r.ProjectID = run.RunID, run.ProjectID
@@ -255,10 +265,143 @@ UPDATE elitea_runtime.run_step_heads SET last_seq = $2, last_hash = $3, updated_
  WHERE run_id = $1`, run.RunID, lastSeq, lastHash); err != nil {
 		return 0, fmt.Errorf("run steps: move the run head: %w", err)
 	}
+	// The rows now name their objects: their journal entries go in the same
+	// transaction.
+	if len(journalled) > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM elitea_runtime.run_step_content_pending WHERE object_key = ANY($1)`, journalled); err != nil {
+			return 0, fmt.Errorf("run steps: clear the content journal: %w", err)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("run steps: commit: %w", err)
 	}
 	return accepted, nil
+}
+
+// JournalContent implements runevidence.Store: it commits a journal entry
+// per object key before the object is written, so an object whose row is
+// never stored is found and deleted by PurgeOrphanContent. A retried report
+// refreshes the entry's age; the upsert waits for a purge holding the entry,
+// so the retry's write lands after that purge's delete.
+func (s *RunSteps) JournalContent(ctx context.Context, run runevidence.RunContext, entries []runevidence.PendingContent) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	keys := make([]string, len(entries))
+	steps := make([]string, len(entries))
+	for i, e := range entries {
+		keys[i], steps[i] = e.Key, e.StepID
+	}
+	if _, err := s.pool.Exec(ctx, `
+INSERT INTO elitea_runtime.run_step_content_pending (object_key, run_id, step_id, project_id)
+SELECT k, $3, st::uuid, $4 FROM unnest($1::text[], $2::text[]) AS e(k, st)
+ON CONFLICT (object_key) DO UPDATE SET created_at = clock_timestamp()`, keys, steps, run.RunID, run.ProjectID); err != nil {
+		return fmt.Errorf("run steps: journal content: %w", err)
+	}
+	return nil
+}
+
+// PurgeOrphanContent implements runevidence.RetentionStore: in one
+// transaction it takes up to limit journal entries older than olderThan,
+// deletes (through remove) the objects no step row names, and then the
+// entries. An entry whose step row names its key only loses the entry. A
+// failed delete rolls the entries back for the next pass.
+func (s *RunSteps) PurgeOrphanContent(ctx context.Context, olderThan time.Time, limit int, remove func(context.Context, []string) error) (claimed, deleted int, err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("run steps: begin orphan purge: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	rows, err := tx.Query(ctx, `
+SELECT p.object_key,
+       EXISTS (SELECT 1 FROM elitea_runtime.run_steps st
+                WHERE st.run_id = p.run_id AND st.step_id = p.step_id
+                  AND (st.inputs_object_key = p.object_key OR st.outputs_object_key = p.object_key))
+  FROM elitea_runtime.run_step_content_pending p
+ WHERE p.created_at < $1
+ ORDER BY p.created_at
+ LIMIT $2
+   FOR UPDATE OF p SKIP LOCKED`, olderThan.UTC(), limit)
+	if err != nil {
+		return 0, 0, fmt.Errorf("run steps: claim orphans: %w", err)
+	}
+	var keys, orphans []string
+	for rows.Next() {
+		var (
+			key   string
+			named bool
+		)
+		if err := rows.Scan(&key, &named); err != nil {
+			rows.Close()
+			return 0, 0, fmt.Errorf("run steps: claim orphans: %w", err)
+		}
+		keys = append(keys, key)
+		if !named {
+			orphans = append(orphans, key)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, 0, fmt.Errorf("run steps: claim orphans: %w", err)
+	}
+	if len(keys) == 0 {
+		return 0, 0, nil
+	}
+	if len(orphans) > 0 && remove != nil {
+		if err := remove(ctx, orphans); err != nil {
+			return 0, 0, fmt.Errorf("run steps: delete orphan objects: %w", err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM elitea_runtime.run_step_content_pending WHERE object_key = ANY($1)`, keys); err != nil {
+		return 0, 0, fmt.Errorf("run steps: clear orphan entries: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, 0, fmt.Errorf("run steps: commit orphan purge: %w", err)
+	}
+	return len(keys), len(orphans), nil
+}
+
+// RequestAnchor implements runevidence.Store: the settlement path's only
+// write, a mark on the run's head that main.run_step_anchor picks up. It
+// takes no lock on the tenant's security audit chain.
+func (s *RunSteps) RequestAnchor(ctx context.Context, runID string) error {
+	if _, err := s.pool.Exec(ctx, `
+UPDATE elitea_runtime.run_step_heads SET anchor_requested_at = clock_timestamp()
+ WHERE run_id = $1 AND anchored_seq < last_seq`, runID); err != nil {
+		return fmt.Errorf("run steps: request anchor: %w", err)
+	}
+	return nil
+}
+
+// AnchorRequested implements runevidence.AnchorStore: anchors up to limit
+// runs whose settlement asked for it, oldest request first.
+func (s *RunSteps) AnchorRequested(ctx context.Context, limit int) (int, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT run_id FROM elitea_runtime.run_step_heads
+ WHERE anchor_requested_at IS NOT NULL AND anchored_seq < last_seq
+ ORDER BY anchor_requested_at
+ LIMIT $1`, limit)
+	if err != nil {
+		return 0, fmt.Errorf("run steps: requested anchors: %w", err)
+	}
+	return s.anchorAll(ctx, rows)
+}
+
+func (s *RunSteps) anchorAll(ctx context.Context, rows pgx.Rows) (int, error) {
+	runs, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return 0, fmt.Errorf("run steps: pending anchors: %w", err)
+	}
+	anchored := 0
+	var errs []error
+	for _, run := range runs {
+		if err := s.Anchor(ctx, run); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		anchored++
+	}
+	return anchored, errors.Join(errs...)
 }
 
 func recordArgs(r runevidence.Record) []any {
@@ -336,28 +479,18 @@ func (s *RunSteps) AnchorPending(ctx context.Context, limit int) (int, error) {
 SELECT h.run_id FROM elitea_runtime.run_step_heads h
  WHERE h.anchored_seq < h.last_seq
    AND NOT EXISTS (
-       SELECT 1 FROM elitea_runtime.execution_jobs j
-        WHERE j.execution_id = h.run_id
-          AND j.state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED'))
+       SELECT 1 FROM (
+           SELECT j.state FROM elitea_runtime.execution_jobs j
+            WHERE j.execution_id = h.run_id
+            ORDER BY j.generation DESC
+            LIMIT 1) latest
+        WHERE latest.state = ANY($2::text[]))
  ORDER BY h.updated_at
- LIMIT $1`, limit)
+ LIMIT $1`, limit, execution.NonTerminalJobStateStrings())
 	if err != nil {
 		return 0, fmt.Errorf("run steps: pending anchors: %w", err)
 	}
-	runs, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		return 0, fmt.Errorf("run steps: pending anchors: %w", err)
-	}
-	anchored := 0
-	var errs []error
-	for _, run := range runs {
-		if err := s.Anchor(ctx, run); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		anchored++
-	}
-	return anchored, errors.Join(errs...)
+	return s.anchorAll(ctx, rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +593,70 @@ func (s *RunSteps) Steps(ctx context.Context, projectID int64, runID string) ([]
 		return nil, fmt.Errorf("run steps: read steps: %w", err)
 	}
 	return records, nil
+}
+
+// RunVerification is VerifyRun's answer.
+type RunVerification struct {
+	Head     RunHead
+	Verified int64
+	Break    *runevidence.Break
+}
+
+// verifyPage is how many steps VerifyRun reads per query.
+const verifyPage = 1000
+
+// VerifyRun recomputes the run's chain against its head from ONE snapshot
+// (a REPEATABLE READ, READ ONLY transaction), so a step appended or a run
+// swept while the walk is in progress does not read as a break.
+func (s *RunSteps) VerifyRun(ctx context.Context, projectID int64, runID string) (RunVerification, error) {
+	var out RunVerification
+	err := pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+		head, err := scanHead(tx.QueryRow(ctx, `SELECT `+headColumns+`
+  FROM elitea_runtime.run_step_heads WHERE run_id = $1 AND project_id = $2`, runID, projectID))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrRunNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("run steps: read the run head: %w", err)
+		}
+		out.Head = head
+		if s.afterVerifyHead != nil {
+			s.afterVerifyHead()
+		}
+		var (
+			verifier runevidence.Verifier
+			after    int64
+		)
+		for {
+			rows, err := tx.Query(ctx, `SELECT `+stepColumns+`
+  FROM elitea_runtime.run_steps WHERE run_id = $1 AND project_id = $2 AND seq > $3 ORDER BY seq LIMIT $4`,
+				runID, projectID, after, verifyPage)
+			if err != nil {
+				return fmt.Errorf("run steps: read steps: %w", err)
+			}
+			records, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (runevidence.Record, error) { return scanStep(row) })
+			if err != nil {
+				return fmt.Errorf("run steps: read steps: %w", err)
+			}
+			for _, record := range records {
+				if out.Break = verifier.Next(record); out.Break != nil {
+					out.Verified = verifier.Count()
+					return nil
+				}
+				after = record.Seq
+			}
+			if len(records) < verifyPage {
+				break
+			}
+		}
+		out.Verified = verifier.Count()
+		out.Break = verifier.Finish(head.LastSeq, head.LastHash)
+		return nil
+	})
+	if err != nil {
+		return RunVerification{}, err
+	}
+	return out, nil
 }
 
 // StepsPage reads up to limit of a run's steps after afterSeq, in seq order.
@@ -657,23 +854,29 @@ UPDATE elitea_runtime.run_steps SET inputs_object_key = NULL, outputs_object_key
 	return nil
 }
 
-// exportPassedSQL is true when every run_steps export sink has passed every
-// step of run h, or no sink exists: retention never outruns the SIEM export
-// (the rule elitea-scheduler's audit sweeper keeps for admin_audit).
-const exportPassedSQL = `NOT EXISTS (
+// exportPassedSQL is true when every run_steps export sink that is
+// configured now has passed every step of run h (the sink names are the
+// array parameter $sinks), or none is: retention never outruns the SIEM
+// export (the rule elitea-scheduler's audit sweeper keeps for admin_audit).
+// The cursor of a sink removed, or of a stream no longer exported, does not
+// hold a run forever.
+func exportPassedSQL(sinks string) string {
+	return `NOT EXISTS (
 	SELECT 1 FROM elitea_runtime.audit_export_cursors c
 	  JOIN elitea_runtime.run_steps st ON st.run_id = h.run_id
-	 WHERE c.stream = 'run_steps' AND (st.export_txid, st.id) > (c.last_txid, c.last_id))`
+	 WHERE c.stream = 'run_steps' AND c.sink = ANY(` + sinks + `::text[])
+	   AND (st.export_txid, st.id) > (c.last_txid, c.last_id))`
+}
 
 // ExpiredRuns implements runevidence.RetentionStore.
-func (s *RunSteps) ExpiredRuns(ctx context.Context, projectID int64, cutoff time.Time, limit int) ([]string, error) {
+func (s *RunSteps) ExpiredRuns(ctx context.Context, projectID int64, cutoff time.Time, exportSinks []string, limit int) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `
 SELECT h.run_id FROM elitea_runtime.run_step_heads h
  WHERE h.project_id = $1 AND h.updated_at < $2
    AND NOT `+runHeldSQL+`
-   AND `+exportPassedSQL+`
+   AND `+exportPassedSQL("$4")+`
  ORDER BY h.updated_at, h.run_id
- LIMIT $3`, projectID, cutoff.UTC(), limit)
+ LIMIT $3`, projectID, cutoff.UTC(), limit, nonNilStrings(exportSinks))
 	if err != nil {
 		return nil, fmt.Errorf("run steps: expired runs: %w", err)
 	}
@@ -705,7 +908,7 @@ UPDATE elitea_runtime.run_steps SET content_expired_at = clock_timestamp(), cont
 // DeleteRun implements runevidence.RetentionStore: under the head's row lock
 // it re-checks age, hold and that no content object is still stored, then
 // deletes the steps and the head.
-func (s *RunSteps) DeleteRun(ctx context.Context, runID string, cutoff time.Time) (bool, error) {
+func (s *RunSteps) DeleteRun(ctx context.Context, runID string, cutoff time.Time, exportSinks []string) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("run steps: begin delete: %w", err)
@@ -713,12 +916,12 @@ func (s *RunSteps) DeleteRun(ctx context.Context, runID string, cutoff time.Time
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	var eligible bool
 	err = tx.QueryRow(ctx, `
-SELECT h.updated_at < $2 AND NOT `+runHeldSQL+` AND `+exportPassedSQL+`
+SELECT h.updated_at < $2 AND NOT `+runHeldSQL+` AND `+exportPassedSQL("$3")+`
        AND NOT EXISTS (SELECT 1 FROM elitea_runtime.run_steps st
                         WHERE st.run_id = h.run_id
                           AND (st.inputs_object_key IS NOT NULL OR st.outputs_object_key IS NOT NULL))
   FROM elitea_runtime.run_step_heads h WHERE h.run_id = $1
-   FOR UPDATE OF h SKIP LOCKED`, runID, cutoff.UTC()).Scan(&eligible)
+   FOR UPDATE OF h SKIP LOCKED`, runID, cutoff.UTC(), nonNilStrings(exportSinks)).Scan(&eligible)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !eligible) {
 		return false, nil
 	}

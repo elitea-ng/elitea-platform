@@ -41,7 +41,7 @@ func (c RunEvidenceContent) Put(ctx context.Context, key string, body []byte, me
 }
 
 // Get reads one side, at most runevidence.MaxContentBytes.
-func (c RunEvidenceContent) Get(ctx context.Context, key string) ([]byte, error) {
+func (c RunEvidenceContent) Get(ctx context.Context, key string) (data []byte, result error) {
 	ref, err := NewPlatformObjectRef(runevidence.ContentBucket, key)
 	if err != nil {
 		return nil, err
@@ -50,8 +50,8 @@ func (c RunEvidenceContent) Get(ctx context.Context, key string) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	defer body.Close()
-	data, err := io.ReadAll(io.LimitReader(body, runevidence.MaxContentBytes+1))
+	defer func() { result = errors.Join(result, body.Close()) }()
+	data, err = io.ReadAll(io.LimitReader(body, runevidence.MaxContentBytes+1))
 	if err != nil {
 		return nil, err
 	}

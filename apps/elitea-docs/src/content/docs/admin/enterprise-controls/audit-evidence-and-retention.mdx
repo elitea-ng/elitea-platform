@@ -9,7 +9,7 @@ description: "The step record Elitea keeps for every agent run, how the run and 
 
 An investigator, an auditor or a model validator must be able to answer: what did this agent do, in what order, with what inputs, which sources did it read, what did it answer, and which definition was running. The answer must be tamper-evident and kept for as long as your policy says.
 
-Every agent run now produces a **step record** for each thing it did, in order. The records of a run are hash-chained, the chain is anchored in the tamper-evident security audit log when the run ends, and the records are exported to your SIEM in the same schema as the rest of the audit evidence.
+Every agent run now produces a **step record** for each thing it did, in order. The records of a run are hash-chained, the chain is anchored in the tamper-evident security audit log within about a minute of the run ending, and the records are exported to your SIEM in the same schema as the rest of the audit evidence.
 
 ### What is recorded
 
@@ -38,7 +38,7 @@ Prompts, tool arguments, tool results and answers can be large and sensitive. A 
 
 ### The chain and its anchor
 
-Within a run, each record's `hash` is SHA-256 over the previous record's hash and the record's canonical form, including the content digests. The database refuses any change to a stored record except marking its content expired. When the run settles, the run's last hash and its step count are appended to the tenant's security audit chain as an `ai.elitea.security.v1.run.steps.anchored` event. Anchoring works on every install, whether or not the governed agent profile is on; an anchor missed at settlement is retried by `main.step_record_retention`.
+Within a run, each record's `hash` is SHA-256 over the previous record's hash and the record's canonical form, including the content digests. The database refuses any change to a stored record except marking its content expired. Within about a minute of the run ending, the run's last hash and its step count are appended to the tenant's security audit chain as an `ai.elitea.security.v1.run.steps.anchored` event, by the elitea-main routine `main.run_step_anchor` (every minute, listed under **Administration → Schedules**, paused in maintenance). Anchoring works on every install, whether or not the governed agent profile is on; a run whose anchor was missed is anchored by `main.step_record_retention`'s hourly pass.
 
 Rewriting a run's records therefore breaks either the run's chain or its anchor in the security audit chain, which the SIEM copy also holds.
 
@@ -158,8 +158,8 @@ The defaults keep today's behaviour. An upgrade deletes nothing that was not alr
 | `attachment` | Keep forever | Keep forever only | No | Deleted with the conversation | The stored object and its `elitea_storage.objects` record. |
 | `gateway_request_log` | 92 days | 1 to 36500 days; keep forever is refused | No | LLM gateway, hourly prune | Rows of `gateway.llm_request_logs`. The gateway uses 92 days when it cannot read the policy. |
 | `admin_audit` | 365 days | 7 to 36500 days, or keep forever | No | elitea-scheduler `scheduler.audit_retention` | Rows of `centry.audit_events`, oldest first, and only as an unbroken prefix of the chain (see [Admin audit trail chain](#admin-audit-trail-chain)). |
-| `step_content` | Keep forever | 1 to 36500 days, or keep forever | Yes, inside the platform bounds | elitea-main routine `main.step_content_retention`, hourly | The stored inputs and outputs of step records. The record keeps its digests and says when and under which policy the content expired. Deleting a conversation also expires its runs' content (policy `conversation_deleted`). |
-| `step_record` | Keep forever | 7 to 36500 days, or keep forever | Yes, inside the platform bounds | elitea-main routine `main.step_record_retention`, hourly | Whole runs whose last step is older than the maximum, once every configured export has delivered them. |
+| `step_content` | Keep forever | 1 to 36500 days, or keep forever | Yes, inside the platform bounds | elitea-main routine `main.step_content_retention`, hourly | The stored inputs and outputs of step records. The record keeps its digests and says when and under which policy the content expired. Deleting a conversation also expires its runs' content (policy `conversation_deleted`). The same routine deletes content that was stored for a step whose record never landed, an hour after it was written. |
+| `step_record` | Keep forever | 7 to 36500 days, or keep forever | Yes, inside the platform bounds | elitea-main routine `main.step_record_retention`, hourly | Whole runs whose last step is older than the maximum, once every export that currently sends run steps has delivered them. A receiver you removed, or a `run_steps` export you switched off, does not hold runs back. |
 | `security_audit` | Keep forever | 1 to 36500 days, or keep forever | No | elitea-scheduler `scheduler.security_audit_outbox_retention` | Exported rows of the security audit outbox that the durable store already holds. The durable store is append-only and is never deleted from. |
 
 A conversation's age is the time of its **last message** (its creation time when it has no messages). A conversation in use is not old because it was created long ago.

@@ -7,7 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runevidence"
 )
 
@@ -28,7 +31,8 @@ func (s *runStepsStub) Report(_ context.Context, executionID string, _ uint64, s
 	return len(steps), nil
 }
 
-func (s *runStepsStub) Anchor(_ context.Context, executionID string) error {
+func (s *runStepsStub) RequestAnchor(_ context.Context, executionID string) error {
+	*s.calls = append(*s.calls, "request-anchor")
 	s.anchored = append(s.anchored, executionID)
 	return s.err
 }
@@ -112,5 +116,40 @@ func TestReportRunStepsRefusals(t *testing.T) {
 				t.Fatalf("an internal error leaked: %q", rejection.GetSafeMessage())
 			}
 		})
+	}
+}
+
+// A prepared settlement only requests the run's anchor (main.run_step_anchor
+// appends it off this path); a failed request never fails the settlement.
+func TestPrepareSettlementRequestsTheRunStepAnchor(t *testing.T) {
+	for _, storeErr := range []error{nil, errors.New("database down")} {
+		calls := []string{}
+		lease := validLease()
+		settlements := &settlementControllerStub{calls: &calls, receipt: executionapp.SettlementReceipt{ID: "settlement-receipt-1", Outcome: executionapp.SettlementSucceeded}}
+		server, err := NewServer(testControlServerConfig(), workloadAuthorizerStub{calls: &calls},
+			verifierSpy{calls: &calls, verifier: newTestVerifier(t)}, claimControllerStub{calls: &calls, lease: lease},
+			inputResolverStub{calls: &calls, manifest: validManifest()}, settlements)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := &runStepsStub{calls: &calls, err: storeErr}
+		server.WithRunSteps(store)
+		proposal := &runtimev1.SettlementProposalV1{
+			ProposalId: "proposal-1", RequestedOutcome: runtimev1.ExecutionOutcomeV1_EXECUTION_OUTCOME_V1_SUCCEEDED,
+			TerminalLogicalOutputId: "validation:revision-1", TerminalEventId: "event-1", TerminalSequence: 1,
+			TerminalPayloadDigest: testDigest([]byte("terminal-output")), PrepareIdempotencyKey: "settlement-key-1",
+		}
+		proposalBytes, _ := proto.MarshalOptions{Deterministic: true}.Marshal(proposal)
+		response, err := server.PrepareSettlement(context.Background(), &runtimev1.PrepareSettlementRequestV1{
+			Identity: identityForFence(lease.Fence), Fence: fenceProto(lease.Fence), Proposal: proposal,
+			ProposalDigest: testDigest(proposalBytes), IdempotencyKey: "settlement-key-1",
+		})
+		if err != nil || response.GetRejection() != nil {
+			t.Fatalf("settlement: %v %v", err, response.GetRejection())
+		}
+		if !reflect.DeepEqual(calls, []string{"authorize-peer", "prepare-settlement", "request-anchor"}) ||
+			!reflect.DeepEqual(store.anchored, []string{lease.Fence.ExecutionID}) {
+			t.Fatalf("calls=%v anchored=%v", calls, store.anchored)
+		}
 	}
 }

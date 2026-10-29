@@ -23,6 +23,9 @@ import (
 const (
 	ContentRoutineID = "main.step_content_retention"
 	RecordRoutineID  = "main.step_record_retention"
+	// AnchorRoutineID anchors the runs whose settlement asked for it, every
+	// minute, off the settlement path.
+	AnchorRoutineID = "main.run_step_anchor"
 )
 
 // Retention defaults bounding one pass.
@@ -31,7 +34,10 @@ const (
 	DefaultRetentionMaxPerPass = 5000
 	DefaultPurgeBatch          = 200
 	DefaultAnchorBatch         = 500
-	defaultPassTimeout         = 30 * time.Minute
+	// DefaultOrphanAge is how old a content journal entry must be before
+	// its object counts as orphaned: well past any persist's retries.
+	DefaultOrphanAge   = time.Hour
+	defaultPassTimeout = 30 * time.Minute
 )
 
 // PolicyConversationDeleted is the content expiry policy of a step whose
@@ -71,9 +77,10 @@ type RetentionStore interface {
 	// CompletePurges clears the object keys of purged steps.
 	CompletePurges(ctx context.Context, ids []int64) error
 	// ExpiredRuns returns up to limit runs of the project whose last step is
-	// before cutoff, that no active legal hold covers and that every audit
-	// export sink has passed.
-	ExpiredRuns(ctx context.Context, projectID int64, cutoff time.Time, limit int) ([]string, error)
+	// before cutoff, that no active legal hold covers and that every
+	// configured run_steps export sink (exportSinks) has passed. A cursor of
+	// a sink not in exportSinks holds nothing.
+	ExpiredRuns(ctx context.Context, projectID int64, cutoff time.Time, exportSinks []string, limit int) ([]string, error)
 	// HeldRuns counts the project's runs a hold keeps past cutoff.
 	HeldRuns(ctx context.Context, projectID int64, cutoff time.Time) (int64, error)
 	// ExpireRunContent marks every stored content side of the run expired
@@ -81,10 +88,18 @@ type RetentionStore interface {
 	ExpireRunContent(ctx context.Context, runID, policy string) error
 	// DeleteRun deletes the run's head and steps when it is still expired,
 	// unheld and holds no stored content object. deleted is false otherwise.
-	DeleteRun(ctx context.Context, runID string, cutoff time.Time) (deleted bool, err error)
-	// AnchorPending anchors up to limit settled runs whose head moved since
-	// the last anchor (the backstop for a settlement whose anchor failed).
+	DeleteRun(ctx context.Context, runID string, cutoff time.Time, exportSinks []string) (deleted bool, err error)
+	// AnchorPending anchors up to limit settled runs (latest generation
+	// terminal) whose head moved since the last anchor: the backstop for a
+	// settlement whose anchor request was missed.
 	AnchorPending(ctx context.Context, limit int) (int, error)
+	// AnchorRequested anchors up to limit runs whose settlement asked for it.
+	AnchorRequested(ctx context.Context, limit int) (int, error)
+	// PurgeOrphanContent deletes, through remove, the objects of up to limit
+	// content journal entries older than olderThan that no step row names,
+	// then the entries. It returns how many entries it took and how many
+	// objects it deleted.
+	PurgeOrphanContent(ctx context.Context, olderThan time.Time, limit int, remove func(context.Context, []string) error) (claimed, deleted int, err error)
 }
 
 // Gate reports whether a maintenance window is open. An error stops the pass.
@@ -95,7 +110,14 @@ type RetentionConfig struct {
 	BatchSize  int
 	MaxPerPass int
 	PurgeBatch int
-	Meter      metric.Meter
+	// OrphanAge is how old a content journal entry is before its object is
+	// an orphan (DefaultOrphanAge).
+	OrphanAge time.Duration
+	// ExportSinks names the audit export sinks that export run_steps now
+	// (auditexport.Config.RunStepsSinks); only their cursors hold a run's
+	// deletion.
+	ExportSinks []string
+	Meter       metric.Meter
 }
 
 // RetentionStats is what one pass did.
@@ -107,6 +129,7 @@ type RetentionStats struct {
 	DeletedRuns int64
 	SkippedHold int64
 	Anchored    int64
+	Orphans     int64
 	Errors      int64
 	Truncated   bool
 }
@@ -126,6 +149,8 @@ type Sweeper struct {
 	deletedRuns metric.Int64Counter
 	skippedHold metric.Int64Counter
 	errors      metric.Int64Counter
+	anchored    metric.Int64Counter
+	orphans     metric.Int64Counter
 }
 
 // NewSweeper builds both sweeps. content may be nil when no object store is
@@ -142,6 +167,9 @@ func NewSweeper(policies Policies, store RetentionStore, content ContentStore, g
 	}
 	if cfg.PurgeBatch <= 0 {
 		cfg.PurgeBatch = DefaultPurgeBatch
+	}
+	if cfg.OrphanAge <= 0 {
+		cfg.OrphanAge = DefaultOrphanAge
 	}
 	if cfg.Meter == nil {
 		cfg.Meter = otel.Meter("elitea-main")
@@ -161,6 +189,8 @@ func NewSweeper(policies Policies, store RetentionStore, content ContentStore, g
 		{&s.deletedRuns, "retention.step_record.deleted_runs", "Runs whose step records the retention sweep deleted."},
 		{&s.skippedHold, "retention.steps.skipped_hold", "Expired steps or runs kept because a legal hold covers them, by class."},
 		{&s.errors, "retention.steps.errors", "Step retention failures, by class and stage."},
+		{&s.anchored, "run_steps.anchored", "Run step chains anchored into the security audit chain."},
+		{&s.orphans, "retention.step_content.orphans", "Step content objects deleted because no step row names them."},
 	} {
 		if *instrument.target, err = cfg.Meter.Int64Counter(instrument.name, metric.WithDescription(instrument.help)); err != nil {
 			return nil, err
@@ -172,6 +202,28 @@ func NewSweeper(policies Policies, store RetentionStore, content ContentStore, g
 // ContentPass is the step_content routine's pass.
 func (s *Sweeper) ContentPass(ctx context.Context) (string, error) {
 	return s.pass(ctx, retention.ClassStepContent, s.SweepContent)
+}
+
+// AnchorPass is main.run_step_anchor's pass: it anchors up to
+// DefaultAnchorBatch runs whose settlement asked for it. It pauses in
+// maintenance like the sweeps.
+func (s *Sweeper) AnchorPass(ctx context.Context) (string, error) {
+	paused, err := s.paused(ctx)
+	if err != nil {
+		s.errors.Add(ctx, 1, metric.WithAttributes(attribute.String("stage", "anchor")))
+		return routines.OutcomeError, err
+	}
+	if paused {
+		return routines.OutcomeMaintenance, nil
+	}
+	n, err := s.store.AnchorRequested(ctx, DefaultAnchorBatch)
+	s.anchored.Add(ctx, int64(n))
+	if err != nil {
+		s.errors.Add(ctx, 1, metric.WithAttributes(attribute.String("stage", "anchor")))
+		s.logger.Error("run step anchor: pass failed", "anchored", n, "err", err)
+		return routines.OutcomeError, err
+	}
+	return routines.OutcomeOK, nil
 }
 
 // RecordPass is the step_record routine's pass.
@@ -289,7 +341,35 @@ func (s *Sweeper) SweepContent(ctx context.Context) (RetentionStats, error) {
 			break
 		}
 	}
-	return stats, s.drain(ctx, &stats)
+	if err := s.drain(ctx, &stats); err != nil {
+		return stats, err
+	}
+	return stats, s.purgeOrphans(ctx, &stats)
+}
+
+// purgeOrphans deletes the objects of content journal entries older than
+// OrphanAge that no step row names (a persist that never landed), within
+// the pass's budget.
+func (s *Sweeper) purgeOrphans(ctx context.Context, stats *RetentionStats) error {
+	var remove func(context.Context, []string) error
+	if s.content != nil {
+		remove = s.content.Delete
+	}
+	olderThan := s.now().Add(-s.cfg.OrphanAge)
+	for budget := s.cfg.MaxPerPass; budget > 0; {
+		limit := min(s.cfg.PurgeBatch, budget)
+		claimed, deleted, err := s.store.PurgeOrphanContent(ctx, olderThan, limit, remove)
+		if err != nil {
+			return fmt.Errorf("purge orphan content: %w", err)
+		}
+		stats.Orphans += int64(deleted)
+		s.orphans.Add(ctx, int64(deleted))
+		budget -= claimed
+		if claimed < limit {
+			return nil
+		}
+	}
+	return nil
 }
 
 // SweepRecords anchors pending runs, then deletes whole runs past the
@@ -328,7 +408,7 @@ func (s *Sweeper) SweepRecords(ctx context.Context) (RetentionStats, error) {
 		}
 		for budget > 0 {
 			limit := min(s.cfg.BatchSize, budget)
-			runs, err := s.store.ExpiredRuns(ctx, projectID, cutoff, limit)
+			runs, err := s.store.ExpiredRuns(ctx, projectID, cutoff, s.cfg.ExportSinks, limit)
 			if err != nil {
 				s.fail(ctx, &stats, class, "select", projectID, err)
 				break
@@ -348,7 +428,7 @@ func (s *Sweeper) SweepRecords(ctx context.Context) (RetentionStats, error) {
 			}
 			progressed := false
 			for _, runID := range expired {
-				deleted, err := s.store.DeleteRun(ctx, runID, cutoff)
+				deleted, err := s.store.DeleteRun(ctx, runID, cutoff, s.cfg.ExportSinks)
 				if err != nil {
 					s.fail(ctx, &stats, class, "delete", projectID, err)
 					continue

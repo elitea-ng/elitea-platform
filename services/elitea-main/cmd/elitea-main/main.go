@@ -2866,7 +2866,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 	// Step evidence retention (ADR-0042, #1499): step_content and step_record
 	// keep forever until an administrator sets a maximum age.
-	if err := startStepRetention(ctx, pool, objectStore, logger); err != nil {
+	if err := startStepRetention(ctx, os.LookupEnv, pool, objectStore, logger); err != nil {
 		return fmt.Errorf("compose step retention: %w", err)
 	}
 

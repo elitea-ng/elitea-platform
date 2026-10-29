@@ -362,3 +362,221 @@ func TestConversationDeleteExpiresItsStepContent(t *testing.T) {
 		t.Fatalf("step after the conversation delete: %+v", step)
 	}
 }
+
+// The verifier reads the head and every page from one snapshot: a step
+// appended between the head read and the page reads is not seen, so a run
+// still reporting does not read as broken.
+func TestRunStepsVerifyReadsOneSnapshot(t *testing.T) {
+	pool, store, service, _ := setUpRunSteps(t)
+	ctx := context.Background()
+	seedEgressExecution(t, pool, "exec-rs-live", 3, 31)
+	if _, err := service.Report(ctx, "exec-rs-live", 1, twoToolsAndARetrieval()); err != nil {
+		t.Fatal(err)
+	}
+	appended := false
+	store.afterVerifyHead = func() {
+		if appended {
+			return
+		}
+		appended = true
+		if n, err := service.Report(ctx, "exec-rs-live", 1, []runevidence.StepInput{reportedStep(stepOutput, runevidence.KindOutput, 3*time.Second)}); err != nil || n != 1 {
+			t.Errorf("append during verify: n=%d err=%v", n, err)
+		}
+	}
+	result, err := store.VerifyRun(ctx, 3, "exec-rs-live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !appended || result.Break != nil || result.Verified != 3 || result.Head.LastSeq != 3 {
+		t.Fatalf("verify during an append: %+v", result)
+	}
+	if result, err = store.VerifyRun(ctx, 3, "exec-rs-live"); err != nil || result.Break != nil || result.Verified != 4 {
+		t.Fatalf("verify after the append: %+v %v", result, err)
+	}
+	if _, err := store.VerifyRun(ctx, 4, "exec-rs-live"); err != ErrRunNotFound {
+		t.Fatalf("another project's run: %v", err)
+	}
+}
+
+// Settledness is the latest generation's state, terminal by the kernel's
+// own set (QUARANTINED included): a run quarantined, or one whose older
+// generation row was left non-terminal, is anchored; a running one is not.
+func TestRunStepsAnchorPendingJudgesTheLatestGeneration(t *testing.T) {
+	pool, store, service, _ := setUpRunSteps(t)
+	ctx := context.Background()
+	for _, run := range []string{"exec-rs-quarantined", "exec-rs-superseded", "exec-rs-running"} {
+		seedEgressExecution(t, pool, run, 3, 31)
+		if _, err := service.Report(ctx, run, 1, twoToolsAndARetrieval()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.execution_jobs SET state = 'QUARANTINED' WHERE execution_id = 'exec-rs-quarantined'`); err != nil {
+		t.Fatal(err)
+	}
+	// Generation 1 left RUNNING, generation 2 settled.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_runtime.execution_jobs (
+    execution_id, generation, command_id, tenant_id, resource_project_id,
+    projection_project_id, actor_id, principal_ref, capability_id,
+    capability_version, input_bundle_id, request_digest, idempotency_scope,
+    idempotency_key, state, desired_state)
+SELECT execution_id, 2, command_id || '-2', tenant_id, resource_project_id,
+       projection_project_id, actor_id, principal_ref, capability_id,
+       capability_version, input_bundle_id, request_digest, idempotency_scope || '-2',
+       idempotency_key || '-2', 'SUCCEEDED', 'RUNNING'
+  FROM elitea_runtime.execution_jobs WHERE execution_id = 'exec-rs-superseded' AND generation = 1`); err != nil {
+		t.Fatalf("seed generation 2: %v", err)
+	}
+	n, err := store.AnchorPending(ctx, 10)
+	if err != nil || n != 2 {
+		t.Fatalf("anchored %d: %v", n, err)
+	}
+	for run, want := range map[string]int64{"exec-rs-quarantined": 3, "exec-rs-superseded": 3, "exec-rs-running": 0} {
+		head, _ := store.Head(ctx, 3, run)
+		if head.AnchoredSeq != want {
+			t.Fatalf("%s anchored_seq = %d, want %d", run, head.AnchoredSeq, want)
+		}
+	}
+}
+
+// Settlement only marks a run; main.run_step_anchor's pass anchors it.
+func TestRunStepsAnchorRoutineAnchorsRequestedRuns(t *testing.T) {
+	pool, store, service, content := setUpRunSteps(t)
+	ctx := context.Background()
+	seedEgressExecution(t, pool, "exec-rs-settled", 3, 31)
+	seedEgressExecution(t, pool, "exec-rs-unmarked", 3, 31)
+	for _, run := range []string{"exec-rs-settled", "exec-rs-unmarked"} {
+		if _, err := service.Report(ctx, run, 1, twoToolsAndARetrieval()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := service.RequestAnchor(ctx, "exec-rs-settled"); err != nil {
+		t.Fatal(err)
+	}
+	var outbox int
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.security_audit_outbox`).Scan(&outbox)
+	if outbox != 0 {
+		t.Fatal("requesting an anchor wrote to the security audit chain")
+	}
+	gate := func(context.Context) (bool, error) { return false, nil }
+	sweeper, err := runevidence.NewSweeper(NewRetentionPolicyRepo(pool), store, content, gate, runevidence.RetentionConfig{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome, err := sweeper.AnchorPass(ctx); err != nil || outcome != "ok" {
+		t.Fatalf("anchor pass: %s %v", outcome, err)
+	}
+	settled, _ := store.Head(ctx, 3, "exec-rs-settled")
+	unmarked, _ := store.Head(ctx, 3, "exec-rs-unmarked")
+	if settled.AnchoredSeq != 3 || unmarked.AnchoredSeq != 0 {
+		t.Fatalf("anchored: settled=%d unmarked=%d", settled.AnchoredSeq, unmarked.AnchoredSeq)
+	}
+	paused, _ := runevidence.NewSweeper(NewRetentionPolicyRepo(pool), store, content,
+		func(context.Context) (bool, error) { return true, nil }, runevidence.RetentionConfig{}, nil)
+	if outcome, _ := paused.AnchorPass(ctx); outcome != "maintenance" {
+		t.Fatalf("maintenance outcome %q", outcome)
+	}
+}
+
+// Only the cursors of sinks that export run_steps now hold a run's
+// deletion: a stale cursor of a removed sink or a disabled stream does not.
+func TestRunStepsRecordRetentionIgnoresStaleExportCursors(t *testing.T) {
+	pool, store, service, content := setUpRunSteps(t)
+	ctx := context.Background()
+	seedEgressExecution(t, pool, "exec-rs-exported", 3, 31)
+	if _, err := service.Report(ctx, "exec-rs-exported", 1, twoToolsAndARetrieval()); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * 24 * time.Hour)
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.run_step_heads SET updated_at = $1`, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO elitea_runtime.audit_export_cursors (stream, sink, last_txid, last_id) VALUES ('run_steps', 'webhook', 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.retention_policy SET max_age_days = 7 WHERE scope = 'platform' AND data_class = 'step_record'`); err != nil {
+		t.Fatal(err)
+	}
+	gate := func(context.Context) (bool, error) { return false, nil }
+	sweep := func(sinks []string) runevidence.RetentionStats {
+		sweeper, err := runevidence.NewSweeper(NewRetentionPolicyRepo(pool), store, content, gate, runevidence.RetentionConfig{ExportSinks: sinks}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stats, err := sweeper.SweepRecords(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stats
+	}
+	if stats := sweep([]string{"webhook"}); stats.DeletedRuns != 0 {
+		t.Fatalf("a configured sink's cursor behind the run did not hold it: %+v", stats)
+	}
+	if stats := sweep([]string{"otlp"}); stats.DeletedRuns != 1 {
+		t.Fatalf("a removed sink's cursor held the run: %+v", stats)
+	}
+}
+
+// A key journalled and written whose row never landed is deleted an hour
+// later; a persisted step leaves no journal entry; a young entry stays.
+func TestRunStepsContentRetentionDeletesOrphans(t *testing.T) {
+	pool, store, service, content := setUpRunSteps(t)
+	ctx := context.Background()
+	seedEgressExecution(t, pool, "exec-rs-orphan", 3, 31)
+	if _, err := service.Report(ctx, "exec-rs-orphan", 1, twoToolsAndARetrieval()); err != nil {
+		t.Fatal(err)
+	}
+	var pending int
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.run_step_content_pending`).Scan(&pending)
+	if pending != 0 {
+		t.Fatalf("a persisted step left %d journal entries", pending)
+	}
+	run, err := store.RunContext(ctx, "exec-rs-orphan", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A persist that failed after its writes: journalled and written, no row.
+	const (
+		lostStep  = "0192f0c1-7b6e-7c3a-8f00-0000000000f1"
+		youngStep = "0192f0c1-7b6e-7c3a-8f00-0000000000f2"
+	)
+	lost := runevidence.ContentKey(3, "exec-rs-orphan", lostStep, runevidence.SideOutputs)
+	young := runevidence.ContentKey(3, "exec-rs-orphan", youngStep, runevidence.SideOutputs)
+	if err := store.JournalContent(ctx, run, []runevidence.PendingContent{{Key: lost, StepID: lostStep}, {Key: young, StepID: youngStep}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{lost, young} {
+		_ = content.Put(ctx, key, []byte("x"), runevidence.MediaText, nil)
+	}
+	// A journal entry whose step row names the key (a retry raced the purge).
+	stored := runevidence.ContentKey(3, "exec-rs-orphan", stepToolA, runevidence.SideInputs)
+	if err := store.JournalContent(ctx, run, []runevidence.PendingContent{{Key: stored, StepID: stepToolA}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.run_step_content_pending SET created_at = now() - interval '2 hours' WHERE object_key <> $1`, young); err != nil {
+		t.Fatal(err)
+	}
+	gate := func(context.Context) (bool, error) { return false, nil }
+	sweeper, err := runevidence.NewSweeper(NewRetentionPolicyRepo(pool), store, content, gate, runevidence.RetentionConfig{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := sweeper.SweepContent(ctx)
+	if err != nil || stats.Orphans != 1 {
+		t.Fatalf("content sweep: %+v %v", stats, err)
+	}
+	if content.has(lost) || !content.has(young) || !content.has(stored) {
+		t.Fatalf("objects: lost=%v young=%v stored=%v", content.has(lost), content.has(young), content.has(stored))
+	}
+	var left []string
+	rows, _ := pool.Query(ctx, `SELECT object_key FROM elitea_runtime.run_step_content_pending`)
+	for rows.Next() {
+		var k string
+		_ = rows.Scan(&k)
+		left = append(left, k)
+	}
+	rows.Close()
+	if len(left) != 1 || left[0] != young {
+		t.Fatalf("journal left %v", left)
+	}
+}

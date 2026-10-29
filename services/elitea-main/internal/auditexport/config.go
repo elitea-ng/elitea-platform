@@ -77,6 +77,24 @@ type Config struct {
 // Enabled reports whether any sink is configured.
 func (c Config) Enabled() bool { return c.OTLPEndpoint != "" || c.WebhookURL != "" }
 
+// RunStepsSinks names the sinks that export the run_steps stream with this
+// configuration (the names their cursors carry): none when the export or
+// the stream is off. Step record retention waits only for these cursors, so
+// a sink removed or a stream switched off never holds a run forever.
+func (c Config) RunStepsSinks() []string {
+	if !c.Enabled() || !c.RunSteps {
+		return []string{}
+	}
+	var sinks []string
+	if c.OTLPEndpoint != "" {
+		sinks = append(sinks, (*OTLPSink)(nil).Name())
+	}
+	if c.WebhookURL != "" {
+		sinks = append(sinks, (*WebhookSink)(nil).Name())
+	}
+	return sinks
+}
+
 // EnvNames lists every variable, for "is anything configured" checks and docs.
 var EnvNames = []string{
 	EnvOTLPEndpoint, EnvOTLPProtocol, EnvOTLPHeadersFile, EnvWebhookURL, EnvWebhookKeysFile,
