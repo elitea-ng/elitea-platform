@@ -13,9 +13,12 @@ package repos
 // audit event (ADR-0039 outbox) in the same transaction, so a transition
 // without its evidence does not happen.
 //
-// Lock order: the registry row, then the change request row. A direct
-// publish locks the registry row only. Approvals of one request serialise
-// on its row.
+// Lock order: the registry row, then the change request row, then what
+// the publish locks (the version rows, the release head). The final
+// approval takes the registry row first; a direct publish takes it as the
+// first statement of its publish transaction (LockRegistryTx), before the
+// version and head locks, so the two publish paths lock one agent in the
+// same order. Approvals of one request serialise on its row.
 
 import (
 	"bytes"
@@ -697,6 +700,14 @@ func (s *AgentLifecycle) directPublishAllowed(ctx context.Context, registry agen
 		fmt.Sprintf("This agent is %s risk. Its release needs a change request with %d approval(s).",
 			registry.Tier, requirement.Approvals),
 		map[string]any{"risk_tier": string(registry.Tier), "required_approvals": requirement.Approvals})
+}
+
+// LockRegistryTx takes the registry row's lock, creating the row when it
+// is missing, in the direct publish's transaction. It is that
+// transaction's first statement (the lock order above).
+func (s *AgentLifecycle) LockRegistryTx(ctx context.Context, tx pgx.Tx, projectID, applicationID int64) error {
+	_, err := readRegistry(ctx, tx, projectID, applicationID, true)
+	return err
 }
 
 // RecordDirectPublishTx checks the tier under the registry row's lock and

@@ -40,6 +40,9 @@ type PublishGovernor interface {
 	// CheckDirectPublish refuses (change_request_required) when the agent's
 	// tier needs an approved change request.
 	CheckDirectPublish(ctx context.Context, projectID, applicationID int64) error
+	// LockRegistryTx takes the agent's registry row lock (creating the row
+	// when missing) as the first statement of the publish transaction.
+	LockRegistryTx(ctx context.Context, tx pgx.Tx, projectID, applicationID int64) error
 	// RecordDirectPublishTx checks the tier again under the registry row's
 	// lock and records the self-approved change request of the publish, in
 	// the publish transaction.

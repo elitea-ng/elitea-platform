@@ -1121,6 +1121,24 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Agent lifecycle governance (ADR-0040 decision 3): a tier that needs
+	// approval publishes only through an approved change request, so a
+	// direct publish answers 409 change_request_required before the
+	// publish checks, whose validation gate makes a model call, and before
+	// anything is written. The transaction below checks the tier again
+	// under the registry row's lock. A version that cannot be read is left
+	// to the precheck's 404.
+	if h.governor != nil {
+		var versionAppID int64
+		if err := h.pool.QueryRow(ctx, fmt.Sprintf(
+			`SELECT application_id FROM %s.application_versions WHERE id = $1`, s), versionID).Scan(&versionAppID); err == nil {
+			if err := h.governor.CheckDirectPublish(ctx, parseProjectID(projectID), versionAppID); err != nil {
+				writeGovernanceError(ctx, w, err)
+				return
+			}
+		}
+	}
+
 	// The checks before the clone: the version, its name, its category, its
 	// model and the validation gate (publish_core.go).
 	appID, vAuthorID, refusal := h.publishPrecheck(ctx, s, projectID, versionID,
@@ -1128,18 +1146,6 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	if refusal != nil {
 		writeJSON(w, refusal.Status, refusal.Body)
 		return
-	}
-
-	// Agent lifecycle governance (ADR-0040 decision 3): a tier that needs
-	// approval publishes only through an approved change request, so a
-	// direct publish answers 409 change_request_required before anything is
-	// written. The transaction below checks the tier again under the
-	// registry row's lock.
-	if h.governor != nil {
-		if err := h.governor.CheckDirectPublish(ctx, parseProjectID(projectID), int64(appID)); err != nil {
-			writeGovernanceError(ctx, w, err)
-			return
-		}
 	}
 
 	// A publish is all-or-nothing, for the reason ForkAgent is
@@ -1157,6 +1163,17 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op once Commit has run
+
+	// The registry row's lock is the transaction's first statement, before
+	// the version and release head locks the publish takes: the final
+	// approval of a change request locks in that order too, so the two
+	// publish paths cannot deadlock on one agent.
+	if h.governor != nil {
+		if err := h.governor.LockRegistryTx(ctx, tx, parseProjectID(projectID), int64(appID)); err != nil {
+			writeGovernanceError(ctx, w, err)
+			return
+		}
+	}
 
 	publishedBy, hasPublisher := publishActorID(ctx, vAuthorID)
 	outcome, refusal := h.publishTx(ctx, tx, publishWrite{
