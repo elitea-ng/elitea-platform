@@ -86,3 +86,17 @@ func (s *RunStarter) Start(
 	}
 	return created, nil
 }
+
+// CancelRun cancels a run this starter started and nobody will read (a
+// release gate whose start failed, releasegate.RunCanceller): the row
+// first, which makes the cancel durable, then the in-process work, as the
+// cancel route does.
+func (s *RunStarter) CancelRun(ctx context.Context, projectID, runID string) error {
+	if _, err := s.runs.CancelRun(ctx, projectID, runID); err != nil {
+		return err
+	}
+	if s.orchestrator != nil {
+		s.orchestrator.Cancel(RunRef{ProjectID: projectID, RunID: runID})
+	}
+	return nil
+}

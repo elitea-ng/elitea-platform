@@ -7332,7 +7332,7 @@ components:
           type: string
           enum: [gate_run_errored, gate_run_cancelled, gate_run_missing, gate_suite_not_runnable,
             gate_dimension_unscored, gate_dimension_incomplete, gate_threshold_not_met,
-            gate_score_regressed, gate_regression, gate_schedule_actor_refused]
+            gate_score_regressed, gate_regression, gate_schedule_actor_refused, gate_start_failed]
         dataset_id: { type: integer, format: int64 }
         role: { type: string, enum: [candidate, baseline] }
         eval_run_id: { type: integer, format: int64 }

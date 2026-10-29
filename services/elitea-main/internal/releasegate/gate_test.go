@@ -22,6 +22,7 @@ type fakeStore struct {
 	head     *Release
 	gates    map[int64]*GateResult
 	nextID   int64
+	addErr   error
 }
 
 func newFakeStore() *fakeStore {
@@ -61,12 +62,25 @@ func (s *fakeStore) CurrentRelease(context.Context, int64, int64) (*Release, err
 func (s *fakeStore) CreateGate(_ context.Context, gate GateResult) (int64, error) {
 	s.nextID++
 	gate.ID = s.nextID
+	gate.CreatedAt = time.Now()
 	if gate.State != StatePending {
 		now := time.Now()
 		gate.EvaluatedAt = &now
 	}
 	s.gates[gate.ID] = &gate
 	return gate.ID, nil
+}
+func (s *fakeStore) AddGateRuns(_ context.Context, _, gateID int64, runs []GateRun) error {
+	if s.addErr != nil {
+		return s.addErr
+	}
+	gate := s.gates[gateID]
+	gate.Runs = append(gate.Runs, runs...)
+	return nil
+}
+func (s *fakeStore) FinishStart(_ context.Context, _, gateID int64) error {
+	s.gates[gateID].Starting = false
+	return nil
 }
 func (s *fakeStore) GetGate(_ context.Context, _, gateID int64) (GateResult, error) {
 	gate, found := s.gates[gateID]
@@ -84,7 +98,7 @@ func (s *fakeStore) SettleGate(_ context.Context, _, gateID int64, state string,
 		return nil
 	}
 	now := time.Now()
-	gate.State, gate.Outcome, gate.Failures, gate.EvaluatedAt = state, outcome, failures, &now
+	gate.State, gate.Outcome, gate.Failures, gate.EvaluatedAt, gate.Starting = state, outcome, failures, &now, false
 	return nil
 }
 func (s *fakeStore) OverrideGate(_ context.Context, _, gateID, actorID int64, reason string) error {
@@ -164,11 +178,23 @@ type fakeStarter struct {
 	started []evaluation.RunStartInput
 	agents  []*evaluation.SnapshotAgent
 	refuse  error
+	// failAfter, when positive, fails every start after that many with a
+	// store error (not a client refusal).
+	failAfter int
+	cancelled []string
+}
+
+func (s *fakeStarter) CancelRun(_ context.Context, _, runID string) error {
+	s.cancelled = append(s.cancelled, runID)
+	return nil
 }
 
 func (s *fakeStarter) Start(_ context.Context, _ string, input evaluation.RunStartInput, _ *int, agent *evaluation.SnapshotAgent) (evaluation.Run, error) {
 	if s.refuse != nil {
 		return evaluation.Run{}, s.refuse
+	}
+	if s.failAfter > 0 && len(s.started) >= s.failAfter {
+		return evaluation.Run{}, errors.New("the evaluation store is down")
 	}
 	s.started = append(s.started, input)
 	s.agents = append(s.agents, agent)
@@ -405,5 +431,58 @@ func TestScheduledGateWithARefusedUserRunsNothing(t *testing.T) {
 	// No evaluation ran, so it is not a regression.
 	if regressed, _ := gate.RegressedSince(context.Background(), 1, 3, time.Time{}); regressed != nil {
 		t.Fatalf("RegressedSince = %+v", regressed)
+	}
+}
+
+// TestStartGateFailedStartRecordsAFailedGate proves a run that cannot start
+// half way leaves a failed gate (gate_start_failed) holding the runs that
+// did start, cancelled, instead of an error and orphan runs.
+func TestStartGateFailedStartRecordsAFailedGate(t *testing.T) {
+	gate, store, runs, starter := newTestGate(t)
+	runs.cases["9"] = []evaluation.DatasetCase{{ID: "1", Input: "Hi"}}
+	store.suites = []SuiteConfig{
+		{ApplicationID: 3, DatasetID: 4, Criteria: []Criterion{threshold("1", 50)}},
+		{ApplicationID: 3, DatasetID: 9, Criteria: []Criterion{threshold("1", 50)}},
+	}
+	starter.failAfter = 1
+
+	id, err := gate.StartGate(context.Background(), 1, 3, 30, nil)
+	if err != nil || id == 0 {
+		t.Fatalf("StartGate = %d, %v; want a gate and no error", id, err)
+	}
+	result, err := gate.Result(context.Background(), 1, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != StateFailed || len(result.Failures) != 1 || result.Failures[0].Code != FailureStartFailed {
+		t.Fatalf("result = %s %+v", result.State, result.Failures)
+	}
+	if len(result.Runs) != 1 || len(starter.cancelled) != 1 ||
+		starter.cancelled[0] != strconv.FormatInt(result.Runs[0].EvalRunID, 10) {
+		t.Fatalf("runs = %+v, cancelled = %v", result.Runs, starter.cancelled)
+	}
+}
+
+// TestStartingGateIsNotEvaluatedUntilStarted proves a gate whose runs are
+// still being started stays pending, and one whose start never finished
+// settles failed after startTimeout.
+func TestStartingGateIsNotEvaluatedUntilStarted(t *testing.T) {
+	gate, store, _, _ := newTestGate(t)
+	suites := []SuiteConfig{{ApplicationID: 3, DatasetID: 4, Criteria: []Criterion{threshold("1", 50)}}}
+	id, err := store.CreateGate(context.Background(), GateResult{
+		TenantProjectID: 1, ApplicationID: 3, Kind: KindChange, CandidateVersionID: 30,
+		State: StatePending, Suites: suites, Starting: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := gate.Result(context.Background(), 1, id)
+	if err != nil || result.State != StatePending {
+		t.Fatalf("a starting gate = %s, %v; want pending", result.State, err)
+	}
+	gate.now = func() time.Time { return time.Now().Add(startTimeout + time.Minute) }
+	result, err = gate.Result(context.Background(), 1, id)
+	if err != nil || result.State != StateFailed || result.Failures[0].Code != FailureStartFailed {
+		t.Fatalf("a stale starting gate = %s %+v, %v", result.State, result.Failures, err)
 	}
 }

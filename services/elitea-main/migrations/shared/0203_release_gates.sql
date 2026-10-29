@@ -18,7 +18,11 @@
 --       One row per gate: kind `change` (a candidate version against the
 --       current release) or `scheduled` (the current release against
 --       itself, the drift signal). `suites` freezes the suite rows the gate
---       started with. The gate is `pending` until every run is terminal,
+--       started with. The row is written before any run starts;
+--       `runs_started_at` is NULL until every run of the gate is started
+--       and recorded, and a gate is not evaluated before then (a start
+--       that failed settles it failed, gate_start_failed). The gate is
+--       `pending` until every run is terminal,
 --       then `passed` or `failed` with `outcome` (per suite and dimension)
 --       and `failures` (typed codes). An override records who accepted a
 --       failed gate and why; it does not change the state. A trigger
@@ -78,6 +82,7 @@ CREATE TABLE IF NOT EXISTS elitea_lifecycle.release_gates (
     failures              jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(failures) = 'array'),
     created_by            bigint CHECK (created_by IS NULL OR created_by > 0),
     created_at            timestamptz NOT NULL DEFAULT clock_timestamp(),
+    runs_started_at       timestamptz,
     evaluated_at          timestamptz,
     overridden_by         bigint CHECK (overridden_by IS NULL OR overridden_by > 0),
     overridden_at         timestamptz,
@@ -89,6 +94,8 @@ CREATE TABLE IF NOT EXISTS elitea_lifecycle.release_gates (
         CHECK (kind <> 'scheduled' OR current_release_id IS NOT NULL),
     CONSTRAINT release_gates_settled_stamp
         CHECK ((state = 'pending') = (evaluated_at IS NULL)),
+    CONSTRAINT release_gates_settled_started
+        CHECK (state = 'pending' OR runs_started_at IS NOT NULL),
     CONSTRAINT release_gates_failed_has_failures
         CHECK (state <> 'failed' OR jsonb_array_length(failures) > 0),
     CONSTRAINT release_gates_override_complete CHECK (

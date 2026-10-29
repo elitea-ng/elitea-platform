@@ -83,6 +83,11 @@ const (
 	// FailureRegression: cases of the regression suite that passed on the
 	// current release fail on the candidate. Cases lists them.
 	FailureRegression = "gate_regression"
+	// FailureStartFailed: a run of the gate could not be started (the
+	// evaluation store or queue failed), or the process stopped while it
+	// started them. The runs it did start are cancelled where the run
+	// starter can cancel, and recorded on the gate either way.
+	FailureStartFailed = "gate_start_failed"
 	// FailureScheduleActorRefused: a scheduled gate did not run because the
 	// user who set the cadence may no longer start evaluation runs in the
 	// project (or none is recorded).
@@ -301,6 +306,9 @@ type GateResult struct {
 	CreatedAt          time.Time      `json:"created_at"`
 	EvaluatedAt        *time.Time     `json:"evaluated_at"`
 	Override           *Override      `json:"override"`
+	// Starting is a gate whose runs are still being started: it is stored
+	// before the first run starts and is not evaluated until FinishStart.
+	Starting bool `json:"-"`
 }
 
 // Overridden reports whether a governance-role holder accepted the failed

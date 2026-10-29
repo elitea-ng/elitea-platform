@@ -59,8 +59,13 @@ type Store interface {
 	CurrentRelease(ctx context.Context, tenantProjectID, applicationID int64) (*Release, error)
 
 	// CreateGate stores a gate and its runs in one transaction. A gate
-	// whose State is not pending is stored settled.
+	// whose State is not pending is stored settled. A Starting gate is
+	// stored before its runs start and is not evaluated until FinishStart.
 	CreateGate(ctx context.Context, gate GateResult) (int64, error)
+	// AddGateRuns records runs a starting gate started.
+	AddGateRuns(ctx context.Context, tenantProjectID, gateID int64, runs []GateRun) error
+	// FinishStart marks every run of a starting gate started.
+	FinishStart(ctx context.Context, tenantProjectID, gateID int64) error
 	GetGate(ctx context.Context, tenantProjectID, gateID int64) (GateResult, error)
 	ListGates(ctx context.Context, tenantProjectID, applicationID int64, limit int) ([]GateResult, error)
 	// SettleGate stores the outcome of a pending gate. It changes nothing
@@ -97,6 +102,18 @@ type Runs interface {
 type Starter interface {
 	Start(ctx context.Context, projectID string, input evaluation.RunStartInput, createdBy *int, agent *evaluation.SnapshotAgent) (evaluation.Run, error)
 }
+
+// RunCanceller is a Starter that can also cancel a run it started
+// (*evaluation.RunStarter). A gate whose start failed cancels the runs it
+// had started; with a Starter that cannot, they run to the end, recorded
+// on the gate.
+type RunCanceller interface {
+	CancelRun(ctx context.Context, projectID, runID string) error
+}
+
+// startTimeout is how long a gate may stay starting before it is settled
+// failed (gate_start_failed): the process that started it stopped.
+const startTimeout = 15 * time.Minute
 
 // Gate is the release gate.
 type Gate struct {
@@ -187,8 +204,10 @@ type startRequest struct {
 // The runs' model calls are made for the user of ctx (the caller's
 // principal). A suite that cannot start (its dataset was deleted, has no
 // active case, or names a dimension the ai engine cannot score) fails the
-// gate at once with gate_suite_not_runnable; the answer is still the gate
-// id. An error is answered only when nothing was recorded.
+// gate at once with gate_suite_not_runnable, and a run whose start fails
+// (the evaluation store or queue) fails it with gate_start_failed; the
+// answer is still the gate id. An error is answered only when nothing was
+// recorded and no run started.
 func (g *Gate) StartGate(ctx context.Context, tenantProjectID, applicationID, candidateVersionID int64, currentReleaseID *int64) (int64, error) {
 	if tenantProjectID <= 0 || applicationID <= 0 || candidateVersionID <= 0 {
 		return 0, ErrVersionNotFound
@@ -325,33 +344,107 @@ func (g *Gate) start(ctx context.Context, request startRequest) (int64, error) {
 		}
 	}
 
-	if len(notRunnable) == 0 {
-		for _, suite := range suites {
-			runs, reason, err := g.startSuite(ctx, project, request, suite)
-			gate.Runs = append(gate.Runs, runs...)
-			if err != nil {
-				// Runs already started are orphans: they execute and are
-				// listed with the agent's runs, but no gate reads them.
-				return 0, err
-			}
-			if reason != "" {
-				notRunnable[suite.DatasetID] = reason
-				break
-			}
-		}
+	if len(notRunnable) > 0 {
+		// Nothing started: the gate is recorded settled.
+		gate.State, gate.Outcome, gate.Failures = Evaluate(notRunnableEvidence(suites, notRunnable))
+		return g.store.CreateGate(ctx, gate)
 	}
 
-	if len(notRunnable) > 0 {
-		evidence := make([]SuiteEvidence, 0, len(suites))
-		for _, suite := range suites {
-			evidence = append(evidence, SuiteEvidence{
-				Suite: suite, NotRunnable: notRunnable[suite.DatasetID],
-				Skipped: notRunnable[suite.DatasetID] == "",
-			})
-		}
-		gate.State, gate.Outcome, gate.Failures = Evaluate(evidence)
+	// The gate is recorded before any run starts, so a run never exists
+	// without the gate that reads it, and a start that fails half way
+	// leaves a failed gate (the scheduled selection then waits for the
+	// cadence) rather than orphan runs and a retry on every pass.
+	gate.Starting = true
+	gateID, err := g.store.CreateGate(ctx, gate)
+	if err != nil {
+		return 0, err
 	}
-	return g.store.CreateGate(ctx, gate)
+	var (
+		started  []GateRun
+		startErr error
+	)
+	for _, suite := range suites {
+		runs, reason, err := g.startSuite(ctx, project, request, suite)
+		if len(runs) > 0 {
+			started = append(started, runs...)
+			if recordErr := g.store.AddGateRuns(ctx, request.tenantProjectID, gateID, runs); recordErr != nil && err == nil {
+				err = recordErr
+			}
+		}
+		if err != nil {
+			startErr = err
+			break
+		}
+		if reason != "" {
+			notRunnable[suite.DatasetID] = reason
+			break
+		}
+	}
+	switch {
+	case startErr != nil:
+		g.logger.Error("release gate: a run did not start; the gate fails",
+			"project_id", request.tenantProjectID, "gate_id", gateID, "error", startErr)
+		g.cancelRuns(ctx, project, gateID, started)
+		_, outcome, _ := Evaluate(notRunnableEvidence(suites, notRunnable))
+		g.settleStartFailed(ctx, request.tenantProjectID, gateID, outcome,
+			"an evaluation run of the gate could not be started; submit again or ask for an override")
+	case len(notRunnable) > 0:
+		g.cancelRuns(ctx, project, gateID, started)
+		state, outcome, failures := Evaluate(notRunnableEvidence(suites, notRunnable))
+		if err := g.store.SettleGate(ctx, request.tenantProjectID, gateID, state, outcome, failures); err != nil {
+			g.logger.Error("release gate: could not settle a gate whose suite cannot run",
+				"project_id", request.tenantProjectID, "gate_id", gateID, "error", err)
+		}
+	default:
+		if err := g.store.FinishStart(ctx, request.tenantProjectID, gateID); err != nil {
+			// The gate stays starting and settles failed after startTimeout.
+			g.logger.Error("release gate: could not mark the gate's runs started",
+				"project_id", request.tenantProjectID, "gate_id", gateID, "error", err)
+		}
+	}
+	return gateID, nil
+}
+
+// notRunnableEvidence is the evidence of a gate settled before its runs
+// finished: the suites that cannot run say why, the others are skipped.
+func notRunnableEvidence(suites []SuiteConfig, notRunnable map[int64]string) []SuiteEvidence {
+	evidence := make([]SuiteEvidence, 0, len(suites))
+	for _, suite := range suites {
+		evidence = append(evidence, SuiteEvidence{
+			Suite: suite, NotRunnable: notRunnable[suite.DatasetID],
+			Skipped: notRunnable[suite.DatasetID] == "",
+		})
+	}
+	return evidence
+}
+
+// settleStartFailed settles a starting gate failed with gate_start_failed.
+// A failure to store it is logged: the gate stays starting and settles the
+// same way after startTimeout.
+func (g *Gate) settleStartFailed(ctx context.Context, tenantProjectID, gateID int64, outcome []SuiteOutcome, message string) {
+	failures := []GateFailure{{Code: FailureStartFailed, Message: message}}
+	if err := g.store.SettleGate(ctx, tenantProjectID, gateID, StateFailed, outcome, failures); err != nil {
+		g.logger.Error("release gate: could not record a failed gate start",
+			"project_id", tenantProjectID, "gate_id", gateID, "error", err)
+	}
+}
+
+// cancelRuns cancels runs a gate started and will not read, when the run
+// starter can cancel. Reused reference runs are not the gate's to cancel.
+func (g *Gate) cancelRuns(ctx context.Context, project string, gateID int64, runs []GateRun) {
+	canceller, ok := g.starter.(RunCanceller)
+	if !ok {
+		return
+	}
+	for _, run := range runs {
+		if run.Reused {
+			continue
+		}
+		if err := canceller.CancelRun(ctx, project, strconv.FormatInt(run.EvalRunID, 10)); err != nil {
+			g.logger.Warn("release gate: could not cancel a run of a failed gate start",
+				"gate_id", gateID, "eval_run_id", run.EvalRunID, "error", err)
+		}
+	}
 }
 
 // preflight answers why a suite cannot run, or "".
@@ -463,6 +556,21 @@ func (g *Gate) Result(ctx context.Context, tenantProjectID, gateID int64) (GateR
 // false when a run is not terminal yet.
 func (g *Gate) settle(ctx context.Context, gate GateResult) (bool, error) {
 	project := projectKey(gate.TenantProjectID)
+	if gate.Starting {
+		// Its runs are still being started: not every suite has its runs
+		// yet. A start that never finished is a failed start.
+		if g.now().Sub(gate.CreatedAt) < startTimeout {
+			return false, nil
+		}
+		g.cancelRuns(ctx, project, gate.ID, gate.Runs)
+		_, outcome, _ := Evaluate(notRunnableEvidence(gate.Suites, nil))
+		failures := []GateFailure{{Code: FailureStartFailed,
+			Message: "the gate's runs were not all started (the process starting them stopped); submit again or ask for an override"}}
+		if err := g.store.SettleGate(ctx, gate.TenantProjectID, gate.ID, StateFailed, outcome, failures); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
 	evidence := make([]SuiteEvidence, 0, len(gate.Suites))
 	for _, suite := range gate.Suites {
 		item := SuiteEvidence{Suite: suite, CaseNames: map[string]string{}}

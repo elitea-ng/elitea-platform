@@ -243,7 +243,9 @@ func (s *ReleaseGates) CurrentRelease(ctx context.Context, tenantProjectID, appl
 	return &release, nil
 }
 
-// CreateGate stores a gate and its runs in one transaction.
+// CreateGate stores a gate and its runs in one transaction. A Starting
+// gate is stored with runs_started_at NULL (Gate.start adds its runs as
+// they start, then FinishStart).
 func (s *ReleaseGates) CreateGate(ctx context.Context, gate releasegate.GateResult) (int64, error) {
 	suites, outcome, failures, err := encodeGateJSON(gate)
 	if err != nil {
@@ -255,13 +257,14 @@ func (s *ReleaseGates) CreateGate(ctx context.Context, gate releasegate.GateResu
 			INSERT INTO elitea_lifecycle.release_gates (
 				tenant_project_id, application_id, kind, candidate_version_id,
 				current_release_id, baseline_version_id, state, suites, outcome,
-				failures, created_by, evaluated_at)
+				failures, created_by, evaluated_at, runs_started_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11,
-			        CASE WHEN $7 = 'pending' THEN NULL ELSE clock_timestamp() END)
+			        CASE WHEN $7 = 'pending' THEN NULL ELSE clock_timestamp() END,
+			        CASE WHEN $12 THEN NULL ELSE clock_timestamp() END)
 			RETURNING id`,
 			gate.TenantProjectID, gate.ApplicationID, gate.Kind, gate.CandidateVersionID,
 			gate.CurrentReleaseID, gate.BaselineVersionID, gate.State, suites, outcome,
-			failures, gate.CreatedBy).Scan(&id); err != nil {
+			failures, gate.CreatedBy, gate.Starting && gate.State == releasegate.StatePending).Scan(&id); err != nil {
 			return err
 		}
 		for _, run := range gate.Runs {
@@ -279,6 +282,42 @@ func (s *ReleaseGates) CreateGate(ctx context.Context, gate releasegate.GateResu
 		return 0, fmt.Errorf("release gates: create gate: %w", err)
 	}
 	return id, nil
+}
+
+// AddGateRuns records runs a starting gate started.
+func (s *ReleaseGates) AddGateRuns(ctx context.Context, tenantProjectID, gateID int64, runs []releasegate.GateRun) error {
+	err := pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		for _, run := range runs {
+			tag, err := tx.Exec(ctx, `
+				INSERT INTO elitea_lifecycle.release_gate_runs (
+					gate_id, dataset_id, role, application_version_id, eval_run_id, reused)
+				SELECT id, $3, $4, $5, $6, $7 FROM elitea_lifecycle.release_gates
+				WHERE tenant_project_id = $1 AND id = $2`,
+				tenantProjectID, gateID, run.DatasetID, run.Role, run.ApplicationVersionID, run.EvalRunID, run.Reused)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() != 1 {
+				return releasegate.ErrGateNotFound
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("release gates: record gate runs: %w", err)
+	}
+	return nil
+}
+
+// FinishStart marks every run of a starting gate started: from now on the
+// gate is evaluated.
+func (s *ReleaseGates) FinishStart(ctx context.Context, tenantProjectID, gateID int64) error {
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE elitea_lifecycle.release_gates SET runs_started_at = clock_timestamp()
+		WHERE tenant_project_id = $1 AND id = $2 AND runs_started_at IS NULL`, tenantProjectID, gateID); err != nil {
+		return fmt.Errorf("release gates: finish the gate start: %w", err)
+	}
+	return nil
 }
 
 func encodeGateJSON(gate releasegate.GateResult) (string, string, string, error) {
@@ -309,7 +348,8 @@ func encodeGateJSON(gate releasegate.GateResult) (string, string, string, error)
 
 const gateColumns = `id, tenant_project_id, application_id, kind, candidate_version_id,
 	current_release_id, baseline_version_id, state, suites, outcome, failures,
-	created_by, created_at, evaluated_at, overridden_by, overridden_at, override_reason`
+	created_by, created_at, evaluated_at, overridden_by, overridden_at, override_reason,
+	runs_started_at IS NULL`
 
 func scanGate(row pgx.Row) (releasegate.GateResult, error) {
 	var gate releasegate.GateResult
@@ -320,7 +360,7 @@ func scanGate(row pgx.Row) (releasegate.GateResult, error) {
 	if err := row.Scan(&gate.ID, &gate.TenantProjectID, &gate.ApplicationID, &gate.Kind,
 		&gate.CandidateVersionID, &gate.CurrentReleaseID, &gate.BaselineVersionID, &gate.State,
 		&suites, &outcome, &failures, &gate.CreatedBy, &gate.CreatedAt, &gate.EvaluatedAt,
-		&overriddenBy, &overriddenAt, &reason); err != nil {
+		&overriddenBy, &overriddenAt, &reason, &gate.Starting); err != nil {
 		return releasegate.GateResult{}, err
 	}
 	for _, field := range []struct {
@@ -441,7 +481,8 @@ func (s *ReleaseGates) SettleGate(ctx context.Context, tenantProjectID, gateID i
 	}
 	if _, err := s.pool.Exec(ctx, `
 		UPDATE elitea_lifecycle.release_gates
-		SET state = $3, outcome = $4::jsonb, failures = $5::jsonb, evaluated_at = clock_timestamp()
+		SET state = $3, outcome = $4::jsonb, failures = $5::jsonb, evaluated_at = clock_timestamp(),
+		    runs_started_at = COALESCE(runs_started_at, clock_timestamp())
 		WHERE tenant_project_id = $1 AND id = $2 AND state = 'pending'`,
 		tenantProjectID, gateID, state, encodedOutcome, encodedFailures); err != nil {
 		return fmt.Errorf("release gates: settle gate: %w", err)

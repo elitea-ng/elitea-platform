@@ -289,3 +289,50 @@ func TestReleaseGateStorePostgres(t *testing.T) {
 		t.Fatalf("suites after the dataset was deleted = %+v, %v", suites, err)
 	}
 }
+
+// TestReleaseGateStartingPostgres proves the gate row exists before its
+// runs: a starting gate reads Starting, takes its runs one batch at a
+// time, and FinishStart (or settling) ends the start.
+func TestReleaseGateStartingPostgres(t *testing.T) {
+	fixture := newReleaseGateFixture(t)
+	ctx := t.Context()
+	store := fixture.store
+	id, err := store.CreateGate(ctx, releasegate.GateResult{
+		TenantProjectID: 1, ApplicationID: 3, Kind: releasegate.KindChange, CandidateVersionID: fixture.draft,
+		State: releasegate.StatePending, Starting: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate, err := store.GetGate(ctx, 1, id)
+	if err != nil || !gate.Starting || len(gate.Runs) != 0 {
+		t.Fatalf("starting gate = %+v, %v", gate, err)
+	}
+	version := fixture.draft
+	if err := store.AddGateRuns(ctx, 1, id, []releasegate.GateRun{{DatasetID: fixture.datasetA,
+		Role: releasegate.RoleCandidate, ApplicationVersionID: &version, EvalRunID: 901}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddGateRuns(ctx, 2, id, nil); err != nil {
+		t.Fatalf("an empty batch: %v", err)
+	}
+	if err := store.AddGateRuns(ctx, 2, id, []releasegate.GateRun{{DatasetID: fixture.datasetB,
+		Role: releasegate.RoleCandidate, EvalRunID: 902}}); !errors.Is(err, releasegate.ErrGateNotFound) {
+		t.Fatalf("a run on another project's gate: %v", err)
+	}
+	if err := store.FinishStart(ctx, 1, id); err != nil {
+		t.Fatal(err)
+	}
+	gate, err = store.GetGate(ctx, 1, id)
+	if err != nil || gate.Starting || len(gate.Runs) != 1 {
+		t.Fatalf("started gate = %+v, %v", gate, err)
+	}
+	// A settled gate always has its start stamped.
+	if _, err := fixture.pool.Exec(ctx, `
+		INSERT INTO elitea_lifecycle.release_gates (tenant_project_id, application_id, kind, candidate_version_id,
+			state, failures, evaluated_at)
+		VALUES (1, 3, 'change', $1, 'failed', '[{"code":"gate_start_failed","message":"x"}]', clock_timestamp())`,
+		fixture.draft); err == nil {
+		t.Fatal("a settled gate without runs_started_at was stored")
+	}
+}

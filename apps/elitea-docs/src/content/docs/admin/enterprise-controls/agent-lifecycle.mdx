@@ -115,6 +115,7 @@ One suite can also be marked as the **regression suite**. An agent can have at m
 | `gate_dimension_unscored`, `gate_dimension_incomplete` | A criterion's dimension has no score, or some of its cases errored or were skipped |
 | `gate_run_errored`, `gate_run_cancelled`, `gate_run_missing` | A run did not finish |
 | `gate_suite_not_runnable` | The suite was deleted, has no active case, or its run could not start |
+| `gate_start_failed` | A run of the gate could not be started (the evaluation store or queue failed), or the process starting the runs stopped. The runs already started are cancelled and kept on the gate. Submit again, or ask for an override |
 
 A run that errors or is cancelled fails the gate. It never passes it. An agent with no gate suites passes at once. Once recorded, a gate's outcome cannot change.
 
