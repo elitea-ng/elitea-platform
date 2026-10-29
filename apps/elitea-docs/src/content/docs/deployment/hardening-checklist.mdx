@@ -27,6 +27,14 @@ A default install favours getting started. A deployment that will be assessed ag
 - [ ] Keep the kill-switch self-test enabled, and alert on its last-success metric. See the [emergency stop runbook](/deployment/emergency-stop-runbook).
 - [ ] Set project budgets. A reached budget refuses further model calls. See [Budgets and LLM governance](/admin/budgets-and-governance).
 
+## Change control
+
+- [ ] Set each production agent's risk tier and owners. Agents that existed before the upgrade start at `medium`. See [Agent lifecycle](/admin/enterprise-controls/agent-lifecycle#registry-and-risk-tiers).
+- [ ] Review the tier policy under **Configuration › Agent Lifecycle**: approvals, recertification cadence and mandatory attestations. Set **Lapse action** to `suspend` if a lapsed certification must stop the agent. See [Configure the tier policy](/admin/enterprise-controls/agent-lifecycle#configure-the-tier-policy).
+- [ ] Decide who holds `models.applications.governance`. By default every project admin holds it.
+- [ ] Mark a release gate suite on every agent at tier `high` or `critical`, and a regression suite. See [Evaluation gate](/admin/enterprise-controls/agent-lifecycle#evaluation-gate).
+- [ ] Give your GRC tool an API token with `lifecycle.attestations.write`, so review outcomes are recorded as attestations.
+
 ## Evidence and data
 
 - [ ] Configure the audit export to your SIEM, and keep the copy of record in WORM storage. See [Audit trail](/admin/audit-trail) and [Audit event schema](/reference/audit-event-schema).

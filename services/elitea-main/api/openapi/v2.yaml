@@ -7423,7 +7423,7 @@ components:
           allOf: [{ $ref: '#/components/schemas/ReleaseGateOverride' }]
           nullable: true
           description: A governance-role holder accepted the failed gate. The state stays failed.
-        blocks: { type: boolean, description: true while the gate blocks approval (pending, or failed and not overridden). }
+        blocks: { type: boolean, description: "True while the gate blocks approval: pending, or failed and not overridden." }
       description: >
         NOTE(W2): internal/api/v2/releasegates/handler.go, Gate.
       example:
