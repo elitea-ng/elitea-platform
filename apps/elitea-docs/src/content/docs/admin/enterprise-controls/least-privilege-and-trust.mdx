@@ -27,6 +27,7 @@ The main service builds the allowlist for each run when it sends the run to a wo
 - the **platform entries**, set under **Configuration › Worker Egress**;
 - the **project entries**, from the project's `worker_egress` setting;
 - the host of every URL that the run's toolkits, MCP servers and configurations are configured with (for example, a Jira toolkit's base URL);
+- the fixed API hosts that a toolkit type always calls, even when its settings do not name them (for example, `api.figma.com` for Figma, `graph.microsoft.com` for SharePoint, and `*.googleapis.com` for Google Cloud toolkits);
 - for a governed run, the target hosts of the credentials that the run may use (for example, Microsoft Graph for a SharePoint credential).
 
 Only toolkit and configuration **settings** add hosts. User input, chat history and tool arguments never add a host, so nothing that a user or a document types can widen a run's allowlist. A project entry only adds hosts to that project's runs. It does not change the mode, which is the platform's decision.
@@ -63,7 +64,7 @@ The run fails with the code `EGRESS_POLICY_INVALID`. Its message names the bad e
 The platform's worker egress allowlist entry "https://jira.example.com" is not a valid host, host:port, *.domain or CIDR block (...). A platform administrator must correct it under Configuration, Worker Egress.
 ```
 
-A chat answer shows this as `error_code: egress_policy_invalid`. A synchronous toolkit tool call answers HTTP 422 with `reason: egress_policy_invalid`. If the main service only could not read a source (for example, the database was briefly unavailable), the dispatch is retried until the run's deadline.
+A chat answer shows this as `error_code: egress_policy_invalid`. A synchronous toolkit tool call answers HTTP 422 with `reason: egress_policy_invalid`, and nothing is admitted. Configuration validation makes no network call, so it is never refused for its policy. If the main service only could not read a source (for example, the database was briefly unavailable), the dispatch is retried until the run's deadline.
 
 #### Limits
 
@@ -83,7 +84,7 @@ A chat answer shows this as `error_code: egress_policy_invalid`. A synchronous t
     Open **Configuration › Worker Egress** in the admin console. The panel under the form lists the hosts that runs reached and the hosts that were refused, per project and agent, for the last 7, 30 or 90 days. It reads the worker's summaries, which are kept 30 days by default. Sandbox runs go through the egress proxy, which has its own per-project allowlists, so their hosts are not listed here; the API's `source=proxy` returns them.
   </Step>
   <Step title="Seed the platform allowlist">
-    Select **Copy as allowlist**. This copies the reached hosts as entries, one per line: a bare host (any port) where only ports 80 and 443 were used, and one `host:port` entry for each port otherwise. Remove the hosts that you do not approve, and paste the rest into the **Platform Allowlist** field. Toolkit base URLs are added to each run automatically, so you do not need to list them.
+    Select **Copy as allowlist**. This copies the reached hosts as entries, one per line: a bare host (any port) where only ports 80 and 443 were used, and one `host:port` entry for each port otherwise. Remove the hosts that you do not approve, and paste the rest into the **Platform Allowlist** field. Toolkit base URLs, and the fixed API hosts of each toolkit type, are added to each run automatically, so you do not need to list them.
   </Step>
   <Step title="Add project entries if necessary">
     A project that needs more hosts than the platform list can add its own. A project admin (permission `models.project_settings.edit`) creates one configuration of type `worker_egress`:
@@ -96,7 +97,7 @@ A chat answer shows this as `error_code: egress_policy_invalid`. A synchronous t
     ```
   </Step>
   <Step title="Switch the mode">
-    Set **Mode** to `allowlist` and save. New runs use the allowlist from the next dispatch. Runs in flight keep the policy that they started with.
+    Set **Mode** to `allowlist` and save. Each replica of the main service reads the section again after at most 5 seconds, so new runs use the allowlist within 5 seconds. Runs in flight keep the policy that they started with.
   </Step>
   <Step title="Watch the refused hosts">
     For the first days, check the refused hosts in the panel. A refused host that a real workflow needs is either added to the platform or project list, or is a call that the allowlist correctly stopped.
