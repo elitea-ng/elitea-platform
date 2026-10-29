@@ -257,6 +257,7 @@ impl Fixture {
                 })),
                 llm: None,
                 events: None,
+                root_session: None,
             }),
             parallel,
             ledger: TestLedger::new(),

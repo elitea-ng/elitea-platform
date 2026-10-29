@@ -91,9 +91,65 @@ fn card(kind: FanoutCardKind, interrupt_id: &str, tool_call_id: &str) -> FanoutC
     }
 }
 
+/// FU-246: the ledger card a saved Agent member's own pause carries (its
+/// Agent node's interrupt data, `fanout_cards`), proven against that pause's
+/// own interrupt ids. `None` for any other pause.
+fn application_member_card(
+    pause: &ParallelBranchPause,
+) -> Option<(
+    FanoutCardKind,
+    ParallelPauseCard,
+    crate::agents::graph::fanout_frames::FanoutCardParts,
+)> {
+    let adk_rust::graph::interrupt::Interrupt::Dynamic {
+        data: Some(data), ..
+    } = &pause.interrupt
+    else {
+        return None;
+    };
+    if data
+        .get("schema_revision")
+        .and_then(serde_json::Value::as_str)
+        != Some(crate::agents::graph::PIPELINE_APPLICATION_HITL_SCHEMA)
+    {
+        return None;
+    }
+    let [card] = data.get("fanout_cards")?.as_array()?.as_slice() else {
+        return None;
+    };
+    let (kind, interrupt_id, tool_call_id, parts) =
+        crate::agents::events::fanout_member_card_parts(card)?;
+    let ids = data.get("interrupt_ids")?.as_array()?;
+    if ids.len() != 1 || ids[0].as_str() != Some(interrupt_id.as_str()) {
+        return None;
+    }
+    let kind = match kind {
+        crate::agents::graph::fanout_frames::CardKind::ToolGuard => FanoutCardKind::ToolGuard,
+        crate::agents::graph::fanout_frames::CardKind::AskUser => FanoutCardKind::AskUser,
+        _ => return None,
+    };
+    Some((
+        kind,
+        ParallelPauseCard {
+            interrupt_id,
+            tool_call_id,
+        },
+        parts,
+    ))
+}
+
+/// Whether the child's pause is a saved Agent member's own carded pause,
+/// resumed through the Agent's nested decision registry, not the bindings here.
+pub(crate) fn is_application_member_pause(pause: &ParallelBranchPause) -> bool {
+    application_member_card(pause).is_some()
+}
+
 /// Classify and bind the child's pause. Exactly one typed binding accepts
 /// a given pause shape; anything else is refused typed.
 pub(crate) fn child_card(pause: &ParallelBranchPause) -> Result<FanoutCard, GraphError> {
+    if let Some((kind, card, _)) = application_member_card(pause) {
+        return Ok(FanoutCard { kind, card });
+    }
     let event = pause_event(pause);
     let thread = pause.thread_id.as_str();
     if let Ok(binding) = pipeline_hitl_event_binding(&event, FANOUT_CHILD_AUTHOR, thread) {
@@ -134,6 +190,9 @@ pub(crate) fn child_card(pause: &ParallelBranchPause) -> Result<FanoutCard, Grap
 pub(crate) fn card_parts(
     pause: &ParallelBranchPause,
 ) -> Result<crate::agents::graph::fanout_frames::FanoutCardParts, GraphError> {
+    if let Some((_, _, parts)) = application_member_card(pause) {
+        return Ok(parts);
+    }
     let event = pause_event(pause);
     crate::agents::events::fanout_card_parts(&event, FANOUT_CHILD_AUTHOR, &pause.thread_id).map_err(
         |_| {

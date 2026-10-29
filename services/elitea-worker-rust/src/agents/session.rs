@@ -2135,8 +2135,44 @@ fn pipeline_turn(
             )
         }
     };
+    let binding = binding.with_root_session(Arc::new(PipelineRootSession {
+        sessions: Arc::clone(&state.sessions),
+        user_id: plan.user_id.to_string(),
+        session_id: plan.session_id.to_string(),
+    }));
     let stop = binding.cancellation();
     Ok((authority, node_runtimes.with_parallel(binding), Some(stop)))
+}
+
+/// The run's root session, read when a saved Agent member's own pause is
+/// decided (FU-246).
+struct PipelineRootSession {
+    sessions: Arc<dyn SessionService>,
+    user_id: String,
+    session_id: String,
+}
+
+#[async_trait::async_trait]
+impl super::graph::compiler::RootSessionSource for PipelineRootSession {
+    async fn root_session(
+        &self,
+    ) -> Result<Box<dyn adk_rust::session::Session>, adk_rust::graph::GraphError> {
+        self.sessions
+            .get(GetRequest {
+                app_name: APP_NAME.to_owned(),
+                user_id: self.user_id.clone(),
+                session_id: self.session_id.clone(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .map_err(|_| adk_rust::graph::GraphError::NodeExecutionFailed {
+                node: "parallel".to_owned(),
+                message:
+                    "graph.parallel.decision_refused: the run's root session could not be read"
+                        .to_owned(),
+            })
+    }
 }
 
 fn fanout_decisions_unavailable() -> NativeAgentAssemblyError {

@@ -239,6 +239,7 @@ fn factory() -> (CompilerParallelBranches, ParallelNodeDefinition) {
             resolver: Some(Arc::new(UnavailableResolver)),
             llm: None,
             events: None,
+            root_session: None,
         },
         parallel,
     )

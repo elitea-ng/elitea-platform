@@ -352,3 +352,95 @@ fn a_small_sensitive_card_is_not_marked_truncated() {
     assert!(detail.get("tool_args_truncated").is_none(), "{detail}");
     assert_eq!(detail["tool_args"], json!({"branch": "old"}));
 }
+
+/// FU-246: a fixed Parallel member's own pause card, built where the
+/// confirmation is born, reads back as the exact card the fan-out runner
+/// raises: kind, identity, actions, display and the pending-payload digest.
+#[test]
+fn a_member_pause_card_round_trips_for_a_sensitive_call_and_an_ask() {
+    use super::events::{fanout_member_card, fanout_member_card_parts};
+    use super::graph::fanout_frames::CardKind;
+    let catalog = sensitive_catalog();
+    let args = json!({"branch": "release/1.2"});
+    let card = fanout_member_card(&confirmation_event("delete_branch", &args), &catalog)
+        .expect("a sensitive-tool card");
+    assert_eq!(
+        card,
+        fanout_member_card(&confirmation_event("delete_branch", &args), &catalog)
+            .expect("the same card"),
+        "byte-stable for the same confirmation"
+    );
+    let (kind, interrupt_id, tool_call_id, parts) =
+        fanout_member_card_parts(&card).expect("the card reads back");
+    assert_eq!(kind, CardKind::ToolGuard);
+    assert_ne!(interrupt_id, "");
+    assert_eq!(tool_call_id, "call-1");
+    assert_eq!(
+        parts.available_actions,
+        ["approve", "reject", "block_with_comment"]
+    );
+    assert_eq!(parts.display.tool_name.as_deref(), Some("delete_branch"));
+    assert_eq!(parts.display.guardrail_type, "sensitive_tool");
+
+    let ask_args = json!({"questions": [{"question": "Which environment?", "header": "Env",
+        "options": [{"label": "Staging"}, {"label": "Production"}]}]});
+    let mut ask = confirmation_event(ASK_USER_TOOL_NAME, &ask_args);
+    let request = AskUserRequest::from_arguments(&ask_args).expect("ask_user arguments");
+    ask.provider_metadata.insert(
+        ASK_USER_METADATA_KEY.to_owned(),
+        encode_ask_user_request(&request).expect("encoded ask_user request"),
+    );
+    let card = fanout_member_card(&ask, &catalog).expect("an ask card");
+    let (kind, _, _, parts) = fanout_member_card_parts(&card).expect("the ask card reads back");
+    assert_eq!(kind, CardKind::AskUser);
+    assert_eq!(parts.available_actions, ["answer"]);
+    assert_eq!(parts.display.guardrail_type, "clarifying_question");
+}
+
+/// A pause no member card can express is refused, and a descriptor that is
+/// not exactly a member card never reads back as one.
+#[test]
+fn a_member_pause_card_refuses_what_it_cannot_express() {
+    use super::events::{fanout_member_card, fanout_member_card_parts};
+    let catalog = sensitive_catalog();
+    let args = json!({"branch": "release/1.2"});
+    // A tool outside the child's sensitive catalog, and a delegated sign-in.
+    assert!(fanout_member_card(&confirmation_event("read_branch", &args), &catalog).is_err());
+    let mut sign_in = confirmation_event("delete_branch", &args);
+    sign_in.provider_metadata.insert(
+        crate::toolkits::DELEGATED_AUTHORIZATION_METADATA_KEY.to_owned(),
+        "{}".to_owned(),
+    );
+    assert!(fanout_member_card(&sign_in, &catalog).is_err());
+    let card = fanout_member_card(&confirmation_event("delete_branch", &args), &catalog)
+        .expect("a sensitive-tool card");
+    for tampered in [
+        {
+            let mut card = card.clone();
+            card["extra"] = json!(true);
+            card
+        },
+        {
+            let mut card = card.clone();
+            card["display"]["guardrail_type"] = json!("clarifying_question");
+            card
+        },
+        {
+            let mut card = card.clone();
+            card["payload_sha256"] = json!("not-a-digest");
+            card
+        },
+        {
+            let mut card = card.clone();
+            card["available_actions"] = json!(["launch"]);
+            card
+        },
+        {
+            let mut card = card.clone();
+            card["kind"] = json!("delegated_auth");
+            card
+        },
+    ] {
+        assert!(fanout_member_card_parts(&tampered).is_none(), "{tampered}");
+    }
+}

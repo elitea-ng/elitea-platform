@@ -36,6 +36,14 @@ use ring::digest;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+/// The run's root session, read when a saved Agent member's own pause is
+/// decided (FU-246): its forwarded confirmation and history are the proof the
+/// Agent's nested decision registry resumes from.
+#[async_trait::async_trait]
+pub(crate) trait RootSessionSource: Send + Sync {
+    async fn root_session(&self) -> Result<Box<dyn adk_rust::session::Session>, GraphError>;
+}
+
 pub(crate) struct ParallelCompilerBinding {
     authority: Arc<dyn ParallelCheckpointAuthority>,
     occurrence: Arc<ParallelOccurrenceCheckpointer>,
@@ -44,6 +52,8 @@ pub(crate) struct ParallelCompilerBinding {
     cancellation: Arc<FanoutCancellation>,
     /// The claim's fenced decision ledger (none: nothing is ever decided).
     decisions: Option<Arc<dyn DecisionSource>>,
+    /// The run's root session (none: a saved Agent member's pause cannot be resumed).
+    root_session: Option<Arc<dyn RootSessionSource>>,
 }
 
 impl ParallelCompilerBinding {
@@ -72,7 +82,19 @@ impl ParallelCompilerBinding {
             deadline,
             cancellation,
             decisions,
+            root_session: None,
         }
+    }
+
+    /// The run's root session, for resuming a saved Agent member's own pause.
+    pub(crate) fn with_root_session(
+        mut self: Arc<Self>,
+        source: Arc<dyn RootSessionSource>,
+    ) -> Arc<Self> {
+        if let Some(binding) = Arc::get_mut(&mut self) {
+            binding.root_session = Some(source);
+        }
+        self
     }
 
     /// The run's fan-out latch; the run's durable Stop fires it.
@@ -198,12 +220,15 @@ impl PipelineDefinition {
                 })?,
             None => Arc::clone(&binding.authority),
         };
-        let bound = Arc::new(ParallelCompilerBinding::bound(
-            authority,
-            binding.deadline,
-            Arc::clone(&binding.cancellation),
-            binding.decisions.clone(),
-        ));
+        let bound = Arc::new(ParallelCompilerBinding {
+            root_session: binding.root_session.clone(),
+            ..ParallelCompilerBinding::bound(
+                authority,
+                binding.deadline,
+                Arc::clone(&binding.cancellation),
+                binding.decisions.clone(),
+            )
+        });
         let parent: Arc<dyn Checkpointer> = bound.occurrence.clone();
         runtimes.parallel = Some(bound);
         runtimes.parallel_authority_bound = true;
@@ -284,6 +309,7 @@ impl PipelineDefinition {
             resolver,
             llm: runtimes.llm.clone(),
             events: runtimes.events.clone(),
+            root_session: binding.root_session.clone(),
         });
         let runtime = Arc::new(AdkParallelBranchRuntime::new(
             binding.authority.clone(),
@@ -462,9 +488,91 @@ struct CompilerParallelBranches {
     resolver: Option<Arc<dyn PipelineApplicationResolver>>,
     llm: Option<Arc<dyn PipelineLlmAgentFactory>>,
     events: Option<PipelineNodeEventSender>,
+    root_session: Option<Arc<dyn RootSessionSource>>,
 }
 
 impl CompilerParallelBranches {
+    /// FU-246: a saved Agent member's own pause, decided. The ledger decision is
+    /// bound to the confirmation the member forwarded into the root session
+    /// (the same proof a browser continuation of a nested Agent uses), installed
+    /// in the member scope's nested decision registry, and the branch re-enters
+    /// its Agent node, which resumes the Agent with exactly that decision.
+    async fn resume_agent_member(
+        &self,
+        definition: &crate::agents::graph::application::ApplicationNodeDefinition,
+        pause: &ParallelBranchPause,
+        decisions: &[ParallelDecision],
+    ) -> Result<State, GraphError> {
+        let refused = |reason: &str| GraphError::NodeExecutionFailed {
+            node: "parallel".to_owned(),
+            message: format!("graph.parallel.decision_refused: {reason}"),
+        };
+        let [decision] = decisions else {
+            return Err(refused(
+                "an Agent member's pause takes exactly one decision",
+            ));
+        };
+        let proven = super::super::parallel_cards::child_card(pause)?;
+        if decision.interrupt_id != proven.card.interrupt_id
+            || decision.tool_call_id != proven.card.tool_call_id
+            || !proven.kind.accepts(&decision.action)
+        {
+            return Err(refused(
+                "the decision does not answer the member's current pause",
+            ));
+        }
+        let participant = self
+            .resolver()?
+            .resolve_node(
+                definition.id(),
+                definition.selection(),
+                Arc::clone(&pause.checkpointer),
+            )
+            .map_err(|_| refused("the member's Agent is unavailable"))?;
+        let crate::agents::graph::application::ResolvedApplicationParticipant::ScopedAgent {
+            scope,
+            ..
+        } = &participant
+        else {
+            return Err(refused("the member's Agent is not a scoped Agent"));
+        };
+        let session = self
+            .root_session
+            .as_ref()
+            .ok_or_else(|| refused("the run's root session is unavailable"))?
+            .root_session()
+            .await?;
+        let value = Some(decision.value.as_str()).filter(|value| !value.is_empty());
+        let set = crate::agents::direct_hitl::DirectHitlDecisionSet::fanout_member(
+            &decision.interrupt_id,
+            &decision.tool_call_id,
+            proven.kind == super::super::parallel_cards::FanoutCardKind::AskUser,
+            &decision.action,
+            value,
+        )
+        .map_err(|error| refused(error.code().as_str()))?;
+        let crate::agents::direct_hitl::ResolvedDirectHitlStart::Nested(resolved) = set
+            .resolve(session.as_ref())
+            .map_err(|error| refused(error.code().as_str()))?
+        else {
+            return Err(refused("the decision is not a nested Agent decision"));
+        };
+        let events = session.events().all();
+        scope
+            .applications
+            .install_scope_resume(&events, resolved)
+            .await
+            .map_err(|error| {
+                refused(&format!(
+                    "the member's nested decision could not be installed ({})",
+                    error
+                        .cause()
+                        .map_or("invalid_configuration", |cause| cause.code())
+                ))
+            })?;
+        Ok(crate::agents::graph::resume::PipelineResume::empty().into_state())
+    }
+
     fn resolver(&self) -> Result<&Arc<dyn PipelineApplicationResolver>, GraphError> {
         self.resolver.as_ref().ok_or_else(|| {
             GraphError::InvalidGraph("the fixed Parallel Agent resolver is unavailable".to_owned())
@@ -759,6 +867,9 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
             // An LLM branch's pause is its own node's card: no authored catalog.
             return super::super::parallel_cards::child_resume(pause, None, decisions).await;
         };
+        if super::super::parallel_cards::is_application_member_pause(pause) {
+            return self.resume_agent_member(definition, pause, decisions).await;
+        }
         // The child participant's own authored pause catalog proves a static
         // pause; it is resolved from frozen saved versions, not from state.
         // By node, as the branch's own run resolves it: a fixed Parallel's

@@ -142,4 +142,5 @@ Fixtures, stated honestly: app 15 created in the UI on the real-model dump; its 
 
 - Main: a fan-out response's last wake row stays ADMITTED after its run settles (lazy retirement; cosmetic, from 2a-2).
 - The 17 translations of the two reworded branch strings.
-- FU-246, FU-248, FU-249 (separate branches).
+- FU-248, FU-249 (separate branches). FU-246 landed on `feat/graph-fanout-agent-branch-pause`
+  ([mapping](fanout-agent-branch-pause-20261028.md)).

@@ -68,7 +68,8 @@ pub(crate) const BRANCH_BLOCKED_CODE: &str = "graph.parallel.branch_blocked";
 /// A branch an earlier process left inside an Agent call that may have started
 /// an effect (D2): it fails typed and is never dispatched again.
 pub(crate) const BRANCH_MAY_HAVE_STARTED_CODE: &str = "graph.fanout.may_have_started";
-/// A member's Agent asked for a decision: not supported yet (FU-246).
+/// A member's Agent asked for a decision no card can take (a delegated sign-in,
+/// or a pause deeper inside it); its own ask and approvals are cards (FU-246).
 const BRANCH_AGENT_PAUSE_CODE: &str = crate::agents::application_tools::FANOUT_AGENT_PAUSE_CODE;
 /// A branch whose saved pipeline holds a tool with external effects, which a
 /// branch cannot run yet (FU-248): typed and readable, never "failed".

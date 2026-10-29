@@ -1065,9 +1065,7 @@ impl Node for ApplicationNode {
                             (result, tool_context.function_call_id().to_owned())
                         };
                     if let Some(interrupt_ids) = nested_application_interrupt_ids(&result) {
-                        return Ok(NodeOutput::interrupt_with_data(
-                            PIPELINE_APPLICATION_HITL_MESSAGE,
-                            json!({
+                        let mut data = json!({
                                 "schema_revision": PIPELINE_APPLICATION_HITL_SCHEMA,
                                 "type": "hitl_checkpoint",
                                 "guardrail_type": "application_sensitive_tool",
@@ -1077,7 +1075,17 @@ impl Node for ApplicationNode {
                                 "application_call_id": call_id,
                                 "application_tool_name": tool.name(),
                                 "interrupt_ids": interrupt_ids,
-                            }),
+                        });
+                        // A fixed Parallel member's own pause carries its
+                        // ledger cards (FU-246), byte-stable on re-raise.
+                        if let Some(cards) =
+                            result.get(crate::agents::application_tools::FANOUT_MEMBER_CARDS_KEY)
+                        {
+                            data["fanout_cards"] = cards.clone();
+                        }
+                        return Ok(NodeOutput::interrupt_with_data(
+                            PIPELINE_APPLICATION_HITL_MESSAGE,
+                            data,
                         ));
                     }
                     let response = result
