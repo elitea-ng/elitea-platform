@@ -6,7 +6,9 @@
 //	PUT /release_gate_suites/prompt_lib/{projectID}/{applicationID}/{datasetID}
 //	    marks a dataset as a gate suite with its criteria, or unmarks it
 //	    (models.applications.evaluation.dataset.update and
-//	    models.applications.publish.post)
+//	    models.applications.publish.post; a change that loosens the gate of
+//	    an agent whose tier needs approval also needs
+//	    models.applications.governance, releasegate.Loosens)
 //	GET /release_gates/prompt_lib/{projectID}/{applicationID}
 //	    the agent's gates, newest first (models.applications.evaluation.run.read)
 //	GET /release_gates/prompt_lib/{projectID}/{applicationID}/{gateID}
@@ -25,6 +27,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -32,6 +35,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/releasegate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
@@ -61,17 +65,53 @@ type Gates interface {
 
 var _ Gates = (*releasegate.Gate)(nil)
 
+// Governor is the agent lifecycle governance a gate suite edit answers to
+// (*repos.AgentLifecycle): the author of an agent whose tier needs
+// approval must not empty or soften the gate their own change request is
+// tested against.
+type Governor interface {
+	// CheckDirectPublish refuses (change_request_required) when the
+	// agent's tier needs an approved change request.
+	CheckDirectPublish(ctx context.Context, projectID, applicationID int64) error
+}
+
 // Handler serves the routes.
 type Handler struct {
-	gates Gates
+	gates    Gates
+	governor Governor
+	// holdsGovernance resolves the caller's governance role in the path's
+	// project.
+	holdsGovernance func(*http.Request) (bool, error)
+}
+
+// Option configures the handler.
+type Option func(*Handler)
+
+// WithGovernance makes a suite edit that loosens the gate of an agent
+// whose tier needs approval require the governance role. A nil governor
+// (or a typed nil pointer) is absent.
+func WithGovernance(governor Governor, holdsGovernance func(*http.Request) (bool, error)) Option {
+	return func(h *Handler) {
+		if governor == nil || holdsGovernance == nil {
+			return
+		}
+		if value := reflect.ValueOf(governor); value.Kind() == reflect.Ptr && value.IsNil() {
+			return
+		}
+		h.governor, h.holdsGovernance = governor, holdsGovernance
+	}
 }
 
 // NewHandler builds the handler. A nil gate (or a typed nil) answers 503.
-func NewHandler(gates Gates) *Handler {
+func NewHandler(gates Gates, options ...Option) *Handler {
 	if gate, ok := gates.(*releasegate.Gate); ok && gate == nil {
 		gates = nil
 	}
-	return &Handler{gates: gates}
+	h := &Handler{gates: gates}
+	for _, option := range options {
+		option(h)
+	}
+	return h
 }
 
 // Suite is one gate suite in a response.
@@ -148,7 +188,18 @@ func (h *Handler) PutSuite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !body.ReleaseGate {
+	var next *releasegate.SuiteConfig
+	if body.ReleaseGate {
+		next = &releasegate.SuiteConfig{
+			ApplicationID: applicationID, DatasetID: datasetID, Regression: body.Regression,
+			Criteria: body.Criteria, ReevaluateEveryDays: body.ReevaluateEveryDays, UpdatedBy: callerID(r),
+		}
+	}
+	if !h.editAllowed(w, r, projectID, applicationID, datasetID, next) {
+		return
+	}
+
+	if next == nil {
 		removed, err := h.gates.DeleteSuite(r.Context(), projectID, applicationID, datasetID)
 		if err != nil {
 			writeError(r.Context(), w, err)
@@ -162,10 +213,7 @@ func (h *Handler) PutSuite(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	stored, err := h.gates.PutSuite(r.Context(), projectID, releasegate.SuiteConfig{
-		ApplicationID: applicationID, DatasetID: datasetID, Regression: body.Regression,
-		Criteria: body.Criteria, ReevaluateEveryDays: body.ReevaluateEveryDays, UpdatedBy: callerID(r),
-	})
+	stored, err := h.gates.PutSuite(r.Context(), projectID, *next)
 	if err != nil {
 		writeError(r.Context(), w, err)
 		return
@@ -176,6 +224,58 @@ func (h *Handler) PutSuite(w http.ResponseWriter, r *http.Request) {
 	}
 	annotateSuite(r, projectID, applicationID, datasetID, kind)
 	writeJSON(w, http.StatusOK, suiteResponse(stored))
+}
+
+// editAllowed refuses a suite edit that loosens the gate (releasegate.
+// Loosens) of an agent whose tier needs an approved change request, unless
+// the caller holds the governance role: 403 governance_role_required.
+// Adding a suite or tightening one stays open to the author.
+func (h *Handler) editAllowed(w http.ResponseWriter, r *http.Request, projectID, applicationID, datasetID int64, next *releasegate.SuiteConfig) bool {
+	if h.governor == nil {
+		return true
+	}
+	suites, err := h.gates.ListSuites(r.Context(), projectID, applicationID)
+	if err != nil {
+		writeError(r.Context(), w, err)
+		return false
+	}
+	var current *releasegate.SuiteConfig
+	for index := range suites {
+		if suites[index].DatasetID == datasetID {
+			current = &suites[index]
+		}
+	}
+	if !releasegate.Loosens(current, next) {
+		return true
+	}
+	err = h.governor.CheckDirectPublish(r.Context(), projectID, applicationID)
+	if err == nil {
+		return true
+	}
+	if refusal, ok := agentlifecycle.AsRefusal(err); !ok || refusal.Code != agentlifecycle.ChangeRequiredCode {
+		if ok {
+			writeJSON(w, refusal.Status(), refusal.Body())
+			return false
+		}
+		slog.ErrorContext(r.Context(), "release gates: read the agent's tier", "error", err)
+		apierr.WriteStatus(w, http.StatusInternalServerError, "could not read the agent's governance")
+		return false
+	}
+	held, err := h.holdsGovernance(r)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "release gates: resolve the governance role", "error", err)
+		apierr.WriteStatus(w, http.StatusInternalServerError, "could not resolve the governance role")
+		return false
+	}
+	if held {
+		return true
+	}
+	refusal := agentlifecycle.Refuse(agentlifecycle.GovernanceRequiredCode,
+		"This agent's tier needs approval, so only a holder of the governance role ("+
+			agentlifecycle.GovernancePermission+") can unmark a gate suite, unset its regression flag, "+
+			"remove or change a criterion's kind, lower a min_score or raise a max_drop.")
+	writeJSON(w, refusal.Status(), refusal.Body())
+	return false
 }
 
 // AuditActionSuiteUpdated is the audit action of a gate suite edit: it

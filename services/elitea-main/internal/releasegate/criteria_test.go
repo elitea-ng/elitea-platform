@@ -254,3 +254,42 @@ func TestCaseName(t *testing.T) {
 		t.Errorf("CaseName length = %d", len(got))
 	}
 }
+
+func TestLoosens(t *testing.T) {
+	current := &SuiteConfig{Regression: true, Criteria: []Criterion{
+		{DimensionID: "1", Kind: CriterionThreshold, MinScore: score(70)},
+		{DimensionID: "2", Kind: CriterionNoWorseThan, MaxDrop: score(5)},
+	}}
+	with := func(edit func(*SuiteConfig)) *SuiteConfig {
+		next := *current
+		next.Criteria = append([]Criterion(nil), current.Criteria...)
+		edit(&next)
+		return &next
+	}
+	for _, c := range []struct {
+		name          string
+		current, next *SuiteConfig
+		want          bool
+	}{
+		{"new suite", nil, current, false},
+		{"unchanged", current, with(func(*SuiteConfig) {}), false},
+		{"unmark", current, nil, true},
+		{"unset regression", current, with(func(s *SuiteConfig) { s.Regression = false }), true},
+		{"remove a criterion", current, with(func(s *SuiteConfig) { s.Criteria = s.Criteria[:1] }), true},
+		{"lower min_score", current, with(func(s *SuiteConfig) { s.Criteria[0].MinScore = score(60) }), true},
+		{"raise min_score", current, with(func(s *SuiteConfig) { s.Criteria[0].MinScore = score(80) }), false},
+		{"raise max_drop", current, with(func(s *SuiteConfig) { s.Criteria[1].MaxDrop = score(10) }), true},
+		{"lower max_drop", current, with(func(s *SuiteConfig) { s.Criteria[1].MaxDrop = score(2) }), false},
+		{"change a kind", current, with(func(s *SuiteConfig) {
+			s.Criteria[0] = Criterion{DimensionID: "1", Kind: CriterionNoWorseThan, MaxDrop: score(0)}
+		}), true},
+		{"add a criterion", current, with(func(s *SuiteConfig) {
+			s.Criteria = append(s.Criteria, Criterion{DimensionID: "3", Kind: CriterionThreshold, MinScore: score(50)})
+		}), false},
+		{"drop the schedule", current, with(func(s *SuiteConfig) { s.ReevaluateEveryDays = nil }), false},
+	} {
+		if got := Loosens(c.current, c.next); got != c.want {
+			t.Errorf("%s: Loosens = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

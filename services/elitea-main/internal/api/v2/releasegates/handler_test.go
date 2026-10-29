@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/releasegate"
 )
 
@@ -138,5 +139,55 @@ func TestNoGateAnswers503(t *testing.T) {
 	status, _ := call(t, router(gate), http.MethodGet, "/release_gates/prompt_lib/1/3", "")
 	if status != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d", status)
+	}
+}
+
+type fakeGovernor struct{ err error }
+
+func (f fakeGovernor) CheckDirectPublish(context.Context, int64, int64) error { return f.err }
+
+// TestPutSuiteLooseningNeedsGovernance proves the author of an agent whose
+// tier needs approval cannot loosen its gate (403 governance_role_required),
+// may tighten it, and that a governance role holder may loosen it.
+func TestPutSuiteLooseningNeedsGovernance(t *testing.T) {
+	governed := fakeGovernor{err: agentlifecycle.Refuse(agentlifecycle.ChangeRequiredCode, "needs approval")}
+	marked := func() *fakeGates {
+		min := 70.0
+		return &fakeGates{put: []releasegate.SuiteConfig{{ApplicationID: 3, DatasetID: 4, Regression: true,
+			Criteria: []releasegate.Criterion{{DimensionID: "7", Kind: releasegate.CriterionThreshold, MinScore: &min}}}}}
+	}
+	serveWith := func(gates *fakeGates, governor Governor, governance bool) http.Handler {
+		handler := NewHandler(gates, WithGovernance(governor, func(*http.Request) (bool, error) { return governance, nil }))
+		r := chi.NewRouter()
+		r.Put(SuitePath, handler.PutSuite)
+		return r
+	}
+	const path = "/release_gate_suites/prompt_lib/1/3/4"
+	for _, c := range []struct {
+		name       string
+		body       string
+		governor   fakeGovernor
+		governance bool
+		want       int
+	}{
+		{"unmark", `{"release_gate":false}`, governed, false, http.StatusForbidden},
+		{"unset regression", `{"release_gate":true,"regression":false,"criteria":[{"dimension_id":"7","kind":"threshold","min_score":70}]}`, governed, false, http.StatusForbidden},
+		{"lower min_score", `{"release_gate":true,"regression":true,"criteria":[{"dimension_id":"7","kind":"threshold","min_score":50}]}`, governed, false, http.StatusForbidden},
+		{"tighten", `{"release_gate":true,"regression":true,"criteria":[{"dimension_id":"7","kind":"threshold","min_score":90}]}`, governed, false, http.StatusOK},
+		{"unmark by governance", `{"release_gate":false}`, governed, true, http.StatusOK},
+		{"unmark at low tier", `{"release_gate":false}`, fakeGovernor{}, false, http.StatusOK},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			gates := marked()
+			status, body := call(t, serveWith(gates, c.governor, c.governance), http.MethodPut, path, c.body)
+			if status != c.want {
+				t.Fatalf("status %d, want %d: %v", status, c.want, body)
+			}
+			if c.want == http.StatusForbidden {
+				if body["code"] != agentlifecycle.GovernanceRequiredCode || gates.deleted != 0 || len(gates.put) != 1 {
+					t.Fatalf("refused edit changed the gate or answered %v", body)
+				}
+			}
+		})
 	}
 }

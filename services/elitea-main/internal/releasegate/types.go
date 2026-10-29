@@ -162,6 +162,45 @@ func (s SuiteConfig) NeedsBaseline() bool {
 	return false
 }
 
+// Loosens reports whether replacing current with next makes the gate
+// easier to pass (next nil: the suite is unmarked). Loosening is:
+// unmarking a suite, unsetting the regression flag, removing a criterion,
+// changing a criterion's kind, lowering a threshold's min_score or raising
+// a no_worse_than's max_drop. A new suite (current nil), a new criterion
+// and a stricter value only tighten. The schedule is not a pass criterion.
+func Loosens(current, next *SuiteConfig) bool {
+	if current == nil {
+		return false
+	}
+	if next == nil {
+		return true
+	}
+	if current.Regression && !next.Regression {
+		return true
+	}
+	byDimension := make(map[string]Criterion, len(next.Criteria))
+	for _, criterion := range next.Criteria {
+		byDimension[criterion.DimensionID] = criterion
+	}
+	for _, was := range current.Criteria {
+		now, kept := byDimension[was.DimensionID]
+		if !kept || now.Kind != was.Kind {
+			return true
+		}
+		switch was.Kind {
+		case CriterionThreshold:
+			if was.MinScore != nil && (now.MinScore == nil || *now.MinScore < *was.MinScore) {
+				return true
+			}
+		case CriterionNoWorseThan:
+			if was.MaxDrop != nil && (now.MaxDrop == nil || *now.MaxDrop > *was.MaxDrop) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // DimensionIDs answers the criteria's dimensions in order: the dimensions
 // a gate run of the suite scores.
 func (s SuiteConfig) DimensionIDs() []string {

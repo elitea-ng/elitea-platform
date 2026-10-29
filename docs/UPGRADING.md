@@ -31,6 +31,11 @@ newest entry is first.
   (`POST application_releases/.../rollback`) of an agent whose tier
   requires approval answers **409 `change_request_required`** unless the
   caller holds `models.applications.governance`.
+* **Loosening a governed agent's gate needs the governance role.** A
+  `PUT release_gate_suites/...` that unmarks a suite, unsets the regression
+  flag, removes a criterion, changes its kind, lowers `min_score` or raises
+  `max_drop` on an agent whose tier requires approval answers
+  **403 `governance_role_required`** without `models.applications.governance`.
 * **New 409 and 403 answers** on the change request routes:
   `self_approval_refused`, `approver_role_required`,
   `release_gate_pending`, `release_gate_failed`, `attestation_missing`,

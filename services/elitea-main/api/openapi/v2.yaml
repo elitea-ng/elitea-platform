@@ -25072,7 +25072,11 @@ paths:
         regression suite and 10 gate suites. A gate already started keeps
         the suites it started with. Requires
         `models.applications.evaluation.dataset.update` and
-        `models.applications.publish.post`.
+        `models.applications.publish.post`. For an agent whose risk tier
+        needs approval (ADR-0040), a change that loosens the gate (unmark a
+        suite, unset regression, remove a criterion or change its kind,
+        lower min_score, raise max_drop) also requires
+        `models.applications.governance`; adding or tightening does not.
       tags: [applications]
       requestBody:
         required: true
@@ -25094,7 +25098,15 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
+        '403':
+          description: >
+            The caller lacks a required permission; (code
+            governance_role_required) the change loosens the gate of an agent
+            whose tier needs approval and the caller does not hold the
+            governance role.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '404':
           description: (code release_gate_dataset_not_found) The dataset is not in this project, or belongs to another agent
           content:

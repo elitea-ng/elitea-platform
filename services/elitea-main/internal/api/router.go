@@ -4050,11 +4050,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// The evaluation release gate (ADR-0040 decision 4). Marking
 				// a dataset as a gate suite changes what a release must pass,
 				// so the write takes the publish permission as well as the
-				// dataset update permission. The reads take the evaluation
-				// reads. A gate is started and overridden by the change
-				// request flow, not by a route.
+				// dataset update permission; a write that loosens the gate
+				// of an agent whose tier needs approval also takes the
+				// governance role (resolved in the handler). The reads take
+				// the evaluation reads. A gate is started and overridden by
+				// the change request flow, not by a route.
 				{
-					gates := v2releasegates.NewHandler(cfg.ReleaseGate)
+					gates := v2releasegates.NewHandler(cfg.ReleaseGate, v2releasegates.WithGovernance(agentLifecycle,
+						apimw.HoldsResolvedPermission(coreResolver, platformauth.PermissionModeDefault, agentlifecycle.GovernancePermission)))
 					r.With(evaluationGate(v2evaluation.PermissionDatasetRead)).
 						Get(v2releasegates.SuitesPath, gates.ListSuites)
 					r.With(evaluationGate(v2evaluation.PermissionDatasetUpdate),

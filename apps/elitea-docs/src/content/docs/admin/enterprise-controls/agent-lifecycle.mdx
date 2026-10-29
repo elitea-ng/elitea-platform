@@ -101,6 +101,8 @@ A change that passes review can still make an agent worse. Without a test run ti
 
 One suite can also be marked as the **regression suite**. An agent can have at most 10 gate suites.
 
+**Only the governance role loosens a governed gate.** For an agent whose tier needs approval, the author cannot weaken the gate their own change request is tested against. Unmarking a suite, unsetting the regression flag, removing a criterion, changing a criterion's kind, lowering a `min_score` or raising a `max_drop` needs the governance role (`models.applications.governance`); without it the change is refused with HTTP 403 `governance_role_required`. Adding a suite or a criterion, or making one stricter, stays open to anyone who can edit the dataset and publish the agent.
+
 **What a gate runs.** Submitting a change request runs every gate suite against the candidate. The regression suite, and any suite with a "no worse than" criterion, also runs against the version of the agent's current release. The instructions and model of both are copied when the gate starts, so an edit made while the gate runs does not change what is measured.
 
 **How a gate decides.** When every run has finished:
@@ -125,7 +127,7 @@ A run that errors or is cancelled fails the gate. It never passes it. An agent w
 - An evaluation run sends each case to the agent's instructions and model in one call, without its tools, toolkits or sub-agents. The gate measures instruction and model changes, not tool behaviour.
 - Gate runs share the evaluation runner's capacity (two runs at a time per instance) and cost model calls like any evaluation run.
 - A gate settles when its runs finish, either when someone reads it or on the next pass of the `main.release_gate` routine (every 5 minutes).
-- A person who can edit the dataset and publish the agent can change its criteria. Each gate keeps the criteria it ran with, so approvers see them.
+- A person who can edit the dataset and publish the agent can add or tighten its criteria; loosening a governed agent's gate needs the governance role. Each gate keeps the criteria it ran with, so approvers see them.
 - If a change request is submitted and later withdrawn, the gate's runs still finish and are paid for.
 
 ## Releases, revisions and rollback
@@ -311,7 +313,7 @@ All paths are under `/api/v2/elitea_core`, with `{p}` the project id and `{app}`
 | `POST change_requests/prompt_lib/{p}/{app}/{cr}/submit`, `approve`, `reject`, `withdraw` | `models.applications.publish.post` | Move the request |
 | `POST change_requests/prompt_lib/{p}/{app}/{cr}/gate_override` | `models.applications.governance` | Accept a failed gate, with a reason |
 | `GET`, `POST agent_attestations/prompt_lib/{p}`; `POST agent_attestations/prompt_lib/{p}/{id}/revoke` | read: `models.applications.versions.get`; write: `lifecycle.attestations.write` | List, record or revoke attestations |
-| `GET release_gate_suites/prompt_lib/{p}/{app}`; `PUT release_gate_suites/prompt_lib/{p}/{app}/{dataset}` | read: `models.applications.evaluation.dataset.read`; write: `…evaluation.dataset.update` and `models.applications.publish.post` | Read or set the gate suites |
+| `GET release_gate_suites/prompt_lib/{p}/{app}`; `PUT release_gate_suites/prompt_lib/{p}/{app}/{dataset}` | read: `models.applications.evaluation.dataset.read`; write: `…evaluation.dataset.update` and `models.applications.publish.post`, and `models.applications.governance` to loosen the gate of an agent whose tier needs approval | Read or set the gate suites |
 | `GET release_gates/prompt_lib/{p}/{app}[/{gate}]` | `models.applications.evaluation.run.read` | Gates with their runs, results, failures and override |
 | `GET /api/v2/admin/agent_registry` | `configuration.governance` | The cross-project registry; `tier`, `state`, `owner_id`, `project_id`, `limit`, `offset`; `format=csv` exports up to 10,000 rows |
 
