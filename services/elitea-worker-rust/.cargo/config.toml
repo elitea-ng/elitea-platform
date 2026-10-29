@@ -1,0 +1,6 @@
+# Test threads get the worker runtime's 8 MiB stack (src/main.rs,
+# WORKER_THREAD_STACK_BYTES). The nested saved agent/pipeline tests run five
+# agent loops deep on one thread, and an unoptimised build needs more than
+# the default 2 MiB for that.
+[env]
+RUST_MIN_STACK = "8388608"
