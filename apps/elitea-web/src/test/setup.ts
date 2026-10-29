@@ -105,13 +105,19 @@ afterEach(() => {
   // never leaks between tests.
   server.resetHandlers();
 
-  // The shim above installs ONE storage instance for the whole worker, where
-  // a working jsdom would hand each test file its own `window`. Without this
-  // reset, storage written by one test is visible to every later test in the
-  // same worker — an isolation leak that shows up as tests passing alone and
-  // failing in-suite. Clearing here restores per-test isolation.
-  for (const name of shimmedStorages) {
-    (globalThis as unknown as Record<string, Storage | undefined>)[name]?.clear();
+  // Storage outlives a test either way: the shim above installs ONE instance
+  // for the whole worker, and a working environment storage (what vitest 5's
+  // jsdom provides, so the shim no-ops) lives as long as the file's window.
+  // Without this reset, storage written by one test is visible to every later
+  // test — an isolation leak that shows up as tests passing alone and failing
+  // in-suite (WorkspaceComposer's composer drafts did, on the vitest 5 bump).
+  // So clear BOTH stores, whoever provides them, not only the shimmed ones.
+  for (const name of new Set<string>([...shimmedStorages, 'localStorage', 'sessionStorage'])) {
+    try {
+      (globalThis as unknown as Record<string, Storage | undefined>)[name]?.clear();
+    } catch {
+      // An environment whose storage accessor throws has nothing to leak.
+    }
   }
 });
 

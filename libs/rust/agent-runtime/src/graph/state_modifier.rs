@@ -282,10 +282,15 @@ pub fn template_value(value: &Value) -> JinjaValue {
             }
         }
         Value::Array(values) => values.iter().map(template_value).collect(),
-        Value::Object(values) => values
-            .iter()
-            .map(|(key, value)| (JinjaValue::from(key.as_str()), template_value(value)))
-            .collect(),
+        // minijinja 3 dropped `FromIterator<(K, V)> for Value`: collecting
+        // pairs now yields a SEQUENCE of 2-tuples, so `.route` / `.count`
+        // lookups silently go undefined. Build the map explicitly.
+        Value::Object(values) => JinjaValue::from(
+            values
+                .iter()
+                .map(|(key, value)| (JinjaValue::from(key.as_str()), template_value(value)))
+                .collect::<BTreeMap<_, _>>(),
+        ),
     }
 }
 
