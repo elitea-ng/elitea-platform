@@ -1961,6 +1961,25 @@ pub(crate) enum TestModelGatewayOutcome {
         model: &'static str,
         response: Response<Body>,
     },
+    /// Served to the next request whose body contains `marker`, in order per
+    /// marker: concurrent branches get their own replies whatever the arrival
+    /// order.
+    ResponseForRequest {
+        marker: &'static str,
+        response: Response<Body>,
+    },
+    /// [`Self::ResponseForRequest`], answered only once `gate` is notified.
+    ResponseForRequestAfter {
+        marker: &'static str,
+        gate: Arc<tokio::sync::Notify>,
+        response: Response<Body>,
+    },
+    /// Served in order, but only once `gate` is notified: a branch whose reply
+    /// must wait for something the test does (a card decided live).
+    ResponseAfter {
+        gate: Arc<tokio::sync::Notify>,
+        response: Response<Body>,
+    },
     Unavailable,
     Pending,
     /// End the test process at this model request: a Worker that dies after
@@ -2005,7 +2024,30 @@ impl ModelGatewayTransport for TestModelGatewayTransport {
             let has_model_routing = outcomes
                 .iter()
                 .any(|outcome| matches!(outcome, TestModelGatewayOutcome::ResponseForModel { .. }));
-            if has_model_routing {
+            let has_request_routing = outcomes.iter().any(|outcome| {
+                matches!(
+                    outcome,
+                    TestModelGatewayOutcome::ResponseForRequest { .. }
+                        | TestModelGatewayOutcome::ResponseForRequestAfter { .. }
+                )
+            });
+            if has_request_routing {
+                let text = String::from_utf8_lossy(&body);
+                let position = outcomes
+                    .iter()
+                    .position(|outcome| {
+                        matches!(
+                            outcome,
+                            TestModelGatewayOutcome::ResponseForRequest { marker, .. }
+                                | TestModelGatewayOutcome::ResponseForRequestAfter { marker, .. }
+                                if text.contains(marker)
+                        )
+                    })
+                    .ok_or(ModelGatewayTransportError::Unavailable)?;
+                outcomes
+                    .remove(position)
+                    .ok_or(ModelGatewayTransportError::Unavailable)?
+            } else if has_model_routing {
                 let model = serde_json::from_slice::<serde_json::Value>(&body)
                     .ok()
                     .and_then(|body| body.get("model")?.as_str().map(str::to_owned))
@@ -2033,7 +2075,13 @@ impl ModelGatewayTransport for TestModelGatewayTransport {
         };
         match outcome {
             TestModelGatewayOutcome::Response(response)
-            | TestModelGatewayOutcome::ResponseForModel { response, .. } => Ok(response),
+            | TestModelGatewayOutcome::ResponseForModel { response, .. }
+            | TestModelGatewayOutcome::ResponseForRequest { response, .. } => Ok(response),
+            TestModelGatewayOutcome::ResponseAfter { gate, response }
+            | TestModelGatewayOutcome::ResponseForRequestAfter { gate, response, .. } => {
+                gate.notified().await;
+                Ok(response)
+            }
             TestModelGatewayOutcome::Unavailable => Err(ModelGatewayTransportError::Unavailable),
             TestModelGatewayOutcome::Pending => std::future::pending().await,
             TestModelGatewayOutcome::ExitProcess(code) => std::process::exit(code),
