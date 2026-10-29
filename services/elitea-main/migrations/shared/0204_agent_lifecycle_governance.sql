@@ -304,17 +304,24 @@ BEGIN
         RETURN;
     END IF;
 
+    -- One INSERT per mode, with the mode spelled as a literal: the router's
+    -- grant gate (router_permission_grant_gate_test.go) reads the grants of
+    -- this directory per `mode = '...'` block.
+    INSERT INTO public.auth_core__role_permission (role_id, permission)
+    SELECT role.id, 'models.applications.governance'
+    FROM public.auth_core__role AS role
+    WHERE role.mode = 'administration' AND role.name IN ('super_admin', 'admin')
+    ON CONFLICT (role_id, permission) DO NOTHING;
+
     INSERT INTO public.auth_core__role_permission (role_id, permission)
     SELECT role.id, grant_row.permission
     FROM public.auth_core__role AS role
-    JOIN (VALUES
-        ('administration', 'super_admin', 'models.applications.governance'),
-        ('administration', 'admin', 'models.applications.governance'),
-        ('default', 'admin', 'models.applications.governance'),
-        ('default', 'admin', 'lifecycle.attestations.write'),
-        ('default', 'admin', 'lifecycle.registry.mark_due')
-    ) AS grant_row(mode, role_name, permission)
-      ON grant_row.mode = role.mode AND grant_row.role_name = role.name
+    CROSS JOIN (VALUES
+        ('models.applications.governance'),
+        ('lifecycle.attestations.write'),
+        ('lifecycle.registry.mark_due')
+    ) AS grant_row(permission)
+    WHERE role.mode = 'default' AND role.name = 'admin'
     ON CONFLICT (role_id, permission) DO NOTHING;
 
     -- legacyrbac reads the central grants only for a caller with no
