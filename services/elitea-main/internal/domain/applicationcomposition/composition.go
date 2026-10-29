@@ -112,6 +112,8 @@ type Attachment struct {
 type AgentNode struct {
 	ID    string
 	Alias string
+	// Branch: a fixed Parallel node runs it as one of its branches.
+	Branch bool
 }
 
 // Version is what the walk reads of one saved version.
@@ -374,6 +376,11 @@ type path struct {
 	depth     int
 	scopes    int
 	graphRoot bool
+	// underAgent: a saved Agent lies on the path, so a pipeline below it runs
+	// as that Agent's tool, not as a subgraph of the root graph.
+	underAgent bool
+	// underBranch: the path runs inside a fixed Parallel branch.
+	underBranch bool
 }
 
 func (p path) with(id Identity, name string) path {
@@ -474,6 +481,7 @@ func (w *walker) enterAgent(p path, id Identity, child Version) (path, error) {
 	}
 	next, err := w.enter(p, id, child)
 	next.tier++
+	next.underAgent = true
 	w.maxTier = max(w.maxTier, next.tier)
 	return next, err
 }
@@ -482,10 +490,12 @@ func (w *walker) enterPipeline(p path, id Identity, child Version) (path, error)
 	if p.depth > MaxPipelineDepth {
 		return path{}, depthViolation(chain(p.trail, child.Name))
 	}
-	// FU-249: the Worker binds a Parallel's checkpoint authority to the started root only.
-	if child.ParallelNode != "" {
+	// FU-249: a Parallel runs in the started pipeline and in a saved pipeline it
+	// reaches through Agent nodes only (a subgraph of the root graph). As an
+	// agent's tool, or inside another Parallel's branch, it cannot run.
+	if child.ParallelNode != "" && (!p.graphRoot || p.underAgent || p.underBranch) {
 		return path{}, violation(BoundNestedParallel, fmt.Sprintf(
-			"Pipeline %s has Parallel node %s, so it cannot run inside another agent or pipeline (%s): for now a Parallel node runs only in the pipeline you start. Start pipeline %s directly, or remove the attachment before saving.",
+			"Pipeline %s has Parallel node %s, so it cannot run as a tool of an agent or inside a Parallel branch (%s). Run pipeline %s from a pipeline Agent node outside any Parallel branch, start it directly, or remove the attachment before saving.",
 			label(child.Name), label(child.ParallelNode), chain(p.trail, child.Name), label(child.Name)))
 	}
 	next, err := w.enter(p, id, child)
@@ -571,8 +581,12 @@ func (w *walker) walkPipeline(ctx context.Context, pipeline Version, p path, com
 		if !ok {
 			continue
 		}
+		at := p
+		if node.Branch {
+			at.underBranch = true
+		}
 		if child.Kind == KindPipeline {
-			next, err := w.enterPipeline(p, attachment.Identity, child)
+			next, err := w.enterPipeline(at, attachment.Identity, child)
 			if err != nil {
 				return err
 			}
@@ -586,7 +600,7 @@ func (w *walker) walkPipeline(ctx context.Context, pipeline Version, p path, com
 				"Agent node %s of pipeline %s runs agent %s as a third level of pipeline Agent nodes (%s); at most %d levels are supported. Reduce the nesting before saving.",
 				label(node.ID), label(pipeline.Name), label(child.Name), chain(p.trail, child.Name), MaxOrdinaryGraphScopes))
 		}
-		scoped := p
+		scoped := at
 		scoped.scopes++
 		next, err := w.enterAgent(scoped, attachment.Identity, child)
 		if err != nil {
@@ -783,6 +797,12 @@ func ReadPipeline(instructions string) (nodes []AgentNode, staticPause bool, par
 }
 
 func agentNodes(sequence *yaml.Node) (nodes []AgentNode, parallelNode string) {
+	branches := map[string]bool{}
+	defer func() {
+		for i := range nodes {
+			nodes[i].Branch = branches[nodes[i].ID]
+		}
+	}()
 	for _, entry := range sequence.Content {
 		entry = aliased(entry)
 		if entry.Kind != yaml.MappingNode {
@@ -792,6 +812,12 @@ func agentNodes(sequence *yaml.Node) (nodes []AgentNode, parallelNode string) {
 		var isAgent, isParallel bool
 		for i := 0; i+1 < len(entry.Content); i += 2 {
 			value := aliased(entry.Content[i+1])
+			if aliased(entry.Content[i]).Value == "branches" && value.Kind == yaml.SequenceNode {
+				for _, node := range branchNodes(value) {
+					branches[node] = true
+				}
+				continue
+			}
 			if value.Kind != yaml.ScalarNode {
 				continue
 			}
@@ -813,6 +839,24 @@ func agentNodes(sequence *yaml.Node) (nodes []AgentNode, parallelNode string) {
 		}
 	}
 	return nodes, parallelNode
+}
+
+// branchNodes answers the node ids a Parallel's `branches` list runs.
+func branchNodes(sequence *yaml.Node) []string {
+	var ids []string
+	for _, branch := range sequence.Content {
+		branch = aliased(branch)
+		if branch.Kind != yaml.MappingNode {
+			continue
+		}
+		for i := 0; i+1 < len(branch.Content); i += 2 {
+			value := aliased(branch.Content[i+1])
+			if aliased(branch.Content[i]).Value == "node" && value.Kind == yaml.ScalarNode {
+				ids = append(ids, value.Value)
+			}
+		}
+	}
+	return ids
 }
 
 func aliased(node *yaml.Node) *yaml.Node {

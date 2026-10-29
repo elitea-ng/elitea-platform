@@ -151,35 +151,49 @@ func parallelPipeline(alias string) string {
 	return fmt.Sprintf("state:\n  messages: list\n  b1: str\n  b2: str\n  joined: list\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{id: one, node: ask_one}, {id: two, node: ask_two}]\n    max_concurrency: 2\n    wait: all\n    output: [joined]\n    transition: END\n  - id: ask_one\n    type: agent\n    tool: %[1]q\n    input_mapping:\n      task: {type: fixed, value: 'one'}\n    output: [b1]\n  - id: ask_two\n    type: agent\n    tool: %[1]q\n    input_mapping:\n      task: {type: fixed, value: 'two'}\n    output: [b2]\n", alias)
 }
 
-// FU-249: a pipeline with a Parallel runs only as the started root, refused by name at
-// attach and at the save that adds the Parallel to a pipeline already run as a child.
-func TestAParallelInASavedChildPipelineIsRefusedAtAttachAndAtSave(t *testing.T) {
+// FU-249: a pipeline with a Parallel runs as a subgraph beneath a pipeline Agent
+// node, so that attach and the save that adds the Parallel are stored. As an
+// agent's tool or inside a Parallel branch it is refused by name, at attach and
+// at the save that adds the Parallel.
+func TestAParallelInASavedChildPipelineIsCheckedAtAttachAndAtSave(t *testing.T) {
 	pool := newPublishCopyPool(t)
 	helper := seedComposed(t, pool, "Helper", "agent", "help")
 	fan := seedComposed(t, pool, "Fan", "pipeline", parallelPipeline("Helper"))
 	mustAttach(t, pool, fan, helper)
 	outer := seedComposed(t, pool, "Outer", "pipeline", agentNodePipeline("Fan", false))
-	expectRefused(t, pool, outer, fan, `Pipeline "Fan" has Parallel node "gather"`, `"Outer" → "Fan"`)
-	// An agent's tool is a child too.
+	mustAttach(t, pool, outer, fan)
+	// An agent's tool cannot run it.
 	chat := seedComposed(t, pool, "Chat", "agent", "chat")
 	expectRefused(t, pool, chat, fan, `Pipeline "Fan" has Parallel node "gather"`)
+	// Nor can another Parallel's branch.
+	branch := seedComposed(t, pool, "Branching", "pipeline", parallelPipeline("Fan"))
+	expectRefused(t, pool, branch, fan, `Pipeline "Fan" has Parallel node "gather"`, `"Branching" → "Fan"`)
 
-	// The save path: Inner runs as Outer's child, and the save that adds a Parallel is refused.
+	repo := repos.NewApplicationsRepo(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	// The save path beneath a pipeline Agent node: the Parallel is stored.
 	inner := seedComposed(t, pool, "Inner", "pipeline", agentNodePipeline("Helper", false))
 	mustAttach(t, pool, inner, helper)
 	runner := seedComposed(t, pool, "Runner", "pipeline", agentNodePipeline("Inner", false))
 	mustAttach(t, pool, runner, inner)
-	repo := repos.NewApplicationsRepo(pool)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	_, err := repo.UpdateVersion(ctx, "1", fmt.Sprint(inner.appID), fmt.Sprint(inner.versionID),
+	if _, err := repo.UpdateVersion(ctx, "1", fmt.Sprint(inner.appID), fmt.Sprint(inner.versionID),
+		applications.Version{AgentType: "pipeline", Instructions: parallelPipeline("Helper")}); err != nil {
+		t.Fatalf("a Parallel beneath a pipeline Agent node is stored: %v", err)
+	}
+	// The save path as an agent's tool: refused, nothing stored.
+	tool := seedComposed(t, pool, "Tool", "pipeline", agentNodePipeline("Helper", false))
+	mustAttach(t, pool, tool, helper)
+	agentParent := seedComposed(t, pool, "Assistant", "agent", "assist")
+	mustAttach(t, pool, agentParent, tool)
+	_, err := repo.UpdateVersion(ctx, "1", fmt.Sprint(tool.appID), fmt.Sprint(tool.versionID),
 		applications.Version{AgentType: "pipeline", Instructions: parallelPipeline("Helper")})
 	apiErr, ok := err.(*apierr.APIError)
-	if !ok || apiErr.Status != http.StatusBadRequest || apiErr.Code != "APPLICATION_COMPOSITION_INVALID" || !strings.Contains(apiErr.Message, `Pipeline "Inner" has Parallel node "gather"`) {
+	if !ok || apiErr.Status != http.StatusBadRequest || apiErr.Code != "APPLICATION_COMPOSITION_INVALID" || !strings.Contains(apiErr.Message, `Pipeline "Tool" has Parallel node "gather"`) {
 		t.Fatalf("save err = %v", err)
 	}
 	var stored string
-	if err := pool.QueryRow(ctx, `SELECT instructions FROM p_1.application_versions WHERE id = $1`, inner.versionID).Scan(&stored); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT instructions FROM p_1.application_versions WHERE id = $1`, tool.versionID).Scan(&stored); err != nil {
 		t.Fatalf("read back: %v", err)
 	}
 	if strings.Contains(stored, "type: parallel") {
