@@ -42,7 +42,11 @@ type securityContextFacts struct {
 	actorID              string
 	applicationID        int64
 	applicationVersionID int64
-	admittedAt           time.Time
+	// bindingVersionID is the version whose agent binding the run binds
+	// when it is not applicationVersionID: the release's own version row
+	// for a release run (ADR-0040 decision 2). Zero is applicationVersionID.
+	bindingVersionID int64
+	admittedAt       time.Time
 	// governed is the agent run's governed credential freeze (#1119); nil
 	// when admission resolved none.
 	governed *agentexecutionapp.GovernedCredentialFreeze
@@ -53,6 +57,14 @@ type securityContextFacts struct {
 // resolved for (#1119): a binding was approved, suspended or replaced in
 // between. A retry resolves again.
 var ErrGovernedBindingChanged = errors.New("the agent binding changed while governed credentials were resolved")
+
+// bindingVersion is the version whose agent binding the run binds.
+func (facts securityContextFacts) bindingVersion() int64 {
+	if facts.bindingVersionID > 0 {
+		return facts.bindingVersionID
+	}
+	return facts.applicationVersionID
+}
 
 // recordFacts reads the facts every admission record carries.
 func recordFacts(record executiondomain.Admission, admittedAt time.Time, applicationVersionID int64) securityContextFacts {
@@ -125,7 +137,7 @@ WHERE execution_id = $1 AND profile = 'elitea.credential-profile.governed.v1'`, 
 		built.ApplicationID, built.ApplicationVersionID = facts.applicationID, facts.applicationVersionID
 	}
 	if governed := facts.governed; governed != nil {
-		if governed.AgentBindingID != built.AgentBindingID || governed.ApplicationVersionID != facts.applicationVersionID {
+		if governed.AgentBindingID != built.AgentBindingID || governed.ApplicationVersionID != facts.bindingVersion() {
 			return securitycontext.Reference{}, ErrGovernedBindingChanged
 		}
 		for _, ref := range governed.References {
@@ -176,6 +188,18 @@ func bindInferredAuthority(ctx context.Context, rows rowFunc, built *securitycon
 // rolls back, so the run writes no row.
 var ErrRunAuthorityNotUsable = errors.New("the run's mandate is not usable")
 
+// ErrRunAuthorityReleaseRolledBack refuses the admission of an unattended
+// governed run of an agent whose published release was rolled back: the
+// run executes the release's version row (bindingVersion), while the
+// mandate's agent binding binds the version the trigger names. A binding
+// pins one version and its definition digest (ADR-0039, #1462), so the
+// mandate never authorised the rolled-back definition, and running it
+// under that mandate would let a rollback widen what the mandate
+// approved. It is typed, not ErrRunAuthorityNotUsable, because the
+// mandate itself is fine: roll forward, or attach a mandate whose binding
+// binds the release's version to a trigger on that version.
+var ErrRunAuthorityReleaseRolledBack = errors.New("the agent was rolled back to a release the run's mandate does not bind")
+
 // bindMandateAuthority names the attached mandate, its binding and its
 // delegation in the context, read in the admission transaction. The subject
 // is the mandate's: empty for an autonomous mandate, whatever user the run
@@ -219,8 +243,14 @@ WHERE m.id::text = $1 AND m.tenant_project_id = $2 AND m.state = 'active'
 	case mandateEpoch != authority.MandateEpoch,
 		subjectID != authority.SubjectUserID,
 		len(digest) != len(runtimedomain.Digest{}),
-		facts.applicationVersionID > 0 && versionID != facts.applicationVersionID,
-		delegationID != "" && delegationEpoch == nil,
+		delegationID != "" && delegationEpoch == nil:
+		return ErrRunAuthorityNotUsable
+	case facts.applicationVersionID > 0 && facts.bindingVersion() != facts.applicationVersionID &&
+		versionID == facts.applicationVersionID:
+		// The mandate binds the trigger's version, and a rollback made the
+		// run execute an earlier release's version row.
+		return ErrRunAuthorityReleaseRolledBack
+	case facts.applicationVersionID > 0 && versionID != facts.bindingVersion(),
 		// The mandate's binding pins another definition than the one the
 		// run executes (#1462).
 		definitionMismatch(facts, runtimedomain.Digest(digestArray(digest))):
@@ -257,7 +287,7 @@ WHERE m.id::text = $1 AND m.tenant_project_id = $2 AND m.state = 'active'
 // audit; the comparison is repeated here because the binding is read again
 // in this transaction.
 func bindActiveAgentIdentity(ctx context.Context, rows rowFunc, built *securitycontext.Context, facts securityContextFacts) error {
-	id, epoch, digest, found, err := usableBindingForVersion(ctx, rows, facts.tenantProjectID, facts.applicationVersionID)
+	id, epoch, digest, found, err := usableBindingForVersion(ctx, rows, facts.tenantProjectID, facts.bindingVersion())
 	if err != nil || !found {
 		return err
 	}

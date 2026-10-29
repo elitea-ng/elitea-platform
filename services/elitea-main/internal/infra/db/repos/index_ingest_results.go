@@ -528,7 +528,7 @@ func (r *IndexIngestResultsRepository) ProjectIndexIngest(ctx context.Context, p
 			}
 			if errors.Is(loadErr, pgx.ErrNoRows) {
 				if insertResult.CancellationRejected {
-					if err := materializeCanonicalCancellation(ctx, tx, record, true); err != nil {
+					if err := materializeCanonicalCancellation(ctx, tx, record, true, false); err != nil {
 						return indexProjectionError(err)
 					}
 					if err := r.activity.projectTerminal(ctx, tx, projectID, currentIndexActivityCancellation(record)); err != nil {

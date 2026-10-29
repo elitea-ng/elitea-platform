@@ -633,6 +633,38 @@ WHERE execution_id = $1 AND generation = $2`,
 			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("record the run's agent: %w", err)
 		}
 	}
+	// The release the run executes (shared 0198, ADR-0040 decision 2), so
+	// audit and incident review can name the exact definition of a run.
+	if admission.ReleaseID > 0 {
+		if _, err := tx.Exec(ctx, `
+UPDATE elitea_runtime.agent_execution_jobs SET release_id = $3
+WHERE execution_id = $1 AND generation = $2`,
+			admission.Record.Job.ID, int64(admission.Record.Job.Generation), admission.ReleaseID); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("record the run's release: %w", err)
+		}
+	}
+	// The run's toolkit types and browser session (shared 0201): a
+	// toolkit_type suspension cancels it in flight, and its session's audit
+	// events join it. ToolkitTypes is never nil from the admission service;
+	// an empty list records "no toolkit".
+	toolkitTypes := admission.ToolkitTypes
+	if toolkitTypes == nil {
+		toolkitTypes = []string{}
+	}
+	if err := stampAdmissionSafety(ctx, pgxExecutor{queryer: tx}, admission.Record.Job.ID,
+		int64(admission.Record.Job.Generation), admissionSafetyRecord{ToolkitTypes: toolkitTypes}); err != nil {
+		return executionapp.AdmissionOutcome{}, nil, err
+	}
+	// A continuation is a new execution of the same response. The whole-run
+	// wall cap counts from the start of the run it continues (ADR-0041
+	// decision 3), so it copies that run's start.
+	if admission.CurrentContinueTurn != nil {
+		if err := inheritContinuedRunStart(ctx, pgxExecutor{queryer: tx}, admission.Record.Job.ID,
+			int64(admission.Record.Job.Generation), admission.Binding.ClientStreamID,
+			admission.Binding.ClientMessageID); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, err
+		}
+	}
 	if admission.CurrentTurn != nil {
 		turn := admission.CurrentTurn
 		if err := insertCurrentApplicationTurn(
@@ -733,6 +765,9 @@ WHERE execution_id = $1 AND generation = $2`,
 	}
 	facts := recordFacts(admission.Record, timing.AdmittedAt, agentApplicationVersionID(admission))
 	facts.applicationID, facts.governed = admission.ApplicationID(), admission.GovernedCredentials
+	if facts.applicationVersionID > 0 {
+		facts.bindingVersionID = admission.BindingVersionID
+	}
 	if _, err := admitExecutionProfile(ctx, tx, pgxRows(tx), r.policy.CredentialProfile, agentAdmissionPin(admission),
 		facts); err != nil {
 		return executionapp.AdmissionOutcome{}, nil, err

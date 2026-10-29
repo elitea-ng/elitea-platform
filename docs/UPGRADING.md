@@ -4,6 +4,67 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Agent releases, revisions and rollback (#1492)
+
+* **Shared migration 0198** creates `elitea_lifecycle.application_releases`
+  (immutable: an UPDATE trigger refuses every change except withdrawal),
+  `application_release_heads` (the current release per agent) and
+  `version_revisions`. **Shared migration 0199** adds
+  `agent_execution_jobs.release_id`. No data is copied: versions published
+  before the upgrade have no release until they are published again, and
+  run as before.
+* **Published versions are read-only on every route.** The HTTP check that
+  refused saving a published version is now enforced in the repository, so
+  an application PUT that carried a nested published version (which skipped
+  the check) is refused too. Edit a draft and publish it instead.
+* **Every version save writes a revision** in the same transaction. A
+  database built without migration 0198 (for example a hand-made dev
+  database) fails every save until it is migrated.
+* **New 409 answers on run start:** `release_toolkit_drifted` when a run
+  names a release (or the agent was rolled back to one) whose toolkit
+  settings or configurations changed since it was published, and
+  `release_withdrawn_dependencies_removed` when a run names a withdrawn
+  release of an agent with sub-agents (unpublish deletes the sub-agent
+  copies its publish made). The rollback refusals are
+  `application_not_published`, `release_already_published`,
+  `release_withdrawn`, and 400 for a reason longer than 200 characters. A
+  run of the live published version is never refused for drift.
+* **Publish and unpublish are all-or-nothing.** A publish now embeds the
+  sub-agent copies and records the release in its own transaction: a
+  failed copy or release answers 500 and publishes nothing (a failed
+  sub-agent copy used to answer 200 with the loss only in the log). An
+  unpublish reverts the version, removes the Catalog copy and withdraws its
+  releases in one transaction: a failure leaves the version published and
+  the retry works.
+* **Rollback and mandate-bound triggers.** With credential governance on,
+  an inbound trigger of an agent that was rolled back answers 403
+  `MANDATE_RELEASE_ROLLED_BACK`: its mandate binds the trigger's version,
+  not the release's. Roll the agent forward, or point the trigger at the
+  release's version with a mandate bound to it.
+
+## Session policy, whole-run cap and the toolkit-type stop (#1496, #1498)
+
+* **Shared migration 0200** adds to `elitea_auth.browser_sessions` a
+  non-secret reference `ref` (an identity column, backfilled for existing
+  rows), `ended_at`, `end_reason` and two audit markers. Adding the identity
+  column rewrites the table once; it is small in every deployment we know.
+* **Shared migration 0201** adds `execution_jobs.browser_session_ref` and
+  `execution_jobs.toolkit_types`. Existing rows read NULL.
+* **New audit events, `event_type=session`.** A single-replica job writes
+  `session.start`, `session.expire`, `session.logout` and `session.revoke`
+  into `centry.audit_events` about once a minute. The migration marks every
+  existing session's start, and every session that had already ended or
+  lapsed, as reported, so the first pass writes no backlog: sessions open at
+  the upgrade get their end event only. If you export audit events, expect
+  about two events per browser sign-in from then on.
+* **Configuration › Session Policy** (maximum idle timeout and maximum
+  lifetime) and **Configuration › Run Caps** (maximum run time) are new
+  console sections. All values default to 0, which keeps today's behaviour.
+  Nothing to do unless you want the bounds.
+* **A `toolkit_type` suspension now cancels runs in flight** that hold a
+  toolkit of that type, as the agent, project and platform scopes already
+  did. Its `cancelled_runs` is no longer always 0.
+
 ## Worker egress allowlist (#1490, off by default) and legal hold on stop (#1507)
 
 * **elitea-main: worker public egress policy (ADR-0044 decision 2).** A new

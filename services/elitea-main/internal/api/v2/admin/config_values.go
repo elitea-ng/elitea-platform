@@ -243,6 +243,13 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		}
 	}
 
+	// The run-safety sections' ranges (ADR-0041 decision 3, ADR-0042
+	// decision 5).
+	if reason := validateRunSafetyValues(section.id, body.Values); reason != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+		return
+	}
+
 	principal, _ := auth.UserFromContext(r.Context())
 	author := principal.Email
 	if author == "" {
@@ -258,6 +265,7 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 	if section.id == platformconfig.SectionNativeClientPolicy {
 		h.invalidateNativeClientPolicy()
 	}
+	h.invalidateRunSafety(section.id)
 	if section.id == platformconfig.SectionBranding {
 		h.invalidateBranding()
 		if stored, err := h.loadSectionValues(r, section.id); err == nil {

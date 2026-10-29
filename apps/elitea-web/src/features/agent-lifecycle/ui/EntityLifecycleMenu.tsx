@@ -4,6 +4,7 @@ import { useState } from 'react';
 import CallSplitOutlinedIcon from '@mui/icons-material/CallSplitOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
+import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import LinkOutlinedIcon from '@mui/icons-material/LinkOutlined';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PublicOffOutlinedIcon from '@mui/icons-material/PublicOffOutlined';
@@ -57,6 +58,8 @@ export interface EntityLifecycleMenuProps {
   readonly onExport?: () => void;
   /** Delete the whole entity. The caller owns the confirmation. Omitted where the editor carries its own Delete button. */
   readonly onDelete?: () => void;
+  /** Opens the release history (agents only; a pipeline has no releases). */
+  readonly onReleaseHistory?: () => void;
   /** Distinguishes the agent and pipeline copies of this menu in the DOM. */
   readonly testIdPrefix: string;
 }
@@ -71,6 +74,7 @@ export function EntityLifecycleMenu({
   onUnpublish,
   onExport,
   onDelete,
+  onReleaseHistory,
   testIdPrefix,
 }: EntityLifecycleMenuProps): ReactNode {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
@@ -152,6 +156,15 @@ export function EntityLifecycleMenu({
           <LinkOutlinedIcon sx={iconSx} />
           {t('features.agentLifecycle.menu.shareEntity', 'Share')}
         </MenuItem>
+        {onReleaseHistory !== undefined && (
+          <MenuItem
+            data-testid={`${testIdPrefix}-release-history-menuitem`}
+            onClick={run(onReleaseHistory)}
+          >
+            <HistoryOutlinedIcon sx={iconSx} />
+            {t('features.agentLifecycle.menu.releaseHistory', 'Release history')}
+          </MenuItem>
+        )}
         {onExport !== undefined && (
           <MenuItem
             data-testid={`${testIdPrefix}-export-menuitem`}
