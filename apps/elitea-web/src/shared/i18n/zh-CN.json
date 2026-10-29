@@ -355,7 +355,6 @@
   "artifacts.buckets.loading": "正在加载存储桶…",
   "artifacts.buckets.pin": "固定存储桶",
   "artifacts.buckets.search": "搜索存储桶",
-  "artifacts.buckets.storageAria": "存储集成",
   "artifacts.buckets.title": "存储桶",
   "artifacts.buckets.unpin": "取消固定存储桶",
   "artifacts.create.creating": "正在创建…",

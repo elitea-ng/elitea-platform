@@ -275,7 +275,6 @@ function AttachmentMenuRow({ isDisabled, remaining, onActivate }: {
     <Box
       role="menuitem"
       tabIndex={isDisabled ? -1 : 0}
-      aria-label={t('widgets.chat.attachmentButton.ariaLabel', 'attach files')}
       aria-disabled={isDisabled}
       data-testid="plus-menu-attachments"
       onClick={isDisabled ? undefined : onActivate}

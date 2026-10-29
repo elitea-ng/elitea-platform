@@ -26,6 +26,11 @@ export function SettingsButton({
   readonly canEdit: boolean;
   readonly styles: AgentEditorPanelStyles;
 }): ReactNode {
+  const state = canEdit ? t('chatInput.agentEditorPanel.editing', 'Editing…') : t('chatInput.agentEditorPanel.viewing', 'Viewing…');
+  // The label carries the visible "Editing…" text too (WCAG 2.5.3).
+  const label = isBeingEdited
+    ? t('chatInput.agentEditorPanel.settingsMenuLabelState', 'agent settings menu: {{state}}', { state })
+    : t('chatInput.agentEditorPanel.settingsMenuLabel', 'agent settings menu');
   return (
     <Tooltip
       placement="top"
@@ -33,7 +38,7 @@ export function SettingsButton({
     >
       <Button
         size="small"
-        aria-label={t('chatInput.agentEditorPanel.settingsMenuLabel', 'agent settings menu')}
+        aria-label={label}
         aria-haspopup="dialog"
         onClick={onClick}
         disabled={disabled}
@@ -46,9 +51,7 @@ export function SettingsButton({
             color="primary"
             sx={styles.editingText}
           >
-            {canEdit
-              ? t('chatInput.agentEditorPanel.editing', 'Editing…')
-              : t('chatInput.agentEditorPanel.viewing', 'Viewing…')}
+            {state}
           </Typography>
         ) : (
           <GearIcon style={gearIconStyle} />

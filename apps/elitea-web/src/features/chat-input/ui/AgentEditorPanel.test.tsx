@@ -137,7 +137,7 @@ describe('AgentEditorPanel', () => {
     renderPanel(<AgentEditorPanel {...baseProps()} />, { projectId: 'proj-1' });
 
     await waitFor(() => expect(screen.getByText('My Agent')).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: 'version selector menu' })).toHaveTextContent('base');
+    expect(screen.getByRole('button', { name: 'version selector menu: base' })).toHaveTextContent('base');
     expect(screen.getByRole('button', { name: 'agent settings menu' })).toBeInTheDocument();
   });
 
@@ -148,7 +148,7 @@ describe('AgentEditorPanel', () => {
       { projectId: 'proj-1' },
     );
     await waitFor(() => expect(screen.getByText('My Agent')).toBeInTheDocument());
-    expect(screen.queryByRole('button', { name: 'version selector menu' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^version selector menu/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'variables selector menu' })).not.toBeInTheDocument();
   });
 
@@ -210,7 +210,7 @@ describe('AgentEditorPanel', () => {
     // accessible name once disabled. Same MUI mechanism the baseline relies
     // on for its own identically-structured `Tooltip`-wrapped `Button`.
     expect(screen.getByRole('button', { description: 'Switch Agent' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'version selector menu' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^version selector menu/ })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'variables selector menu' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'agent settings menu' })).toBeDisabled();
   });
@@ -225,8 +225,8 @@ describe('AgentEditorPanel', () => {
       />,
       { projectId: 'proj-1' },
     );
-    await waitFor(() => expect(screen.getByRole('button', { name: 'version selector menu' })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: 'version selector menu' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^version selector menu/ })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /^version selector menu/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'v2' }));
     expect(onCloseAgentEditor).toHaveBeenCalledTimes(1);
     expect(onSelect).toHaveBeenCalledWith(participantDetails.versions[1]);

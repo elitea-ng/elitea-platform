@@ -81,19 +81,28 @@ describe('EntityCard', () => {
     expect(getByTestId('entity-card-tag-overflow')).toHaveTextContent('+1');
   });
 
-  it('activates on click and on Enter', () => {
+  it('activates on a click anywhere on the card and through its title button', () => {
     const onClick = vi.fn();
-    const { getByTestId } = renderWithTheme(<EntityCard item={{ id: '1', name: 'a', onClick }} />);
+    const { getByTestId, getByRole } = renderWithTheme(
+      <EntityCard item={{ id: '1', name: 'Alpha', onClick, tags: [{ id: 't', name: 'python' }] }} />,
+    );
     fireEvent.click(getByTestId('entity-card'));
-    fireEvent.keyDown(getByTestId('entity-card'), { key: 'Enter' });
+    // The title is the card's one button, named by its visible text only
+    // (WCAG 2.5.3); the tags stay outside it. A native button turns Enter and
+    // Space into this same click, which bubbles to the card once.
+    const open = getByRole('button', { name: 'Alpha' });
+    expect(open).toBe(getByTestId('entity-card-name'));
+    expect(getByTestId('entity-card')).not.toHaveAttribute('role');
+    fireEvent.click(open);
     expect(onClick).toHaveBeenCalledTimes(2);
   });
 
   /*
    * #915, corrected: on a CARD the indicator is a marker, not a control.
    *
-   * The card root is `role="button"`, and a focusable widget nested inside
-   * one is axe's `nested-interactive` (impact "serious") — it failed
+   * The card's title is a button, and a focusable widget beside it on the
+   * card adds a tab stop with no purpose (and inside a widget role it is axe's
+   * `nested-interactive`, impact "serious") — it failed
    * `agents.lifecycle.spec.ts`'s a11y check on every dashboard showing a
    * forked row. So the card states the fact and the TABLE row (asserted
    * separately below) carries the clickable link to the original.

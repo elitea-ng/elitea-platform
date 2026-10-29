@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { memo } from 'react';
 
 import { t } from '@/shared/i18n';
+import { visuallyHidden } from '@/shared/lib/visuallyHidden';
 
 import { useTypewriter } from '../../lib/hooks';
 import type { TMessage } from '../../lib/types';
@@ -38,9 +39,10 @@ const AnimatedMessage = memo(({ message, onComplete }: TAnimatedMessageProps): R
     <button
       type="button"
       className="elitea-assistant-skip-animation"
-      aria-label={t('widgets.supportAssistant.showFullAnswer', 'Show the full answer')}
       onClick={skipAnimation}
     >
+      {/* Hidden text, not an aria-label: the visible answer must stay in the name (WCAG 2.5.3). */}
+      <span style={visuallyHidden}>{t('widgets.supportAssistant.showFullAnswer', 'Show the full answer')}</span>
       {content}
     </button>
   );
