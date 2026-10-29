@@ -958,6 +958,7 @@ The test that matters. If it hangs or fails, use the table below.
     --certificate-oidc-issuer \
       https://token.actions.githubusercontent.com
   ```
+  Build provenance, SBOMs and an admission policy that enforces the signature are in [Verify release artifacts](/deployment/verify-artifacts).
 - **Certificate expiry.** The minted runtime material is valid for 825 days by default. cert-manager renews its own certificates; nothing renews the minted ones. Re-mint the runtime CA, the listener, edge and worker certificates, and the `elitea-runtime-ca` Secret before they expire. Keep the master key, the PAT signing key and the database password, which the script would otherwise regenerate.
 - **Rotation costs.** Rotating `auth-pat-signing-key` invalidates every personal access token. Rotating `application-secret-key` signs everyone out. `secrets-master-key` cannot be rotated by replacing it.
 - **Backups.** Back up both databases, the bucket, the Qdrant volume (or plan to re-index) and the `elitea-material` directory. NATS state is rebuildable: budget counters restart for the current period.
