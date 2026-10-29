@@ -453,7 +453,32 @@ impl PostgresSessionService {
         Self::activate_with_parent(pool, authority, limits, state_writer_lease, None).await
     }
 
+    /// Activation runs to its commit even while the caller is parked (a
+    /// child session activated inside a tool batch share-locks its parent's
+    /// writer row; see [`Self::driven`]).
     async fn activate_with_parent(
+        pool: PgPool,
+        authority: SessionWriterAuthority,
+        limits: SessionLimits,
+        state_writer_lease: Arc<dyn StateWriterLease>,
+        parent: Option<Arc<Self>>,
+    ) -> Result<Self, PostgresSessionError> {
+        crate::agents::driven::DrivenTask::new(Self::activate_in_transaction(
+            pool,
+            authority,
+            limits,
+            state_writer_lease,
+            parent,
+        ))
+        .await
+        .unwrap_or_else(|_| {
+            Err(PostgresSessionError::StorageFailure {
+                source: sqlx::Error::WorkerCrashed,
+            })
+        })
+    }
+
+    async fn activate_in_transaction(
         pool: PgPool,
         authority: SessionWriterAuthority,
         limits: SessionLimits,
@@ -1301,15 +1326,14 @@ impl SessionService for PostgresSessionService {
     }
 
     async fn health_check(&self) -> adk_rust::Result<()> {
-        let mut transaction = begin_bounded(&self.pool, self.limits)
-            .await
-            .map_err(PostgresSessionError::into_adk)?;
-        self.lock_current_writer(&mut transaction, false)
-            .await
-            .map_err(PostgresSessionError::into_adk)?;
-        self.commit_current(transaction)
-            .await
-            .map_err(PostgresSessionError::into_adk)
+        let span = session_operation_span("health_check");
+        self.driven(&span, |writer| async move {
+            let mut transaction = begin_bounded(&writer.pool, writer.limits).await?;
+            writer.lock_current_writer(&mut transaction, false).await?;
+            writer.commit_current(transaction).await
+        })
+        .await?
+        .map_err(PostgresSessionError::into_adk)
     }
 }
 

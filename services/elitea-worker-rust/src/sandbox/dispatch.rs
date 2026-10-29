@@ -1,6 +1,7 @@
 //! Worker-owned identities for durable stop delivery. Never stores code or grants.
 use sqlx::{PgPool, Row};
 
+#[derive(Clone)]
 pub(crate) struct DispatchScope {
     tenant: String,
     project: i32,
@@ -187,27 +188,35 @@ impl DispatchJournal {
         if descriptor.is_empty() || descriptor.len() > 16 * 1024 {
             return Err(DispatchError::Invalid);
         }
-        let mut tx = self.pool.begin().await?;
-        let rows=sqlx::query("SELECT request_digest,audience,compiled_descriptor_json FROM elitea_runtime.sandbox_dispatches WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND activation_id=$4 FOR UPDATE")
-            .bind(&scope.tenant).bind(scope.project).bind(&scope.execution).bind(activation.as_slice()).fetch_all(&mut *tx).await?;
-        if rows.is_empty() {
-            return Err(DispatchError::Conflict);
-        }
-        for row in rows {
-            let existing: Option<Vec<u8>> = row.try_get("compiled_descriptor_json")?;
-            let request: Vec<u8> = row.try_get("request_digest")?;
-            let target: String = row.try_get("audience")?;
-            if request.as_slice() != digest
-                || target != audience
-                || existing.as_deref().is_some_and(|value| value != descriptor)
-            {
+        let (pool, scope) = (self.pool.clone(), scope.clone());
+        let (activation, digest) = (*activation, *digest);
+        let (audience, descriptor) = (audience.to_owned(), descriptor.to_vec());
+        crate::agents::driven::to_completion::<(), DispatchError, _>(async move {
+            let (scope, activation, digest) = (&scope, &activation, &digest);
+            let (audience, descriptor) = (audience.as_str(), descriptor.as_slice());
+            let mut tx = pool.begin().await?;
+            let rows=sqlx::query("SELECT request_digest,audience,compiled_descriptor_json FROM elitea_runtime.sandbox_dispatches WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND activation_id=$4 FOR UPDATE")
+                .bind(&scope.tenant).bind(scope.project).bind(&scope.execution).bind(activation.as_slice()).fetch_all(&mut *tx).await?;
+            if rows.is_empty() {
                 return Err(DispatchError::Conflict);
             }
-        }
-        sqlx::query("UPDATE elitea_runtime.sandbox_dispatches SET compiled_descriptor_json=$5 WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND activation_id=$4 AND compiled_descriptor_json IS NULL")
-            .bind(&scope.tenant).bind(scope.project).bind(&scope.execution).bind(activation.as_slice()).bind(descriptor).execute(&mut *tx).await?;
-        tx.commit().await?;
-        Ok(())
+            for row in rows {
+                let existing: Option<Vec<u8>> = row.try_get("compiled_descriptor_json")?;
+                let request: Vec<u8> = row.try_get("request_digest")?;
+                let target: String = row.try_get("audience")?;
+                if request.as_slice() != digest
+                    || target != audience
+                    || existing.as_deref().is_some_and(|value| value != descriptor)
+                {
+                    return Err(DispatchError::Conflict);
+                }
+            }
+            sqlx::query("UPDATE elitea_runtime.sandbox_dispatches SET compiled_descriptor_json=$5 WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND activation_id=$4 AND compiled_descriptor_json IS NULL")
+                .bind(&scope.tenant).bind(scope.project).bind(&scope.execution).bind(activation.as_slice()).bind(descriptor).execute(&mut *tx).await?;
+            tx.commit().await?;
+            Ok(())
+        })
+        .await
     }
 
     pub(crate) async fn pending(

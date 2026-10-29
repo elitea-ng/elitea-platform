@@ -358,8 +358,17 @@ impl PostgresCheckpointer {
         state_writer_lease: Arc<dyn StateWriterLease>,
     ) -> Result<Self, PostgresCheckpointError> {
         let io = Arc::new(CheckpointIoCounters::default());
-        persist_scoped("activate", &io, async {
-            Self::activate_fenced(pool, authority, limits, state_writer_lease, None, &io).await
+        let writer_io = Arc::clone(&io);
+        persist_driven("activate", io, async move {
+            Self::activate_fenced(
+                pool,
+                authority,
+                limits,
+                state_writer_lease,
+                None,
+                &writer_io,
+            )
+            .await
         })
         .await
     }
@@ -377,14 +386,16 @@ impl PostgresCheckpointer {
         state_writer_lease: Arc<dyn StateWriterLease>,
         io: &Arc<CheckpointIoCounters>,
     ) -> Result<Self, PostgresCheckpointError> {
-        persist_scoped("activate", io, async {
+        let root_thread_id = root_thread_id.to_owned();
+        let writer_io = Arc::clone(io);
+        persist_driven("activate", Arc::clone(io), async move {
             Self::activate_fenced(
                 pool,
                 authority,
                 limits,
                 state_writer_lease,
-                Some(root_thread_id),
-                io,
+                Some(&root_thread_id),
+                &writer_io,
             )
             .await
         })
@@ -1166,45 +1177,109 @@ WHERE checkpoint.tenant_id = $1
 #[async_trait]
 impl Checkpointer for PostgresCheckpointer {
     async fn save(&self, checkpoint: &Checkpoint) -> Result<String, GraphError> {
-        self.persist("save", self.save_checkpoint(checkpoint)).await
+        let checkpoint = checkpoint.clone();
+        self.persist("save", |writer| async move {
+            writer.save_checkpoint(&checkpoint).await
+        })
+        .await
     }
 
     async fn load(&self, thread_id: &str) -> Result<Option<Checkpoint>, GraphError> {
         self.scope.require_thread(thread_id)?;
-        self.persist("load", self.load_checkpoint(None)).await
+        self.persist("load", |writer| async move {
+            writer.load_checkpoint(None).await
+        })
+        .await
     }
 
     async fn load_by_id(&self, checkpoint_id: &str) -> Result<Option<Checkpoint>, GraphError> {
-        self.persist("load_by_id", self.load_checkpoint(Some(checkpoint_id)))
-            .await
+        let checkpoint_id = checkpoint_id.to_owned();
+        self.persist("load_by_id", |writer| async move {
+            writer.load_checkpoint(Some(&checkpoint_id)).await
+        })
+        .await
     }
 
     async fn list(&self, thread_id: &str) -> Result<Vec<Checkpoint>, GraphError> {
         self.scope.require_thread(thread_id)?;
-        self.persist("list", self.list_checkpoints()).await
+        self.persist(
+            "list",
+            |writer| async move { writer.list_checkpoints().await },
+        )
+        .await
     }
 
     async fn delete(&self, thread_id: &str) -> Result<(), GraphError> {
         self.scope.require_thread(thread_id)?;
-        self.persist("delete", self.delete_checkpoints()).await
+        self.persist("delete", |writer| async move {
+            writer.delete_checkpoints().await
+        })
+        .await
     }
 
     async fn prune(&self, thread_id: &str, policy: &RetentionPolicy) -> Result<usize, GraphError> {
         self.scope.require_thread(thread_id)?;
-        self.persist("prune", self.prune_checkpoints(policy)).await
+        let policy = policy.clone();
+        self.persist("prune", |writer| async move {
+            writer.prune_checkpoints(&policy).await
+        })
+        .await
     }
 }
 
 impl PostgresCheckpointer {
-    async fn persist<T>(
+    /// An owned handle on this same writer (its authority duplicated the
+    /// way child threads derive theirs), for a driven operation.
+    pub(super) fn owned(&self) -> Result<Self, PostgresCheckpointError> {
+        Ok(Self {
+            pool: self.pool.clone(),
+            scope: CheckpointScope {
+                authority: self
+                    .scope
+                    .authority
+                    .for_thread(self.scope.authority.thread_id.clone())?,
+            },
+            limits: self.limits,
+            state_writer_lease: Arc::clone(&self.state_writer_lease),
+            run_root_thread_id: self.run_root_thread_id.clone(),
+            io: Arc::clone(&self.io),
+        })
+    }
+
+    /// Run one checkpoint operation on an owned handle of this writer, driven
+    /// to completion (see [`persist_driven`]).
+    async fn persist<T, W>(
         &self,
         operation: &'static str,
-        future: impl Future<Output = Result<T, PostgresCheckpointError>>,
-    ) -> Result<T, GraphError> {
-        persist_scoped(operation, &self.io, future)
+        work: impl FnOnce(Self) -> W,
+    ) -> Result<T, GraphError>
+    where
+        T: Send + 'static,
+        W: Future<Output = Result<T, PostgresCheckpointError>> + Send + 'static,
+    {
+        let writer = self.owned()?;
+        persist_driven(operation, Arc::clone(&self.io), work(writer))
             .await
             .map_err(Into::into)
     }
+}
+
+/// [`persist_scoped`] on its own task once pending (#1534): a checkpoint
+/// transaction, once begun, reaches its commit or rollback even while the
+/// caller is parked (a graph node or tool batch suspended at a stream yield),
+/// so it never holds a writer row idle while this process waits for it.
+pub(super) fn persist_driven<T, W>(
+    operation: &'static str,
+    counters: Arc<CheckpointIoCounters>,
+    work: W,
+) -> impl Future<Output = Result<T, PostgresCheckpointError>> + Send
+where
+    T: Send + 'static,
+    W: Future<Output = Result<T, PostgresCheckpointError>> + Send + 'static,
+{
+    crate::agents::driven::to_completion(
+        async move { persist_scoped(operation, &counters, work).await },
+    )
 }
 
 /// Run one checkpoint operation under its `agent.checkpoint.persist` span and
@@ -1672,6 +1747,14 @@ async fn begin_bounded(
     ))
     .await
     .map_err(storage_error)
+}
+
+/// What a driven checkpoint operation that never finished fails with
+/// (see [`persist_driven`]).
+impl From<sqlx::Error> for PostgresCheckpointError {
+    fn from(source: sqlx::Error) -> Self {
+        storage_error(source)
+    }
 }
 
 fn storage_error(source: sqlx::Error) -> PostgresCheckpointError {

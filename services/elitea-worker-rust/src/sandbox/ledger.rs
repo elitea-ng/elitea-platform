@@ -97,6 +97,8 @@ pub struct JobRecord {
     pub runtime_id: Option<String>,
 }
 
+/// Cloned only to hand a driven ledger transaction its own copy (#1534).
+#[derive(Clone)]
 pub struct JobLease {
     scope: JobScope,
     owner: String,
@@ -246,25 +248,31 @@ impl JobLedger {
         bundle: &DependencyBundle,
     ) -> Result<(), LedgerError> {
         let record = std::str::from_utf8(bundle.record_json()).map_err(|_| LedgerError::Invalid)?;
-        let mut transaction = self.pool.begin().await?;
-        // Check database time after locking. A lock wait can outlive the lease.
-        let row = sqlx::query("WITH owned AS MATERIALIZED (SELECT preparation_bundle_json,lease_until FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND phase='dispatched' AND NOT cancellation_requested FOR UPDATE) SELECT preparation_bundle_json FROM owned WHERE lease_until > clock_timestamp()")
-            .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
-            .bind(&lease.owner).bind(lease.epoch).fetch_optional(&mut *transaction).await?
-            .ok_or(LedgerError::Fenced)?;
-        let recorded: Option<String> = row.try_get("preparation_bundle_json")?;
-        if let Some(recorded) = recorded {
-            if recorded != record {
-                return Err(LedgerError::Conflict);
-            }
-        } else {
-            let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET preparation_bundle_json=$7,updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase='dispatched' AND NOT cancellation_requested AND preparation_bundle_json IS NULL")
+        let record = record.to_owned();
+        let (pool, lease) = (self.pool.clone(), lease.clone());
+        crate::agents::driven::to_completion::<(), LedgerError, _>(async move {
+            let (record, lease) = (record.as_str(), &lease);
+            let mut transaction = pool.begin().await?;
+            // Check database time after locking. A lock wait can outlive the lease.
+            let row = sqlx::query("WITH owned AS MATERIALIZED (SELECT preparation_bundle_json,lease_until FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND phase='dispatched' AND NOT cancellation_requested FOR UPDATE) SELECT preparation_bundle_json FROM owned WHERE lease_until > clock_timestamp()")
                 .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
-                .bind(&lease.owner).bind(lease.epoch).bind(record).execute(&mut *transaction).await?.rows_affected();
-            changed(count)?;
-        }
-        transaction.commit().await?;
-        Ok(())
+                .bind(&lease.owner).bind(lease.epoch).fetch_optional(&mut *transaction).await?
+                .ok_or(LedgerError::Fenced)?;
+            let recorded: Option<String> = row.try_get("preparation_bundle_json")?;
+            if let Some(recorded) = recorded {
+                if recorded != record {
+                    return Err(LedgerError::Conflict);
+                }
+            } else {
+                let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET preparation_bundle_json=$7,updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase='dispatched' AND NOT cancellation_requested AND preparation_bundle_json IS NULL")
+                    .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
+                    .bind(&lease.owner).bind(lease.epoch).bind(record).execute(&mut *transaction).await?.rows_affected();
+                changed(count)?;
+            }
+            transaction.commit().await?;
+            Ok(())
+        })
+        .await
     }
 
     /// Start readiness at the first runtime binding. Lease renewal does not reset it.

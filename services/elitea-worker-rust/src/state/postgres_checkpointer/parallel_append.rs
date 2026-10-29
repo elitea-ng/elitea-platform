@@ -30,15 +30,18 @@ impl ParallelCheckpointAppender for PostgresCheckpointer {
         if let Some(expected) = expected_latest {
             self.scope.require_thread(&expected.thread_id)?;
         }
-        let condition =
-            CheckpointAppendCondition::Latest(expected_latest.map(|expected| LatestIdentity {
-                checkpoint_id: &expected.checkpoint_id,
-                save_ordinal: None,
-            }));
-        self.persist(
-            "parallel_append",
-            self.save_checkpoint_inner(candidate, condition),
-        )
+        let expected = expected_latest.map(|expected| expected.checkpoint_id.clone());
+        let candidate = candidate.clone();
+        self.persist("parallel_append", |writer| async move {
+            let condition =
+                CheckpointAppendCondition::Latest(expected.as_ref().map(|checkpoint_id| {
+                    LatestIdentity {
+                        checkpoint_id,
+                        save_ordinal: None,
+                    }
+                }));
+            writer.save_checkpoint_inner(&candidate, condition).await
+        })
         .await
     }
 
@@ -48,8 +51,11 @@ impl ParallelCheckpointAppender for PostgresCheckpointer {
         candidate_id: &str,
     ) -> Result<ParentSaveProbe, GraphError> {
         self.scope.require_thread(thread_id)?;
-        self.persist("parent_probe", self.probe_parent_inner(candidate_id))
-            .await
+        let candidate_id = candidate_id.to_owned();
+        self.persist("parent_probe", |writer| async move {
+            writer.probe_parent_inner(&candidate_id).await
+        })
+        .await
     }
 
     async fn append_after_head(
@@ -60,15 +66,18 @@ impl ParallelCheckpointAppender for PostgresCheckpointer {
         if let Some(expected) = expected {
             self.scope.require_thread(&expected.thread_id)?;
         }
-        let condition =
-            CheckpointAppendCondition::Latest(expected.map(|expected| LatestIdentity {
-                checkpoint_id: &expected.checkpoint_id,
-                save_ordinal: expected.save_ordinal,
-            }));
-        self.persist(
-            "parallel_append",
-            self.save_checkpoint_inner(candidate, condition),
-        )
+        let expected =
+            expected.map(|expected| (expected.checkpoint_id.clone(), expected.save_ordinal));
+        let candidate = candidate.clone();
+        self.persist("parallel_append", |writer| async move {
+            let condition = CheckpointAppendCondition::Latest(expected.as_ref().map(
+                |(checkpoint_id, save_ordinal)| LatestIdentity {
+                    checkpoint_id,
+                    save_ordinal: *save_ordinal,
+                },
+            ));
+            writer.save_checkpoint_inner(&candidate, condition).await
+        })
         .await
     }
 }
