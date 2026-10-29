@@ -5627,6 +5627,160 @@ mod internal_tools_graph {
         );
     }
 
+    /// ADR-0042 (#1499) end to end: a real ordinary turn over the test model
+    /// gateway that makes two tool calls and one retrieval records exactly
+    /// these step kinds, in the order they happened, and the settlement
+    /// reports them to Main before `PrepareSettlement`. The answer names the
+    /// retrieved file, so the output step cites the retrieval.
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::too_many_lines)] // One scripted turn and its whole step record, in order.
+    async fn a_turn_with_two_tool_calls_and_a_retrieval_reports_its_steps_before_settlement() {
+        use crate::protocol::elitea::runtime::v1::RunStepKindV1;
+
+        let key = format!("{UUID}/notes.txt");
+        let id = attachment_id_of(&key);
+        let document = runtime_context_response(&serde_json::json!({
+            "schema_version": "elitea.runtime.attachment-object.v1",
+            "project_id": 17,
+            "bucket": "chat-attachments",
+            "name": key,
+            "media_type": "text/plain",
+            "byte_length": 31,
+            "content": "The launch word is QUOKKAWORD.\n",
+        }));
+        let runtime_context = runtime_context_client_from(
+            VecDeque::from([
+                runtime_context_response(&serde_json::json!({
+                    "schema_version": "elitea.runtime.elitea-client-token.v1",
+                    "project_id": 17,
+                    "token": TOKEN,
+                })),
+                runtime_context_response(&serde_json::json!({
+                    "schema_version": "elitea.runtime.artifact-list.v1",
+                    "project_id": 17,
+                    "bucket": "chat-attachments",
+                    "files": [{"name": key, "byte_length": 31, "media_type": "text/plain",
+                               "modified_at": "2026-10-01T00:00:00Z"}],
+                    "truncated": false,
+                })),
+                document,
+            ]),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let (assembler, _captured) = assembler_with(
+            vec![
+                TestModelGatewayOutcome::Response(call_response(
+                    "call_list",
+                    "list_attachments",
+                    &serde_json::json!({}),
+                )),
+                TestModelGatewayOutcome::Response(call_response(
+                    "call_search",
+                    "search_attachment",
+                    &serde_json::json!({"query": "launch word"}),
+                )),
+                TestModelGatewayOutcome::Response(call_response(
+                    "call_read",
+                    "read_attachment",
+                    &serde_json::json!({"attachment_id": id}),
+                )),
+                TestModelGatewayOutcome::Response(text_response(
+                    "The launch word is QUOKKAWORD, from notes.txt.",
+                )),
+            ],
+            runtime_context,
+            Arc::new(InMemorySessionService::new()),
+        );
+        let mut request = with_toggles(AgentExecutionKind::Application, &["attachments"]);
+        request.payload.conversation_id = Some(UUID.to_owned());
+
+        // The settlement the run's steps must precede, and the recorder its
+        // command owns.
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let (acknowledged, terminal) =
+            crate::transport::output_grpc::tests::settle_ready(temp.path()).await;
+        let identity = terminal.identity.clone().expect("identity");
+        let registry = Arc::new(crate::protocol::run_steps::RunStepRegistry::default());
+
+        let mut invocation = assembler
+            .assemble(AuthorizedNativeAssembly::new(
+                &request,
+                test_runtime_context_authority(),
+                AuthorizedNativeCommandBinding::fixture(),
+            ))
+            .await
+            .expect("assembly");
+        invocation.project_start(chrono::Utc::now()).expect("start");
+        let (mut native, mut projector, completion) = invocation.start().expect("native start");
+        projector.attach_run_steps(registry.recorder(&identity));
+        while let Some(event) = native.next_event().await.expect("event") {
+            projector.project(&event).expect("projected event");
+        }
+        let completed = completion.select().await.expect("completion");
+        projector
+            .finish_after_eos(completed, chrono::Utc::now())
+            .expect("finish");
+
+        let rpc = crate::transport::output_grpc::tests::SettlementRpc::default();
+        let (calls, reports) = (Arc::clone(&rpc.calls), Arc::clone(&rpc.run_steps));
+        crate::transport::output_grpc::tests::settlement_control(rpc, &registry)
+            .prepare_agent_settlement(acknowledged)
+            .await
+            .expect("settled");
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            ["report_run_steps", "prepare_settlement"]
+        );
+        let reports = reports.lock().expect("reports").clone();
+        let steps = &reports[0].steps;
+        let kinds: Vec<RunStepKindV1> = steps
+            .iter()
+            .map(|step| RunStepKindV1::try_from(step.kind).expect("kind"))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                RunStepKindV1::ModelCall,
+                RunStepKindV1::ToolCall,
+                RunStepKindV1::ModelCall,
+                RunStepKindV1::Retrieval,
+                RunStepKindV1::ModelCall,
+                RunStepKindV1::ToolCall,
+                RunStepKindV1::ModelCall,
+                RunStepKindV1::Output,
+            ]
+        );
+        let names: Vec<&str> = steps.iter().map(|step| step.name.as_str()).collect();
+        assert_eq!(
+            [names[1], names[3], names[5]],
+            ["list_attachments", "search_attachment", "read_attachment"]
+        );
+        let model: serde_json::Value =
+            serde_json::from_str(&steps[0].summary_json).expect("summary json");
+        assert_eq!(model["input_tokens"], 3);
+        assert_eq!(model["output_tokens"], 2);
+        assert!(model["finish_reason"].is_string(), "{model}");
+        let retrieval = steps[3].retrieval.as_ref().expect("retrieval summary");
+        assert_eq!(retrieval.index_name, "attachments");
+        assert_eq!(retrieval.query, "launch word");
+        assert_eq!(retrieval.documents.len(), 1);
+        assert_eq!(retrieval.documents[0].document_id, id);
+        assert_eq!(retrieval.documents[0].source, "notes.txt");
+        assert_eq!(retrieval.documents[0].rank, 1);
+        let output = &steps[7];
+        assert_eq!(output.cited_step_ids, [steps[3].step_id.clone()]);
+        assert_eq!(output.cited_document_ids, [id]);
+        assert_eq!(
+            output.outputs.as_ref().expect("answer").content,
+            b"The launch word is QUOKKAWORD, from notes.txt."
+        );
+        let mut ids: Vec<&str> = steps.iter().map(|step| step.step_id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), steps.len(), "every step has its own id");
+    }
+
     fn attachment_id_of(name: &str) -> String {
         attachment_id_in("chat-attachments", name)
     }

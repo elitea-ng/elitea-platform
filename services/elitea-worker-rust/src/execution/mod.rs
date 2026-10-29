@@ -17,6 +17,7 @@ mod native_agent_lifecycle;
 mod node_recovery;
 pub mod output_delivery;
 pub(crate) mod production;
+mod run_step_events;
 mod toolkit_delivery;
 mod toolkit_delivery_processor;
 mod toolkit_output;

@@ -1919,7 +1919,7 @@ fn recovery_binding_error(kind: RecoveryKind) -> OutputGrpcError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::VecDeque;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -1942,8 +1942,8 @@ mod tests {
         DesiredExecutionStateV1, DigestV1, ExecutionFenceV1, ExecutionIdentityV1,
         ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
         PrepareSettlementResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1,
-        ReportEgressSummaryRequestV1, ReportEgressSummaryResponseV1, RuntimeErrorV1,
-        SettlementProposalV1,
+        ReportEgressSummaryRequestV1, ReportEgressSummaryResponseV1, ReportRunStepsRequestV1,
+        ReportRunStepsResponseV1, RuntimeErrorV1, SettlementProposalV1,
     };
     use crate::spool::{
         ExecutionSpoolBinding, ExecutionSpoolIdentity, SpoolLimits, SpoolMasterKey,
@@ -1996,13 +1996,21 @@ mod tests {
         release_close: Arc<Notify>,
     }
 
+    /// A scripted `ReportRunSteps` answer: a rejection (or none), or a status.
+    type RunStepsAnswer = Result<Option<RuntimeErrorV1>, tonic::Code>;
+
     #[derive(Default)]
-    struct SettlementRpc {
+    pub(crate) struct SettlementRpc {
         request: Arc<Mutex<Option<PrepareSettlementRequestV1>>>,
         egress: Arc<Mutex<Option<ReportEgressSummaryRequestV1>>>,
-        calls: Arc<Mutex<Vec<&'static str>>>,
+        pub(crate) calls: Arc<Mutex<Vec<&'static str>>>,
         /// Answer the egress summary with this status instead of accepting it.
         egress_failure: Option<tonic::Code>,
+        /// Every step report received, in order (ADR-0042, #1499).
+        pub(crate) run_steps: Arc<Mutex<Vec<ReportRunStepsRequestV1>>>,
+        /// Scripted answers to the step reports, first to last; accepted
+        /// once they run out.
+        run_steps_answers: Arc<Mutex<VecDeque<RunStepsAnswer>>>,
     }
 
     #[async_trait]
@@ -2107,6 +2115,33 @@ mod tests {
             match self.egress_failure {
                 Some(code) => Err(Status::new(code, "test-only")),
                 None => Ok(Response::new(ReportEgressSummaryResponseV1::default())),
+            }
+        }
+
+        async fn report_run_steps(
+            &self,
+            request: Request<ReportRunStepsRequestV1>,
+        ) -> Result<Response<ReportRunStepsResponseV1>, Status> {
+            self.calls.lock().expect("calls").push("report_run_steps");
+            let request = request.into_inner();
+            let steps = request.steps.len();
+            self.run_steps.lock().expect("run steps").push(request);
+            match self
+                .run_steps_answers
+                .lock()
+                .expect("answers")
+                .pop_front()
+                .unwrap_or(Ok(None))
+            {
+                Ok(rejection) => Ok(Response::new(ReportRunStepsResponseV1 {
+                    accepted: if rejection.is_none() {
+                        u32::try_from(steps).expect("steps")
+                    } else {
+                        0
+                    },
+                    rejection,
+                })),
+                Err(code) => Err(Status::new(code, "test-only")),
             }
         }
 
@@ -3398,7 +3433,8 @@ mod tests {
                 },
             )
             .expect("semantic control")
-            .with_egress_registry(Arc::clone(&registry));
+            .with_egress_registry(Arc::clone(&registry))
+            .with_run_step_registry(Arc::default());
             control
                 .prepare_agent_settlement(acknowledged)
                 .await
@@ -3431,6 +3467,321 @@ mod tests {
                 registry.summary_for_settlement(identity).is_none(),
                 "a settled execution is no longer tracked"
             );
+        }
+    }
+
+    /// A terminal acknowledged by a fake output plane, ready to settle.
+    pub(crate) async fn settle_ready(
+        temp: &Path,
+    ) -> (DurablyAckedTerminal, ExecutionOutputFrameV1) {
+        let verified = verified_agent_command("signed_command_output_session");
+        let terminal = terminal_frame();
+        let io = FakeStream {
+            acknowledgements: VecDeque::from([
+                Ok(Some(bootstrap())),
+                Ok(Some(bound_ack(&terminal))),
+            ]),
+            writes: Vec::new(),
+            closed: false,
+        };
+        let settings = config();
+        let inner = OutputSession::open(io, spool(&temp.join("root")), settings.clone())
+            .await
+            .expect("output session");
+        let mut output = spawn_output_actor(inner, settings.max_frame_bytes);
+        let acknowledged = output
+            .send_terminal(&verified, terminal.clone())
+            .await
+            .expect("durably acknowledged terminal");
+        (acknowledged, terminal)
+    }
+
+    pub(crate) fn settlement_control(
+        rpc: SettlementRpc,
+        steps: &Arc<crate::protocol::run_steps::RunStepRegistry>,
+    ) -> AgentControlClient<SettlementRpc> {
+        AgentControlClient::new(
+            rpc,
+            crate::transport::ControlGrpcConfig {
+                deadline: Duration::from_secs(1),
+                workload_session_id: "session-1".to_owned(),
+                producer_id: "worker-1".to_owned(),
+            },
+        )
+        .expect("semantic control")
+        .with_egress_registry(Arc::default())
+        .with_run_step_registry(Arc::clone(steps))
+    }
+
+    fn record_steps(
+        steps: &crate::protocol::run_steps::RunStepRegistry,
+        identity: &ExecutionIdentityV1,
+        count: usize,
+    ) -> Vec<String> {
+        let recorder = steps.recorder(identity);
+        (0..count)
+            .map(|index| {
+                recorder
+                    .record(crate::protocol::run_steps::StepDraft::new(
+                        crate::protocol::elitea::runtime::v1::RunStepKindV1::ToolCall,
+                        format!("tool-{index}"),
+                        1,
+                    ))
+                    .expect("recorded")
+            })
+            .collect()
+    }
+
+    /// ADR-0042 (#1499): every buffered step goes to Main under the live
+    /// claim BEFORE `PrepareSettlement` (and before the egress summary), in
+    /// the order the steps happened, at most 64 per request.
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_steps_are_reported_in_order_before_settlement() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let (acknowledged, terminal) = settle_ready(temp.path()).await;
+        let identity = terminal.identity.clone().expect("identity");
+        let steps = Arc::new(crate::protocol::run_steps::RunStepRegistry::default());
+        let ids = record_steps(&steps, &identity, 65);
+        let rpc = SettlementRpc::default();
+        let (calls, reports) = (Arc::clone(&rpc.calls), Arc::clone(&rpc.run_steps));
+        settlement_control(rpc, &steps)
+            .prepare_agent_settlement(acknowledged)
+            .await
+            .expect("settled");
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            ["report_run_steps", "report_run_steps", "prepare_settlement"]
+        );
+        let reports = reports.lock().expect("reports").clone();
+        assert_eq!(reports[0].steps.len(), 64);
+        assert_eq!(reports[1].steps.len(), 1);
+        for report in &reports {
+            assert_eq!(report.identity, terminal.identity);
+            assert_eq!(report.fence, terminal.fence);
+        }
+        let sent: Vec<String> = reports
+            .iter()
+            .flat_map(|report| report.steps.iter().map(|step| step.step_id.clone()))
+            .collect();
+        assert_eq!(sent, ids, "reported once each, in the order recorded");
+        assert!(
+            steps.find(&identity).is_none(),
+            "a settled command is forgotten"
+        );
+    }
+
+    /// A full batch goes out early under the claim's bound fence; a partial
+    /// one waits for the settlement, and nothing goes out before the fence is
+    /// bound.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_full_batch_of_run_steps_is_reported_early_under_the_bound_fence() {
+        let identity = ExecutionIdentityV1 {
+            execution_id: "execution-early".to_owned(),
+            generation: 2,
+            command_id: "command-early".to_owned(),
+            tenant_id: "tenant-early".to_owned(),
+            ..ExecutionIdentityV1::default()
+        };
+        let steps = Arc::new(crate::protocol::run_steps::RunStepRegistry::default());
+        let ids = record_steps(&steps, &identity, 65);
+        let recorder = steps.find(&identity).expect("tracked");
+        let rpc = SettlementRpc::default();
+        let reports = Arc::clone(&rpc.run_steps);
+        let control = settlement_control(rpc, &steps);
+        control.flush_run_steps_early(&recorder).await;
+        assert!(reports.lock().expect("reports").is_empty(), "no claim yet");
+        let fence = ExecutionFenceV1 {
+            lease_epoch: 7,
+            ..ExecutionFenceV1::default()
+        };
+        steps.bind_claim(&identity, &fence);
+        control.flush_run_steps_early(&recorder).await;
+        let reports = reports.lock().expect("reports").clone();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].fence, Some(fence));
+        assert_eq!(reports[0].identity, Some(identity));
+        let sent: Vec<&String> = reports[0].steps.iter().map(|step| &step.step_id).collect();
+        assert_eq!(sent, ids[..64].iter().collect::<Vec<_>>());
+        assert_eq!(
+            recorder.pending_len(),
+            1,
+            "the last step waits for settlement"
+        );
+    }
+
+    /// A step older than 2 s is reported early even below a full batch. An
+    /// unavailable Main gets ONE attempt: the steps stay buffered and the
+    /// next early report waits for the backoff window, then delivers them.
+    #[tokio::test(flavor = "current_thread")]
+    async fn aged_run_steps_are_reported_early_and_kept_when_main_is_down() {
+        let identity = ExecutionIdentityV1 {
+            execution_id: "execution-aged".to_owned(),
+            generation: 1,
+            command_id: "command-aged".to_owned(),
+            ..ExecutionIdentityV1::default()
+        };
+        let steps = Arc::new(crate::protocol::run_steps::RunStepRegistry::default());
+        let ids = record_steps(&steps, &identity, 3);
+        steps.bind_claim(&identity, &ExecutionFenceV1::default());
+        let recorder = steps.find(&identity).expect("tracked");
+        let rpc = SettlementRpc {
+            run_steps_answers: Arc::new(Mutex::new(
+                vec![Err(tonic::Code::Unavailable), Ok(None)].into(),
+            )),
+            ..SettlementRpc::default()
+        };
+        let reports = Arc::clone(&rpc.run_steps);
+        let control = settlement_control(rpc, &steps);
+        control.flush_run_steps_early(&recorder).await;
+        assert!(
+            reports.lock().expect("reports").is_empty(),
+            "young steps wait"
+        );
+
+        recorder.age_pending(crate::protocol::run_steps::MAX_UNSENT_STEP_AGE);
+        control.flush_run_steps_early(&recorder).await;
+        assert_eq!(
+            reports.lock().expect("reports").len(),
+            1,
+            "one attempt only"
+        );
+        assert_eq!(
+            recorder.pending_len(),
+            3,
+            "a failed early report keeps them"
+        );
+        control.flush_run_steps_early(&recorder).await;
+        assert_eq!(
+            reports.lock().expect("reports").len(),
+            1,
+            "the backoff window holds the next attempt"
+        );
+
+        recorder.expire_early_backoff();
+        control.flush_run_steps_early(&recorder).await;
+        let reports = reports.lock().expect("reports").clone();
+        assert_eq!(reports.len(), 2);
+        let sent: Vec<&String> = reports[1].steps.iter().map(|step| &step.step_id).collect();
+        assert_eq!(sent, ids.iter().collect::<Vec<_>>());
+        assert_eq!(recorder.pending_len(), 0);
+    }
+
+    /// An attempt that resumes another claim's run with no recorder in this
+    /// process opens with `steps_possibly_lost`; one that continues a
+    /// recorder this process already holds does not.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_taken_over_run_opens_with_a_steps_possibly_lost_error_step() {
+        let identity = ExecutionIdentityV1 {
+            execution_id: "execution-takeover".to_owned(),
+            generation: 3,
+            command_id: "command-takeover".to_owned(),
+            tenant_id: "tenant-takeover".to_owned(),
+            ..ExecutionIdentityV1::default()
+        };
+        let fence = ExecutionFenceV1 {
+            lease_epoch: 9,
+            ..ExecutionFenceV1::default()
+        };
+        let steps = Arc::new(crate::protocol::run_steps::RunStepRegistry::default());
+        let rpc = SettlementRpc::default();
+        let reports = Arc::clone(&rpc.run_steps);
+        let control = settlement_control(rpc, &steps);
+        control.begin_recovered_run_steps(&identity, &fence, 42);
+        control.begin_recovered_run_steps(&identity, &fence, 43);
+        let recorder = steps.find(&identity).expect("tracked");
+        assert_eq!(recorder.pending_len(), 1, "one marker, not one per call");
+        assert!(recorder.is_resumed());
+        recorder.age_pending(crate::protocol::run_steps::MAX_UNSENT_STEP_AGE);
+        control.flush_run_steps_early(&recorder).await;
+        let reports = reports.lock().expect("reports").clone();
+        assert_eq!(reports.len(), 1, "the claim was bound");
+        assert_eq!(reports[0].fence, Some(fence.clone()));
+        assert_eq!(reports[0].identity, Some(identity.clone()));
+        let marker = &reports[0].steps[0];
+        assert_eq!(
+            marker.kind,
+            crate::protocol::elitea::runtime::v1::RunStepKindV1::Error as i32
+        );
+        assert_eq!(marker.name, crate::protocol::control::STEPS_POSSIBLY_LOST);
+        assert_eq!(marker.summary_json, r#"{"reason":"worker_restart"}"#);
+
+        let continued = ExecutionIdentityV1 {
+            command_id: "command-continued".to_owned(),
+            ..identity
+        };
+        record_steps(&steps, &continued, 1);
+        control.begin_recovered_run_steps(&continued, &fence, 44);
+        assert_eq!(
+            steps.find(&continued).expect("tracked").pending_len(),
+            1,
+            "this process ran the earlier attempt: no gap"
+        );
+    }
+
+    /// A transport error and a retryable rejection are retried with the SAME
+    /// steps (main skips a step id it stored); a stale-fence rejection or a
+    /// Main without the RPC drops them (logged, counted) and the run still
+    /// settles.
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_step_reports_retry_then_never_fail_the_settlement() {
+        let retryable = RuntimeErrorV1 {
+            code: crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::DependencyUnavailable
+                as i32,
+            safe_message: "busy".to_owned(),
+            retryable: true,
+        };
+        let stale = RuntimeErrorV1 {
+            code: crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::StaleFence as i32,
+            safe_message: "stale".to_owned(),
+            retryable: false,
+        };
+        for (answers, attempts, delivered) in [
+            (
+                vec![Err(tonic::Code::Unavailable), Ok(Some(retryable)), Ok(None)],
+                3,
+                true,
+            ),
+            (vec![Ok(Some(stale))], 1, false),
+            (vec![Err(tonic::Code::Unimplemented)], 1, false),
+            (vec![Err(tonic::Code::Unavailable); 4], 4, false),
+        ] {
+            let temp = tempfile::tempdir().expect("temporary directory");
+            let (acknowledged, terminal) = settle_ready(temp.path()).await;
+            let identity = terminal.identity.clone().expect("identity");
+            let steps = Arc::new(crate::protocol::run_steps::RunStepRegistry::default());
+            let ids = record_steps(&steps, &identity, 3);
+            let dropped_before = crate::protocol::run_steps::dropped_run_steps_total();
+            let failures_before = crate::protocol::run_steps::run_step_report_failures_total();
+            let rpc = SettlementRpc {
+                run_steps_answers: Arc::new(Mutex::new(answers.into())),
+                ..SettlementRpc::default()
+            };
+            let (calls, reports) = (Arc::clone(&rpc.calls), Arc::clone(&rpc.run_steps));
+            settlement_control(rpc, &steps)
+                .prepare_agent_settlement(acknowledged)
+                .await
+                .expect("the report's fate never fails the settlement");
+            let calls = calls.lock().expect("calls").clone();
+            assert_eq!(calls.len(), attempts + 1, "{calls:?}");
+            assert_eq!(calls.last(), Some(&"prepare_settlement"));
+            for report in reports.lock().expect("reports").iter() {
+                let sent: Vec<&String> = report.steps.iter().map(|step| &step.step_id).collect();
+                assert_eq!(
+                    sent,
+                    ids.iter().collect::<Vec<_>>(),
+                    "a retry resends the same steps"
+                );
+            }
+            assert!(
+                crate::protocol::run_steps::run_step_report_failures_total()
+                    >= failures_before + u64::try_from(attempts - usize::from(delivered)).unwrap()
+            );
+            if !delivered {
+                // Other tests may drop steps concurrently: at least ours.
+                assert!(
+                    crate::protocol::run_steps::dropped_run_steps_total() >= dropped_before + 3
+                );
+            }
         }
     }
 

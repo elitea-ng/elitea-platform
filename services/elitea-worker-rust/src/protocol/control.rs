@@ -53,8 +53,8 @@ use super::elitea::runtime::v1::{
     ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
     PrepareSettlementResponseV1, RemoveIndexDispositionV1, RemoveIndexRequestV1,
     RemoveIndexResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1, ReportEgressSummaryRequestV1,
-    RuntimeErrorCodeV1, RuntimeErrorV1, ScopedContentReferenceV1, SettlementProposalV1,
-    SettlementRecoveryV1, worker_command_v1,
+    ReportRunStepsRequestV1, RuntimeErrorCodeV1, RuntimeErrorV1, ScopedContentReferenceV1,
+    SettlementProposalV1, SettlementRecoveryV1, worker_command_v1,
 };
 use super::output::{
     AgentTerminalOutput, RuntimeFailureKind, ToolkitExecuteReadTerminalOutput,
@@ -1403,6 +1403,11 @@ pub struct AgentExecutionOutputAuthority {
 }
 
 impl AgentExecutionOutputAuthority {
+    /// The claim's full identity and fence, for step reports (ADR-0042).
+    pub(crate) const fn claim_parts(&self) -> (&ExecutionIdentityV1, &ExecutionFenceV1) {
+        (&self.claim.identity, &self.claim.fence)
+    }
+
     /// Consume the exact claim into an ACK-driven output cursor.
     ///
     /// The cursor owns the raw fence and authenticated handoff watermark. A
@@ -2325,6 +2330,9 @@ pub struct AgentControlClient<R> {
     /// Where each execution's egress ledger lives (#1490); the process's
     /// registry outside tests.
     egress: Arc<super::egress::EgressRegistry>,
+    /// Where each execution's step records wait to be reported (ADR-0042,
+    /// #1499); the process's registry outside tests.
+    steps: Arc<super::run_steps::RunStepRegistry>,
 }
 
 impl AgentControlClient<TonicControlRpc> {
@@ -2357,6 +2365,7 @@ impl<R> AgentControlClient<R> {
             producer_id,
             governed_security_context: false,
             egress: super::egress::EgressRegistry::global(),
+            steps: super::run_steps::RunStepRegistry::global(),
         })
     }
 
@@ -2369,6 +2378,63 @@ impl<R> AgentControlClient<R> {
     ) -> Self {
         self.egress = registry;
         self
+    }
+
+    /// Test-only: keep execution step records in `registry`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_run_step_registry(
+        mut self,
+        registry: Arc<super::run_steps::RunStepRegistry>,
+    ) -> Self {
+        self.steps = registry;
+        self
+    }
+
+    /// The step recorder of one command (ADR-0042, #1499): the same instance
+    /// for every path of the command, created on first use.
+    #[must_use]
+    pub(crate) fn run_steps(
+        &self,
+        execution_id: &str,
+        generation: u64,
+        command_id: &str,
+    ) -> Arc<super::run_steps::RunStepRecorder> {
+        self.steps.recorder(&super::run_steps::command_identity(
+            execution_id,
+            generation,
+            command_id,
+        ))
+    }
+
+    /// Start step recording for an attempt that takes over a run another
+    /// claim began (settlement recovery, model-checkpoint or node recovery;
+    /// ADR-0042, #1499). When this process holds no recorder for the command,
+    /// the earlier attempt ran elsewhere (or this worker restarted), so its
+    /// unreported steps may be gone: an `error` step `steps_possibly_lost`
+    /// opens the recovered attempt and makes the gap explicit. The claim is
+    /// bound so early reports go under it.
+    pub(crate) fn begin_recovered_run_steps(
+        &self,
+        identity: &ExecutionIdentityV1,
+        fence: &ExecutionFenceV1,
+        at_unix_ms: i64,
+    ) {
+        let prior = self.steps.find(identity).is_some();
+        self.steps.bind_claim(identity, fence);
+        if prior {
+            return;
+        }
+        let recorder = self.steps.recorder(identity);
+        recorder.mark_resumed();
+        recorder.record(
+            super::run_steps::StepDraft::new(
+                super::elitea::runtime::v1::RunStepKindV1::Error,
+                STEPS_POSSIBLY_LOST,
+                at_unix_ms,
+            )
+            .summary("reason", serde_json::Value::from("worker_restart")),
+        );
     }
 
     /// Claim governed commands (ADR-0039, #1115): every fresh claim sets
@@ -2543,6 +2609,8 @@ impl<R: ControlRpc> AgentControlClient<R> {
         };
         match parse_authorize_invocation_response(&response) {
             Ok(AuthorizeInvocationDecision::AuthorizedNow) => {
+                // Early step reports (ADR-0042, #1499) go under this claim.
+                self.steps.bind_claim(&claim.identity, &claim.fence);
                 let runtime_context = ClaimBoundRuntimeContextAuthority::from_claim(&claim);
                 let session = ClaimBoundSessionAuthority::from_claim(&claim);
                 InvocationAuthorizationDecision::AuthorizedNow(Box::new(payload.into_authorized(
@@ -2654,6 +2722,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
                 ControlSemanticError::InvalidInput("the settlement outcome is malformed").into(),
             );
         }
+        self.report_run_steps(&identity, &fence, true).await;
         self.report_egress_summary(&identity, &fence).await;
         let settled_identity = identity.clone();
         let proposal_bytes = proposal.encode_to_vec();
@@ -2671,7 +2740,152 @@ impl<R: ControlRpc> AgentControlClient<R> {
         let response = self.control.prepare_settlement(request).await?;
         let receipt = parse_prepare_settlement_response(response, expected_outcome, retirement)?;
         self.egress.forget(&settled_identity);
+        self.steps.forget(&settled_identity);
         Ok(receipt)
+    }
+
+    /// Report the buffered step records early, under the live claim, once a
+    /// full batch (64 steps) waits or the oldest step is older than 2 s.
+    /// Nothing happens before the claim is bound; the settlement report then
+    /// sends everything. Each batch gets ONE attempt (bounded by the RPC
+    /// deadline): a failure keeps the steps buffered and opens a backoff
+    /// window, so a slow or unavailable Main never holds the run longer.
+    pub(crate) async fn flush_run_steps_early(&self, recorder: &super::run_steps::RunStepRecorder) {
+        if !recorder.should_flush_early() {
+            return;
+        }
+        let Some((identity, fence)) = recorder.claim() else {
+            return;
+        };
+        self.send_run_steps(recorder, &identity, &fence, false)
+            .await;
+    }
+
+    /// Report every buffered step record of the execution (ADR-0042, #1499)
+    /// under the live claim. With `settle`, everything is sent before
+    /// `PrepareSettlement`; a batch that still fails after the retries is
+    /// dropped (logged and counted). Never fails the run.
+    async fn report_run_steps(
+        &self,
+        identity: &ExecutionIdentityV1,
+        fence: &ExecutionFenceV1,
+        settle: bool,
+    ) {
+        let Some(recorder) = self.steps.find(identity) else {
+            return;
+        };
+        self.send_run_steps(&recorder, identity, fence, settle)
+            .await;
+    }
+
+    async fn send_run_steps(
+        &self,
+        recorder: &super::run_steps::RunStepRecorder,
+        identity: &ExecutionIdentityV1,
+        fence: &ExecutionFenceV1,
+        settle: bool,
+    ) {
+        let _order = recorder.lock_sending().await;
+        loop {
+            if !settle && !recorder.should_flush_early() {
+                return;
+            }
+            let batch = recorder.next_batch();
+            if batch.is_empty() {
+                return;
+            }
+            let count = batch.len();
+            let attempts = if settle { RUN_STEPS_REPORT_ATTEMPTS } else { 1 };
+            match self
+                .report_run_step_batch(identity, fence, batch, attempts)
+                .await
+            {
+                RunStepReport::Delivered => recorder.acknowledge(count),
+                RunStepReport::Refused(reason) => {
+                    // A stale fence or a Main without the RPC refuses every
+                    // later batch too: drop them all now.
+                    recorder.drop_pending(reason);
+                    return;
+                }
+                RunStepReport::Exhausted => {
+                    if settle {
+                        recorder.drop_pending("retries_exhausted");
+                    } else {
+                        recorder.note_early_failure();
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    /// One batch, retried with bounded backoff on transport errors and
+    /// retryable rejections.
+    async fn report_run_step_batch(
+        &self,
+        identity: &ExecutionIdentityV1,
+        fence: &ExecutionFenceV1,
+        steps: Vec<super::elitea::runtime::v1::RunStepV1>,
+        attempts: u32,
+    ) -> RunStepReport {
+        let mut backoff = RUN_STEPS_RETRY_BACKOFF;
+        for attempt in 1..=attempts {
+            if attempt > 1 {
+                tokio::time::sleep(backoff).await;
+                backoff = backoff.saturating_mul(2);
+            }
+            let request = ReportRunStepsRequestV1 {
+                identity: Some(identity.clone()),
+                fence: Some(fence.clone()),
+                steps: steps.clone(),
+            };
+            let failure = match self.control.report_run_steps(request).await {
+                Ok(response) => match response.rejection {
+                    None => return RunStepReport::Delivered,
+                    Some(rejection) if rejection.retryable => {
+                        RuntimeErrorCodeV1::try_from(rejection.code)
+                            .map_or("UNKNOWN", |code| code.as_str_name())
+                    }
+                    Some(rejection) => {
+                        let failures = super::run_steps::count_report_failure();
+                        tracing::warn!(
+                            event = "worker_run_steps_rejected",
+                            execution_id = %identity.execution_id,
+                            generation = identity.generation,
+                            code = RuntimeErrorCodeV1::try_from(rejection.code)
+                                .map_or("UNKNOWN", |code| code.as_str_name()),
+                            report_failures_total = failures,
+                            "Main refused the execution's step records; the run continues"
+                        );
+                        return RunStepReport::Refused("rejected");
+                    }
+                },
+                Err(crate::transport::ControlGrpcError::Unavailable(_)) => "UNAVAILABLE",
+                Err(error) => {
+                    let failures = super::run_steps::count_report_failure();
+                    tracing::warn!(
+                        event = "worker_run_steps_unsupported",
+                        execution_id = %identity.execution_id,
+                        generation = identity.generation,
+                        error = %error,
+                        report_failures_total = failures,
+                        "the execution's step records cannot be reported; the run continues"
+                    );
+                    return RunStepReport::Refused("unsupported");
+                }
+            };
+            let failures = super::run_steps::count_report_failure();
+            tracing::warn!(
+                event = "worker_run_steps_report_failed",
+                execution_id = %identity.execution_id,
+                generation = identity.generation,
+                attempt,
+                code = failure,
+                report_failures_total = failures,
+                "the execution's step records were not accepted; retrying"
+            );
+        }
+        RunStepReport::Exhausted
     }
 
     /// Report the execution's egress summary (#1490) under the live claim,
@@ -2716,6 +2930,13 @@ impl<R: ControlRpc> AgentControlClient<R> {
             .map_err(|_| {
                 ControlSemanticError::InvalidInput("the settlement recovery outcome is malformed")
             })?;
+        self.begin_recovered_run_steps(
+            &recovery.identity,
+            &recovery.fence,
+            super::run_steps::now_unix_ms(),
+        );
+        self.report_run_steps(&recovery.identity, &recovery.fence, true)
+            .await;
         self.report_egress_summary(&recovery.identity, &recovery.fence)
             .await;
         let settled_identity = recovery.identity.clone();
@@ -2730,8 +2951,29 @@ impl<R: ControlRpc> AgentControlClient<R> {
         let receipt =
             parse_prepare_settlement_response(response, expected_outcome, recovery.retirement)?;
         self.egress.forget(&settled_identity);
+        self.steps.forget(&settled_identity);
         Ok(receipt)
     }
+}
+
+/// The step that marks a recovered attempt's possible gap (ADR-0042).
+pub(crate) const STEPS_POSSIBLY_LOST: &str = "steps_possibly_lost";
+
+/// Attempts per step batch, and the first backoff (doubled each retry).
+const RUN_STEPS_REPORT_ATTEMPTS: u32 = 4;
+#[cfg(not(test))]
+const RUN_STEPS_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(250);
+#[cfg(test)]
+const RUN_STEPS_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(1);
+
+/// How one step batch ended.
+enum RunStepReport {
+    Delivered,
+    /// Final for this claim: every buffered step is dropped.
+    Refused(&'static str),
+    /// Retries ran out; at settlement the steps are dropped, earlier they
+    /// wait for the next report.
+    Exhausted,
 }
 
 /// One execution's egress summary as `ReportEgressSummary` carries it: each
