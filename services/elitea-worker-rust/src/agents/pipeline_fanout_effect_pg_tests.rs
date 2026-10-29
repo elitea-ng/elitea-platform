@@ -1475,12 +1475,12 @@ async fn postgres_a_parallel_in_a_saved_child_pipeline_parks_and_a_wake_complete
     let rows = child_parallel_rows(&db.pool).await;
     assert!(!rows.is_empty());
     assert!(rows.iter().all(|stamped| *stamped), "{rows:?}");
-    for (card, answer) in cards.iter().zip(["red", "green", "blue"]) {
-        ledger.decide(
-            card["interrupt_key"].as_str().expect("a card key"),
-            "answer",
-            Some(answer),
-        );
+    let parked_keys = cards
+        .iter()
+        .map(|card| card["interrupt_key"].as_str().expect("a card key").to_owned())
+        .collect::<Vec<_>>();
+    for (key, answer) in parked_keys.iter().zip(["red", "green", "blue"]) {
+        ledger.decide(key, "answer", Some(answer));
     }
 
     let (woken, captured) = assembler(
@@ -1501,7 +1501,14 @@ async fn postgres_a_parallel_in_a_saved_child_pipeline_parks_and_a_wake_complete
     let (_, cards) = run_collecting(invocation)
         .await
         .expect("the wake completes the child's Parallel and the root");
-    assert!(cards.is_empty(), "no card is raised again: {cards:?}");
+    // The restore re-announces the parked cards (their keys unchanged); no
+    // new card is raised.
+    assert!(
+        cards.iter().all(|card| parked_keys
+            .iter()
+            .any(|key| card["interrupt_key"] == key.as_str())),
+        "{cards:?}"
+    );
     assert_eq!(model_requests(&captured), 3, "each answered branch calls the model once");
     let joined = child_joined(&db.pool).await.expect("the child's join");
     assert_eq!(joined.len(), 3, "{joined:?}");

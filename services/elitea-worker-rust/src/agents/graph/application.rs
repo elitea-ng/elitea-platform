@@ -452,6 +452,9 @@ pub(super) struct ApplicationNode {
     activation_checkpointer: Option<Arc<ApplicationActivationCheckpointer>>,
     graph_call_owner: Option<Arc<crate::agents::pipeline::scoped_runtime::PipelineGraphCallOwner>>,
     parallel_inputs: bool,
+    /// The saved child pipeline holds a fixed Parallel (FU-249): a wake
+    /// re-enters it at its parked frontier.
+    child_fanout: bool,
     /// The run's node failure channel, so a typed child refusal keeps its reason.
     failure_events: Option<PipelineNodeEventSender>,
 }
@@ -517,6 +520,7 @@ impl ApplicationNode {
         let child_checkpointer: Arc<dyn Checkpointer> = activation_checkpointer
             .as_ref()
             .map_or_else(|| checkpointer.clone(), |owner| owner.clone());
+        let child_fanout = fanout.is_some();
         let participant = match fanout {
             None => {
                 resolver.resolve_node(definition.id(), definition.selection(), child_checkpointer)?
@@ -576,7 +580,22 @@ impl ApplicationNode {
             activation_checkpointer,
             graph_call_owner,
             parallel_inputs: false,
+            child_fanout,
         })
+    }
+
+    /// Whether the child thread's latest checkpoint, as this activation sees
+    /// it, is an unfinished frontier the child resumes from.
+    async fn child_resumes_frontier(&self, thread: &str) -> Result<bool, GraphError> {
+        let checkpointer: &dyn Checkpointer = match &self.activation_checkpointer {
+            Some(overlay) => overlay.as_ref(),
+            None => self.checkpointer.as_ref(),
+        };
+        Ok(checkpointer
+            .load(thread)
+            .await
+            .map_err(|_| node_failure(self.name()))?
+            .is_some_and(|checkpoint| !checkpoint.pending_nodes.is_empty()))
     }
 
     fn pipeline_subgraph(&self, graph: Arc<CompiledGraph>) -> SubgraphNode {
@@ -724,17 +743,28 @@ impl ApplicationNode {
             |receipt| receipt.activation().call_id().to_owned(),
         );
         let checkpoint_thread_id = format!("{}/{}", context.config.thread_id, self.name());
-        let task = state
+        let text_resume = state
             .get(super::static_pause::STATIC_TEXT_RESUME_STATE_KEY)
             .and_then(|value| value.get(&checkpoint_thread_id))
-            .and_then(Value::as_str)
-            .unwrap_or(task);
-        let task = task.to_owned();
+            .and_then(Value::as_str);
+        // FU-249: a child holding a Parallel re-entered at its own unfinished
+        // frontier (a wake) already holds its input. The subgraph merges the
+        // input through the channel reducers again, so the task message would
+        // be appended twice and the parked occurrence would no longer match.
+        // A text resume is a new message and is still sent.
+        let resumes_frontier = self.child_fanout
+            && text_resume.is_none()
+            && self.child_resumes_frontier(&checkpoint_thread_id).await?;
+        let task = text_resume.unwrap_or(task).to_owned();
         state.insert(APPLICATION_TASK_STATE_KEY.to_owned(), json!(task));
-        state.insert(
-            APPLICATION_MESSAGES_STATE_KEY.to_owned(),
-            json!([{"role": "user", "content": task}]),
-        );
+        if resumes_frontier {
+            state.remove(APPLICATION_MESSAGES_STATE_KEY);
+        } else {
+            state.insert(
+                APPLICATION_MESSAGES_STATE_KEY.to_owned(),
+                json!([{"role": "user", "content": task}]),
+            );
+        }
         let event_scope = events
             .map(|_| {
                 PipelineNodeEventScope::new(&call_id, display_name, &checkpoint_thread_id)
