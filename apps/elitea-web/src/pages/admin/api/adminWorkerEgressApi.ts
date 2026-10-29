@@ -24,14 +24,16 @@ export function workerEgressHosts(response: unknown): WorkerEgressHostsResponse 
 export function useWorkerEgressHosts(days: number) {
   return useQuery({
     queryKey: [...KEY, days],
-    queryFn: async () => workerEgressHosts(await listWorkerEgressHosts({ days, source: 'all' })),
+    queryFn: async () => workerEgressHosts(await listWorkerEgressHosts({ days, source: 'worker' })),
   });
 }
 
 /**
- * The allowlist entries that would admit every reached host: one `host` per
- * distinct name, or `host:port` when that host was only reached on ports
- * other than the scheme defaults. Sorted, deduplicated.
+ * The allowlist entries that would admit every reached host, and no more: a
+ * bare `host` (any port) when that host was only reached on the scheme
+ * defaults, or with no port recorded; otherwise one `host:port` per port it
+ * was reached on, so a host seen on 443 and 8443 does not open every port.
+ * Sorted, deduplicated.
  */
 export function allowlistFromReached(reached: readonly { host: string; port: number }[]): string[] {
   const ports = new Map<string, Set<number>>();
@@ -44,11 +46,11 @@ export function allowlistFromReached(reached: readonly { host: string; port: num
   }
   const entries: string[] = [];
   for (const [host, seen] of ports) {
-    const nonDefault = [...seen].filter((port) => port !== 0 && port !== 80 && port !== 443);
-    if (nonDefault.length === seen.size) {
-      for (const port of nonDefault.sort((a, b) => a - b)) entries.push(`${host}:${port}`);
-    } else {
+    const onlyDefaults = [...seen].every((port) => port === 80 || port === 443);
+    if (seen.has(0) || onlyDefaults) {
       entries.push(host);
+    } else {
+      for (const port of [...seen].sort((a, b) => a - b)) entries.push(`${host}:${port}`);
     }
   }
   return entries.sort();

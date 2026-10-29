@@ -18,7 +18,7 @@ import { allowlistFromReached } from './api/adminWorkerEgressApi';
 const BODY: WorkerEgressHostsResponse = {
   days: 30,
   since: '2026-09-28T00:00:00Z',
-  source: 'all',
+  source: 'worker',
   project_id: null,
   reached: [
     { project_id: 7, agent_id: 31, host: 'api.github.com', port: 443, connections: 12, executions: 4, last_seen: '2026-10-28T09:15:02Z' },
@@ -49,7 +49,7 @@ afterEach(() => {
 });
 
 describe('WorkerEgressHostsPanel', () => {
-  it('lists reached and refused hosts for the last 30 days, both sources', async () => {
+  it('lists reached and refused hosts for the last 30 days, worker hosts only', async () => {
     renderAdminRoute(<WorkerEgressHostsPanel />);
 
     await screen.findByText('api.github.com');
@@ -60,7 +60,7 @@ describe('WorkerEgressHostsPanel', () => {
     expect(within(refused).getByText('paste.example')).toBeInTheDocument();
     expect(within(refused).getByText('egress_host_not_allowed')).toBeInTheDocument();
     expect(queries[0]).toContain('days=30');
-    expect(queries[0]).toContain('source=all');
+    expect(queries[0]).toContain('source=worker');
   });
 
   it('copies the reached hosts as allowlist entries', async () => {
@@ -78,15 +78,19 @@ describe('WorkerEgressHostsPanel', () => {
 });
 
 describe('allowlistFromReached', () => {
-  it('uses the bare host when a default port was reached, host:port otherwise', () => {
+  it('uses the bare host only for default ports, host:port for every port otherwise', () => {
     expect(
       allowlistFromReached([
         { host: 'A.example', port: 443 },
-        { host: 'a.example', port: 8080 },
+        { host: 'a.example', port: 8443 },
         { host: 'b.example', port: 8080 },
         { host: 'b.example', port: 9090 },
+        { host: 'c.example', port: 80 },
+        { host: 'c.example', port: 443 },
+        { host: 'd.example', port: 0 },
+        { host: 'd.example', port: 8443 },
         { host: '', port: 443 },
       ]),
-    ).toEqual(['a.example', 'b.example:8080', 'b.example:9090']);
+    ).toEqual(['a.example:443', 'a.example:8443', 'b.example:8080', 'b.example:9090', 'c.example', 'd.example']);
   });
 });

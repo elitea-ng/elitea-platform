@@ -80,10 +80,10 @@ A chat answer shows this as `error_code: egress_policy_invalid`. A synchronous t
 
 <Steps>
   <Step title="See which hosts your agents reach">
-    Open **Configuration › Worker Egress** in the admin console. The panel under the form lists the hosts that runs reached and the hosts that were refused, per project and agent, for the last 7, 30 or 90 days. It reads the worker's summaries and the egress proxy's summaries, which are kept 30 days by default.
+    Open **Configuration › Worker Egress** in the admin console. The panel under the form lists the hosts that runs reached and the hosts that were refused, per project and agent, for the last 7, 30 or 90 days. It reads the worker's summaries, which are kept 30 days by default. Sandbox runs go through the egress proxy, which has its own per-project allowlists, so their hosts are not listed here; the API's `source=proxy` returns them.
   </Step>
   <Step title="Seed the platform allowlist">
-    Select **Copy as allowlist**. This copies the reached hosts as entries, one per line: a bare host where only the default ports were used, and `host:port` otherwise. Remove the hosts that you do not approve, and paste the rest into the **Platform Allowlist** field. Toolkit base URLs are added to each run automatically, so you do not need to list them.
+    Select **Copy as allowlist**. This copies the reached hosts as entries, one per line: a bare host (any port) where only ports 80 and 443 were used, and one `host:port` entry for each port otherwise. Remove the hosts that you do not approve, and paste the rest into the **Platform Allowlist** field. Toolkit base URLs are added to each run automatically, so you do not need to list them.
   </Step>
   <Step title="Add project entries if necessary">
     A project that needs more hosts than the platform list can add its own. A project admin (permission `models.project_settings.edit`) creates one configuration of type `worker_egress`:

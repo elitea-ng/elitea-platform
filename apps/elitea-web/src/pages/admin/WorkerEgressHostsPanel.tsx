@@ -3,8 +3,10 @@
  * decision 2, #1490), shown under the Worker Egress section of the
  * Configuration page. An operator reads it before switching `mode` to
  * `allowlist`: "Copy as allowlist" puts one entry per reached host on the
- * clipboard, ready to paste into the section's allowlist field. Agent runs
- * and sandbox runs (the egress proxy) are both counted.
+ * clipboard, ready to paste into the section's allowlist field. Only the
+ * worker's own hosts are listed: sandbox runs reach the egress proxy, which
+ * has its own per-project allowlists, and copying them here would widen the
+ * worker's list.
  */
 import { useState } from 'react';
 import Alert from '@mui/material/Alert';
@@ -43,7 +45,7 @@ export function WorkerEgressHostsPanel() {
       <Typography variant="bodySmall" color="text.secondary">
         {t(
           'pages.admin.workerEgress.description',
-          'Public hosts that agent tools and sandbox runs reached, and the hosts the allowlist refused. Review this before switching to allowlist mode, so the list holds what your agents already use.',
+          'Public hosts that agent tools reached from the worker, and the hosts the allowlist refused. Sandbox runs go through the egress proxy and are not listed. Review this before switching to allowlist mode, so the list holds what your agents already use.',
         )}
       </Typography>
       <Toolbar days={days} onDays={setDays} data={hosts.data} />

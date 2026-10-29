@@ -5132,7 +5132,7 @@
   "pages.admin.workerEgress.copied": "Copied",
   "pages.admin.workerEgress.copy": "Copy as allowlist",
   "pages.admin.workerEgress.days": "Last {{days}} days",
-  "pages.admin.workerEgress.description": "Public hosts that agent tools and sandbox runs reached, and the hosts the allowlist refused. Review this before switching to allowlist mode, so the list holds what your agents already use.",
+  "pages.admin.workerEgress.description": "Public hosts that agent tools reached from the worker, and the hosts the allowlist refused. Sandbox runs go through the egress proxy and are not listed. Review this before switching to allowlist mode, so the list holds what your agents already use.",
   "pages.admin.workerEgress.emptyReached": "No public host was reached in this window.",
   "pages.admin.workerEgress.loadError": "Could not read the reached hosts.",
   "pages.admin.workerEgress.noAgent": "No agent",
