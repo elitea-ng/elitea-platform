@@ -130,19 +130,20 @@ updates:
     multi-ecosystem-group: nightly
     patterns: ["*"]
 
+  # CARGO IS THREE ENTRIES, NOT ONE, and all three stay in the `nightly` group,
+  # so it is still one pull request. Each entry is one Dependabot job, and a
+  # job is cancelled at ~55 minutes: the single ten-directory entry ran 43-46
+  # min when it finished and was cancelled mid-resolution on 2026-10-23,
+  # 10-24 and three times on 10-28 (once majors were unlocked), and a
+  # cancelled ecosystem means the multi-ecosystem PR is never opened. The
+  # split balances lockfile size (~1.6-1.8k packages per entry). A new crate
+  # directory goes into the lightest entry, never a fourth unrelated list.
   - package-ecosystem: cargo
     directories:
+      - /libs/rust
       - /services/elitea-worker-rust
       - /services/elitea-code-runner
       - /services/elitea-code-runner/adapters/rust
-      - /services/elitea-deepwiki-engine
-      - /libs/rust
-      - /services/elitea-inventory-engine
-      - /services/elitea-vector
-      - /services/elitea-doc-extractor
-      - /apps/elitea-desktop/src-tauri
-      # The desktop's document extractor: xberg in a lockfile of its own.
-      - /apps/elitea-desktop/doc-extract-sidecar
     multi-ecosystem-group: nightly
     patterns: ["*"]
     ignore:
@@ -150,6 +151,41 @@ updates:
       # exactly, and its sub-crates move only with them (ADR-0032 decision 5):
       # a bump is a reviewed PR that reruns the hostile corpus, never a scanner
       # PR. tests/isolation.rs asserts the locked version of every zavora-*.
+      # Repeated in all three cargo entries: every workspace that path-depends
+      # on libs/rust carries zavora-* in its own lock.
+      - dependency-name: "zavora-*"
+
+  - package-ecosystem: cargo
+    directories:
+      - /services/elitea-inventory-engine
+      - /services/elitea-deepwiki-engine
+      - /services/elitea-doc-extractor
+    multi-ecosystem-group: nightly
+    patterns: ["*"]
+    ignore:
+      # libs/rust/office-core pins zavora-slide, zavora-docx and zavora-xlsx
+      # exactly, and its sub-crates move only with them (ADR-0032 decision 5):
+      # a bump is a reviewed PR that reruns the hostile corpus, never a scanner
+      # PR. tests/isolation.rs asserts the locked version of every zavora-*.
+      # Repeated in all three cargo entries: every workspace that path-depends
+      # on libs/rust carries zavora-* in its own lock.
+      - dependency-name: "zavora-*"
+
+  - package-ecosystem: cargo
+    directories:
+      - /apps/elitea-desktop/src-tauri
+      # The desktop's document extractor: xberg in a lockfile of its own.
+      - /apps/elitea-desktop/doc-extract-sidecar
+      - /services/elitea-vector
+    multi-ecosystem-group: nightly
+    patterns: ["*"]
+    ignore:
+      # libs/rust/office-core pins zavora-slide, zavora-docx and zavora-xlsx
+      # exactly, and its sub-crates move only with them (ADR-0032 decision 5):
+      # a bump is a reviewed PR that reruns the hostile corpus, never a scanner
+      # PR. tests/isolation.rs asserts the locked version of every zavora-*.
+      # Repeated in all three cargo entries: every workspace that path-depends
+      # on libs/rust carries zavora-* in its own lock.
       - dependency-name: "zavora-*"
 
   - package-ecosystem: pip
