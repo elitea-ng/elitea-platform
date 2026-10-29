@@ -30,6 +30,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/releasegate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -148,9 +149,13 @@ func (h *Handler) PutSuite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !body.ReleaseGate {
-		if _, err := h.gates.DeleteSuite(r.Context(), projectID, applicationID, datasetID); err != nil {
+		removed, err := h.gates.DeleteSuite(r.Context(), projectID, applicationID, datasetID)
+		if err != nil {
 			writeError(r.Context(), w, err)
 			return
+		}
+		if removed {
+			annotateSuite(r, projectID, applicationID, datasetID, "unmarked")
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"application_id": applicationID, "dataset_id": datasetID, "release_gate": false,
@@ -165,7 +170,28 @@ func (h *Handler) PutSuite(w http.ResponseWriter, r *http.Request) {
 		writeError(r.Context(), w, err)
 		return
 	}
+	kind := "marked"
+	if stored.Regression {
+		kind = "marked regression"
+	}
+	annotateSuite(r, projectID, applicationID, datasetID, kind)
 	writeJSON(w, http.StatusOK, suiteResponse(stored))
+}
+
+// AuditActionSuiteUpdated is the audit action of a gate suite edit: it
+// changes what a release must pass (ADR-0040 decision 4).
+const AuditActionSuiteUpdated = "agent.gate_suite.updated"
+
+// annotateSuite names the suite edit in the request's audit event (the
+// /release_gate_suites/ audited surface).
+func annotateSuite(r *http.Request, projectID, applicationID, datasetID int64, change string) {
+	project, dataset := projectID, datasetID
+	audit.Annotate(r.Context(), audit.Annotation{
+		Action: AuditActionSuiteUpdated, EntityType: "release_gate_suite", EntityID: &dataset,
+		EntityName: "application:" + strconv.FormatInt(applicationID, 10) + " dataset:" +
+			strconv.FormatInt(datasetID, 10) + " " + change,
+		ProjectID: &project,
+	})
 }
 
 // ListGates answers the agent's gates.

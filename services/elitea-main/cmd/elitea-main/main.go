@@ -2632,6 +2632,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return err
 		}
 	}
+	// The recertification pass of agent lifecycle governance (ADR-0040
+	// decision 5) reads the gate's scheduled re-evaluations and writes the
+	// kill switch's certification suspensions.
+	if pool != nil {
+		if err := startAgentRecertification(ctx, pool, releaseGate, executionSuspensions, logger); err != nil {
+			return err
+		}
+	}
 
 	// The admin LLM Proxy section reads the gateway's own enforcement status.
 	// It uses the shared gateway client; the GovernanceStatus call carries no
@@ -3026,10 +3034,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// for the reason above. The orchestrator is started below, after the
 		// config is built, so that a nil pool leaves all three fields nil
 		// together and the thirteen routes are simply not registered.
-		EvalDatasetsRepo: evalDatasetsRepository(pool),
-		EvalRunsRepo:     evalRunsRepo,
-		EvalOrchestrator: evalOrchestrator,
-		ReleaseGate:      releaseGate,
+		EvalDatasetsRepo:  evalDatasetsRepository(pool),
+		EvalRunsRepo:      evalRunsRepo,
+		EvalOrchestrator:  evalOrchestrator,
+		ReleaseGate:       releaseGate,
+		SuspensionChanged: executionSuspensions.gate.Notify,
 		// WebhookRepo is the sixth instance of the same defect, and it hid one
 		// step deeper than the other five. Its gate mounts a subrouter —
 		// `r.Mount("/webhooks/prompt_lib/{projectID}", webhook.NewHandler(...).Routes())`

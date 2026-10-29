@@ -1181,9 +1181,29 @@ JOIN (VALUES
     -- administrators suspend and resume every scope. Existing databases get
     -- the grant from migrations/shared/0194_execution_suspensions.sql.
     ('super_admin', 'safety.suspend'),
-    ('admin', 'safety.suspend')
+    ('admin', 'safety.suspend'),
+    -- Issue 1497, agent lifecycle governance (ADR-0040). Existing databases
+    -- get the grant from
+    -- migrations/shared/0204_agent_lifecycle_governance.sql.
+    ('super_admin', 'models.applications.governance'),
+    ('admin', 'models.applications.governance')
 ) AS grant_row(role_name, permission) ON grant_row.role_name = role.name
 WHERE role.mode = 'administration'
+ON CONFLICT (role_id, permission) DO NOTHING;
+
+-- Issue 1497: the project admin holds the governance role (approve at high
+-- and critical, lower a tier, override a failed release gate) and may
+-- record attestations and mark an agent due. Existing databases get the
+-- grants from migrations/shared/0204_agent_lifecycle_governance.sql.
+INSERT INTO auth_core__role_permission (role_id, permission)
+SELECT role.id, grant_row.permission
+FROM auth_core__role AS role
+CROSS JOIN (VALUES
+    ('models.applications.governance'),
+    ('lifecycle.attestations.write'),
+    ('lifecycle.registry.mark_due')
+) AS grant_row(permission)
+WHERE role.mode = 'default' AND role.name = 'admin'
 ON CONFLICT (role_id, permission) DO NOTHING;
 
 -- Issue 1493: the project admin suspends and resumes an agent or the whole

@@ -7499,6 +7499,385 @@ components:
         code: release_gate_regression_taken
         message: The agent already has a regression suite. Unmark it first.
 
+    AgentRiskTier:
+      type: string
+      enum: [low, medium, high, critical]
+      description: The risk tier of an agent (ADR-0040 decision 1).
+      example: medium
+
+    AgentCertificationState:
+      type: string
+      enum: [uncertified, certified, due, lapsed, suspended]
+      description: >
+        The certification state of an agent. A suspended agent's runs are
+        refused with agent_certification_lapsed (lapse_action suspend).
+      example: certified
+
+    AgentRegistryRecord:
+      type: object
+      required: [project_id, application_id, application_name, business_owner_id, technical_owner_id,
+        risk_tier, intended_use, out_of_scope_use, data_classes, certification_state,
+        certified_release_id, certified_at, recertify_by, state_reason, state_changed_at,
+        suspension_id, updated_at]
+      properties:
+        project_id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        application_name: { type: string }
+        business_owner_id: { type: integer, format: int64, nullable: true }
+        technical_owner_id: { type: integer, format: int64, nullable: true }
+        risk_tier: { $ref: '#/components/schemas/AgentRiskTier' }
+        intended_use: { type: string, maxLength: 2000 }
+        out_of_scope_use: { type: string, maxLength: 2000 }
+        data_classes:
+          type: array
+          maxItems: 32
+          items: { type: string }
+        certification_state: { $ref: '#/components/schemas/AgentCertificationState' }
+        certified_release_id: { type: integer, format: int64, nullable: true }
+        certified_at: { type: string, format: date-time, nullable: true }
+        recertify_by: { type: string, format: date-time, nullable: true }
+        state_reason:
+          type: string
+          description: >
+            Why the state last moved: recertify_window, new_release,
+            release_toolkit_drifted, evaluation_regressed,
+            recertify_by_passed, lapse_action_suspend, lapse_action_warn, or
+            the reason an external tool gave.
+        state_changed_at: { type: string, format: date-time }
+        suspension_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: The active agent suspension (kill switch), of any source.
+        updated_at: { type: string, format: date-time }
+      description: >
+        NOTE(W2): internal/api/v2/agentlifecycle/handler.go, RegistryRecord.
+      example:
+        project_id: 12
+        application_id: 31
+        application_name: Refund assistant
+        business_owner_id: 4
+        technical_owner_id: 7
+        risk_tier: high
+        intended_use: Answers refund policy questions for support staff.
+        out_of_scope_use: Decides refunds.
+        data_classes: [customer_pii]
+        certification_state: certified
+        certified_release_id: 9
+        certified_at: '2026-10-29T09:00:00Z'
+        recertify_by: '2027-04-27T09:00:00Z'
+        state_reason: ''
+        state_changed_at: '2026-10-29T09:00:00Z'
+        suspension_id: null
+        updated_at: '2026-10-29T09:00:00Z'
+
+    AgentRegistryList:
+      type: object
+      required: [total, rows]
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AgentRegistryRecord' }
+      description: >
+        NOTE(W2): internal/api/v2/agentlifecycle/handler.go, Handler.AdminRegistry.
+
+    AgentRegistryUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        business_owner_id: { type: integer, format: int64, minimum: 0, description: 0 clears the owner. }
+        technical_owner_id: { type: integer, format: int64, minimum: 0, description: 0 clears the owner. }
+        risk_tier: { $ref: '#/components/schemas/AgentRiskTier' }
+        intended_use: { type: string, maxLength: 2000 }
+        out_of_scope_use: { type: string, maxLength: 2000 }
+        data_classes:
+          type: array
+          maxItems: 32
+          items: { type: string, pattern: '^[a-z0-9][a-z0-9_.-]{0,63}$' }
+      description: An absent field is unchanged.
+      example:
+        risk_tier: high
+        business_owner_id: 4
+
+    AgentLifecycleReason:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: { type: string, maxLength: 500 }
+      example:
+        reason: The model provider announced the retirement of the agent's model.
+
+    AgentGateOverride:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 200 }
+      example:
+        reason: The failed case tests a policy that changed this week; the new answer is correct.
+
+    AgentChangeRequestCreate:
+      type: object
+      additionalProperties: false
+      required: [summary]
+      properties:
+        kind: { type: string, enum: [release, recertification], default: release }
+        version_id: { type: integer, format: int64, minimum: 1, description: The draft version of a release change request. }
+        version_name: { type: string, maxLength: 128, pattern: '^[a-zA-Z0-9._-]+$' }
+        category: { type: string, maxLength: 64 }
+        summary: { type: string, minLength: 1, maxLength: 2000 }
+      example:
+        kind: release
+        version_id: 88
+        version_name: '2.1'
+        summary: Adds the refund window lookup tool.
+
+    AgentChangeApproval:
+      type: object
+      additionalProperties: false
+      properties:
+        note: { type: string, maxLength: 1000 }
+      example:
+        note: Reviewed the tool list and the gate results.
+
+    AgentChangeRequestApproval:
+      type: object
+      required: [approver_id, holds_governance_role, note, created_at]
+      properties:
+        approver_id: { type: integer, format: int64 }
+        holds_governance_role: { type: boolean }
+        note: { type: string }
+        created_at: { type: string, format: date-time }
+
+    AgentChangeRequestGate:
+      type: object
+      required: [id, state, failures, overridden]
+      properties:
+        id: { type: integer, format: int64 }
+        state: { type: string, enum: [pending, passed, failed] }
+        failures:
+          type: array
+          items: { type: string }
+          description: The gate's failure codes; the release gate route has the detail.
+        overridden: { type: boolean }
+
+    AgentChangeRequest:
+      type: object
+      required: [id, application_id, kind, state, risk_tier, candidate_version_id, candidate_revision_id,
+        version_name, category, summary, proposed_by, self_approved, required_approvals,
+        required_governance_approvals, gate_id, override_reason, overridden_by, overridden_at,
+        current_release_id, release_id, decided_by, decided_at, decision_reason, created_at,
+        submitted_at, published_at, approvals]
+      properties:
+        id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        kind: { type: string, enum: [release, recertification, legacy_unreviewed] }
+        state: { type: string, enum: [draft, submitted, approved, rejected, withdrawn, published] }
+        risk_tier: { $ref: '#/components/schemas/AgentRiskTier' }
+        candidate_version_id: { type: integer, format: int64, nullable: true }
+        candidate_revision_id: { type: integer, format: int64, nullable: true, description: The draft revision the submission saw. }
+        version_name: { type: string }
+        category: { type: string }
+        summary: { type: string }
+        proposed_by: { type: integer, format: int64, nullable: true }
+        self_approved: { type: boolean, description: A direct publish of a tier that needs no approval. }
+        required_approvals: { type: integer }
+        required_governance_approvals: { type: integer }
+        gate_id: { type: integer, format: int64, nullable: true, description: The release gate started at submission. }
+        gate:
+          $ref: '#/components/schemas/AgentChangeRequestGate'
+        override_reason: { type: string }
+        overridden_by: { type: integer, format: int64, nullable: true }
+        overridden_at: { type: string, format: date-time, nullable: true }
+        current_release_id: { type: integer, format: int64, nullable: true, description: The published release at submission. }
+        release_id: { type: integer, format: int64, nullable: true, description: The release the change request published or certified. }
+        decided_by: { type: integer, format: int64, nullable: true }
+        decided_at: { type: string, format: date-time, nullable: true }
+        decision_reason: { type: string }
+        created_at: { type: string, format: date-time }
+        submitted_at: { type: string, format: date-time, nullable: true }
+        published_at: { type: string, format: date-time, nullable: true }
+        approvals:
+          type: array
+          items: { $ref: '#/components/schemas/AgentChangeRequestApproval' }
+      description: >
+        NOTE(W2): internal/api/v2/agentlifecycle/handler.go, ChangeRequest.
+        gate is present on the single read only.
+      example:
+        id: 5
+        application_id: 31
+        kind: release
+        state: submitted
+        risk_tier: high
+        candidate_version_id: 88
+        candidate_revision_id: 412
+        version_name: '2.1'
+        category: ''
+        summary: Adds the refund window lookup tool.
+        proposed_by: 7
+        self_approved: false
+        required_approvals: 1
+        required_governance_approvals: 1
+        gate_id: 14
+        gate: { id: 14, state: passed, failures: [], overridden: false }
+        override_reason: ''
+        overridden_by: null
+        overridden_at: null
+        current_release_id: 9
+        release_id: null
+        decided_by: null
+        decided_at: null
+        decision_reason: ''
+        created_at: '2026-10-29T09:00:00Z'
+        submitted_at: '2026-10-29T09:05:00Z'
+        published_at: null
+        approvals: []
+
+    AgentChangeRequestList:
+      type: object
+      required: [total, rows]
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AgentChangeRequest' }
+      description: >
+        NOTE(W2): internal/api/v2/agentlifecycle/handler.go, Handler.ListChangeRequests.
+
+    AgentChangeApprovalOutcome:
+      type: object
+      required: [change_request, complete]
+      properties:
+        change_request: { $ref: '#/components/schemas/AgentChangeRequest' }
+        complete: { type: boolean, description: The approval was the final one required. }
+        published:
+          type: object
+          required: [version_id, release_id, version_name]
+          properties:
+            version_id: { type: integer, format: int64 }
+            release_id: { type: integer, format: int64, nullable: true }
+            version_name: { type: string }
+      description: >
+        NOTE(W2): internal/api/v2/agentlifecycle/handler.go, Handler.ApproveChangeRequest.
+        published is present when the final approval published a release candidate.
+
+    AgentAttestationSubjectType:
+      type: string
+      enum: [agent, release, toolkit, index]
+      example: agent
+
+    AgentAttestationCreate:
+      type: object
+      additionalProperties: false
+      required: [kind, subject_type, subject_id, attester]
+      properties:
+        kind: { type: string, enum: [architecture, legal, model_risk, data_owner, data_accuracy, custom] }
+        custom_kind: { type: string, pattern: '^[a-z0-9][a-z0-9_.-]{0,63}$', description: Required for kind custom; empty otherwise. }
+        subject_type: { $ref: '#/components/schemas/AgentAttestationSubjectType' }
+        subject_id: { type: string, pattern: '^[A-Za-z0-9-]{1,64}$', description: The numeric id of an agent or a release; the reference of a toolkit or an index. }
+        attester: { type: string, minLength: 1, maxLength: 256 }
+        attester_user_id: { type: integer, format: int64, minimum: 1 }
+        valid_until: { type: string, format: date-time }
+        evidence_url: { type: string, maxLength: 2048, format: uri }
+        note: { type: string, maxLength: 2000 }
+      example:
+        kind: model_risk
+        subject_type: agent
+        subject_id: '31'
+        attester: Model Risk Committee
+        valid_until: '2027-10-29T00:00:00Z'
+        evidence_url: https://grc.example.com/reviews/1182
+
+    AgentAttestation:
+      type: object
+      required: [id, kind, custom_kind, subject_type, subject_id, attester, attester_user_id, valid_until,
+        evidence_url, note, recorded_by, created_at, revoked_at, revoked_by, revoke_reason, valid]
+      properties:
+        id: { type: integer, format: int64 }
+        kind: { type: string, enum: [architecture, legal, model_risk, data_owner, data_accuracy, custom] }
+        custom_kind: { type: string }
+        subject_type: { $ref: '#/components/schemas/AgentAttestationSubjectType' }
+        subject_id: { type: string }
+        attester: { type: string }
+        attester_user_id: { type: integer, format: int64, nullable: true }
+        valid_until: { type: string, format: date-time, nullable: true }
+        evidence_url: { type: string }
+        note: { type: string }
+        recorded_by: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time, nullable: true }
+        revoked_by: { type: integer, format: int64, nullable: true }
+        revoke_reason: { type: string }
+        valid: { type: boolean, description: Not revoked and not expired now. }
+      description: >
+        NOTE(W2): internal/api/v2/agentlifecycle/handler.go, Attestation.
+      example:
+        id: 3
+        kind: model_risk
+        custom_kind: ''
+        subject_type: agent
+        subject_id: '31'
+        attester: Model Risk Committee
+        attester_user_id: null
+        valid_until: '2027-10-29T00:00:00Z'
+        evidence_url: https://grc.example.com/reviews/1182
+        note: ''
+        recorded_by: 4
+        created_at: '2026-10-29T09:00:00Z'
+        revoked_at: null
+        revoked_by: null
+        revoke_reason: ''
+        valid: true
+
+    AgentAttestationList:
+      type: object
+      required: [total, rows]
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AgentAttestation' }
+      description: >
+        NOTE(W2): internal/api/v2/agentlifecycle/handler.go, Handler.ListAttestations.
+
+    AgentLifecycleRefusal:
+      type: object
+      required: [error, code, message]
+      properties:
+        error: { type: string, description: 'The code again: some clients read error only.' }
+        code:
+          type: string
+          description: >
+            change_request_required, change_request_not_required,
+            self_approval_refused, approver_role_required,
+            change_request_already_approved, release_gate_pending,
+            release_gate_failed, release_gate_not_overridable,
+            attestation_missing, change_request_state_conflict,
+            change_request_open, change_request_stale,
+            change_request_proposer_only, agent_not_certifiable,
+            registry_owner_required, tier_lowering_requires_governance,
+            governance_role_required, invalid_request or not_found. A
+            publish refusal of the candidate keeps the publish route's code.
+        message: { type: string }
+        failures:
+          type: array
+          items: { type: string }
+          description: release_gate_failed only, the gate's failure codes.
+        missing:
+          type: array
+          items: { type: string }
+          description: attestation_missing only, the missing kinds.
+        risk_tier: { type: string, description: change_request_required and change_request_not_required. }
+        required_approvals: { type: integer, description: change_request_required only. }
+      description: >
+        NOTE(W2): internal/api/v2/agentlifecycle/handler.go, writeError.
+      example:
+        error: attestation_missing
+        code: attestation_missing
+        message: 'A mandatory attestation is missing, expired or revoked: legal.'
+        missing: [legal]
+
     ExecutionSuspension:
       type: object
       description: >
@@ -18004,6 +18383,63 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  /admin/agent_registry:
+    get:
+      operationId: listAdminAgentRegistry
+      summary: List the agent registry across projects
+      description: >
+        The cross-project agent registry (ADR-0040 decision 1), ordered by
+        project and agent. JSON pages of at most 500 rows, or with
+        format=csv a CSV export of at most 10000 rows (limit and offset do
+        not apply). Gated on `configuration.governance` in the
+        administration mode.
+      tags: [admin]
+      parameters:
+        - name: tier
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/AgentRiskTier' }
+        - name: state
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/AgentCertificationState' }
+        - name: owner_id
+          in: query
+          required: false
+          description: The business or technical owner.
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: project_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, maximum: 500, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+        - name: format
+          in: query
+          required: false
+          schema: { type: string, enum: [json, csv], default: json }
+      responses:
+        '200':
+          description: The registry rows
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRegistryList' }
+            text/csv:
+              schema: { type: string }
+        '400':
+          description: (code invalid_request) A filter that is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
   /admin/execution_suspensions:
     get:
       operationId: listExecutionSuspensions
@@ -23919,6 +24355,628 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ApplicationReleaseRefusal' }
+
+  /elitea_core/agent_registry/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentRegistry
+      summary: Read the registry record of an agent
+      description: >
+        The agent's governance record (ADR-0040 decision 1): owners, risk
+        tier, intended and out-of-scope use, data classes and certification
+        state. An agent without a record gets one on this read (tier low,
+        uncertified). Requires `models.applications.versions.get`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The registry record
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRegistryRecord' }
+        '400':
+          description: A bad project or application id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) The agent does not exist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+    put:
+      operationId: updateAgentRegistry
+      summary: Edit the registry record of an agent
+      description: >
+        Changes the owners, risk tier, uses or data classes. Only an owner
+        or a holder of `models.applications.governance` can edit; an agent
+        with no owner accepts any caller the route admits. Raising the tier
+        needs an owner or the governance role; lowering it needs the
+        governance role. A tier change is written to the security audit
+        outbox as agent.registry.tier_changed. Requires
+        `models.applications.publish.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentRegistryUpdate' }
+      responses:
+        '200':
+          description: The stored registry record
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRegistryRecord' }
+        '400':
+          description: (code invalid_request) A malformed body, an unknown tier, a data class or text that is not valid, or an owner who is not a user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            (code registry_owner_required) The caller is neither an owner nor
+            a governance role holder; (code
+            tier_lowering_requires_governance) lowering the tier needs the
+            governance role.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '404':
+          description: (code not_found) The agent does not exist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+
+  /elitea_core/agent_registry/prompt_lib/{project_id}/{application_id}/mark_due:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: markAgentDue
+      summary: Set a certified agent to due for recertification
+      description: >
+        For an external tool (an API token): a certified agent becomes due,
+        with the reason recorded as its state reason. A due, lapsed or
+        suspended agent is answered as it is. Written to the security audit
+        outbox as agent.certification.due. Requires
+        `lifecycle.registry.mark_due`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentLifecycleReason' }
+      responses:
+        '200':
+          description: The registry record
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRegistryRecord' }
+        '400':
+          description: (code invalid_request) No reason, or a reason longer than 500 characters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) The agent does not exist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '409':
+          description: (code agent_not_certifiable) The agent is not certified
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+
+  /elitea_core/change_requests/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: listAgentChangeRequests
+      summary: List the change requests of an agent
+      description: >
+        The agent's change requests, newest first, at most 500 (ADR-0040
+        decision 3). Requires `models.applications.versions.get`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The change requests
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentChangeRequestList' }
+        '400':
+          description: A bad project or application id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    post:
+      operationId: createAgentChangeRequest
+      summary: Create a draft change request
+      description: >
+        A release change request names a draft version and the version name
+        it is published under. A recertification change request certifies
+        the agent's published release again with no definition change. An
+        agent has at most one open (draft or submitted) change request. A
+        tier that needs no approval publishes directly instead. Requires
+        `models.applications.publish.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentChangeRequestCreate' }
+      responses:
+        '201':
+          description: The draft
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentChangeRequest' }
+        '400':
+          description: (code invalid_request) A malformed body, a version that is already published, or a summary that is empty or too long
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) The agent or the version does not exist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '409':
+          description: >
+            (code change_request_not_required) The agent's tier needs no
+            approval; (code change_request_open) the agent already has an
+            open change request; (code agent_not_certifiable) a
+            recertification of an agent with no published release.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+
+  /elitea_core/change_requests/prompt_lib/{project_id}/{application_id}/{change_request_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: change_request_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentChangeRequest
+      summary: Read one change request
+      description: >
+        The change request with its approvals and the state of its release
+        gate. Requires `models.applications.versions.get`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The change request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentChangeRequest' }
+        '400':
+          description: A bad id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) Not a change request of this agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+
+  /elitea_core/change_requests/prompt_lib/{project_id}/{application_id}/{change_request_id}/submit:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: change_request_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: submitAgentChangeRequest
+      summary: Submit a draft change request
+      description: >
+        The author submits the draft. A release candidate passes every
+        publish check first (the publish route's refusals apply), the
+        release gate starts, and the tier's approval requirement is
+        recorded. Written to the security audit outbox as
+        agent.change.submitted. Requires `models.applications.publish.post`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The submitted change request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentChangeRequest' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code change_request_proposer_only) Only the author can submit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '404':
+          description: (code not_found) Not a change request of this agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '409':
+          description: >
+            (code change_request_state_conflict) The change request is not a
+            draft; (code change_request_not_required) the tier no longer
+            needs approval; or a publish check refused the candidate.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+
+  /elitea_core/change_requests/prompt_lib/{project_id}/{application_id}/{change_request_id}/approve:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: change_request_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: approveAgentChangeRequest
+      summary: Approve a submitted change request
+      description: >
+        Records the caller's approval. The author cannot approve. Approval
+        is refused while the release gate is pending or failed (not
+        overridden), while a mandatory attestation is missing, expired or
+        revoked, and after the candidate changed since submission. The
+        final required approval publishes a release candidate through the
+        publish path (the release is recorded) or certifies the published
+        release again, in the same transaction, and certifies the agent.
+        Written to the security audit outbox as agent.change.approved, and
+        on the final approval agent.change.published and
+        agent.certification.certified. Requires
+        `models.applications.publish.post`.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentChangeApproval' }
+      responses:
+        '200':
+          description: The change request after the approval
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentChangeApprovalOutcome' }
+        '400':
+          description: (code invalid_request) A note longer than 1000 characters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            (code self_approval_refused) The author cannot approve; (code
+            approver_role_required) the remaining approvals must come from a
+            governance role holder.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '404':
+          description: (code not_found) Not a change request of this agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '409':
+          description: >
+            (code release_gate_pending) The release gate still runs; (code
+            release_gate_failed) the gate failed and was not overridden;
+            (code attestation_missing) a mandatory attestation is missing;
+            (code change_request_stale) the candidate changed since
+            submission; (code change_request_already_approved) the caller
+            already approved; (code change_request_state_conflict) the
+            change request is not submitted; or a publish refusal of the
+            candidate.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+
+  /elitea_core/change_requests/prompt_lib/{project_id}/{application_id}/{change_request_id}/reject:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: change_request_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: rejectAgentChangeRequest
+      summary: Reject a submitted change request
+      description: >
+        A reviewer other than the author rejects, with a reason. Written to
+        the security audit outbox as agent.change.rejected. Requires
+        `models.applications.publish.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentLifecycleReason' }
+      responses:
+        '200':
+          description: The rejected change request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentChangeRequest' }
+        '400':
+          description: (code invalid_request) No reason, or a reason longer than 500 characters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code self_approval_refused) The author withdraws instead
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '404':
+          description: (code not_found) Not a change request of this agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '409':
+          description: (code change_request_state_conflict) The change request is not submitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+
+  /elitea_core/change_requests/prompt_lib/{project_id}/{application_id}/{change_request_id}/withdraw:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: change_request_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: withdrawAgentChangeRequest
+      summary: Withdraw a draft or submitted change request
+      description: >
+        The author, or a holder of `models.applications.governance`,
+        withdraws. Written to the security audit outbox as
+        agent.change.withdrawn. Requires `models.applications.publish.post`.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentLifecycleReason' }
+      responses:
+        '200':
+          description: The withdrawn change request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentChangeRequest' }
+        '400':
+          description: (code invalid_request) A reason longer than 500 characters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code change_request_proposer_only) Only the author or a governance role holder can withdraw
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '404':
+          description: (code not_found) Not a change request of this agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '409':
+          description: (code change_request_state_conflict) The change request is not open
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+
+  /elitea_core/change_requests/prompt_lib/{project_id}/{application_id}/{change_request_id}/gate_override:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: change_request_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: overrideAgentChangeRequestGate
+      summary: Override the failed release gate of a change request
+      description: >
+        A governance role holder who is not the author accepts the failed
+        release gate, with a reason of 1 to 200 characters. The gate stays
+        failed with the override stored beside it; approval still needs the
+        tier's approvers. Written to the security audit outbox as
+        agent.change.gate_overridden. Requires
+        `models.applications.governance`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentGateOverride' }
+      responses:
+        '200':
+          description: The change request with the override
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentChangeRequest' }
+        '400':
+          description: (code invalid_request) No reason, or a reason longer than 200 characters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            (code governance_role_required) The caller does not hold the
+            governance role; (code self_approval_refused) the author cannot
+            override.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '404':
+          description: (code not_found) Not a change request of this agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '409':
+          description: >
+            (code release_gate_not_overridable) The gate is not failed or is
+            already overridden; (code change_request_state_conflict) the
+            change request is not submitted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+
+  /elitea_core/agent_attestations/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listAgentAttestations
+      summary: List the attestations of a project
+      description: >
+        The project's attestations, newest first, at most 500, optionally of
+        one subject (ADR-0040 decision 6). Requires
+        `models.applications.versions.get`.
+      tags: [applications]
+      parameters:
+        - name: subject_type
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/AgentAttestationSubjectType' }
+        - name: subject_id
+          in: query
+          required: false
+          schema: { type: string, pattern: '^[A-Za-z0-9-]{1,64}$' }
+      responses:
+        '200':
+          description: The attestations
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentAttestationList' }
+        '400':
+          description: (code invalid_request) A filter that is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    post:
+      operationId: recordAgentAttestation
+      summary: Record an attestation
+      description: >
+        Records an external review of an agent, a release, a toolkit or an
+        index, for example by a GRC tool with an API token. An agent or a
+        release subject must exist in the project. A valid attestation
+        satisfies a mandatory attestation kind of the agent's tier. Written
+        to the security audit outbox as agent.attestation.recorded.
+        Requires `lifecycle.attestations.write`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentAttestationCreate' }
+      responses:
+        '201':
+          description: The attestation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentAttestation' }
+        '400':
+          description: (code invalid_request) A malformed body, an unknown kind or subject, an evidence URL that is not http or https, or a valid_until in the past
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) The agent or release subject does not exist in the project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+
+  /elitea_core/agent_attestations/prompt_lib/{project_id}/{attestation_id}/revoke:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: attestation_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: revokeAgentAttestation
+      summary: Revoke an attestation
+      description: >
+        A revoked attestation no longer satisfies a mandatory kind. Written
+        to the security audit outbox as agent.attestation.revoked. Requires
+        `lifecycle.attestations.write`.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentLifecycleReason' }
+      responses:
+        '200':
+          description: The revoked attestation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentAttestation' }
+        '400':
+          description: (code invalid_request) A reason longer than 500 characters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) No active attestation has this id in the project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
 
   /elitea_core/version_revisions/prompt_lib/{project_id}/{application_id}/{version_id}:
     parameters:

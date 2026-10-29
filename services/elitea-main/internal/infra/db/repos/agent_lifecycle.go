@@ -84,6 +84,15 @@ func WithLifecyclePublisher(publisher CandidatePublisher) AgentLifecycleOption {
 	return func(s *AgentLifecycle) { s.publisher = publisher }
 }
 
+// ComposePublisher sets the publish path after construction: the publish
+// handler takes this store as its governor, so one of the two is built
+// first. It is a composition-time call, before the store serves.
+func (s *AgentLifecycle) ComposePublisher(publisher CandidatePublisher) {
+	if s != nil {
+		s.publisher = publisher
+	}
+}
+
 // WithLifecyclePolicy sets the tier table source. Without it the store
 // reads the agent_lifecycle section on every call.
 func WithLifecyclePolicy(policy PolicySource) AgentLifecycleOption {
@@ -894,6 +903,8 @@ func (s *AgentLifecycle) SubmitChangeRequest(ctx context.Context, projectID, app
 	if err != nil {
 		return agentlifecycle.ChangeRequest{}, err
 	}
+	// The gate's runs make their model calls for the user of ctx: the
+	// proposer, who submits.
 	gateID, err := s.gate.StartGate(ctx, projectID, applicationID, draft.CandidateVersionID, head)
 	if err != nil {
 		return agentlifecycle.ChangeRequest{}, fmt.Errorf("agent lifecycle: start the release gate: %w", err)
@@ -997,11 +1008,11 @@ func (s *AgentLifecycle) ApproveChangeRequest(ctx context.Context, approval Appr
 	// The gate runs outside this service: read it before the transaction.
 	// A passed gate does not fail later, and an override only releases.
 	if snapshot.GateID > 0 && snapshot.OverriddenBy == 0 {
-		result, err := s.gate.GateResult(ctx, snapshot.GateID)
+		result, err := s.gate.GateResult(ctx, approval.ProjectID, snapshot.GateID)
 		if err != nil {
 			return ApprovalOutcome{}, fmt.Errorf("agent lifecycle: read the release gate: %w", err)
 		}
-		if err := agentlifecycle.CheckGate(snapshot.GateID, result, false); err != nil {
+		if err := agentlifecycle.CheckGate(snapshot.GateID, result, result.Overridden); err != nil {
 			return ApprovalOutcome{}, err
 		}
 	}
@@ -1297,9 +1308,9 @@ RETURNING `+changeRequestColumns, projectID, applicationID, changeID, string(to)
 // tier's approvers.
 func (s *AgentLifecycle) OverrideGate(ctx context.Context, projectID, applicationID, changeID, actorID int64, governance bool, reason string) (agentlifecycle.ChangeRequest, error) {
 	reason = strings.TrimSpace(reason)
-	if reason == "" || !agentlifecycle.TextWithin(reason, agentlifecycle.MaxReason) {
+	if reason == "" || !agentlifecycle.TextWithin(reason, agentlifecycle.MaxOverrideReason) {
 		return agentlifecycle.ChangeRequest{}, agentlifecycle.Refuse(agentlifecycle.InvalidCode,
-			fmt.Sprintf("An override needs a reason of 1 to %d characters.", agentlifecycle.MaxReason))
+			fmt.Sprintf("An override needs a reason of 1 to %d characters.", agentlifecycle.MaxOverrideReason))
 	}
 	if !governance {
 		return agentlifecycle.ChangeRequest{}, agentlifecycle.Refuse(agentlifecycle.GovernanceRequiredCode,
@@ -1318,15 +1329,20 @@ func (s *AgentLifecycle) OverrideGate(ctx context.Context, projectID, applicatio
 	if snapshot.GateID == 0 || snapshot.OverriddenBy != 0 {
 		return agentlifecycle.ChangeRequest{}, agentlifecycle.Refuse(agentlifecycle.GateNotOverridableCode, "The change request has no failed gate to override.")
 	}
-	result, err := s.gate.GateResult(ctx, snapshot.GateID)
+	result, err := s.gate.GateResult(ctx, projectID, snapshot.GateID)
 	if err != nil {
 		return agentlifecycle.ChangeRequest{}, fmt.Errorf("agent lifecycle: read the release gate: %w", err)
 	}
-	if result.State == agentlifecycle.GatePassed {
-		return agentlifecycle.ChangeRequest{}, agentlifecycle.Refuse(agentlifecycle.GateNotOverridableCode, "The release gate passed. There is nothing to override.")
+	if result.State != agentlifecycle.GateFailed {
+		return agentlifecycle.ChangeRequest{}, agentlifecycle.Refuse(agentlifecycle.GateNotOverridableCode,
+			"Only a failed release gate can be overridden. This gate is "+string(result.State)+".")
 	}
-	if err := s.gate.Override(ctx, snapshot.GateID, actorID, reason); err != nil {
-		return agentlifecycle.ChangeRequest{}, fmt.Errorf("agent lifecycle: override the release gate: %w", err)
+	// The gate may already hold an override (made through the gate's own
+	// route); the change request records it all the same.
+	if !result.Overridden {
+		if err := s.gate.Override(ctx, projectID, snapshot.GateID, actorID, reason); err != nil {
+			return agentlifecycle.ChangeRequest{}, fmt.Errorf("agent lifecycle: override the release gate: %w", err)
+		}
 	}
 	var overridden agentlifecycle.ChangeRequest
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
@@ -1354,11 +1370,11 @@ RETURNING `+changeRequestColumns, projectID, applicationID, changeID, reason, ac
 }
 
 // GateResult reads the release gate of a change request (display).
-func (s *AgentLifecycle) GateResult(ctx context.Context, gateID int64) (agentlifecycle.GateResult, error) {
+func (s *AgentLifecycle) GateResult(ctx context.Context, projectID, gateID int64) (agentlifecycle.GateResult, error) {
 	if gateID <= 0 {
 		return agentlifecycle.GateResult{State: agentlifecycle.GatePassed}, nil
 	}
-	return s.gate.GateResult(ctx, gateID)
+	return s.gate.GateResult(ctx, projectID, gateID)
 }
 
 // ---------------------------------------------------------------------------

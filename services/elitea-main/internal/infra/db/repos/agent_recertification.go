@@ -95,7 +95,7 @@ RETURNING registry.tenant_project_id, registry.application_id`, []any{agentlifec
 		agentlifecycle.ActionCertificationDue, agentlifecycle.ReasonNewRelease, &summary.Due); err != nil {
 		return summary, err
 	}
-	if deps.Drift != nil {
+	{
 		checked, due, err := s.driftPass(ctx, deps.Drift)
 		summary.DriftChecked += checked
 		summary.Due += due
@@ -206,11 +206,14 @@ func (s *AgentLifecycle) moveRows(ctx context.Context, statement string, args []
 	})
 }
 
-// driftPass reconstructs the certified release of the certified agents
-// checked longest ago, at most DriftBatch of them.
+// driftPass checks the certified agents checked longest ago, at most
+// DriftBatch of them: their certified release must still reconstruct
+// (drift, when a checker is composed), and no scheduled re-evaluation of
+// the release since the certification may have failed (the release gate's
+// regression signal).
 func (s *AgentLifecycle) driftPass(ctx context.Context, drift ReleaseDriftChecker) (int, int, error) {
 	rows, err := s.pool.Query(ctx, `
-SELECT tenant_project_id, application_id, certified_release_id
+SELECT tenant_project_id, application_id, certified_release_id, certified_at
 FROM elitea_lifecycle.agent_registry
 WHERE certification_state = 'certified' AND certified_release_id IS NOT NULL
 ORDER BY drift_checked_at NULLS FIRST, tenant_project_id, application_id
@@ -219,13 +222,14 @@ LIMIT $1`, DriftBatch)
 		return 0, 0, fmt.Errorf("agent lifecycle: read the drift batch: %w", err)
 	}
 	type candidate struct {
-		key       registryKey
-		releaseID int64
+		key         registryKey
+		releaseID   int64
+		certifiedAt time.Time
 	}
 	var batch []candidate
 	for rows.Next() {
 		var c candidate
-		if err := rows.Scan(&c.key.projectID, &c.key.applicationID, &c.releaseID); err != nil {
+		if err := rows.Scan(&c.key.projectID, &c.key.applicationID, &c.releaseID, &c.certifiedAt); err != nil {
 			rows.Close()
 			return 0, 0, fmt.Errorf("agent lifecycle: scan the drift batch: %w", err)
 		}
@@ -237,12 +241,28 @@ LIMIT $1`, DriftBatch)
 	}
 	checked, due := 0, 0
 	for _, c := range batch {
-		drifted, err := drift.ReleaseDrifted(ctx, c.key.projectID, c.key.applicationID, c.releaseID)
-		if err != nil {
-			// One unreadable project does not stop the pass; it is checked
-			// again next time.
-			continue
+		// One unreadable project does not stop the pass; it is checked
+		// again next time.
+		reason := ""
+		if drift != nil {
+			drifted, err := drift.ReleaseDrifted(ctx, c.key.projectID, c.key.applicationID, c.releaseID)
+			if err != nil {
+				continue
+			}
+			if drifted {
+				reason = agentlifecycle.ReasonToolkitDrifted
+			}
 		}
+		if reason == "" {
+			gateID, err := s.gate.RegressedSince(ctx, c.key.projectID, c.key.applicationID, c.certifiedAt)
+			if err != nil {
+				continue
+			}
+			if gateID > 0 {
+				reason = agentlifecycle.ReasonGateRegressed
+			}
+		}
+		drifted := reason != ""
 		checked++
 		err = s.inTx(ctx, func(tx pgx.Tx) error {
 			if !drifted {
@@ -255,13 +275,13 @@ UPDATE elitea_lifecycle.agent_registry
 SET certification_state = 'due', state_reason = $4, state_changed_at = clock_timestamp(),
     drift_checked_at = clock_timestamp(), updated_at = clock_timestamp()
 WHERE tenant_project_id = $1 AND application_id = $2 AND certification_state = 'certified' AND certified_release_id = $3`,
-				c.key.projectID, c.key.applicationID, c.releaseID, agentlifecycle.ReasonToolkitDrifted)
+				c.key.projectID, c.key.applicationID, c.releaseID, reason)
 			if err != nil || tag.RowsAffected() == 0 {
 				return err
 			}
 			due++
 			return s.append(ctx, tx, lifecycleEvent(c.key.projectID, agentlifecycle.ActionCertificationDue, 0,
-				"agent", agentRef(c.key.applicationID), agentlifecycle.ReasonToolkitDrifted))
+				"agent", agentRef(c.key.applicationID), reason))
 		})
 		if err != nil {
 			return checked, due, fmt.Errorf("agent lifecycle: record the drift check: %w", err)

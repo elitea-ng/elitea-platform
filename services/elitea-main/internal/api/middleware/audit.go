@@ -153,6 +153,17 @@ var auditedSurfaces = []string{
 	// Agent release rollback (ADR-0040 decision 2): it changes which
 	// release of an agent runs. The reads under it are GETs.
 	"/api/v2/elitea_core/application_releases/",
+	// Agent lifecycle governance (ADR-0040 decisions 1, 3, 5 and 6): risk
+	// tier and owner edits, change request approvals that publish, gate
+	// overrides and attestations. The security audit outbox records the
+	// same transitions with their reasons.
+	"/api/v2/elitea_core/agent_registry/",
+	"/api/v2/elitea_core/change_requests/",
+	"/api/v2/elitea_core/agent_attestations/",
+	// Release gate suites (ADR-0040 decision 4): marking a dataset as a
+	// gate suite changes what a release must pass
+	// (agent.gate_suite.updated). The reads under it are GETs.
+	"/api/v2/elitea_core/release_gate_suites/",
 }
 
 // AuditedSurfaces returns a copy of the prefix list, so a router-level test can
