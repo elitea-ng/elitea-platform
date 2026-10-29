@@ -2577,6 +2577,11 @@ export interface components {
              * @description REQUIRED, client generated, a LOWERCASE canonical UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`; an upper-case spelling is refused). It is the admission idempotency key of the turn: generate it once per user message, persist it with the unsent message, and send the same value on every retry.
              */
             question_id: string;
+            /**
+             * Format: int64
+             * @description Runs one release of the participant's agent, published or withdrawn (listApplicationReleases). Absent or 0 runs the participant's version, which is the agent's published release when that version is published. Only for `agent.execute.application.v1`. A release that is not a release of the agent answers 404 `release_not_found`; a release whose pinned toolkits or configurations changed answers 409 `release_toolkit_drifted`; a withdrawn release of an agent with sub-agents answers 409 `release_withdrawn_dependencies_removed`, because the unpublish removed the sub-agent copies its publish made (ApplicationReleaseRefusal).
+             */
+            release_id?: number;
             /** @description USER ids this message mentions (at most 64; `entity_meta.id` of a user participant, never a participant row id). `userIds` is accepted as an alias. Each project member named, except the sender, gets one `chat_user_mentioned` notification once the turn is admitted — on both execution contracts (an ad-hoc model chat notifies since client contract 1.1). An id that is not a project member is dropped silently; a replay of the same `question_id` notifies nobody again. */
             user_ids?: number[];
         };
