@@ -61,12 +61,31 @@ type Producer struct {
 	signer   CommandSigner
 	appender StreamAppender
 	egress   EgressPolicyResolver
+	refusals DispatchRefusalRecorder
+}
+
+// DispatchRefusalRecorder makes a refusal durable on the run's outbox row
+// (repos.CommandOutboxRepository.RefuseDispatch, shared 0197): the refusal,
+// the row's deadline moved to now, and a chat answer's error, so the next
+// no-authority retirement pass fails the run with the refusal's message.
+type DispatchRefusalRecorder interface {
+	RefuseDispatch(ctx context.Context, executionID string, generation uint64, code, message string) error
+}
+
+// policyRefusal is the shape of a policy that can never be assembled
+// (workeregress.RefusalError), read without importing the resolver.
+type policyRefusal interface {
+	error
+	DispatchRefusal() (code, message string)
 }
 
 // EgressPolicyResolver answers the public egress policy a command carries
 // (ADR-0044 decision 2; workeregress.Resolver). Nil means open, and the
 // policy field stays absent. An error refuses the command: it is never
-// signed without the policy it should carry.
+// signed without the policy it should carry. An error with a
+// DispatchRefusal() (code, message) method can never succeed and fails the
+// run at once (WithDispatchRefusals); any other is retried within the run's
+// deadline.
 type EgressPolicyResolver interface {
 	WorkerEgressPolicy(ctx context.Context, command *runtimev1.WorkerCommandV1) (*runtimev1.WorkerEgressPolicyV1, error)
 }
@@ -77,6 +96,28 @@ type EgressPolicyResolver interface {
 func (p *Producer) WithEgressPolicy(resolver EgressPolicyResolver) *Producer {
 	p.egress = resolver
 	return p
+}
+
+// WithDispatchRefusals records a policy that can never be assembled, so the
+// run fails at once with its message. Without it such a policy is an
+// ordinary error, retried until the run's deadline retires it.
+func (p *Producer) WithDispatchRefusals(recorder DispatchRefusalRecorder) *Producer {
+	p.refusals = recorder
+	return p
+}
+
+// refuse makes a refusal durable and answers it as an
+// executionapp.DispatchRefusal. A failure to record it is an ordinary error:
+// the dispatch is retried and records it then.
+func (p *Producer) refuse(ctx context.Context, command *runtimev1.WorkerCommandV1, refusal policyRefusal) error {
+	if p.refusals == nil {
+		return fmt.Errorf("assemble the worker egress policy: %w", refusal)
+	}
+	code, message := refusal.DispatchRefusal()
+	if err := p.refusals.RefuseDispatch(ctx, command.GetExecutionId(), command.GetGeneration(), code, message); err != nil {
+		return fmt.Errorf("record the refused worker egress policy: %w", err)
+	}
+	return &executionapp.DispatchRefusal{Code: code, Message: message}
 }
 
 func NewProducer(config ProducerConfig, signer CommandSigner, appender StreamAppender) (*Producer, error) {
@@ -109,6 +150,10 @@ func (p *Producer) PrepareValidation(ctx context.Context, dispatch executionapp.
 func (p *Producer) prepareCommand(ctx context.Context, command *runtimev1.WorkerCommandV1) (executionapp.PreparedCommandEnvelope, error) {
 	if p.egress != nil && command != nil {
 		policy, err := p.egress.WorkerEgressPolicy(ctx, command)
+		var refusal policyRefusal
+		if errors.As(err, &refusal) {
+			return executionapp.PreparedCommandEnvelope{}, p.refuse(ctx, command, refusal)
+		}
 		if err != nil {
 			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker egress policy: %w", err)
 		}

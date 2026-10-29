@@ -18,7 +18,7 @@ type egressSummariesStub struct {
 	calls     *[]string
 	fences    []runtimedomain.Fence
 	summaries []egressauditapp.WorkerSummary
-	settled   []string
+	settled   []runtimedomain.Fence
 	err       error
 }
 
@@ -32,9 +32,9 @@ func (s *egressSummariesStub) RecordWorkerEgress(_ context.Context, fence runtim
 	return nil
 }
 
-func (s *egressSummariesStub) SettleWorkerEgress(_ context.Context, executionID string) error {
+func (s *egressSummariesStub) SettleWorkerEgress(_ context.Context, fence runtimedomain.Fence) error {
 	*s.calls = append(*s.calls, "settle-egress")
-	s.settled = append(s.settled, executionID)
+	s.settled = append(s.settled, fence)
 	return s.err
 }
 
@@ -70,6 +70,7 @@ func TestReportEgressSummaryVerifiesTheClaimAndStores(t *testing.T) {
 	}
 	want := egressauditapp.WorkerSummary{
 		ExecutionID:  lease.Fence.ExecutionID,
+		CommandID:    lease.Fence.CommandID,
 		HostsReached: []egressauditapp.HostReached{{Host: "api.github.com", Port: 443, Connections: 3}},
 		HostsRefused: []egressauditapp.HostRefused{{Host: "evil.example", Port: 443, Reason: "egress_host_not_allowed", Count: 2}},
 		OtherHosts:   5,
@@ -157,7 +158,7 @@ func TestPrepareSettlementSettlesTheWorkerEgressRow(t *testing.T) {
 			t.Fatalf("settlement: %v %v", err, response.GetRejection())
 		}
 		if !reflect.DeepEqual(calls, []string{"authorize-peer", "prepare-settlement", "settle-egress"}) ||
-			!reflect.DeepEqual(store.settled, []string{lease.Fence.ExecutionID}) {
+			!reflect.DeepEqual(store.settled, []runtimedomain.Fence{lease.Fence}) {
 			t.Fatalf("calls=%v settled=%v", calls, store.settled)
 		}
 	}

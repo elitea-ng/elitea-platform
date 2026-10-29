@@ -28,3 +28,27 @@ func (p *ToolkitAvailableToolsProducer) WithEgressPolicy(resolver EgressPolicyRe
 	p.producer.WithEgressPolicy(resolver)
 	return p
 }
+
+// WithDispatchRefusals records a refused policy so the run fails at once.
+func (p *AgentExecutionProducer) WithDispatchRefusals(recorder DispatchRefusalRecorder) *AgentExecutionProducer {
+	p.producer.WithDispatchRefusals(recorder)
+	return p
+}
+
+// WithDispatchRefusals records a refused policy so the run fails at once.
+func (p *IndexIngestProducer) WithDispatchRefusals(recorder DispatchRefusalRecorder) *IndexIngestProducer {
+	p.producer.WithDispatchRefusals(recorder)
+	return p
+}
+
+// WithDispatchRefusals records a refused policy so the run fails at once.
+func (p *ToolkitCallToolProducer) WithDispatchRefusals(recorder DispatchRefusalRecorder) *ToolkitCallToolProducer {
+	p.producer.WithDispatchRefusals(recorder)
+	return p
+}
+
+// WithDispatchRefusals records a refused policy so the run fails at once.
+func (p *ToolkitAvailableToolsProducer) WithDispatchRefusals(recorder DispatchRefusalRecorder) *ToolkitAvailableToolsProducer {
+	p.producer.WithDispatchRefusals(recorder)
+	return p
+}

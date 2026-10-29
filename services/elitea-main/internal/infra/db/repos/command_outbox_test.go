@@ -228,7 +228,7 @@ func TestRetireNoAuthorityValidationConsumesCancellationCapacityFirst(t *testing
 			{rows: []scriptedRow{{values: []any{"outbox-cancel", "execution-cancel", int64(1), int64(1), "CANCELLED"}}}},
 			{rows: []scriptedRow{{values: []any{"outbox-deadline", "execution-deadline", int64(1), int64(1), "RUNNING"}}}},
 		},
-		rowResults: []scriptedRow{{values: []any{int64(1)}}, {values: []any{int64(1)}}},
+		rowResults: []scriptedRow{{values: []any{int64(1), "", ""}}, {values: []any{int64(1), "", ""}}},
 	}
 	repository, err := newCommandOutboxRepository(&scriptedStore{scriptedExecutor: executor}, "runtime:commands")
 	if err != nil {

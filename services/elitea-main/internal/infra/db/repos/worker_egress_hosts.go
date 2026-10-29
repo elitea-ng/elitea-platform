@@ -23,7 +23,7 @@ SELECT s.execution_id, s.project_id, s.updated_at, s.%[1]s AS hosts,
         ORDER BY a.generation DESC LIMIT 1) AS agent_id
 FROM elitea_runtime.egress_run_summaries AS s
 WHERE s.updated_at >= $1
-  AND ($2::text = 'all' OR ($2::text = 'worker') = (s.replica = 'worker'))
+  AND ($2::text = 'all' OR ($2::text = 'worker') = (s.replica = 'worker' OR s.replica LIKE 'worker:%%'))
   AND ($3::bigint = 0 OR s.project_id = $3::bigint)`
 
 // Hosts answers one admin query. Each list is cut at query.Limit, most

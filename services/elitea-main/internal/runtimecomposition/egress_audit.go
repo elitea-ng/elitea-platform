@@ -93,12 +93,12 @@ func (w workerEgressSummaries) RecordWorkerEgress(ctx context.Context, fence run
 	if err != nil {
 		return err
 	}
-	summary.ExecutionID, summary.ProjectID = fence.ExecutionID, project
+	summary.ExecutionID, summary.CommandID, summary.ProjectID = fence.ExecutionID, fence.CommandID, project
 	return w.merger.ReportWorker(ctx, summary)
 }
 
-func (w workerEgressSummaries) SettleWorkerEgress(ctx context.Context, executionID string) error {
-	return w.merger.SettleWorker(ctx, executionID)
+func (w workerEgressSummaries) SettleWorkerEgress(ctx context.Context, fence runtimedomain.Fence) error {
+	return w.merger.SettleWorker(ctx, fence.ExecutionID, fence.CommandID)
 }
 
 func egressAuditClients(lookup LookupEnv) ([]string, error) {

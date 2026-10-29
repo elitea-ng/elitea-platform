@@ -36,11 +36,26 @@ func (p *projectStub) WorkerEgressProjectEntries(_ context.Context, projectID in
 
 type inputStub struct {
 	entries map[string][]byte
+	err     error
 	calls   int
+}
+
+type governedStub struct {
+	targets []string
+	err     error
+	calls   int
+}
+
+func (g *governedStub) GovernedEgressTargets(context.Context, *runtimev1.ExecutionSecurityContextReferenceV1) ([]string, error) {
+	g.calls++
+	return g.targets, g.err
 }
 
 func (i *inputStub) InputEntries(_ context.Context, bundle string, ids []string) (map[string][]byte, error) {
 	i.calls++
+	if i.err != nil {
+		return nil, i.err
+	}
 	out := map[string][]byte{}
 	for _, id := range ids {
 		if content, ok := i.entries[bundle+"/"+id]; ok {
@@ -91,7 +106,7 @@ func agentInput(t *testing.T) []byte {
 func newResolver(t *testing.T, mode platformconfig.WorkerEgressMode, platform []string, project []string, inputs *inputStub) (*Resolver, *projectStub) {
 	t.Helper()
 	projects := &projectStub{entries: map[int64][]string{7: project}}
-	resolver, err := NewResolver(platformStub{settings: platformconfig.WorkerEgressSettings{Mode: mode, Allowlist: platform}}, projects, inputs)
+	resolver, err := NewResolver(platformStub{settings: platformconfig.WorkerEgressSettings{Mode: mode, Allowlist: platform}}, projects, inputs, &governedStub{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,16 +154,29 @@ func TestAllowlistMergesAndDedupesTheSources(t *testing.T) {
 	}
 }
 
-// The governed profile forces the allowlist under an open platform.
+// The governed profile forces the allowlist under an open platform, and adds
+// the targets its frozen credentials are bound to: a SharePoint credential's
+// site and its Microsoft Graph audience are in no toolkit setting.
 func TestGovernedForcesTheAllowlist(t *testing.T) {
 	inputs := &inputStub{entries: map[string][]byte{"bundle-1/agent-request": agentInput(t)}}
-	resolver, _ := newResolver(t, platformconfig.WorkerEgressOpen, nil, nil, inputs)
+	governed := &governedStub{targets: []string{"https://contoso.sharepoint.com/sites/team", "https://graph.microsoft.com", "not a url"}}
+	resolver, err := NewResolver(platformStub{settings: platformconfig.DefaultWorkerEgressSettings()},
+		&projectStub{}, inputs, governed)
+	if err != nil {
+		t.Fatal(err)
+	}
 	policy, err := resolver.WorkerEgressPolicy(context.Background(), agentCommand(true))
 	if err != nil || policy.GetMode() != runtimev1.WorkerEgressModeV1_WORKER_EGRESS_MODE_V1_ALLOWLIST {
 		t.Fatalf("governed: %v %v", policy, err)
 	}
-	if !slices.Contains(policy.GetAllow(), "api.github.com") || len(policy.GetAllow()) != 3 {
-		t.Fatalf("governed allow = %v", policy.GetAllow())
+	want := []string{"api.github.com", "contoso.sharepoint.com", "graph.microsoft.com", "jira.corp.example", "mcp.example.com"}
+	if !slices.Equal(policy.GetAllow(), want) {
+		t.Fatalf("governed allow = %v, want %v", policy.GetAllow(), want)
+	}
+	// A run that is not governed never reads the credential targets.
+	resolver, _ = newResolver(t, platformconfig.WorkerEgressAllowlist, nil, nil, inputs)
+	if _, err := resolver.WorkerEgressPolicy(context.Background(), agentCommand(false)); err != nil || governed.calls != 1 {
+		t.Fatalf("not governed: %v calls=%d", err, governed.calls)
 	}
 }
 
@@ -170,30 +198,47 @@ func TestEmptyAllowlistIsStillAPolicy(t *testing.T) {
 	}
 }
 
+// A policy that can never be assembled is a *RefusalError whose message says
+// what is wrong and who fixes it: the run fails at once with it.
 func TestMalformedOrOversizeRefuses(t *testing.T) {
 	inputs := &inputStub{entries: map[string][]byte{"bundle-1/agent-request": agentInput(t)}}
+	refusal := func(t *testing.T, err error, want ...string) {
+		t.Helper()
+		refused, ok := AsRefusal(err)
+		if !ok || !errors.Is(err, ErrPolicyRefused) {
+			t.Fatalf("not a refusal: %v", err)
+		}
+		code, message := refused.DispatchRefusal()
+		if code != RefusalCode || message != refused.Message {
+			t.Fatalf("refusal %q %q", code, message)
+		}
+		for _, text := range want {
+			if !strings.Contains(message, text) {
+				t.Fatalf("message %q lacks %q", message, text)
+			}
+		}
+	}
 	for name, platform := range map[string][]string{
 		"a scheme":         {"https://example.com"},
 		"a stray wildcard": {"a.*.example.com"},
 		"a blank":          {""},
 	} {
-		resolver, _ := newResolver(t, platformconfig.WorkerEgressAllowlist, platform, nil, inputs)
-		if _, err := resolver.WorkerEgressPolicy(context.Background(), agentCommand(false)); !errors.Is(err, ErrPolicyRefused) {
-			t.Fatalf("%s: %v", name, err)
-		}
+		t.Run(name, func(t *testing.T) {
+			resolver, _ := newResolver(t, platformconfig.WorkerEgressAllowlist, append([]string{"ok.example"}, platform...), nil, inputs)
+			_, err := resolver.WorkerEgressPolicy(context.Background(), agentCommand(false))
+			refusal(t, err, "platform's", fmt.Sprintf("%q", platform[0]), "platform administrator", "Configuration, Worker Egress")
+		})
 	}
 	resolver, _ := newResolver(t, platformconfig.WorkerEgressAllowlist, nil, []string{"bad host"}, inputs)
-	if _, err := resolver.WorkerEgressPolicy(context.Background(), agentCommand(false)); !errors.Is(err, ErrPolicyRefused) {
-		t.Fatalf("a malformed project entry: %v", err)
-	}
+	_, err := resolver.WorkerEgressPolicy(context.Background(), agentCommand(false))
+	refusal(t, err, "project's", `"bad host"`, "project administrator")
 
 	many := make([]string, 0, MaxEntries+1)
 	for i := range MaxEntries + 1 {
 		many = append(many, fmt.Sprintf("h%d.example.com", i))
 	}
-	if _, err := Assemble(many, nil, nil); !errors.Is(err, ErrPolicyRefused) || !strings.Contains(err.Error(), "1025") {
-		t.Fatalf("1025 entries: %v", err)
-	}
+	_, err = Assemble(many, nil, nil)
+	refusal(t, err, "1025", "1024", "remove worker egress allowlist entries")
 	if allow, err := Assemble(many[:MaxEntries], nil, nil); err != nil || len(allow) != MaxEntries {
 		t.Fatalf("1024 entries: %d %v", len(allow), err)
 	}
@@ -201,27 +246,55 @@ func TestMalformedOrOversizeRefuses(t *testing.T) {
 	for i := range 200 {
 		long = append(long, fmt.Sprintf("%s%d.example.com", strings.Repeat("a", 60)+"."+strings.Repeat("b", 60), i))
 	}
-	if _, err := Assemble(long, nil, nil); !errors.Is(err, ErrPolicyRefused) {
-		t.Fatalf("oversize bytes: %v", err)
-	}
+	_, err = Assemble(long, nil, nil)
+	refusal(t, err, "bytes", "24576")
 
 	unreadable := &inputStub{entries: map[string][]byte{"bundle-1/agent-request": []byte("not a proto \xff\xff")}}
 	resolver, _ = newResolver(t, platformconfig.WorkerEgressAllowlist, nil, nil, unreadable)
-	if _, err := resolver.WorkerEgressPolicy(context.Background(), agentCommand(false)); !errors.Is(err, ErrPolicyRefused) {
-		t.Fatalf("an unreadable input: %v", err)
+	_, err = resolver.WorkerEgressPolicy(context.Background(), agentCommand(false))
+	refusal(t, err, "toolkit settings cannot be read")
+	resolver, _ = newResolver(t, platformconfig.WorkerEgressAllowlist, nil, nil, &inputStub{})
+	_, err = resolver.WorkerEgressPolicy(context.Background(), agentCommand(false))
+	refusal(t, err, "toolkit input is missing")
+
+	corrupt, _ := NewResolver(platformStub{settings: platformconfig.WorkerEgressSettings{Mode: platformconfig.WorkerEgressAllowlist}},
+		&projectStub{err: fmt.Errorf("%w: bad json", ErrProjectSettingCorrupt)}, inputs, &governedStub{})
+	_, err = corrupt.WorkerEgressPolicy(context.Background(), agentCommand(false))
+	refusal(t, err, "project administrator")
+
+	mismatched, _ := NewResolver(platformStub{settings: platformconfig.DefaultWorkerEgressSettings()},
+		&projectStub{}, inputs, &governedStub{err: ErrSecurityContextInvalid})
+	_, err = mismatched.WorkerEgressPolicy(context.Background(), agentCommand(true))
+	refusal(t, err, "security context")
+}
+
+// A source that could not be read is retried (within the run's deadline),
+// never refused and never run open.
+func TestUnreadableSourcesAreTransient(t *testing.T) {
+	inputs := &inputStub{entries: map[string][]byte{"bundle-1/agent-request": agentInput(t)}}
+	allowlist := platformStub{settings: platformconfig.WorkerEgressSettings{Mode: platformconfig.WorkerEgressAllowlist}}
+	down := errors.New("database down")
+	for name, resolver := range map[string]*Resolver{
+		"platform": must(NewResolver(platformStub{err: down}, &projectStub{}, inputs, &governedStub{})),
+		"project":  must(NewResolver(allowlist, &projectStub{err: down}, inputs, &governedStub{})),
+		"input":    must(NewResolver(allowlist, &projectStub{}, &inputStub{err: down}, &governedStub{})),
+		"governed": must(NewResolver(allowlist, &projectStub{}, inputs, &governedStub{err: down})),
+	} {
+		policy, err := resolver.WorkerEgressPolicy(context.Background(), agentCommand(true))
+		if err == nil || policy != nil || !errors.Is(err, down) {
+			t.Fatalf("%s: %v %v", name, policy, err)
+		}
+		if _, refused := AsRefusal(err); refused || errors.Is(err, ErrPolicyRefused) {
+			t.Fatalf("%s: a transient error was a refusal: %v", name, err)
+		}
 	}
-	missing := &inputStub{}
-	resolver, _ = newResolver(t, platformconfig.WorkerEgressAllowlist, nil, nil, missing)
-	if _, err := resolver.WorkerEgressPolicy(context.Background(), agentCommand(false)); !errors.Is(err, ErrPolicyRefused) {
-		t.Fatalf("a missing input: %v", err)
-	}
-	broken, err := NewResolver(platformStub{err: errors.New("down")}, &projectStub{}, &inputStub{})
+}
+
+func must(resolver *Resolver, err error) *Resolver {
 	if err != nil {
-		t.Fatal(err)
+		panic(err)
 	}
-	if _, err := broken.WorkerEgressPolicy(context.Background(), agentCommand(false)); !errors.Is(err, ErrPolicyRefused) {
-		t.Fatalf("an unreadable platform setting must refuse, not run open: %v", err)
-	}
+	return resolver
 }
 
 func TestHostsFromSettingsReadsOnlyURLFields(t *testing.T) {

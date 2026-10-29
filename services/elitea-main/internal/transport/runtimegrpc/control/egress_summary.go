@@ -11,15 +11,20 @@ import (
 )
 
 // EgressSummaries keeps the worker's egress reports (ADR-0044 decision 2) as
-// the run's `worker` row in elitea_runtime.egress_run_summaries, beside the
-// egress proxy's rows (the composition's adapter over egressaudit.Merger).
+// one `worker:<command id>` row per claimed command in
+// elitea_runtime.egress_run_summaries, beside the egress proxy's rows (the
+// composition's adapter over egressaudit.Merger). The command is the fence's,
+// which VerifyActive (and the settlement's own lease check) bound to the
+// job's current command: a resumed run is a new command, and its report never
+// replaces the earlier command's row.
 type EgressSummaries interface {
-	// RecordWorkerEgress replaces the run's worker row with this snapshot.
+	// RecordWorkerEgress replaces the claimed command's worker row with this
+	// snapshot.
 	// The project is the one Main admitted the claimed generation in, read
 	// from the execution kernel, never one the worker names.
 	RecordWorkerEgress(ctx context.Context, fence runtimedomain.Fence, summary egressauditapp.WorkerSummary) error
-	// SettleWorkerEgress makes the run's worker row final.
-	SettleWorkerEgress(ctx context.Context, executionID string) error
+	// SettleWorkerEgress makes the settled command's worker row final.
+	SettleWorkerEgress(ctx context.Context, fence runtimedomain.Fence) error
 }
 
 // WithEgressSummaries serves ReportEgressSummary and marks the worker row
@@ -60,7 +65,7 @@ func (s *Server) ReportEgressSummary(ctx context.Context, request *runtimev1.Rep
 	}
 	reached, refused, junk := egressaudit.Hosts(request.GetHostsReached(), request.GetHostsRefused())
 	if err := s.egressSummaries.RecordWorkerEgress(ctx, fence, egressauditapp.WorkerSummary{
-		ExecutionID: fence.ExecutionID, HostsReached: reached, HostsRefused: refused,
+		ExecutionID: fence.ExecutionID, CommandID: fence.CommandID, HostsReached: reached, HostsRefused: refused,
 		OtherHosts: request.GetOtherHosts() + junk,
 	}); err != nil {
 		slog.WarnContext(ctx, "worker egress summary not stored", "execution_id", fence.ExecutionID)
@@ -71,12 +76,12 @@ func (s *Server) ReportEgressSummary(ctx context.Context, request *runtimev1.Rep
 
 // settleWorkerEgress is best effort: a settlement never fails because its
 // egress row could not be marked (the row is still written after its hold).
-func (s *Server) settleWorkerEgress(ctx context.Context, executionID string) {
+func (s *Server) settleWorkerEgress(ctx context.Context, fence runtimedomain.Fence) {
 	if s.egressSummaries == nil {
 		return
 	}
-	if err := s.egressSummaries.SettleWorkerEgress(ctx, executionID); err != nil {
-		slog.WarnContext(ctx, "worker egress summary not marked final", "execution_id", executionID)
+	if err := s.egressSummaries.SettleWorkerEgress(ctx, fence); err != nil {
+		slog.WarnContext(ctx, "worker egress summary not marked final", "execution_id", fence.ExecutionID)
 	}
 }
 

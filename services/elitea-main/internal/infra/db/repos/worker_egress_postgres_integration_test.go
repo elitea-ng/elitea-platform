@@ -73,11 +73,17 @@ INSERT INTO elitea_runtime.agent_execution_jobs (
 }
 
 func workerReport(executionID string, projectID int64, hosts ...app.HostReached) app.Report {
-	return app.Report{ReplicaID: app.WorkerReplica, ExecutionID: executionID, ProjectID: projectID, HostsReached: hosts}
+	return workerCommandReport(executionID, "cmd-"+executionID, projectID, hosts...)
 }
 
-// The worker's row is replaced by each snapshot, stays open until the
-// settlement marks it final, and the mark never touches the proxy's row.
+func workerCommandReport(executionID, commandID string, projectID int64, hosts ...app.HostReached) app.Report {
+	return app.Report{ReplicaID: app.WorkerReplicaFor(commandID), ExecutionID: executionID, ProjectID: projectID, HostsReached: hosts}
+}
+
+// A command's worker row is replaced by each snapshot of that command, stays
+// open until the command's settlement marks it final, and the mark never
+// touches the proxy's row or another command's row of the same execution (a
+// resumed run).
 func TestWorkerEgressRowIsReplacedAndMarkedFinal(t *testing.T) {
 	store := newEgressSummaries(t)
 	ctx := context.Background()
@@ -88,7 +94,9 @@ func TestWorkerEgressRowIsReplacedAndMarkedFinal(t *testing.T) {
 		app.HostReached{Host: "pypi.org", Port: 443, Connections: 2})
 	second.TokenExpiresAt = now.Add(6 * time.Hour)
 	proxy := app.Report{ReplicaID: "proxy-a", ExecutionID: "exec-w", ProjectID: 3, TokenExpiresAt: now.Add(time.Hour)}
-	for _, report := range []app.Report{first, second, proxy} {
+	resumed := workerCommandReport("exec-w", "cmd-resumed", 3, app.HostReached{Host: "jira.example", Port: 443, Connections: 1})
+	resumed.TokenExpiresAt = now.Add(6 * time.Hour)
+	for _, report := range []app.Report{first, second, proxy, resumed} {
 		if err := store.Upsert(ctx, report, now); err != nil {
 			t.Fatal(err)
 		}
@@ -96,22 +104,25 @@ func TestWorkerEgressRowIsReplacedAndMarkedFinal(t *testing.T) {
 	if rows, err := store.ClaimDue(ctx, now.Add(time.Minute), 30*time.Second, 10*time.Minute); err != nil || len(rows) != 0 {
 		t.Fatalf("an open turn was due: %v %v", rows, err)
 	}
-	if err := store.MarkFinal(ctx, "exec-w", app.WorkerReplica, now.Add(time.Minute)); err != nil {
+	if err := store.MarkFinal(ctx, "exec-w", app.WorkerReplicaFor("cmd-exec-w"), now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	var workerFinal, proxyFinal bool
-	var reached int
+	var workerFinal, proxyFinal, resumedFinal bool
+	var reached, workerRows int
 	if err := store.pool.QueryRow(ctx, `
-SELECT bool_or(final) FILTER (WHERE replica = 'worker'), bool_or(final) FILTER (WHERE replica <> 'worker'),
-       max(jsonb_array_length(hosts_reached)) FILTER (WHERE replica = 'worker')
-FROM elitea_runtime.egress_run_summaries WHERE execution_id = 'exec-w'`).Scan(&workerFinal, &proxyFinal, &reached); err != nil {
+SELECT bool_or(final) FILTER (WHERE replica = 'worker:cmd-exec-w'), bool_or(final) FILTER (WHERE replica = 'proxy-a'),
+       bool_or(final) FILTER (WHERE replica = 'worker:cmd-resumed'),
+       max(jsonb_array_length(hosts_reached)) FILTER (WHERE replica = 'worker:cmd-exec-w'),
+       count(*) FILTER (WHERE replica LIKE 'worker:%')
+FROM elitea_runtime.egress_run_summaries WHERE execution_id = 'exec-w'`).Scan(&workerFinal, &proxyFinal, &resumedFinal, &reached, &workerRows); err != nil {
 		t.Fatal(err)
 	}
-	if !workerFinal || proxyFinal || reached != 2 {
-		t.Fatalf("worker final=%v proxy final=%v worker hosts=%d", workerFinal, proxyFinal, reached)
+	if !workerFinal || proxyFinal || resumedFinal || reached != 2 || workerRows != 2 {
+		t.Fatalf("worker final=%v proxy final=%v resumed final=%v worker hosts=%d worker rows=%d",
+			workerFinal, proxyFinal, resumedFinal, reached, workerRows)
 	}
 	// Marking a run that has no worker row, or one already audited, is a no-op.
-	if err := store.MarkFinal(ctx, "exec-none", app.WorkerReplica, now); err != nil {
+	if err := store.MarkFinal(ctx, "exec-none", app.WorkerReplicaFor("cmd-none"), now); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -150,6 +161,9 @@ func TestWorkerEgressHostsAggregates(t *testing.T) {
 		{workerReport("exec-a2", 3, github(5), app.HostReached{Host: "pypi.org", Port: 443, Connections: 1}), now.Add(-time.Hour)},
 		{workerReport("exec-chat", 3, github(1)), now.Add(-time.Hour)},
 		{workerReport("exec-p4", 4, github(3)), now.Add(-time.Hour)},
+		// exec-a1 paused and resumed: a second command's row of the same run
+		// adds its connections, and the run still counts once.
+		{workerCommandReport("exec-a1", "cmd-exec-a1-resumed", 3, github(4)), now.Add(-90 * time.Minute)},
 		// Outside a 30-day window.
 		{workerReport("exec-old", 3, github(100)), now.Add(-40 * 24 * time.Hour)},
 		// The proxy's row of an agent run.
@@ -187,7 +201,7 @@ func TestWorkerEgressHostsAggregates(t *testing.T) {
 		t.Fatalf("reached=%+v truncated=%v", report.Reached, report.ReachedTruncated)
 	}
 	agentGitHub := got[key{3, 77, "api.github.com"}]
-	if agentGitHub.Connections != 7 || agentGitHub.Executions != 2 || !agentGitHub.LastSeen.Equal(now.Add(-time.Hour)) {
+	if agentGitHub.Connections != 11 || agentGitHub.Executions != 2 || !agentGitHub.LastSeen.Equal(now.Add(-time.Hour)) {
 		t.Fatalf("agent row=%+v", agentGitHub)
 	}
 	if chat := got[key{3, 0, "api.github.com"}]; chat.Connections != 1 || chat.AgentID != nil {
@@ -196,7 +210,7 @@ func TestWorkerEgressHostsAggregates(t *testing.T) {
 	if got[key{3, 77, "pypi.org"}].Connections != 1 || got[key{4, 0, "api.github.com"}].Connections != 3 {
 		t.Fatalf("reached=%+v", report.Reached)
 	}
-	if report.Reached[0].Connections != 7 {
+	if report.Reached[0].Connections != 11 {
 		t.Fatalf("not ordered by use: %+v", report.Reached)
 	}
 	if len(report.Refused) != 1 || report.Refused[0].Host != "evil.example" || report.Refused[0].Count != 3 ||

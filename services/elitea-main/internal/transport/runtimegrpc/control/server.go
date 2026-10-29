@@ -546,9 +546,9 @@ func (s *Server) PrepareSettlement(ctx context.Context, request *runtimev1.Prepa
 		code, message, retryable := safeRuntimeError(err)
 		return settlementRejection(code, message, retryable), nil
 	}
-	// The run settled: no further egress report can come for this turn, so
-	// its worker row is final.
-	s.settleWorkerEgress(ctx, fence.ExecutionID)
+	// The command settled: no further egress report can come for this turn,
+	// so its worker row is final.
+	s.settleWorkerEgress(ctx, fence)
 	return &runtimev1.PrepareSettlementResponseV1{
 		SettlementReceiptId: receipt.ID,
 		Outcome:             settlementOutcomeProto(receipt.Outcome),

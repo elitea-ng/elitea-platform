@@ -849,7 +849,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// (audit_export_dead_letters), one position per (stream, sink), and
 	// centry.audit_events.export_txid so the relay reads in commit order
 	// (#1494). No data, no permission.
-	require.EqualValues(t, 196, Head(shared))
+	//
+	// 197: shared/0197_command_outbox_refusal.sql, the refusal a command Main
+	// can never prepare settles its run with (command_outbox.refusal_code and
+	// refusal_message, CHECK added NOT VALID): a worker egress allowlist that
+	// cannot be assembled (ADR-0044 decision 2, #1490). The row's deadline is
+	// moved to now, so the existing deadline retirement settles it; no
+	// retirement or terminal error code is added. No data, no permission.
+	require.EqualValues(t, 197, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

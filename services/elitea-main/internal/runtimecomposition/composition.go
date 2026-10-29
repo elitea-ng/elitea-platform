@@ -355,11 +355,18 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, fmt.Errorf("construct worker egress sources: %w", err)
 	}
-	egressPolicy, err := workeregressapp.NewResolver(egressSources, egressSources, egressSources)
+	egressPolicy, err := workeregressapp.NewResolver(egressSources, egressSources, egressSources, egressSources)
 	if err != nil {
 		return nil, err
 	}
-	producer.WithEgressPolicy(egressPolicy)
+	// A policy that can never be assembled fails its run at once with a
+	// message naming the entry or the bound (shared 0197), instead of being
+	// retried until the deadline.
+	dispatchRefusals, err := repos.NewDispatchRefusals(dependencies.AdmissionPool)
+	if err != nil {
+		return nil, fmt.Errorf("construct dispatch refusals: %w", err)
+	}
+	producer.WithEgressPolicy(egressPolicy).WithDispatchRefusals(dispatchRefusals)
 
 	dispatchPolicy := repos.ValidationDispatchPolicy{
 
@@ -568,7 +575,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct index ingest producer: %w", err)
 		}
-		indexProducer.WithEgressPolicy(egressPolicy)
+		indexProducer.WithEgressPolicy(egressPolicy).WithDispatchRefusals(dispatchRefusals)
 		indexOutbox, err := repos.NewCommandOutboxRepository(dependencies.AdmissionPool, config.IndexIngestCommandStream)
 		if err != nil {
 			return nil, fmt.Errorf("construct index ingest command outbox: %w", err)
@@ -612,7 +619,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct tool-run producer: %w", err)
 		}
-		toolkitCallToolProducer.WithEgressPolicy(egressPolicy)
+		toolkitCallToolProducer.WithEgressPolicy(egressPolicy).WithDispatchRefusals(dispatchRefusals)
 		if config.ToolkitDiscoveryEnabled {
 			toolkitDiscoveryProducer, err = commandbus.NewToolkitAvailableToolsProducer(commandbus.ToolkitAvailableToolsProducerConfig{
 				Stream: toolkitRoute.stream, Consumer: toolkitRoute.consumer, ValidationStream: config.CommandStream, ProtocolRevision: protocolRevision, EnvelopeSchemaRevision: envelopeSchemaRevision, CapabilityVersion: toolkitCallToolCapabilityVersion, Limits: toolkitLimits,
@@ -620,7 +627,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			if err != nil {
 				return nil, err
 			}
-			toolkitDiscoveryProducer.WithEgressPolicy(egressPolicy)
+			toolkitDiscoveryProducer.WithEgressPolicy(egressPolicy).WithDispatchRefusals(dispatchRefusals)
 		}
 	}
 	var agentJobs *repos.AgentExecutionJobsRepository
@@ -672,7 +679,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct agent execution producer: %w", err)
 		}
-		agentProducer.WithEgressPolicy(egressPolicy)
+		agentProducer.WithEgressPolicy(egressPolicy).WithDispatchRefusals(dispatchRefusals)
 		// The catalogue project is the SAME id the freezer resolves shared
 		// models against, taken from the same place, so the one project a turn
 		// may borrow a published agent from and the one project it may borrow a

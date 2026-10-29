@@ -117,21 +117,21 @@ func TestWorkerEgressSummariesNeedNoProxy(t *testing.T) {
 	}
 	defer merger.Close()
 	summaries := workerEgressSummaries{merger: merger, projects: executionProjectsStub{project: 42}}
-	fence := runtimedomain.Fence{ExecutionID: "exec-7", Generation: 2}
+	fence := runtimedomain.Fence{ExecutionID: "exec-7", Generation: 2, CommandID: "cmd-7"}
 	if err := summaries.RecordWorkerEgress(context.Background(), fence, egressauditapp.WorkerSummary{
-		ExecutionID: "forged", ProjectID: 999,
+		ExecutionID: "forged", CommandID: "forged", ProjectID: 999,
 		HostsReached: []egressauditapp.HostReached{{Host: "api.github.com", Port: 443, Connections: 1}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := summaries.SettleWorkerEgress(context.Background(), "exec-7"); err != nil {
+	if err := summaries.SettleWorkerEgress(context.Background(), fence); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := store.ClaimDue(context.Background(), time.Now().Add(time.Hour), time.Second, time.Hour)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("rows %+v %v", rows, err)
 	}
-	if row := rows[0]; row.ExecutionID != "exec-7" || row.ProjectID != 42 || row.ReplicaID != egressauditapp.WorkerReplica || !row.Final {
+	if row := rows[0]; row.ExecutionID != "exec-7" || row.ProjectID != 42 || row.ReplicaID != egressauditapp.WorkerReplicaFor("cmd-7") || !row.Final {
 		t.Fatalf("row %+v", row)
 	}
 	failing := workerEgressSummaries{merger: merger, projects: executionProjectsStub{err: errors.New("no such generation")}}

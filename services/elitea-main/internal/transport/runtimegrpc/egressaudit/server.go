@@ -103,9 +103,10 @@ func toReport(r *runtimev1.ReportRunSummaryRequestV1) (app.Report, error) {
 	switch {
 	case !validID(r.GetReplicaId()):
 		return app.Report{}, errors.New("the replica id is malformed")
-	case r.GetReplicaId() == app.WorkerReplica:
-		// The worker's own row (RuntimeControlService.ReportEgressSummary);
-		// a proxy replica cannot overwrite it.
+	case app.IsWorkerReplica(r.GetReplicaId()):
+		// A worker's own row, "worker:<command id>"
+		// (RuntimeControlService.ReportEgressSummary); a proxy replica cannot
+		// overwrite it.
 		return app.Report{}, errors.New("the replica id is reserved")
 	case !validID(r.GetExecutionId()):
 		return app.Report{}, errors.New("the execution id is malformed")
