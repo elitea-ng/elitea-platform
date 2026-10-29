@@ -52,7 +52,7 @@ describe('SettingsPreview', () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole('button', { name: /select ide/i }));
+    await userEvent.click(screen.getByRole('button', { description: /select ide/i }));
     await userEvent.click(await screen.findByRole('menuitem', { name: /jetbrains/i }));
 
     expect(getEditor(container)).toHaveTextContent('EliteASettings');

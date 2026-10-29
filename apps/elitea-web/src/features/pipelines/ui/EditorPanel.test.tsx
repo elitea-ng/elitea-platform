@@ -234,7 +234,8 @@ describe('EditorPanel', () => {
     // the transform cost for the whole chain before it can reject. The
     // assertion is unchanged — only the time it is given.
     expect(await screen.findByText('Failed to load the flow editor', {}, { timeout: 20000 })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Reload page' })).toBeInTheDocument();
+    // Named by its visible text; the tooltip describes it (WCAG 2.5.3).
+    expect(screen.getByRole('button', { name: 'Reload the page' })).toHaveAccessibleDescription('Reload page');
   }, 30000);
 
   it('the error-boundary reload button calls window.location.reload', async () => {
@@ -243,7 +244,7 @@ describe('EditorPanel', () => {
 
     const user = userEvent.setup();
     renderEditorPanel();
-    await user.click(await screen.findByRole('button', { name: 'Reload page' }, { timeout: 5000 }));
+    await user.click(await screen.findByRole('button', { name: 'Reload the page' }, { timeout: 5000 }));
     expect(reloadSpy).toHaveBeenCalledTimes(1);
 
     vi.unstubAllGlobals();

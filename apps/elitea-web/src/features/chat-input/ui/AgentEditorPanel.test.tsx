@@ -209,7 +209,7 @@ describe('AgentEditorPanel', () => {
     // not "My Agent" (the button's own visible text), is this button's
     // accessible name once disabled. Same MUI mechanism the baseline relies
     // on for its own identically-structured `Tooltip`-wrapped `Button`.
-    expect(screen.getByRole('button', { name: 'Switch Agent' })).toBeDisabled();
+    expect(screen.getByRole('button', { description: 'Switch Agent' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'version selector menu' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'variables selector menu' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'agent settings menu' })).toBeDisabled();
