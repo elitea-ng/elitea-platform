@@ -39,6 +39,11 @@ PM-7, PM-8, PM-11, PM-12 and the named gaps are FU-255 to FU-261 in `FOLLOWUPS-2
   - a Parallel two levels down could not compile;
   - inside a nested child, a branch whose saved pipeline holds Code or another Parallel was not refused by the Worker
     (Main still refused it).
+- **The walk's deeper rows were checked less strictly than claimed (REVIEW-1533 R1).** Below the first level the walk
+  accepted a leaf on any single pending node that carried the occurrence key, and checked the activation stamp for
+  presence only. It now requires the leaf to be parked on an unowned Parallel node of the frozen leaf definition, and
+  every deeper row's stamp to name its own thread with the frozen parent Agent node's digest. Two tamper tests prove
+  it and fail without the checks.
 - **Depth 3 was admitted by Main but refused opaquely by the Worker.** The Postgres checkpointer admits at most three
   path components, and an inline branch needs a path one level below its pipeline. The run failed "the claim-bound
   pipeline checkpoint is unavailable".
@@ -61,14 +66,18 @@ PM-7, PM-8, PM-11, PM-12 and the named gaps are FU-255 to FU-261 in `FOLLOWUPS-2
 
 - **PM-1:** `src/agents/pipeline_fanout_effect_pg_tests.rs` (`approved_effect` crash mode).
 - **PM-2:**
-  - `src/agents/session.rs`: `walk_child_frontier` `:1634`, `inspect_checkpoint` `:1690`, causes `:1810`,
-    `is_recovery_frontier_cause` `:1821`, `FrozenRecoveryLevel`;
+  - `src/agents/session.rs`: `walk_child_frontier` `:1637` (the deeper rows' stamp against the frozen Agent node
+    digest, the leaf's unowned Parallel node), `inspect_checkpoint` `:1711`, causes `:1831`,
+    `is_recovery_frontier_cause` `:1842`, `FrozenRecoveryLevel`;
   - `src/agents/pipeline.rs`: `RootRecoveryLevel` `:1969`;
   - `src/agents/pipeline/composition.rs`: `FrozenRecoveryLevel` for the frozen composition `:349`, depth refusal of
     inline branches;
-  - `src/agents/graph/compiler.rs`: `has_node` `:1014`;
-  - `src/agents/graph/parallel_compiler.rs`: relative composition keys in `child_fanout` and `reject_nested_parallel`;
+  - `src/agents/graph/compiler.rs`: `has_node` `:1017`, `is_unowned_parallel` `:1023`, `application_config_digest`
+    `:1034`;
+  - `src/agents/graph/parallel_compiler.rs`: relative composition keys in `child_fanout` `:147` and
+    `reject_nested_parallel` `:439`;
   - `libs/rust/agent-runtime/src/graph/application_activation.rs`: `ACTIVATION_METADATA_KEY` is now public;
+    `stamped_definition_digest` `:39` reads a row's stamp for exactly its own thread;
   - Main `internal/domain/applicationcomposition/composition.go:567`.
 - **Registered terminal:**
   - `libs/proto/elitea/runtime/v1/errors.proto` (code 37), with the regenerated Go and Python `errors` files only;
@@ -79,26 +88,31 @@ PM-7, PM-8, PM-11, PM-12 and the named gaps are FU-255 to FU-261 in `FOLLOWUPS-2
   - `testdata/proto/runtime/v1/model_failure_policies.json`, `conformance/governed/testdata/golden-vectors.sha256`.
 - **PM-3:** `src/agents/graph/llm.rs` (`freeze_parallel_input`), `src/agents/graph/parallel.rs`
   (`is_parallel_resource_exhausted`), `src/agents/runtime.rs` (`parallel_resource_exhausted`),
-  `src/execution/native_agent_lifecycle.rs:1594` (`stream_failure`).
+  `src/execution/native_agent_lifecycle.rs:1594` (`stream_failure`); `llm.rs:368`, `parallel.rs:2269`,
+  `runtime.rs:1141`.
 - **PM-4:** Main `composition.go` (`ReadPipeline` returns `LLMBranches`; `checkpointPaths`), `repos/application_composition.go`,
   `repos/applications.go`, Worker `composition.rs` test.
 - **PM-5:**
   - `src/agents/graph/node_events_parallel.rs:38` (`for_inline_llm_branch`, inline-member stamp);
   - `src/agents/graph/parallel_compiler.rs:248,681` (`InlineBranchEvents`, `compile_llm_branch`);
-  - `src/agents/events.rs:1532,6440` (`project_inline_member`, `inline_member_tier`, reset on a member's status).
+  - `src/agents/events.rs:1546,6454` (`project_inline_member`, `inline_member_tier`, reset on a member's status).
   - Web, the reload view:
     - `apps/elitea-web/src/entities/message/lib/traceSteps.ts:118,135,141` (`isMemberThinkingRow`,
       `memberThinkingSteps`, `withMemberThinkingSteps`; a restored thinking step keeps its owner call id and path);
     - `apps/elitea-web/src/entities/message/lib/toolActions.ts:277` (`restoredOwner`);
     - `apps/elitea-web/src/entities/message/lib/wire.ts:86`;
     - `apps/elitea-web/src/features/chat-messages/lib/convertMessagesToChatHistory.ts:313`.
-- **PM-6:** `src/agents/pipeline_fanout_effect_pg_tests.rs` (`run_until_first_card` and its test).
+- **PM-6:** `src/agents/pipeline_fanout_effect_pg_tests.rs` (`run_until_first_card` `:603`, its test and its
+  negative control).
+- **Tests only:** `src/transport/openai_compatible_facade.rs` (`#[cfg(test)]` replies `ResponseAfter` and
+  `ResponseForRequestAfter`, answered once a test's gate opens).
 - **PM-10:** 18 locale files; `fanout-inline-llm-branches-20261028.md`.
 
 ## Tests
 
 - **Worker:**
-  - real PostgreSQL, `fanout_effect_pg_tests`: 34 passed, 0 failed, 0 skipped, run with load average above 30;
+  - real PostgreSQL, `fanout_effect_pg_tests`: 39 passed, 0 failed, 0 skipped per run, 5 of 5 runs at 16 test threads
+    (after the REVIEW-1533 fixes);
   - full suite `--all-targets --all-features`: see the PR description.
   - New tests:
     - PM-1: `postgres_an_approved_agent_member_call_in_flight_at_a_crash_ends_typed` (two-process).
@@ -109,16 +123,24 @@ PM-7, PM-8, PM-11, PM-12 and the named gaps are FU-255 to FU-261 in `FOLLOWUPS-2
       - `postgres_two_levels_down_a_middle_pipeline_whose_frozen_definition_differs_is_refused`;
       - `postgres_a_grandchild_lost_outside_a_parallel_is_not_resumed` and
         `postgres_a_child_pipeline_lost_outside_a_parallel_is_not_resumed` (`child_not_parked`);
-      - `postgres_a_takeover_between_inspect_and_assembly_fences_the_older_claim`;
+      - `postgres_two_levels_down_a_leaf_parked_on_a_node_other_than_its_parallel_is_refused`
+        (`child_frontier_unsupported`) and `postgres_two_levels_down_a_grandchild_stamped_by_another_definition_is_refused`
+        (`child_definition_mismatch`), each refused at assembly with 0 model requests; both fail without the R1 checks;
+      - `postgres_a_takeover_between_inspect_and_assembly_fences_the_older_claim`: the older claim is refused
+        `AuthorizationFailed` (the lost writer lease) and writes no checkpoint, no session event and no ledger ACK;
       - `postgres_a_parallel_three_agent_levels_down_is_refused_typed`;
       - `a_branch_with_code_is_refused_inside_a_nested_child_too`;
       - `a_recovery_walk_refusal_ends_as_the_registered_frontier_terminal`.
     - PM-3: `a_frozen_parallel_llm_input_is_bounded_at_its_limit_and_limit_plus_one` (code and branch at limit+1),
       `a_parallel_resource_refusal_is_recognised_through_its_wrapping`.
     - PM-4: `inline_llm_branches_count_against_the_checkpoint_paths` (128 fits, 129 refused).
-    - PM-5: `postgres_inline_llm_branches_stream_their_text_under_their_member_tier`.
-    - PM-6: `postgres_an_agent_member_lost_at_its_card_frame_is_decided_from_the_durable_confirmation`. It is
-      decisive: with the confirmation removed the same decision is refused.
+    - PM-5: `postgres_inline_llm_branches_stream_their_text_under_their_member_tier` (streaming, no loss).
+      The inline card test is split: `postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live` is
+      deterministically the live path (gated replies keep a branch running until every card is decided), and
+      `postgres_inline_llm_branches_park_their_cards_and_resume_on_the_wake` parks undecided and wakes.
+    - PM-6: `postgres_an_agent_member_lost_at_its_card_frame_is_decided_from_the_durable_confirmation` and its
+      negative control `postgres_an_agent_member_decision_without_its_forwarded_confirmation_is_refused` (the
+      confirmation deleted from the root session: `graph.parallel.decision_refused`, the Agent never resumes).
 - **Main:**
   - new: `TestCheckpointPathsCountInlineLLMBranches`, `TestReadPipelineCountsOnlyParallelOwnedLLMNodes`,
     `TestInlineLLMBranchesInTheDeepestPipelineAreRefused`, `TestEveryRuntimeErrorCodeHasRegisteredTextOrIsNotATerminal`;
@@ -178,7 +200,8 @@ PM-7, PM-8, PM-11, PM-12 and the named gaps are FU-255 to FU-261 in `FOLLOWUPS-2
   - `child_not_parked`.
 - The cause is logged (`pipeline_recovery_frontier_refused`). The user sees the registered, data-free text with the
   support reference.
-- A takeover between inspect and assembly fences the older claim: its assembly is refused and it writes nothing.
+- A takeover between inspect and assembly fences the older claim: its assembly is refused `AuthorizationFailed` (lost
+  writer lease) and it writes no checkpoint, session event or ledger ACK.
 - Depth 3 is refused before anything runs. PM-3's bound and PM-4's count are refused at the limit+1, not later.
 
 ## Security
@@ -188,16 +211,23 @@ PM-7, PM-8, PM-11, PM-12 and the named gaps are FU-255 to FU-261 in `FOLLOWUPS-2
   frontier Agent node. The pre-assembly inspect cannot read deeper: the pre-authorization path allowlist admits only
   the root's own Agent-node thread paths, and it is not widened.
 - **How deeper rows are protected.**
-  - They are Worker-written under the claim's writer fencing.
-  - They stay unchanged between inspect and assembly under the exclusive lease. That is proven by the takeover test:
-    a newer claim fences the older one out, and the older one writes nothing.
-  - The assembly-time walk validates them against the Main-frozen definitions: a single recovery-supported Agent node
-    per level, an alias Main froze, the node present in the frozen definition, the activation stamp on every deeper
-    row, and a Parallel occurrence at the leaf. Any miss refuses before any effect, model call or ledger write.
+  - They are Worker-written under the claim's writer fencing, and every write carries the claim's `writer_lease_epoch`.
+  - They are read only at assembly, after `open_with_application_paths` has made this claim the current writer. A
+    superseded claim cannot assemble or write: the takeover test refuses it `AuthorizationFailed` with no checkpoint,
+    session event or ledger write. The pre-assembly inspect never reads them.
+  - The assembly-time walk validates every level against the Main-frozen definitions, failing closed with a distinct
+    cause before any effect, model call or ledger write:
+    - each intermediate level: one pending node, present in the frozen definition, a recovery-supported Agent node
+      running a saved pipeline Main froze;
+    - each deeper row: an activation stamp for exactly its own thread whose definition digest is the frozen parent
+      Agent node's (`child_definition_mismatch` otherwise);
+    - the leaf: parked on an unowned Parallel node of the frozen leaf definition (`child_frontier_unsupported`
+      otherwise).
 - **Residual risk.** Rows below the first level are not inside the digest Main signed off. Their integrity rests on the
-  Worker's writer fencing, the database's access control and the frozen-definition checks. Someone able to write the
-  checkpoint tables directly with a valid fence could alter a deeper row's state within what the frozen definition
-  admits. The same holds today for every row the digest does cover after authorization, so A adds no new writer.
+  Worker's writer fencing, the database's access control and the frozen-definition checks above. Someone able to
+  write the checkpoint tables directly with a valid fence could alter a deeper row's state (its graph state, not its
+  node, its definition or its stamp) within what the frozen definition admits. The same holds today for every row the
+  digest does cover after authorization, so A adds no new writer.
 
 Other changes:
 - **PM-5:** the inline-member marker is stamped only by the Parallel node's own branch sender (an explicit inline-LLM
@@ -216,18 +246,21 @@ Other changes:
   - no identity, egress or parser surface;
   - the YAML read in Main is the existing bounded `ReadPipeline` pass;
   - secrets scanned before each commit.
+- **Scanners (gate §4).** This PR changes no dependency manifest (no `Cargo.toml`/`Cargo.lock`, `go.mod`/`go.sum` or
+  `package.json`/lock change against `main`), so `cargo deny`, `govulncheck` and `npm audit` report the same
+  pre-existing set as `main`; no new findings.
 
 ## Recovery rows (replatform-delivery-gate §2)
 
 | Component × phase | Class | Enforcing code | Proof |
 |---|---|---|---|
-| Worker × lost mid-wake inside a Parallel two Agent-node levels down | R | `session.rs:1634` (walk), `parallel_compiler.rs` (relative keys) | `postgres_a_wake_lost_two_agent_levels_down_resumes_the_answered_branch` |
-| Worker × a recovery frontier the walk refuses (any level) | F (typed, readable, nothing repeated) | `session.rs:1634`, `native_agent_lifecycle.rs` (terminal) | the five depth-2 and depth-1 refusal tests |
+| Worker × lost mid-wake inside a Parallel two Agent-node levels down | R | `session.rs:1637` (walk), `parallel_compiler.rs:147,439` (relative keys) | `postgres_a_wake_lost_two_agent_levels_down_resumes_the_answered_branch` |
+| Worker × a recovery frontier the walk refuses (any level) | F (typed, readable, nothing repeated) | `session.rs:1637`, `native_agent_lifecycle.rs:1602` (terminal), `protocol/output.rs:982` | the seven depth-2 and depth-1 refusal tests, the takeover test |
 | Main × save/start of a Parallel three Agent-node levels down | F at save (no run) | `composition.go:567`, Worker `composition.rs` | `TestInlineLLMBranchesInTheDeepestPipelineAreRefused`, `postgres_a_parallel_three_agent_levels_down_is_refused_typed` |
-| Worker × approved Agent-member call in flight at a crash | C → F (`may_have_started`, never repeated) | dispatch journal, member path | `postgres_an_approved_agent_member_call_in_flight_at_a_crash_ends_typed` |
-| Worker × lost between a member's card frame and its decision | R | one ordered root stream (PM-6) | `postgres_an_agent_member_lost_at_its_card_frame_is_decided_from_the_durable_confirmation` |
+| Worker × approved Agent-member call in flight at a crash | C → F (`may_have_started`, never repeated) | `dispatch_journal.rs:680` (boundary in the member's model scope) | `postgres_an_approved_agent_member_call_in_flight_at_a_crash_ends_typed` (both interleavings of `third` accepted) |
+| Worker × lost between a member's card frame and its decision | R | the member's FIFO channel into the root runner, appended before yielded; decision bound at `parallel_compiler.rs:596` | `postgres_an_agent_member_lost_at_its_card_frame_is_decided_from_the_durable_confirmation` and the negative control `postgres_an_agent_member_decision_without_its_forwarded_confirmation_is_refused` |
 | Worker × lost at the resumed saved Agent branch's model call (wake) | R (only the killed model call runs again) | child checkpoint per branch, stable member call id | browser PM-1 (chat 40) |
-| Worker × lost mid-stream in a resumed inline LLM branch (wake) | R | branch checkpoint + recorded decision | `postgres_inline_llm_branches_stream_their_text_under_their_member_tier`; browser PM-5 (chat 28) |
+| Worker × lost mid-stream in a resumed inline LLM branch (wake) | R | branch checkpoint + recorded decision | browser PM-5 (chat 28) only; a PG proof of this phase is FU-262 |
 | Web × reload or end of a run with Parallel members and sub-agents | R (every tier and step restored from durable trace rows) | `traceSteps.ts:141`, `convertMessagesToChatHistory.ts:313` | `persistedMemberThinking.test.ts`; browser (chat 28) |
 | Web × reload of a run whose recovery frontier was refused | F (registered text + support reference) | `protocol/output.rs` (RecoveryFrontierUnsupported), Main policy | `ApplicationAnswer.test.tsx`; browser (chat 20) |
 
@@ -278,8 +311,7 @@ Other changes:
 
 - FU-255 to FU-259 (PM-7, PM-8, PM-11, PM-12, Map in a child), FU-260 (nested inline-branch streaming), FU-261 (replay
   retention 23514).
-- Seen on the browser stack, not this change:
-  - On a redelivery past a decided pause, the Parallel trace logs `Fan-out child admitted start="fresh"` although
-    the child continues from its mid-run checkpoint (`ChildStart::Fresh` reads "No checkpoint yet"). This misleads
-    an operator reading logs.
-  - A turn that ends with the frontier terminal shows "Thought for -1 h -1 min and -1 sec" (negative duration).
+- FU-262: a real-PostgreSQL proof of the inline branch lost mid-stream during a wake (the row rests on the browser
+  proof until then).
+- FU-263: seen on the browser stack, not this change: the `start="fresh"` trace label on a redelivery past a decided
+  pause, and a negative "Thought for" duration on a turn ending with the frontier terminal.

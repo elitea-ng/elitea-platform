@@ -1968,6 +1968,12 @@ pub(crate) enum TestModelGatewayOutcome {
         marker: &'static str,
         response: Response<Body>,
     },
+    /// [`Self::ResponseForRequest`], answered only once `gate` is notified.
+    ResponseForRequestAfter {
+        marker: &'static str,
+        gate: Arc<tokio::sync::Notify>,
+        response: Response<Body>,
+    },
     /// Served in order, but only once `gate` is notified: a branch whose reply
     /// must wait for something the test does (a card decided live).
     ResponseAfter {
@@ -2019,7 +2025,11 @@ impl ModelGatewayTransport for TestModelGatewayTransport {
                 .iter()
                 .any(|outcome| matches!(outcome, TestModelGatewayOutcome::ResponseForModel { .. }));
             let has_request_routing = outcomes.iter().any(|outcome| {
-                matches!(outcome, TestModelGatewayOutcome::ResponseForRequest { .. })
+                matches!(
+                    outcome,
+                    TestModelGatewayOutcome::ResponseForRequest { .. }
+                        | TestModelGatewayOutcome::ResponseForRequestAfter { .. }
+                )
             });
             if has_request_routing {
                 let text = String::from_utf8_lossy(&body);
@@ -2029,6 +2039,7 @@ impl ModelGatewayTransport for TestModelGatewayTransport {
                         matches!(
                             outcome,
                             TestModelGatewayOutcome::ResponseForRequest { marker, .. }
+                                | TestModelGatewayOutcome::ResponseForRequestAfter { marker, .. }
                                 if text.contains(marker)
                         )
                     })
@@ -2066,7 +2077,8 @@ impl ModelGatewayTransport for TestModelGatewayTransport {
             TestModelGatewayOutcome::Response(response)
             | TestModelGatewayOutcome::ResponseForModel { response, .. }
             | TestModelGatewayOutcome::ResponseForRequest { response, .. } => Ok(response),
-            TestModelGatewayOutcome::ResponseAfter { gate, response } => {
+            TestModelGatewayOutcome::ResponseAfter { gate, response }
+            | TestModelGatewayOutcome::ResponseForRequestAfter { gate, response, .. } => {
                 gate.notified().await;
                 Ok(response)
             }

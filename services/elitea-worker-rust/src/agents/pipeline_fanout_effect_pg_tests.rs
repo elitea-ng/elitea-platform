@@ -913,16 +913,67 @@ async fn postgres_fanout_agent_branch_asks_and_resumes_with_the_answer() {
 /// The process is lost right at that frame, before anything after it runs. A
 /// reclaim of the same execution decides the card: the member's forwarded
 /// confirmation was already durable in the root session, so the member resumes
-/// with the answer. The order holds because the confirmation and the card are
-/// events of one root stream, appended in order before each is yielded; with
-/// the confirmation removed the same decision is refused
-/// (`graph.parallel.decision_refused`), which keeps this test decisive.
+/// with the answer. The order holds because the member's events reach the root
+/// runner through one FIFO channel and each is appended to the root session
+/// before it is yielded, so the confirmation is durable before the card frame.
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_an_agent_member_lost_at_its_card_frame_is_decided_from_the_durable_confirmation()
 {
+    let Some((db, outcome, captured)) = lost_at_the_card_and_reclaimed(false).await else {
+        return;
+    };
+    outcome.expect("the decided member resumes and the pipeline completes");
+    let resumed = {
+        let requests = captured.lock().expect("captured model requests");
+        String::from_utf8_lossy(&requests[0].body).into_owned()
+    };
+    assert!(resumed.contains("Staging"), "{resumed}");
+    let entries = joined(&db.pool).await.expect("joined entries");
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    for entry in &entries {
+        assert_eq!(entry["status"], "succeeded", "{entries:?}");
+    }
+    db.pool.close().await;
+}
+
+/// PM-6 negative control: the same loss and decision, with the member's
+/// forwarded confirmation removed from the root session before the reclaim.
+/// The decision has no proof to bind to and is refused; the member's Agent
+/// never resumes.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_an_agent_member_decision_without_its_forwarded_confirmation_is_refused() {
+    let Some((db, outcome, captured)) = lost_at_the_card_and_reclaimed(true).await else {
+        return;
+    };
+    let refused = match outcome {
+        Err(error) => error,
+        Ok(()) => format!("{:?}", joined(&db.pool).await),
+    };
+    assert!(
+        refused.contains("graph.parallel.decision_refused"),
+        "{refused}"
+    );
+    assert!(
+        captured
+            .lock()
+            .expect("captured model requests")
+            .iter()
+            .all(|request| !String::from_utf8_lossy(&request.body).contains("Staging")),
+        "the member's Agent never resumed with the answer"
+    );
+    db.pool.close().await;
+}
+
+/// PM-6: park at the second member's card, lose the process there, decide the
+/// card, optionally delete the member's forwarded confirmation from the root
+/// session, and reclaim. Returns the reclaim's outcome; `None` when no test
+/// database is configured.
+async fn lost_at_the_card_and_reclaimed(
+    remove_confirmation: bool,
+) -> Option<(IsolatedPostgres, Result<(), String>, CapturedModelRequests)> {
     let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
-        return;
+        return None;
     };
     let db = IsolatedPostgres::create(&url).await;
     install_schema(&db.pool).await;
@@ -957,6 +1008,30 @@ async fn postgres_an_agent_member_lost_at_its_card_frame_is_decided_from_the_dur
         "answer",
         Some("Staging"),
     );
+    if remove_confirmation {
+        // The member's confirmation as forwarded into the root session: its
+        // `tool_confirmation` for the card's call, routed to the member.
+        let call = card["display"]["tool_call_id"]
+            .as_str()
+            .expect("card tool call id");
+        let removed = sqlx::query(
+            "DELETE FROM elitea_runtime.agent_session_events \
+             WHERE session_id NOT LIKE 'elitea-model-%' \
+               AND event_payload LIKE '%\"tool_confirmation\"%' \
+               AND event_payload LIKE '%\"functionCallId\":\"' || $1 || '\"%' \
+               AND event_payload LIKE '%' || $2 || '%'",
+        )
+        .bind(call)
+        .bind(crate::agents::events::DESCENDANT_CONTAINER_INVOCATION_KEY)
+        .execute(&db.pool)
+        .await
+        .expect("remove the forwarded confirmation")
+        .rows_affected();
+        assert_ne!(
+            removed, 0,
+            "the root session held the forwarded confirmation"
+        );
+    }
     let (again, captured) = assembler(
         &db.pool,
         vec![
@@ -967,23 +1042,11 @@ async fn postgres_an_agent_member_lost_at_its_card_frame_is_decided_from_the_dur
         asking_agent(),
     );
     let again = again.with_fanout_decisions_for_tests(ledger.client(2));
-    let invocation = recovered(&again, &request, EXECUTION, 2)
-        .await
-        .unwrap_or_else(|error| panic!("the lost run is reclaimed: {error}"));
-    run_collecting(invocation)
-        .await
-        .expect("the decided member resumes and the pipeline completes");
-    let resumed = {
-        let requests = captured.lock().expect("captured model requests");
-        String::from_utf8_lossy(&requests[0].body).into_owned()
+    let outcome = match recovered(&again, &request, EXECUTION, 2).await {
+        Ok(invocation) => run_collecting(invocation).await.map(|_| ()),
+        Err(error) => Err(error),
     };
-    assert!(resumed.contains("Staging"), "{resumed}");
-    let entries = joined(&db.pool).await.expect("joined entries");
-    assert_eq!(entries.len(), 3, "{entries:?}");
-    for entry in &entries {
-        assert_eq!(entry["status"], "succeeded", "{entries:?}");
-    }
-    db.pool.close().await;
+    Some((db, outcome, captured))
 }
 
 /// Production composition: a pipeline with a fixed Parallel node needs the
@@ -1038,6 +1101,14 @@ async fn postgres_production_parallel_without_the_decision_ledger_is_refused_typ
 /// sensitive for `lookup_release`: `ask` asks the user, `guard` and `deny`
 /// each call the tool.
 fn inline_llm_request(on_error: &str) -> super::super::request::AgentExecutionRequest {
+    inline_llm_request_with(on_error, 1)
+}
+
+/// [`inline_llm_request`] with `max_concurrency` branches running at once.
+fn inline_llm_request_with(
+    on_error: &str,
+    max_concurrency: usize,
+) -> super::super::request::AgentExecutionRequest {
     let mut request = llm_mcp_pipeline_request(
         "release intelligence",
         &["lookup_release"],
@@ -1050,7 +1121,7 @@ fn inline_llm_request(on_error: &str) -> super::super::request::AgentExecutionRe
         )
     };
     let yaml = format!(
-        "state:\n  ask_out: str\n  guard_out: str\n  deny_out: str\n  joined: list\n  messages: list\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{{id: first, node: ask}}, {{id: second, node: guard}}, {{id: third, node: deny}}]\n    max_concurrency: 1\n    wait: all\n    on_error: {on_error}\n    output: [joined]\n    transition: END\n{}{}{}",
+        "state:\n  ask_out: str\n  guard_out: str\n  deny_out: str\n  joined: list\n  messages: list\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{{id: first, node: ask}}, {{id: second, node: guard}}, {{id: third, node: deny}}]\n    max_concurrency: {max_concurrency}\n    wait: all\n    on_error: {on_error}\n    output: [joined]\n    transition: END\n{}{}{}",
         branch("ask", "    tool_names:\n      ask_user: [\"ask_user\"]\n"),
         branch(
             "guard",
@@ -1150,12 +1221,14 @@ async fn postgres_inline_llm_branches_stream_their_text_under_their_member_tier(
     db.pool.close().await;
 }
 
-/// T-2A D1: inline LLM branches each pause with their own card (an
+/// T-2A D1 (live): inline LLM branches each pause with their own card (an
 /// `ask_user` question and two sensitive-tool approvals), are answered,
-/// approved and rejected live while the run goes on, resume and join; only
-/// the approved tool runs, once, and nothing raises a legacy pause.
+/// approved and rejected while the run goes on, resume and join in the same
+/// run; only the approved tool runs, once, and nothing raises a legacy pause.
+/// Deterministic: `deny` asks only once `ask` and `guard` are decided, and the
+/// resumed `ask` answers only once `deny` is decided, so a branch is always
+/// running until every decision exists and the run never parks.
 #[tokio::test(flavor = "current_thread")]
-#[allow(clippy::too_many_lines)] // One run: each card kind is raised, decided live and asserted in order.
 async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live() {
     let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
@@ -1169,16 +1242,18 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
         .expect("apply checkpoint migration");
     let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
     let tool_calls = Arc::new(AtomicUsize::new(0));
-    // Each branch gets its own replies, in its own order, whatever order the
-    // branches' requests arrive in (a loaded run interleaves them).
+    let early_decided = Arc::new(tokio::sync::Notify::new());
+    let deny_decided = Arc::new(tokio::sync::Notify::new());
+    let early = AtomicUsize::new(0);
     let (platform, model_facade, captured) = saved_runtime(
         vec![
             TestModelGatewayOutcome::ResponseForRequest {
                 marker: "Work on ask",
                 response: pipeline_ask_user_call_response(),
             },
-            TestModelGatewayOutcome::ResponseForRequest {
+            TestModelGatewayOutcome::ResponseForRequestAfter {
                 marker: "Work on ask",
+                gate: Arc::clone(&deny_decided),
                 response: pipeline_text_response("resumed done"),
             },
             TestModelGatewayOutcome::ResponseForRequest {
@@ -1189,8 +1264,9 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
                 marker: "Work on guard",
                 response: pipeline_text_response("resumed done"),
             },
-            TestModelGatewayOutcome::ResponseForRequest {
+            TestModelGatewayOutcome::ResponseForRequestAfter {
                 marker: "Work on deny",
+                gate: Arc::clone(&early_decided),
                 response: pipeline_mcp_tool_call_response(),
             },
             TestModelGatewayOutcome::ResponseForRequest {
@@ -1200,83 +1276,171 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
         ],
         effectful_agent(),
     );
-    let assembler = PipelineNativeAgentAssembler::postgres(
-        db.pool.clone(),
-        SessionLimits::default(),
-        CheckpointLimits::default(),
-        sensitive_pipeline_mcp_policy(),
-        Arc::clone(&platform),
-        Arc::clone(&model_facade),
-    )
-    .with_mcp_connector(Arc::new(PipelineMcpConnector {
-        connections: Arc::new(AtomicUsize::new(0)),
-        tool_calls: Arc::clone(&tool_calls),
-        read_only: false,
-    }))
-    .with_fixed_parallel_for_tests()
-    .with_fanout_decisions_for_tests(ledger.client(1));
-    let request = inline_llm_request("continue");
-    let invocation = assembler
-        .assemble(claim(&request, 1))
+    let invocation = inline_cards_assembler(&db.pool, platform, model_facade, &tool_calls)
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&inline_llm_request_with("continue", 3), 1))
         .await
-        .unwrap_or_else(|error| {
-            panic!(
-                "assemble inline LLM branches: {error} {:?}",
-                error
-                    .cause()
-                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
-            )
-        });
+        .expect("assemble inline LLM branches");
     let (members, cards) = run_deciding(invocation, &|card| {
         let key = card["interrupt_key"].as_str().expect("card key");
         match (card["fanout_v1"]["member"].as_str(), card["kind"].as_str()) {
             (Some("first"), Some("ask_user")) => ledger.decide(key, "answer", Some("Staging")),
             (Some("second"), Some("tool_guard")) => ledger.decide(key, "approve", None),
-            (Some("third"), Some("tool_guard")) => ledger.decide(key, "reject", None),
+            (Some("third"), Some("tool_guard")) => {
+                ledger.decide(key, "reject", None);
+                deny_decided.notify_one();
+                return;
+            }
             other => panic!("unexpected card {other:?}"),
+        }
+        if early.fetch_add(1, Ordering::AcqRel) == 1 {
+            early_decided.notify_one();
         }
     })
     .await
-    .expect("the answered and approved branches resume and the pipeline completes or parks");
-    // The last card can be raised after the runner's last decision fetch: the
-    // run then parks, and its wake (a new execution) resumes that branch with
-    // its decision. Either way every branch resumes once and the join follows.
-    if joined(&db.pool)
+    .expect("the branches resume and the pipeline completes in this run");
+    assert!(
+        joined(&db.pool)
+            .await
+            .is_some_and(|entries| !entries.is_empty()),
+        "the run joined live, without parking"
+    );
+    assert_inline_cards(&db, &members, &cards, &tool_calls, &captured).await;
+    db.pool.close().await;
+}
+
+/// T-2A D1 (park, then wake): the same three cards, decided only after the
+/// run parked on them. The wake (a new execution) resumes each branch once
+/// with its decision and joins.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_inline_llm_branches_park_their_cards_and_resume_on_the_wake() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
         .await
-        .is_none_or(|entries| entries.is_empty())
-    {
-        let mut wake = inline_llm_request("continue");
-        wake.payload.user_input = super::super::request::UserInput::Text(String::new());
-        wake.payload.meta.insert(
-            crate::agents::graph::fanout_wake::FANOUT_WAKE_META_KEY.to_owned(),
-            json!({"schema": "elitea.pipeline.fanout-wake.v1",
-                "response_message_id": "10000000-0000-4000-8000-000000000043",
-                "decision_revision": 1,
-                "parked_execution_id": EXECUTION,
-                "parked_generation": GENERATION}),
-        );
-        let invocation = PipelineNativeAgentAssembler::postgres(
-            db.pool.clone(),
-            SessionLimits::default(),
-            CheckpointLimits::default(),
-            sensitive_pipeline_mcp_policy(),
-            platform,
-            model_facade,
-        )
-        .with_mcp_connector(Arc::new(PipelineMcpConnector {
-            connections: Arc::new(AtomicUsize::new(0)),
-            tool_calls: Arc::clone(&tool_calls),
-            read_only: false,
-        }))
-        .with_fixed_parallel_for_tests()
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    // Each branch gets its own replies, in its own order, whatever order the
+    // branches' requests arrive in.
+    let (platform, model_facade, captured) = saved_runtime(
+        ["ask", "guard", "deny"]
+            .into_iter()
+            .flat_map(|branch| {
+                let marker = match branch {
+                    "ask" => "Work on ask",
+                    "guard" => "Work on guard",
+                    _ => "Work on deny",
+                };
+                let first = if branch == "ask" {
+                    pipeline_ask_user_call_response()
+                } else {
+                    pipeline_mcp_tool_call_response()
+                };
+                [
+                    TestModelGatewayOutcome::ResponseForRequest {
+                        marker,
+                        response: first,
+                    },
+                    TestModelGatewayOutcome::ResponseForRequest {
+                        marker,
+                        response: pipeline_text_response("resumed done"),
+                    },
+                ]
+            })
+            .collect(),
+        effectful_agent(),
+    );
+    let request = inline_llm_request("continue");
+    let invocation = inline_cards_assembler(
+        &db.pool,
+        Arc::clone(&platform),
+        Arc::clone(&model_facade),
+        &tool_calls,
+    )
+    .with_fanout_decisions_for_tests(ledger.client(1))
+    .assemble(claim(&request, 1))
+    .await
+    .expect("assemble inline LLM branches");
+    let (members, cards) = run_collecting(invocation)
+        .await
+        .expect("the undecided cards park the run");
+    assert!(
+        joined(&db.pool)
+            .await
+            .is_none_or(|entries| entries.is_empty()),
+        "the run parked"
+    );
+    for card in &cards {
+        let key = card["interrupt_key"].as_str().expect("card key");
+        match card["fanout_v1"]["member"].as_str() {
+            Some("first") => ledger.decide(key, "answer", Some("Staging")),
+            Some("second") => ledger.decide(key, "approve", None),
+            Some("third") => ledger.decide(key, "reject", None),
+            other => panic!("unexpected card {other:?}"),
+        }
+    }
+    let mut wake = request;
+    wake.payload.user_input = super::super::request::UserInput::Text(String::new());
+    wake.payload.meta.insert(
+        crate::agents::graph::fanout_wake::FANOUT_WAKE_META_KEY.to_owned(),
+        json!({"schema": "elitea.pipeline.fanout-wake.v1",
+            "response_message_id": "10000000-0000-4000-8000-000000000043",
+            "decision_revision": 1,
+            "parked_execution_id": EXECUTION,
+            "parked_generation": GENERATION}),
+    );
+    let invocation = inline_cards_assembler(&db.pool, platform, model_facade, &tool_calls)
         .with_fanout_decisions_for_tests(ledger.client(2))
         .assemble(claim(&wake, 2))
         .await
         .expect("assemble the wake");
-        run_collecting(invocation)
-            .await
-            .expect("the wake resumes the decided branch and joins");
-    }
+    run_collecting(invocation)
+        .await
+        .expect("the wake resumes every decided branch and joins");
+    assert_inline_cards(&db, &members, &cards, &tool_calls, &captured).await;
+    db.pool.close().await;
+}
+
+/// The inline-card scenario's assembler: the sensitive MCP tool counted in
+/// `tool_calls`.
+fn inline_cards_assembler(
+    pool: &sqlx::PgPool,
+    platform: Arc<PlatformClient>,
+    model_facade: Arc<ModelFacade>,
+    tool_calls: &Arc<AtomicUsize>,
+) -> PipelineNativeAgentAssembler {
+    PipelineNativeAgentAssembler::postgres(
+        pool.clone(),
+        SessionLimits::default(),
+        CheckpointLimits::default(),
+        sensitive_pipeline_mcp_policy(),
+        platform,
+        model_facade,
+    )
+    .with_mcp_connector(Arc::new(PipelineMcpConnector {
+        connections: Arc::new(AtomicUsize::new(0)),
+        tool_calls: Arc::clone(tool_calls),
+        read_only: false,
+    }))
+    .with_fixed_parallel_for_tests()
+}
+
+/// What both inline-card tests prove once the run has joined: all three
+/// cards with their member tiers, the approved tool once, six model requests
+/// each carrying its branch's own instruction and tool, and three successes.
+async fn assert_inline_cards(
+    db: &IsolatedPostgres,
+    members: &[Value],
+    cards: &[Value],
+    tool_calls: &AtomicUsize,
+    captured: &CapturedModelRequests,
+) {
     let kinds = cards
         .iter()
         .map(|card| {
@@ -1294,7 +1458,7 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
         kinds,
         ["first:ask_user", "second:tool_guard", "third:tool_guard"]
     );
-    for card in &cards {
+    for card in cards {
         // The member tier of an LLM branch is named by its node (§3.3).
         let tier = &card["parent_agent_path"][0];
         assert!(["ask", "guard", "deny"].contains(&tier["name"].as_str().unwrap_or_default()));
@@ -1304,7 +1468,7 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
         1,
         "only the approved tool runs, once"
     );
-    assert_eq!(model_requests(&captured), 6);
+    assert_eq!(model_requests(captured), 6);
     // Browser finding 2026-10-28: an inline branch's model request carries its
     // own system instruction and offers its own bound tool.
     for request in captured.lock().expect("captured model requests").iter() {
@@ -1341,7 +1505,6 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
     for entry in &entries {
         assert_eq!(entry["status"], "succeeded", "{entries:?}");
     }
-    db.pool.close().await;
 }
 
 /// A saved pipeline participant whose LLM node asks the user.
@@ -2381,10 +2544,11 @@ async fn refused_two_levels_down(middle: Value, cause: &str, tamper: &'static st
 }
 
 /// PM-2 (option A trust argument): the evidence Main authorizes binds the
-/// root and the first-level child; deeper rows rely on the claim's exclusive
-/// writer lease from inspect to assembly. A newer claim taking over between
+/// root and the first-level child; the deeper rows are read only at assembly,
+/// under the current claim's writer fence. A newer claim taking over between
 /// claim 3's inspect and its assembly fences claim 3 out: its assembly is
-/// refused and nothing it would write changes.
+/// refused as a lost writer lease, and it writes no checkpoint, no session
+/// event and no ledger acknowledgement.
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_a_takeover_between_inspect_and_assembly_fences_the_older_claim() {
     const WAKE_EXECUTION: &str = "execution-grandchild-takeover";
@@ -2420,10 +2584,13 @@ async fn postgres_a_takeover_between_inspect_and_assembly_fences_the_older_claim
     .await
     .expect("claim 3 inspects the frontier");
     let rows = |pool: sqlx::PgPool| async move {
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints")
-            .fetch_one(&pool)
-            .await
-            .expect("count checkpoint rows")
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT (SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints), \
+                    (SELECT count(*) FROM elitea_runtime.agent_session_events)",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count checkpoint rows and session events")
     };
     // Claim 4 takes the execution over before claim 3 assembles.
     let (newer, _) = assembler_with(
@@ -2442,6 +2609,7 @@ async fn postgres_a_takeover_between_inspect_and_assembly_fences_the_older_claim
     .await
     .expect("claim 4 takes over and inspects");
     let before = rows(db.pool.clone()).await;
+    let acks = ledger.acks().len();
     let assembled = older
         .assemble_checkpoint(AuthorizedNativeAssembly::from_authorized(
             &wake,
@@ -2451,11 +2619,16 @@ async fn postgres_a_takeover_between_inspect_and_assembly_fences_the_older_claim
             AuthorizedNativeCommandBinding::fixture_for_execution(WAKE_EXECUTION),
         ))
         .await;
-    assert!(
-        assembled.is_err(),
-        "the fenced claim 3 must not assemble after claim 4 took over"
+    let Err(refusal) = assembled else {
+        panic!("the fenced claim 3 must not assemble after claim 4 took over");
+    };
+    assert_eq!(
+        refusal.code(),
+        elitea_agent_runtime::assembly_error::NativeAgentAssemblyErrorCode::AuthorizationFailed,
+        "a lost writer lease, not another assembly error: {refusal}"
     );
     assert_eq!(rows(db.pool.clone()).await, before, "claim 3 wrote nothing");
+    assert_eq!(ledger.acks().len(), acks, "claim 3 acknowledged nothing");
     assert_eq!(model_requests(&captured), 0);
     db.pool.close().await;
 }
@@ -2552,6 +2725,40 @@ async fn postgres_two_levels_down_a_middle_pipeline_whose_frozen_definition_diff
             .replace("  - id: inner\n", "  - id: inner_v2\n")
     );
     refused_two_levels_down(middle, "pipeline.recovery.child_definition_mismatch", "").await;
+}
+
+/// R1: the leaf keeps its occurrence key but is parked on a branch node, not on
+/// the frozen leaf definition's own Parallel node: nothing resumes blind.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_two_levels_down_a_leaf_parked_on_a_node_other_than_its_parallel_is_refused() {
+    refused_two_levels_down(
+        middle_pipeline(),
+        "pipeline.recovery.child_frontier_unsupported",
+        "UPDATE elitea_runtime.agent_graph_checkpoints \
+         SET pending_nodes = '[\"ask_a\"]' \
+         WHERE thread_id LIKE '%/delegate/inner' \
+           AND metadata LIKE '%elitea.graph.parallel.occurrence.v3%'",
+    )
+    .await;
+}
+
+/// R1: the grandchild's activation stamp records an Agent node definition
+/// other than the one Main froze: refused typed at assembly, not at run time.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_two_levels_down_a_grandchild_stamped_by_another_definition_is_refused() {
+    refused_two_levels_down(
+        middle_pipeline(),
+        "pipeline.recovery.child_definition_mismatch",
+        "UPDATE elitea_runtime.agent_graph_checkpoints AS row \
+         SET metadata = jsonb_set( \
+             row.metadata::jsonb, '{elitea.pipeline.application-activation.v1}', \
+             (SELECT jsonb_object_agg(entry.key, jsonb_set(entry.value, '{definition_digest,0}', \
+                  to_jsonb(((entry.value->'definition_digest'->>0)::int + 1) % 256))) \
+              FROM jsonb_each(row.metadata::jsonb->'elitea.pipeline.application-activation.v1') AS entry) \
+           )::text \
+         WHERE row.thread_id LIKE '%/delegate/inner'",
+    )
+    .await;
 }
 
 /// PM-2: the walk reaches a frozen saved pipeline two levels down, but that
@@ -3314,10 +3521,14 @@ async fn postgres_fanout_effect_child() {
                         )
                     })
                     .collect::<Vec<_>>();
-                // An approved member waited on its card while `third` ran and
-                // ended before the crash: `third` is served from its receipt.
+                // An approved member waited on its card while `third` ran.
+                // `third` may have ended before the approved call's crash
+                // (served from its receipt here) or not (it runs here, once):
+                // both interleavings are correct, the approved call is never
+                // repeated either way.
                 let approved = mode == "approved_effect";
-                let expected: &[&str] = if approved {
+                let third_ran_here = statuses.iter().any(|status| status.starts_with("third:"));
+                let expected: &[&str] = if approved && !third_ran_here {
                     &["second:start", "second:failed"]
                 } else {
                     &["second:start", "second:failed", "third:start", "third:end"]
@@ -3325,7 +3536,7 @@ async fn postgres_fanout_effect_child() {
                 assert_eq!(statuses, expected);
                 assert_eq!(
                     model_requests(&captured),
-                    usize::from(!approved),
+                    usize::from(!approved || third_ran_here),
                     "recover: only `third` calls the model, unless it already ended"
                 );
                 let entries = joined(&pool).await.expect("joined entries");

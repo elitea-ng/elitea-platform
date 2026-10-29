@@ -1630,14 +1630,20 @@ impl PipelineStateServices {
     /// returns the first-level child row the evidence binds. Deeper rows cannot
     /// be read before assembly (their paths are admitted with the composition),
     /// so the assembly-time walk (`validates`) checks every deeper level against
-    /// the frozen definitions and fails closed with a distinct cause.
+    /// the frozen definitions and fails closed with a distinct cause: each
+    /// deeper row's activation stamp names its thread and the Agent node
+    /// definition Main froze, and the leaf is parked on an unowned Parallel
+    /// node of the frozen leaf definition.
     async fn walk_child_frontier(
         &self,
         mut thread: String,
         mut level: Option<(&PipelineDefinition, &dyn FrozenRecoveryLevel)>,
         validates: bool,
     ) -> Result<serde_json::Value, NativeAgentAssemblyError> {
+        use elitea_agent_runtime::graph::application_activation as activation;
         let mut bound = None;
+        // The digest of the Agent node that stamps the next level's rows.
+        let mut stamped_by = None;
         for depth in 0..MAX_RECOVERY_LEVELS {
             let child = self
                 .checkpointer
@@ -1647,12 +1653,26 @@ impl PipelineStateServices {
                 .ok_or_else(|| child_refused(CHILD_MISSING))?;
             if depth == 0 {
                 bound = Some(serde_json::to_value(&child).map_err(|_| invalid_configuration())?);
-            } else if !child.metadata.contains_key(
-                elitea_agent_runtime::graph::application_activation::ACTIVATION_METADATA_KEY,
-            ) {
+            } else if !child
+                .metadata
+                .contains_key(activation::ACTIVATION_METADATA_KEY)
+            {
                 return Err(child_refused(CHILD_UNSTAMPED));
+            } else if validates
+                && (stamped_by.is_none()
+                    || activation::stamped_definition_digest(&child.metadata, &thread)
+                        != stamped_by)
+            {
+                return Err(child_refused(CHILD_DEFINITION_MISMATCH));
             }
             if super::graph::holds_parallel_occurrence(&child) {
+                if validates
+                    && !level.is_some_and(|(definition, _)| {
+                        definition.is_unowned_parallel(&child.pending_nodes[0])
+                    })
+                {
+                    return Err(child_refused(CHILD_FRONTIER_UNSUPPORTED));
+                }
                 return bound.ok_or_else(invalid_configuration);
             }
             let [pending] = child.pending_nodes.as_slice() else {
@@ -1681,6 +1701,7 @@ impl PipelineStateServices {
             if !aliases.contains(alias) {
                 return Err(child_refused(CHILD_DEFINITION_MISMATCH));
             }
+            stamped_by = child_definition.application_config_digest(pending);
             level = child_level.child(alias);
             thread = format!("{thread}/{pending}");
         }

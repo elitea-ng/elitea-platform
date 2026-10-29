@@ -1018,6 +1018,28 @@ impl PipelineDefinition {
         self.nodes.iter().any(|node| node.id() == id)
     }
 
+    /// Whether `id` is a Parallel node no other fan-out owns: the only node a
+    /// recovery walk's leaf may be parked on (PM-2).
+    pub(crate) fn is_unowned_parallel(&self, id: &str) -> bool {
+        !self.parallel_owned_nodes.contains(id)
+            && !self.map_owned_nodes.contains(id)
+            && self
+                .nodes
+                .iter()
+                .any(|node| node.id() == id && matches!(node, PipelineNodeDefinition::Parallel(_)))
+    }
+
+    /// The configuration digest Agent node `id` stamps on its child rows
+    /// (PM-2 recovery walk).
+    pub(crate) fn application_config_digest(&self, id: &str) -> Option<[u8; 32]> {
+        self.nodes.iter().find_map(|node| match node {
+            PipelineNodeDefinition::Application(agent) if agent.id() == id => {
+                Some(agent.config_digest())
+            }
+            _ => None,
+        })
+    }
+
     /// The pending Agent nodes of a recovery frontier (FU-249): each one's
     /// child frontier is proven separately.
     pub(crate) fn application_frontier_nodes<'a>(&self, pending: &'a [String]) -> Vec<&'a str> {

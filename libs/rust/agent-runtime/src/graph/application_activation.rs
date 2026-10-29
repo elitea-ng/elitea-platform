@@ -32,6 +32,24 @@ impl ApplicationActivation {
     }
 }
 
+/// The Agent node definition digest the activation stamp on a row of `thread`
+/// records for that thread: `None` unless the stamp is well formed and names
+/// exactly `thread` (a recovery walk compares it with the frozen definition).
+#[must_use]
+pub fn stamped_definition_digest<S: std::hash::BuildHasher>(
+    metadata: &HashMap<String, Value, S>,
+    thread: &str,
+) -> Option<[u8; 32]> {
+    let entry = metadata
+        .get(ACTIVATION_METADATA_KEY)?
+        .as_object()?
+        .get(thread)?
+        .clone();
+    let recorded: ApplicationActivation = serde_json::from_value(entry).ok()?;
+    (recorded.schema == ACTIVATION_SCHEMA && recorded.child_thread() == thread)
+        .then_some(recorded.definition_digest)
+}
+
 /// Every node owns its own overlay. The inner adapter retains authority and fencing.
 pub struct ApplicationActivationCheckpointer {
     inner: Arc<dyn Checkpointer>,
