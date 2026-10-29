@@ -181,4 +181,4 @@ parallel") and "FP inner parallel" (Parallel of two Agent nodes running saved pi
 - Web: when a branch FAILS during a wake of a nested park, the live view loses the still-open card until a reload
   (the Worker publishes it; a replay of the success path keeps it — `chatStreamNestedWake.test.ts`).
 - Browser check of the two refusals with the new text on images from this branch.
-- Recovery of a child parked deeper than one Agent node below the root (a grandchild's Parallel) is refused (F).
+- Recovery of a child parked deeper than one Agent node below the root (a grandchild's Parallel) is refused (F). Superseded by the post-merge fix PR (`fanout-postmerge-review-20261029.md`): two levels down is R; three levels down is refused at save and assembly.
