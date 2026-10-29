@@ -575,9 +575,13 @@ func TestAvailableServesPinnedRegistrySnapshot(t *testing.T) {
 	// The old payload had eight static rows plus whatever the DB happened to
 	// hold; the snapshot is a fixed 51 (52 before the pgvector type was
 	// retired), plus the Go-registered cloud_executor project setting
-	// (ADR-0034 decision 11).
-	if len(types) != 57 {
-		t.Errorf("expected the 51 pinned entries, the five web providers and cloud_executor, got %d", len(types))
+	// (ADR-0034 decision 11) and worker_egress project setting (ADR-0044
+	// decision 2).
+	if len(types) != 58 {
+		t.Errorf("expected the 51 pinned entries, the five web providers, cloud_executor and worker_egress, got %d", len(types))
+	}
+	if got := found["worker_egress"].Section; got != "project_settings" {
+		t.Errorf("worker_egress section = %q, want project_settings", got)
 	}
 	if _, offered := found["pgvector"]; offered {
 		t.Error("the retired pgvector type is still offered")

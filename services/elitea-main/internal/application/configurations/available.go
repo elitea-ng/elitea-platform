@@ -100,6 +100,9 @@ func LoadPinnedCurrentAvailableCatalog() (*CurrentAvailableCatalog, error) {
 	if err := catalog.addCloudExecutorProjectSetting(); err != nil {
 		return nil, err
 	}
+	if err := catalog.addWorkerEgressProjectSetting(); err != nil {
+		return nil, err
+	}
 	return catalog, nil
 }
 

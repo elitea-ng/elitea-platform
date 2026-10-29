@@ -1941,7 +1941,8 @@ mod tests {
         BeginExecutionResponseV1, ClaimCommandRequestV1, ClaimCommandResponseV1,
         DesiredExecutionStateV1, DigestV1, ExecutionFenceV1, ExecutionIdentityV1,
         ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
-        PrepareSettlementResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1, RuntimeErrorV1,
+        PrepareSettlementResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1,
+        ReportEgressSummaryRequestV1, ReportEgressSummaryResponseV1, RuntimeErrorV1,
         SettlementProposalV1,
     };
     use crate::spool::{
@@ -1995,8 +1996,13 @@ mod tests {
         release_close: Arc<Notify>,
     }
 
+    #[derive(Default)]
     struct SettlementRpc {
         request: Arc<Mutex<Option<PrepareSettlementRequestV1>>>,
+        egress: Arc<Mutex<Option<ReportEgressSummaryRequestV1>>>,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+        /// Answer the egress summary with this status instead of accepting it.
+        egress_failure: Option<tonic::Code>,
     }
 
     #[async_trait]
@@ -2089,10 +2095,26 @@ mod tests {
             Err(Status::unimplemented("test-only"))
         }
 
+        async fn report_egress_summary(
+            &self,
+            request: Request<ReportEgressSummaryRequestV1>,
+        ) -> Result<Response<ReportEgressSummaryResponseV1>, Status> {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push("report_egress_summary");
+            *self.egress.lock().expect("egress summary") = Some(request.into_inner());
+            match self.egress_failure {
+                Some(code) => Err(Status::new(code, "test-only")),
+                None => Ok(Response::new(ReportEgressSummaryResponseV1::default())),
+            }
+        }
+
         async fn prepare_settlement(
             &self,
             request: Request<PrepareSettlementRequestV1>,
         ) -> Result<Response<PrepareSettlementResponseV1>, Status> {
+            self.calls.lock().expect("calls").push("prepare_settlement");
             *self.request.lock().expect("settlement request") = Some(request.into_inner());
             Ok(Response::new(PrepareSettlementResponseV1 {
                 settlement_receipt_id: "settlement-receipt-1".to_owned(),
@@ -3271,6 +3293,7 @@ mod tests {
         let control = AgentControlClient::new(
             SettlementRpc {
                 request: Arc::clone(&captured),
+                ..SettlementRpc::default()
             },
             crate::transport::ControlGrpcConfig {
                 deadline: Duration::from_secs(1),
@@ -3305,6 +3328,110 @@ mod tests {
                 .value,
             expected.as_ref()
         );
+    }
+
+    /// #1490: the execution's egress summary goes to Main under the live
+    /// claim BEFORE `PrepareSettlement`, and a failed report never fails the
+    /// settlement.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_egress_summary_is_reported_before_settlement_best_effort() {
+        for failure in [
+            None,
+            Some(tonic::Code::Unimplemented),
+            Some(tonic::Code::Unavailable),
+        ] {
+            let temp = tempfile::tempdir().expect("temporary directory");
+            let verified = verified_agent_command("signed_command_output_session");
+            let terminal = terminal_frame();
+            let identity = terminal.identity.clone().expect("identity");
+            let registry = Arc::new(crate::protocol::egress::EgressRegistry::default());
+            let egress =
+                registry.run_egress(&crate::protocol::elitea::runtime::v1::WorkerCommandV1 {
+                    execution_id: identity.execution_id.clone(),
+                    command_id: identity.command_id.clone(),
+                    generation: identity.generation,
+                    egress_policy: Some(
+                        crate::protocol::elitea::runtime::v1::WorkerEgressPolicyV1 {
+                            mode:
+                                crate::protocol::elitea::runtime::v1::WorkerEgressModeV1::Allowlist
+                                    as i32,
+                            allow: vec!["api.example.com".to_owned()],
+                        },
+                    ),
+                    ..Default::default()
+                });
+            egress.record_reached(&reqwest::Url::parse("https://api.example.com/v1").expect("url"));
+            let _ = egress.check("evil.example", 443);
+
+            let io = FakeStream {
+                acknowledgements: VecDeque::from([
+                    Ok(Some(bootstrap())),
+                    Ok(Some(bound_ack(&terminal))),
+                ]),
+                writes: Vec::new(),
+                closed: false,
+            };
+            let settings = config();
+            let inner = OutputSession::open(io, spool(&temp.path().join("root")), settings.clone())
+                .await
+                .expect("output session");
+            let mut output = spawn_output_actor(inner, settings.max_frame_bytes);
+            let acknowledged = output
+                .send_terminal(&verified, terminal.clone())
+                .await
+                .expect("durably acknowledged terminal");
+            let rpc = SettlementRpc {
+                egress_failure: failure,
+                ..SettlementRpc::default()
+            };
+            let (calls, report, settled) = (
+                Arc::clone(&rpc.calls),
+                Arc::clone(&rpc.egress),
+                Arc::clone(&rpc.request),
+            );
+            let control = AgentControlClient::new(
+                rpc,
+                crate::transport::ControlGrpcConfig {
+                    deadline: Duration::from_secs(1),
+                    workload_session_id: "session-1".to_owned(),
+                    producer_id: "worker-1".to_owned(),
+                },
+            )
+            .expect("semantic control")
+            .with_egress_registry(Arc::clone(&registry));
+            control
+                .prepare_agent_settlement(acknowledged)
+                .await
+                .expect("settled despite the report's fate");
+
+            assert_eq!(
+                *calls.lock().expect("calls"),
+                ["report_egress_summary", "prepare_settlement"],
+                "{failure:?}"
+            );
+            let report = report.lock().expect("report").clone().expect("report sent");
+            assert_eq!(report.identity, terminal.identity);
+            // One report per command (#1490 resume): the identity is the
+            // settled command's, command_id and generation included.
+            let settled = settled.lock().expect("settled").clone().expect("settled");
+            assert_eq!(report.identity, settled.identity);
+            let identity = report.identity.as_ref().expect("identity");
+            assert_ne!(identity.command_id, "");
+            assert_ne!(identity.generation, 0);
+            assert_eq!(report.fence, terminal.fence);
+            assert_eq!(report.hosts_reached.len(), 1);
+            assert_eq!(report.hosts_reached[0].host, "api.example.com");
+            assert_eq!(report.hosts_reached[0].port, 443);
+            assert_eq!(report.hosts_reached[0].connections, 1);
+            assert_eq!(report.hosts_refused.len(), 1);
+            assert_eq!(report.hosts_refused[0].host, "evil.example");
+            assert_eq!(report.hosts_refused[0].reason, "host_not_allowed");
+            assert_eq!(report.other_hosts, 0);
+            assert!(
+                registry.summary_for_settlement(identity).is_none(),
+                "a settled execution is no longer tracked"
+            );
+        }
     }
 
     fn retired_record_count(root: &Path) -> usize {

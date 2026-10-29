@@ -791,7 +791,8 @@ impl PipelineNativeAgentAssembler {
             }
         }
         let toolsets = freeze_toolsets_by_alias(toolsets).await?;
-        let direct_tool_resolver = build_direct_tool_resolver(profile, &toolsets)?;
+        let direct_tool_resolver =
+            build_direct_tool_resolver(profile, &toolsets, tool_policy.egress())?;
         // One assembly path for the whole graph: its shared skipped set feeds the notice (FU-243).
         let materialization = ApplicationMaterializationPath::native_graph(continuation);
         let application_runtime = context
@@ -1147,6 +1148,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
         let policy = policy_for_guardrails(
             request.payload.toolkit_guardrails.as_ref(),
             &self.tool_policy,
+            command.egress(),
         )?;
         let (profile, plan, _, _) = super::runtime::admit_pipeline_plan(
             request,
@@ -1179,6 +1181,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
         let policy = policy_for_guardrails(
             request.payload.toolkit_guardrails.as_ref(),
             &self.tool_policy,
+            command.egress(),
         )?;
         let (profile, plan, _, start) = super::runtime::admit_pipeline_plan(
             request,
@@ -1269,6 +1272,7 @@ impl PipelineNativeAgentAssembler {
             let tool_policy = policy_for_guardrails(
                 assembly.request().payload.toolkit_guardrails.as_ref(),
                 &self.tool_policy,
+                assembly.egress(),
             )?;
             // #606, the pipeline twin of the ordinary path's read. `platform`
             // is optional here only because the injected-state test constructor
@@ -1453,6 +1457,8 @@ struct NativePipelineLlmAgentFactory {
 
 struct NativePipelineDirectToolResolver {
     tools: BTreeMap<(String, String), ResolvedDirectTool>,
+    /// The run's egress policy, for delegated-auth discovery (#1490).
+    egress: Arc<elitea_agent_runtime::egress::RunEgress>,
 }
 
 #[path = "pipeline/parallel_application_resolver.rs"]
@@ -1689,6 +1695,10 @@ impl PipelineDirectToolResolver for NativePipelineDirectToolResolver {
             .get(&(selection.alias().to_owned(), selection.tool().to_owned()))
             .cloned()
             .ok_or(DirectToolExecutionError::Unavailable)
+    }
+
+    fn egress(&self) -> Arc<elitea_agent_runtime::egress::RunEgress> {
+        Arc::clone(&self.egress)
     }
 }
 
@@ -2394,7 +2404,8 @@ async fn bind_saved_pipeline_runtimes(
         }
     }
     let toolsets = freeze_toolsets_by_alias(toolsets).await?;
-    let direct_tool_resolver = build_direct_tool_resolver(profile, &toolsets)?;
+    let direct_tool_resolver =
+        build_direct_tool_resolver(profile, &toolsets, runtime.tool_policy.egress())?;
     let guarded_interrupt_kinds = guarded_interrupt_kinds(profile, &delegated_authorization);
     let llm_factory = profile.definition().has_llm_nodes().then(|| {
         Arc::new(NativePipelineLlmAgentFactory {
@@ -2530,6 +2541,7 @@ async fn freeze_toolsets_by_alias(
 fn build_direct_tool_resolver(
     profile: &PipelineExecutionProfile,
     toolsets: &BTreeMap<String, FrozenToolset>,
+    egress: &Arc<elitea_agent_runtime::egress::RunEgress>,
 ) -> Result<Option<Arc<dyn PipelineDirectToolResolver>>, NativeAgentAssemblyError> {
     let selections = profile
         .definition()
@@ -2574,7 +2586,10 @@ fn build_direct_tool_resolver(
             );
         }
     }
-    Ok(Some(Arc::new(NativePipelineDirectToolResolver { tools })))
+    Ok(Some(Arc::new(NativePipelineDirectToolResolver {
+        tools,
+        egress: Arc::clone(egress),
+    })))
 }
 
 fn validate_application_selection(

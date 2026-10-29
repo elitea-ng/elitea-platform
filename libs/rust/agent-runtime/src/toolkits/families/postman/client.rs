@@ -14,6 +14,7 @@ use tokio_stream::StreamExt;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::config::{DynamicExecutionProfile, PostmanToolkitConfig};
+use crate::egress::BuildForRun as _;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -362,7 +363,7 @@ struct ManagementAuthority {
     workspace_id: Box<str>,
     api_key: Zeroizing<String>,
     collection_id: Box<str>,
-    request_builder: reqwest::Client,
+    request_builder: crate::egress::HttpClient,
     transport: Arc<dyn ManagementTransport>,
 }
 
@@ -402,7 +403,7 @@ pub(in crate::toolkits) trait ManagementTransport: Send + Sync {
 }
 
 struct ReqwestManagementTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -431,7 +432,7 @@ impl ManagementTransport for ReqwestManagementTransport {
 impl PostmanClient {
     pub(crate) fn new(config: PostmanToolkitConfig) -> Result<Self, PostmanClientError> {
         let config = config.into_client_parts();
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -440,7 +441,7 @@ impl PostmanClient {
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             management: ManagementAuthority {

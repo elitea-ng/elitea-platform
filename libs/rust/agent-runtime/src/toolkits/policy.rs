@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
+use std::sync::Arc;
 
 use serde_json::{Map, Value};
+
+use crate::egress::RunEgress;
 
 const MAX_POLICY_IDENTIFIERS: usize = 16_384;
 const MAX_POLICY_IDENTIFIER_BYTES: usize = 1_024;
@@ -72,6 +75,12 @@ impl std::error::Error for ToolAdmissionPolicyError {}
 /// The outer worker runtime may replace an `Arc<ToolAdmissionPolicy>` when its
 /// trusted deployment configuration changes. An in-flight invocation retains
 /// the exact generation it admitted, avoiding mutable process-global policy.
+///
+/// It also carries the run's public egress policy and ledger
+/// ([`crate::egress::RunEgress`], #1490): every tool the policy admits runs
+/// under it, and every client a family builds while materializing under this
+/// policy is bound to it. Open unless the host lends one.
+#[derive(Clone)]
 pub struct ToolAdmissionPolicy {
     blocked_toolkits: HashSet<Box<str>>,
     /// Toolkit types under an active `toolkit_type` suspension, canonical
@@ -82,6 +91,7 @@ pub struct ToolAdmissionPolicy {
     sensitive_tools: HashMap<Box<str>, HashSet<Box<str>>>,
     sensitive_company_name: Box<str>,
     sensitive_message_template: Box<str>,
+    egress: Arc<RunEgress>,
 }
 
 /// Model/UI-safe presentation for one sensitive concrete tool.
@@ -276,7 +286,21 @@ impl ToolAdmissionPolicy {
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or(DEFAULT_MESSAGE_TEMPLATE)
                 .into(),
+            egress: RunEgress::open(),
         })
+    }
+
+    /// This generation bound to one run's public egress policy (#1490).
+    #[must_use]
+    pub fn with_egress(mut self, egress: Arc<RunEgress>) -> Self {
+        self.egress = egress;
+        self
+    }
+
+    /// The run's public egress policy and ledger.
+    #[must_use]
+    pub const fn egress(&self) -> &Arc<RunEgress> {
+        &self.egress
     }
 
     #[must_use]

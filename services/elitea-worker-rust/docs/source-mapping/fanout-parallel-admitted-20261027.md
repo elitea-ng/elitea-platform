@@ -51,7 +51,7 @@ conversation on the project event stream.
 - Main: `internal/infra/db/repos/execution_interrupts*.go`, `execution_interrupt_wakes.go`, `agent_claim_authority.go`,
   `internal/application/agentexecution/{continue_fanout_wake,fanout_wake_admitter}.go`,
   `internal/api/v2/events/*`, `internal/api/middleware/otel.go` (SSE flush), `internal/domain/{executioninterrupt,
-  pipelinelimits,applicationcomposition}/*`, migration `migrations/shared/0197_execution_interrupt_wakes.sql`.
+  pipelinelimits,applicationcomposition}/*`, migration `migrations/shared/0198_execution_interrupt_wakes.sql`.
 - Web: `src/features/chat-messages/**` (ledger hook, fan-out frames, cards, shared project stream),
   `src/features/pipelines/lib/graphParallelAdmission.helpers.ts`, `src/pages/pipelines/**` (test-chat refusal).
 
@@ -259,7 +259,10 @@ A later merge (2026-10-28) brought migration 0193. The base-branch check require
 head, so the park/wake migration is renumbered to `0194_execution_interrupt_wakes.sql` (manifest head 194); 0192
 stays a gap like 0189. Only the file name and its header line changed. A merge on 2026-10-29 brought main's 0194 (kill switch), 0195 (retention) and 0196 (audit
 export): the park/wake migration is renumbered again to `0197_execution_interrupt_wakes.sql` (manifest head 197), file
-name and header line only; the admission's two new main return paths now also return the (empty) resolved-frame list. main moved the turn checks into `validateAgentTurns`; the fan-out wake check
+name and header line only; the admission's two new main return paths now also return the (empty) resolved-frame list. A second merge the same day brought main's
+0197 (command outbox refusal) and the egress summary RPC: the migration is now `0198_execution_interrupt_wakes.sql`
+(manifest head 198), claim field 19 is unchanged, generated protobuf and `api.gen.go` were regenerated with the pinned
+tools, and the stop's scripted-row tests follow the merged order (conversation, legal hold probe, interrupt ledger). main moved the turn checks into `validateAgentTurns`; the fan-out wake check
 moved with them, and the admission carries both `CurrentFanoutWakeTurn` and main's `GovernedCredentials`.
 `main` routed agent claims through a shared fresh-claim builder that dropped the fan-out opt-in; agent claims now use
 an agent builder with both opt-ins (`ordinary_agent_claims_opt_into_fanout_interrupt_decisions` caught it).

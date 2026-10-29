@@ -15,6 +15,7 @@ use super::config::AhaToolkitConfig;
 use super::format::{
     FormatError, FormatErrorCode, OutputFormat, bounded, project_record, project_records, render,
 };
+use crate::egress::BuildForRun as _;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -438,7 +439,7 @@ pub(in crate::toolkits) trait AhaTransport: Send + Sync {
 }
 
 struct ReqwestAhaTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -505,7 +506,7 @@ impl AhaTransport for ReqwestAhaTransport {
 pub(in crate::toolkits) struct AhaClient {
     base_url: Url,
     api_key: Zeroizing<String>,
-    request_client: reqwest::Client,
+    request_client: crate::egress::HttpClient,
     transport: Arc<dyn AhaTransport>,
     artifacts: Arc<AhaArtifactResolver>,
 }
@@ -534,15 +535,15 @@ impl AhaClient {
         Self {
             base_url: config.base_url().clone(),
             api_key: Zeroizing::new(config.api_key().to_owned()),
-            request_client: reqwest::Client::new(),
+            request_client: build_http_client().expect("test client"),
             transport,
             artifacts,
         }
     }
 }
 
-fn build_http_client() -> Result<reqwest::Client, AhaClientError> {
-    reqwest::Client::builder()
+fn build_http_client() -> Result<crate::egress::HttpClient, AhaClientError> {
+    crate::egress::client_builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
         .https_only(true)
@@ -552,7 +553,7 @@ fn build_http_client() -> Result<reqwest::Client, AhaClientError> {
         .redirect(reqwest::redirect::Policy::none())
         .referer(false)
         .user_agent(USER_AGENT)
-        .build()
+        .build_for_run()
         .map_err(|_| invalid_configuration())
 }
 
@@ -2083,7 +2084,7 @@ impl AhaClient {
         let authorization = self.authorization_header()?;
         let mut request = self
             .request_client
-            .post(url)
+            .request(reqwest::Method::POST, url)
             .header(AUTHORIZATION, authorization)
             .header(ACCEPT, "application/json")
             .multipart(form)

@@ -363,6 +363,13 @@ pub(crate) trait PipelineDirectToolResolver: Send + Sync {
         &self,
         selection: &DirectToolSelection,
     ) -> Result<ResolvedDirectTool, DirectToolExecutionError>;
+
+    /// The run's public egress policy and ledger (#1490). Delegated-auth
+    /// discovery runs after the tool call, outside any egress scope, and is
+    /// held to this. A resolver that names no run reaches no public host.
+    fn egress(&self) -> std::sync::Arc<elitea_agent_runtime::egress::RunEgress> {
+        elitea_agent_runtime::egress::RunEgress::closed()
+    }
 }
 
 /// One exact materialized tool plus its immutable invocation policy.
@@ -625,7 +632,9 @@ impl DirectToolNode {
                     return Ok(self
                         .mcp_authorization_stopped(remaining.unwrap_or_else(|| json!({})), true));
                 }
-                let requirement = requirement.resolve_public_metadata().await;
+                let requirement = requirement
+                    .resolve_public_metadata(&self.resolver.egress())
+                    .await;
                 return Ok(self.mcp_authorization_interrupt(
                     &requirement,
                     &call_id,

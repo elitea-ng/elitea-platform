@@ -326,6 +326,12 @@ impl<'a> AuthorizedNativeAssembly<'a> {
         self.request
     }
 
+    /// The execution's public egress policy and ledger (#1490).
+    #[must_use]
+    pub(crate) const fn egress(&self) -> &Arc<elitea_agent_runtime::egress::RunEgress> {
+        self.command.egress()
+    }
+
     /// Validate the first production assembly profile before credential
     /// redemption becomes reachable.
     pub(crate) fn admit_llm_agent(

@@ -36,3 +36,17 @@ func TestCloudExecutorSettingNeedsTheProjectSettingsPermission(t *testing.T) {
 		t.Fatalf("a caller with no principal was allowed")
 	}
 }
+
+// The worker egress project setting (ADR-0044 decision 2) widens what a
+// project's runs reach, so its writes take the same gate.
+func TestWorkerEgressSettingNeedsTheProjectSettingsPermission(t *testing.T) {
+	ctx := auth.ContextWithUser(context.Background(), auth.User{UserID: "3", AuthType: "token"})
+	editor := &Handler{permissionResolver: grantedPermissions{"configurations.configuration.create"}}
+	admin := &Handler{permissionResolver: grantedPermissions{"configurations.configuration.create", ProjectSettingsEditPermission}}
+	if !editor.projectSettingsWriteForbidden(ctx, "7", "worker_egress") {
+		t.Fatalf("an editor without models.project_settings.edit may write the worker egress setting")
+	}
+	if admin.projectSettingsWriteForbidden(ctx, "7", "worker_egress") {
+		t.Fatalf("a project admin was refused")
+	}
+}

@@ -12,6 +12,7 @@ use serde_json::Value;
 use zeroize::Zeroizing;
 
 use super::config::QtestToolkitConfig;
+use crate::egress::BuildForRun as _;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// `DEFAULT_QTEST_API_TIMEOUT_SECONDS`: qTest searches can be slow.
@@ -191,7 +192,7 @@ pub(in crate::toolkits) trait QtestTransport: Send + Sync {
 }
 
 struct ReqwestQtestTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -313,7 +314,7 @@ pub(in crate::toolkits) struct QtestClient {
 
 impl QtestClient {
     pub(in crate::toolkits) fn new(config: QtestToolkitConfig) -> Result<Self, QtestClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -321,7 +322,7 @@ impl QtestClient {
             .timeout(REQUEST_TIMEOUT)
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self::with_transport(
             config,

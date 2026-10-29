@@ -19,6 +19,7 @@ use tokio::time::timeout;
 use zeroize::Zeroizing;
 
 use super::config::GcpToolkitConfig;
+use crate::egress::BuildForRun as _;
 
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const TOKEN_AUDIENCE: &str = TOKEN_URL;
@@ -224,7 +225,7 @@ pub(in crate::toolkits) trait GcpTransport: Send + Sync {
 }
 
 struct ReqwestGcpTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -277,7 +278,7 @@ pub(crate) struct GcpClient {
 
 impl GcpClient {
     pub(crate) fn new(config: GcpToolkitConfig) -> Result<Self, GcpClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -287,7 +288,7 @@ impl GcpClient {
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT_VALUE)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             config,

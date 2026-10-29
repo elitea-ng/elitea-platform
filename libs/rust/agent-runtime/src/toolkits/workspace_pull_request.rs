@@ -51,7 +51,7 @@ use elitea_connectors::transport::{Transport, Url};
 use serde_json::{Map, Value, json};
 use zeroize::Zeroizing;
 
-use super::families::connector_client::transport as host_transport;
+use super::families::connector_client::transport_for as host_transport;
 use super::families::github::client::GitHubClient;
 use super::families::github::config::GitHubToolkitConfig;
 use super::families::github::writes::{
@@ -63,6 +63,7 @@ use super::families::gitlab::config::GitLabToolkitConfig;
 pub use super::git_receive_pack::PushPack;
 use super::git_receive_pack::{GitCredential, PushRequest, push_new_branch};
 use super::snapshot::{AdmittedToolSnapshot, FrozenToolKind};
+use crate::egress::{EgressTransport, RunEgress};
 
 /// The pull (merge) request tool's name.
 pub const OPEN_PULL_REQUEST: &str = "open_pull_request";
@@ -664,8 +665,19 @@ fn github_web_origin(base: &Url) -> Option<Url> {
 /// The GitHub and GitLab toolkits of a turn's frozen snapshot, each with its
 /// own client (its own credentials, never shared with the toolkit's
 /// toolset). A toolkit whose settings do not parse is left out.
+///
+/// Each client is bound to `egress`, the run's policy (#1490): they are built
+/// at assembly, outside any egress scope, and keep the run they were built
+/// under for every later request (`open_pull_request`).
 #[must_use]
-pub fn pull_request_targets(snapshot: &AdmittedToolSnapshot<'_>) -> Vec<PullRequestTarget> {
+pub fn pull_request_targets(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    egress: &Arc<RunEgress>,
+) -> Vec<PullRequestTarget> {
+    crate::egress::scope_sync(Arc::clone(egress), || targets_in_scope(snapshot))
+}
+
+fn targets_in_scope(snapshot: &AdmittedToolSnapshot<'_>) -> Vec<PullRequestTarget> {
     snapshot
         .iter()
         .filter(|reference| reference.kind() == FrozenToolKind::Configured)
@@ -764,6 +776,7 @@ pub fn open_pull_request_toolset(
     targets: Vec<PullRequestTarget>,
     diff: Arc<dyn WorkspaceDiffSource>,
     audit: Arc<dyn PullRequestAudit>,
+    egress: Arc<RunEgress>,
 ) -> Option<Arc<dyn Toolset>> {
     WorkspaceForgeTools {
         thread,
@@ -772,6 +785,7 @@ pub fn open_pull_request_toolset(
         push: None,
         push_transport: None,
         audit,
+        egress,
     }
     .toolset()
 }
@@ -785,6 +799,11 @@ pub struct WorkspaceForgeTools {
     /// The push's transport; `None` is this host's.
     pub push_transport: Option<Arc<dyn Transport>>,
     pub audit: Arc<dyn PullRequestAudit>,
+    /// The run's egress policy (#1490). These tools are not admitted through
+    /// the toolkit policy, so they carry it themselves: every call runs
+    /// under it (the thread credential's forge client, the push) and a host
+    /// outside it is refused, never reached under an open fallback.
+    pub egress: Arc<RunEgress>,
 }
 
 impl WorkspaceForgeTools {
@@ -800,8 +819,11 @@ impl WorkspaceForgeTools {
             targets: self.targets.into_iter().map(Arc::new).collect(),
             diff: self.diff,
             push: self.push,
-            push_transport: self.push_transport,
+            push_transport: self
+                .push_transport
+                .map(|inner| Arc::new(EgressTransport::new(Arc::clone(&self.egress), inner)) as _),
             audit: self.audit,
+            egress: self.egress,
             pushed: Mutex::new(Vec::new()),
         });
         let mut tools: Vec<Arc<dyn Tool>> =
@@ -810,6 +832,19 @@ impl WorkspaceForgeTools {
             tools.push(Arc::new(GitPushTool(shared)));
         }
         Some(Arc::new(PullRequestToolset { tools }))
+    }
+}
+
+/// Run one call under the run's egress policy: a refused host answers
+/// `refused` naming it (host and port, never the URL).
+async fn under_run_egress(
+    egress: &Arc<RunEgress>,
+    call: impl Future<Output = Result<Value, Value>>,
+) -> Value {
+    let (answered, refused) = crate::egress::attributed(Arc::clone(egress), call).await;
+    match refused {
+        Some(refused) => answer("refused", refused.message()),
+        None => answered.unwrap_or_else(|refusal| refusal),
     }
 }
 
@@ -845,6 +880,7 @@ struct Shared {
     push: Option<Arc<dyn WorkspacePushSource>>,
     push_transport: Option<Arc<dyn Transport>>,
     audit: Arc<dyn PullRequestAudit>,
+    egress: Arc<RunEgress>,
     pushed: Mutex<Vec<PushedBranch>>,
 }
 
@@ -974,7 +1010,8 @@ impl Shared {
         };
         let transport = match &self.push_transport {
             Some(transport) => Arc::clone(transport),
-            None => host_transport(&PUSH_POLICY)
+            // Already bound to the run: one check and one count per request.
+            None => host_transport(Arc::clone(&self.egress), &PUSH_POLICY)
                 .map_err(|_| answer("error", "The push client could not be built."))?,
         };
         let PreparedPush {
@@ -1101,7 +1138,7 @@ impl Tool for GitPushTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
-        Ok(self.run(&args).await.unwrap_or_else(|refusal| refusal))
+        Ok(under_run_egress(&self.0.egress, self.run(&args)).await)
     }
 }
 
@@ -1171,7 +1208,7 @@ impl Tool for OpenPullRequestTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
-        Ok(self.run(&args).await.unwrap_or_else(|refusal| refusal))
+        Ok(under_run_egress(&self.0.egress, self.run(&args)).await)
     }
 }
 
@@ -1413,6 +1450,88 @@ fn capitalized(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use elitea_connectors::transport::{Method, Request};
+
+    use super::{PUSH_POLICY, host_transport};
+    use crate::egress::{HostCount, PublicPolicy, RunEgress, scope};
+
+    /// The push's host transport checks and counts each request once, even
+    /// run inside the same run's scope (it used to be wrapped twice).
+    #[tokio::test]
+    async fn the_push_transport_counts_each_request_once() {
+        let run = RunEgress::new(PublicPolicy::allowlist(["github.com"]).expect("policy"));
+        let transport = host_transport(Arc::clone(&run), &PUSH_POLICY).expect("transport");
+        let target = Url::parse("https://evil.example/o/r.git/git-receive-pack").expect("url");
+        let error = scope(
+            Arc::clone(&run),
+            transport.execute(Request::new(Method::POST, target)),
+        )
+        .await
+        .expect_err("refused");
+        assert!(error.is_refused());
+        assert_eq!(
+            run.summary().refused,
+            vec![HostCount {
+                host: "evil.example".to_owned(),
+                port: 443,
+                count: 1,
+            }]
+        );
+    }
+
+    /// #1490 review: a bound toolkit's forge client is built at assembly,
+    /// outside any egress scope, and keeps the run it was built under. It is
+    /// bound to the run handed over: `open_pull_request` to a host the run's
+    /// allowlist leaves out (here the API host) is refused and counted in
+    /// THAT run's ledger — not sent under a fallback policy.
+    #[tokio::test]
+    async fn bound_toolkit_targets_are_held_to_the_runs_egress() {
+        use super::super::snapshot::FrozenToolSnapshot;
+        use super::pull_request_targets;
+
+        let version = serde_json::json!({"tools": [{
+            "id": 7,
+            "type": "github",
+            "toolkit_name": "team-github",
+            "settings": {
+                "github_configuration": {
+                    "configuration_type": "github",
+                    "base_url": "https://api.github.com",
+                    "access_token": "fixture-token"
+                },
+                "repository": "EliteaAI/elitea-platform",
+                "active_branch": "feature/runtime",
+                "base_branch": "main",
+                "selected_tools": []
+            }
+        }]});
+        let policy =
+            crate::toolkits::ToolAdmissionPolicy::new(&[], &std::collections::BTreeMap::new())
+                .expect("policy");
+        let snapshot =
+            FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+                .expect("snapshot")
+                .apply_policy(&policy);
+        // The git remote's host is allowed; the API host is not.
+        let run = RunEgress::new(PublicPolicy::allowlist(["github.com"]).expect("policy"));
+        let targets = pull_request_targets(&snapshot, &run);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].web_host(), "github.com");
+        assert!(
+            targets[0]
+                .open_request("cloud-change", "main", "title", "body")
+                .await
+                .is_err()
+        );
+        let summary = run.summary();
+        assert_eq!(summary.reached, Vec::<HostCount>::new());
+        assert_eq!(summary.refused.len(), 1);
+        assert_eq!(summary.refused[0].host, "api.github.com");
+        assert_eq!(summary.refused[0].port, 443);
+    }
+
     use super::{
         github_web_origin, remote_host, remote_path_as_written, remote_repository_as_written,
         valid_branch,

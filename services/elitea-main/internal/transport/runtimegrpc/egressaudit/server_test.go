@@ -77,10 +77,12 @@ func TestMalformedReportsAreRefused(t *testing.T) {
 	server, _ := NewServer(sink, []string{"dns:elitea-egress-proxy"})
 	ctx := peerContext("elitea-egress-proxy")
 	for name, mutate := range map[string]func(*runtimev1.ReportRunSummaryRequestV1){
-		"no replica":     func(r *runtimev1.ReportRunSummaryRequestV1) { r.ReplicaId = "" },
-		"bad execution":  func(r *runtimev1.ReportRunSummaryRequestV1) { r.ExecutionId = "a b" },
-		"no project":     func(r *runtimev1.ReportRunSummaryRequestV1) { r.ProjectId = 0 },
-		"negative bytes": func(r *runtimev1.ReportRunSummaryRequestV1) { r.BytesUp = -1 },
+		"no replica":             func(r *runtimev1.ReportRunSummaryRequestV1) { r.ReplicaId = "" },
+		"the worker's":           func(r *runtimev1.ReportRunSummaryRequestV1) { r.ReplicaId = "worker" },
+		"a command's worker row": func(r *runtimev1.ReportRunSummaryRequestV1) { r.ReplicaId = "worker:cmd-1" },
+		"bad execution":          func(r *runtimev1.ReportRunSummaryRequestV1) { r.ExecutionId = "a b" },
+		"no project":             func(r *runtimev1.ReportRunSummaryRequestV1) { r.ProjectId = 0 },
+		"negative bytes":         func(r *runtimev1.ReportRunSummaryRequestV1) { r.BytesUp = -1 },
 		"too many hosts": func(r *runtimev1.ReportRunSummaryRequestV1) {
 			for range 256 {
 				r.HostsReached = append(r.HostsReached, &runtimev1.EgressHostReachedV1{Host: "x.example", Port: 443})

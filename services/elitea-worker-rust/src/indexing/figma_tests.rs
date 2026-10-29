@@ -13,6 +13,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use elitea_agent_runtime::egress::{PublicPolicy, RunEgress};
 use elitea_connectors::transport::{
     HeaderMap, HeaderValue, Request, Response, StatusCode, Transport, TransportError,
 };
@@ -81,11 +82,29 @@ async fn run(
     parameters: &Value,
     expected: Option<(&str, u32)>,
 ) -> IndexIngestSummaryV1 {
+    run_under(
+        harness,
+        configuration,
+        parameters,
+        expected,
+        RunEgress::open(),
+    )
+    .await
+}
+
+async fn run_under(
+    harness: &Harness,
+    configuration: &Value,
+    parameters: &Value,
+    expected: Option<(&str, u32)>,
+    egress: Arc<RunEgress>,
+) -> IndexIngestSummaryV1 {
     let now = || 1_700_000_000_000_i64;
     run_index(
         &harness.runtime,
         IndexRun {
             command: &command(NS, expected),
+            egress,
             toolkit_configuration: configuration.to_string().as_bytes(),
             tool_parameters: parameters.to_string().as_bytes(),
             parsed: None,
@@ -381,4 +400,51 @@ async fn figma_without_files_to_index_is_refused_before_any_request() {
         summary.message
     );
     assert!(transport.requests().is_empty());
+}
+
+/// The command's egress allowlist (#1490) binds the index source: a host it
+/// does not name is never requested and is recorded as refused; a named one
+/// is reached and recorded.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_command_egress_allowlist_binds_the_index_source() {
+    let mut harness = harness(4, None).await;
+    let transport = design_transport(Arc::new(Mutex::new(original())));
+    harness.runtime.transport = transport.clone();
+
+    let refused = RunEgress::new(PublicPolicy::allowlist(["other.example"]).expect("policy"));
+    let summary = run_under(
+        &harness,
+        &configuration(),
+        &parameters(),
+        None,
+        Arc::clone(&refused),
+    )
+    .await;
+    assert_ne!(
+        summary.status,
+        IndexIngestStatusV1::Ok as i32,
+        "{summary:?}"
+    );
+    assert!(transport.requests().is_empty(), "nothing left the worker");
+    let ledger = refused.summary();
+    assert_eq!(ledger.refused[0].host, "api.figma.com");
+    assert_eq!(ledger.reached, []);
+
+    let admitted = RunEgress::new(PublicPolicy::allowlist(["api.figma.com"]).expect("policy"));
+    let summary = run_under(
+        &harness,
+        &configuration(),
+        &parameters(),
+        None,
+        Arc::clone(&admitted),
+    )
+    .await;
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::Ok as i32,
+        "{summary:?}"
+    );
+    let ledger = admitted.summary();
+    assert_eq!(ledger.reached[0].host, "api.figma.com");
+    assert_eq!(ledger.refused, []);
 }

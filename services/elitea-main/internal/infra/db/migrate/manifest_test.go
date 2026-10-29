@@ -850,13 +850,20 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// centry.audit_events.export_txid so the relay reads in commit order
 	// (#1494). No data, no permission.
 	//
-	// 197: shared/0197_execution_interrupt_wakes.sql, park and wake for the
+	// 197: shared/0197_command_outbox_refusal.sql, the refusal a command Main
+	// can never prepare settles its run with (command_outbox.refusal_code and
+	// refusal_message, CHECK added NOT VALID): a worker egress allowlist that
+	// cannot be assembled (ADR-0044 decision 2, #1490). The row's deadline is
+	// moved to now, so the existing deadline retirement settles it; no
+	// retirement or terminal error code is added. No data, no permission.
+	//
+	// 198: shared/0198_execution_interrupt_wakes.sql, park and wake for the
 	// per-interrupt decision ledger (fanout-interrupt-decisions v1.1 §8): the
 	// park columns on execution_interrupt_responses and
 	// elitea_runtime.execution_interrupt_wakes with the partial unique index
 	// "one active continuation per response", and the open-card index a new
 	// turn supersedes through. No data, no permission.
-	require.EqualValues(t, 197, Head(shared))
+	require.EqualValues(t, 198, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

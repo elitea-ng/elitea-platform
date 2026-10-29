@@ -198,7 +198,10 @@ sendBatch:
 	}
 	itemErrors := make([]error, 0, len(results))
 	for index, err := range results {
-		if err != nil {
+		// A refused command is settled, not failed: its refusal is durable
+		// and the next retirement pass fails the run with it. It is not a
+		// reason to back the whole publisher off.
+		if err != nil && !errors.Is(err, ErrDispatchRefused) {
 			itemErrors = append(itemErrors, fmt.Errorf("dispatch pending validation outbox %q: %w", outboxIDs[index], err))
 		}
 	}

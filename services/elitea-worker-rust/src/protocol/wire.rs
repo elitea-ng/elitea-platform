@@ -63,9 +63,14 @@ mod merge_contract_tests {
             scan_message(&[0x88, 0x04, 0x00], Schema::WorkerCommand),
             Err(super::ProtocolError::InvalidInput(_))
         ));
-        // Field 66 is still unknown.
+        // Field 66 is the egress policy (#1490); 67 is still unknown.
+        assert!(
+            scan_message(&[0x92, 0x04, 0x00], Schema::WorkerCommand)
+                .unwrap()
+                .contains(66)
+        );
         assert!(matches!(
-            scan_message(&[0x92, 0x04, 0x00], Schema::WorkerCommand),
+            scan_message(&[0x9a, 0x04, 0x00], Schema::WorkerCommand),
             Err(super::ProtocolError::IncompatibleVersion(_))
         ));
         // The reference holds 1-3; an unknown nested field 4 is refused.
@@ -125,6 +130,25 @@ mod merge_contract_tests {
     }
 
     #[test]
+    fn the_egress_policy_holds_a_mode_and_repeated_entries() {
+        // mode 1 (varint), allow 2 (repeated string): tags 0x08 and 0x12.
+        let policy = scan_message(
+            &[0x08, 0x02, 0x12, 0x01, b'a', 0x12, 0x01, b'b'],
+            Schema::WorkerEgressPolicy,
+        )
+        .unwrap();
+        assert_eq!(policy.repeated_field(2).len(), 2);
+        assert!(matches!(
+            scan_message(&[0x1a, 0x00], Schema::WorkerEgressPolicy),
+            Err(super::ProtocolError::IncompatibleVersion(_))
+        ));
+        assert!(matches!(
+            scan_message(&[0x0a, 0x00], Schema::WorkerEgressPolicy),
+            Err(super::ProtocolError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
     fn mixed_toolkit_commands_are_rejected_before_decode() {
         for raw in [
             [0xa2, 0x02, 0x00, 0x82, 0x04, 0x00],
@@ -169,6 +193,8 @@ pub(crate) enum Schema {
     ActorLink,
     /// `GovernedCredentialReferenceV1`, one frozen credential reference (#1119).
     GovernedCredentialReference,
+    /// `WorkerCommandV1.egress_policy` (field 66, ADR-0044 #1490).
+    WorkerEgressPolicy,
 }
 
 #[derive(Clone, Copy)]
@@ -341,8 +367,9 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
             _ => None,
         },
         Schema::WorkerCommand => match field {
-            // 65 is the governed security context reference (#1115).
-            1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 | 65 => Some(length()),
+            // 65 is the governed security context reference (#1115), 66 the
+            // public egress policy (#1490).
+            1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 | 65 | 66 => Some(length()),
             4 | 6..=7 | 21..=22 => Some(varint()),
             // Preserve the complete language-neutral capability oneof.
             32..=36 | 64 => Some(FieldRule {
@@ -398,11 +425,25 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
             1..=13 => Some(length()),
             _ => None,
         },
+        Schema::WorkerEgressPolicy => egress_policy_rule(field),
         Schema::SecurityContextReference
         | Schema::SecurityContext
         | Schema::CallerContext
         | Schema::ActorLink
         | Schema::GovernedCredentialReference => security_context_rule(schema, field),
+    }
+}
+
+/// `WorkerEgressPolicyV1` (#1490): the mode 1 and the repeated entries 2.
+const fn egress_policy_rule(field: u32) -> Option<FieldRule> {
+    match field {
+        1 => Some(varint()),
+        2 => Some(FieldRule {
+            wire_type: 2,
+            oneof: None,
+            repeated: true,
+        }),
+        _ => None,
     }
 }
 

@@ -15,6 +15,7 @@ use serde_json::{Map, Value, json};
 use zeroize::Zeroizing;
 
 use super::config::{ConfluenceApiVersion, ConfluenceCredential, ConfluenceToolkitConfig};
+use crate::egress::BuildForRun as _;
 use crate::toolkits::families::attachment_host::AttachmentHost;
 
 mod attachments;
@@ -390,7 +391,7 @@ pub(in crate::toolkits) trait ConfluenceTransport: Send + Sync {
 }
 
 struct ReqwestConfluenceTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -488,7 +489,7 @@ impl ConfluenceClient {
     pub(in crate::toolkits) fn new(
         config: ConfluenceToolkitConfig,
     ) -> Result<Self, ConfluenceClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -498,7 +499,7 @@ impl ConfluenceClient {
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .referer(false)
             .user_agent(USER_AGENT)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             config,

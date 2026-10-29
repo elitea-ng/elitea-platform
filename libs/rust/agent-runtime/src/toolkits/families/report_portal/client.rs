@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
 use super::config::ReportPortalToolkitConfig;
+use crate::egress::BuildForRun as _;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -244,7 +245,7 @@ pub(in crate::toolkits) trait ReportPortalTransport: Send + Sync {
 }
 
 struct ReqwestReportPortalTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -340,7 +341,7 @@ pub(crate) struct ReportPortalClient {
 
 impl ReportPortalClient {
     pub(crate) fn new(config: ReportPortalToolkitConfig) -> Result<Self, ReportPortalClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -349,7 +350,7 @@ impl ReportPortalClient {
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             config,

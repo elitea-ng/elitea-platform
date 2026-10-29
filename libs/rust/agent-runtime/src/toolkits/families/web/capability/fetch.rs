@@ -132,9 +132,15 @@ fn check_url(url: &reqwest::Url, state: &WebState) -> Result<(), CallEnd> {
     } else {
         url_violation(url, state.config.allow_http, state)
     };
-    violation.map_or(Ok(()), |error| {
-        Err(CallEnd::error(error.code(), error.message()))
-    })
+    if let Some(error) = violation {
+        return Err(CallEnd::error(error.code(), error.message()));
+    }
+    // The run's egress policy (#1490), before any backend: a provider fetch
+    // would carry the URL out of the platform as surely as the direct one.
+    state
+        .egress
+        .check_url(url)
+        .map_err(|refused| CallEnd::error(ProviderError::HostNotAllowed.code(), &refused.message()))
 }
 
 fn resolve_backend(state: &WebState, requested: Option<&str>) -> Result<&'static str, CallEnd> {
