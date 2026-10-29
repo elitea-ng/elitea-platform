@@ -719,6 +719,16 @@
     },
     {
       "file": null,
+      "route": "/admin/app/agent-registry",
+      "targetComponent": "src/pages/admin/AgentRegistry.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "The cross-project agent registry (ADR-0040 decision 1, issue 1497): owners, risk tier and certification with tier, state, owner and project filters, CSV and JSON export. WIRED and NOT snapshotted yet — see the EXEMPT entry in scripts/check-visual-coverage.mjs.",
+      "surface": "admin",
+      "baseline": null
+    },
+    {
+      "file": null,
       "route": "/admin/app/retention",
       "targetComponent": "src/pages/admin/Retention.tsx",
       "theme": "dark",

@@ -1,9 +1,135 @@
 ---
 title: "Agent lifecycle"
-description: "Controls that keep a record of how an agent changed. Every publish creates an immutable release, every draft save is recorded with its author and changes, runs record the release they executed, and an agent can be rolled back to an earlier release."
+description: "Controls that govern how an agent reaches production and stays there. Every agent has a registry record with owners and a risk tier; publishing above the low tier needs an approved change request that passed its evaluation gate; certified agents come due for recertification; external reviews are recorded as attestations; every publish is an immutable release that can be rolled back."
 ---
 
-Agent lifecycle controls record what an agent was at each point in time, who changed it, and which definition a run executed. This page describes the controls of ADR-0040 that are available now.
+Agent lifecycle controls answer four questions about every agent: who owns it and how risky it is, what changed and who approved it, whether it was tested before release, and when it is due for review again. This page describes these controls in the order an agent meets them:
+
+1. [Registry and risk tiers](#registry-and-risk-tiers)
+2. [Change requests and approvals](#change-requests-and-approvals)
+3. [Evaluation gate](#evaluation-gate)
+4. [Releases, revisions and rollback](#releases-revisions-and-rollback)
+5. [Recertification](#recertification)
+6. [Attestations](#attestations)
+
+The tier table, the recertification cadence and the lapse action are platform settings; see [Configure the tier policy](#configure-the-tier-policy).
+
+## Registry and risk tiers
+
+### The risk
+
+An organisation cannot govern agents it cannot list. Without one record per agent, nobody can say which agents exist across projects, who answers for each one, how much harm it could do, or whether anyone reviewed it.
+
+### What is enforced
+
+**Every agent and pipeline has a registry record.** The platform creates it when the agent is created. The record holds:
+
+- a **business owner** and a **technical owner** (platform users);
+- a **risk tier**: `low`, `medium`, `high` or `critical`;
+- the **intended use** and the **out-of-scope use**, as short text;
+- the **data classes** the agent may touch, as labels you choose;
+- the **certification state**: `uncertified`, `certified`, `due`, `lapsed` or `suspended`, with the certified release, the time of certification and the **recertify-by** date.
+
+**The tier decides how much control applies.** See the [tier table](#change-requests-and-approvals). New agents start at `low`, so personal and experimental agents keep a one-step publish.
+
+**Lowering a tier needs the governance role.** An owner, or anyone holding the governance role, may raise a tier. Only a holder of the governance role (`models.applications.governance`) may lower it. Otherwise an author could drop an agent to `low` to skip approval. The refusal is HTTP 403 `tier_lowering_requires_governance`. When the agent has owners, only an owner or the governance role may edit its record (403 `registry_owner_required`).
+
+**Existing agents.** When an install is upgraded, every existing agent gets a record that is `uncertified` at tier `medium`, with the author of its first version as technical owner. Agents in a personal project are the exception: they get tier `low`, because a personal project has one member and nobody else could approve. From then on, publishing a `medium` agent needs a change request.
+
+**One view across projects.** Platform administrators see every agent in **Admin › Agent registry**, filtered by tier, certification state, owner and project, and can export the list as CSV or JSON.
+
+#### Limits
+
+- Data classes are free labels. The platform has no classification catalogue to check them against.
+- An agent with no owners can be edited by anyone allowed to publish it. Set the owners when you raise the tier.
+- Catalog copies of an agent get their own registry record.
+
+## Change requests and approvals
+
+### The risk
+
+A single person who can publish an agent can put an unreviewed definition into production. Change management in a regulated organisation needs a second person, evidence of testing, and a record of who approved what.
+
+### What is enforced
+
+**Above the tier's threshold, publishing needs an approved change request.** A direct publish of such an agent is refused with HTTP 409 `change_request_required`. The author creates a **change request** for a draft version with a summary and submits it. Submitting starts the agent's [evaluation gate](#evaluation-gate). The change request records the candidate version, its latest revision, the gate, the approvals and, after publishing, the release.
+
+**Default tier table:**
+
+| Tier | Approvals | From the governance role | Evaluation gate |
+| --- | --- | --- | --- |
+| low | 0: publish directly | 0 | Not run |
+| medium | 1, not the author | 0 | Runs when the agent has gate suites |
+| high | 1, not the author | 1 | Runs when the agent has gate suites |
+| critical | 2 distinct, neither the author | 1 | Runs when the agent has gate suites |
+
+A platform administrator can raise these numbers (up to 5) in the [tier policy](#configure-the-tier-policy). The numbers in the table are floors: a saved value below them is raised to them.
+
+**Four eyes.** The author of a change request can never approve it (403 `self_approval_refused`). A database constraint repeats this rule, so it holds even if application code is bypassed. Approvals that need the governance role are refused without it (403 `approver_role_required`).
+
+**Approval is blocked until the evidence is in.** An approval is refused while:
+
+- the gate is still running (409 `release_gate_pending`);
+- the gate failed and nobody overrode it (409 `release_gate_failed`, with the failures);
+- a mandatory [attestation](#attestations) is missing or expired (409 `attestation_missing`, with the missing kinds).
+
+**The final approval publishes.** The approval that completes the tier's requirement publishes the candidate in the same transaction and records the [release](#releases-revisions-and-rollback). The change request moves to `published` and the agent becomes `certified`, with a recertify-by date from its tier's cadence.
+
+**One open change request per agent.** A second one is refused (409 `change_request_open`). At submit, the platform records the candidate's draft revision and a digest of everything its release would record: the definition, the attached toolkits with their settings and selected tools, skills and sub-agents, and the configurations the toolkits reference. A recertification certifies the release that is current at submit. If the candidate changes while it is being submitted, the submit is refused (409 `change_request_stale`) and the request stays a draft. If the candidate version was saved again or published after the request was submitted, an attachment changed, or, for a recertification, the agent's current release changed, the approval is refused (409 `change_request_stale`). Withdraw the request and submit a new one, so that approvers review what will be published. The author or a governance role holder can withdraw a request; an approver can reject it with a reason.
+
+**Low-tier publishes are recorded too.** A direct publish of an agent that needs no approval records a self-approved change request, so every release has one.
+
+#### Limits
+
+- Approve, reject and withdraw use the publish permission (`models.applications.publish.post`). There is no separate reviewer permission. Give the publish permission to the people who may review.
+- The project admin role holds the governance role by default. In a project where one person is the only admin, that person cannot approve their own requests, but can approve other people's at any tier.
+- A project cannot set its own, higher minimums. The tier table is platform-wide.
+- Versions published before the upgrade are recorded as change requests of kind `legacy_unreviewed`, already published and uncertified.
+
+## Evaluation gate
+
+### The risk
+
+A change that passes review can still make an agent worse. Without a test run tied to the release, nobody can prove that the release was tested, or which test cases it broke.
+
+### What is enforced
+
+**Gate suites.** Any evaluation dataset of the agent (or of no agent) can be marked as a **release gate suite**, with 1 to 5 criteria, one per scoring dimension:
+
+- **threshold**: the dimension's mean normalised score (0–100) must be at least `min_score`;
+- **no worse than**: the score must not drop more than `max_drop` points below the agent's current release.
+
+One suite can also be marked as the **regression suite**. An agent can have at most 10 gate suites.
+
+**Only the governance role loosens a governed gate.** For an agent whose tier needs approval, the author cannot weaken the gate their own change request is tested against. Unmarking a suite, unsetting the regression flag, removing a criterion, changing a criterion's kind, lowering a `min_score` or raising a `max_drop` needs the governance role (`models.applications.governance`); without it the change is refused with HTTP 403 `governance_role_required`. Adding a suite or a criterion, or making one stricter, stays open to anyone who can edit the dataset and publish the agent.
+
+**What a gate runs.** Submitting a change request runs every gate suite against the candidate. The regression suite, and any suite with a "no worse than" criterion, also runs against the version of the agent's current release. The instructions and model of both are copied when the gate starts, so an edit made while the gate runs does not change what is measured.
+
+**How a gate decides.** When every run has finished:
+
+| Failure | Meaning |
+| --- | --- |
+| `gate_threshold_not_met` | A threshold criterion was not met |
+| `gate_score_regressed` | A score dropped more than `max_drop` |
+| `gate_regression` | Cases that passed on the current release fail on the candidate; each one is listed |
+| `gate_dimension_unscored`, `gate_dimension_incomplete` | A criterion's dimension has no score, or some of its cases errored or were skipped |
+| `gate_run_errored`, `gate_run_cancelled`, `gate_run_missing` | A run did not finish |
+| `gate_suite_not_runnable` | The suite was deleted, has no active case, or its run could not start |
+| `gate_start_failed` | A run of the gate could not be started (the evaluation store or queue failed), or the process starting the runs stopped. The runs already started are cancelled and kept on the gate. Submit again, or ask for an override |
+
+A run that errors or is cancelled fails the gate. It never passes it. An agent with no gate suites passes at once. Once recorded, a gate's outcome cannot change.
+
+**Override.** A holder of the governance role who is not the request's author can accept a failed gate, with a reason of 1 to 200 characters. The gate stays `failed`, and the override is recorded with the person, the time and the reason.
+
+**Scheduled re-evaluation.** A gate suite can be set to re-run every N days against the agent's current release. A scheduled run that fails the suite's criteria makes a certified agent `due` (see [Recertification](#recertification)). The runs are made for the user who last saved the suite's schedule. If that user has lost the permission to run evaluations, the scheduled gate is recorded as failed (`gate_schedule_actor_refused`) and runs nothing, and it does not make the agent due.
+
+#### Limits
+
+- An evaluation run sends each case to the agent's instructions and model in one call, without its tools, toolkits or sub-agents. The gate measures instruction and model changes, not tool behaviour.
+- Gate runs share the evaluation runner's capacity (two runs at a time per instance) and cost model calls like any evaluation run.
+- A gate settles when its runs finish, either when someone reads it or on the next pass of the `main.release_gate` routine (every 5 minutes).
+- A person who can edit the dataset and publish the agent can add or tighten its criteria; loosening a governed agent's gate needs the governance role. Each gate keeps the criteria it ran with, so approvers see them.
+- If a change request is submitted and later withdrawn, the gate's runs still finish and are paid for.
 
 ## Releases, revisions and rollback
 
@@ -29,7 +155,7 @@ A database trigger refuses any change to a release except marking it withdrawn. 
 
 **Runs record their release.** A run of a published agent records the id of the release it executes (`agent_execution_jobs.release_id`). A run can also name a release explicitly (`release_id` on the chat start body); it then executes that release, even a withdrawn one, unless the agent has sub-agents (see Limits).
 
-**Rollback re-points the current release.** A user with the permission to publish (`models.applications.publish.post`) can make an earlier published release current again. New runs then execute that release. Runs already in progress keep the release they started with.
+**Rollback re-points the current release.** A user with the permission to publish (`models.applications.publish.post`) can make an earlier published release current again. A rollback needs no change request, so for an agent whose tier needs approval it also needs the governance role (`models.applications.governance`); without it the rollback is refused with 409 `change_request_required`. New runs then execute that release. Runs already in progress keep the release they started with.
 
 **Drift is refused, not hidden.** When a run executes a release that is not the agent's live version (an explicit release id, or after a rollback), the platform reads the live toolkit settings and configurations and compares them with the release's pins. If any of them changed, the run is refused with HTTP 409 `release_toolkit_drifted`, which names the toolkit and the reason. A rollback to a release whose toolkits drifted is refused the same way. The platform never runs an old release with new toolkit settings without telling you.
 
@@ -46,7 +172,7 @@ A database trigger refuses any change to a release except marking it withdrawn. 
 
 ### Configure and use
 
-Nothing needs to be turned on. To see an agent's history, open the agent, select the **⋮** menu beside the version bar, and select **Release history**. See [Roll back an agent to an earlier release](/how-tos/agents-pipelines/entity-versioning#roll-back-to-an-earlier-release).
+Nothing needs to be turned on. For the steps of each role (author, approver, governance role), see [Publish with approval](/how-tos/agents-pipelines/publishing#publish-with-approval). To see an agent's history, open the agent, select the **⋮** menu beside the version bar, and select **Release history**. See [Roll back an agent to an earlier release](/how-tos/agents-pipelines/entity-versioning#roll-back-to-an-earlier-release).
 
 The same data is available with the API:
 
@@ -54,10 +180,10 @@ The same data is available with the API:
 | --- | --- | --- |
 | `GET /api/v2/elitea_core/application_releases/prompt_lib/{project_id}/{application_id}` | `models.applications.versions.get` | Every release, newest first |
 | `GET /api/v2/elitea_core/application_releases/prompt_lib/{project_id}/{application_id}/{release_id}` | `models.applications.version.details` | One release with its definition, pins and changes against the release before it |
-| `POST /api/v2/elitea_core/application_releases/prompt_lib/{project_id}/{application_id}/{release_id}/rollback` | `models.applications.publish.post` | Body `{"reason": "..."}` (at most 200 characters); answers the releases it moved from and to |
+| `POST /api/v2/elitea_core/application_releases/prompt_lib/{project_id}/{application_id}/{release_id}/rollback` | `models.applications.publish.post`; for an agent whose tier needs approval, also `models.applications.governance` | Body `{"reason": "..."}` (at most 200 characters); answers the releases it moved from and to |
 | `GET /api/v2/elitea_core/version_revisions/prompt_lib/{project_id}/{application_id}/{version_id}` | `models.applications.versions.get` | The version's revisions with their diffs |
 
-A rollback is refused with 400 when the reason is longer than 200 characters, with 404 `release_not_found`, or with 409 and `application_not_published`, `release_already_published`, `release_withdrawn` or `release_toolkit_drifted`.
+A rollback is refused with 400 when the reason is longer than 200 characters, with 404 `release_not_found`, or with 409 and `application_not_published`, `release_already_published`, `release_withdrawn`, `release_toolkit_drifted` or `change_request_required` (an agent whose tier needs approval, rolled back without the governance role).
 
 ### Evidence
 
@@ -84,5 +210,151 @@ A rollback is refused with 400 when the reason is longer than 200 characters, wi
 ### Customer responsibility
 
 - Decide who may publish and roll back agents, and give `models.applications.publish.post` only to them.
-- Keep your change records (tickets, approvals) in your own system, and cite the release id and digest in them. Change requests with approvers in the platform are planned ([issue 1497](https://github.com/elitea-ng/elitea-platform/issues/1497)).
+- Keep links between the platform's change requests and your own change records (tickets) in either direction: cite the change request and release id in your ticket, or put the ticket link in the change request summary.
 - Publish an agent again after you change one of its toolkits, so that its current release matches what runs.
+
+## Recertification
+
+### The risk
+
+An approval is a statement about one point in time. Models are retired, toolkits change, and an agent that passed its tests six months ago may not pass them today. Without a deadline, a certification never expires.
+
+### What is enforced
+
+**A certification has a deadline.** When a change request certifies an agent, its recertify-by date is set from the tier's cadence. The defaults are critical 90 days, high 180 and medium 365. Low-tier agents have no deadline.
+
+**A tier change moves the deadline.** When a certified agent's tier changes, its recertify-by date becomes the time of certification plus the new tier's cadence, or none when the new tier has no cadence. Raising a tier can therefore make an agent due or lapsed at once. When a `due`, `lapsed` or `suspended` agent moves to a tier with no cadence, it returns to `certified` with no deadline and its certification suspension is resumed. Both are recorded as `agent.certification.certified` with the reason `tier_without_cadence`. An agent at a tier with no cadence never lapses by time.
+
+**A certified agent becomes `due`** when:
+
+- its recertify-by date is less than 30 days away (`recertify_window`);
+- a release other than the certified one is published (`new_release`);
+- a toolkit or configuration pinned in the certified release changed (`release_toolkit_drifted`);
+- a [scheduled re-evaluation](#evaluation-gate) failed its criteria (`evaluation_regressed`);
+- someone, or an external tool, marked it due through the API, with a reason (`external_mark`). Only a certified agent can be marked due.
+
+**A `due` or certified agent becomes `lapsed`** when its recertify-by date passes. What happens then is a platform setting (`lapse_action`):
+
+- `warn` (the default): the agent keeps running; its state shows as lapsed in the registry and the agent's Governance dialog.
+- `suspend`: the platform suspends the agent with the [kill switch](/admin/enterprise-controls/runtime-safety), with source `certification`. Its runs are refused with HTTP 409 `agent_certification_lapsed` and its state is `suspended`. Only a holder of the governance role can resume it.
+
+**Recertifying.** Open the agent, select **⋮ › Governance › Change requests**, and select **Start recertification**. This is a change request of kind `recertification` for the agent's current release, with no definition change. It runs the gate again and collects the approvals and attestations the tier requires. Its approval certifies the agent again, sets a new recertify-by date and lifts a certification suspension. A `due`, `lapsed` or `suspended` agent can always be recertified, whatever its tier. At a tier that needs no approval, a recertification still needs one approval from someone other than its author.
+
+The routine `main.agent_recertification` runs every hour (**Admin › Schedules & Tasks**). It checks drift and scheduled evaluations for up to 50 agents per pass, the oldest checked first.
+
+#### Limits
+
+- The platform has no signal for a model being retired. An external tool, or a person, can mark the agent due through the API.
+- Drift and regression checks cover 50 agents per hour, so a deployment with many certified agents notices drift later.
+- Switching `lapse_action` back to `warn` resumes the certification suspensions on the next pass.
+
+## Attestations
+
+### The risk
+
+Some reviews cannot happen inside the platform: enterprise architecture, legal and compliance, model-risk classification, data ownership and data accuracy. If their outcome is not recorded next to the agent, nobody can prove the review happened before release, or notice when it expired.
+
+### What is enforced
+
+**An attestation records a review done elsewhere.** It has:
+
+- a **kind**: `architecture`, `legal`, `model_risk`, `data_owner`, `data_accuracy` or `custom`;
+- a **subject**: an agent, a release, a toolkit or an index;
+- the **attester**, an optional **valid-until** date, an **evidence link** (an `http` or `https` URL, for example a ticket or a document) and a note.
+
+Attestations are never deleted. A revocation is stamped with who revoked it and when.
+
+**Mandatory kinds per tier.** The tier policy can make kinds mandatory. By default, `critical` agents need a `model_risk` and a `legal` attestation. An attestation counts when its subject is the agent, or the agent's current release. A change request for an agent with a missing, expired or revoked mandatory attestation cannot be approved (409 `attestation_missing`).
+
+**Written by people or by your GRC tool.** Anyone holding `lifecycle.attestations.write` can record or revoke an attestation, in the Governance dialog or through the API. Give an API token with this permission to your GRC system, so the outcome of a review is recorded automatically. See [Record an attestation from a GRC tool](#record-an-attestation-from-a-grc-tool).
+
+#### Limits
+
+- The agent's **Attestations** tab lists attestations whose subject is the agent. Attestations on a release, toolkit or index are listed through the API (`GET agent_attestations/prompt_lib/{p}?subject_type=release&subject_id=...`).
+- The platform does not perform or model the reviews. It records that they happened and enforces that they exist.
+- For toolkit and index subjects, the platform does not check that the subject exists.
+- The `custom` kind cannot be made mandatory.
+
+## Configure the tier policy
+
+A platform administrator sets the tier policy in **Admin › Configuration › Agent Lifecycle** (permission `configuration.governance`), or with `PUT /api/v2/admin/plugin_config_values/administration/agent_lifecycle`.
+
+| Setting | Default | Range |
+| --- | --- | --- |
+| `low_approvals`, `low_governance_approvals` | 0, 0 | from the default up to 5 |
+| `medium_approvals`, `medium_governance_approvals` | 1, 0 | from the default up to 5 |
+| `high_approvals`, `high_governance_approvals` | 1, 1 | from the default up to 5 |
+| `critical_approvals`, `critical_governance_approvals` | 2, 1 | from the default up to 5 |
+| `low_recertify_days`, `medium_recertify_days`, `high_recertify_days`, `critical_recertify_days` | 0 (none), 365, 180, 90 | 0 to 1095 |
+| `low_attestations` … `critical_attestations` | critical: `model_risk`, `legal`; others none | kinds except `custom` |
+| `lapse_action` | `warn` | `warn` or `suspend` |
+
+Governance approvals never exceed approvals. A value below the default is raised to the default.
+
+### Permissions
+
+| Permission | Default holders | Allows |
+| --- | --- | --- |
+| `models.applications.publish.post` | Project roles that publish | Create, submit, approve, reject and withdraw change requests; edit the registry record |
+| `models.applications.governance` | Platform `super_admin` and `admin`; project `admin` | Approve where the tier needs the governance role, lower a tier, override a failed gate, withdraw anyone's request |
+| `lifecycle.attestations.write` | Project `admin` | Record and revoke attestations |
+| `lifecycle.registry.mark_due` | Project `admin` | Mark an agent due |
+| `configuration.governance` | Platform administrators | The tier policy and the cross-project registry |
+
+## Governance API
+
+All paths are under `/api/v2/elitea_core`, with `{p}` the project id and `{app}` the agent id.
+
+| Method and path | Permission | Does |
+| --- | --- | --- |
+| `GET`, `PUT agent_registry/prompt_lib/{p}/{app}` | read: `models.applications.versions.get`; write: `models.applications.publish.post` | Read or edit the registry record |
+| `POST agent_registry/prompt_lib/{p}/{app}/mark_due` | `lifecycle.registry.mark_due` | Mark a certified agent due, with a reason |
+| `GET`, `POST change_requests/prompt_lib/{p}/{app}` | read: `models.applications.versions.get`; create: `models.applications.publish.post` | List, or create a draft change request |
+| `GET change_requests/prompt_lib/{p}/{app}/{cr}` | `models.applications.versions.get` | One request with its approvals and gate state |
+| `POST change_requests/prompt_lib/{p}/{app}/{cr}/submit`, `approve`, `reject`, `withdraw` | `models.applications.publish.post` | Move the request |
+| `POST change_requests/prompt_lib/{p}/{app}/{cr}/gate_override` | `models.applications.governance` | Accept a failed gate, with a reason |
+| `GET`, `POST agent_attestations/prompt_lib/{p}`; `POST agent_attestations/prompt_lib/{p}/{id}/revoke` | read: `models.applications.versions.get`; write: `lifecycle.attestations.write` | List, record or revoke attestations |
+| `GET release_gate_suites/prompt_lib/{p}/{app}`; `PUT release_gate_suites/prompt_lib/{p}/{app}/{dataset}` | read: `models.applications.evaluation.dataset.read`; write: `…evaluation.dataset.update` and `models.applications.publish.post`, and `models.applications.governance` to loosen the gate of an agent whose tier needs approval | Read or set the gate suites |
+| `GET release_gates/prompt_lib/{p}/{app}[/{gate}]` | `models.applications.evaluation.run.read` | Gates with their runs, results, failures and override |
+| `GET /api/v2/admin/agent_registry` | `configuration.governance` | The cross-project registry; `tier`, `state`, `owner_id`, `project_id`, `limit`, `offset`; `format=csv` exports up to 10,000 rows |
+
+### Record an attestation from a GRC tool
+
+Create an API token for a service user that holds `lifecycle.attestations.write` in the project, then have your GRC tool call:
+
+```bash
+curl -X POST "$ELITEA_URL/api/v2/elitea_core/agent_attestations/prompt_lib/7" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{
+        "kind": "model_risk",
+        "subject_type": "agent",
+        "subject_id": "31",
+        "attester": "Model Risk Committee",
+        "valid_until": "2027-10-29T00:00:00Z",
+        "evidence_url": "https://grc.example.com/reviews/MR-2291",
+        "note": "Tier 2 model risk; approved for internal use"
+      }'
+```
+
+To mark an agent due from an ML-monitoring tool, call `POST agent_registry/prompt_lib/7/31/mark_due` with `{"reason": "output drift above threshold"}`.
+
+## Governance evidence
+
+Every change to the registry, a change request, a certification or an attestation is written to the tamper-evident security audit log, in the same transaction as the change, with the event type `ai.elitea.security.v1.agent.lifecycle`:
+
+| Action | When |
+| --- | --- |
+| `agent.change.submitted`, `approved`, `rejected`, `withdrawn`, `published` | A change request moves |
+| `agent.change.gate_overridden` | A failed gate is accepted, with the reason |
+| `agent.registry.tier_changed` | A tier changes |
+| `agent.certification.certified`, `due`, `lapsed`, `suspended` | The certification state moves, with the reason codes |
+| `agent.attestation.recorded`, `revoked` | An attestation is written or revoked |
+
+Changes to a dataset's gate settings are recorded in the [audit trail](/admin/audit-trail) as `agent.gate_suite.updated`. Both logs reach your SIEM through the [audit export](/admin/enterprise-controls/audit-evidence-and-retention). The registry export is the inventory to hand to an auditor; the change request read shows, for one release, the candidate, its gate with the criteria it ran with, the approvals and the release that was published.
+
+## What stays with you
+
+- Classify each agent's risk and set its tier. The platform enforces the controls of the tier you choose; it does not decide the tier.
+- Perform the architecture, legal, model-risk and data reviews in your own process and record their outcome as attestations.
+- Write the evaluation datasets and choose the pass criteria. The platform runs them; it does not ship a fairness or accuracy methodology.
+- Monitor production traffic for statistical drift in your ML-monitoring tool, which can mark agents due through the API.

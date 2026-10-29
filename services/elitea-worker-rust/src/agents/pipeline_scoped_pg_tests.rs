@@ -27,7 +27,7 @@
 
 use super::restart_pg_tests::{
     CHECKPOINT_MIGRATION, PHASE_DEADLINE, authorized_turn, connect, model_requests, pending_card,
-    run_phase,
+    run_probed_phase,
 };
 use super::scoped_tests::{
     STATIC_GRAPH, Saved, answer, asking_agent, child_pipeline_yaml, ordinary_agent_request,
@@ -162,7 +162,7 @@ async fn run_scenario(url: &str, scenario: &str, phases: &[&str]) -> IsolatedPos
             .env(SCENARIO_ENV, scenario)
             .env(PHASE_ENV, phase)
             .env(PENDING_ENV, &pending);
-        let output = run_phase(phase, command);
+        let output = run_probed_phase(&db, phase, command).await;
         let stdout = String::from_utf8_lossy(&output.stdout);
         if *phase == "crash" {
             // The Worker dies inside the approved tool, after its dispatch.

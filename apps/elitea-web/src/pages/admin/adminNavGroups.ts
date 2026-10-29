@@ -16,6 +16,7 @@
 import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalanceWalletOutlined';
 import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
+import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
 import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
@@ -234,6 +235,13 @@ export function navGroups(): readonly AdminNavGroup[] {
           // a name this platform's administration mode issues — see this
           // module's header on why an unissuable name is a nav item that
           // disappears for good.
+          anyPermission: ['configuration.governance'],
+        },
+        {
+          id: 'agent-registry',
+          path: '/agent-registry',
+          label: t('pages.admin.nav.agentRegistry', 'Agent registry'),
+          icon: FactCheckOutlinedIcon,
           anyPermission: ['configuration.governance'],
         },
         {

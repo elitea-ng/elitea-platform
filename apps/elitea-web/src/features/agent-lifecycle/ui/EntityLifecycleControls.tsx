@@ -8,12 +8,17 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { handleCopy } from '@/shared/lib/clipboard';
 import { t } from '@/shared/i18n';
 
+import { useAgentRegistry } from '../api/governanceApi';
+import { isChangeRequestRequired } from '../lib/governanceRefusal';
 import { buildEntityShareLink, getLifecycleBasename, type LifecycleEntity } from '../lib/shareLink';
 import { lifecycleErrorMessage, useEntityLifecycle } from '../model/useEntityLifecycle';
 import { EntityLifecycleMenu } from './EntityLifecycleMenu';
 import { ForkEntityDialog, type ForkTargetProject } from './ForkEntityDialog';
+import { GovernanceDialog } from './GovernanceDialog';
+import { tierNeedsChangeRequest } from './governanceLabels';
 import { PublishVersionDialog } from './PublishVersionDialog';
 import { ReleaseHistoryDialog } from './ReleaseHistoryDialog';
+import { RequestPublishDialog } from './RequestPublishDialog';
 
 /**
  * The lifecycle controls, mounted on BOTH editors.
@@ -67,7 +72,15 @@ export function EntityLifecycleControls({
   const [publishOpen, setPublishOpen] = useState(false);
   const [forkOpen, setForkOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [governanceOpen, setGovernanceOpen] = useState(false);
+  const [requestOpen, setRequestOpen] = useState(false);
   const lifecycle = useEntityLifecycle(projectId, entityId);
+  // The risk tier decides what Publish opens (ADR-0040 decision 3): low
+  // publishes directly, medium and above request approval. An unread tier
+  // falls back to the direct wizard, whose 409 change_request_required
+  // reopens the request dialog anyway.
+  const registry = useAgentRegistry(projectId, numericId(entityId), entity === 'agents');
+  const riskTier = registry.data?.risk_tier;
 
   const share = useCallback(
     (versionId: number | undefined) => {
@@ -124,6 +137,7 @@ export function EntityLifecycleControls({
         onShareEntity={() => share(undefined)}
         {...entityActionHandlers(onExport, onDelete)}
         {...releaseHistoryHandler(entity, () => setHistoryOpen(true))}
+        {...governanceHandler(entity, () => setGovernanceOpen(true))}
         onFork={() => {
           setError(undefined);
           setNotice(undefined);
@@ -136,7 +150,7 @@ export function EntityLifecycleControls({
                 setNotice(undefined);
                 lifecycle.validate.reset();
                 lifecycle.publish.reset();
-                setPublishOpen(true);
+                (tierNeedsChangeRequest(riskTier) ? setRequestOpen : setPublishOpen)(true);
               },
               onUnpublish: () => {
                 setError(undefined);
@@ -176,10 +190,34 @@ export function EntityLifecycleControls({
                     : t('features.agentLifecycle.notice.publishedToCatalog', 'This version is published to the Catalog.'),
                 );
               },
-              onError: (cause) => setError(lifecycleErrorMessage(cause)),
+              onError: (cause) => {
+                // The tier was raised, or read as low, after the menu
+                // opened: the same request dialog, not a raw 409.
+                if (!isChangeRequestRequired(cause)) {
+                  setError(lifecycleErrorMessage(cause));
+                  return;
+                }
+                setPublishOpen(false);
+                void registry.refetch();
+                setRequestOpen(true);
+              },
             },
           );
         }}
+      />
+      <RequestPublishDialog
+        open={requestOpen}
+        projectId={projectId}
+        applicationId={numericId(entityId)}
+        versionId={versionId}
+        riskTier={riskTier}
+        onClose={() => setRequestOpen(false)}
+      />
+      <GovernanceDialog
+        open={governanceOpen}
+        projectId={projectId}
+        applicationId={numericId(entityId)}
+        onClose={() => setGovernanceOpen(false)}
       />
       <ReleaseHistoryDialog
         open={historyOpen}
@@ -242,6 +280,11 @@ function entityActionHandlers(
 /** Release history exists for agents only: a pipeline is never published. */
 function releaseHistoryHandler(entity: LifecycleEntity, open: () => void): { onReleaseHistory?: () => void } {
   return entity === 'agents' ? { onReleaseHistory: open } : {};
+}
+
+/** Governance exists for agents only, like release history. */
+function governanceHandler(entity: LifecycleEntity, open: () => void): { onGovernance?: () => void } {
+  return entity === 'agents' ? { onGovernance: open } : {};
 }
 
 function numericId(id: string | undefined): number | undefined {

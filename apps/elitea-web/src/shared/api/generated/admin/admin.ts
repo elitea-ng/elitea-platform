@@ -57,6 +57,8 @@ import type {
   AgentIdentityBinding,
   AgentIdentityBindingCreate,
   AgentIdentityBindingListResponse,
+  AgentLifecycleRefusal,
+  AgentRegistryList,
   AgentToolkitPin,
   AgentToolkitPinRequest,
   BackgroundJobListResponse,
@@ -98,6 +100,7 @@ import type {
   LegalHoldCreate,
   LegalHoldListResponse,
   LegalHoldRelease,
+  ListAdminAgentRegistryParams,
   ListAdminPublishedAgentsParams,
   ListAgentIdentityBindingsParams,
   ListBackgroundJobsParams,
@@ -4499,6 +4502,234 @@ export function useCancelBackgroundJob<
     params,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listAdminAgentRegistryResponse200ApplicationJson = {
+  data: AgentRegistryList;
+  status: 200;
+};
+
+export type listAdminAgentRegistryResponse200TextCsv = {
+  data: string;
+  status: 200;
+};
+
+export type listAdminAgentRegistryResponse400 = {
+  data: AgentLifecycleRefusal;
+  status: 400;
+};
+
+export type listAdminAgentRegistryResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listAdminAgentRegistryResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listAdminAgentRegistryResponseSuccess = (
+  | listAdminAgentRegistryResponse200ApplicationJson
+  | listAdminAgentRegistryResponse200TextCsv
+) & {
+  headers: Headers;
+};
+export type listAdminAgentRegistryResponseError = (
+  | listAdminAgentRegistryResponse400
+  | listAdminAgentRegistryResponse401
+  | listAdminAgentRegistryResponse403
+) & {
+  headers: Headers;
+};
+
+export type listAdminAgentRegistryResponse =
+  listAdminAgentRegistryResponseSuccess | listAdminAgentRegistryResponseError;
+
+export const getListAdminAgentRegistryUrl = (
+  params?: ListAdminAgentRegistryParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/agent_registry?${stringifiedParams}`
+    : `/admin/agent_registry`;
+};
+
+/**
+ * The cross-project agent registry (ADR-0040 decision 1), ordered by project and agent. JSON pages of at most 500 rows, or with format=csv a CSV export of at most 10000 rows (limit and offset do not apply). Gated on `configuration.governance` in the administration mode.
+ * @summary List the agent registry across projects
+ */
+export const listAdminAgentRegistry = async (
+  params?: ListAdminAgentRegistryParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listAdminAgentRegistryResponse> => {
+  return eliteaFetch<listAdminAgentRegistryResponse>(
+    getListAdminAgentRegistryUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListAdminAgentRegistryQueryKey = (
+  params?: ListAdminAgentRegistryParams,
+) => {
+  return [`/admin/agent_registry`, ...(params ? [params] : [])] as const;
+};
+
+export const getListAdminAgentRegistryQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAdminAgentRegistry>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  params?: ListAdminAgentRegistryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminAgentRegistry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListAdminAgentRegistryQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAdminAgentRegistry>>
+  > = ({ signal }) =>
+    listAdminAgentRegistry(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAdminAgentRegistry>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAdminAgentRegistryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAdminAgentRegistry>>
+>;
+export type ListAdminAgentRegistryQueryError =
+  AgentLifecycleRefusal | N401Response | N403Response;
+
+export function useListAdminAgentRegistry<
+  TData = Awaited<ReturnType<typeof listAdminAgentRegistry>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  params: undefined | ListAdminAgentRegistryParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminAgentRegistry>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminAgentRegistry>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminAgentRegistry>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAdminAgentRegistry<
+  TData = Awaited<ReturnType<typeof listAdminAgentRegistry>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  params?: ListAdminAgentRegistryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminAgentRegistry>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminAgentRegistry>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminAgentRegistry>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAdminAgentRegistry<
+  TData = Awaited<ReturnType<typeof listAdminAgentRegistry>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  params?: ListAdminAgentRegistryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminAgentRegistry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the agent registry across projects
+ */
+
+export function useListAdminAgentRegistry<
+  TData = Awaited<ReturnType<typeof listAdminAgentRegistry>>,
+  TError = AgentLifecycleRefusal | N401Response | N403Response,
+>(
+  params?: ListAdminAgentRegistryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdminAgentRegistry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListAdminAgentRegistryQueryOptions(params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

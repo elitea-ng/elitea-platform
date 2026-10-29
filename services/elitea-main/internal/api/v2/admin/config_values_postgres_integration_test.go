@@ -750,6 +750,10 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 	//	run_caps          → platformconfig.LoadRunCaps through a cached reader:
 	//	                    the control plane's lease renewal cancels an agent
 	//	                    run past max_wall_seconds (ADR-0041 decision 3)
+	//	agent_lifecycle   → platformconfig.LoadAgentLifecyclePolicy: every
+	//	                    change request submit and approval, every direct
+	//	                    publish (does the tier need approval?) and every
+	//	                    recertification pass (ADR-0040 decisions 3 and 5)
 	want := map[string]bool{
 		"resources": true, "mcp_configuration": true, "branding": true,
 		"agent_publishing": true, "skill_publishing": true,
@@ -769,6 +773,9 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		"session_policy": true,
 		// ADR-0041 decision 3 (#1496, #1498): every agent lease renewal.
 		"run_caps": true,
+		// ADR-0040 decisions 3 and 5 (#1497): publish, change requests and
+		// the recertification routine.
+		"agent_lifecycle": true,
 	}
 	for id := range want {
 		if !available[id] {

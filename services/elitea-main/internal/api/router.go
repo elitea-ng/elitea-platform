@@ -27,6 +27,7 @@ import (
 	scimapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/scim"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
+	v2agentlifecycle "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentlifecycle"
 	v2agentreleases "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentreleases"
 	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2apps "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applications"
@@ -65,6 +66,7 @@ import (
 	v2projectinfo "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
 	v2projects "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projects"
 	v2promptcontextreads "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
+	v2releasegates "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/releasegates"
 	v2retention "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/retention"
 	v2safety "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/safety"
 	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
@@ -96,6 +98,7 @@ import (
 	platformauth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/runtoken"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/buildinfo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/events"
@@ -110,6 +113,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/releasegate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimclient"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimdirectory"
 	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
@@ -437,6 +441,14 @@ type RouterConfig struct {
 	// invisibly absent. The run START route reports the row it wrote either
 	// way, so a queued run is never claimed to be running.
 	EvalOrchestrator v2evaluation.Enqueuer
+	// ReleaseGate is the evaluation release gate (ADR-0040 decision 4). Nil
+	// leaves its four routes registered, answering 503.
+	ReleaseGate *releasegate.Gate
+	// SuspensionChanged is the kill switch gate's invalidation
+	// (safety.Gate.Notify). Agent lifecycle governance calls it after a
+	// recertification resumed a certification suspension. Nil: the
+	// gate's snapshot age applies.
+	SuspensionChanged func(id int64)
 	// OnProjectProvisioner, when set, is called once with the one shared project
 	// provisioner, after it is built. The process uses it to start the
 	// project-deletion reconciler (#1211) over the same provisioner the routes
@@ -2073,9 +2085,23 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	if cfg.Pool != nil {
 		agentReleases, _ = dbrepos.NewAgentReleases(cfg.Pool)
 	}
+	// Agent lifecycle governance (ADR-0040 decisions 1, 3, 5 and 6): the
+	// publish route asks it whether the agent's tier allows a direct
+	// publish, and a change request's final approval publishes through
+	// the publish handler. Without a pool the store stays nil and the
+	// lifecycle routes answer 503.
+	var agentLifecycle *dbrepos.AgentLifecycle
+	if cfg.Pool != nil {
+		var lifecycleGate agentlifecycle.ReleaseGate = agentlifecycle.NoGate{}
+		if cfg.ReleaseGate != nil {
+			lifecycleGate = releasegate.LifecycleGate{Gate: cfg.ReleaseGate}
+		}
+		agentLifecycle, _ = dbrepos.ComposeAgentLifecycle(cfg.Pool, lifecycleGate, cfg.SuspensionChanged)
+	}
 	coreHandler := v2core.NewHandler(
 		cfg.Pool,
 		v2core.WithReleases(agentReleases),
+		v2core.WithPublishGovernor(agentLifecycle),
 		v2core.WithMemoryUserJournal(memoryUserJournal),
 		v2core.WithPermissionResolver(permissionResolver),
 		v2core.WithObjectStore(cfg.ObjectStore),
@@ -2090,6 +2116,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithEvents(cfg.DomainEvents),
 		v2core.WithPublishAIValidation(publishAIValidator(cfg.PredictCompleter)),
 	)
+	agentLifecycle.ComposePublisher(coreHandler)
 
 	// The MCP server (issue 252). Outside the /api/v2 group for the reasons in
 	// mountMCPServerRoutes.
@@ -3054,6 +3081,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(suspend).Post(v2safety.AdminResumePath, suspensions.AdminResume)
 				}
 
+				// The cross-project agent registry (ADR-0040 decision 1),
+				// JSON or CSV, behind configuration.governance like the
+				// Agent Lifecycle section.
+				r.With(central("configuration.governance")).
+					Get(v2agentlifecycle.AdminRegistryPath, v2agentlifecycle.NewHandler(agentLifecycle, nil).AdminRegistry)
+
 				// Regular app admin endpoints (with projectID)
 				//
 				// #130: POST/PUT/DELETE used to be mounted onto coreHandler.Users
@@ -4014,6 +4047,28 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Get("/eval_results/prompt_lib/{projectID}/{runID}", runHandler.Results)
 				}
 
+				// The evaluation release gate (ADR-0040 decision 4). Marking
+				// a dataset as a gate suite changes what a release must pass,
+				// so the write takes the publish permission as well as the
+				// dataset update permission; a write that loosens the gate
+				// of an agent whose tier needs approval also takes the
+				// governance role (resolved in the handler). The reads take
+				// the evaluation reads. A gate is started and overridden by
+				// the change request flow, not by a route.
+				{
+					gates := v2releasegates.NewHandler(cfg.ReleaseGate, v2releasegates.WithGovernance(agentLifecycle,
+						apimw.HoldsResolvedPermission(coreResolver, platformauth.PermissionModeDefault, agentlifecycle.GovernancePermission)))
+					r.With(evaluationGate(v2evaluation.PermissionDatasetRead)).
+						Get(v2releasegates.SuitesPath, gates.ListSuites)
+					r.With(evaluationGate(v2evaluation.PermissionDatasetUpdate),
+						projectPermission("models.applications.publish.post")).
+						Put(v2releasegates.SuitePath, gates.PutSuite)
+					r.With(evaluationGate(v2evaluation.PermissionRunRead)).
+						Get(v2releasegates.GatesPath, gates.ListGates)
+					r.With(evaluationGate(v2evaluation.PermissionRunRead)).
+						Get(v2releasegates.GatePath, gates.GetGate)
+				}
+
 				// Conversations
 				if cfg.ConvsRepo != nil {
 					// S20a: chat attachment byte path — WithPool/WithObjectStore/
@@ -4383,9 +4438,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Post("/unpublish/prompt_lib/{projectID}/{versionID}", coreHandler.Unpublish)
 				// Agent releases and draft revisions (ADR-0040 decision 2).
 				// A rollback changes what the agent runs, so it takes the
-				// publish permission; the reads take the version reads'.
+				// publish permission, and for an agent whose tier needs
+				// approval the governance role too (resolved in the
+				// handler); the reads take the version reads'.
 				{
-					releases := v2agentreleases.NewHandler(agentReleases)
+					releases := v2agentreleases.NewHandler(agentReleases, v2agentreleases.WithGovernance(agentLifecycle,
+						apimw.HoldsResolvedPermission(coreResolver, platformauth.PermissionModeDefault, agentlifecycle.GovernancePermission)))
 					r.With(projectPermission("models.applications.versions.get")).
 						Get(v2agentreleases.ReleasesPath, releases.List)
 					r.With(projectPermission("models.applications.version.details")).
@@ -4393,6 +4451,37 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(requirePublish).Post(v2agentreleases.RollbackPath, releases.Rollback)
 					r.With(projectPermission("models.applications.versions.get")).
 						Get(v2agentreleases.RevisionsPath, releases.Revisions)
+				}
+				// Agent lifecycle governance (ADR-0040 decisions 1, 3, 5 and
+				// 6). The reads take the version reads' permission; a change
+				// request and a registry edit take the publish permission.
+				// The governance role (models.applications.governance) is
+				// resolved in the handler where a decision depends on it,
+				// and gates the gate override route. Attestations and
+				// mark-due take their own permissions, for a GRC or
+				// monitoring tool's API token.
+				{
+					lifecycle := v2agentlifecycle.NewHandler(agentLifecycle, apimw.HoldsResolvedPermission(
+						coreResolver, platformauth.PermissionModeDefault, agentlifecycle.GovernancePermission))
+					readVersions := projectPermission("models.applications.versions.get")
+					r.With(readVersions).Get(v2agentlifecycle.RegistryPath, lifecycle.GetRegistry)
+					r.With(requirePublish).Put(v2agentlifecycle.RegistryPath, lifecycle.UpdateRegistry)
+					r.With(projectPermission(agentlifecycle.MarkDuePermission)).
+						Post(v2agentlifecycle.MarkDuePath, lifecycle.MarkDue)
+					r.With(readVersions).Get(v2agentlifecycle.ChangeRequestsPath, lifecycle.ListChangeRequests)
+					r.With(requirePublish).Post(v2agentlifecycle.ChangeRequestsPath, lifecycle.CreateChangeRequest)
+					r.With(readVersions).Get(v2agentlifecycle.ChangeRequestPath, lifecycle.GetChangeRequest)
+					r.With(requirePublish).Post(v2agentlifecycle.SubmitPath, lifecycle.SubmitChangeRequest)
+					r.With(requirePublish).Post(v2agentlifecycle.ApprovePath, lifecycle.ApproveChangeRequest)
+					r.With(requirePublish).Post(v2agentlifecycle.RejectPath, lifecycle.RejectChangeRequest)
+					r.With(requirePublish).Post(v2agentlifecycle.WithdrawPath, lifecycle.WithdrawChangeRequest)
+					r.With(projectPermission(agentlifecycle.GovernancePermission)).
+						Post(v2agentlifecycle.GateOverridePath, lifecycle.OverrideGate)
+					r.With(readVersions).Get(v2agentlifecycle.AttestationsPath, lifecycle.ListAttestations)
+					r.With(projectPermission(agentlifecycle.AttestationsWritePermission)).
+						Post(v2agentlifecycle.AttestationsPath, lifecycle.RecordAttestation)
+					r.With(projectPermission(agentlifecycle.AttestationsWritePermission)).
+						Post(v2agentlifecycle.RevokeAttestPath, lifecycle.RevokeAttestation)
 				}
 				r.With(requirePublish).
 					Get("/publish_validate/prompt_lib/{projectID}/{versionID}", coreHandler.PublishValidate)

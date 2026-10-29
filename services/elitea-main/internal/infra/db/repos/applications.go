@@ -499,6 +499,16 @@ func (r *ApplicationsRepo) Create(ctx context.Context, req applications.CreateRe
 		app.Versions = []applications.Version{created}
 	}
 
+	// ADR-0040 decision 1: a new agent has a registry record from its
+	// creation, tier low, its author as the owner.
+	if projectID, perr := strconv.ParseInt(req.ProjectID, 10, 64); perr == nil {
+		if applicationID, aerr := strconv.ParseInt(app.ID, 10, 64); aerr == nil {
+			if err := EnsureRegistryTx(ctx, tx, projectID, applicationID, req.AuthorID.Int64()); err != nil {
+				return applications.Application{}, err
+			}
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return applications.Application{}, fmt.Errorf("applications: create: commit: %w", err)
 	}

@@ -101,6 +101,15 @@ const tokenBindingMigrationPath = "shared/0071_token_project_binding.sql"
 // depends on no other schema and every statement in it is guarded.
 const agentReleasesMigrationPath = "shared/0198_agent_releases.sql"
 
+// agentLifecycleMigrationPath is shared 0204 (ADR-0040 decisions 1, 3, 5
+// and 6): every agent publish reads the agent's registry row and records a
+// change request in the publish transaction, so a database without it
+// refuses every publish with 42P01. It depends on 0198 (the release
+// foreign keys), which this list applies first; every other dependency
+// (tenant schemas, centry.project, auth_core) is guarded, and its backfill
+// runs once (elitea_lifecycle.lifecycle_backfills).
+const agentLifecycleMigrationPath = "shared/0204_agent_lifecycle_governance.sql"
+
 // dumpGuardExemptMigrations are the ledgered shared files RunMigrations applies
 // itself, in order. Every one of them MUST be idempotent and MUST tolerate a
 // database that already holds its objects: the pool.Exec below leaves NO ledger
@@ -125,6 +134,8 @@ var dumpGuardExemptMigrations = []string{
 	meteredOperationsMigrationPath,
 	tokenBindingMigrationPath,
 	agentReleasesMigrationPath,
+	// After 0198: its foreign keys name 0198's releases.
+	agentLifecycleMigrationPath,
 }
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {

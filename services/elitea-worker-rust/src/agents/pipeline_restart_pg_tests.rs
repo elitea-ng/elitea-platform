@@ -174,7 +174,7 @@ async fn postgres_two_nested_agent_pauses_resume_across_process_replacement() {
             .env(DATABASE_ENV, &db.database_name)
             .env(PHASE_ENV, phase)
             .env(PENDING_ENV, &pending);
-        let output = run_phase(phase, command);
+        let output = run_probed_phase(&db, phase, command).await;
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
             output.status.success(),
@@ -224,6 +224,85 @@ pub(crate) fn run_phase(phase: &str, mut command: std::process::Command) -> std:
         panic!("{phase} process did not finish within {PHASE_DEADLINE:?}");
     };
     output.expect("wait for child test process")
+}
+
+/// How often the parent samples the isolated database for a blocked lock wait.
+const BLOCKER_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Every lock wait in the isolated database older than one second, with its holder: the pid,
+/// state, transaction and backend start, client port and last query of each. A holder whose
+/// backend started before the phase began belongs to an earlier phase's process.
+const BLOCKED_SQL: &str = r"
+SELECT format(
+    'waiter pid=%s waited=%s query=%L | holder pid=%s state=%s backend_start=%s xact_start=%s state_change=%s client_port=%s query=%L',
+    waiter.pid, clock_timestamp() - waiter.state_change, left(waiter.query, 200),
+    holder.pid, holder.state, holder.backend_start, holder.xact_start, holder.state_change,
+    holder.client_port, left(holder.query, 200))
+FROM pg_stat_activity AS waiter
+CROSS JOIN LATERAL unnest(pg_blocking_pids(waiter.pid)) AS blocking(pid)
+JOIN pg_stat_activity AS holder ON holder.pid = blocking.pid
+WHERE waiter.datname = $1
+  AND waiter.wait_event_type = 'Lock'
+  AND clock_timestamp() - waiter.state_change > interval '1 second'
+";
+
+/// [`run_phase`] while sampling the phase's isolated database for blocked lock waits.
+///
+/// A phase that fails on a lock timeout (`session.storage_unavailable` after the 10 s writer
+/// lock bound) has already lost its holder by the time it exits, so the parent records the
+/// holder while the wait is live and appends it to the child's stderr, which every phase
+/// assertion prints.
+pub(crate) async fn run_probed_phase(
+    db: &IsolatedPostgres,
+    phase: &str,
+    command: std::process::Command,
+) -> std::process::Output {
+    let phase_start = sqlx::query_scalar::<_, String>("SELECT clock_timestamp()::text")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap_or_default();
+    let name = phase.to_owned();
+    let mut child = tokio::task::spawn_blocking(move || run_phase(&name, command));
+    let mut blocked = std::collections::BTreeMap::<(i64, i64), String>::new();
+    let mut output = loop {
+        tokio::select! {
+            joined = &mut child => break joined.expect("phase thread"),
+            () = tokio::time::sleep(BLOCKER_POLL) => {
+                if let Ok(reports) = sqlx::query_scalar::<_, String>(BLOCKED_SQL)
+                    .bind(&db.database_name)
+                    .fetch_all(&db.pool)
+                    .await
+                {
+                    for report in reports {
+                        let key = blocker_key(&report);
+                        blocked.insert(key, report);
+                    }
+                }
+            }
+        }
+    };
+    if !blocked.is_empty() {
+        output.stderr.extend_from_slice(
+            format!(
+                "\nblocked lock waits (phase started {phase_start}):\n{}\n",
+                blocked.into_values().collect::<Vec<_>>().join("\n")
+            )
+            .as_bytes(),
+        );
+    }
+    output
+}
+
+/// The (waiter, holder) pid pair of one report, so a wait sampled many times is reported once.
+fn blocker_key(report: &str) -> (i64, i64) {
+    let pid_after = |marker: &str| {
+        report
+            .split_once(marker)
+            .and_then(|(_, rest)| rest.split_whitespace().next())
+            .and_then(|pid| pid.parse().ok())
+            .unwrap_or_default()
+    };
+    (pid_after("waiter pid="), pid_after("holder pid="))
 }
 
 /// The child activations that wrote to the persisted session need distinct invocation ids:

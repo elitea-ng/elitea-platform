@@ -118,6 +118,14 @@ const ITEMS = [
     heading: 'LLM Governance',
     path: '/admin/app/governance',
   },
+  // Agent registry (ADR-0040 decision 1, issue 1497) shares LLM Governance's
+  // gate, `configuration.governance`, so it renders for the same persona.
+  {
+    id: 'agent-registry',
+    label: 'Agent registry',
+    heading: 'Agent registry',
+    path: '/admin/app/agent-registry',
+  },
   // Budgets renders for this persona because shared migration 0062 grants
   // `models.admin.project_budgets.view` to the administration `admin` role,
   // and `apps/elitea-web/scripts/e2e-stack.sh` gives e2e-admin that role. The

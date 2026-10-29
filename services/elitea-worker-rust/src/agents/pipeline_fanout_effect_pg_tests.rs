@@ -29,7 +29,7 @@
 //! The same three cases run with inline LLM branches (T-2A D1): each branch is
 //! an `llm` node offered the same MCP tool, with its own model checkpoint.
 
-use super::restart_pg_tests::{CHECKPOINT_MIGRATION, connect, model_requests, run_phase};
+use super::restart_pg_tests::{CHECKPOINT_MIGRATION, connect, model_requests, run_probed_phase};
 use super::*;
 use crate::protocol::control::test_session_authority_for_reclaim;
 use crate::state::postgres_session_tests::{IsolatedPostgres, install_schema};
@@ -266,6 +266,29 @@ fn saved_runtime_with(
     details: Value,
     second: Option<Value>,
 ) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
+    saved_runtime_on(outcomes, details, second, test_model_gateway_config())
+}
+
+/// [`saved_runtime`] for a script holding [`TestModelGatewayOutcome::ResponseAfter`]
+/// replies. A gated reply waits for the test to decide a card from its frame,
+/// which on a loaded runner can take longer than the fake's 1 s header
+/// deadline; that deadline would turn the test's own reaction time into a
+/// failed branch, so the gated script is bounded by the test instead.
+fn gated_saved_runtime(
+    outcomes: Vec<TestModelGatewayOutcome>,
+    details: Value,
+) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
+    let mut config = test_model_gateway_config();
+    config.response_header_timeout = Duration::from_secs(60);
+    saved_runtime_on(outcomes, details, None, config)
+}
+
+fn saved_runtime_on(
+    outcomes: Vec<TestModelGatewayOutcome>,
+    details: Value,
+    second: Option<Value>,
+    gateway: crate::transport::openai_compatible_facade::ModelGatewayConfig,
+) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
     let runtime = RuntimeContextClient::with_rpc(
         crate::transport::input_content::content_fake::Routes(SavedAgentVersions {
             details,
@@ -281,8 +304,8 @@ fn saved_runtime_with(
         },
     )
     .expect("saved-version runtime-context fixture");
-    let (gateway, captured) = test_model_gateway_client(outcomes, test_model_gateway_config())
-        .expect("scripted model gateway");
+    let (gateway, captured) =
+        test_model_gateway_client(outcomes, gateway).expect("scripted model gateway");
     (
         Arc::new(PlatformClient::new(Arc::new(runtime))),
         Arc::new(ModelFacade::from_gateway(gateway)),
@@ -298,7 +321,28 @@ fn assembler(
     connector: Arc<dyn McpConnector>,
     details: Value,
 ) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
-    let (platform, model_facade, captured) = saved_runtime(outcomes, details);
+    assembler_on(pool, saved_runtime(outcomes, details), connector)
+}
+
+/// [`assembler`] over a [`gated_saved_runtime`] script.
+fn gated_assembler(
+    pool: &sqlx::PgPool,
+    outcomes: Vec<TestModelGatewayOutcome>,
+    connector: Arc<dyn McpConnector>,
+    details: Value,
+) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
+    assembler_on(pool, gated_saved_runtime(outcomes, details), connector)
+}
+
+fn assembler_on(
+    pool: &sqlx::PgPool,
+    (platform, model_facade, captured): (
+        Arc<PlatformClient>,
+        Arc<ModelFacade>,
+        CapturedModelRequests,
+    ),
+    connector: Arc<dyn McpConnector>,
+) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
     let assembler = PipelineNativeAgentAssembler::postgres(
         pool.clone(),
         SessionLimits::default(),
@@ -537,7 +581,7 @@ async fn scenario_for(url: &str, kind: &str, mode: &str, on_error: &str) {
             .env(MODE_ENV, mode)
             .env(KIND_ENV, kind)
             .env(PHASE_ENV, phase);
-        let output = run_phase(phase, command);
+        let output = run_probed_phase(&db, phase, command).await;
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert_eq!(
             output.status.code(),
@@ -607,15 +651,17 @@ async fn postgres_fanout_agent_branches_approve_and_reject_their_own_calls() {
         .expect("apply checkpoint migration");
     let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
     let tool_calls = Arc::new(AtomicUsize::new(0));
-    // `third` answers only after both cards are decided, so the runner cannot
-    // park on a final fetch that ran before this test saw the cards.
+    // `third` answers only once both cards are decided, so a member is still
+    // running when they are: the live path. Ungated, `third` could end before
+    // the test read the second card frame, and the runner then parks (by
+    // design) with both decisions unread.
     let decided = Arc::new(tokio::sync::Notify::new());
     let decisions = AtomicUsize::new(0);
-    let (platform, model_facade, captured) = saved_runtime(
+    let (platform, model_facade, captured) = gated_saved_runtime(
         vec![
             TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
             TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
-            TestModelGatewayOutcome::Gated {
+            TestModelGatewayOutcome::ResponseAfter {
                 gate: Arc::clone(&decided),
                 response: pipeline_text_response("done"),
             },
@@ -651,7 +697,7 @@ async fn postgres_fanout_agent_branches_approve_and_reject_their_own_calls() {
             (Some("second"), Some("tool_guard")) => ledger.decide(key, "reject", None),
             other => panic!("unexpected card {other:?}"),
         }
-        if decisions.fetch_add(1, Ordering::AcqRel) + 1 == 2 {
+        if decisions.fetch_add(1, Ordering::AcqRel) == 1 {
             decided.notify_one();
         }
     })
@@ -689,17 +735,15 @@ async fn postgres_fanout_agent_branch_asks_and_resumes_with_the_answer() {
         .await
         .expect("apply checkpoint migration");
     let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
-    // `third` answers only after the card is decided. Otherwise, under load,
-    // `first` and `third` can finish before the card frame reaches this test:
-    // the runner's final fetch finds no decision and parks, and the answer
-    // is never delivered live.
+    // `third` answers only once the card is decided: the live path, never a
+    // park on a card the test has not read yet.
     let decided = Arc::new(tokio::sync::Notify::new());
-    let (assembler, captured) = assembler(
+    let (assembler, captured) = gated_assembler(
         &db.pool,
         vec![
             TestModelGatewayOutcome::Response(pipeline_text_response("first done")),
             TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
-            TestModelGatewayOutcome::Gated {
+            TestModelGatewayOutcome::ResponseAfter {
                 gate: Arc::clone(&decided),
                 response: pipeline_text_response("third done"),
             },
@@ -727,6 +771,7 @@ async fn postgres_fanout_agent_branch_asks_and_resumes_with_the_answer() {
             }
             other => panic!("unexpected card {other:?}"),
         }
+        decided.notify_one();
     })
     .await
     .expect("the answered member resumes and the pipeline completes");
@@ -802,8 +847,11 @@ async fn postgres_production_parallel_without_the_decision_ledger_is_refused_typ
 
 /// Inline LLM branches (T-2A D1) over the root's MCP toolkit, which is
 /// sensitive for `lookup_release`: `ask` asks the user, `guard` and `deny`
-/// each call the tool.
-fn inline_llm_request(on_error: &str) -> super::super::request::AgentExecutionRequest {
+/// each call the tool; `max_concurrency` of them run at once.
+fn inline_llm_request(
+    on_error: &str,
+    max_concurrency: usize,
+) -> super::super::request::AgentExecutionRequest {
     let mut request = llm_mcp_pipeline_request(
         "release intelligence",
         &["lookup_release"],
@@ -816,7 +864,7 @@ fn inline_llm_request(on_error: &str) -> super::super::request::AgentExecutionRe
         )
     };
     let yaml = format!(
-        "state:\n  ask_out: str\n  guard_out: str\n  deny_out: str\n  joined: list\n  messages: list\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{{id: first, node: ask}}, {{id: second, node: guard}}, {{id: third, node: deny}}]\n    max_concurrency: 1\n    wait: all\n    on_error: {on_error}\n    output: [joined]\n    transition: END\n{}{}{}",
+        "state:\n  ask_out: str\n  guard_out: str\n  deny_out: str\n  joined: list\n  messages: list\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{{id: first, node: ask}}, {{id: second, node: guard}}, {{id: third, node: deny}}]\n    max_concurrency: {max_concurrency}\n    wait: all\n    on_error: {on_error}\n    output: [joined]\n    transition: END\n{}{}{}",
         branch("ask", "    tool_names:\n      ask_user: [\"ask_user\"]\n"),
         branch(
             "guard",
@@ -850,28 +898,44 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
         .expect("apply checkpoint migration");
     let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
     let tool_calls = Arc::new(AtomicUsize::new(0));
-    // Every branch raises a card, so no sibling keeps the runner busy while
-    // this test decides them: under load it fetched before a decision landed,
-    // parked, and the approved tool never ran. `third` asks only after the
-    // first two cards are decided, and the first resumed reply waits for the
-    // third decision, so some branch is always in flight until all three land.
-    let two_decided = Arc::new(tokio::sync::Notify::new());
-    let all_decided = Arc::new(tokio::sync::Notify::new());
-    let decisions = AtomicUsize::new(0);
-    let (platform, model_facade, captured) = saved_runtime(
+    // The three branches run at once, each served its own replies by its
+    // request's marker, whatever order they arrive in. A branch is always
+    // running until every card is decided, so the run never parks on a card
+    // the test has not read yet (a park is the runner's correct answer to an
+    // undecided card, and would end this run without the live resume):
+    // `deny` asks only once `ask` and `guard` are decided, and the resumed
+    // `ask` answers only once `deny` is decided.
+    let early_decided = Arc::new(tokio::sync::Notify::new());
+    let deny_decided = Arc::new(tokio::sync::Notify::new());
+    let early = AtomicUsize::new(0);
+    let (platform, model_facade, captured) = gated_saved_runtime(
         vec![
-            TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
-            TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
-            TestModelGatewayOutcome::Gated {
-                gate: Arc::clone(&two_decided),
-                response: pipeline_mcp_tool_call_response(),
+            TestModelGatewayOutcome::ResponseForRequest {
+                marker: "Work on ask",
+                response: pipeline_ask_user_call_response(),
             },
-            TestModelGatewayOutcome::Gated {
-                gate: Arc::clone(&all_decided),
+            TestModelGatewayOutcome::ResponseForRequestAfter {
+                marker: "Work on ask",
+                gate: Arc::clone(&deny_decided),
                 response: pipeline_text_response("resumed done"),
             },
-            TestModelGatewayOutcome::Response(pipeline_text_response("resumed done")),
-            TestModelGatewayOutcome::Response(pipeline_text_response("resumed done")),
+            TestModelGatewayOutcome::ResponseForRequest {
+                marker: "Work on guard",
+                response: pipeline_mcp_tool_call_response(),
+            },
+            TestModelGatewayOutcome::ResponseForRequest {
+                marker: "Work on guard",
+                response: pipeline_text_response("resumed done"),
+            },
+            TestModelGatewayOutcome::ResponseForRequestAfter {
+                marker: "Work on deny",
+                gate: Arc::clone(&early_decided),
+                response: pipeline_mcp_tool_call_response(),
+            },
+            TestModelGatewayOutcome::ResponseForRequest {
+                marker: "Work on deny",
+                response: pipeline_text_response("resumed done"),
+            },
         ],
         effectful_agent(),
     );
@@ -890,7 +954,7 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
     }))
     .with_fixed_parallel_for_tests()
     .with_fanout_decisions_for_tests(ledger.client(1));
-    let request = inline_llm_request("continue");
+    let request = inline_llm_request("continue", 3);
     let invocation = assembler
         .assemble(claim(&request, 1))
         .await
@@ -907,13 +971,15 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
         match (card["fanout_v1"]["member"].as_str(), card["kind"].as_str()) {
             (Some("first"), Some("ask_user")) => ledger.decide(key, "answer", Some("Staging")),
             (Some("second"), Some("tool_guard")) => ledger.decide(key, "approve", None),
-            (Some("third"), Some("tool_guard")) => ledger.decide(key, "reject", None),
+            (Some("third"), Some("tool_guard")) => {
+                ledger.decide(key, "reject", None);
+                deny_decided.notify_one();
+                return;
+            }
             other => panic!("unexpected card {other:?}"),
         }
-        match decisions.fetch_add(1, Ordering::AcqRel) + 1 {
-            2 => two_decided.notify_one(),
-            3 => all_decided.notify_one(),
-            _ => {}
+        if early.fetch_add(1, Ordering::AcqRel) == 1 {
+            early_decided.notify_one();
         }
     })
     .await
@@ -928,6 +994,9 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
             )
         })
         .collect::<Vec<_>>();
+    // All three cards, whatever order the concurrent branches raised them in.
+    let mut kinds = kinds;
+    kinds.sort();
     assert_eq!(
         kinds,
         ["first:ask_user", "second:tool_guard", "third:tool_guard"]

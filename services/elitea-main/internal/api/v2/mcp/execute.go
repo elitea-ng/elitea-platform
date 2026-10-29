@@ -494,7 +494,7 @@ func (s turnState) result(tool Tool, executionID string) map[string]any {
 func suspendedResult(toolName string, err error) (map[string]any, bool) {
 	if suspended, found := safety.AsSuspended(err); found {
 		return errorResult(fmt.Sprintf("'%s' was not run: %s (%s, scope %s). Nothing was executed.",
-			toolName, strings.TrimSuffix(suspended.Message(), "."), safety.ErrorCode, suspended.Scope)), true
+			toolName, strings.TrimSuffix(suspended.Message(), "."), suspended.Code(), suspended.Scope)), true
 	}
 	if errors.Is(err, safety.ErrStateUnavailable) {
 		return errorResult(fmt.Sprintf("'%s' was not run: the platform cannot confirm that execution is "+

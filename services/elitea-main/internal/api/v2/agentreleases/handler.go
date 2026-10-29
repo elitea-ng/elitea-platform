@@ -8,7 +8,8 @@
 //	     before it (models.applications.version.details)
 //	POST /application_releases/prompt_lib/{projectID}/{applicationID}/{releaseID}/rollback
 //	     points the agent's published release at an earlier release
-//	     (models.applications.publish.post); audited as
+//	     (models.applications.publish.post; for an agent whose tier needs
+//	     approval, also models.applications.governance); audited as
 //	     application_release.rolled_back
 //	GET  /version_revisions/prompt_lib/{projectID}/{applicationID}/{versionID}
 //	     the draft revisions of a version, newest first
@@ -33,6 +34,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -67,17 +69,52 @@ type Store interface {
 
 var _ Store = (*repos.AgentReleases)(nil)
 
+// Governor is the agent lifecycle governance a rollback answers to
+// (*repos.AgentLifecycle): a rollback moves the published release of an
+// agent with no change request, so an agent whose tier needs approval is
+// rolled back by a governance role holder only (ADR-0040 decision 3).
+type Governor interface {
+	// CheckDirectPublish refuses (change_request_required) when the
+	// agent's tier needs an approved change request.
+	CheckDirectPublish(ctx context.Context, projectID, applicationID int64) error
+}
+
 // Handler serves the routes.
 type Handler struct {
-	store Store
+	store    Store
+	governor Governor
+	// holdsGovernance resolves the caller's governance role in the path's
+	// project.
+	holdsGovernance func(*http.Request) (bool, error)
+}
+
+// Option configures the handler.
+type Option func(*Handler)
+
+// WithGovernance makes a rollback of an agent whose tier needs approval
+// require the governance role. A nil governor (or a typed nil) is absent.
+func WithGovernance(governor Governor, holdsGovernance func(*http.Request) (bool, error)) Option {
+	return func(h *Handler) {
+		if governor == nil || holdsGovernance == nil {
+			return
+		}
+		if lifecycle, ok := governor.(*repos.AgentLifecycle); ok && lifecycle == nil {
+			return
+		}
+		h.governor, h.holdsGovernance = governor, holdsGovernance
+	}
 }
 
 // NewHandler builds the handler. A nil store (or a typed nil) answers 503.
-func NewHandler(store Store) *Handler {
+func NewHandler(store Store, options ...Option) *Handler {
 	if releases, ok := store.(*repos.AgentReleases); ok && releases == nil {
 		store = nil
 	}
-	return &Handler{store: store}
+	h := &Handler{store: store}
+	for _, option := range options {
+		option(h)
+	}
+	return h
 }
 
 // ReleaseSummary is one release in a response.
@@ -217,6 +254,9 @@ func (h *Handler) Rollback(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusBadRequest, "the reason is longer than 200 characters")
 		return
 	}
+	if !h.rollbackAllowed(w, r, projectID, applicationID) {
+		return
+	}
 	outcome, err := h.store.Rollback(r.Context(), projectID, applicationID, releaseID, actorID, body.Reason)
 	if err != nil {
 		writeError(r.Context(), w, err)
@@ -236,6 +276,42 @@ func (h *Handler) Rollback(w http.ResponseWriter, r *http.Request) {
 		"to":     summary(outcome.To),
 		"reason": body.Reason,
 	})
+}
+
+// rollbackAllowed refuses a rollback of an agent whose tier needs an
+// approved change request unless the caller holds the governance role: 409
+// change_request_required, as a direct publish of that agent answers.
+func (h *Handler) rollbackAllowed(w http.ResponseWriter, r *http.Request, projectID, applicationID int64) bool {
+	if h.governor == nil {
+		return true
+	}
+	err := h.governor.CheckDirectPublish(r.Context(), projectID, applicationID)
+	if err == nil {
+		return true
+	}
+	refusal, ok := agentlifecycle.AsRefusal(err)
+	if !ok {
+		slog.ErrorContext(r.Context(), "application releases: read the agent's tier", "error", err)
+		apierr.WriteStatus(w, http.StatusInternalServerError, "could not read the agent's governance")
+		return false
+	}
+	if refusal.Code == agentlifecycle.ChangeRequiredCode {
+		held, err := h.holdsGovernance(r)
+		if err != nil {
+			slog.ErrorContext(r.Context(), "application releases: resolve the governance role", "error", err)
+			apierr.WriteStatus(w, http.StatusInternalServerError, "could not resolve the governance role")
+			return false
+		}
+		if held {
+			return true
+		}
+		refusal = agentlifecycle.RefuseWith(agentlifecycle.ChangeRequiredCode,
+			"This agent's tier needs an approved change request to change its published release. "+
+				"Only a holder of the governance role ("+agentlifecycle.GovernancePermission+") can roll it back directly.",
+			refusal.Detail)
+	}
+	writeJSON(w, refusal.Status(), refusal.Body())
+	return false
 }
 
 // Revisions answers the draft revisions of one version.

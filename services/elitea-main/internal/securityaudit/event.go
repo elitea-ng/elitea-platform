@@ -59,6 +59,11 @@ const (
 	// (#1151), allowed or denied.
 	TypeAgentSession EventType = "ai.elitea.security.v1.agent.session"
 	TypeProbe        EventType = "ai.elitea.security.v1.probe"
+	// TypeAgentLifecycle is an agent lifecycle governance change (ADR-0040,
+	// #1497): a change request transition (action agent.change.*), a tier
+	// change (agent.registry.tier_changed), a certification state change
+	// (agent.certification.*) or an attestation (agent.attestation.*).
+	TypeAgentLifecycle EventType = "ai.elitea.security.v1.agent.lifecycle"
 )
 
 // OCSF class and category uids (https://schema.ocsf.io).
@@ -86,6 +91,7 @@ var ocsfClasses = map[EventType]int{
 	TypeExternalIdentityDrift:   OCSFClassEntityManagement,
 	TypeAgentSession:            OCSFClassAuthorizeSession,
 	TypeProbe:                   OCSFClassAPIActivity,
+	TypeAgentLifecycle:          OCSFClassEntityManagement,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.

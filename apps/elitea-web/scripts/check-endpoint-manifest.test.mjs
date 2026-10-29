@@ -841,7 +841,20 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // getApplicationRelease, rollbackApplicationRelease and
 // listVersionRevisions, the agent releases and draft revisions. No web
 // code calls them yet, so the manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 417;
+// 417 -> 421 (issue 1497, ADR-0040 decision 4): listReleaseGateSuites,
+// putReleaseGateSuite, listReleaseGates and getReleaseGate, the evaluation
+// release gate. No web code calls them yet, so the manifest count is
+// unchanged.
+// 421 -> 436 (issue 1497, ADR-0040 decisions 1, 3, 5 and 6): the agent
+// registry (getAgentRegistry, updateAgentRegistry, markAgentDue,
+// listAdminAgentRegistry), change requests (listAgentChangeRequests,
+// createAgentChangeRequest, getAgentChangeRequest,
+// submitAgentChangeRequest, approveAgentChangeRequest,
+// rejectAgentChangeRequest, withdrawAgentChangeRequest,
+// overrideAgentChangeRequestGate) and attestations
+// (listAgentAttestations, recordAgentAttestation, revokeAgentAttestation).
+// The web app now calls 16 of them (see MANIFEST_ENTRY_COUNT below).
+const GENERATED_OPERATION_COUNT = 436;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1077,8 +1090,18 @@ const GENERATED_OPERATION_COUNT = 417;
  * 291 -> 293 (Point 5 2a-2, fixed Parallel): chat.listExecutionInterrupts
  * and chat.decideExecutionInterrupt, the open fan-out cards of a response
  * and their decision (features/chat-messages interruptLedgerApi). Generated.
+ *
+ * 293 -> 309 (issue 1497, ADR-0040 decisions 1 and 3-6): the agent registry,
+ * change requests, attestations and release gate of the agent's Governance
+ * dialog and Request publish (features/agent-lifecycle: getAgentRegistry,
+ * updateAgentRegistry, list/create/get/submit/approve/reject/withdraw
+ * AgentChangeRequest, overrideAgentChangeRequestGate, list/record/revoke
+ * AgentAttestation, getReleaseGate) and the dataset's release gate settings
+ * (features/agent-evaluation: listReleaseGateSuites, putReleaseGateSuite).
+ * Generated. The admin registry (listAdminAgentRegistry) is an admin route
+ * and stays out of the manifest.
  */
-const MANIFEST_ENTRY_COUNT = 293;
+const MANIFEST_ENTRY_COUNT = 309;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

@@ -9,8 +9,8 @@ The table shows where the line sits and how Elitea integrates across it.
 
 | Responsibility | Lives in | What Elitea provides |
 | --- | --- | --- |
-| Architecture, legal and compliance, and model-risk reviews | Your GRC or ticketing system | Typed attestations on the agent or release, required by risk tier before release, and writable over the API (planned, [issue 1497](https://github.com/elitea-ng/elitea-platform/issues/1497)) |
-| Data owner approval and data accuracy | The data owner and your data catalogue | Credential use grants with an approver other than the proposer ([credential governance](/deployment/credential-governance)); data-owner attestations with an expiry (planned) |
+| Architecture, legal and compliance, and model-risk reviews | Your GRC or ticketing system | Typed attestations on the agent or release, required by risk tier before approval, and writable over the API ([attestations](/admin/enterprise-controls/agent-lifecycle#attestations)) |
+| Data owner approval and data accuracy | The data owner and your data catalogue | Credential use grants with an approver other than the proposer ([credential governance](/deployment/credential-governance)); `data_owner` and `data_accuracy` attestations with an expiry ([attestations](/admin/enterprise-controls/agent-lifecycle#attestations)) |
 | Immutable storage of record (WORM) | Object storage with object lock, or your SIEM's archive tier | Hash-chained logs that make tampering detectable, exported in one versioned schema ([audit event schema](/reference/audit-event-schema)). Elitea does not claim WORM on its own database. |
 | Retention schedule | Your records-management policy | Per-class retention limits and legal hold that enforce the values you set ([audit evidence and retention](/admin/enterprise-controls/audit-evidence-and-retention)) |
 | Security monitoring, correlation and anomaly detection | Your SIEM or SOC | The evidence export, Prometheus metrics, and alert rules for platform health. A rule-based agent circuit breaker is planned. |
