@@ -313,8 +313,13 @@ fn collect_paths(
             )?;
         }
     }
-    // An inline LLM Parallel branch runs in its own checkpoint family too.
+    // An inline LLM Parallel branch runs in its own checkpoint family too, one
+    // level below its pipeline: at the deepest level it is refused as an Agent
+    // node is (PM-2; Main's save check refuses the same).
     for node_id in definition.parallel_llm_branch_ids() {
+        if depth == MAX_PIPELINE_COMPOSITION_DEPTH {
+            return Err(composition_exhausted(bound::PIPELINE_DEPTH));
+        }
         let path = if prefix.is_empty() {
             node_id.to_owned()
         } else {
@@ -338,6 +343,28 @@ const fn composition_exhausted(detail: &'static str) -> NativeAgentAssemblyError
         ),
         detail,
     )
+}
+
+/// One level of the frozen composition, as a recovery walk descends it (PM-2).
+impl crate::agents::session::FrozenRecoveryLevel for BTreeMap<String, Arc<AdmittedSavedPipeline>> {
+    fn admitted_aliases(&self) -> BTreeSet<String> {
+        self.keys().cloned().collect()
+    }
+
+    fn child(
+        &self,
+        alias: &str,
+    ) -> Option<(
+        &PipelineDefinition,
+        &dyn crate::agents::session::FrozenRecoveryLevel,
+    )> {
+        self.get(alias).map(|child| {
+            (
+                child.profile.definition(),
+                &child.children as &dyn crate::agents::session::FrozenRecoveryLevel,
+            )
+        })
+    }
 }
 
 pub(super) fn composition_definitions(
@@ -478,6 +505,53 @@ mod tests {
         }
         json!({"agent_type":"pipeline","instructions":instructions,"meta":{},"variables":[],"tools":tools,"llm_settings":null})
             .as_object().unwrap().clone()
+    }
+
+    /// PM-4: inline LLM Parallel branches count against the checkpoint-path
+    /// bound with the Agent nodes, as Main's save check counts them. A root
+    /// with 16 inline branches and one Agent node running a saved child of N
+    /// Agent nodes holds 1 + N + 16 paths: N = 111 fits (128), N = 112 is refused.
+    #[test]
+    fn inline_llm_branches_count_against_the_checkpoint_paths() {
+        let branch_ids = (0..16)
+            .map(|index| format!("{{id: b{index}, node: l{index}}}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut root = format!(
+            "state:\n  topic: string\n  detail: string\n  joined: list\n  answer: str\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{branch_ids}]\n    max_concurrency: 2\n    wait: all\n    output: [joined]\n    transition: a0\n  - id: a0\n    type: agent\n    tool: child_0\n    input_mapping: {{task: {{type: fixed, value: work}}}}\n    output: [answer]\n    transition: END\n"
+        );
+        for index in 0..16 {
+            let _ = write!(
+                root,
+                "  - id: l{index}\n    type: llm\n    input: [topic]\n    input_mapping:\n      task: {{type: fixed, value: work}}\n    output: [detail]\n"
+            );
+        }
+        let root = PipelineDefinition::from_yaml(&root).expect("root pipeline");
+        let paths = |child_nodes: usize| {
+            let version = branches(&[(9, 10)], child_nodes);
+            let child = AdmittedSavedPipeline {
+                profile: PipelineExecutionProfile::from_nested_version(&version, &fallback())
+                    .expect("child profile"),
+                version,
+                children: BTreeMap::new(),
+                revision: PipelineCheckpointRevision {
+                    application_id: 5,
+                    version_id: 6,
+                    definition_digest: [7; 32],
+                },
+            };
+            composition_paths(
+                &root,
+                &BTreeMap::from([("child_0".to_owned(), Arc::new(child))]),
+            )
+        };
+        let limit = MAX_PIPELINE_CHECKPOINT_PATHS;
+        assert_eq!(paths(limit - 17).expect("128 paths fit").len(), limit);
+        let refused = paths(limit - 16).expect_err("129 paths are refused");
+        assert_eq!(
+            refused.code(),
+            NativeAgentAssemblyErrorCode::ResourceExhausted
+        );
     }
 
     #[tokio::test]

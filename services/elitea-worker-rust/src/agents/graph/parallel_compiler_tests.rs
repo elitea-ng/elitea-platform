@@ -508,6 +508,38 @@ fn a_branch_whose_saved_pipeline_contains_code_is_refused_typed() {
     }
 }
 
+/// PM-2: inside a saved child (a non-empty scope path), the composition
+/// definitions are keyed relative to that child; a branch whose saved pipeline
+/// contains Code is still refused there, as at the root.
+#[test]
+fn a_branch_with_code_is_refused_inside_a_nested_child_too() {
+    let definition = PipelineDefinition::from_yaml(YAML).unwrap();
+    let child = PipelineDefinition::from_yaml(
+        "entry_point: execute\nstate:\n  messages: list\nnodes:\n  - id: execute\n    type: code\n    code: {type: fixed, value: 'result = 1'}\n    input: [messages]\n    output: [messages]\n    structured_output: false\n    transition: END\n",
+    )
+    .expect("saved child pipeline with Code");
+    let authority: Arc<dyn ParallelCheckpointAuthority> = Arc::new(TestAuthority::default());
+    let checkpointer: Arc<dyn Checkpointer> = authority.clone();
+    let runtimes = PipelineNodeRuntimes::new(None, None, Some(Arc::new(UnavailableResolver)))
+        .with_parallel(ParallelCompilerBinding::for_tests(
+            authority,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(10),
+            None,
+        ))
+        .with_composition_definitions(std::collections::BTreeMap::from([(
+            "workerB".to_owned(),
+            child,
+        )]))
+        .with_application_scope_path("outer".to_owned());
+    match definition.compile_subgraph_with_runtime(checkpointer, &runtimes) {
+        Err(error @ PipelineConfigurationError::FanoutChildUnsupported { .. }) => {
+            assert_eq!(error.code(), "graph.fanout.child_contains_code");
+        }
+        Err(other) => panic!("expected a typed Code refusal, got {other:?}"),
+        Ok(_) => panic!("a nested branch with Code compiled"),
+    }
+}
+
 /// FU-249: a Parallel binds its checkpoint authority to the started root only,
 /// so a saved child pipeline beneath an Agent node that holds one is refused
 /// typed by the path of its Parallel node, before anything binds.

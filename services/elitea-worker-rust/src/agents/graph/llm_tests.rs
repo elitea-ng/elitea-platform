@@ -513,5 +513,19 @@ fn a_frozen_parallel_llm_input_is_bounded_at_its_limit_and_limit_plus_one() {
     };
     assert_eq!(23 + 6 * 65_536 + 6 * 13_103 + 52_431, 512 * 1024);
     assert!(frozen_at(52_431).is_ok());
-    assert!(frozen_at(52_432).is_err());
+    // PM-3: limit+1 keeps its typed code and names the branch, never the
+    // generic "the pipeline LLM node failed".
+    let Err(adk_rust::graph::GraphError::NodeExecutionFailed { message, .. }) = frozen_at(52_432)
+    else {
+        panic!("limit+1 must fail as a node failure");
+    };
+    assert!(
+        message.starts_with("graph.parallel.resource_exhausted: ")
+            && message.contains("\"branch\""),
+        "{message}"
+    );
+    assert!(
+        crate::agents::graph::is_parallel_resource_exhausted(&message),
+        "{message}"
+    );
 }

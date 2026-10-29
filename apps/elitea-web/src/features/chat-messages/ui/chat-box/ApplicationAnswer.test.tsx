@@ -139,6 +139,21 @@ describe('ApplicationAnswer', () => {
     expect(await navigator.clipboard.readText()).toBe('Error code: OUTPUT_CONTINUATION_EXHAUSTED\nMessage ID: partial-answer');
   });
 
+  it('restores a refused recovery frontier with its registered text and support reference (PM-2)', async () => {
+    const user = userEvent.setup();
+    const text = 'This run stopped at a point where it cannot be safely continued. Nothing was repeated. Start it again, and share the support reference with your administrator if it happens again.';
+    const answer = normaliseAssistantMessage({
+      id: 'frontier-row', uuid: 'frontier-answer', content: '',
+      created_at: '2026-10-29T00:00:00Z',
+      meta: { is_error: true, error: text, error_code: 'RECOVERY_FRONTIER_UNSUPPORTED' },
+    }, [], undefined) as unknown as ChatMessage;
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);
+    expect(screen.getByText(text)).toBeInTheDocument();
+    await user.click(screen.getByText('Details for support'));
+    await user.click(screen.getByRole('button', { name: 'Copy error reference' }));
+    expect(await navigator.clipboard.readText()).toBe('Error code: RECOVERY_FRONTIER_UNSUPPORTED\nMessage ID: frontier-answer');
+  });
+
   it('copies a message reference for untyped failures without copying private output', async () => {
     const user = userEvent.setup();
     const answer = { id: 'failed-message', role: 'assistant', content: 'Private output',

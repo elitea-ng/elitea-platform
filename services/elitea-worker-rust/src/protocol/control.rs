@@ -4354,7 +4354,8 @@ fn runtime_rejection(error: &RuntimeErrorV1) -> ControlSemanticError {
             // An output-plane refusal; the control plane never sends it.
             | RuntimeErrorCodeV1::ResultRefused
             // A terminal of one run; the control plane never sends it.
-            | RuntimeErrorCodeV1::RecoveryRefused,
+            | RuntimeErrorCodeV1::RecoveryRefused
+            | RuntimeErrorCodeV1::RecoveryFrontierUnsupported,
         )
         | None => {
             return ControlSemanticError::InvalidInput(

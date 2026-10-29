@@ -78,6 +78,13 @@ export interface ThinkingStepWire {
     readonly response_metadata?: { readonly model_name?: string; readonly tool_name?: string };
   };
   readonly parent_agent_name?: string;
+  /**
+   * A restored step's owner, as its row stored it (`lib/traceSteps.ts`): the
+   * call id and path its sub-agent or Parallel-member tier is keyed by, so
+   * the step lands in the same tier as that owner's other steps.
+   */
+  readonly parent_agent_call_id?: string;
+  readonly parent_agent_path?: unknown;
   readonly timestamp_start?: string;
   readonly timestamp_finish?: string;
 }

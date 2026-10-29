@@ -128,6 +128,11 @@ pub(crate) const FANOUT_MEMBER_THREAD_KEY: &str = "elitea.fanout.member_thread.v
 /// side by side, so their calls stay open together; only the Parallel node
 /// stamps it.
 pub(crate) const FANOUT_MEMBER_CALL_KEY: &str = "elitea.fanout.member_call.v1";
+/// PM-5: an inline LLM Parallel branch's own model and tool events
+/// (`{"call": fo1_…, "ordinal": n, "name": node}`). Only the Parallel node's
+/// branch sender stamps it; the projector shows them under that member tier,
+/// never as the run's own text.
+pub(crate) const FANOUT_INLINE_MEMBER_KEY: &str = "elitea.fanout.inline_member.v1";
 /// FU-246: a fixed Parallel member's own confirmation. It is persisted with
 /// the root session (the resume proof) but projected as nothing: the member's
 /// ledger card, raised by the fan-out runner, is its only pause.
@@ -886,7 +891,7 @@ struct ActiveToolCall {
     member_tier: Option<(String, usize)>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct AgentPathTier {
     name: String,
     call_id: String,
@@ -1231,6 +1236,16 @@ impl AgentEventProjector {
         if let Some((frame_type, metadata)) = super::graph::fanout_frames::stamped_frame(event)
             .map_err(|_| AgentEventProjectionError::invalid_state())?
         {
+            // PM-5: a member that paused or ended closes its inline stream; a
+            // resumed inline branch streams through a fresh projector.
+            if frame_type == super::graph::fanout_frames::FANOUT_MEMBER_EVENT
+                && let Some(status) = metadata.get("fanout_member_status_v1")
+                && status["status"] != "start"
+                && let Some(call) = status["parent_agent_call_id"].as_str()
+                && call.starts_with("fo1_")
+            {
+                self.descendants.remove(call);
+            }
             let mut batch = ProjectedAgentEventBatch::new();
             batch.push(self.event(
                 frame_type,
@@ -1240,6 +1255,9 @@ impl AgentEventProjector {
                 event.timestamp,
             )?)?;
             return Ok(batch);
+        }
+        if let Some(tier) = inline_member_tier(event)? {
+            return self.project_inline_member(event, &tier);
         }
         if let Some(projected) = super::pipeline::scoped_applications::project_root_scope_event(
             event,
@@ -1535,6 +1553,50 @@ impl AgentEventProjector {
             descendant.projector.restore_retained_authorization(event)?;
         }
         Ok(())
+    }
+
+    /// PM-5: an inline LLM branch streams through its own projector, keyed by
+    /// its member call, and every frame carries its member tier.
+    fn project_inline_member(
+        &mut self,
+        event: &Event,
+        tier: &AgentPathTier,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        if !self.descendants.contains_key(&tier.call_id) {
+            // The branch is a node of this pipeline graph: its projector is a
+            // pipeline projector on the same graph thread.
+            let nested = self.context.nested(
+                tier.name.clone(),
+                self.context.model_name.clone(),
+                self.context.graph_checkpoint_thread_id.clone(),
+            )?;
+            let mut projector = Self::with_runtime_catalogs(
+                nested,
+                self.sensitive_tools.clone(),
+                self.delegated_authorization.clone(),
+                self.application_tools.clone(),
+            )?;
+            let _start = projector.start(event.timestamp)?;
+            self.descendants.insert(
+                tier.call_id.clone(),
+                DescendantAgentProjector {
+                    tier: tier.clone(),
+                    projector: Box::new(projector),
+                },
+            );
+        }
+        let member = self
+            .descendants
+            .get_mut(&tier.call_id)
+            .filter(|member| member.tier == *tier)
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        let mut child = event.clone();
+        child.provider_metadata.remove(FANOUT_INLINE_MEMBER_KEY);
+        // The branch is the member's agent in its own projection; the stored
+        // event keeps the run's author.
+        child.author.clone_from(&member.tier.name);
+        let batch = member.projector.project(&child)?;
+        overlay_batch_hierarchy(batch, std::slice::from_ref(&member.tier))
     }
 
     fn project_descendant_event(
@@ -6410,6 +6472,35 @@ fn fanout_member_tier(event: &Event) -> Result<Option<(String, usize)>, AgentEve
         .filter(|_| value.as_object().is_some_and(|object| object.len() == 2))
         .ok_or_else(AgentEventProjectionError::invalid_state)?;
     Ok(Some((call_id.to_owned(), ordinal)))
+}
+
+/// The member tier an inline LLM branch's event carries (PM-5); `None` for
+/// any other event.
+fn inline_member_tier(event: &Event) -> Result<Option<AgentPathTier>, AgentEventProjectionError> {
+    let Some(raw) = event.provider_metadata.get(FANOUT_INLINE_MEMBER_KEY) else {
+        return Ok(None);
+    };
+    let value: Value =
+        serde_json::from_str(raw).map_err(|_| AgentEventProjectionError::invalid_state())?;
+    let call_id = value["call"]
+        .as_str()
+        .filter(|call| sibling_ordinal_bound(call) == MAX_FANOUT_MEMBER_ORDINAL)
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    let ordinal = value["ordinal"]
+        .as_u64()
+        .and_then(|ordinal| usize::try_from(ordinal).ok())
+        .filter(|ordinal| (1..=MAX_FANOUT_MEMBER_ORDINAL).contains(ordinal))
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    let name = value["name"]
+        .as_str()
+        .filter(|name| elitea_agent_runtime::graph::yaml::valid_graph_id(name))
+        .filter(|_| value.as_object().is_some_and(|object| object.len() == 3))
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    Ok(Some(AgentPathTier {
+        name: name.to_owned(),
+        call_id: call_id.to_owned(),
+        sibling_ordinal: Some(ordinal),
+    }))
 }
 
 /// A fan-out member tier is named by its `fo1_` member call id (contract

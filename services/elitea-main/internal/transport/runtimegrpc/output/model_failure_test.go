@@ -68,3 +68,29 @@ func TestModelFailurePoliciesCrossOutputBoundary(t *testing.T) {
 		})
 	}
 }
+
+// Every runtime error code is either a run terminal with a registered,
+// readable text, or one of the pinned codes that never reaches a run's
+// terminal (claim, authentication and protocol refusals). A new code must be
+// placed on one side (PM-2: RECOVERY_FRONTIER_UNSUPPORTED is a terminal).
+func TestEveryRuntimeErrorCodeHasRegisteredTextOrIsNotATerminal(t *testing.T) {
+	notTerminal := map[string]bool{
+		"RUNTIME_ERROR_CODE_V1_UNSPECIFIED":              true,
+		"RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED":    true,
+		"RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION":       true,
+		"RUNTIME_ERROR_CODE_V1_STALE_FENCE":              true,
+		"RUNTIME_ERROR_CODE_V1_GOVERNED_WORKER_REQUIRED": true,
+		"RUNTIME_ERROR_CODE_V1_GOVERNED_CONTEXT_MISSING": true,
+	}
+	for name, value := range runtimev1.RuntimeErrorCodeV1_value {
+		policy, ok := runtimeFailurePolicyFor(runtimev1.RuntimeErrorCodeV1(value))
+		switch {
+		case ok && notTerminal[name]:
+			t.Errorf("%s is pinned as not a terminal but has a policy", name)
+		case !ok && !notTerminal[name]:
+			t.Errorf("%s has no registered run-terminal text", name)
+		case ok && (policy.Code == "" || policy.SafeMessage == ""):
+			t.Errorf("%s maps to an empty policy", name)
+		}
+	}
+}

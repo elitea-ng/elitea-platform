@@ -1968,20 +1968,21 @@ pub(crate) enum TestModelGatewayOutcome {
         marker: &'static str,
         response: Response<Body>,
     },
-    /// [`Self::ResponseForRequest`], answered only once `gate` is notified.
+    /// [`Self::ResponseForRequest`], answered only once `gate` is notified
+    /// (the routed form of [`Self::Gated`]).
     ResponseForRequestAfter {
         marker: &'static str,
         gate: Arc<tokio::sync::Notify>,
         response: Response<Body>,
     },
-    /// Served in order, but only once `gate` is notified: a branch whose reply
-    /// must wait for something the test does (a card decided live).
-    ResponseAfter {
+    Unavailable,
+    Pending,
+    /// Answer once `gate` is notified: holds one member of a parallel run
+    /// until the test has done what must come first (a live decision).
+    Gated {
         gate: Arc<tokio::sync::Notify>,
         response: Response<Body>,
     },
-    Unavailable,
-    Pending,
     /// End the test process at this model request: a Worker that dies after
     /// everything before the request is durable (process-replacement proofs).
     ExitProcess(i32),
@@ -2077,13 +2078,13 @@ impl ModelGatewayTransport for TestModelGatewayTransport {
             TestModelGatewayOutcome::Response(response)
             | TestModelGatewayOutcome::ResponseForModel { response, .. }
             | TestModelGatewayOutcome::ResponseForRequest { response, .. } => Ok(response),
-            TestModelGatewayOutcome::ResponseAfter { gate, response }
+            TestModelGatewayOutcome::Unavailable => Err(ModelGatewayTransportError::Unavailable),
+            TestModelGatewayOutcome::Pending => std::future::pending().await,
+            TestModelGatewayOutcome::Gated { gate, response }
             | TestModelGatewayOutcome::ResponseForRequestAfter { gate, response, .. } => {
                 gate.notified().await;
                 Ok(response)
             }
-            TestModelGatewayOutcome::Unavailable => Err(ModelGatewayTransportError::Unavailable),
-            TestModelGatewayOutcome::Pending => std::future::pending().await,
             TestModelGatewayOutcome::ExitProcess(code) => std::process::exit(code),
         }
     }

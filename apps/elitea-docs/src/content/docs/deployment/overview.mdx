@@ -69,6 +69,8 @@ Every chart (`elitea`, and the standalone `elitea-sandbox-runtime`) and every fi
 helm install elitea oci://ghcr.io/elitea-ng/charts/elitea --version <tag>
 ```
 
+Both charts are also listed on [Artifact Hub](https://artifacthub.io/packages/search?org=elitea-ng). The listing shows the values reference and every version, with pre-releases marked. It also shows a security report on the images that version ships. The listing reads the same OCI charts; it is not a second copy.
+
 <Steps>
 <Step title="Charts have no `latest` tag">
 An OCI chart reference resolves by SemVer, so `--version <tag>` is required in practice — there is no floating tag to fall back on.
@@ -82,7 +84,7 @@ cosign verify ghcr.io/elitea-ng/charts/elitea:<tag> \
   --certificate-identity-regexp '^https://github.com/elitea-ng/elitea-platform/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
-Image manifests verify the same way, against `ghcr.io/elitea-ng/<component>:<tag>`.
+Image manifests verify the same way, against `ghcr.io/elitea-ng/<component>:<tag>`. Every image and chart also carries signed SLSA build provenance, and every image a CycloneDX SBOM. [Verify release artifacts](/deployment/verify-artifacts) shows how to check them, and how to enforce them at admission.
 </Step>
 </Steps>
 

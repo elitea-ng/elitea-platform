@@ -102,13 +102,51 @@ function toToolCallStep(row: TraceStepRow): ToolCallStepWire {
 
 /** One `thinking_step` row as the wire entry `buildToolActions` consumes. */
 function toThinkingStep(row: TraceStepRow): ThinkingStepWire {
+  const path = record(row.attrs)?.['parent_agent_path'];
   return {
     trace_step_id: row.id,
     trace_message_group_id: row.message_group_id,
     ...(text(row.parent_agent_name) === undefined ? {} : { parent_agent_name: row.parent_agent_name as string }),
+    ...(text(row.parent_agent_call_id) === undefined ? {} : { parent_agent_call_id: row.parent_agent_call_id as string }),
+    ...(path === undefined ? {} : { parent_agent_path: path }),
     ...(row.started_at ? { timestamp_start: row.started_at } : {}),
     ...(row.finished_at ? { timestamp_finish: row.finished_at } : {}),
     message: { id: `trace-${String(row.id)}`, response_metadata: {} },
+  };
+}
+
+function isMemberThinkingRow(value: unknown): value is TraceStepRow {
+  const row = record(value);
+  return row?.['kind'] === 'thinking_step'
+    && Number.isSafeInteger(row['id'])
+    && Number.isSafeInteger(row['message_group_id'])
+    && text(row['parent_agent_name']) !== undefined;
+}
+
+/**
+ * The thinking steps a sub-agent or a Parallel member wrote, out of the light
+ * rows the message reader already attaches to each message group
+ * (`persisted_trace`, `entities/conversation/api/messageTraces.ts` — paged,
+ * every kind). The conversation-wide listing reads `tool_call` rows only, so
+ * without these a reload kept a sub-agent's tier but lost its inner steps, and
+ * lost a Parallel member that called no tool altogether. Only rows with an
+ * owner are taken: the coordinator's own steps stay exactly as before.
+ */
+function memberThinkingSteps(persistedTrace: unknown): ThinkingStepWire[] {
+  const steps = record(persistedTrace)?.['steps'];
+  return Array.isArray(steps) ? steps.filter(isMemberThinkingRow).map(toThinkingStep) : [];
+}
+
+/** A message group's listed steps plus its members' thinking steps; unchanged when there are none. */
+export function withMemberThinkingSteps(
+  persisted: PersistedTraceSteps | undefined,
+  persistedTrace: unknown,
+): PersistedTraceSteps | undefined {
+  const thinking = memberThinkingSteps(persistedTrace);
+  if (thinking.length === 0) return persisted;
+  return {
+    toolCalls: persisted?.toolCalls ?? [],
+    thinkingSteps: [...(persisted?.thinkingSteps ?? []), ...thinking],
   };
 }
 

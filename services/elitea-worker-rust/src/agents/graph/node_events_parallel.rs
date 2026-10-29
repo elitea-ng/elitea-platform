@@ -27,9 +27,30 @@ pub(super) struct ParallelEventScope {
     /// member tier the fan-out frames and cards use (contract §3.3). `None`
     /// for a Map item.
     member_tier: Option<String>,
+    /// PM-5: a root-level inline LLM branch, whose own events carry its
+    /// member tier (only [`PipelineNodeEventSender::for_inline_llm_branch`]).
+    inline_llm: bool,
 }
 
 impl PipelineNodeEventSender {
+    /// [`Self::for_parallel_branch`] for a root-level inline LLM branch: its own
+    /// model and tool events stream under its member tier (PM-5).
+    pub(crate) fn for_inline_llm_branch(
+        &self,
+        execution: &ParallelBranchExecution,
+    ) -> adk_rust::Result<Self> {
+        let mut branch = self.for_parallel_branch(execution, None)?;
+        let scope = branch
+            .parallel_scope
+            .take()
+            .ok_or_else(pipeline_node_event_channel_error)?;
+        let mut scope =
+            std::sync::Arc::try_unwrap(scope).map_err(|_| pipeline_node_event_channel_error())?;
+        scope.inline_llm = true;
+        branch.parallel_scope = Some(std::sync::Arc::new(scope));
+        Ok(branch)
+    }
+
     pub(crate) fn for_parallel_branch(
         &self,
         execution: &ParallelBranchExecution,
@@ -236,6 +257,7 @@ impl ParallelEventScope {
             threads,
             parent,
             member_tier: None,
+            inline_llm: false,
         })
     }
 
@@ -350,6 +372,28 @@ impl ParallelEventScope {
             root_invocation.clone_into(&mut event.invocation_id);
             root_author.clone_into(&mut event.author);
             root_branch.clone_into(&mut event.branch);
+            // PM-5: an inline LLM branch's own events stream under its member
+            // tier, named by its node, never as the run's own text.
+            if let Some(tier) = self.member_tier.as_deref().filter(|_| self.inline_llm) {
+                let mut tier: serde_json::Value =
+                    serde_json::from_str(tier).map_err(|_| pipeline_node_event_channel_error())?;
+                let node = self
+                    .owned_thread
+                    .strip_prefix(&format!("{}/", self.branch_root_thread))
+                    .filter(|node| valid_graph_id(node))
+                    .ok_or_else(pipeline_node_event_channel_error)?;
+                tier["name"] = serde_json::Value::String(node.to_owned());
+                if event
+                    .provider_metadata
+                    .insert(
+                        crate::agents::events::FANOUT_INLINE_MEMBER_KEY.to_owned(),
+                        tier.to_string(),
+                    )
+                    .is_some()
+                {
+                    return Err(pipeline_node_event_channel_error());
+                }
+            }
         }
         Ok(())
     }

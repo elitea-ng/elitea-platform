@@ -153,14 +153,12 @@ impl PipelineNodeRuntimes {
         else {
             return Ok(None);
         };
-        let path = if self.application_scope_path.is_empty() {
-            node.to_owned()
-        } else {
-            format!("{}/{node}", self.application_scope_path)
-        };
-        let descendants = format!("{path}/");
+        // The composition definitions are keyed relative to the pipeline these
+        // runtimes compile (a saved child's own nodes at its root), not by the
+        // absolute scope path (PM-2: a Parallel two Agent-node levels down).
+        let descendants = format!("{node}/");
         if !definitions.iter().any(|(key, definition)| {
-            (key == &path || key.starts_with(&descendants)) && definition.has_parallel_nodes()
+            (key == node || key.starts_with(&descendants)) && definition.has_parallel_nodes()
         }) {
             return Ok(None);
         }
@@ -242,6 +240,40 @@ impl crate::agents::graph::llm::PipelineLlmAgentFactory for ParallelLlmEvents {
         &self,
     ) -> Option<Arc<dyn crate::agents::graph::llm::PipelineLlmAgentFactory>> {
         self.inner.for_fanout_branch()
+    }
+}
+
+/// An inline LLM Parallel branch's factory: its node events go through the
+/// branch's member-scoped sender (PM-5).
+struct InlineBranchEvents {
+    inner: Arc<dyn crate::agents::graph::llm::PipelineLlmAgentFactory>,
+    events: PipelineNodeEventSender,
+}
+
+impl crate::agents::graph::llm::PipelineLlmAgentFactory for InlineBranchEvents {
+    fn build(
+        &self,
+        definition: &crate::agents::graph::llm::LlmNodeDefinition,
+        input: &crate::agents::graph::llm::LlmExecutionInput,
+        output_schema: Option<serde_json::Value>,
+        replay: Option<&crate::agents::graph::llm::PipelineLlmReplayEnvelope>,
+        scope: &crate::agents::graph::llm::PipelineModelScope,
+    ) -> Result<
+        crate::agents::graph::llm::PipelineLlmAgentBinding,
+        crate::agents::graph::llm::LlmExecutionError,
+    > {
+        self.inner
+            .build(definition, input, output_schema, replay, scope)
+    }
+
+    fn event_sender(&self) -> Option<PipelineNodeEventSender> {
+        Some(self.events.clone())
+    }
+
+    fn for_fanout_branch(
+        &self,
+    ) -> Option<Arc<dyn crate::agents::graph::llm::PipelineLlmAgentFactory>> {
+        None
     }
 }
 
@@ -418,11 +450,8 @@ fn reject_nested_parallel(
         .collect::<BTreeMap<_, _>>();
     if let Some(definitions) = runtimes.composition_definitions() {
         for node in owned.values() {
-            let path = if runtimes.application_scope_path.is_empty() {
-                node.id().to_owned()
-            } else {
-                format!("{}/{}", runtimes.application_scope_path, node.id())
-            };
+            // Keyed relative to the pipeline these runtimes compile (PM-2).
+            let path = node.id().to_owned();
             let descendants = format!("{path}/");
             // Code inside a fan-out child needs the Wave 3 Code-slot and
             // receipt work; refuse it by name until then, as Map does.
@@ -436,11 +465,8 @@ fn reject_nested_parallel(
             }
         }
         for node in owned.values() {
-            let path = if runtimes.application_scope_path.is_empty() {
-                node.id().to_owned()
-            } else {
-                format!("{}/{}", runtimes.application_scope_path, node.id())
-            };
+            // Keyed relative to the pipeline these runtimes compile (PM-2).
+            let path = node.id().to_owned();
             let descendants = format!("{path}/");
             if definitions.iter().any(|(key, definition)| {
                 (key == &path || key.starts_with(&descendants)) && definition.has_parallel_nodes()
@@ -666,6 +692,31 @@ impl CompilerParallelBranches {
                     "the fixed Parallel LLM branch runtime is unavailable".to_owned(),
                 )
             })?;
+        // PM-5: a root-level inline branch's model text and tool calls stream
+        // under its member tier, through the same proved branch scope an Agent
+        // member uses; the member sender keeps its failures as join data. A
+        // branch inside a saved child pipeline does not stream yet (FU-260).
+        let nested = super::super::node_events::PipelineNodeEventScope::from_state(
+            execution.parent_event_scope_value(),
+        )
+        .map_err(|_| {
+            GraphError::InvalidGraph("the fixed Parallel parent event scope is invalid".to_owned())
+        })?
+        .is_some();
+        let factory = match self.events.as_ref().filter(|_| !nested) {
+            Some(events) => {
+                let events = events.for_inline_llm_branch(execution).map_err(|_| {
+                    GraphError::InvalidGraph(
+                        "the fixed Parallel event branch is unproved".to_owned(),
+                    )
+                })?;
+                Arc::new(InlineBranchEvents {
+                    inner: factory,
+                    events,
+                }) as Arc<dyn crate::agents::graph::llm::PipelineLlmAgentFactory>
+            }
+            None => factory,
+        };
         let checkpointer = execution.checkpointer();
         let node = LlmNode::new(definition.clone(), self.state_types.clone(), factory)
             .with_parallel_inputs();

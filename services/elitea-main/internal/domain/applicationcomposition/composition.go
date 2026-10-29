@@ -126,6 +126,9 @@ type Version struct {
 	StaticPause bool
 	// ParallelNode is the first Parallel node's id, empty when there is none.
 	ParallelNode string
+	// LLMBranches is how many LLM nodes a Parallel runs as branches: each
+	// runs in its own checkpoint family (PM-4).
+	LLMBranches int
 }
 
 // Source reads one saved version. ok is false for a version that does not
@@ -558,6 +561,13 @@ func (w *walker) walkPipeline(ctx context.Context, pipeline Version, p path, com
 		return depthViolation(strings.Join(append(append([]string(nil), p.trail...),
 			"Agent node "+label(pipeline.AgentNodes[0].ID)), " → "))
 	}
+	// PM-2: an inline LLM Parallel branch needs a checkpoint path one level
+	// below its pipeline, so at the deepest level it is refused as an Agent
+	// node is (the Worker's collect_paths refuses the same).
+	if composition == MaxPipelineDepth && pipeline.LLMBranches > 0 {
+		return depthViolation(strings.Join(append(append([]string(nil), p.trail...),
+			"Parallel node "+label(pipeline.ParallelNode)), " → "))
+	}
 	if composition == 0 {
 		paths := 0
 		if err := w.checkpointPaths(ctx, pipeline, 0, &paths, map[Identity]bool{}); err != nil {
@@ -613,10 +623,11 @@ func (w *walker) walkPipeline(ctx context.Context, pipeline Version, p path, com
 	return nil
 }
 
-// checkpointPaths counts the Agent-node paths of a saved pipeline composition
+// checkpointPaths counts the checkpoint paths of a saved pipeline composition
 // as the Worker's collect_paths does: every Agent node, and the nodes of the
-// saved pipeline it runs, below the pipeline root or tool. Depth past the bound
-// is walkPipeline's refusal; visiting guards a cycle (refused by the cycle check).
+// saved pipeline it runs, below the pipeline root or tool, then every inline
+// LLM Parallel branch at that level (PM-4). Depth past the bound is
+// walkPipeline's refusal; visiting guards a cycle (refused by the cycle check).
 func (w *walker) checkpointPaths(ctx context.Context, pipeline Version, depth int, paths *int, visiting map[Identity]bool) error {
 	if depth >= MaxPipelineDepth {
 		return nil
@@ -624,7 +635,7 @@ func (w *walker) checkpointPaths(ctx context.Context, pipeline Version, depth in
 	for _, node := range pipeline.AgentNodes {
 		if *paths == MaxCheckpointPaths {
 			return violation(BoundCheckpoints, fmt.Sprintf(
-				"Pipeline %s runs more than %d Agent nodes across the saved pipelines it runs. Reduce the Agent nodes before saving.",
+				"Pipeline %s runs more than %d Agent nodes and LLM Parallel branches across the saved pipelines it runs. Reduce them before saving.",
 				label(pipeline.Name), MaxCheckpointPaths))
 		}
 		*paths++
@@ -645,6 +656,14 @@ func (w *walker) checkpointPaths(ctx context.Context, pipeline Version, depth in
 		if err != nil {
 			return err
 		}
+	}
+	for range pipeline.LLMBranches {
+		if *paths == MaxCheckpointPaths {
+			return violation(BoundCheckpoints, fmt.Sprintf(
+				"Pipeline %s runs more than %d Agent nodes and LLM Parallel branches across the saved pipelines it runs. Reduce them before saving.",
+				label(pipeline.Name), MaxCheckpointPaths))
+		}
+		*paths++
 	}
 	return nil
 }
@@ -765,20 +784,21 @@ func label(name string) string {
 	return `"` + builder.String() + `"`
 }
 
-// ReadPipeline reads the Agent nodes, the static pause and the first Parallel
-// node of a pipeline definition. A definition the save-time admission refuses
-// or that does not parse has none: the Worker refuses it on its own.
-func ReadPipeline(instructions string) (nodes []AgentNode, staticPause bool, parallelNode string) {
+// ReadPipeline reads the Agent nodes, the static pause, the first Parallel
+// node and the number of inline LLM Parallel branches of a pipeline
+// definition. A definition the save-time admission refuses or that does not
+// parse has none: the Worker refuses it on its own.
+func ReadPipeline(instructions string) (nodes []AgentNode, staticPause bool, parallelNode string, llmBranches int) {
 	if pipelinelimits.Check(instructions) != nil {
-		return nil, false, ""
+		return nil, false, "", 0
 	}
 	var document yaml.Node
 	if yaml.NewDecoder(strings.NewReader(instructions)).Decode(&document) != nil || len(document.Content) != 1 {
-		return nil, false, ""
+		return nil, false, "", 0
 	}
 	root := aliased(document.Content[0])
 	if root.Kind != yaml.MappingNode {
-		return nil, false, ""
+		return nil, false, "", 0
 	}
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		value := aliased(root.Content[i+1])
@@ -789,18 +809,24 @@ func ReadPipeline(instructions string) (nodes []AgentNode, staticPause bool, par
 			}
 		case "nodes":
 			if value.Kind == yaml.SequenceNode {
-				nodes, parallelNode = agentNodes(value)
+				nodes, parallelNode, llmBranches = agentNodes(value)
 			}
 		}
 	}
-	return nodes, staticPause, parallelNode
+	return nodes, staticPause, parallelNode, llmBranches
 }
 
-func agentNodes(sequence *yaml.Node) (nodes []AgentNode, parallelNode string) {
+func agentNodes(sequence *yaml.Node) (nodes []AgentNode, parallelNode string, llmBranches int) {
 	branches := map[string]bool{}
+	var llmNodes []string
 	defer func() {
 		for i := range nodes {
 			nodes[i].Branch = branches[nodes[i].ID]
+		}
+		for _, id := range llmNodes {
+			if branches[id] {
+				llmBranches++
+			}
 		}
 	}()
 	for _, entry := range sequence.Content {
@@ -809,7 +835,7 @@ func agentNodes(sequence *yaml.Node) (nodes []AgentNode, parallelNode string) {
 			continue
 		}
 		var node AgentNode
-		var isAgent, isParallel bool
+		var isAgent, isParallel, isLLM bool
 		for i := 0; i+1 < len(entry.Content); i += 2 {
 			value := aliased(entry.Content[i+1])
 			if aliased(entry.Content[i]).Value == "branches" && value.Kind == yaml.SequenceNode {
@@ -825,6 +851,7 @@ func agentNodes(sequence *yaml.Node) (nodes []AgentNode, parallelNode string) {
 			case "type":
 				isAgent = value.Value == "agent"
 				isParallel = value.Value == "parallel"
+				isLLM = value.Value == "llm"
 			case "id":
 				node.ID = value.Value
 			case "tool":
@@ -837,8 +864,11 @@ func agentNodes(sequence *yaml.Node) (nodes []AgentNode, parallelNode string) {
 		if isParallel && parallelNode == "" && node.ID != "" {
 			parallelNode = node.ID
 		}
+		if isLLM && node.ID != "" {
+			llmNodes = append(llmNodes, node.ID)
+		}
 	}
-	return nodes, parallelNode
+	return nodes, parallelNode, llmBranches
 }
 
 // branchNodes answers the node ids a Parallel's `branches` list runs.

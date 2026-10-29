@@ -371,8 +371,23 @@ impl LlmNodeDefinition {
         let mapped = self.mapped_values(parent).map_err(|_| failure())?;
         Self::execution_input(&mapped).map_err(|_| failure())?;
         let frozen = serde_json::to_value(&mapped).map_err(|_| failure())?;
-        super::parallel::ensure_bounded_json(&frozen, MAX_LLM_REPLAY_BYTES, "input")
-            .map_err(|_| failure())?;
+        // PM-3: the bound keeps its typed code and names the branch.
+        super::parallel::ensure_bounded_json(&frozen, MAX_LLM_REPLAY_BYTES, "input").map_err(
+            |error| match error {
+                GraphError::NodeExecutionFailed { message, .. }
+                    if super::parallel::is_parallel_resource_exhausted(&message) =>
+                {
+                    GraphError::NodeExecutionFailed {
+                        node: self.id().to_owned(),
+                        message: format!(
+                            "graph.parallel.resource_exhausted: the mapped input of LLM branch \"{}\" exceeds its 512 KiB bound; shorten the mapped input",
+                            self.id()
+                        ),
+                    }
+                }
+                _ => failure(),
+            },
+        )?;
         let mut state = self
             .input
             .iter()

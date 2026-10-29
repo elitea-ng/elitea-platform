@@ -11,7 +11,8 @@ use ring::digest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const ACTIVATION_METADATA_KEY: &str = "elitea.pipeline.application-activation.v1";
+/// The metadata key of an Agent node activation stamp on its child rows.
+pub const ACTIVATION_METADATA_KEY: &str = "elitea.pipeline.application-activation.v1";
 const ACTIVATION_SCHEMA: &str = "elitea.pipeline.application-activation.v1";
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
@@ -29,6 +30,24 @@ impl ApplicationActivation {
     fn child_thread(&self) -> String {
         format!("{}/{}", self.parent_thread, self.node_name)
     }
+}
+
+/// The Agent node definition digest the activation stamp on a row of `thread`
+/// records for that thread: `None` unless the stamp is well formed and names
+/// exactly `thread` (a recovery walk compares it with the frozen definition).
+#[must_use]
+pub fn stamped_definition_digest<S: std::hash::BuildHasher>(
+    metadata: &HashMap<String, Value, S>,
+    thread: &str,
+) -> Option<[u8; 32]> {
+    let entry = metadata
+        .get(ACTIVATION_METADATA_KEY)?
+        .as_object()?
+        .get(thread)?
+        .clone();
+    let recorded: ApplicationActivation = serde_json::from_value(entry).ok()?;
+    (recorded.schema == ACTIVATION_SCHEMA && recorded.child_thread() == thread)
+        .then_some(recorded.definition_digest)
 }
 
 /// Every node owns its own overlay. The inner adapter retains authority and fencing.

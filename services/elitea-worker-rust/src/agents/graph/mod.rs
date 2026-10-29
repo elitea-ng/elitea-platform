@@ -183,6 +183,7 @@ pub(crate) use parallel::{
     ParallelCheckpointAppender, ParallelCheckpointAuthority, ParallelChildCheckpoint,
     ParallelChildCheckpointerFactory, ParallelChildOrigin, ParallelChildRequest, ParentHead,
     ParentSaveProbe, PreparedChildCheckpoint, holds_parallel_occurrence,
+    is_parallel_resource_exhausted,
 };
 pub(crate) use printer::{PRINTER_PAUSE_METADATA_KEY, PrinterPauseCatalog, PrinterPauseMetadata};
 
