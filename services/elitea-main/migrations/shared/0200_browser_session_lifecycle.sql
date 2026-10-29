@@ -75,6 +75,25 @@ UPDATE elitea_auth.browser_sessions
 SET ended_at = revoked_at, end_reason = 'revoked', end_audited_at = revoked_at
 WHERE revoked_at IS NOT NULL AND ended_at IS NULL;
 
+-- Sessions that had already lapsed before this migration end here, quietly:
+-- their expiry happened before session events existed, and reporting it now
+-- would send one burst of stale `session.expire` events on the first pass.
+-- The idle deadline is taken when it falls before the absolute one.
+UPDATE elitea_auth.browser_sessions
+SET ended_at = last_seen_at + make_interval(secs => idle_timeout_seconds),
+    end_reason = 'idle',
+    end_audited_at = now()
+WHERE ended_at IS NULL
+  AND revoked_at IS NULL
+  AND idle_timeout_seconds > 0
+  AND last_seen_at + make_interval(secs => idle_timeout_seconds) <= LEAST(now(), expires_at);
+
+UPDATE elitea_auth.browser_sessions
+SET ended_at = expires_at, end_reason = 'absolute', end_audited_at = now()
+WHERE ended_at IS NULL
+  AND revoked_at IS NULL
+  AND expires_at <= now();
+
 -- The relay's two queues. Both stay small: a row leaves each the moment its
 -- event is written.
 CREATE INDEX IF NOT EXISTS browser_sessions_start_unaudited
