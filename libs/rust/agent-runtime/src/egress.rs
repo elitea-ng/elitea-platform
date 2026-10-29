@@ -212,7 +212,7 @@ impl RunEgress {
     }
 
     /// Whether `host` on `port` may be reached. A refusal is counted, and
-    /// named to the tool call in progress (see [`attributed`]).
+    /// named to the tool call in progress (see `attributed`).
     ///
     /// # Errors
     ///
