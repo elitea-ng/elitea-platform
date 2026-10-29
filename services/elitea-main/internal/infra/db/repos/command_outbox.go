@@ -38,6 +38,20 @@ type noAuthorityRetirementCandidate struct {
 	Generation          int64
 	ProjectionProjectID int64
 	DesiredState        string
+	// RefusalMessage is the refusal a retired row carried (shared 0197),
+	// read after the retirement by the index projections; empty otherwise.
+	RefusalMessage string
+}
+
+// outboxRefusalMessage reads the refusal message of an outbox row (shared
+// 0197); empty when it carries none.
+func outboxRefusalMessage(ctx context.Context, tx sqlExecutor, outboxID string) (string, error) {
+	var message string
+	if err := tx.QueryRow(ctx, `
+SELECT COALESCE(refusal_message, '') FROM elitea_runtime.command_outbox WHERE outbox_id = $1`, outboxID).Scan(&message); err != nil {
+		return "", fmt.Errorf("read the outbox refusal: %w", err)
+	}
+	return message, nil
 }
 
 type CommandOutboxRepository struct {
@@ -272,6 +286,7 @@ func retireLockedNoAuthorityValidation(ctx context.Context, tx sqlExecutor, cand
 	}
 
 	var projectionProjectID int64
+	var refusalCode, refusalMessage string
 	err := tx.QueryRow(ctx, `
 WITH retired AS (
     UPDATE elitea_runtime.command_outbox AS o
@@ -296,26 +311,33 @@ WITH retired AS (
           FROM elitea_runtime.execution_claims AS c
           WHERE c.execution_id = o.execution_id AND c.generation = o.generation
       )
-    RETURNING o.execution_id, o.generation, o.retired_at
+    RETURNING o.execution_id, o.generation, o.retired_at, o.refusal_code, o.refusal_message
 )
 UPDATE elitea_runtime.execution_jobs AS j
 SET state = $5, settled_at = retired.retired_at, terminal_error_code = $6
 FROM retired
 WHERE j.execution_id = retired.execution_id
   AND j.generation = retired.generation
-RETURNING j.projection_project_id`,
+RETURNING j.projection_project_id, COALESCE(retired.refusal_code, ''), COALESCE(retired.refusal_message, '')`,
 		candidate.OutboxID,
 		candidate.ExecutionID,
 		candidate.Generation,
 		retirementCode,
 		jobState,
 		terminalErrorCode,
-	).Scan(&projectionProjectID)
+	).Scan(&projectionProjectID, &refusalCode, &refusalMessage)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("retire no-authority validation execution: %w", err)
+	}
+	// A command Main refused to prepare (shared 0197) fails with its refusal,
+	// not the deadline text: the deadline was moved to now to retire it.
+	if refusalCode != "" && retirementCode == retirementCodeDeadlineExceeded {
+		if eventBytes, err = refusalEventBytes(refusalCode, refusalMessage); err != nil {
+			return false, fmt.Errorf("encode the refusal replay event: %w", err)
+		}
 	}
 	if projectionProjectID != candidate.ProjectionProjectID {
 		return false, errors.New("retired validation projection identity changed")

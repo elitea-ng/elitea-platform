@@ -269,6 +269,7 @@ impl Harness {
             &self.runtime,
             IndexRun {
                 command: &command,
+                egress: elitea_agent_runtime::egress::RunEgress::open(),
                 toolkit_configuration: &configuration,
                 tool_parameters: &parameters,
                 parsed: None,

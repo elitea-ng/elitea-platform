@@ -307,6 +307,10 @@ pub(crate) struct OrdinaryRuntimeBindings {
     /// turn, taken by the root agent at each safe point. Only the ordinary
     /// root agent takes them; a pipeline or a child agent never does.
     steering: Option<Arc<dyn crate::state::TurnSteering>>,
+    /// The run's public egress policy and ledger (#1490). Delegated-auth
+    /// discovery runs after a tool call, outside any egress scope, so it is
+    /// handed the run here; never set, nothing public is reached.
+    egress: Arc<elitea_agent_runtime::egress::RunEgress>,
 }
 
 impl OrdinaryRuntimeBindings {
@@ -331,7 +335,18 @@ impl OrdinaryRuntimeBindings {
             lazy_tools_index: None,
             tool_call_confirmation: None,
             steering: None,
+            egress: elitea_agent_runtime::egress::RunEgress::closed(),
         }
+    }
+
+    /// The run whose egress policy delegated-auth discovery runs under.
+    #[must_use]
+    pub(crate) fn with_egress(
+        mut self,
+        egress: Arc<elitea_agent_runtime::egress::RunEgress>,
+    ) -> Self {
+        self.egress = egress;
+        self
     }
 
     /// Take steering messages at the root agent's safe points.
@@ -515,6 +530,7 @@ fn application_event_agent(
 pub(crate) fn delegated_authorization_agent(
     agent: Arc<dyn Agent>,
     authorization: DelegatedAuthorizationCatalog,
+    egress: Arc<elitea_agent_runtime::egress::RunEgress>,
 ) -> Arc<dyn Agent> {
     if authorization.is_empty() {
         agent
@@ -522,6 +538,7 @@ pub(crate) fn delegated_authorization_agent(
         Arc::new(DelegatedAuthorizationEventAgent {
             inner: agent,
             authorization,
+            egress,
         })
     }
 }
@@ -594,6 +611,9 @@ impl Agent for ClarifyingQuestionEventAgent {
 struct DelegatedAuthorizationEventAgent {
     inner: Arc<dyn Agent>,
     authorization: DelegatedAuthorizationCatalog,
+    /// The run's egress policy: discovery GETs a URL the server's challenge
+    /// named, so it is held to the run's allowlist and lands in its ledger.
+    egress: Arc<elitea_agent_runtime::egress::RunEgress>,
 }
 
 #[async_trait]
@@ -613,6 +633,7 @@ impl Agent for DelegatedAuthorizationEventAgent {
     async fn run(&self, context: Arc<dyn InvocationContext>) -> adk_rust::Result<EventStream> {
         let mut events = self.inner.run(context).await?;
         let authorization = self.authorization.clone();
+        let egress = Arc::clone(&self.egress);
         let declined_scope = authorization
             .encode_declined_scope()
             .map_err(|()| AdkError::agent("delegated authorization scope exceeds its bound"))?;
@@ -633,7 +654,7 @@ impl Agent for DelegatedAuthorizationEventAgent {
                 if let Some(request) = event.actions.tool_confirmation.as_ref()
                     && let Some(requirement) = authorization.requirement_for(&request.tool_name)
                 {
-                    let requirement = requirement.resolve_public_metadata().await;
+                    let requirement = requirement.resolve_public_metadata(&egress).await;
                     let Some(encoded) = encode_delegated_authorization_requirement(&requirement) else {
                         yield Err(AdkError::agent("delegated authorization metadata could not be encoded"));
                         return;
@@ -672,6 +693,9 @@ pub(crate) struct AuthorizedNativeCommandBinding {
     /// The original command deadline, in Unix milliseconds. Fan-out nodes are
     /// bounded by it (`OrdinaryNativeAgentPlan::fanout_deadline`).
     deadline_unix_millis: i64,
+    /// The execution's public egress policy and ledger (#1490), the same
+    /// instance every path of this execution uses.
+    egress: std::sync::Arc<elitea_agent_runtime::egress::RunEgress>,
 }
 
 impl AuthorizedNativeCommandBinding {
@@ -705,7 +729,13 @@ impl AuthorizedNativeCommandBinding {
             client_message_id: agent.client_message_id.clone(),
             sio_event: agent.sio_event.clone(),
             deadline_unix_millis: command.deadline_unix_millis,
+            egress: crate::protocol::egress::run_egress(command),
         }
+    }
+
+    /// The execution's public egress policy and ledger (#1490).
+    pub(crate) const fn egress(&self) -> &std::sync::Arc<elitea_agent_runtime::egress::RunEgress> {
+        &self.egress
     }
 
     #[cfg(test)]
@@ -721,6 +751,7 @@ impl AuthorizedNativeCommandBinding {
             client_message_id: "message-1".to_owned(),
             sio_event: "chat_predict".to_owned(),
             deadline_unix_millis: 4_102_444_800_000,
+            egress: elitea_agent_runtime::egress::RunEgress::open(),
         }
     }
 
@@ -2985,6 +3016,7 @@ fn build_runtime_agent(
         lazy_tools_index: _,
         tool_call_confirmation,
         steering,
+        egress,
     } = runtime;
     let mut delegated_authorization = delegated_authorization;
     let (model, toolsets) = crate::toolkits::bind_authorization_model_tools(
@@ -3045,7 +3077,7 @@ fn build_runtime_agent(
         Arc::new(PipelineNodeEventStreamingAgent::new(agent, events))
     });
     let agent = instruction_plan.wrap(agent);
-    let agent = delegated_authorization_agent(agent, delegated_authorization.clone());
+    let agent = delegated_authorization_agent(agent, delegated_authorization.clone(), egress);
     let agent = clarifying_question_agent(agent, internal_tools);
     let agent = application_events.map_or(agent.clone(), |events| {
         application_event_agent(
@@ -3186,6 +3218,7 @@ async fn prepare_direct_resume(
         lazy_tools_index: _,
         tool_call_confirmation,
         steering,
+        egress,
     } = runtime;
     let events = stored.events().all();
     let resolved = match start {
@@ -3308,7 +3341,8 @@ async fn prepare_direct_resume(
         .with_instruction_plan(instruction_plan)
         .with_toolkit_attribution(toolkit_attribution)
         .with_tool_call_confirmation(tool_call_confirmation)
-        .with_steering(steering),
+        .with_steering(steering)
+        .with_egress(egress),
         parallel_applications,
     })
 }

@@ -98,6 +98,7 @@ import type {
   UserListResponse,
   UserProjectPermissionsResult,
   UserProjectRoleMap,
+  WorkerEgressHostsResponse,
 } from "../model";
 
 export const getListNativeDevicesAdministrationResponseMock = (
@@ -606,6 +607,43 @@ export const getSetProjectRetentionOverrideResponseMock = (
   enforced_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
   updated_by: faker.helpers.arrayElement([faker.number.int(), null]),
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getListWorkerEgressHostsResponseMock = (
+  overrideResponse: Partial<Extract<WorkerEgressHostsResponse, object>> = {},
+): WorkerEgressHostsResponse => ({
+  days: faker.number.int(),
+  since: faker.date.past().toISOString().slice(0, 19) + "Z",
+  source: faker.helpers.arrayElement(["worker", "proxy", "all"] as const),
+  project_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  reached: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    project_id: faker.number.int(),
+    agent_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    host: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    port: faker.number.int(),
+    connections: faker.number.int(),
+    executions: faker.number.int(),
+    last_seen: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  refused: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    project_id: faker.number.int(),
+    agent_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    host: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    port: faker.number.int(),
+    reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    count: faker.number.int(),
+    executions: faker.number.int(),
+    last_seen: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  reached_truncated: faker.datatype.boolean(),
+  refused_truncated: faker.datatype.boolean(),
   ...overrideResponse,
 });
 
@@ -3336,6 +3374,32 @@ export const getDeleteProjectRetentionOverrideMockHandler = (
   );
 };
 
+export const getListWorkerEgressHostsMockHandler = (
+  overrideResponse?:
+    | WorkerEgressHostsResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<WorkerEgressHostsResponse> | WorkerEgressHostsResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/worker_egress/hosts",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListWorkerEgressHostsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListLegalHoldsMockHandler = (
   overrideResponse?:
     | LegalHoldListResponse
@@ -5071,6 +5135,7 @@ export const getAdminMock = () => [
   getSetPlatformRetentionPolicyMockHandler(),
   getSetProjectRetentionOverrideMockHandler(),
   getDeleteProjectRetentionOverrideMockHandler(),
+  getListWorkerEgressHostsMockHandler(),
   getListLegalHoldsMockHandler(),
   getCreateLegalHoldMockHandler(),
   getReleaseLegalHoldMockHandler(),

@@ -1,0 +1,124 @@
+---
+title: "Least privilege and trust"
+description: "Controls that limit what an agent can reach. The worker egress allowlist restricts the public hosts an agent's tools may call to the hosts that the platform, the project and the agent's own toolkits name."
+---
+
+Least-privilege controls limit what an agent can reach and act on. This page describes the controls of ADR-0044 that are available now.
+
+## Worker egress allowlist
+
+### The risk
+
+An agent's tools make outbound HTTP calls from the worker: web fetches, toolkit clients (Jira, Confluence, GitHub and others), OpenAPI tools, remote MCP servers and index runs. Without a restriction, a tool can reach any public host. A prompt injection, a malicious document or a misconfigured toolkit can then send data to a host that nobody approved. The private, link-local and cloud-metadata ranges were already refused for web fetches, but any public host was allowed.
+
+### What is enforced
+
+The platform has a **worker egress mode**:
+
+| Mode | What a run may reach |
+| --- | --- |
+| `open` (the default) | Any public host. This is the behaviour of earlier releases. |
+| `allowlist` | Only the hosts in the run's allowlist. Any other host is refused. |
+
+A run uses `allowlist` mode when the platform's mode is `allowlist`, or when the run is governed (credential governance is on; see [Credential governance](/deployment/credential-governance)). A governed run always uses `allowlist`, whatever the platform's mode is.
+
+The main service builds the allowlist for each run when it sends the run to a worker. The allowlist is the union of:
+
+- the **platform entries**, set under **Configuration › Worker Egress**;
+- the **project entries**, from the project's `worker_egress` setting;
+- the host of every URL that the run's toolkits, MCP servers and configurations are configured with (for example, a Jira toolkit's base URL);
+- the fixed API hosts that a toolkit type always calls, even when its settings do not name them (for example, `api.figma.com` for Figma, `graph.microsoft.com` for SharePoint, and `*.googleapis.com` for Google Cloud toolkits);
+- for an OpenAPI toolkit, the host of its specification URL and the host that its operations call: the `base_url` setting when it is set, otherwise the first `servers` entry of the specification, with each `{variable}` replaced by its `default`;
+- for a GitHub toolkit with the base URL `https://api.github.com`, the host `github.com`, which the pull-request push of a workspace uses (a GitHub Enterprise base URL already names its push host);
+- for a governed run, the target hosts of the credentials that the run may use (for example, Microsoft Graph for a SharePoint credential).
+
+Only toolkit and configuration **settings** add hosts. User input, chat history and tool arguments never add a host, so nothing that a user or a document types can widen a run's allowlist. A project entry only adds hosts to that project's runs. It does not change the mode, which is the platform's decision.
+
+The allowlist travels inside the signed worker command, so a worker cannot widen it. The worker enforces it on every outbound connection of the run: web fetches and every redirect hop, all toolkit clients, OpenAPI tools, delegated sign-in token calls and metadata discovery, remote MCP servers, index runs, and the pull-request push of a workspace. A client opened outside any run is refused too: the worker has no unrestricted default. A refused call fails with the tool error `egress_host_not_allowed`, which names the host. The agent sees this error and can report it. The call never fails silently.
+
+The allowlist narrows the existing rules. It never widens them. For web fetches, private, link-local, cloud-metadata and reserved addresses stay refused in every mode, even if an entry names them.
+
+#### Entry format
+
+Each entry is one of:
+
+| Entry | Matches |
+| --- | --- |
+| `api.example.com` | That host, on any port |
+| `api.example.com:8443` | That host on that port only |
+| `*.example.com` | Every subdomain of `example.com` (not `example.com` itself) |
+| `*.example.com:443` | Every subdomain, on that port only |
+| `203.0.113.0/24` | Every address in that block |
+
+The platform list holds at most 512 entries, and a project list at most 256. A run's assembled allowlist holds at most 1024 entries and 24 KiB.
+
+#### When a policy cannot be built
+
+If the allowlist for a run cannot be built, the run fails at once. It is not retried, and it does not run with a shorter list. This happens when:
+
+- a platform or project entry is malformed;
+- the assembled list is longer than 1024 entries or larger than 24 KiB;
+- a governed run's security context is missing.
+
+The run fails with the code `EGRESS_POLICY_INVALID`. Its message names the bad entry and who must correct it, for example:
+
+```text
+The platform's worker egress allowlist entry "https://jira.example.com" is not a valid host, host:port, *.domain or CIDR block (...). A platform administrator must correct it under Configuration, Worker Egress.
+```
+
+A chat answer shows this as `error_code: egress_policy_invalid`. A synchronous toolkit tool call answers HTTP 422 with `reason: egress_policy_invalid`, and nothing is admitted. Configuration validation makes no network call, so it is never refused for its policy. If the main service only could not read a source (for example, the database was briefly unavailable), the dispatch is retried until the run's deadline.
+
+#### Limits
+
+- Endpoints that the operator configured for the worker itself, such as web-search provider origins in `ELITEA_WEB_EGRESS_ALLOWLIST`, are not judged by this policy, because the main service cannot list them. They are still reported as reached.
+- Toolkit clients reach operator-approved hosts, including hosts on your private network, so they never had the private-address guard of web fetches. For them, the allowlist is the only egress check inside the platform.
+- The task status of a run that failed with `EGRESS_POLICY_INVALID` can show `DEADLINE_EXCEEDED`. The run's events, the chat answer and index records show the refusal code.
+- A refused policy is settled at the next dispatch pass. A chat answer and a synchronous tool call report it immediately.
+- A governed toolkit that holds only a credential digest uses the credential grants that exist when the run is dispatched.
+- The worker's summary does not count bytes (`bytes_up` and `bytes_down` are 0). If the worker restarts before it sends the summary, or if the run is not settled within 12 hours, that summary is lost. The refusal itself still reaches the agent and the run's events.
+- An index run counts each request to a host, not each document.
+- A remote MCP server with no selected tools is checked when the run starts, and appears only in the refused hosts if it is refused.
+- The main service does not download an OpenAPI specification that a toolkit names by URL. If that specification's first server is an absolute URL on a different host, set the toolkit's `base_url`, or add that host to the platform or project entries. A relative server, or no server, uses the host of the specification URL, which is added automatically.
+
+### Configure and use
+
+<Steps>
+  <Step title="See which hosts your agents reach">
+    Open **Configuration › Worker Egress** in the admin console. The panel under the form lists the hosts that runs reached and the hosts that were refused, per project and agent, for the last 7, 30 or 90 days. It reads the worker's summaries, which are kept 30 days by default. Sandbox runs go through the egress proxy, which has its own per-project allowlists, so their hosts are not listed here; the API's `source=proxy` returns them.
+  </Step>
+  <Step title="Seed the platform allowlist">
+    Select **Copy as allowlist**. This copies the reached hosts as entries, one per line: a bare host (any port) where only ports 80 and 443 were used, and one `host:port` entry for each port otherwise. Remove the hosts that you do not approve, and paste the rest into the **Platform Allowlist** field. Toolkit base URLs, and the fixed API hosts of each toolkit type, are added to each run automatically, so you do not need to list them.
+  </Step>
+  <Step title="Add project entries if necessary">
+    A project that needs more hosts than the platform list can add its own. A project admin (permission `models.project_settings.edit`) creates one configuration of type `worker_egress`:
+
+    ```bash
+    curl -X POST "$DEPLOYMENT_URL/api/v2/configurations/configurations/$PROJECT_ID" \
+      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+      -d '{"elitea_title":"worker_egress","label":"Worker egress","type":"worker_egress",
+           "section":"project_settings","data":{"allowlist":["api.partner.example","*.internal.example.com"]}}'
+    ```
+  </Step>
+  <Step title="Switch the mode">
+    Set **Mode** to `allowlist` and save. Each replica of the main service reads the section again after at most 5 seconds, so new runs use the allowlist within 5 seconds. If the database cannot be read, a replica keeps the last value that it read and tries again after a short wait (from 0.5 seconds, doubled after each failure, up to 30 seconds). Runs in flight keep the policy that they started with.
+  </Step>
+  <Step title="Watch the refused hosts">
+    For the first days, check the refused hosts in the panel. A refused host that a real workflow needs is either added to the platform or project list, or is a call that the allowlist correctly stopped.
+  </Step>
+</Steps>
+
+To find the same data with the API, call `GET /api/v2/admin/worker_egress/hosts` (permission `configuration.governance`). The parameters are `days` (1 to 90, default 30), `source` (`worker`, `proxy` or `all`) and `project_id`.
+
+### Evidence
+
+- **One audit event per run turn.** The audit trail gets an event of type `tool` with entity type `execution` and the run's execution id as entity name. Its action lists the hosts reached and refused, for example `worker egress: reached api.example.com:443, jira.example.com:443; refused paste.example:443 (host_not_allowed x2)`. The structured log line `egress_audit.turn_summary` carries the full summary. These events go to your SIEM with the other audit events (see [Audit evidence and retention](/admin/enterprise-controls/audit-evidence-and-retention)).
+- **The summaries table.** `elitea_runtime.egress_run_summaries` keeps each run's summary for 30 days (`ELITEA_EGRESS_AUDIT_RETENTION_DAYS`, at most 365). Rows written by the worker have a replica key `worker:<command id>`.
+- **The configuration history.** Every save of the platform section (`/api/v2/admin/…`) and of a project's `worker_egress` setting (`/api/v2/configurations/…`) is recorded as an `api` audit event with the user, the route and the result. The event does not include the entries; read the current list from the section.
+- **The run's events.** A run refused for its policy has an `execution.failed` event with the code `EGRESS_POLICY_INVALID`.
+
+### Customer responsibility
+
+- Decide which public hosts your agents may reach, and review the platform list on a schedule.
+- Seed the allowlist from the observed hosts before you switch to `allowlist`, and watch the refused hosts after the switch.
+- Keep network egress control at your perimeter as well. This allowlist is enforced inside the worker; a firewall or egress gateway is your independent second layer.
+- Keep the list of hosts that the operator configured for the worker (web-search providers, model endpoints) under your change process, because this policy does not judge them.

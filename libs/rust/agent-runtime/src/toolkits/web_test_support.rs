@@ -273,12 +273,23 @@ pub(super) fn web_toolset(
     transport: &Arc<FixtureTransport>,
     extra_fetch_ports: Vec<u16>,
 ) -> BasicToolset {
+    web_toolset_under(value, meter, transport, extra_fetch_ports, &policy())
+}
+
+/// [`web_toolset`] under another toolkit policy (a run's egress policy).
+pub(super) fn web_toolset_under(
+    value: &Value,
+    meter: Option<&Arc<FakeMeter>>,
+    transport: &Arc<FixtureTransport>,
+    extra_fetch_ports: Vec<u16>,
+    policy: &Arc<ToolAdmissionPolicy>,
+) -> BasicToolset {
     let host = meter.map(host);
     let factory = |_: &RegistryEntry| Arc::clone(transport) as Arc<dyn Transport>;
     build_web_with(
         "web",
         WebConfig::parse(&settings(value)).expect("web settings"),
-        &policy(),
+        policy,
         &Parts {
             host: host.as_ref(),
             transports: &factory,

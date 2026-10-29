@@ -357,6 +357,7 @@ async fn run_timed(
         &harness.runtime,
         IndexRun {
             command,
+            egress: elitea_agent_runtime::egress::RunEgress::open(),
             toolkit_configuration: &configuration(),
             tool_parameters: parameters,
             parsed: None,
@@ -1335,6 +1336,7 @@ async fn malformed_inputs_are_invalid_input_not_a_summary() {
         &harness.runtime,
         IndexRun {
             command: &command(NS, None),
+            egress: elitea_agent_runtime::egress::RunEgress::open(),
             toolkit_configuration: b"[]",
             tool_parameters: &parameters(false, json!({})),
             parsed: None,
@@ -1358,6 +1360,7 @@ async fn malformed_inputs_are_invalid_input_not_a_summary() {
         &harness.runtime,
         IndexRun {
             command: &command("", None),
+            egress: elitea_agent_runtime::egress::RunEgress::open(),
             toolkit_configuration: &configuration(),
             tool_parameters: &parameters(false, json!({})),
             parsed: None,
@@ -1384,6 +1387,7 @@ async fn without_a_vector_token_or_a_model_the_run_fails_with_a_reason() {
         &harness.runtime,
         IndexRun {
             command: &command(NS, None),
+            egress: elitea_agent_runtime::egress::RunEgress::open(),
             toolkit_configuration: &configuration(),
             tool_parameters: &parameters(false, json!({})),
             parsed: None,
@@ -1406,6 +1410,7 @@ async fn without_a_vector_token_or_a_model_the_run_fails_with_a_reason() {
         &harness.runtime,
         IndexRun {
             command: &command(NS, None),
+            egress: elitea_agent_runtime::egress::RunEgress::open(),
             toolkit_configuration: &configuration(),
             tool_parameters: &parameters(false, json!({})),
             parsed: None,

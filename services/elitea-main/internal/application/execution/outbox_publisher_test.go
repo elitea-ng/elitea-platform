@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -337,4 +338,30 @@ func withPublisherConcurrency(config OutboxPublisherConfig, value int) OutboxPub
 func withPublisherReporter(config OutboxPublisherConfig, reporter func(error)) OutboxPublisherConfig {
 	config.ReportFailure = reporter
 	return config
+}
+
+// A refused command is settled by its durable refusal, not failed: the cycle
+// succeeds and only the sibling's real failure is reported.
+func TestOutboxPublisherCountsARefusedCommandAsHandled(t *testing.T) {
+	outbox := &publisherOutboxStub{responses: []publisherListResponse{{ids: []string{"refused", "failing", "fine"}}}}
+	down := errors.New("database down")
+	publisher := newTestOutboxPublisher(t, outbox, validationDispatchFunc(func(_ context.Context, id string) error {
+		switch id {
+		case "refused":
+			return fmt.Errorf("prepare: %w", &DispatchRefusal{Code: "EGRESS_POLICY_INVALID", Message: "fix it"})
+		case "failing":
+			return down
+		}
+		return nil
+	}), OutboxPublisherConfig{
+		PollInterval: time.Hour, VisibilityTimeout: time.Minute, BatchSize: 4, MaxConcurrent: 1, ReportFailure: func(error) {},
+	})
+	err := publisher.RunOnce(context.Background())
+	if !errors.Is(err, down) || errors.Is(err, ErrDispatchRefused) {
+		t.Fatalf("err = %v", err)
+	}
+	outbox.responses = []publisherListResponse{{ids: []string{"refused"}}}
+	if err := publisher.RunOnce(context.Background()); err != nil {
+		t.Fatalf("a refused command failed the cycle: %v", err)
+	}
 }

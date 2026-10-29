@@ -15,6 +15,7 @@ use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
 use super::config::RallyToolkitConfig;
+use crate::egress::BuildForRun as _;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -224,7 +225,7 @@ pub(in crate::toolkits) trait RallyTransport: Send + Sync {
 }
 
 struct ReqwestRallyTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -298,7 +299,7 @@ pub(crate) struct RallyClient {
 
 impl RallyClient {
     pub(crate) fn new(config: RallyToolkitConfig) -> Result<Self, RallyClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -307,7 +308,7 @@ impl RallyClient {
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT_VALUE)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self::with_transport_inner(
             config,

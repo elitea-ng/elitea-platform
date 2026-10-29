@@ -39,6 +39,23 @@
 // turn's rows to exactly ONE of them (a single UPDATE ... RETURNING), so a
 // turn yields exactly one audit event however many Main replicas run.
 //
+// # The worker's own reports
+//
+// The worker's HTTP clients (web_fetch, the SaaS toolkits, MCP servers) report
+// the hosts a run reached and refused over RuntimeControlService
+// ReportEgressSummary (ADR-0044 decision 2), under the run's live claim. Main
+// stores that as the run's row with replica WorkerReplicaFor(command id),
+// beside the proxy replicas' rows of the same execution, so one turn's event
+// merges both. One row per COMMAND: a paused run that resumes is a new command
+// of the same execution, and its worker reports only the new turn's hosts, so
+// a row keyed by the execution alone would lose the earlier turn's. Within a
+// command a report replaces the previous one (it is cumulative). A worker row
+// carries no token: it is non-final until that command settles (SettleWorker,
+// from PrepareSettlement), and then written after Settle like a proxy
+// replica's last report. Its token_expires_at is the last report plus
+// WorkerHold, so a run that never settles (its worker died, and nothing took
+// it over) is still written, partial, MaxHold after that.
+//
 // Delivery is at most once past the claim: a Main that dies between claiming
 // a turn and recording its event loses that one event (the proxy's own log
 // keeps the summary, and the recorder behind this package is itself an async
@@ -48,6 +65,7 @@ package egressaudit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -105,6 +123,10 @@ type Turn struct {
 	OtherHosts   int64         `json:"other_hosts"`
 	FirstReport  time.Time     `json:"first_report"`
 	LastReport   time.Time     `json:"last_report"`
+	// Worker and Proxy say whose reports were merged: the worker's own HTTP
+	// clients, the egress proxy's replicas, or both.
+	Worker bool `json:"worker"`
+	Proxy  bool `json:"proxy"`
 }
 
 // Row is one stored (execution, replica) snapshot.
@@ -131,7 +153,28 @@ type Store interface {
 	// DeleteOlderThan deletes the rows last updated before cutoff, claimed or
 	// not, and reports how many.
 	DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
+	// MarkFinal makes the open (execution, replica) row final, stamped now,
+	// so the turn is due Settle later. No open row is not an error.
+	MarkFinal(ctx context.Context, executionID, replica string, now time.Time) error
 }
+
+// WorkerReplicaPrefix starts the replica of every worker row: one row per
+// command, "worker:<command id>". The egress audit service refuses any
+// proxy replica id that is a worker's (IsWorkerReplica).
+const WorkerReplicaPrefix = "worker:"
+
+// WorkerReplicaFor is the replica of a command's worker row.
+func WorkerReplicaFor(commandID string) string { return WorkerReplicaPrefix + commandID }
+
+// IsWorkerReplica reports whether replica is a worker's row: one of
+// WorkerReplicaFor, or the bare "worker" no proxy may use either.
+func IsWorkerReplica(replica string) bool {
+	return replica == "worker" || strings.HasPrefix(replica, WorkerReplicaPrefix)
+}
+
+// WorkerHold is how long after a worker's last report its row counts as
+// live; see "The worker's own reports".
+const WorkerHold = 6 * time.Hour
 
 // Config tunes the merger. Zero values take the defaults.
 type Config struct {
@@ -143,7 +186,8 @@ type Config struct {
 	// replica sweeps every 5 s and logs the final summary within seconds).
 	MaxHold time.Duration
 	// Retention is how long the store keeps a row after its last report.
-	// Default 7 days.
+	// Default 30 days: the admin view of the hosts runs reached reads 30
+	// days back by default.
 	Retention time.Duration
 	// Tick is the sweep interval of Start. Default 5 s.
 	Tick time.Duration
@@ -151,7 +195,7 @@ type Config struct {
 
 // DefaultRetention is how long the rows are kept when Config.Retention is
 // zero.
-const DefaultRetention = 7 * 24 * time.Hour
+const DefaultRetention = 30 * 24 * time.Hour
 
 func (c Config) withDefaults() Config {
 	if c.Settle <= 0 {
@@ -217,6 +261,46 @@ func (m *Merger) WithClock(now func() time.Time) *Merger {
 // proxy retries it.
 func (m *Merger) Report(ctx context.Context, report Report) error {
 	return m.store.Upsert(ctx, report, m.now())
+}
+
+// WorkerSummary is the worker's cumulative view of one claimed command.
+type WorkerSummary struct {
+	ExecutionID string
+	// CommandID is the claimed command's: its row is WorkerReplicaFor it.
+	CommandID    string
+	ProjectID    int64
+	HostsReached []HostReached
+	HostsRefused []HostRefused
+	OtherHosts   int64
+}
+
+// ReportWorker stores the worker's snapshot of a command as its
+// WorkerReplicaFor row, replacing that command's previous one. It stays
+// non-final until SettleWorker.
+func (m *Merger) ReportWorker(ctx context.Context, summary WorkerSummary) error {
+	if summary.CommandID == "" {
+		return errors.New("egress audit: a worker summary needs its command")
+	}
+	report := Report{
+		ReplicaID: WorkerReplicaFor(summary.CommandID), ExecutionID: summary.ExecutionID, ProjectID: summary.ProjectID,
+		TokenExpiresAt: m.now().Add(WorkerHold),
+		HostsReached:   summary.HostsReached, HostsRefused: summary.HostsRefused, OtherHosts: summary.OtherHosts,
+	}
+	for _, host := range summary.HostsReached {
+		report.Connections += host.Connections
+		report.BytesUp += host.BytesUp
+		report.BytesDown += host.BytesDown
+	}
+	return m.store.Upsert(ctx, report, m.now())
+}
+
+// SettleWorker makes the command's worker row final: the command settled,
+// so no further report can come for this turn.
+func (m *Merger) SettleWorker(ctx context.Context, executionID, commandID string) error {
+	if commandID == "" {
+		return errors.New("egress audit: settling a worker row needs its command")
+	}
+	return m.store.MarkFinal(ctx, executionID, WorkerReplicaFor(commandID), m.now())
 }
 
 // Sweep claims every turn that is due at now, writes one audit event for
@@ -311,6 +395,13 @@ func mergeRows(rows []Row) []Turn {
 
 func merge(executionID string, rows []Row) Turn {
 	turn := Turn{ExecutionID: executionID, Replicas: len(rows), Complete: true}
+	for _, row := range rows {
+		if IsWorkerReplica(row.ReplicaID) {
+			turn.Worker = true
+		} else {
+			turn.Proxy = true
+		}
+	}
 	type hp struct {
 		host string
 		port int
@@ -424,7 +515,14 @@ const maxAction = 512
 // bytes: the hosts reached and refused, most significant first.
 func Action(turn Turn) string {
 	var b strings.Builder
-	b.WriteString("egress proxy: ")
+	switch {
+	case turn.Worker && turn.Proxy:
+		b.WriteString("egress (worker and proxy): ")
+	case turn.Worker:
+		b.WriteString("worker egress: ")
+	default:
+		b.WriteString("egress proxy: ")
+	}
 	if len(turn.HostsReached) == 0 {
 		b.WriteString("reached no host")
 	} else {

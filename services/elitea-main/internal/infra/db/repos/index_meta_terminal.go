@@ -245,7 +245,7 @@ FROM (
       AND o.settlement_outcome = 'FAILED'
     UNION ALL
     SELECT ''::text,
-           NULL::bytea,
+           convert_to(COALESCE(o.refusal_message, ''), 'UTF8'),
            o.retirement_code,
            2
     FROM elitea_runtime.command_outbox AS o
@@ -455,6 +455,10 @@ WHERE execution_id = $1
 
 func terminalSafeError(payloadType string, payloadBytes []byte, retirementCode string) string {
 	if retirementCode == "DEADLINE_EXCEEDED" {
+		// A refused command (shared 0197) carries its refusal message here.
+		if len(payloadBytes) != 0 {
+			return string(payloadBytes)
+		}
 		return "The execution deadline was exceeded before worker authority was granted."
 	}
 	switch payloadType {

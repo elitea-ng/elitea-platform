@@ -904,6 +904,7 @@ async fn artifact_documents_keep_the_full_key_so_two_folders_do_not_collide() {
             &harness.runtime,
             super::IndexRun {
                 command: &command(NS, expected),
+                egress: elitea_agent_runtime::egress::RunEgress::open(),
                 toolkit_configuration: configuration.to_string().as_bytes(),
                 tool_parameters:
                     json!({"index_name": "docs", "clean_index": false, "folder": folder})

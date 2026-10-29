@@ -561,20 +561,24 @@ pub async fn materialize_configured_toolsets_with_authorities_governed(
     governed: Option<&Arc<GovernedOperationClient>>,
 ) -> Result<(Vec<Arc<dyn Toolset>>, DelegatedAuthorizationCatalog), ToolsetMaterializationError> {
     let mut refusal = None;
-    let materialized = materialize_all(
-        snapshot,
-        policy,
-        delegated_tokens,
-        artifacts,
-        index_tools,
-        governed,
-        &mut |_, skip| {
-            // An unported family stays a quiet skip here: these callers have
-            // no run notice, and refusing the profile would stop the agent.
-            if let ToolkitSkip::Setting(setting) = skip {
-                refusal.get_or_insert(ToolsetMaterializationError::refused(setting));
-            }
-        },
+    // Every client a family builds here is bound to the run's egress policy.
+    let materialized = crate::egress::scope(
+        Arc::clone(policy.egress()),
+        materialize_all(
+            snapshot,
+            policy,
+            delegated_tokens,
+            artifacts,
+            index_tools,
+            governed,
+            &mut |_, skip| {
+                // An unported family stays a quiet skip here: these callers have
+                // no run notice, and refusing the profile would stop the agent.
+                if let ToolkitSkip::Setting(setting) = skip {
+                    refusal.get_or_insert(ToolsetMaterializationError::refused(setting));
+                }
+            },
+        ),
     )
     .await?;
     if let Some(error) = refusal {
@@ -617,14 +621,18 @@ pub async fn materialize_configured_toolsets_reporting_refusals_governed(
     governed: Option<&Arc<GovernedOperationClient>>,
 ) -> Result<ConfiguredToolsets, ToolsetMaterializationError> {
     let mut refused = Vec::new();
-    let mut materialized = materialize_all(
-        snapshot,
-        policy,
-        delegated_tokens,
-        artifacts,
-        index_tools,
-        governed,
-        &mut |reference, skip| refused.push(LeftOutToolkit::new(reference, skip)),
+    // Every client a family builds here is bound to the run's egress policy.
+    let mut materialized = crate::egress::scope(
+        Arc::clone(policy.egress()),
+        materialize_all(
+            snapshot,
+            policy,
+            delegated_tokens,
+            artifacts,
+            index_tools,
+            governed,
+            &mut |reference, skip| refused.push(LeftOutToolkit::new(reference, skip)),
+        ),
     )
     .await?;
     materialized.left_out = refused;

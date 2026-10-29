@@ -319,6 +319,7 @@ pub(super) async fn run_model_raw(
         &harness.runtime,
         IndexRun {
             command: &command(NS, expected),
+            egress: elitea_agent_runtime::egress::RunEgress::open(),
             toolkit_configuration: &configuration(),
             tool_parameters: parameters,
             parsed: None,
@@ -350,6 +351,7 @@ pub(super) async fn run_with_entries(
         &harness.runtime,
         IndexRun {
             command: &command(NS, None),
+            egress: elitea_agent_runtime::egress::RunEgress::open(),
             toolkit_configuration: &configuration(),
             tool_parameters: parameters,
             parsed: None,
@@ -1042,6 +1044,7 @@ async fn runs_without_a_proposal_chunker_are_not_failed_by_unreadable_chat_entri
             &harness.runtime,
             IndexRun {
                 command: &command(NS, None),
+                egress: elitea_agent_runtime::egress::RunEgress::open(),
                 toolkit_configuration: &configuration(),
                 tool_parameters: &parameters(false, config.clone()),
                 parsed: None,

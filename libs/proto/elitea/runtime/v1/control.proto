@@ -4,6 +4,7 @@ package elitea.runtime.v1;
 
 import "elitea/runtime/v1/common.proto";
 import "elitea/runtime/v1/compiled_code.proto";
+import "elitea/runtime/v1/egress_audit.proto";
 import "elitea/runtime/v1/envelope.proto";
 import "elitea/runtime/v1/errors.proto";
 import "elitea/runtime/v1/input.proto";
@@ -326,6 +327,28 @@ message ClaimSteeringMessagesResponseV1 {
   reserved 3 to 15;
 }
 
+// ReportEgressSummary records the public hosts the worker's own HTTP clients
+// reached and refused for one claimed execution (ADR-0044 decision 2,
+// #1490), beside the egress proxy's reports for sandbox runs. It is sent under
+// the live claim, before PrepareSettlement. A report is a CUMULATIVE snapshot
+// of this worker's view of the execution, so a retried or repeated report
+// replaces the previous one. Best effort: a failed report never fails the
+// run. Main stores it as the run's `worker` row in egress_run_summaries.
+message ReportEgressSummaryRequestV1 {
+  ExecutionIdentityV1 identity = 1;
+  ExecutionFenceV1 fence = 2;
+  // At most 256 hosts in each list; the rest are counted in other_hosts.
+  repeated EgressHostReachedV1 hosts_reached = 3;
+  repeated EgressHostRefusedV1 hosts_refused = 4;
+  int64 other_hosts = 5;
+  reserved 6 to 15;
+}
+
+message ReportEgressSummaryResponseV1 {
+  RuntimeErrorV1 rejection = 1;
+  reserved 2 to 10;
+}
+
 service RuntimeControlService {
   rpc AuthorizeSandboxJob(AuthorizeSandboxJobRequestV1) returns (AuthorizeSandboxJobResponseV1);
   rpc AuthorizeRustCompiledSnapshot(AuthorizeRustCompiledSnapshotRequestV1) returns (AuthorizeRustCompiledSnapshotResponseV1);
@@ -338,4 +361,5 @@ service RuntimeControlService {
   rpc PrepareSettlement(PrepareSettlementRequestV1) returns (PrepareSettlementResponseV1);
   rpc RemoveIndex(RemoveIndexRequestV1) returns (RemoveIndexResponseV1);
   rpc ClaimSteeringMessages(ClaimSteeringMessagesRequestV1) returns (ClaimSteeringMessagesResponseV1);
+  rpc ReportEgressSummary(ReportEgressSummaryRequestV1) returns (ReportEgressSummaryResponseV1);
 }

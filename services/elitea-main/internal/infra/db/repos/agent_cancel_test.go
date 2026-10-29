@@ -78,8 +78,10 @@ func TestCurrentAgentCancelRepositoryProjectsRetainedSalvagedAndDeletedResponses
 	} {
 		t.Run(name, func(t *testing.T) {
 			executor := &currentAgentCancelExecutorStub{
-				// The turn's conversation, then no ledger row: the stop still asks.
-				scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{{values: []any{int64(9)}}, {err: pgx.ErrNoRows}}},
+				// The turn's conversation, then the legal hold probe (#1507): no
+				// hold table, so the stop is not kept for a hold; then no ledger
+				// row: the stop still asks.
+				scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{{values: []any{int64(9)}}, {values: []any{false}}, {err: pgx.ErrNoRows}}},
 				cancelRow: sqlcgen.CancelCurrentAgentExecutionRow{
 					ResponseMessageGroupID: 51,
 					QuestionMessageGroupID: &questionID,
@@ -100,8 +102,9 @@ func TestCurrentAgentCancelRepositoryProjectsRetainedSalvagedAndDeletedResponses
 			if outcome.Deleted != projection.Deleted || outcome.Salvaged != projection.Salvaged || outcome.Replay {
 				t.Fatalf("outcome=%+v projection=%+v", outcome, projection)
 			}
-			// The turn's conversation (its steering), then the response's cards.
-			if calls := executor.rowCalls; len(calls) != 2 || !strings.Contains(calls[1].sql, "execution_interrupt_responses") {
+			// The turn's conversation (its steering), the legal hold probe, then
+			// the response's cards.
+			if calls := executor.rowCalls; len(calls) != 3 || !strings.Contains(calls[2].sql, "execution_interrupt_responses") {
 				t.Fatalf("stop did not close interrupt cards in its transaction: %+v", calls)
 			}
 			if projects.projectID != 2 || projects.options.AccessMode != pgx.ReadWrite ||
@@ -247,5 +250,47 @@ func TestCurrentAgentCancelRepositoryTreatsAVanishedProjectionAsReplay(t *testin
 				t.Fatalf("replay params=%+v", executor.replayParams)
 			}
 		})
+	}
+}
+
+// A stop never fails because the legal hold cannot be read (#1507): the
+// lookup runs under a savepoint that is rolled back, and the turn is kept
+// (KeepHeld), the safe direction.
+func TestCurrentAgentCancelKeepsTheTurnWhenTheHoldLookupFails(t *testing.T) {
+	questionID := int32(41)
+	executor := &currentAgentCancelExecutorStub{
+		// The turn's conversation, then a failed legal hold probe, then no
+		// interrupt ledger row.
+		scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{
+			{values: []any{int64(9)}}, {err: errors.New("simulated hold lookup failure")}, {err: pgx.ErrNoRows},
+		}},
+		cancelRow: sqlcgen.CancelCurrentAgentExecutionRow{
+			ResponseMessageGroupID: 51, QuestionMessageGroupID: &questionID,
+			ExecutionID: "execution-1", Generation: 1,
+			ClientExecutionGeneration: "20000000-0000-4000-8000-000000000035",
+		},
+		projection: sqlcgen.ProjectCurrentAgentStopRow{Retained: true},
+	}
+	repository, err := newCurrentAgentCancelRepository(&currentAgentCancelProjectStoreStub{executor: executor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := repository.CancelCurrentAgent(t.Context(), agentexecutionapp.CurrentAgentCancelRequest{
+		ProjectID: 2, ActorUserID: 7,
+		ResponseMessageID: "10000000-0000-4000-8000-000000000035",
+	})
+	if err != nil || outcome.Deleted {
+		t.Fatalf("outcome=%+v err=%v", outcome, err)
+	}
+	if !executor.projectParams.KeepHeld {
+		t.Fatal("a failed hold lookup did not keep the turn")
+	}
+	var savepoint, rolledBack bool
+	for _, call := range executor.execCalls {
+		savepoint = savepoint || call.sql == "SAVEPOINT stop_legal_hold_lookup"
+		rolledBack = rolledBack || call.sql == "ROLLBACK TO SAVEPOINT stop_legal_hold_lookup"
+	}
+	if !savepoint || !rolledBack {
+		t.Fatalf("the failed lookup was not isolated by a savepoint: %+v", executor.execCalls)
 	}
 }

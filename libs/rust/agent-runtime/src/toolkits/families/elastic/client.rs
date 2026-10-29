@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
 use super::config::ElasticToolkitConfig;
+use crate::egress::BuildForRun as _;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -193,7 +194,7 @@ pub(in crate::toolkits) trait ElasticTransport: Send + Sync {
 }
 
 struct ReqwestElasticTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -250,7 +251,7 @@ pub(crate) struct ElasticClient {
 
 impl ElasticClient {
     pub(crate) fn new(config: ElasticToolkitConfig) -> Result<Self, ElasticClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -260,7 +261,7 @@ impl ElasticClient {
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .user_agent(USER_AGENT)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
             config,

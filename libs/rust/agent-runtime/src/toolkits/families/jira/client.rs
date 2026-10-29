@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
 use super::config::{JiraApiVersion, JiraCredential, JiraToolkitConfig, MAX_SEARCH_RESULTS};
+use crate::egress::BuildForRun as _;
 use crate::toolkits::families::attachment_host::AttachmentHost;
 
 mod attachments;
@@ -361,7 +362,7 @@ pub(in crate::toolkits) trait JiraTransport: Send + Sync {
 }
 
 struct ReqwestJiraTransport {
-    http: reqwest::Client,
+    http: crate::egress::HttpClient,
 }
 
 #[async_trait]
@@ -454,7 +455,7 @@ pub(in crate::toolkits) struct JiraClient {
 
 impl JiraClient {
     pub(in crate::toolkits) fn new(config: JiraToolkitConfig) -> Result<Self, JiraClientError> {
-        let http = reqwest::Client::builder()
+        let http = crate::egress::client_builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -464,7 +465,7 @@ impl JiraClient {
             .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
             .referer(false)
             .user_agent(USER_AGENT)
-            .build()
+            .build_for_run()
             .map_err(|_| invalid_configuration())?;
         Ok(Self::with_transport_inner(
             config,

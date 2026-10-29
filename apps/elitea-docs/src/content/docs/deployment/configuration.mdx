@@ -44,7 +44,7 @@ curl -s -H "Authorization: Bearer $ADMIN_PAT" \
 
 ## Egress allowlists
 
-Two separate allowlists guard two separate outbound paths, both fail-closed by default in the dangerous direction:
+Separate allowlists guard separate outbound paths:
 
 <Tabs>
 <Tab title="LLM gateway — GATEWAY_EGRESS_ALLOWLIST">
@@ -70,6 +70,17 @@ Governs where elitea-main may dial for a Remote MCP server: **Load Tools**, the 
 ```bash
 --set-string main.env.ELITEA_MCP_EGRESS_ALLOWLIST="10.0.0.0/8"
 ```
+</Tab>
+<Tab title="Agent tools — Configuration › Worker Egress">
+Governs the public hosts an agent's tools reach from the **worker**: web fetches, toolkit clients, OpenAPI tools, remote MCP servers, index runs and the workspace pull-request push. It is a console setting, not an environment variable: section `worker_egress`, with `mode` (`open`, the default, or `allowlist`) and `allowlist` (at most 512 entries, the same grammar as above). A project adds its own entries with a `worker_egress` project configuration (at most 256). In `allowlist` mode each run may reach the platform's entries, its project's entries and the hosts its own toolkits and MCP servers are configured with. Runs under the governed credential profile always use `allowlist` mode.
+
+The worker and the egress proxy report the hosts each run reached and was refused. Main keeps those summaries in `elitea_runtime.egress_run_summaries` for `ELITEA_EGRESS_AUDIT_RETENTION_DAYS` days (default `30`, at most `365`), and writes one audit event per run turn. The same panel lists them, so you can seed the allowlist before you switch.
+
+```bash
+--set-string main.env.ELITEA_EGRESS_AUDIT_RETENTION_DAYS="90"
+```
+
+See [Least privilege and trust](/admin/enterprise-controls/least-privilege-and-trust) for what is enforced and the evidence it produces.
 </Tab>
 </Tabs>
 

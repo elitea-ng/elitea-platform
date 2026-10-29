@@ -1,6 +1,7 @@
 package runtimecomposition
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/egressaudit"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/egressaudit"
 )
 
@@ -22,7 +24,8 @@ const EgressAuditClientsEnv = "ELITEA_EGRESS_AUDIT_CLIENTS"
 const maxEgressAuditClients = 16
 
 // EgressAuditRetentionEnv is how many days the stored per-turn egress
-// summaries are kept (default 7, 1 to 365).
+// summaries are kept (default 30, 1 to 365). The admin view of the hosts
+// runs reached reads at most this far back.
 const EgressAuditRetentionEnv = "ELITEA_EGRESS_AUDIT_RETENTION_DAYS"
 
 func egressAuditRetention(lookup LookupEnv) (time.Duration, error) {
@@ -38,28 +41,64 @@ func egressAuditRetention(lookup LookupEnv) (time.Duration, error) {
 	return time.Duration(days) * 24 * time.Hour, nil
 }
 
-// newEgressAudit builds the service and its merger when clients are
-// configured. The merger keeps the proxy's summaries in
-// Dependencies.EgressAuditStore (shared by every Main replica) and writes the
-// turn's event through Dependencies.AuditRecorder.
+// newEgressAudit builds the merger whenever a summary store is composed, and
+// the proxy's service when its clients are configured. The merger keeps the
+// summaries in Dependencies.EgressAuditStore (shared by every Main replica)
+// and writes the turn's event through Dependencies.AuditRecorder. It also
+// serves the worker's own reports (ADR-0044 decision 2, workerEgressSummaries
+// below), which need no proxy, so it runs, and applies the retention, without
+// one.
 func newEgressAudit(config Config, dependencies Dependencies) (*egressaudit.Server, *app.Merger, error) {
-	if len(config.EgressAuditClients) == 0 {
-		return nil, nil, nil
-	}
-	if dependencies.AuditRecorder == nil {
-		return nil, nil, errors.New(EgressAuditClientsEnv + " is set, but no audit recorder is composed")
+	if len(config.EgressAuditClients) > 0 {
+		if dependencies.AuditRecorder == nil {
+			return nil, nil, errors.New(EgressAuditClientsEnv + " is set, but no audit recorder is composed")
+		}
+		if dependencies.EgressAuditStore == nil {
+			return nil, nil, errors.New(EgressAuditClientsEnv + " is set, but no egress summary store is composed")
+		}
 	}
 	if dependencies.EgressAuditStore == nil {
-		return nil, nil, errors.New(EgressAuditClientsEnv + " is set, but no egress summary store is composed")
+		return nil, nil, nil
 	}
 	merger := app.New(dependencies.EgressAuditStore, dependencies.AuditRecorder, dependencies.Logger,
 		app.Config{Retention: config.EgressAuditRetention})
-	server, err := egressaudit.NewServer(merger, config.EgressAuditClients)
-	if err != nil {
-		return nil, nil, fmt.Errorf("construct the egress audit service: %w", err)
+	var server *egressaudit.Server
+	if len(config.EgressAuditClients) > 0 {
+		var err error
+		server, err = egressaudit.NewServer(merger, config.EgressAuditClients)
+		if err != nil {
+			return nil, nil, fmt.Errorf("construct the egress audit service: %w", err)
+		}
 	}
 	merger.Start()
 	return server, merger, nil
+}
+
+// executionProjects answers the project Main admitted a claimed generation
+// in (repos.EgressRunSummaries.ExecutionProject).
+type executionProjects interface {
+	ExecutionProject(ctx context.Context, executionID string, generation uint64) (int64, error)
+}
+
+// workerEgressSummaries is control.EgressSummaries over the merger: the
+// worker's report is filed under the project of the claimed generation, read
+// from the execution kernel, never one the worker names.
+type workerEgressSummaries struct {
+	merger   *app.Merger
+	projects executionProjects
+}
+
+func (w workerEgressSummaries) RecordWorkerEgress(ctx context.Context, fence runtimedomain.Fence, summary app.WorkerSummary) error {
+	project, err := w.projects.ExecutionProject(ctx, fence.ExecutionID, fence.Generation)
+	if err != nil {
+		return err
+	}
+	summary.ExecutionID, summary.CommandID, summary.ProjectID = fence.ExecutionID, fence.CommandID, project
+	return w.merger.ReportWorker(ctx, summary)
+}
+
+func (w workerEgressSummaries) SettleWorkerEgress(ctx context.Context, fence runtimedomain.Fence) error {
+	return w.merger.SettleWorker(ctx, fence.ExecutionID, fence.CommandID)
 }
 
 func egressAuditClients(lookup LookupEnv) ([]string, error) {

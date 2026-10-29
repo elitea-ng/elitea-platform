@@ -21,6 +21,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "elitea/runtime/v1/compiled_code.proto",
         "elitea/runtime/v1/content.proto",
         "elitea/runtime/v1/credential.proto",
+        // control.proto imports it for ReportEgressSummary (#1490).
+        "elitea/runtime/v1/egress_audit.proto",
         "elitea/runtime/v1/envelope.proto",
         "elitea/runtime/v1/errors.proto",
         "elitea/runtime/v1/indexing.proto",

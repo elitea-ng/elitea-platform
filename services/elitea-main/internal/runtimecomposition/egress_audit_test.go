@@ -2,11 +2,13 @@ package runtimecomposition
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	egressauditapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/egressaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
 type egressAuditRecorder struct{ events []audit.Event }
@@ -91,4 +93,49 @@ func TestEgressAuditRetentionParses(t *testing.T) {
 
 func reportFor(execution string) egressauditapp.Report {
 	return egressauditapp.Report{ReplicaID: "r", ExecutionID: execution, ProjectID: 3, Final: true}
+}
+
+type executionProjectsStub struct {
+	project int64
+	err     error
+}
+
+func (s executionProjectsStub) ExecutionProject(context.Context, string, uint64) (int64, error) {
+	return s.project, s.err
+}
+
+// The worker's own reports (ADR-0044 decision 2) need no proxy: a store alone
+// composes the merger (and its retention), with no proxy service. The
+// adapter files a report under the claimed generation's project, never the
+// one the worker names, and marks it final at settlement.
+func TestWorkerEgressSummariesNeedNoProxy(t *testing.T) {
+	store := egressauditapp.NewMemoryStore()
+	recorder := &egressAuditRecorder{}
+	server, merger, err := newEgressAudit(Config{}, Dependencies{AuditRecorder: recorder, EgressAuditStore: store})
+	if err != nil || server != nil || merger == nil {
+		t.Fatalf("%v %v %v", server, merger, err)
+	}
+	defer merger.Close()
+	summaries := workerEgressSummaries{merger: merger, projects: executionProjectsStub{project: 42}}
+	fence := runtimedomain.Fence{ExecutionID: "exec-7", Generation: 2, CommandID: "cmd-7"}
+	if err := summaries.RecordWorkerEgress(context.Background(), fence, egressauditapp.WorkerSummary{
+		ExecutionID: "forged", CommandID: "forged", ProjectID: 999,
+		HostsReached: []egressauditapp.HostReached{{Host: "api.github.com", Port: 443, Connections: 1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := summaries.SettleWorkerEgress(context.Background(), fence); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.ClaimDue(context.Background(), time.Now().Add(time.Hour), time.Second, time.Hour)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows %+v %v", rows, err)
+	}
+	if row := rows[0]; row.ExecutionID != "exec-7" || row.ProjectID != 42 || row.ReplicaID != egressauditapp.WorkerReplicaFor("cmd-7") || !row.Final {
+		t.Fatalf("row %+v", row)
+	}
+	failing := workerEgressSummaries{merger: merger, projects: executionProjectsStub{err: errors.New("no such generation")}}
+	if err := failing.RecordWorkerEgress(context.Background(), fence, egressauditapp.WorkerSummary{}); err == nil {
+		t.Fatal("a report for an unknown generation was stored")
+	}
 }
