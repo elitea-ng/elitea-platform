@@ -1109,3 +1109,56 @@ fn every_fanout_code_is_in_the_dotted_graph_fanout_grammar() {
         );
     }
 }
+
+/// The card frames a run raised, in order.
+#[derive(Default)]
+struct RecordedCards(Mutex<Vec<String>>);
+
+#[async_trait]
+impl FanoutEvents for RecordedCards {
+    async fn card_opened(&self, _child: usize, card: &CardIdentity) -> Result<(), FanoutRunError> {
+        self.0
+            .lock()
+            .expect("recorded cards")
+            .push(card.interrupt_key.clone());
+        Ok(())
+    }
+}
+
+/// FU-249: a re-entered occurrence re-raises its restored cards after its
+/// restore fetch, and never one that fetch already holds a decision for: that
+/// card was raised before its decision, and raising it again would show an
+/// answered question as open.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restore_re_raises_only_the_cards_without_a_decision() {
+    let mut harness = Harness::new(three_asking());
+    harness
+        .runner(3, OnError::Continue)
+        .run()
+        .await
+        .expect("park");
+    harness.ledger.decide("ik-1-1-ask");
+    harness.replace_process();
+    let recorded = Arc::new(RecordedCards::default());
+    let outcome = FanoutRunner::new(
+        harness.children.clone(),
+        harness.ledger.clone(),
+        recorded.clone(),
+        ChildPermits::default(),
+        Arc::clone(&harness.stop),
+        FanoutRunnerConfig {
+            max_concurrency: 3,
+            on_error: OnError::Continue,
+            deadline: None,
+        },
+    )
+    .expect("valid runner")
+    .run()
+    .await
+    .expect("wake");
+    assert_eq!(parked(&outcome), vec!["ik-0-1-ask", "ik-2-1-ask"]);
+    assert_eq!(
+        *recorded.0.lock().expect("recorded cards"),
+        vec!["ik-0-1-ask".to_owned(), "ik-2-1-ask".to_owned()]
+    );
+}

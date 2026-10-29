@@ -87,7 +87,10 @@ mod pipeline_runs {
         let state = run(&definition, input).await.expect("round-trip run");
         assert_eq!(state.get("orders_out"), Some(&orders));
         assert_eq!(state.get("orders"), Some(&orders));
-        assert!(definition.recovery_frontier_supported(&["split".to_owned(), "join".to_owned()]));
+        assert!(definition.recovery_frontier_supported(
+            &["split".to_owned(), "join".to_owned()],
+            &std::collections::BTreeSet::new()
+        ));
     }
 
     #[tokio::test]
@@ -122,7 +125,10 @@ mod pipeline_runs {
         );
         assert_eq!(state.get("orders"), Some(&orders));
         assert_eq!(state.get("note"), Some(&json!("kept")));
-        assert!(definition.recovery_frontier_supported(&["split".to_owned()]));
+        assert!(definition.recovery_frontier_supported(
+            &["split".to_owned()],
+            &std::collections::BTreeSet::new()
+        ));
     }
 
     #[tokio::test]

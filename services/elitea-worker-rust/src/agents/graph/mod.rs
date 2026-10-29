@@ -182,7 +182,7 @@ pub(crate) use parallel::{
     FANOUT_PARKED_SCHEMA, FanoutChildOrigin, ParallelActivation, ParallelBranchExecution,
     ParallelCheckpointAppender, ParallelCheckpointAuthority, ParallelChildCheckpoint,
     ParallelChildCheckpointerFactory, ParallelChildOrigin, ParallelChildRequest, ParentHead,
-    ParentSaveProbe, PreparedChildCheckpoint,
+    ParentSaveProbe, PreparedChildCheckpoint, holds_parallel_occurrence,
 };
 pub(crate) use printer::{PRINTER_PAUSE_METADATA_KEY, PrinterPauseCatalog, PrinterPauseMetadata};
 

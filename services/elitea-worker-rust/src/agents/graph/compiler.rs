@@ -978,26 +978,51 @@ impl PipelineDefinition {
 
     #[must_use]
     /// Recover deterministic nodes, model checkpoints, or durable sandbox receipts.
-    pub(crate) fn recovery_frontier_supported(&self, pending: &[String]) -> bool {
+    /// `pipeline_aliases`: the attachments Main froze as saved pipelines. An
+    /// Agent node running one is a recovery frontier too (FU-249): its child
+    /// resumes from its own checkpoint. An Agent node running a saved Agent is
+    /// not, since that Agent's effects have no such proof.
+    pub(crate) fn recovery_frontier_supported(
+        &self,
+        pending: &[String],
+        pipeline_aliases: &BTreeSet<String>,
+    ) -> bool {
         pending.iter().all(|id| {
             self.nodes.iter().any(|node| {
                 node.id() == id
                     && !self.parallel_owned_nodes.contains(id)
                     && !self.map_owned_nodes.contains(id)
-                    && matches!(
-                        node,
-                        PipelineNodeDefinition::Llm(_)
-                            | PipelineNodeDefinition::Code(_)
-                            | PipelineNodeDefinition::StateModifier(_)
-                            | PipelineNodeDefinition::SplitOut(_)
-                            | PipelineNodeDefinition::Aggregate(_)
-                            | PipelineNodeDefinition::Decision(_)
-                            | PipelineNodeDefinition::Router(_)
-                            | PipelineNodeDefinition::Parallel(_)
-                            | PipelineNodeDefinition::Map(_)
-                    )
+                    && (matches!(node, PipelineNodeDefinition::Application(agent)
+                        if pipeline_aliases.contains(agent.selection().alias()))
+                        || matches!(
+                            node,
+                            PipelineNodeDefinition::Llm(_)
+                                | PipelineNodeDefinition::Code(_)
+                                | PipelineNodeDefinition::StateModifier(_)
+                                | PipelineNodeDefinition::SplitOut(_)
+                                | PipelineNodeDefinition::Aggregate(_)
+                                | PipelineNodeDefinition::Decision(_)
+                                | PipelineNodeDefinition::Router(_)
+                                | PipelineNodeDefinition::Parallel(_)
+                                | PipelineNodeDefinition::Map(_)
+                        ))
             })
         })
+    }
+
+    /// The pending Agent nodes of a recovery frontier (FU-249): each one's
+    /// child frontier is proven separately.
+    pub(crate) fn application_frontier_nodes<'a>(&self, pending: &'a [String]) -> Vec<&'a str> {
+        pending
+            .iter()
+            .filter(|id| {
+                self.nodes.iter().any(|node| {
+                    node.id() == id.as_str()
+                        && matches!(node, PipelineNodeDefinition::Application(_))
+                })
+            })
+            .map(String::as_str)
+            .collect()
     }
 
     pub(crate) fn node_recovery_spec(

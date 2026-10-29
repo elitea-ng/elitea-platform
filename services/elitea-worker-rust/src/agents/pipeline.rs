@@ -1183,12 +1183,13 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             &self.tool_policy,
             command.egress(),
         )?;
-        let (profile, plan, _, start) = super::runtime::admit_pipeline_plan(
+        let (profile, plan, toolsets, start) = super::runtime::admit_pipeline_plan(
             request,
             command,
             &request.payload.input_attachments,
             &policy,
         )?;
+        let pipeline_aliases = frozen_pipeline_aliases(&toolsets);
         self.state
             .open(session, lease, &plan, profile.definition())
             .await?
@@ -1199,6 +1200,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
                     super::runtime::PipelineNativeStart::FanoutWake(wake) => Some(wake),
                     _ => None,
                 },
+                &pipeline_aliases,
             )
             .await
             .map(|(evidence, _)| evidence)
@@ -1356,6 +1358,7 @@ impl PipelineNativeAgentAssembler {
                             super::runtime::PipelineNativeStart::FanoutWake(wake) => Some(wake),
                             _ => None,
                         },
+                        &frozen_pipeline_aliases(&toolsets),
                     )
                     .await?;
                 wake_rerun = frontier == super::session::RecoveryFrontier::WakePark;
@@ -1578,15 +1581,15 @@ impl NativePipelineApplicationResolver {
                     None => runtimes,
                 };
                 definition
-                .compile_subgraph_with_runtime(checkpointer, &runtimes)
-                .map(|graph| ResolvedApplicationParticipant::Pipeline {
-                    graph: Arc::new(graph),
-                    variable_types: definition.declared_variable_types(),
-                    static_pauses: definition.static_pause_catalog(),
-                    events: Some(events),
-                    display_name,
-                })
-                .map_err(|_| ApplicationExecutionError::Unavailable)
+                    .compile_subgraph_with_runtime(checkpointer, &runtimes)
+                    .map(|graph| ResolvedApplicationParticipant::Pipeline {
+                        graph: Arc::new(graph),
+                        variable_types: definition.declared_variable_types(),
+                        static_pauses: definition.static_pause_catalog(),
+                        events: Some(events),
+                        display_name,
+                    })
+                    .map_err(|_| ApplicationExecutionError::Unavailable)
             }
         }
     }
@@ -1955,6 +1958,19 @@ impl Toolset for StrictNodeToolset {
     }
 }
 
+/// The attachments Main froze as saved pipelines (their aliases): an Agent
+/// node running one may be a recovery frontier (FU-249).
+fn frozen_pipeline_aliases(toolsets: &AdmittedToolSnapshot<'_>) -> BTreeSet<String> {
+    toolsets
+        .iter()
+        .filter(|reference| {
+            reference.application_agent_type()
+                == Some(crate::agents::application_tools::PIPELINE_APPLICATION_AGENT_TYPE)
+        })
+        .map(|reference| reference.toolkit_name().to_owned())
+        .collect()
+}
+
 /// Materialize one saved pipeline as a participant an ORDINARY agent can call
 /// as a tool (#973).
 ///
@@ -2042,13 +2058,13 @@ pub(super) async fn materialize_saved_pipeline_tool(
         Ok(())
     } else {
         definition.first_parallel_node().map_or_else(
-        || crate::agents::graph::compiler::refuse_child_parallel(&bound.runtimes),
-        |node| {
-            Err(PipelineConfigurationError::FanoutChildUnsupported {
-                node: node.to_owned(),
-                refusal: crate::agents::graph::compiler::FanoutChildRefusal::ContainsParallel,
-            })
-        },
+            || crate::agents::graph::compiler::refuse_child_parallel(&bound.runtimes),
+            |node| {
+                Err(PipelineConfigurationError::FanoutChildUnsupported {
+                    node: node.to_owned(),
+                    refusal: crate::agents::graph::compiler::FanoutChildRefusal::ContainsParallel,
+                })
+            },
         )
     };
     if let Err(refusal) = parallel {

@@ -1473,11 +1473,16 @@ async fn postgres_a_parallel_in_a_saved_child_pipeline_parks_and_a_wake_complete
         assert_eq!(card["fanout_v1"]["member"], branch);
     }
     let rows = child_parallel_rows(&db.pool).await;
-    assert!(!rows.is_empty());
+    assert_ne!(rows.len(), 0);
     assert!(rows.iter().all(|stamped| *stamped), "{rows:?}");
     let parked_keys = cards
         .iter()
-        .map(|card| card["interrupt_key"].as_str().expect("a card key").to_owned())
+        .map(|card| {
+            card["interrupt_key"]
+                .as_str()
+                .expect("a card key")
+                .to_owned()
+        })
         .collect::<Vec<_>>();
     for (key, answer) in parked_keys.iter().zip(["red", "green", "blue"]) {
         ledger.decide(key, "answer", Some(answer));
@@ -1485,10 +1490,14 @@ async fn postgres_a_parallel_in_a_saved_child_pipeline_parks_and_a_wake_complete
 
     let (woken, captured) = assembler(
         &db.pool,
-        ["the saddle is red", "the bridle is green", "the stirrup is blue"]
-            .into_iter()
-            .map(|text| TestModelGatewayOutcome::Response(pipeline_text_response(text)))
-            .collect(),
+        [
+            "the saddle is red",
+            "the bridle is green",
+            "the stirrup is blue",
+        ]
+        .into_iter()
+        .map(|text| TestModelGatewayOutcome::Response(pipeline_text_response(text)))
+        .collect(),
         pipeline_connector(),
         parallel_child_pipeline(),
     );
@@ -1501,19 +1510,199 @@ async fn postgres_a_parallel_in_a_saved_child_pipeline_parks_and_a_wake_complete
     let (_, cards) = run_collecting(invocation)
         .await
         .expect("the wake completes the child's Parallel and the root");
-    // The restore re-announces the parked cards (their keys unchanged); no
-    // new card is raised.
-    assert!(
-        cards.iter().all(|card| parked_keys
-            .iter()
-            .any(|key| card["interrupt_key"] == key.as_str())),
-        "{cards:?}"
+    // Every card was answered while parked: none is raised again.
+    assert!(cards.is_empty(), "{cards:?}");
+    assert_eq!(
+        model_requests(&captured),
+        3,
+        "each answered branch calls the model once"
     );
-    assert_eq!(model_requests(&captured), 3, "each answered branch calls the model once");
     let joined = child_joined(&db.pool).await.expect("the child's join");
     assert_eq!(joined.len(), 3, "{joined:?}");
     let rows = child_parallel_rows(&db.pool).await;
     assert!(rows.iter().all(|stamped| *stamped), "{rows:?}");
+    db.pool.close().await;
+}
+
+/// FU-249: the child pipeline's Parallel parked, only branch `a` answered; the
+/// wake's process is lost while `a`'s resumed model call is in flight. The
+/// reclaim (production checkpoint recovery under the wake's own execution)
+/// re-enters the child at its parked frontier and resumes `a` from its model
+/// checkpoint with the answer (R); `a` never asks again, `b` and `c` park again.
+#[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // One scenario: park, answer, lose the wake, recover, assert in order.
+async fn postgres_a_wake_lost_inside_a_child_pipeline_resumes_the_answered_branch() {
+    const WAKE_EXECUTION: &str = "execution-child-fanout-wake";
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let (first, _) = assembler(
+        &db.pool,
+        (0..3)
+            .map(|_| TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()))
+            .collect(),
+        pipeline_connector(),
+        parallel_child_pipeline(),
+    );
+    let request = child_parallel_request();
+    let invocation = first
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the child fan-out: {error}"));
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .expect("the child's Parallel parks the run");
+    assert_eq!(cards.len(), 3, "{cards:?}");
+    let parked_keys = cards
+        .iter()
+        .map(|card| {
+            card["interrupt_key"]
+                .as_str()
+                .expect("a card key")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    let answered = parked_keys[0].clone();
+    ledger.decide(&answered, "answer", Some("Staging"));
+
+    // The wake's first claim applies the answer, then its process is lost
+    // while branch `a`'s resumed model call is in flight.
+    let (lost, lost_requests) = assembler(
+        &db.pool,
+        vec![TestModelGatewayOutcome::Pending],
+        pipeline_connector(),
+        parallel_child_pipeline(),
+    );
+    let wake = child_parallel_wake();
+    let invocation = lost
+        .with_fanout_decisions_for_tests(ledger.client(2))
+        .assemble(AuthorizedNativeAssembly::from_authorized(
+            &wake,
+            test_runtime_context_authority(),
+            test_session_authority_for_reclaim(WAKE_EXECUTION, GENERATION, 2),
+            Arc::new(TestStateWriterLease::current()),
+            AuthorizedNativeCommandBinding::fixture_for_execution(WAKE_EXECUTION),
+        ))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
+    // Dropped inside the gateway's 1 s header timeout: the process is gone.
+    let outcome =
+        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
+    assert!(
+        outcome.is_err(),
+        "branch a waits in its model call: {outcome:?}"
+    );
+    assert_eq!(
+        model_requests(&lost_requests),
+        1,
+        "branch a's step was in flight"
+    );
+
+    let (woken, captured) = assembler(
+        &db.pool,
+        vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+            "staging it is",
+        ))],
+        pipeline_connector(),
+        parallel_child_pipeline(),
+    );
+    let woken = woken.with_fanout_decisions_for_tests(ledger.client(3));
+    let invocation = recovered(&woken, &wake, WAKE_EXECUTION, 3)
+        .await
+        .unwrap_or_else(|error| panic!("the lost wake recovers: {error}"));
+    let (members, cards) = run_collecting(invocation)
+        .await
+        .expect("the recovered wake finishes branch a and parks again");
+    assert_eq!(
+        model_requests(&captured),
+        1,
+        "only branch a's step: {members:?}"
+    );
+    assert!(
+        members
+            .iter()
+            .any(|member| member["fanout_v1"]["member"] == "a" && member["status"] == "end"),
+        "{members:?}"
+    );
+    // The reclaim re-runs the wake from the park (class I, as a root wake
+    // lost before its first root save): `a`'s decision is applied once from
+    // its receipt (one model step, `a` ends), its answered card is never
+    // raised again, and only `b` and `c` are re-raised as they park again.
+    let keys = cards
+        .iter()
+        .filter_map(|card| card["interrupt_key"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        keys,
+        [parked_keys[1].as_str(), parked_keys[2].as_str()],
+        "{cards:?}"
+    );
+    let rows = child_parallel_rows(&db.pool).await;
+    assert!(rows.iter().all(|stamped| *stamped), "{rows:?}");
+    db.pool.close().await;
+}
+
+/// FU-249: recovery resumes an Agent node's saved child only where the child
+/// is parked inside a fixed Parallel occurrence. A child lost mid model call
+/// in an ordinary node (here its LLM node) is not resumed blind: the inspect
+/// refuses the frontier and the run ends typed, as before.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_child_pipeline_lost_outside_a_parallel_is_not_resumed() {
+    const EXECUTION_LOST: &str = "execution-child-lost";
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let (lost, lost_requests) = assembler(
+        &db.pool,
+        vec![TestModelGatewayOutcome::Pending],
+        pipeline_connector(),
+        asking_pipeline(),
+    );
+    let request = child_parallel_request();
+    let invocation = lost
+        .assemble(AuthorizedNativeAssembly::from_authorized(
+            &request,
+            test_runtime_context_authority(),
+            test_session_authority_for_reclaim(EXECUTION_LOST, GENERATION, 1),
+            Arc::new(TestStateWriterLease::current()),
+            AuthorizedNativeCommandBinding::fixture_for_execution(EXECUTION_LOST),
+        ))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the child run: {error}"));
+    let outcome =
+        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
+    assert!(
+        outcome.is_err(),
+        "the child waits in its model call: {outcome:?}"
+    );
+    assert_eq!(model_requests(&lost_requests), 1);
+
+    let (again, _) = assembler(
+        &db.pool,
+        Vec::new(),
+        pipeline_connector(),
+        asking_pipeline(),
+    );
+    let Err(refusal) = recovered(&again, &request, EXECUTION_LOST, 2).await else {
+        panic!("a child outside a Parallel must not be recovered blind");
+    };
+    assert!(refusal.starts_with("inspect:"), "{refusal}");
     db.pool.close().await;
 }
 

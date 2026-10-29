@@ -498,7 +498,13 @@ impl ApplicationNode {
         checkpointer: Arc<dyn Checkpointer>,
         fanout: super::compiler::ChildFanout,
     ) -> Result<Self, ApplicationExecutionError> {
-        Self::build(definition, state_types, resolver, checkpointer, Some(fanout))
+        Self::build(
+            definition,
+            state_types,
+            resolver,
+            checkpointer,
+            Some(fanout),
+        )
     }
 
     fn build(
@@ -522,9 +528,11 @@ impl ApplicationNode {
             .map_or_else(|| checkpointer.clone(), |owner| owner.clone());
         let child_fanout = fanout.is_some();
         let participant = match fanout {
-            None => {
-                resolver.resolve_node(definition.id(), definition.selection(), child_checkpointer)?
-            }
+            None => resolver.resolve_node(
+                definition.id(),
+                definition.selection(),
+                child_checkpointer,
+            )?,
             Some(fanout) => {
                 let authority = Arc::new(
                     super::parallel_child_authority::ChildParallelAuthority::new(

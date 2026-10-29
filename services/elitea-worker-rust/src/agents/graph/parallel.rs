@@ -45,6 +45,13 @@ use tracing::Instrument as _;
 
 #[path = "parallel_checkpoint.rs"]
 mod checkpoint;
+
+/// FU-249: whether `checkpoint` is a frontier parked inside a fixed Parallel
+/// occurrence: one pending node and the frozen occurrence in its metadata.
+pub(crate) fn holds_parallel_occurrence(checkpoint: &Checkpoint) -> bool {
+    checkpoint.pending_nodes.len() == 1
+        && checkpoint.metadata.contains_key(checkpoint::OCCURRENCE_KEY)
+}
 use elitea_agent_runtime::graph::parallel_control as control;
 #[path = "parallel_frames.rs"]
 mod frames;

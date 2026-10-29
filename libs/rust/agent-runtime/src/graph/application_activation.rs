@@ -318,6 +318,54 @@ mod tests {
         );
     }
 
+    /// FU-249: `stamp` is exactly the row `save` writes (a fixed Parallel's
+    /// atomic append inside the child carries it), and `admits` decides from a
+    /// row's head what `load` decides from the row.
+    #[tokio::test]
+    async fn stamp_matches_save_and_admits_matches_load() {
+        let inner: Arc<dyn Checkpointer> = Arc::new(MemoryCheckpointer::new());
+        let overlay = ApplicationActivationCheckpointer::new(inner.clone());
+        let outside = Checkpoint::new("root", State::new(), 1, vec![]);
+        assert!(matches!(overlay.stamp(&outside).unwrap(), Cow::Borrowed(_)));
+        let first = overlay
+            .enter("root", "delegate", 1, [1; 32], &json!({"task":"one"}))
+            .unwrap();
+        for thread in ["root/delegate", "root/delegate/branch"] {
+            let checkpoint = Checkpoint::new(thread, State::new(), 2, vec!["gather".to_owned()]);
+            let stamped = overlay.stamp(&checkpoint).unwrap().into_owned();
+            let id = overlay.save(&checkpoint).await.unwrap();
+            let saved = inner.load_by_id(&id).await.unwrap().unwrap();
+            assert_eq!(saved.metadata, stamped.metadata, "{thread}");
+            assert!(overlay.admits(thread, &saved.metadata, true).unwrap());
+        }
+        let done = Checkpoint::new("root/delegate", State::new(), 3, vec![]);
+        let done_id = overlay.save(&done).await.unwrap();
+        drop(first);
+        let done = inner.load_by_id(&done_id).await.unwrap().unwrap();
+        let _second = overlay
+            .enter("root", "delegate", 5, [1; 32], &json!({"task":"two"}))
+            .unwrap();
+        // A completed earlier visit: hidden by both.
+        assert!(
+            !overlay
+                .admits("root/delegate", &done.metadata, false)
+                .unwrap()
+        );
+        assert!(overlay.load("root/delegate").await.unwrap().is_none());
+        // The same head with work pending is an unfinished visit: refused by both.
+        assert!(
+            overlay
+                .admits("root/delegate", &done.metadata, true)
+                .is_err()
+        );
+        // A row without the stamp is unproven.
+        assert!(
+            overlay
+                .admits("root/delegate", &HashMap::new(), false)
+                .is_err()
+        );
+    }
+
     #[tokio::test]
     async fn unfinished_foreign_and_unproven_visits_fail_without_resetting_the_inner_store() {
         let inner: Arc<dyn Checkpointer> = Arc::new(MemoryCheckpointer::new());

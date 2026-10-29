@@ -174,7 +174,9 @@ impl PipelineNodeRuntimes {
                         Arc::clone(&binding.authority),
                     )
                     .map_err(|_| {
-                        PipelineConfigurationError::Invalid("the fixed Parallel scope is not admitted")
+                        PipelineConfigurationError::Invalid(
+                            "the fixed Parallel scope is not admitted",
+                        )
                     })?,
                 None => Arc::clone(&binding.authority),
             }
