@@ -23,6 +23,13 @@ func (s *endingStore) MarkEnded(_ context.Context, id, reason string, endedAt ti
 		return nil
 	}
 	s.ended[id], s.at[id] = reason, endedAt
+	// The row records the end, as the Postgres store's UPDATE does.
+	s.memoryStore.mu.Lock()
+	defer s.memoryStore.mu.Unlock()
+	if row, ok := s.rows[id]; ok && row.EndedAt == nil && row.RevokedAt == nil {
+		row.EndedAt, row.EndReason = &endedAt, reason
+		s.rows[id] = row
+	}
 	return nil
 }
 
@@ -142,6 +149,45 @@ func TestExistingSessionIsHeldToANewMaximum(t *testing.T) {
 	dial.advance(31 * time.Minute)
 	if _, err := manager.Validate(context.Background(), value2); !errors.Is(err, ErrExpired) {
 		t.Fatalf("Validate past a tightened lifetime = %v, want ErrExpired", err)
+	}
+}
+
+// TestAnEndedSessionStaysEnded: a session ended under a bound (and audited
+// as expired) does not authenticate again when the administrator later
+// raises or removes the bound, although its own row deadlines are still
+// ahead.
+func TestAnEndedSessionStaysEnded(t *testing.T) {
+	t.Parallel()
+	bounds := Bounds{MaxIdleTimeout: 30 * time.Minute}
+	manager, store, dial := newBoundedManager(t, Policy{IdleTimeout: 0, AbsoluteLifetime: 7 * 24 * time.Hour}, &bounds)
+	value, err := manager.Create(context.Background(), NewSession{UserID: 7, Provider: ProviderOIDC})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	id, _ := ParseCookieValue(value)
+
+	dial.advance(time.Hour)
+	if _, err := manager.Validate(context.Background(), value); !errors.Is(err, ErrIdle) {
+		t.Fatalf("Validate past the idle maximum = %v, want ErrIdle", err)
+	}
+	if store.ended[id] != EndIdle {
+		t.Fatalf("end recorded as %q, want %q", store.ended[id], EndIdle)
+	}
+
+	bounds = Bounds{}
+	if _, err := manager.Validate(context.Background(), value); !errors.Is(err, ErrIdle) {
+		t.Fatalf("Validate after the bound was removed = %v, want ErrIdle (ended stays ended)", err)
+	}
+
+	// The reason maps to the refusal it was ended for.
+	ended := dial.Now()
+	for reason, want := range map[string]error{
+		EndIdle: ErrIdle, EndAbsolute: ErrExpired, EndLogout: ErrRevoked, EndRevoked: ErrRevoked,
+	} {
+		row := Session{ExpiresAt: ended.Add(time.Hour), LastSeenAt: ended, EndedAt: &ended, EndReason: reason}
+		if err := row.UsableUnder(ended, Bounds{}); !errors.Is(err, want) {
+			t.Errorf("ended %q = %v, want %v", reason, err, want)
+		}
 	}
 }
 

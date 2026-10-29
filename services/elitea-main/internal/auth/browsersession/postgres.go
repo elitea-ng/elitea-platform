@@ -49,14 +49,14 @@ func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, user_id, email, provider, provider_session_index,
 		       created_at, last_seen_at, expires_at, idle_timeout_seconds, revoked_at,
-		       ref, ended_at
+		       ref, ended_at, COALESCE(end_reason, '')
 		FROM elitea_auth.browser_sessions
 		WHERE id = $1`, id,
 	).Scan(
 		&session.ID, &session.UserID, &session.Email, &session.Provider,
 		&session.ProviderSessionIndex, &session.CreatedAt, &session.LastSeenAt,
 		&session.ExpiresAt, &idle, &session.RevokedAt,
-		&session.Ref, &session.EndedAt,
+		&session.Ref, &session.EndedAt, &session.EndReason,
 	)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):

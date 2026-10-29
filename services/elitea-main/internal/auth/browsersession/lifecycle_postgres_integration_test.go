@@ -7,6 +7,7 @@ package browsersession
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -73,6 +74,13 @@ func TestPostgresLifecycleAuditsStartAndEveryEnd(t *testing.T) {
 	}
 	if reason != EndIdle || !endedAt.Equal(dial.Now().Add(30*time.Minute)) {
 		t.Fatalf("idle session ended %q at %s", reason, endedAt)
+	}
+
+	// The administrator removes the bound again. The row's own deadlines
+	// are still ahead, but the sweep ended (and audited) it: it stays ended.
+	bounds = Bounds{}
+	if _, err := manager.Validate(ctx, idle); !errors.Is(err, ErrIdle) {
+		t.Fatalf("Validate of a swept session after the bound was removed = %v, want ErrIdle", err)
 	}
 
 	rows, err := pool.Query(ctx, `

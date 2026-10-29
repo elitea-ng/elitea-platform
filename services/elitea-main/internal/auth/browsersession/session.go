@@ -95,8 +95,11 @@ type Session struct {
 	// events and the runs a session started name it by. ID is the cookie
 	// value and never leaves this package's store.
 	Ref int64
-	// EndedAt is set once the row is recorded as ended (shared 0200).
-	EndedAt *time.Time
+	// EndedAt is set once the row is recorded as ended (shared 0200), and
+	// EndReason says why (EndIdle, EndAbsolute, EndLogout, EndRevoked). An
+	// ended row never authenticates again, whatever the bounds say later.
+	EndedAt   *time.Time
+	EndReason string
 }
 
 // Usable reports whether this row still authenticates its user at `now`, and
@@ -179,6 +182,20 @@ func (s Session) Deadline(b Bounds) (time.Time, string) {
 func (s Session) UsableUnder(now time.Time, b Bounds) error {
 	if s.RevokedAt != nil {
 		return ErrRevoked
+	}
+	// An ended row is final. The sweep (or a refused validation) recorded it
+	// as ended under the bounds of that moment and audited the end; an
+	// administrator who raises or removes a bound afterwards must not bring
+	// it back, or one session would be audited as expired and keep working.
+	if s.EndedAt != nil {
+		switch s.EndReason {
+		case EndIdle:
+			return ErrIdle
+		case EndLogout, EndRevoked:
+			return ErrRevoked
+		default:
+			return ErrExpired
+		}
 	}
 	if !now.Before(s.EffectiveExpiresAt(b)) {
 		return ErrExpired
