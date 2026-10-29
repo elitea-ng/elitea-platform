@@ -187,7 +187,7 @@ describe('NewChatInput', () => {
       { projectId: 'proj-1' },
     );
     await waitFor(() => expect(screen.getByTestId('model-selector')).toBeInTheDocument());
-    expect(screen.queryByRole('button', { name: 'Switch Agent' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { description: 'Switch Agent' })).not.toBeInTheDocument();
   });
 
   it('renders AgentEditorPanel (not the modelSelector slot) for an application participant outside the agents page', async () => {

@@ -554,7 +554,7 @@ func identityExecutionFromCtx(ctx context.Context) string {
 // that header since the llmproxy identity path was written; until issue #321
 // the gateway carried it and read it for nothing.
 func identityUserFromCtx(ctx context.Context) string {
-	return bifrostCtxString(ctx, schemas.BifrostContextKeyUserID)
+	return bifrostCtxString(ctx, schemas.BifrostContextKeyUserID) //nolint:staticcheck // SA1019: bifrost core 1.13 still reads this key (schemas/context.go, plugin pipelines); its Grant API has no setter for the gateway
 }
 
 func bifrostCtxString(ctx context.Context, key any) string {

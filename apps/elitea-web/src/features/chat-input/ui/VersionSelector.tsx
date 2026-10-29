@@ -177,7 +177,12 @@ export function VersionSelector(props: VersionSelectorProps): ReactNode {
           variant="elitea"
           color="secondary"
           aria-expanded={menuOpen ? 'true' : undefined}
-          aria-label={t('chatInput.versionSelector.menuLabel', 'version selector menu')}
+          // Names the visible version too (WCAG 2.5.3); the icon form has no text to match.
+          aria-label={
+            isSmallView || !selectedVersion?.name
+              ? t('chatInput.versionSelector.menuLabel', 'version selector menu')
+              : t('chatInput.versionSelector.menuLabelNamed', 'version selector menu: {{name}}', { name: selectedVersion.name })
+          }
           aria-haspopup="menu"
           onClick={handleMenuClick}
         >

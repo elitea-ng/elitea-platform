@@ -1,22 +1,22 @@
 name: CI — Gateway
 
-# elitea-llm-gateway is a STANDALONE Go module with a Go 1.26.4 FLOOR (required
-# by bifrost/core), deliberately excluded from the root go.work. It therefore
-# needs its own CI job, built with GOWORK=off so the workspace is never
-# consulted. The workspace was on Go 1.25 when this split was made; it is on the
-# same 1.26 series now, but the gateway still builds and tests on its own.
+# elitea-llm-gateway is a STANDALONE Go module, deliberately excluded from the
+# root go.work. It therefore needs its own CI job, built with GOWORK=off so the
+# workspace is never consulted. Since 2026-10 it is also on a DIFFERENT Go series
+# from the workspace: github.com/maximhq/bifrost/core 1.13 requires go 1.27.3,
+# while go.work and every other module stay on 1.26 (floor 1.26.9).
 #
-# THE PIN BELOW IS THE SERIES `1.26`, NOT THE PATCH `1.26.4` (#506).
+# THE PIN BELOW IS THE SERIES `1.27`, NOT A PATCH SUCH AS `1.27.3` (#506).
 #
-# services/elitea-llm-gateway/Containerfile builds from `golang:1.26-trixie`, so
-# the released image takes each 1.26 patch. An exact patch pin here tested the
-# gateway on a toolchain the image no longer uses: the scan in ci-image-scan.yml
-# reported 9 HIGH findings against stdlib v1.26.4, all fixed in 1.26.6. A
-# standard-library change that alters behaviour then reaches the release and
-# never reaches the tests.
+# services/elitea-llm-gateway/Containerfile builds from `golang:1.27-trixie`, so
+# the released image takes each 1.27 patch. An exact patch pin here once tested
+# the gateway on a toolchain the image no longer used: the scan in
+# ci-image-scan.yml reported 9 HIGH findings against stdlib v1.26.4, all fixed
+# in 1.26.6. A standard-library change that alters behaviour then reaches the
+# release and never reaches the tests.
 #
-# `go 1.26.9` in go.mod states the MINIMUM the module needs. It is not a
-# maximum. actions/setup-go reads "1.26" as the newest 1.26 patch, which is what
+# `go 1.27.3` in go.mod states the MINIMUM the module needs. It is not a
+# maximum. actions/setup-go reads "1.27" as the newest 1.27 patch, which is what
 # the Containerfile does. scripts/ci/check-gateway-toolchain.sh holds the
 # workflow, the Containerfile and go.mod together, and runs in the lint job.
 
@@ -84,7 +84,7 @@ jobs:
       # The gateway must be TESTED on the toolchain it SHIPS (#506). The pin
       # below and services/elitea-llm-gateway/Containerfile are two files that
       # nothing compared, so they drifted: this workflow asked for the exact
-      # patch 1.26.4 while the image had already moved to golang:1.26-alpine (now -trixie).
+      # patch 1.26.4 while the image had already moved to golang:1.26-alpine (now 1.27-trixie).
       # This step is the comparison. It runs BEFORE setup-go, so a disagreement
       # is reported instead of installed, and it needs no toolchain of its own.
       - name: The workflow pin matches the shipped toolchain
@@ -96,9 +96,9 @@ jobs:
           # The cache is .github/actions/go-cache below: setup-go's own
           # saves from every ref, and pull-request copies evicted main's.
           cache: false
-          go-version: "1.26"
-          # The series, at its latest patch: go.mod sets the security floor
-          # (1.26.9), and the runner cache can lag behind it.
+          go-version: "1.27"
+          # The series, at its latest patch: go.mod sets the floor (1.27.3,
+          # bifrost/core's minimum), and the runner cache can lag behind it.
           check-latest: true
       - name: Restore the Go cache (pull requests read, main writes)
         uses: ./.github/actions/go-cache
@@ -108,9 +108,16 @@ jobs:
       # target, and a new release redded main and every open gateway PR on
       # code nobody had touched (errcheck on `<-done`, 2026-10-16). Raise it
       # deliberately, together with ci-go.yml, after reading the release notes.
+      #
+      # THIS PIN DIFFERS FROM ci-go.yml ON PURPOSE. golangci-lint refuses a
+      # module whose `go` directive is newer than the Go it was built with:
+      # v2.9.0 is built with go1.26.0 and fails here with "the Go language
+      # version (go1.26) used to build golangci-lint is lower than the targeted
+      # Go version (1.27.3)". v2.15.0 is built with go1.27.0. The workspace
+      # stays on 1.26, so ci-go.yml keeps v2.9.0 until it is raised on its own.
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.9.0
+          version: v2.15.0
           # No `golangci-lint config verify`: it validates against a JSON
           # schema it downloads from golangci-lint.run at run time, so an
           # outage of that site redded this gate on code nobody had touched
@@ -159,9 +166,9 @@ jobs:
           # The cache is .github/actions/go-cache below: setup-go's own
           # saves from every ref, and pull-request copies evicted main's.
           cache: false
-          go-version: "1.26"
-          # The series, at its latest patch: go.mod sets the security floor
-          # (1.26.9), and the runner cache can lag behind it.
+          go-version: "1.27"
+          # The series, at its latest patch: go.mod sets the floor (1.27.3,
+          # bifrost/core's minimum), and the runner cache can lag behind it.
           check-latest: true
       - name: Restore the Go cache (pull requests read, main writes)
         uses: ./.github/actions/go-cache

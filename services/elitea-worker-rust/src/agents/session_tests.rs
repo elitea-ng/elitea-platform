@@ -194,6 +194,31 @@ impl Llm for SequencedLlm {
     }
 }
 
+/// Records each provider request, then answers with `inner`.
+struct RequestCapturingLlm {
+    inner: Arc<dyn Llm>,
+    requests: Arc<Mutex<Vec<LlmRequest>>>,
+}
+
+#[async_trait]
+impl Llm for RequestCapturingLlm {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    async fn generate_content(
+        &self,
+        request: LlmRequest,
+        stream: bool,
+    ) -> adk_rust::Result<LlmResponseStream> {
+        self.requests
+            .lock()
+            .map_err(|_| adk_rust::AdkError::agent("fixture request lock failed"))?
+            .push(request.clone());
+        self.inner.generate_content(request, stream).await
+    }
+}
+
 struct CountingTool {
     calls: Arc<AtomicUsize>,
     read_only: bool,
@@ -769,13 +794,17 @@ async fn application_only_agent_dispatches_repeated_participant_calls_concurrent
         &request.payload.input_attachments,
     )
     .expect("native plan");
+    let requests = Arc::new(Mutex::new(Vec::new()));
     let model = FixtureBoundModel {
-        model: Arc::new(SequencedLlm {
-            responses: Mutex::new(VecDeque::from([
-                parallel_application_call_response(),
-                LlmResponse::new(Content::new("model").with_text("Both names were resolved.")),
-            ])),
-            calls: Arc::new(AtomicUsize::new(0)),
+        model: Arc::new(RequestCapturingLlm {
+            inner: Arc::new(SequencedLlm {
+                responses: Mutex::new(VecDeque::from([
+                    parallel_application_call_response(),
+                    LlmResponse::new(Content::new("model").with_text("Both names were resolved.")),
+                ])),
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+            requests: Arc::clone(&requests),
         }),
         completed: "Both names were resolved.".to_owned(),
     };
@@ -821,13 +850,33 @@ async fn application_only_agent_dispatches_repeated_participant_calls_concurrent
     .await
     .expect("parallel calls completed without serial barrier timeout");
 
+    // ADK 2.3.0 emits (and the Runner commits) each result as its call
+    // completes, so the event order is the completion order; each result is
+    // emitted exactly once.
+    let mut emitted = result_ids;
+    emitted.sort();
+    assert_eq!(emitted, ["application-call-1", "application-call-2"]);
+    let completion = completion.select().await.expect("selected completion");
+    let _ = completion;
+    // The provider still receives the results in call order.
+    let requests = requests.lock().expect("captured provider requests");
+    let [_, continuation] = requests.as_slice() else {
+        panic!("one call request and one continuation request expected");
+    };
+    let response_ids: Vec<&str> = continuation
+        .contents
+        .iter()
+        .flat_map(|content| &content.parts)
+        .filter_map(|part| match part {
+            Part::FunctionResponse { id: Some(id), .. } => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
     assert_eq!(
-        result_ids,
+        response_ids,
         ["application-call-1", "application-call-2"],
         "ADK must restore provider call order after concurrent completion"
     );
-    let completion = completion.select().await.expect("selected completion");
-    let _ = completion;
 }
 
 #[tokio::test]

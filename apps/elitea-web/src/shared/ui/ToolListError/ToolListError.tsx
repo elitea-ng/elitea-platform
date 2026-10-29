@@ -41,6 +41,8 @@ export function ToolListError({ onRetry, testId = 'tool-list-error', message, di
     return (
       <Alert
         severity="info"
+        // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- a standing notice, not a failure: `status`, not MUI Alert's default `alert`
+        role="status"
         data-testid={testId}
       >
         {t('shared.ui.toolListError.discoveryDisabled', 'Tool discovery is turned off on this deployment. Ask an administrator to enable it.')}

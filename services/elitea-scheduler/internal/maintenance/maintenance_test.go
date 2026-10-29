@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // switchStore answers the maintenance point read with a chosen value.
@@ -72,6 +73,10 @@ func (r *switchRows) FieldDescriptions() []pgconn.FieldDescription { return nil 
 func (r *switchRows) Values() ([]any, error)                       { return nil, nil }
 func (r *switchRows) RawValues() [][]byte                          { return nil }
 func (r *switchRows) Conn() *pgx.Conn                              { return nil }
+
+// TypeMap joined the pgx.Rows interface in pgx v5.11.0. nil is correct here:
+// Scan above writes the fixture values directly and decodes nothing.
+func (r *switchRows) TypeMap() *pgtype.Map { return nil }
 
 func jsonValue(t *testing.T, v any) []byte {
 	t.Helper()

@@ -194,11 +194,13 @@ async fn empty_database(name: &str) -> Option<PgPool> {
     let dsn = dsn()?;
     let database = format!("invt_{name}");
     let mut admin = PgConnection::connect(&dsn).await.expect("connect");
-    sqlx::query(&format!("DROP DATABASE IF EXISTS {database} WITH (FORCE)"))
-        .execute(&mut admin)
-        .await
-        .expect("drop");
-    sqlx::query(&format!("CREATE DATABASE {database}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {database} WITH (FORCE)"
+    )))
+    .execute(&mut admin)
+    .await
+    .expect("drop");
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
         .execute(&mut admin)
         .await
         .expect("create");
@@ -903,7 +905,7 @@ const RELEASED: &[(&str, &str)] = &[
 /// The released 0004's checksum: the one `store::REWRITTEN` accepts.
 const RELEASED_0004: &str = "a28e5e3845a21781ec21d3d376aadb8f66648b8cd731274caa6210cbc370b44f";
 
-async fn scalar_bool(pool: &PgPool, sql: &str) -> bool {
+async fn scalar_bool(pool: &PgPool, sql: &'static str) -> bool {
     sqlx::query_scalar(sql).fetch_one(pool).await.expect(sql)
 }
 

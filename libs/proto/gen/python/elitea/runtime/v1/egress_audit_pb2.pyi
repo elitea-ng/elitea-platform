@@ -58,7 +58,7 @@ class ReportRunSummaryRequestV1(_message.Message):
     hosts_reached: _containers.RepeatedCompositeFieldContainer[EgressHostReachedV1]
     hosts_refused: _containers.RepeatedCompositeFieldContainer[EgressHostRefusedV1]
     other_hosts: int
-    def __init__(self, replica_id: _Optional[str] = ..., execution_id: _Optional[str] = ..., project_id: _Optional[int] = ..., final: bool = ..., replica_shutdown: bool = ..., token_expires_at_unix: _Optional[int] = ..., connections: _Optional[int] = ..., bytes_up: _Optional[int] = ..., bytes_down: _Optional[int] = ..., hosts_reached: _Optional[_Iterable[_Union[EgressHostReachedV1, _Mapping]]] = ..., hosts_refused: _Optional[_Iterable[_Union[EgressHostRefusedV1, _Mapping]]] = ..., other_hosts: _Optional[int] = ...) -> None: ...
+    def __init__(self, replica_id: _Optional[str] = ..., execution_id: _Optional[str] = ..., project_id: _Optional[int] = ..., final: _Optional[bool] = ..., replica_shutdown: _Optional[bool] = ..., token_expires_at_unix: _Optional[int] = ..., connections: _Optional[int] = ..., bytes_up: _Optional[int] = ..., bytes_down: _Optional[int] = ..., hosts_reached: _Optional[_Iterable[_Union[EgressHostReachedV1, _Mapping]]] = ..., hosts_refused: _Optional[_Iterable[_Union[EgressHostRefusedV1, _Mapping]]] = ..., other_hosts: _Optional[int] = ...) -> None: ...
 
 class ReportRunSummaryResponseV1(_message.Message):
     __slots__ = ()

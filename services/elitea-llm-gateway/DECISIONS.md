@@ -811,6 +811,11 @@ in a release note.**
   Update 2026-10-09: go.work moved to the Go 1.26 series (floor go1.26.9), so the
   toolchain reason no longer holds. The gateway still builds standalone; joining
   the workspace is a separate decision.
+  Update 2026-10-28 (Dependabot #1520): bifrost/core 1.13 requires go 1.27.3, so
+  the gateway moved to the Go 1.27 series (go.mod 1.27.3, golang:1.27-trixie,
+  ci-gateway `go-version: "1.27"`, golangci-lint v2.15.0, floor
+  stdlibFloorGo127 = 1.27.2). The workspace stays on 1.26: nothing in it needs
+  1.27. The toolchain reason to stay standalone holds again.
 
 ## Prevention gates (CI)
 - Three enforcing gates guard the classes that recurred in review:

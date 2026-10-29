@@ -211,10 +211,10 @@ const (
 // The realtime money-path and capacity counters.
 //
 // gateway_realtime_turns_unpriced_total is the important one. A realtime session
-// with a TRANSCRIPTION intent produces no usage that bifrost's own extractor can
-// read: ExtractRealtimeTurnUsage parses `response.usage` off `response.done`
-// only, and a transcription-intent session emits neither. This gateway parses
-// the transcription event's own top-level usage instead — and when even that is
+// with a TRANSCRIPTION intent emits no `response.done`. Up to bifrost core 1.7,
+// ExtractRealtimeTurnUsage parsed `response.usage` off that event only (core
+// 1.13 also reads a top-level usage). This gateway parses the transcription
+// event's own top-level usage itself — and when even that is
 // absent, the turn is UNPRICED and counted here. It is never billed as zero and
 // never billed from an invented number.
 const (
@@ -1655,9 +1655,10 @@ func writeRealtimeFrame(ctx context.Context, sock RealtimeSocket, frame []byte) 
 //
 //	response.done                 bifrost's own extractor reads it.
 //	…input_audio_transcription.
-//	  completed                   bifrost's extractor returns nil for it — it
-//	                              only ever looks at `response.usage` — so this
-//	                              file parses the event's own top-level usage.
+//	  completed                   this file parses the event's own top-level
+//	                              usage. bifrost core 1.7 returned nil for it;
+//	                              core 1.13 reads it too, and a test holds the
+//	                              two readers in agreement.
 func (s *realtimeSession) billTurn(raw []byte, ev *schemas.BifrostRealtimeEvent) {
 	// The TYPE comes from the raw frame when the codec could not decode it.
 	// `if ev == nil { return }` was a silent hole: a terminal frame the codec

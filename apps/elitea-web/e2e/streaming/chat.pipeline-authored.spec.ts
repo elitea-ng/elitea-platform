@@ -78,7 +78,12 @@ const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
  */
 const LLM_NODE_ID = 'autotest_ui_authored_llm';
 
-/** The id `getInitialNodeId` mints for the first LLM node on an empty canvas. */
+/**
+ * The entry node's id before the rename. A new pipeline is NOT an empty
+ * canvas: the create page stores `PIPELINE_STARTER_TEMPLATE`, whose single
+ * LLM node is `LLM_1` (`PIPELINE_STARTER_ENTRY_NODE_ID`), so the node the
+ * Add-node menu adds below is `LLM_2` and this id names the starter.
+ */
 const MINTED_LLM_NODE_ID = 'LLM_1';
 
 /**
@@ -92,10 +97,24 @@ const MINTED_LLM_NODE_ID = 'LLM_1';
 async function renameNodeThroughCard(page: Page, fromId: string, toId: string): Promise<void> {
   const node = page.locator(`.react-flow__node[data-id="${fromId}"]`);
   await expect(node).toBeVisible({ timeout: 15_000 });
-  await node.getByText(fromId, { exact: true }).dblclick();
+  // EDIT MODE IS PROVEN, not assumed. The node renamed here is the create
+  // page's starter `LLM_1` (`PIPELINE_STARTER_TEMPLATE`), whose card body is
+  // already expanded with VISIBLE inputs (the Trigger autocomplete first).
+  // So "the first input is visible" was true before the double-click did
+  // anything, and when the double-click raced the Add-node reveal pan the
+  // name was typed into the Trigger box, Tab reverted it, and nothing was
+  // renamed (chat-stream-real, PR #1520 round 3: header still "LLM_1", not
+  // editing). Edit mode REPLACES the label with the name box, so the label
+  // vanishing — and the first input holding the node's own id — is the proof.
+  const label = node.getByText(fromId, { exact: true });
+  await expect(async () => {
+    if ((await label.count()) > 0) await label.dblclick({ timeout: 5_000 });
+    await expect(label).toHaveCount(0, { timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
   const nameInput = node.locator('input').first();
-  await expect(nameInput).toBeVisible({ timeout: 10_000 });
+  await expect(nameInput).toHaveValue(fromId, { timeout: 5_000 });
   await nameInput.fill(toId);
+  await expect(nameInput).toHaveValue(toId);
   await nameInput.press('Tab');
   // The rename rewrites the react-flow node's own id, `entry_point`, and any
   // transition pointing at the old one — so the canvas re-keying is itself

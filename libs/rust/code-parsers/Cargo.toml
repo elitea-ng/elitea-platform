@@ -20,8 +20,8 @@ serde = { version = "1.0.228", features = ["derive"] }
 # `preserve_order` and `float_roundtrip` on in their own manifests, so their
 # builds are unchanged; this crate's own tests run with both (the
 # dev-dependency below).
-serde_json = "1.0.151"
-tree-sitter = "=0.27.0"
+serde_json = "1.0.154"
+tree-sitter = "=0.27.1"
 # The C# grammar `tree_sitter_language_pack` 1.16.1 builds (its
 # language_definitions.json: master at this rev, 4 commits after v0.23.5 with
 # C# 14 support; ABI 15, 8495 parse states, 26 fields, 545 node kinds). The
@@ -46,7 +46,7 @@ tree-sitter-typescript = "=0.23.2"
 [dev-dependencies]
 # The engines' serde_json, for this crate's own goldens (dev-dependency
 # features never reach a normal build).
-serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"] }
+serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
 
 [lints]
 workspace = true

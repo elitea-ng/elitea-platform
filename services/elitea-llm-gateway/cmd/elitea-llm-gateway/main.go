@@ -2,7 +2,7 @@
 // bifrost/core and serves the /llm surface as N stateless replicas,
 // coordinating shared state through NATS JetStream.
 //
-// This entrypoint stands up the module on Go 1.26.4 with the §9.5 deployment
+// This entrypoint stands up the module on Go 1.27 with the §9.5 deployment
 // settings (long shutdown drain, disabled SSE write timeout, tuned pools). The
 // /llm chi handler is mounted below, and server.New connects the hardened NATS
 // budget-path client when GATEWAY_NATS_URL is set (design §8; the connection is

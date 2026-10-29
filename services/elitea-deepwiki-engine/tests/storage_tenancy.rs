@@ -113,9 +113,9 @@ async fn owned(pool: &PgPool, project: i32) -> Vec<i64> {
         "wiki_bm25_postings",
     ] {
         // A table name from the list above, never input.
-        let count: i64 = sqlx::query_scalar(&format!(
+        let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT count(*) FROM {table} WHERE project_id = $1 AND wiki_id = $2"
-        ))
+        )))
         .bind(project)
         .bind(WIKI)
         .fetch_one(pool)

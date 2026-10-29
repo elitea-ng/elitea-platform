@@ -19,9 +19,11 @@ describe('BucketStorageSelector (#6638)', () => {
         onChange={vi.fn()}
       />,
     );
-    const trigger = screen.getByRole('button', { name: 'Storage integration' });
+    const trigger = screen.getByRole('button', { name: /^Storage:/ });
     expect(screen.getByTestId('bucket-storage-caption')).toHaveTextContent('Storage:');
     expect(trigger).toHaveTextContent('Storage:Own S3');
+    // Named by its visible text, caption and value both (WCAG 2.5.3).
+    expect(trigger).toHaveAccessibleName(/^Storage:\s?Own S3$/);
     expect(trigger).toHaveStyle({ minHeight: remToPx('3.25rem') });
   });
 
@@ -33,7 +35,7 @@ describe('BucketStorageSelector (#6638)', () => {
         onChange={onChange}
       />,
     );
-    const trigger = screen.getByRole('button', { name: 'Storage integration' });
+    const trigger = screen.getByRole('button', { name: /^Storage:/ });
     expect(trigger).toHaveTextContent('Storage:Select Storage');
     fireEvent.click(trigger);
     fireEvent.click(screen.getByText('Team S3'));

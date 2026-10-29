@@ -53,7 +53,7 @@ class AuthorizeSandboxJobRequestV1(_message.Message):
     signed_command: _envelope_pb2.SignedWorkerCommandEnvelopeV1
     cancel_only: bool
     dependency_bundle_sha256: bytes
-    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., activation_id: _Optional[str] = ..., request_digest: _Optional[bytes] = ..., audience: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ..., cancel_only: bool = ..., dependency_bundle_sha256: _Optional[bytes] = ...) -> None: ...
+    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., activation_id: _Optional[str] = ..., request_digest: _Optional[bytes] = ..., audience: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ..., cancel_only: _Optional[bool] = ..., dependency_bundle_sha256: _Optional[bytes] = ...) -> None: ...
 
 class SandboxJobGrantClaimsV1(_message.Message):
     __slots__ = ("revision", "tenant_id", "project_id", "execution_id", "activation_id", "request_digest", "submitter_workload_identity", "audience", "issued_at_unix_millis", "expires_at_unix_millis", "generation", "cancel_only", "dependency_bundle_sha256")
@@ -83,7 +83,7 @@ class SandboxJobGrantClaimsV1(_message.Message):
     generation: int
     cancel_only: bool
     dependency_bundle_sha256: bytes
-    def __init__(self, revision: _Optional[int] = ..., tenant_id: _Optional[str] = ..., project_id: _Optional[int] = ..., execution_id: _Optional[str] = ..., activation_id: _Optional[str] = ..., request_digest: _Optional[bytes] = ..., submitter_workload_identity: _Optional[str] = ..., audience: _Optional[str] = ..., issued_at_unix_millis: _Optional[int] = ..., expires_at_unix_millis: _Optional[int] = ..., generation: _Optional[int] = ..., cancel_only: bool = ..., dependency_bundle_sha256: _Optional[bytes] = ...) -> None: ...
+    def __init__(self, revision: _Optional[int] = ..., tenant_id: _Optional[str] = ..., project_id: _Optional[int] = ..., execution_id: _Optional[str] = ..., activation_id: _Optional[str] = ..., request_digest: _Optional[bytes] = ..., submitter_workload_identity: _Optional[str] = ..., audience: _Optional[str] = ..., issued_at_unix_millis: _Optional[int] = ..., expires_at_unix_millis: _Optional[int] = ..., generation: _Optional[int] = ..., cancel_only: _Optional[bool] = ..., dependency_bundle_sha256: _Optional[bytes] = ...) -> None: ...
 
 class SignedSandboxJobGrantV1(_message.Message):
     __slots__ = ("key_id", "claims_bytes", "signature")
@@ -143,7 +143,7 @@ class WorkspaceHydrationCursorV1(_message.Message):
     next_file_index: int
     file_count: int
     ready: bool
-    def __init__(self, revision: _Optional[int] = ..., manifest_sha256: _Optional[bytes] = ..., next_file_index: _Optional[int] = ..., file_count: _Optional[int] = ..., ready: bool = ...) -> None: ...
+    def __init__(self, revision: _Optional[int] = ..., manifest_sha256: _Optional[bytes] = ..., next_file_index: _Optional[int] = ..., file_count: _Optional[int] = ..., ready: _Optional[bool] = ...) -> None: ...
 
 class CodeOwnerRecoveryReadRequestV1(_message.Message):
     __slots__ = ("job_key", "request_json")
@@ -239,7 +239,7 @@ class SubmitSandboxJobResponseV1(_message.Message):
     result_json: bytes
     failure_code: str
     cleanup_pending: bool
-    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., result_json: _Optional[bytes] = ..., failure_code: _Optional[str] = ..., cleanup_pending: bool = ...) -> None: ...
+    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., result_json: _Optional[bytes] = ..., failure_code: _Optional[str] = ..., cleanup_pending: _Optional[bool] = ...) -> None: ...
 
 class CancelSandboxJobRequestV1(_message.Message):
     __slots__ = ("grant",)
@@ -253,7 +253,7 @@ class CancelSandboxJobResponseV1(_message.Message):
     CLEANUP_PENDING_FIELD_NUMBER: _ClassVar[int]
     status: SandboxJobStatusV1
     cleanup_pending: bool
-    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., cleanup_pending: bool = ...) -> None: ...
+    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., cleanup_pending: _Optional[bool] = ...) -> None: ...
 
 class LookupSandboxDependenciesRequestV1(_message.Message):
     __slots__ = ("content_grant", "preparation_job_json")
@@ -287,7 +287,7 @@ class PrepareSandboxDependenciesResponseV1(_message.Message):
     bundle_json: bytes
     failure_code: str
     cleanup_pending: bool
-    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., bundle_json: _Optional[bytes] = ..., failure_code: _Optional[str] = ..., cleanup_pending: bool = ...) -> None: ...
+    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., bundle_json: _Optional[bytes] = ..., failure_code: _Optional[str] = ..., cleanup_pending: _Optional[bool] = ...) -> None: ...
 
 class PublishSandboxDependenciesRequestV1(_message.Message):
     __slots__ = ("content_grant", "index")
@@ -305,7 +305,7 @@ class PublishSandboxDependenciesResponseV1(_message.Message):
     status: SandboxJobStatusV1
     failure_code: str
     cleanup_pending: bool
-    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., failure_code: _Optional[str] = ..., cleanup_pending: bool = ...) -> None: ...
+    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., failure_code: _Optional[str] = ..., cleanup_pending: _Optional[bool] = ...) -> None: ...
 
 class HydrateSandboxDependenciesRequestV1(_message.Message):
     __slots__ = ("execution_grant", "content_grant", "prepared_job_json", "bundle_json", "index", "code_execution_intent_json")
@@ -327,7 +327,7 @@ class HydrateSandboxDependenciesResponseV1(_message.Message):
     __slots__ = ("ready",)
     READY_FIELD_NUMBER: _ClassVar[int]
     ready: bool
-    def __init__(self, ready: bool = ...) -> None: ...
+    def __init__(self, ready: _Optional[bool] = ...) -> None: ...
 
 class SubmitRustCompiledSnapshotRequestV1(_message.Message):
     __slots__ = ("grant", "prepared_job_json", "control_json", "descriptor_json", "read_grant", "dependency_content_grant", "dependency_bundle_json", "reconcile_only", "native_hydration_index", "code_execution_intent_json")
@@ -351,7 +351,7 @@ class SubmitRustCompiledSnapshotRequestV1(_message.Message):
     reconcile_only: bool
     native_hydration_index: int
     code_execution_intent_json: bytes
-    def __init__(self, grant: _Optional[_Union[SignedSandboxJobGrantV1, _Mapping]] = ..., prepared_job_json: _Optional[bytes] = ..., control_json: _Optional[bytes] = ..., descriptor_json: _Optional[bytes] = ..., read_grant: _Optional[_Union[SignedSandboxJobGrantV1, _Mapping]] = ..., dependency_content_grant: _Optional[_Union[SignedSandboxJobGrantV1, _Mapping]] = ..., dependency_bundle_json: _Optional[bytes] = ..., reconcile_only: bool = ..., native_hydration_index: _Optional[int] = ..., code_execution_intent_json: _Optional[bytes] = ...) -> None: ...
+    def __init__(self, grant: _Optional[_Union[SignedSandboxJobGrantV1, _Mapping]] = ..., prepared_job_json: _Optional[bytes] = ..., control_json: _Optional[bytes] = ..., descriptor_json: _Optional[bytes] = ..., read_grant: _Optional[_Union[SignedSandboxJobGrantV1, _Mapping]] = ..., dependency_content_grant: _Optional[_Union[SignedSandboxJobGrantV1, _Mapping]] = ..., dependency_bundle_json: _Optional[bytes] = ..., reconcile_only: _Optional[bool] = ..., native_hydration_index: _Optional[int] = ..., code_execution_intent_json: _Optional[bytes] = ...) -> None: ...
 
 class SubmitRustCompiledSnapshotResponseV1(_message.Message):
     __slots__ = ("status", "result_json", "descriptor_json", "compilation_job_key", "failure_code", "cleanup_pending", "needs_admission", "native_hydration_ready")
@@ -371,7 +371,7 @@ class SubmitRustCompiledSnapshotResponseV1(_message.Message):
     cleanup_pending: bool
     needs_admission: bool
     native_hydration_ready: bool
-    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., result_json: _Optional[bytes] = ..., descriptor_json: _Optional[bytes] = ..., compilation_job_key: _Optional[bytes] = ..., failure_code: _Optional[str] = ..., cleanup_pending: bool = ..., needs_admission: bool = ..., native_hydration_ready: bool = ...) -> None: ...
+    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., result_json: _Optional[bytes] = ..., descriptor_json: _Optional[bytes] = ..., compilation_job_key: _Optional[bytes] = ..., failure_code: _Optional[str] = ..., cleanup_pending: _Optional[bool] = ..., needs_admission: _Optional[bool] = ..., native_hydration_ready: _Optional[bool] = ...) -> None: ...
 
 class PublishRustCompiledSnapshotRequestV1(_message.Message):
     __slots__ = ("publish_grant", "phase")
@@ -389,4 +389,4 @@ class PublishRustCompiledSnapshotResponseV1(_message.Message):
     status: SandboxJobStatusV1
     failure_code: str
     cleanup_pending: bool
-    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., failure_code: _Optional[str] = ..., cleanup_pending: bool = ...) -> None: ...
+    def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., failure_code: _Optional[str] = ..., cleanup_pending: _Optional[bool] = ...) -> None: ...

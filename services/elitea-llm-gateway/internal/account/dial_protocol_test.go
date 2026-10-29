@@ -309,7 +309,9 @@ func TestDialDefaultProtocolUsesTheDeploymentRoute(t *testing.T) {
 			ctx.SetValue(ContextKeyDispatchKind, DispatchEmbedding)
 			_, bErr := core.EmbeddingRequest(ctx, &schemas.BifrostEmbeddingRequest{
 				Provider: schemas.Azure, Model: "text-embedding-3-small",
-				Input: &schemas.EmbeddingInput{Text: schemas.Ptr("hello")},
+				Input: schemas.EmbeddingInput{{Content: schemas.EmbeddingContent{
+					{Type: schemas.EmbeddingContentPartTypeText, Text: schemas.Ptr("hello")},
+				}}},
 			})
 			if bErr != nil {
 				t.Fatalf("EmbeddingRequest: %+v", bErr)

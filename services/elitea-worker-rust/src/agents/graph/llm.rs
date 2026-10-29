@@ -1518,6 +1518,7 @@ async fn run_model_agent(
                 .map_err(|_| LlmExecutionError::Unavailable)?
                 .extend(event.actions.state_delta.clone());
         }
+        let restates_turn = crate::agents::events::restates_streamed_turn(&event);
         if !event.llm_response.partial
             && let Some(event_content) = event.llm_response.content.as_mut()
         {
@@ -1530,14 +1531,17 @@ async fn run_model_agent(
             }
             // Replay needs the whole model turn, not just the terminal delta.
             // Do not change the event forwarded to the live browser stream.
+            // A 2.3.0 streamed terminal already carries the whole turn.
             let mut completed_content = event_content.clone();
-            completed_content.parts = events
-                .iter()
-                .filter(|previous: &&adk_rust::Event| previous.id == event.id)
-                .filter_map(adk_rust::Event::content)
-                .flat_map(|content| content.parts.iter().cloned())
-                .chain(event_content.parts.iter().cloned())
-                .collect();
+            if !restates_turn {
+                completed_content.parts = events
+                    .iter()
+                    .filter(|previous: &&adk_rust::Event| previous.id == event.id)
+                    .filter_map(adk_rust::Event::content)
+                    .flat_map(|content| content.parts.iter().cloned())
+                    .chain(event_content.parts.iter().cloned())
+                    .collect();
+            }
             if has_calls {
                 pending_prefix = Some(transcript.clone());
                 pending_content = Some(completed_content.clone());
@@ -1592,11 +1596,23 @@ fn last_model_text(events: &[adk_rust::Event]) -> Option<String> {
     })?;
     // SSE events carry deltas with a stable model-turn ID. Keep streaming to
     // the browser, but return the whole final turn as the node's state output.
+    // A 2.3.0 streamed terminal already restates the whole turn.
+    let turn = events.iter().filter(|event| event.id == last.id);
+    if let Some(complete) = turn
+        .clone()
+        .rfind(|event| crate::agents::events::restates_streamed_turn(event))
+    {
+        return Some(
+            complete
+                .content()
+                .into_iter()
+                .flat_map(|content| &content.parts)
+                .filter_map(Part::text)
+                .collect(),
+        );
+    }
     Some(
-        events
-            .iter()
-            .filter(|event| event.id == last.id)
-            .filter_map(adk_rust::Event::content)
+        turn.filter_map(adk_rust::Event::content)
             .flat_map(|content| &content.parts)
             .filter_map(Part::text)
             .collect(),

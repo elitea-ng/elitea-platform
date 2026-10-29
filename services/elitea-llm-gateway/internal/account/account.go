@@ -449,7 +449,7 @@ func (a *EliteaAccount) GetConfigForProvider(provider schemas.ModelProvider) (*s
 	// key, so the value it returns cannot vary per project. That fits: the
 	// marker is a constant of the deployment.
 	if v := a.hopMarker.Value(); v != "" {
-		cfg.NetworkConfig.ExtraHeaders = map[string]string{hopmarker.Header: v}
+		cfg.NetworkConfig.ExtraHeaders = schemas.NewSecretVarMap(map[string]string{hopmarker.Header: v})
 	}
 	return cfg, nil
 }

@@ -356,8 +356,8 @@ func TestDrainWaitsForCallsAndRefusesNewOnes(t *testing.T) {
 	drained := make(chan error, 1)
 	go func() { drained <- srv.service.Drain(testContext(t)) }()
 	select {
-	case <-drained:
-		t.Fatal("Drain returned while a call was in flight")
+	case err := <-drained:
+		t.Fatalf("Drain returned (err %v) while a call was in flight", err)
 	case <-time.After(100 * time.Millisecond):
 	}
 	if _, err := srv.service.begin(); status.Code(err) != codes.Unavailable {

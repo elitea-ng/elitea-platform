@@ -93,7 +93,7 @@ class ClaimCommandRequestV1(_message.Message):
     node_recovery: bool
     governed_security_context_v1: bool
     fanout_interrupt_decisions: bool
-    def __init__(self, workload_session_id: _Optional[str] = ..., producer_id: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ..., agent_model_checkpoint_recovery: bool = ..., node_recovery: bool = ..., governed_security_context_v1: bool = ..., fanout_interrupt_decisions: bool = ...) -> None: ...
+    def __init__(self, workload_session_id: _Optional[str] = ..., producer_id: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ..., agent_model_checkpoint_recovery: _Optional[bool] = ..., node_recovery: _Optional[bool] = ..., governed_security_context_v1: _Optional[bool] = ..., fanout_interrupt_decisions: _Optional[bool] = ...) -> None: ...
 
 class SettlementRecoveryV1(_message.Message):
     __slots__ = ("proposal", "proposal_digest", "idempotency_key", "settlement_receipt_id", "outcome")
@@ -141,7 +141,7 @@ class ClaimReceiptV1(_message.Message):
     node_recovery_receipt_json: bytes
     vector_token: VectorClaimTokenV1
     toolkit_typed_refusals: bool
-    def __init__(self, disposition: _Optional[_Union[ClaimDispositionV1, str]] = ..., identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., lease_expires_at_unix_millis: _Optional[int] = ..., input_bundle_ref: _Optional[_Union[_input_pb2.ExecutionInputBundleReferenceV1, _Mapping]] = ..., input_bundle: _Optional[_Union[_input_pb2.ExecutionInputBundleV1, _Mapping]] = ..., desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., claim_handoff_watermark: _Optional[int] = ..., claim_id: _Optional[str] = ..., settlement_recovery: _Optional[_Union[SettlementRecoveryV1, _Mapping]] = ..., retirement: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., claim_started_at_unix_micros: _Optional[int] = ..., node_recovery_receipt_json: _Optional[bytes] = ..., vector_token: _Optional[_Union[VectorClaimTokenV1, _Mapping]] = ..., toolkit_typed_refusals: bool = ...) -> None: ...
+    def __init__(self, disposition: _Optional[_Union[ClaimDispositionV1, str]] = ..., identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., lease_expires_at_unix_millis: _Optional[int] = ..., input_bundle_ref: _Optional[_Union[_input_pb2.ExecutionInputBundleReferenceV1, _Mapping]] = ..., input_bundle: _Optional[_Union[_input_pb2.ExecutionInputBundleV1, _Mapping]] = ..., desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., claim_handoff_watermark: _Optional[int] = ..., claim_id: _Optional[str] = ..., settlement_recovery: _Optional[_Union[SettlementRecoveryV1, _Mapping]] = ..., retirement: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., claim_started_at_unix_micros: _Optional[int] = ..., node_recovery_receipt_json: _Optional[bytes] = ..., vector_token: _Optional[_Union[VectorClaimTokenV1, _Mapping]] = ..., toolkit_typed_refusals: _Optional[bool] = ...) -> None: ...
 
 class VectorClaimTokenV1(_message.Message):
     __slots__ = ("bearer", "expires_at_unix_millis", "allowed_sources")
@@ -231,7 +231,7 @@ class RenewLeaseResponseV1(_message.Message):
     desired_state: _common_pb2.DesiredExecutionStateV1
     rejection: _errors_pb2.RuntimeErrorV1
     workspace_wrap_up: bool
-    def __init__(self, lease_expires_at_unix_millis: _Optional[int] = ..., desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., workspace_wrap_up: bool = ...) -> None: ...
+    def __init__(self, lease_expires_at_unix_millis: _Optional[int] = ..., desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., workspace_wrap_up: _Optional[bool] = ...) -> None: ...
 
 class ObserveDesiredStateRequestV1(_message.Message):
     __slots__ = ("identity", "fence")
@@ -249,7 +249,7 @@ class ObserveDesiredStateResponseV1(_message.Message):
     desired_state: _common_pb2.DesiredExecutionStateV1
     rejection: _errors_pb2.RuntimeErrorV1
     workspace_wrap_up: bool
-    def __init__(self, desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., workspace_wrap_up: bool = ...) -> None: ...
+    def __init__(self, desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., workspace_wrap_up: _Optional[bool] = ...) -> None: ...
 
 class PrepareSettlementRequestV1(_message.Message):
     __slots__ = ("identity", "fence", "proposal", "proposal_digest", "idempotency_key")
@@ -309,7 +309,7 @@ class ClaimSteeringMessagesRequestV1(_message.Message):
     fence: _common_pb2.ExecutionFenceV1
     acknowledged_steering_ids: _containers.RepeatedScalarFieldContainer[str]
     acknowledge_only: bool
-    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., acknowledged_steering_ids: _Optional[_Iterable[str]] = ..., acknowledge_only: bool = ...) -> None: ...
+    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., acknowledged_steering_ids: _Optional[_Iterable[str]] = ..., acknowledge_only: _Optional[bool] = ...) -> None: ...
 
 class SteeringMessageV1(_message.Message):
     __slots__ = ("steering_id", "content", "queued_at_unix_millis")

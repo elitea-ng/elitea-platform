@@ -94,7 +94,7 @@ func WithRoutingPick(pick func(total float64) float64) HandlerOption {
 func (h *Handler) policySubject(ctx context.Context, provider schemas.ModelProvider, model string) policy.Subject {
 	return policy.Subject{
 		ProjectID: parseProjectID(identityProjectFromCtx(ctx)),
-		TenantID:  bifrostCtxString(ctx, schemas.BifrostContextKeyGovernanceCustomerID),
+		TenantID:  bifrostCtxString(ctx, schemas.BifrostContextKeyGovernanceCustomerID), //nolint:staticcheck // SA1019: bifrost core 1.13 still reads this key (schemas/context.go, plugin pipelines); its Grant API has no setter for the gateway
 		Provider:  string(provider),
 		Model:     model,
 	}

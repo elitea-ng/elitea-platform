@@ -752,20 +752,24 @@ func TestRealtime_EachTurnIsBilledWithItsOwnEventID(t *testing.T) {
 
 // TestRealtime_TranscriptionTurnIsBilledFromItsOwnUsage is FACT F2.
 //
-// A transcription-intent session never emits `response.done`, and bifrost's
-// ExtractRealtimeTurnUsage reads `response.usage` off that event ONLY — so it
-// returns nil for the event that DOES carry a well-formed top-level usage
-// object. The subtest below asserts that directly against bifrost's own code, so
-// the reason this route parses the envelope itself is recorded in a test rather
-// than in a comment.
+// A transcription-intent session never emits `response.done`. Up to bifrost
+// core 1.7, ExtractRealtimeTurnUsage read `response.usage` off that event ONLY,
+// so it returned nil for the event that DOES carry a top-level usage object.
+// This route therefore parses the transcription envelope itself.
+//
+// bifrost core 1.13 also falls back to the top-level usage. The route keeps its
+// own parser: it also reads the duration arm and the money path stays the same.
+// The first subtest now holds the two readers in agreement, so a later bifrost
+// change to that reading is reported here.
 func TestRealtime_TranscriptionTurnIsBilledFromItsOwnUsage(t *testing.T) {
 	const frame = `{"type":"conversation.item.input_audio_transcription.completed",` +
 		`"transcript":"hello there","usage":{"type":"tokens","input_tokens":30,"output_tokens":7}}`
 
-	t.Run("bifrost's own extractor reports nothing for it", func(t *testing.T) {
-		if u := (&openAICodec{}).ExtractRealtimeTurnUsage([]byte(frame)); u != nil {
-			t.Fatalf("ExtractRealtimeTurnUsage returned %+v; F2 says it returns nil here, and "+
-				"this route's own parser exists only because it does", u)
+	t.Run("bifrost's own extractor agrees with the route's parser", func(t *testing.T) {
+		u := (&openAICodec{}).ExtractRealtimeTurnUsage([]byte(frame))
+		if u == nil || u.PromptTokens != 30 || u.CompletionTokens != 7 {
+			t.Fatalf("ExtractRealtimeTurnUsage returned %+v; want 30 input and 7 output tokens, "+
+				"the numbers this route's own parser bills", u)
 		}
 	})
 

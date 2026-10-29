@@ -5,9 +5,10 @@ made (see DECISIONS.md for rationale) — apply them WITHOUT re-asking. They exi
 because each was a real bug found across 3 review rounds.
 
 ## Build / test (non-negotiable)
-- This is a **standalone Go 1.26.4 module, NOT in the root go.work.** ALWAYS build
+- This is a **standalone Go 1.27 module (go 1.27.3), NOT in the root go.work** (Go 1.26). ALWAYS build
   and test with `GOWORK=off` (e.g. `GOWORK=off go test -race ./...`,
   `GOWORK=off golangci-lint run ./...`). Plain `go test` from the workspace fails.
+  golangci-lint must be built with Go 1.27 (v2.13 or later; CI pins v2.15.0).
 - Before claiming done, BOTH must be green: `GOWORK=off go test -race ./...` AND
   `GOWORK=off golangci-lint run ./...`. `go vet`/`go test` alone is not enough —
   CI runs golangci-lint and it has caught real bugs (ineffassign, errcheck).

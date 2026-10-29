@@ -315,9 +315,9 @@ impl UnifiedDb {
     ///
     /// [`crate::storage::StorageError::Database`].
     pub async fn get_node(&self, node_id: &str) -> Result<Option<NodeRecord>> {
-        let row = sqlx::query(&format!(
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
             "{NODE_SELECT} WHERE wiki_id = $1 AND node_id = $2 AND project_id = $3"
-        ))
+        )))
         .bind(self.key().wiki_id())
         .bind(node_id)
         .bind(self.key().project_id())
@@ -471,9 +471,9 @@ pub(crate) async fn nodes_by_id(
     if node_ids.is_empty() {
         return Ok(std::collections::HashMap::new());
     }
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "{NODE_SELECT} WHERE wiki_id = $1 AND node_id = ANY($2) AND project_id = $3"
-    ))
+    )))
     .bind(key.wiki_id())
     .bind(node_ids)
     .bind(key.project_id())

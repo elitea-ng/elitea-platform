@@ -21,10 +21,10 @@ tonic = { version = "0.14.6", default-features = false, features = ["channel", "
 # verifier and HTTP/2; no native-tls, no cookies, no decompression. Model calls
 # never use it.
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2"] }
-serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"] }
+serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
 # The o200k_base and cl100k_base BPEs are compiled in: no runtime download.
 tiktoken-rs = "0.12.1"
-tokio = { version = "1.53.1", features = ["macros", "rt", "sync", "time"] }
+tokio = { version = "1.54.1", features = ["macros", "rt", "sync", "time"] }
 tracing = "0.1.44"
 
 [dev-dependencies]
@@ -35,7 +35,7 @@ elitea-model-rpc = { path = "../model-rpc", features = ["testing"] }
 # test: macOS refuses a leaf valid for more than 825 days, so a committed
 # fixture would need rotating.
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
-tokio = { version = "1.53.1", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
+tokio = { version = "1.54.1", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "tls12"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
 # An HTTP/2 server that sends GOAWAY at a connection's age and lets its

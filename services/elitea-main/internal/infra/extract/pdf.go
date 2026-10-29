@@ -13,6 +13,8 @@ import (
 	"github.com/klippa-app/go-pdfium/requests"
 	"github.com/klippa-app/go-pdfium/webassembly"
 	"github.com/tetratelabs/wazero"
+	wazeroapi "github.com/tetratelabs/wazero/api"
+	"github.com/tetratelabs/wazero/experimental"
 )
 
 // PDFEngineConcurrency is how many PDFs one process extracts at the same
@@ -60,7 +62,12 @@ func newPDFEngine(memoryLimitPages uint32) *pdfEngine {
 // sandbox property is set here: an empty file system, no output streams, a
 // memory ceiling, and a runtime that stops when ctx ends.
 func (engine *pdfEngine) poolConfig(ctx context.Context) webassembly.Config {
+	// go-pdfium >= 1.21 builds pdfium with WebAssembly exception handling;
+	// without the feature its module fails to compile ("tag section not
+	// supported") and every PDF is unreadable. These are the features its own
+	// default config enables.
 	runtime := wazero.NewRuntimeConfig().
+		WithCoreFeatures(wazeroapi.CoreFeaturesV2 | experimental.CoreFeaturesExceptionHandling).
 		WithCloseOnContextDone(true).
 		WithCompilationCache(engine.cache)
 	if engine.memoryLimitPages > 0 {

@@ -1213,7 +1213,8 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
         super::runtime::PendingRecoveredAgentInvocation<Self::Completion>,
         NativeAgentAssemblyError,
     > {
-        let (assembled, evidence) = self.assemble_with_recovery(assembly, true, None).await?;
+        let (assembled, evidence) =
+            Box::pin(self.assemble_with_recovery(assembly, true, None)).await?;
         let evidence = evidence.ok_or_else(unsupported_pipeline_runtime)?;
         Ok(super::runtime::PendingRecoveredAgentInvocation::new(
             assembled, evidence,
@@ -1224,7 +1225,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
         &self,
         assembly: AuthorizedNativeAssembly<'_>,
     ) -> Result<AssembledNativeAgentInvocation<Self::Completion>, NativeAgentAssemblyError> {
-        self.assemble_with_recovery(assembly, false, None)
+        Box::pin(self.assemble_with_recovery(assembly, false, None))
             .await
             .map(|(assembled, _)| assembled)
     }
@@ -1237,9 +1238,8 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
         super::runtime::PendingRecoveredAgentInvocation<Self::Completion>,
         NativeAgentAssemblyError,
     > {
-        let (assembled, evidence) = self
-            .assemble_with_recovery(assembly, false, Some(authority))
-            .await?;
+        let (assembled, evidence) =
+            Box::pin(self.assemble_with_recovery(assembly, false, Some(authority))).await?;
         let evidence = evidence.ok_or_else(unsupported_pipeline_runtime)?;
         Ok(super::runtime::PendingRecoveredAgentInvocation::new(
             assembled, evidence,
@@ -1269,7 +1269,7 @@ impl PipelineNativeAgentAssembler {
             outcome = tracing::field::Empty,
             error_code = tracing::field::Empty,
         );
-        let result: Result<_, NativeAgentAssemblyError> = async {
+        let admit_and_build = async {
             tracing::Span::current().record("stage", "admission");
             let tool_policy = policy_for_guardrails(
                 assembly.request().payload.toolkit_guardrails.as_ref(),
@@ -1431,8 +1431,8 @@ impl PipelineNativeAgentAssembler {
             .await?;
             Ok((assembled, evidence))
         }
-        .instrument(span.clone())
-        .await;
+        .instrument(span.clone());
+        let result: Result<_, NativeAgentAssemblyError> = Box::pin(admit_and_build).await;
         match &result {
             Ok(_) => {
                 span.record("outcome", "assembled");

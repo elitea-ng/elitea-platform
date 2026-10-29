@@ -183,7 +183,7 @@ fn extract_into(
             // `get_latest_log_file`: the newest folder directly under the
             // extraction root, which the extraction order makes the last one.
             let mut folders: Vec<String> = Vec::new();
-            for name in zip.file_names() {
+            for name in zip.file_names().filter_map(std::result::Result::ok) {
                 if let Some((folder, _)) = name.split_once('/')
                     && !folder.is_empty()
                     && !folders.iter().any(|known| known == folder)

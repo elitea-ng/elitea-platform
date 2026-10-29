@@ -9,7 +9,7 @@ It turns the PDF and Office documents an index run fetched into text, over
 Two reasons, and either alone would do.
 
 1. **The worker's lock cannot hold the PDF backend.** `elitea-doc-extract`'s
-   `documents` feature brings xberg 1.3.6, whose pure-Rust PDF backend
+   `documents` feature brings xberg 1.3.10, whose pure-Rust PDF backend
    (`xberg-native-pdf`) requires `smallvec >= 1.16`. The worker's
    `kube-client` 4.2.0 (its `sandbox-supervisor` feature) pins `serde-saphyr
    ^0.0.29`, which caps `smallvec < 1.16`. One `Cargo.lock` cannot satisfy

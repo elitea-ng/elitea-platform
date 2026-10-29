@@ -33,15 +33,15 @@ check_version \
 check_version \
   "grpcio-tools" \
   "$(PYTHONPATH="${python_tools}${PYTHONPATH:+:${PYTHONPATH}}" "${python_bin}" -c 'import importlib.metadata as m; print(m.version("grpcio-tools"))')" \
-  "1.76.0"
+  "1.84.1"
 check_version \
   "grpcio-tools protoc" \
   "$(PYTHONPATH="${python_tools}${PYTHONPATH:+:${PYTHONPATH}}" "${python_bin}" -m grpc_tools.protoc --version | awk '{print $2}')" \
-  "31.1"
+  "35.1"
 check_version \
   "protobuf Python runtime" \
   "$(PYTHONPATH="${python_tools}${PYTHONPATH:+:${PYTHONPATH}}" "${python_bin}" -c 'import importlib.metadata as m; print(m.version("protobuf"))')" \
-  "6.33.6"
+  "7.36.2"
 
 cd "${proto_root}"
 buf lint .

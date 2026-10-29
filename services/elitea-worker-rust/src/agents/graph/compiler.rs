@@ -92,6 +92,9 @@ const MAX_STATIC_INTERRUPTS: usize = 128;
 const PIPELINE_RECURSION_LIMIT: usize = 100;
 const SUBGRAPH_RESULT_NODE: &str = "__elitea_subgraph_result_v1";
 const SUBGRAPH_ENTRY_NODE: &str = "__elitea_subgraph_entry_v1";
+/// Root-only bookkeeping node that a finished thread re-enters instead of the
+/// pipeline entry point; see [`FinishedTurnCheckpointer`].
+const FINISHED_TURN_NODE: &str = "__elitea_finished_turn_v1";
 const PIPELINE_DIGEST_DOMAIN: &[u8] = b"elitea.graph.pipeline.config.v1\0";
 
 type ValidatedState = (
@@ -1333,6 +1336,30 @@ impl PipelineDefinition {
         )
     }
 
+    /// The static pauses: `interrupt_before`, and after every Printer node and `interrupt_after`.
+    fn with_interrupts(&self, mut builder: GraphAgentBuilder) -> GraphAgentBuilder {
+        let before_interrupts: Vec<&str> =
+            self.interrupt_before.iter().map(String::as_str).collect();
+        if !before_interrupts.is_empty() {
+            builder = builder.interrupt_before(&before_interrupts);
+        }
+        let mut after_interrupts = self
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                PipelineNodeDefinition::Printer(node) => Some(node.id()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        after_interrupts.extend(self.interrupt_after.iter().map(String::as_str));
+        after_interrupts.sort_unstable();
+        after_interrupts.dedup();
+        if !after_interrupts.is_empty() {
+            builder = builder.interrupt_after(&after_interrupts);
+        }
+        builder
+    }
+
     /// Compile with invocation-owned model and direct-tool runtimes.
     pub(crate) fn compile_with_runtime(
         &self,
@@ -1385,7 +1412,9 @@ impl PipelineDefinition {
                     .description("Elitea stored pipeline")
                     .state_schema(state_schema.clone())
                     .edge(START, &self.entry_point)
-                    .checkpointer_arc(checkpointer)
+                    .checkpointer_arc(Arc::new(FinishedTurnCheckpointer {
+                        inner: checkpointer,
+                    }))
                     .recursion_limit(PIPELINE_RECURSION_LIMIT)
                     .max_concurrency(1)
                     .output_mapper(move |state| {
@@ -1406,27 +1435,12 @@ impl PipelineDefinition {
         }) {
             builder = self.bind_node(builder, node, runtimes, &node_checkpointer)?;
         }
-        let mut builder = builder.into_agent()?;
-        let before_interrupts: Vec<&str> =
-            self.interrupt_before.iter().map(String::as_str).collect();
-        if !before_interrupts.is_empty() {
-            builder = builder.interrupt_before(&before_interrupts);
-        }
-        let printer_interrupts = self
-            .nodes
-            .iter()
-            .filter_map(|node| match node {
-                PipelineNodeDefinition::Printer(node) => Some(node.id()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let mut after_interrupts = printer_interrupts;
-        after_interrupts.extend(self.interrupt_after.iter().map(String::as_str));
-        after_interrupts.sort_unstable();
-        after_interrupts.dedup();
-        if !after_interrupts.is_empty() {
-            builder = builder.interrupt_after(&after_interrupts);
-        }
+        let mut builder = self.with_interrupts(
+            builder
+                .into_agent()?
+                .node(PipelineFinishedTurnNode)
+                .edge(FINISHED_TURN_NODE, END),
+        );
         if let Some(resume) = resume {
             let resume_state = resume.into_state();
             builder = builder
@@ -2207,6 +2221,66 @@ impl Node for PipelineSubgraphEntryNode {
     }
 }
 
+/// Keeps a finished root thread finished across `GraphAgent::run` calls.
+///
+/// ADK-Rust 2.3 `GraphAgent::run` treats a thread whose latest checkpoint has
+/// an empty frontier as a NEW turn and restarts it from the entry nodes with
+/// the finished state carried over (2.2 returned the finished state). Elitea
+/// never re-enters a finished root thread for new input: fresh turns are
+/// isolated by `TurnCheckpointer`, so the empty frontiers this graph loads are
+/// an authored `interrupt_after` on a terminal node being continued, or a
+/// reclaimed turn whose graph already finished. Re-running the entry point
+/// there repeats completed node effects. The frontier is presented as this
+/// compiler-owned no-op node instead, so the run applies no node updates,
+/// records one terminal checkpoint, and completes from the finished state.
+struct FinishedTurnCheckpointer {
+    inner: Arc<dyn Checkpointer>,
+}
+
+#[async_trait]
+impl Checkpointer for FinishedTurnCheckpointer {
+    async fn save(&self, checkpoint: &Checkpoint) -> Result<String, GraphError> {
+        self.inner.save(checkpoint).await
+    }
+    async fn load(&self, thread_id: &str) -> Result<Option<Checkpoint>, GraphError> {
+        Ok(self.inner.load(thread_id).await?.map(|mut checkpoint| {
+            if checkpoint.pending_nodes.is_empty() {
+                checkpoint.pending_nodes = vec![FINISHED_TURN_NODE.to_owned()];
+            }
+            checkpoint
+        }))
+    }
+    async fn load_by_id(&self, id: &str) -> Result<Option<Checkpoint>, GraphError> {
+        self.inner.load_by_id(id).await
+    }
+    async fn list(&self, thread_id: &str) -> Result<Vec<Checkpoint>, GraphError> {
+        self.inner.list(thread_id).await
+    }
+    async fn delete(&self, thread_id: &str) -> Result<(), GraphError> {
+        self.inner.delete(thread_id).await
+    }
+    async fn prune(
+        &self,
+        thread_id: &str,
+        policy: &adk_rust::graph::checkpoint::RetentionPolicy,
+    ) -> Result<usize, GraphError> {
+        self.inner.prune(thread_id, policy).await
+    }
+}
+
+struct PipelineFinishedTurnNode;
+
+#[async_trait]
+impl Node for PipelineFinishedTurnNode {
+    fn name(&self) -> &str {
+        FINISHED_TURN_NODE
+    }
+
+    async fn execute(&self, _: &NodeContext) -> Result<NodeOutput, GraphError> {
+        Ok(NodeOutput::new())
+    }
+}
+
 struct PipelineSubgraphResultNode {
     result_policy: PipelineResultPolicy,
 }
@@ -2462,7 +2536,10 @@ fn parse_pipeline_nodes(
     let mut node_ids = BTreeSet::new();
     for raw_node in raw_nodes {
         let node = parse_pipeline_node(&raw_node)?;
-        if matches!(node.id(), SUBGRAPH_RESULT_NODE | SUBGRAPH_ENTRY_NODE) {
+        if matches!(
+            node.id(),
+            SUBGRAPH_RESULT_NODE | SUBGRAPH_ENTRY_NODE | FINISHED_TURN_NODE
+        ) {
             return Err(PipelineConfigurationError::Invalid(
                 "a pipeline node identifier is reserved",
             ));
@@ -2982,6 +3059,7 @@ pub(super) fn reserved_user_state_key(key: &str) -> bool {
                 | APPLICATION_RESULT_STATE_KEY
                 | SUBGRAPH_RESULT_NODE
                 | SUBGRAPH_ENTRY_NODE
+                | FINISHED_TURN_NODE
         )
         || matches!(
             key,

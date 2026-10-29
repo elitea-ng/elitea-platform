@@ -102,7 +102,7 @@ class RuntimeConstraintsV1(_message.Message):
     network_egress_classes: _containers.RepeatedScalarFieldContainer[str]
     artifact_support: bool
     realtime_session_support: bool
-    def __init__(self, isolation_classes: _Optional[_Iterable[str]] = ..., architectures: _Optional[_Iterable[str]] = ..., child_process_support: bool = ..., network_egress_classes: _Optional[_Iterable[str]] = ..., artifact_support: bool = ..., realtime_session_support: bool = ...) -> None: ...
+    def __init__(self, isolation_classes: _Optional[_Iterable[str]] = ..., architectures: _Optional[_Iterable[str]] = ..., child_process_support: _Optional[bool] = ..., network_egress_classes: _Optional[_Iterable[str]] = ..., artifact_support: _Optional[bool] = ..., realtime_session_support: _Optional[bool] = ...) -> None: ...
 
 class RuntimeLimitsProfileReferenceV1(_message.Message):
     __slots__ = ("limits_schema_revision", "limits_revisions", "resource_profile_classes")

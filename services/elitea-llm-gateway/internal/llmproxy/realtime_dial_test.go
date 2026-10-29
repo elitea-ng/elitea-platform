@@ -59,6 +59,7 @@ type stubRealtimeProvider struct {
 	mu        sync.Mutex
 	urlKey    schemas.Key
 	urlModel  string
+	urlIntent string
 	hdrKey    schemas.Key
 	lastRaw   json.RawMessage
 	lastEvent *schemas.BifrostRealtimeEvent
@@ -67,11 +68,11 @@ type stubRealtimeProvider struct {
 
 func (p *stubRealtimeProvider) SupportsRealtimeAPI() bool { return true }
 
-func (p *stubRealtimeProvider) RealtimeWebSocketURL(key schemas.Key, model string) string {
+func (p *stubRealtimeProvider) RealtimeWebSocketURL(key schemas.Key, model, intent string) (string, *schemas.BifrostError) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.urlKey, p.urlModel = key, model
-	return p.url
+	p.urlKey, p.urlModel, p.urlIntent = key, model, intent
+	return p.url, nil
 }
 
 func (p *stubRealtimeProvider) RealtimeHeaders(_ *schemas.BifrostContext, key schemas.Key) (map[string]string, *schemas.BifrostError) {

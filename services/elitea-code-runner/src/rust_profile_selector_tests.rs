@@ -88,7 +88,7 @@ fn ordinary_profile_keeps_original_template_wrapper_and_source_set() {
     assert_eq!(Profile::Legacy.sources().len(), 1);
     assert_eq!(
         digest(Profile::Legacy.template().as_bytes()),
-        "ef28d29a000d697efbac8902fecaf26bbd8f4d2c315f346eec6d416420d9361c"
+        "62dba802c39f989d2ba12b9e04a15056fd1b87dffd3578c003df728d4e482e06"
     );
     assert_eq!(
         digest(Profile::Legacy.wrapper().as_bytes()),

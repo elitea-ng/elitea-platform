@@ -80,10 +80,13 @@ describe('CopyToClipboardButton', () => {
         tooltip="Copy to clipboard"
       />,
     );
-    // MUI's Tooltip clones its child and — since the button has no
-    // `aria-label` of its own — sets one from `title`, which then takes
-    // over as the accessible name ahead of the button's visible text.
-    expect(getByRole('button', { name: 'Copy to clipboard' })).toBeInTheDocument();
+    // The tooltip DESCRIBES the button (`describeChild`); it does not rename
+    // it. The accessible name stays the visible value (WCAG 2.5.3 Label in
+    // Name, axe `label-content-name-mismatch`), and the tooltip text is the
+    // accessible description.
+    const button = getByRole('button', { name: 'sk-123' });
+    expect(button).not.toHaveAttribute('aria-label');
+    expect(button).toHaveAccessibleDescription('Copy to clipboard');
   });
 
   it('does not call useToast or read Redux — it is a pure callback prop', () => {

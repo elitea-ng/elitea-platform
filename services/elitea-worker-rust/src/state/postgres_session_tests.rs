@@ -51,10 +51,12 @@ impl IsolatedPostgres {
             "elitea_rust_session_{}_{unique}_{sequence}",
             std::process::id()
         );
-        sqlx::query(&format!("CREATE DATABASE {database_name}"))
-            .execute(&admin_pool)
-            .await
-            .expect("create isolated session database");
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE DATABASE {database_name}"
+        )))
+        .execute(&admin_pool)
+        .await
+        .expect("create isolated session database");
         admin_pool.close().await;
         let pool = crate::test_pg::pool_options()
             .min_connections(1)
@@ -90,10 +92,11 @@ impl Drop for IsolatedPostgres {
                             .connect_with(admin_options)
                             .await
                         {
-                            let _ =
-                                sqlx::query(&format!("DROP DATABASE {database_name} WITH (FORCE)"))
-                                    .execute(&admin_pool)
-                                    .await;
+                            let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
+                                "DROP DATABASE {database_name} WITH (FORCE)"
+                            )))
+                            .execute(&admin_pool)
+                            .await;
                             admin_pool.close().await;
                         }
                     })
