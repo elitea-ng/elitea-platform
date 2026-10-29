@@ -169,6 +169,7 @@ function buildLlmToolAction(
     type: TOOL_ACTION_TYPES.Llm,
     name: toolName || TOOL_ACTION_NAMES.Llm,
     parent_agent_name: step.parent_agent_name || null,
+    ...restoredOwner(step),
     id: step.message?.id,
     status: ToolActionStatus.complete,
     toolInputs: '',
@@ -265,6 +266,20 @@ function persistedHierarchy(metadata: ToolCallStepWire['metadata']): { parent_ag
   return {
     ...(path !== undefined ? { parent_agent_path: path } : {}),
     ...(typeof ordinal === 'number' && Number.isInteger(ordinal) && ordinal > 0 ? { sibling_ordinal: ordinal } : {}),
+  };
+}
+
+/**
+ * A restored thinking step's owner call id and path (`lib/traceSteps.ts`),
+ * so it joins its owner's tier; a live step keeps the source's name-only
+ * shape.
+ */
+function restoredOwner(step: ThinkingStepWire): { parent_agent_call_id?: string; parent_agent_path?: unknown } {
+  if (step.trace_step_id === undefined) return {};
+  const path = persistedPath(step.parent_agent_path);
+  return {
+    ...(step.parent_agent_call_id ? { parent_agent_call_id: step.parent_agent_call_id } : {}),
+    ...(path !== undefined ? { parent_agent_path: path } : {}),
   };
 }
 
