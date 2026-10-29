@@ -967,7 +967,8 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if versionID != "" {
 		v := applications.Version{
-			Name: anyStr(versionData, "name"),
+			Name:     anyStr(versionData, "name"),
+			EditorID: ownerID,
 		}
 		v.Present.Name = v.Name != ""
 		// Same presence rule as UpdateVersion's own decode (#824): the
@@ -1417,6 +1418,9 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 		v.PipelineSettings = pipelineSettings
 	}
 
+	// The saving user authors the revision this save appends (ADR-0040
+	// decision 2).
+	v.EditorID = ownerID
 	ver, err := h.repo.UpdateVersion(r.Context(), projectID, applicationID, versionID, v)
 	if err != nil {
 		apierr.Write(w, err)

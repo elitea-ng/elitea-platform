@@ -33,6 +33,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
@@ -357,6 +358,14 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		// The kill switch (ADR-0041 decision 1): the run is not started and
 		// the sender learns why; the trigger itself stays valid.
 		record(status, projectID, trigger.CreatedBy, trigger.VersionID, safety.ErrorCode)
+		writeJSON(w, status, body)
+		return
+	}
+	if status, body, refused := agentrelease.HTTPRefusal(err); refused {
+		// The application's published release was rolled back to a
+		// release whose pins no longer match (ADR-0040 decision 2).
+		code, _ := body["code"].(string)
+		record(status, projectID, trigger.CreatedBy, trigger.VersionID, code)
 		writeJSON(w, status, body)
 		return
 	}

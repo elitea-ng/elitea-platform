@@ -150,6 +150,9 @@ var auditedSurfaces = []string{
 	// The project admin's kill switch (ADR-0041 decision 1): suspend and
 	// resume of an agent or the project. The admin routes are under /admin/.
 	"/api/v2/elitea_core/execution_suspensions/",
+	// Agent release rollback (ADR-0040 decision 2): it changes which
+	// release of an agent runs. The reads under it are GETs.
+	"/api/v2/elitea_core/application_releases/",
 }
 
 // AuditedSurfaces returns a copy of the prefix list, so a router-level test can

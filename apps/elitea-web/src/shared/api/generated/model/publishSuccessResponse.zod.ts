@@ -45,6 +45,12 @@ import * as zod from "zod";
 export const PublishSuccessResponse = zod
   .object({
     public_agent_id: zod.string(),
+    release_id: zod
+      .string()
+      .optional()
+      .describe(
+        "The release this publish recorded (listApplicationReleases). Absent when no release could be recorded; the publish itself stands.\n",
+      ),
     public_version_id: zod.string(),
     version_name: zod.string(),
     source_version_id: zod
