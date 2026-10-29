@@ -36,7 +36,7 @@ An organisation cannot govern agents it cannot list. Without one record per agen
 
 **Existing agents.** When an install is upgraded, every existing agent gets a record that is `uncertified` at tier `medium`, with the author of its first version as technical owner. Agents in a personal project are the exception: they get tier `low`, because a personal project has one member and nobody else could approve. From then on, publishing a `medium` agent needs a change request.
 
-**One view across projects.** Platform administrators see every agent in **Administration → Agent registry**, filtered by tier, certification state, owner and project, and can export the list as CSV or JSON.
+**One view across projects.** Platform administrators see every agent in **Admin › Agent registry**, filtered by tier, certification state, owner and project, and can export the list as CSV or JSON.
 
 #### Limits
 
@@ -169,7 +169,7 @@ A database trigger refuses any change to a release except marking it withdrawn. 
 
 ### Configure and use
 
-Nothing needs to be turned on. To see an agent's history, open the agent, select the **⋮** menu beside the version bar, and select **Release history**. See [Roll back an agent to an earlier release](/how-tos/agents-pipelines/entity-versioning#roll-back-to-an-earlier-release).
+Nothing needs to be turned on. For the steps of each role (author, approver, governance role), see [Publish with approval](/how-tos/agents-pipelines/publishing#publish-with-approval). To see an agent's history, open the agent, select the **⋮** menu beside the version bar, and select **Release history**. See [Roll back an agent to an earlier release](/how-tos/agents-pipelines/entity-versioning#roll-back-to-an-earlier-release).
 
 The same data is available with the API:
 
@@ -233,9 +233,9 @@ An approval is a statement about one point in time. Models are retired, toolkits
 - `warn` (the default): the agent keeps running; its state shows as lapsed in the registry and the agent's Governance dialog.
 - `suspend`: the platform suspends the agent with the [kill switch](/admin/enterprise-controls/runtime-safety), with source `certification`. Its runs are refused with HTTP 409 `agent_certification_lapsed` and its state is `suspended`. Only a holder of the governance role can resume it.
 
-**Recertifying.** Open the agent's Governance dialog and start a recertification. This is a change request of kind `recertification` for the agent's current release, with no definition change. It runs the gate again and collects the approvals and attestations the tier requires. Its approval certifies the agent again, sets a new recertify-by date and lifts a certification suspension.
+**Recertifying.** Open the agent, select **⋮ › Governance › Change requests**, and select **Start recertification**. This is a change request of kind `recertification` for the agent's current release, with no definition change. It runs the gate again and collects the approvals and attestations the tier requires. Its approval certifies the agent again, sets a new recertify-by date and lifts a certification suspension.
 
-The routine `main.agent_recertification` runs every hour (Administration → Schedules). It checks drift and scheduled evaluations for up to 50 agents per pass, the oldest checked first.
+The routine `main.agent_recertification` runs every hour (**Admin › Schedules & Tasks**). It checks drift and scheduled evaluations for up to 50 agents per pass, the oldest checked first.
 
 #### Limits
 
@@ -265,13 +265,14 @@ Attestations are never deleted. A revocation is stamped with who revoked it and 
 
 #### Limits
 
+- The agent's **Attestations** tab lists attestations whose subject is the agent. Attestations on a release, toolkit or index are listed through the API (`GET agent_attestations/prompt_lib/{p}?subject_type=release&subject_id=...`).
 - The platform does not perform or model the reviews. It records that they happened and enforces that they exist.
 - For toolkit and index subjects, the platform does not check that the subject exists.
 - The `custom` kind cannot be made mandatory.
 
 ## Configure the tier policy
 
-A platform administrator sets the tier policy in **Administration → Configuration → Agent Lifecycle** (permission `configuration.governance`), or with `PUT /api/v2/admin/plugin_config_values/administration/agent_lifecycle`.
+A platform administrator sets the tier policy in **Admin › Configuration › Agent Lifecycle** (permission `configuration.governance`), or with `PUT /api/v2/admin/plugin_config_values/administration/agent_lifecycle`.
 
 | Setting | Default | Range |
 | --- | --- | --- |

@@ -30,6 +30,48 @@ Any skills attached to the agent are kept and still work at runtime, but publish
 The **Publish** action is hidden if your role lacks the publish permission. If it's visible but disabled with a policy tooltip, the platform has restricted publishing to an allowed list of projects — ask your administrator.
 </Note>
 
+## Publish with approval
+
+An agent at risk tier `medium` or above cannot be published in one step. Publishing it takes a **change request** that someone other than you approves, after the agent's evaluation gate passes. The tier, the number of approvals and the gate are described in [Agent lifecycle](/admin/enterprise-controls/agent-lifecycle#change-requests-and-approvals). An agent's tier is shown in **⋮ › Governance › Registry**.
+
+### As the author: request a publish
+
+<Steps>
+<Step title="Open Publish">
+Open the agent, select the draft version, and choose **Publish** from the three-dot menu. For a `medium`, `high` or `critical` agent, the **Request publish** dialog opens instead of the publish wizard.
+</Step>
+<Step title="Describe the change">
+Write a summary for the approvers: what changed and why, and a link to your ticket if you have one. Enter the version name and category, and agree to the publishing terms.
+</Step>
+<Step title="Submit">
+Select **Submit for approval**. The change request is submitted and the agent's gate suites start running. The dialog shows how many approvals the request still needs.
+</Step>
+</Steps>
+
+Follow the request in **⋮ › Governance › Change requests**. If you save the version again before it is approved, the approval is refused as stale: withdraw the request and submit a new one.
+
+### As an approver: review the evidence
+
+<Steps>
+<Step title="Open the request">
+Open the agent and select **⋮ › Governance › Change requests**, then the submitted request.
+</Step>
+<Step title="Check the evidence">
+Read the summary and the **Release gate** block: its state, each failure, and every regression case listed by name. Check that the tier's mandatory attestations are present in the **Attestations** tab. Compare the candidate with the current release in **⋮ › Release history**.
+</Step>
+<Step title="Decide">
+Select **Approve** or **Reject** (with a reason). You cannot approve your own request. The approval that completes the tier's requirement publishes the version and certifies the agent.
+</Step>
+</Steps>
+
+### As a governance role holder: override a failed gate
+
+If the gate failed for a reason you accept (for example, a test case that is wrong), open the request, select **Override gate**, and enter a reason of up to 200 characters. The gate stays failed, and the override, with your name and reason, is recorded in the security audit log. The request still needs its approvals. You cannot override the gate of your own request.
+
+### Recertify an agent
+
+When an agent is due, open **⋮ › Governance › Change requests** and select **Start recertification**. It runs the gate against the current release and collects the same approvals, without changing the definition.
+
 ## Publish a skill
 
 Skills publish the same way, from a skill's three-dot menu — but a skill has a single version, so there's no version selector: you publish the skill as it currently stands.
