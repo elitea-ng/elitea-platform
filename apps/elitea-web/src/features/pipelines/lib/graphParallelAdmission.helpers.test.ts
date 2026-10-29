@@ -46,7 +46,7 @@ describe('strict fixed Parallel admission', () => {
     expect(graphParallelIssues(changed(patch))).toEqual([]);
   });
   it('refuses the private Parallel output channels even when declared as lists', () => {
-    for (const key of ['__elitea_parallel_resume_v1', '__elitea_parallel_agent_inputs_v1']) {
+    for (const key of ['__elitea_parallel_resume_v1', '__elitea_parallel_agent_inputs_v1', '__elitea_parallel_llm_inputs_v1']) {
       const value = changed({ output: [key] });
       expect(graphParallelIssues({ ...value, state: { ...value.state, [key]: 'list' } }).length).toBeGreaterThan(0);
     }
@@ -83,18 +83,21 @@ describe('strict fixed Parallel admission', () => {
     expect(graphParallelIssues(conflicting).some((issue) => issue.message.includes('exactly one'))).toBe(true);
     expect(parallelOwnedAgent(conflicting, 'extension', 0)).toBeUndefined();
   });
-  it('rejects a declared sibling with the correct identity but a non-Agent type', () => {
+  it('admits an inline LLM node as a branch and rejects any other kind (T-2A D1)', () => {
     const value = document();
-    expect(graphParallelIssues({ ...value, nodes: value.nodes?.map((node) => node.id === 'Agent_left' ? { ...node, type: 'llm' } : node) ?? [] }).length).toBeGreaterThan(0);
+    const withType = (type: string) => ({ ...value, nodes: value.nodes?.map((node) => node.id === 'Agent_left' ? { ...node, type } : node) ?? [] });
+    expect(graphParallelIssues(withType('llm'))).toEqual([]);
+    expect(parallelOwnedAgent(withType('llm'), 'extension', 0)?.type).toBe('llm');
+    expect(graphParallelIssues(withType('printer')).length).toBeGreaterThan(0);
   });
-  it('names an inline LLM branch (FU-247) and its kind instead of admitting it', () => {
+  it('names a branch node kind no branch can run, with its kind, instead of admitting it', () => {
     const value = document();
-    const issues = graphParallelIssues({ ...value, nodes: value.nodes?.map((node) => node.id === 'Agent_left' ? { ...node, type: 'llm' } : node) ?? [] });
-    expect(issues.map((issue) => issue.message)).toContain(
-      'branches[0].node: Node "Agent_left" is a "llm" node, but a branch can only run an Agent node (a saved agent or pipeline) for now. '
-        + 'Put the "llm" node in a saved pipeline and run that pipeline from an Agent node.',
+    const stateModifier = { ...value, nodes: value.nodes?.map((node) => node.id === 'Agent_left' ? { ...node, type: 'state_modifier' } : node) ?? [] };
+    expect(graphParallelIssues(stateModifier).map((issue) => issue.message)).toContain(
+      'branches[0].node: Node "Agent_left" is a "state_modifier" node, but a branch can only run an Agent node (a saved agent or pipeline) or an LLM node. '
+        + 'Put the "state_modifier" node in a saved pipeline and run that pipeline from an Agent node.',
     );
-    expect(parallelOwnedAgent({ ...value, nodes: value.nodes?.map((node) => node.id === 'Agent_left' ? { ...node, type: 'llm' } : node) ?? [] }, 'extension', 0)).toBeUndefined();
+    expect(parallelOwnedAgent(stateModifier, 'extension', 0)).toBeUndefined();
   });
   it('withholds child mutation when another node reuses the selected exact Agent identity', () => {
     const value = document();

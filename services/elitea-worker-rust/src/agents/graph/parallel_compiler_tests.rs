@@ -96,10 +96,12 @@ fn whole_pipeline_admission_enforces_fixed_bounds_and_typed_list_output() {
     assert!(PipelineDefinition::from_yaml(&YAML.replace("joined: list", "joined: dict")).is_err());
     assert!(PipelineDefinition::from_yaml(&YAML.replace("  joined: list\n", "")).is_err());
     assert!(PipelineDefinition::from_yaml(&YAML.replace("joined", "messages")).is_err());
-    assert!(
-        PipelineDefinition::from_yaml(&YAML.replace("topic", "__elitea_parallel_agent_inputs_v1"))
-            .is_err()
-    );
+    for private in [
+        "__elitea_parallel_agent_inputs_v1",
+        "__elitea_parallel_llm_inputs_v1",
+    ] {
+        assert!(PipelineDefinition::from_yaml(&YAML.replace("topic", private)).is_err());
+    }
     let branches = (0..17)
         .map(|index| format!("{{id: b{index}, node: n{index}}}"))
         .collect::<Vec<_>>()
@@ -227,14 +229,15 @@ fn factory() -> (CompilerParallelBranches, ParallelNodeDefinition) {
                     _ => None,
                 })
                 .unwrap();
-            (branch.id().into(), node)
+            (branch.id().into(), OwnedBranch::Agent(node))
         })
         .collect();
     (
         CompilerParallelBranches {
             owned,
             state_types: pipeline.state,
-            resolver: Arc::new(UnavailableResolver),
+            resolver: Some(Arc::new(UnavailableResolver)),
+            llm: None,
             events: None,
         },
         parallel,
@@ -466,25 +469,6 @@ fn a_branch_of_an_unadmitted_kind_is_refused_typed_by_name() {
     }
 }
 
-/// An inline LLM node is not a Parallel branch yet (FU-247): refused typed
-/// by name; run it from a saved pipeline through an Agent node instead.
-#[test]
-fn an_inline_llm_branch_is_refused_typed_by_name() {
-    let yaml = YAML.replace(
-        "  - id: workerB\n    type: agent\n    tool: Research Agent\n",
-        "  - id: workerB\n    type: llm\n",
-    );
-    assert_ne!(yaml, YAML, "fixture replacement applied");
-    match PipelineDefinition::from_yaml(&yaml) {
-        Err(error @ PipelineConfigurationError::FanoutChildUnsupported { .. }) => {
-            assert_eq!(error.code(), "graph.fanout.child_kind_unsupported");
-            assert!(error.to_string().contains("workerB"), "{error}");
-        }
-        Err(other) => panic!("expected a typed child-kind refusal, got {other:?}"),
-        Ok(_) => panic!("an inline LLM branch compiled"),
-    }
-}
-
 /// A branch whose saved pipeline contains a Code node is refused by name
 /// until Wave 3 (Map refuses the same through its effect-free cohort).
 #[test]
@@ -566,5 +550,74 @@ fn a_branch_whose_saved_pipeline_holds_a_parallel_is_refused_typed() {
         }
         Err(other) => panic!("expected a typed nested-Parallel refusal, got {other:?}"),
         Ok(_) => panic!("a nested fan-out compiled"),
+    }
+}
+
+fn inline_llm_parallel(members: usize, extra: &str) -> String {
+    use std::fmt::Write as _;
+    let branches = (0..members)
+        .map(|index| format!("{{id: b{index}, node: n{index}}}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let nodes = (0..members).fold(String::new(), |mut nodes, index| {
+        let _ = write!(
+            nodes,
+            "  - id: n{index}\n    type: llm\n    input: [topic]\n    input_mapping:\n      task: {{type: fstring, value: 'Work on {{topic}}'}}\n    output: [detail]\n{extra}"
+        );
+        nodes
+    });
+    format!(
+        "state:\n  topic: string\n  detail: string\n  joined: list\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{branches}]\n    max_concurrency: 2\n    wait: all\n    output: [joined]\n    transition: END\n{nodes}"
+    )
+}
+
+/// T-2A D1: an inline LLM node is an admitted branch with the same topology
+/// rules as a saved Agent, up to the member bound (16 compiles, 17 is
+/// refused).
+#[test]
+fn inline_llm_branches_are_owned_up_to_the_member_bound() {
+    let definition = PipelineDefinition::from_yaml(&inline_llm_parallel(16, ""))
+        .expect("16 inline LLM branches");
+    assert_eq!(definition.parallel_owned_nodes.len(), 16);
+    assert_eq!(definition.parallel_llm_branch_ids().count(), 16);
+    assert!(PipelineDefinition::from_yaml(&inline_llm_parallel(17, "")).is_err());
+    for refused in [
+        inline_llm_parallel(2, "    transition: END\n"),
+        inline_llm_parallel(2, "").replace("entry_point: gather", "entry_point: n0"),
+        inline_llm_parallel(2, "").replace(
+            "entry_point: gather",
+            "interrupt_before: [n1]\nentry_point: gather",
+        ),
+        inline_llm_parallel(2, "").replace("node: n1", "node: n0"),
+    ] {
+        assert!(
+            PipelineDefinition::from_yaml(&refused).is_err(),
+            "{refused}"
+        );
+    }
+}
+
+/// An inline LLM branch needs the fan-out model factory; a runtime without
+/// one refuses at compile time instead of running the branch unscoped.
+#[test]
+fn an_inline_llm_branch_without_a_fanout_model_factory_is_refused() {
+    let definition = PipelineDefinition::from_yaml(&inline_llm_parallel(2, "")).unwrap();
+    let authority: Arc<dyn ParallelCheckpointAuthority> = Arc::new(TestAuthority::default());
+    let checkpointer: Arc<dyn Checkpointer> = authority.clone();
+    let runtimes = PipelineNodeRuntimes::new(None, None, None).with_parallel(
+        ParallelCompilerBinding::for_tests(
+            authority,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(10),
+            None,
+        ),
+    );
+    match definition.compile_subgraph_with_runtime(checkpointer, &runtimes) {
+        Err(error) => assert!(
+            error
+                .to_string()
+                .contains("LLM branch runtime is not bound"),
+            "{error}"
+        ),
+        Ok(_) => panic!("an inline LLM branch compiled without its model factory"),
     }
 }

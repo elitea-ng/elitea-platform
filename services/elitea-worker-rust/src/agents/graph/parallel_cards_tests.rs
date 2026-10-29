@@ -243,7 +243,7 @@ impl Fixture {
                         _ => None,
                     })
                     .expect("owned agent");
-                (branch.id().to_owned(), node)
+                (branch.id().to_owned(), OwnedBranch::Agent(node))
             })
             .collect();
         Self {
@@ -251,10 +251,11 @@ impl Fixture {
             branches: Arc::new(CompilerParallelBranches {
                 owned,
                 state_types: pipeline.state,
-                resolver: Arc::new(SavedPipeline {
+                resolver: Some(Arc::new(SavedPipeline {
                     yaml: child.to_owned(),
                     runtimes,
-                }),
+                })),
+                llm: None,
                 events: None,
             }),
             parallel,

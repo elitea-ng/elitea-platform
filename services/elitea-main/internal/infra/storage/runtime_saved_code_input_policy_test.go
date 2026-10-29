@@ -86,3 +86,11 @@ func TestSavedCodeInputPolicyUsesTheSameBoundedAnchorFixture(t *testing.T) {
 		t.Fatal("anchored owning input policy changed", err)
 	}
 }
+
+func TestSavedCodeReservedStateKeyHoldsTheFixedParallelPrivateChannels(t *testing.T) {
+	for _, key := range []string{"__elitea_parallel_resume_v1", "__elitea_parallel_agent_inputs_v1", "__elitea_parallel_llm_inputs_v1"} {
+		if !savedCodeReservedStateKey(key) {
+			t.Fatalf("%s is not reserved", key)
+		}
+	}
+}

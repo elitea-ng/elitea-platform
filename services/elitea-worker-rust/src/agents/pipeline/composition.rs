@@ -313,6 +313,20 @@ fn collect_paths(
             )?;
         }
     }
+    // An inline LLM Parallel branch runs in its own checkpoint family too.
+    for node_id in definition.parallel_llm_branch_ids() {
+        let path = if prefix.is_empty() {
+            node_id.to_owned()
+        } else {
+            format!("{prefix}/{node_id}")
+        };
+        if paths.len() == MAX_PIPELINE_CHECKPOINT_PATHS {
+            return Err(composition_exhausted(bound::CHECKPOINT_PATHS));
+        }
+        if paths.insert(path, None).is_some() {
+            return Err(invalid_pipeline_tool_scope());
+        }
+    }
     Ok(())
 }
 

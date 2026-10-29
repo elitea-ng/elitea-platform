@@ -491,3 +491,27 @@ nodes:
         ]))
     );
 }
+
+/// A fixed Parallel LLM branch freezes its mapped inputs once (FU-247). Each
+/// text is bounded at 64 KiB, but JSON escaping can grow the frozen map, so the
+/// map has its own 512 KiB bound: exactly at it freezes, one byte more fails.
+#[test]
+fn a_frozen_parallel_llm_input_is_bounded_at_its_limit_and_limit_plus_one() {
+    let node = LlmNodeDefinition::from_yaml(
+        "id: branch\ntype: llm\ninput: [s, t]\ninput_mapping:\n  system: {type: variable, value: s}\n  task: {type: variable, value: t}\noutput: [out]\n",
+    )
+    .expect("LLM node");
+    // {"system":"S","task":"T"}: 23 bytes of framing; U+0001 escapes to 6 bytes.
+    let task = "\u{1}".repeat(65_536);
+    let frozen_at = |plain: usize| {
+        let system = format!("{}{}", "\u{1}".repeat(13_103), "a".repeat(plain));
+        let parent = adk_rust::graph::State::from([
+            ("s".to_owned(), json!(system)),
+            ("t".to_owned(), json!(task)),
+        ]);
+        node.freeze_parallel_input(&parent)
+    };
+    assert_eq!(23 + 6 * 65_536 + 6 * 13_103 + 52_431, 512 * 1024);
+    assert!(frozen_at(52_431).is_ok());
+    assert!(frozen_at(52_432).is_err());
+}

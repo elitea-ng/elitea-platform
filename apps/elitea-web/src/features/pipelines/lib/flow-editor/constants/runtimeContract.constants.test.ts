@@ -70,8 +70,8 @@ describe('CompilerAdmittedNodeTypes mirrors parse_pipeline_node (worker compiler
 });
 
 describe('ReservedStateKeys mirrors reserved_user_state_key (worker compiler.rs:2666)', () => {
-  it('holds the 26 recorded reserved keys, each citing the compiler line that reserves it', () => {
-    expect(ReservedStateKeys).toHaveLength(26);
+  it('holds the 27 recorded reserved keys, each citing the compiler line that reserves it', () => {
+    expect(ReservedStateKeys).toHaveLength(27);
     for (const entry of ReservedStateKeys) {
       expect(entry.key.length).toBeGreaterThan(0);
       expect(entry.citation).toMatch(/^compiler\.rs:\d+/);

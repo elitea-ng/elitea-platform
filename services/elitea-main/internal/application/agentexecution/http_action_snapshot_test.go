@@ -91,9 +91,9 @@ func TestCurrentPipelineStartNamesTheNodeTheRuntimeWouldRefuse(t *testing.T) {
 		code         string
 		text         []string
 	}{
-		"unsupported type":                    {"entry_point: split\nnodes:\n  - id: split\n    type: custom\n", pipelinelimits.CodeNodeTypeUnsupported, []string{`Node "split"`, `"custom"`, "does not support"}},
-		"inline llm parallel branch (FU-247)": {"entry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{id: one, node: ask}, {id: two, node: other}]\n  - id: ask\n    type: llm\n  - id: other\n    type: agent\n", pipelinelimits.CodeParallelBranchUnsupported, []string{`Node "gather"`, `node "ask"`, `"llm" node`}},
-		"unattached mcp":                      {"entry_point: fetch\nnodes:\n  - id: fetch\n    type: mcp\n    toolkit_name: github_mcp\n    tool: list_issues\n    transition: END\n", pipelinelimits.CodeToolkitNotAttached, []string{`Node "fetch"`, `"github_mcp"`, "Attach \"github_mcp\" under Tools → MCP"}},
+		"unsupported type":        {"entry_point: split\nnodes:\n  - id: split\n    type: custom\n", pipelinelimits.CodeNodeTypeUnsupported, []string{`Node "split"`, `"custom"`, "does not support"}},
+		"printer parallel branch": {"entry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{id: one, node: ask}, {id: two, node: other}]\n  - id: ask\n    type: printer\n  - id: other\n    type: agent\n", pipelinelimits.CodeParallelBranchUnsupported, []string{`Node "gather"`, `node "ask"`, `"printer" node`}},
+		"unattached mcp":          {"entry_point: fetch\nnodes:\n  - id: fetch\n    type: mcp\n    toolkit_name: github_mcp\n    tool: list_issues\n    transition: END\n", pipelinelimits.CodeToolkitNotAttached, []string{`Node "fetch"`, `"github_mcp"`, "Attach \"github_mcp\" under Tools → MCP"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			details, err := json.Marshal(map[string]any{"agent_type": "pipeline", "instructions": tc.instructions, "llm_settings": map[string]any{"model_name": "test", "model_project_id": 7, "openai_compatible": false}, "meta": map[string]any{}, "tools": []any{}})

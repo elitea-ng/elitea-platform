@@ -42,7 +42,7 @@ use super::direct_tool::{
 use super::hitl::{HITL_RESUME_STATE_KEY, HitlConfigurationError, HitlNode, HitlNodeDefinition};
 use super::llm::{
     LLM_TOOL_RESUME_STATE_KEY, LlmConfigurationError, LlmNode, LlmNodeDefinition,
-    LlmToolkitSelection, PipelineLlmAgentFactory,
+    LlmToolkitSelection, PARALLEL_LLM_INPUTS_STATE_KEY, PipelineLlmAgentFactory,
 };
 use super::node_events::{PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PipelineNodeEventSender};
 use super::pipeline_result::{
@@ -1184,6 +1184,17 @@ impl PipelineDefinition {
     pub(crate) fn application_node_ids(&self) -> impl Iterator<Item = &str> {
         self.nodes.iter().filter_map(|node| match node {
             PipelineNodeDefinition::Application(node) => Some(node.id()),
+            _ => None,
+        })
+    }
+
+    /// The inline LLM nodes a fixed Parallel owns as branches: each runs in
+    /// its own branch checkpoint family, like an Agent branch.
+    pub(crate) fn parallel_llm_branch_ids(&self) -> impl Iterator<Item = &str> {
+        self.nodes.iter().filter_map(|node| match node {
+            PipelineNodeDefinition::Llm(node) if self.parallel_owned_nodes.contains(node.id()) => {
+                Some(node.id())
+            }
             _ => None,
         })
     }
@@ -2918,6 +2929,7 @@ pub(super) fn reserved_user_state_key(key: &str) -> bool {
         || key == DIRECT_TOOL_RESUME_STATE_KEY
         || key == LLM_TOOL_RESUME_STATE_KEY
         || key == super::application::PARALLEL_AGENT_INPUTS_STATE_KEY
+        || key == PARALLEL_LLM_INPUTS_STATE_KEY
         || key == PIPELINE_NODE_EVENT_SCOPE_STATE_KEY
         || key == PIPELINE_RESULT_TRACE_STATE_KEY
         || matches!(

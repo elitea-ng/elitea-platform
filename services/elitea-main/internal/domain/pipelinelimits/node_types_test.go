@@ -101,8 +101,8 @@ func parallelOver(secondType string) string {
 
 // An inline LLM node (FU-247) or any other non-Agent node cannot run as a
 // fixed Parallel branch: refused at save and at start, naming both nodes.
-func TestCheckRefusesAParallelBranchThatIsNotAnAgentNode(t *testing.T) {
-	for _, nodeType := range []string{"llm", "state_modifier", "toolkit"} {
+func TestCheckRefusesAParallelBranchThatIsNotAnAgentOrLLMNode(t *testing.T) {
+	for _, nodeType := range []string{"state_modifier", "toolkit", "printer"} {
 		doc := parallelOver(nodeType)
 		for name, err := range map[string]error{
 			"save":  pipelinelimits.Check(doc),
@@ -124,13 +124,14 @@ func TestCheckRefusesAParallelBranchThatIsNotAnAgentNode(t *testing.T) {
 	}
 }
 
-func TestCheckAdmitsAgentBranchesAndLeavesMalformedBranchesToTheCompiler(t *testing.T) {
+func TestCheckAdmitsAgentAndLLMBranchesAndLeavesMalformedBranchesToTheCompiler(t *testing.T) {
 	for name, doc := range map[string]string{
-		"agent branches":    parallelOver("agent"),
-		"missing node":      strings.Replace(parallelOver("llm"), "node: second", "node: absent", 1),
-		"non-scalar node":   strings.Replace(parallelOver("llm"), "node: second", "node: [second]", 1),
-		"non-list branches": strings.Replace(parallelOver("llm"), "[{id: one, node: first}, {id: two, node: second}]", "first", 1),
-		"integer type":      strings.Replace(parallelOver("llm"), "type: llm", "type: 3", 1),
+		"agent branches":             parallelOver("agent"),
+		"inline llm branch (FU-247)": parallelOver("llm"),
+		"missing node":               strings.Replace(parallelOver("llm"), "node: second", "node: absent", 1),
+		"non-scalar node":            strings.Replace(parallelOver("llm"), "node: second", "node: [second]", 1),
+		"non-list branches":          strings.Replace(parallelOver("llm"), "[{id: one, node: first}, {id: two, node: second}]", "first", 1),
+		"integer type":               strings.Replace(parallelOver("llm"), "type: llm", "type: 3", 1),
 		// The compiler runs the first node with an id, as here.
 		"first declaration is the agent": parallelOver("agent") + "  - id: second\n    type: llm\n",
 	} {

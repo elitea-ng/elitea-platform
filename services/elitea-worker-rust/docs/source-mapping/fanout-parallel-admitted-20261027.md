@@ -224,7 +224,8 @@ refused the model-checkpoint reclaim (473c27f27), the answered child was parked 
 ## Follow-ups
 
 - FU-246: a saved Agent branch's own pause (refused typed `graph.fanout.agent_pause_unsupported`).
-- FU-247: inline `llm` branches (refused typed at save, start and assembly; work on `wip/fu247-inline-llm-branches`).
+- FU-247: inline `llm` branches — landed on `feat/graph-fanout-inline-llm-branches`
+  ([mapping](fanout-inline-llm-branches-20261028.md)).
 - FU-248: effectful direct nodes inside saved child pipelines (refused typed `graph.fanout.child_tool_unavailable`).
 - FU-249: a Parallel inside a saved child pipeline or an Agent's pipeline tool (refused typed
   `graph.fanout.parallel_in_child_pipeline` / Main bound `parallel_in_child_pipeline`); needs a capability-preserving

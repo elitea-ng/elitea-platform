@@ -185,11 +185,11 @@ func checkParallelBranches(declared []map[string]*yaml.Node) error {
 			if target == "" {
 				continue
 			}
-			if nodeType, ok := stringScalar(typeOf[target]); ok && nodeType != "agent" {
+			if nodeType, ok := stringScalar(typeOf[target]); ok && nodeType != "agent" && nodeType != "llm" {
 				return &apierr.APIError{
 					Status: http.StatusBadRequest,
 					Code:   CodeParallelBranchUnsupported,
-					Message: fmt.Sprintf("%s runs node %s as a Parallel branch, but a branch can only run an Agent node (a saved agent or pipeline) for now. Put the %s node in a saved pipeline and run that pipeline from an Agent node.",
+					Message: fmt.Sprintf("%s runs node %s as a Parallel branch, but a branch can only run an Agent node (a saved agent or pipeline) or an LLM node. Put the %s node in a saved pipeline and run that pipeline from an Agent node.",
 						nodeLabel(owner["id"]), quoted(target), quoted(nodeType)),
 				}
 			}
