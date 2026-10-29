@@ -5,7 +5,7 @@ import warnings
 
 from elitea.runtime.v1 import sandbox_pb2 as elitea_dot_runtime_dot_v1_dot_sandbox__pb2
 
-GRPC_GENERATED_VERSION = '1.76.0'
+GRPC_GENERATED_VERSION = '1.84.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -25,7 +25,7 @@ if _version_not_supported:
     )
 
 
-class SandboxSupervisorServiceStub(object):
+class SandboxSupervisorServiceStub:
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -106,7 +106,7 @@ class SandboxSupervisorServiceStub(object):
                 _registered_method=True)
 
 
-class SandboxSupervisorServiceServicer(object):
+class SandboxSupervisorServiceServicer:
     """Missing associated documentation comment in .proto file."""
 
     def HydrateSandboxWorkspace(self, request, context):
@@ -283,7 +283,7 @@ def add_SandboxSupervisorServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class SandboxSupervisorService(object):
+class SandboxSupervisorService:
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod

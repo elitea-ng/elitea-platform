@@ -280,9 +280,9 @@ async fn export_does_not_migrate_and_refuses_a_missing_or_old_schema() {
     };
 
     // A schema one migration behind: refused, and the ledger is untouched.
-    let latest: String = sqlx::query_scalar(&format!(
+    let latest: String = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "DELETE FROM {ledger} WHERE version = (SELECT max(version) FROM {ledger}) RETURNING version"
-    ))
+    )))
     .fetch_one(&pool)
     .await
     .expect("forget the latest migration");
@@ -293,12 +293,13 @@ async fn export_does_not_migrate_and_refuses_a_missing_or_old_schema() {
         "{}",
         stderr(&behind)
     );
-    let count: i64 =
-        sqlx::query_scalar(&format!("SELECT count(*) FROM {ledger} WHERE version = $1"))
-            .bind(&latest)
-            .fetch_one(&pool)
-            .await
-            .expect("count");
+    let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) FROM {ledger} WHERE version = $1"
+    )))
+    .bind(&latest)
+    .fetch_one(&pool)
+    .await
+    .expect("count");
     assert_eq!(count, 0, "export-graph applied a migration");
 
     // No schema at all: refused, and nothing is created.

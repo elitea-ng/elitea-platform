@@ -54,8 +54,8 @@ import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
 import { API_BASE, DEFAULT_PROJECT_ID, deleteConversation } from '../../fixtures/api';
 
-/** Exact accessible name of the attach control (`AttachmentButton.tsx`'s `ariaLabel` + en.json). */
-const ATTACH_NAME = 'attach files';
+/** The attach row's accessible name, from its visible text (`AttachmentButton.tsx`). */
+const ATTACH_NAME = /^Attach Files\b/;
 /** MAX_ATTACHMENTS (src/shared/lib/attachments.ts). */
 const MAX_ATTACHMENTS = 10;
 /** CHUNK_SIZE (src/shared/api/upload.ts:22). */
@@ -155,7 +155,7 @@ test('J12: attach a small file to a chat message', async ({ page }) => {
     await checkA11y(page);
 
     const attach = await openAttachRow(page);
-    await expect(attach).toHaveAttribute('aria-label', ATTACH_NAME);
+    await expect(attach).toHaveAccessibleName(ATTACH_NAME);
 
     // Capacity counter BEFORE attaching — computed by
     // getRemainingAttachmentCapacity from the component's own state.

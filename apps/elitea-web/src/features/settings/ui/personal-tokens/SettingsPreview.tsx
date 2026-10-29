@@ -196,7 +196,11 @@ export const SettingsPreview = memo(function SettingsPreview({
         </Box>
         <Box sx={styles.headerRight}>
           {/* IDE selector */}
-          <Tooltip title={t('entities.token.preview.selectIde', 'Select IDE')}>
+          {/* Describes, not names: the button shows the IDE's name (axe label-content-name-mismatch, WCAG 2.5.3). */}
+          <Tooltip
+            title={t('entities.token.preview.selectIde', 'Select IDE')}
+            describeChild
+          >
             <IconButton
               size="small"
               onClick={(e) => setAnchorEl(e.currentTarget)}

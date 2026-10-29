@@ -1818,6 +1818,15 @@ impl RunnerSessionService {
     }
 
     fn durable_event(&self, mut event: Event) -> adk_rust::Result<Event> {
+        // ADK 2.3.0 already stores the whole streamed turn on its terminal
+        // event, one part per provider delta. Keep the durable copy's shape:
+        // the turn's text as one part, no snapshot enrichment needed.
+        if super::events::restates_streamed_turn(&event) {
+            if let Some(content) = event.llm_response.content.as_mut() {
+                merge_adjacent_text_parts(content);
+            }
+            return Ok(event);
+        }
         let Some(completion) = &self.completion else {
             return Ok(event);
         };
@@ -1857,6 +1866,22 @@ impl RunnerSessionService {
         content.parts.insert(0, adk_rust::Part::Text { text });
         Ok(event)
     }
+}
+
+/// Join each run of adjacent text parts into one. Text parts carry nothing
+/// but their text, so the model sees the same message.
+fn merge_adjacent_text_parts(content: &mut Content) {
+    let mut merged: Vec<adk_rust::Part> = Vec::with_capacity(content.parts.len());
+    for part in std::mem::take(&mut content.parts) {
+        if let adk_rust::Part::Text { text } = &part
+            && let Some(adk_rust::Part::Text { text: previous }) = merged.last_mut()
+        {
+            previous.push_str(text);
+            continue;
+        }
+        merged.push(part);
+    }
+    content.parts = merged;
 }
 
 #[async_trait]

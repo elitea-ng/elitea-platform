@@ -27,9 +27,14 @@ export function EntitySwitchButton({
   readonly styles: AgentEditorPanelStyles;
 }): ReactNode {
   return (
+    // While the name shows, the tooltip DESCRIBES the button: as its
+    // aria-label it would hide the visible name (axe label-content-name-
+    // mismatch, WCAG 2.5.3). In the small view the icon has no text, so the
+    // tooltip stays its accessible name.
     <Tooltip
       placement="top"
       title={tooltip}
+      describeChild={!isSmallView}
     >
       <Button
         variant="elitea"

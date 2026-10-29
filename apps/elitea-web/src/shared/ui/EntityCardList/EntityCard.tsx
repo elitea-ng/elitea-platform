@@ -38,9 +38,11 @@ import type { EntityListItem, EntityListTag } from './model';
  *    gap, items top-aligned, holding a `1.75rem`-tall row of author avatars
  *    and tag chips.
  *
- * A real `role="button"` + `tabIndex` (not MUI's `ButtonBase`) because the
- * bottom row holds its own clickable tag chips; nesting interactive
- * elements inside a `<button>` is invalid HTML and axe rejects it.
+ * The TITLE is the card's button, not the card: the card shows more text than
+ * its name (authors, tags), and a widget's visible text must sit inside its
+ * accessible name (WCAG 2.5.3). A click anywhere on the card still opens it:
+ * the title's click bubbles to the card's own handler. The bottom row's tag
+ * chips stay siblings of the button, never nested inside it.
  */
 export interface EntityCardProps {
   readonly item: EntityListItem;
@@ -63,16 +65,7 @@ export function EntityCard({ item, actions, onTagClick, 'data-testid': dataTestI
   return (
     <Box
       data-testid={dataTestId}
-      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- the card's own bottom row holds clickable tag chips; a real <button> may not nest interactive content (and MUI's Divider emits an <hr>, which a button may not contain either).
-      role="button"
-      tabIndex={0}
-      aria-label={item.name}
       onClick={activate}
-      onKeyDown={(event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        activate();
-      }}
       sx={cardSx(item.onClick !== undefined)}
     >
       {actions !== undefined && <Box sx={actionsSx}>{actions}</Box>}
@@ -88,10 +81,14 @@ export function EntityCard({ item, actions, onTagClick, 'data-testid': dataTestI
           placement="top"
           enterDelay={1000}
           enterNextDelay={1000}
+          describeChild
         >
           <Typography
+            component="button"
+            type="button"
             variant="headingSmall"
             data-testid="entity-card-name"
+            data-entity-card-open=""
             sx={titleSx}
           >
             {item.name}
@@ -118,10 +115,10 @@ export function EntityCard({ item, actions, onTagClick, 'data-testid': dataTestI
           /*
            * #915, corrected: a MARKER, not a control.
            *
-           * The card's own root is `role="button"` (see its rule comment
-           * above), and axe's `nested-interactive` — impact "serious", and a
-           * rule this app's `checkA11y` E2E fixture does NOT disable — fails
-           * any focusable widget nested inside one. The first cut made this a
+           * The card was once `role="button"` itself, and axe's
+           * `nested-interactive` — impact "serious", and a rule this app's
+           * `checkA11y` E2E fixture does NOT disable — fails any focusable
+           * widget nested inside one. The first cut made this a
            * focusable `role="link"`, which broke `agents.lifecycle.spec.ts`'s
            * a11y check on every dashboard that renders a forked row.
            *
@@ -158,7 +155,10 @@ function cardSx(clickable: boolean): SxProps<Theme> {
     display: 'flex',
     flexDirection: 'column',
     cursor: clickable ? 'pointer' : 'default',
-    '&:focus-visible': { outline: `0.125rem solid ${theme.vars.palette.border.lines}`, outlineOffset: '0.125rem' },
+    '&:has([data-entity-card-open]:focus-visible)': {
+      outline: `0.125rem solid ${theme.vars.palette.border.lines}`,
+      outlineOffset: '0.125rem',
+    },
   });
 }
 
@@ -217,6 +217,15 @@ const iconTileSx: SxProps<Theme> = (theme: Theme) => ({
 
 /** `Card.jsx`'s `cardTitle`: two-line clamp, `text.secondary` (white in the dark scheme). */
 const titleSx: SxProps<Theme> = (theme: Theme) => ({
+  // A bare `<button>`: no UA chrome, the card's own cursor, the ring on the card.
+  appearance: 'none',
+  border: 0,
+  padding: 0,
+  margin: 0,
+  background: 'none',
+  textAlign: 'start',
+  cursor: 'inherit',
+  '&:focus-visible': { outline: 'none' },
   color: theme.vars.palette.text.secondary,
   minWidth: 0,
   maxHeight: '3rem',

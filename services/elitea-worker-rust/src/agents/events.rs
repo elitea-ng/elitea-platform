@@ -139,6 +139,20 @@ pub(crate) const FANOUT_MEMBER_PAUSE_KEY: &str = "elitea.fanout.member_pause.v1"
 /// or a stored trace step; `application_pipeline` owns its encoding.
 pub(crate) const PIPELINE_TOOL_PENDING_METADATA_KEY: &str = "elitea.pipeline_tool.pending.v1";
 
+/// ADK 2.3.0 marks the terminal event of a streamed model turn with
+/// `content_complete`: its content is the WHOLE turn (every partial delta's
+/// parts, then the terminal chunk's own), not one more delta to append.
+pub(crate) fn restates_streamed_turn(event: &Event) -> bool {
+    !event.llm_response.partial
+        && event
+            .llm_response
+            .provider_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("content_complete"))
+            .and_then(Value::as_bool)
+            == Some(true)
+}
+
 /// Remove every PRIVATE routing/state key a descendant event carries.
 ///
 /// One list, used by both readers of a persisted descendant event: the

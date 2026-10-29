@@ -144,7 +144,7 @@ class FlowEditorErrorBoundary extends PureComponent<FlowEditorErrorBoundaryProps
           </Typography>
           <Tooltip
             title={t('features.pipelines.editorPanel.errorBoundary.reloadTooltip', 'Reload page')}
-            placement="top"
+            placement="top" describeChild
           >
             <IconButton onClick={() => window.location.reload()}>
               <RefreshIcon style={refreshIconStyle} />

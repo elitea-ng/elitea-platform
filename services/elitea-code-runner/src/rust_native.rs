@@ -126,7 +126,9 @@ impl NativePreparation {
         hash.update(b"elitea.sandbox.preparation-job.v1\0");
         hash.update((bytes.len() as u64).to_be_bytes());
         hash.update(bytes);
-        Ok(format!("{:x}", hash.finalize()))
+        Ok(crate::rust_profile::rust_prepare_archive::lower_hex(
+            &hash.finalize(),
+        ))
     }
 }
 

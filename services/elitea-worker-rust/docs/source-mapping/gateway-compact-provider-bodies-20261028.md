@@ -11,6 +11,14 @@ Example: execution `0d6927e1cb972a242d6d1ddc24b203bb` on the `fanpar` stack, pro
 `eu.anthropic.claude-haiku-4-5-20251001-v1:0` through the OpenAI-compatible credential `ai_creds` of project 1
 (upstream `https://dev.elitea.ai/llm/v1`).
 
+
+> **Superseded (2026-10-29, #1520).** The gateway moved to bifrost/core v1.13.1, which builds every converted
+> provider body with `MarshalProviderRequest` → `MarshalSorted` (compact), and no provider request path indents
+> (`MergeExtraParamsIntoJSON` included). `internal/providerwire` and its guards are deleted, as planned below.
+> `internal/server/provider_wire_test.go` (`TestProviderBodiesAreCompact`) now pins bifrost's body encoder to
+> compact JSON with markup in a string, so a release that indents again fails CI. The record below describes
+> the v1.7.15 fix.
+
 ## Root cause
 
 Two things together cause the refusal. The first is ours.
@@ -248,7 +256,7 @@ The stack was torn down after recording (`stack.sh down --name ctx403 --volumes`
 - Project-context parity with the current platform:
   - With no activation description, the current platform puts the context straight into the instructions under a
     `# Project Context` markdown heading and offers no tool
-    (`pylon_main/plugins/elitea_core/utils/project_context_utils.py:8-22`).
+    (the legacy `elitea_core` plugin, `utils/project_context_utils.py:8-22`).
   - Only with an activation description does it withhold the content and bind `read_project_context`
     (`elitea_sdk/runtime/middleware/project_context.py`).
   - The Worker renders an `<active_instruction …>` block and still exposes `read_project_context` when the context is

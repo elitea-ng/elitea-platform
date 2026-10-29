@@ -9,10 +9,10 @@ publish.workspace = true
 [dependencies]
 elitea-engine-core = { path = "../engine-core" }
 elitea-model-client = { path = "../model-client" }
-serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"] }
+serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
 
 [dev-dependencies]
-tokio = { version = "1.53.1", features = ["macros", "rt"] }
+tokio = { version = "1.54.1", features = ["macros", "rt"] }
 
 [lints]
 workspace = true

@@ -10,10 +10,10 @@ description = "The Rust-native Inventory engine behind the sub-application host'
 # investigate's agent loop (adk-rust; the worker's version, without its
 # patches, which only its durable history needs). No default features:
 # no skills, artifacts or plugins.
-adk-agent = { version = "=2.2.0", default-features = false }
-adk-core = { version = "=2.2.0", default-features = false }
-adk-runner = { version = "=2.2.0", default-features = false }
-adk-session = { version = "=2.2.0", default-features = false }
+adk-agent = { version = "=2.3.0", default-features = false }
+adk-core = { version = "=2.3.0", default-features = false }
+adk-runner = { version = "=2.3.0", default-features = false }
+adk-session = { version = "=2.3.0", default-features = false }
 # The engine sidecars' shared crates (ADR-0027): the error contract, the
 # NDJSON stream and stop flag, Python-compatible text; the socket's gRPC
 # server, the container probe and process tracing.
@@ -45,8 +45,8 @@ jiff = "=0.2.38"
 # Repairing a model's malformed JSON answer.
 jsonrepair = { version = "=0.1.0", default-features = false, features = ["serde"] }
 # Entity ids are Python's md5 prefix; file hashes its sha256.
-md-5 = "=0.10.6"
-sha2 = "=0.10.9"
+md-5 = "=0.11.0"
+sha2 = "=0.11.1"
 # investigate's source-tool calls: elitea.runtime.v1.InternalToolService's
 # InvokeToolkit on the platform listener (#1359 U5), over the model calls'
 # channel.
@@ -56,15 +56,15 @@ elitea-platform-rpc = { path = "../../libs/rust/platform-rpc" }
 # every other TLS hop of this engine.
 elitea-vector-index = { path = "../../libs/rust/vector-index", default-features = false, features = ["tls-aws-lc"] }
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
+serde_json = { version = "=1.0.154", features = ["preserve_order", "float_roundtrip"] }
 # The graph store (src/store.rs); the same stack the DeepWiki engine uses.
-sqlx = { version = "=0.8.6", default-features = false, features = ["json", "postgres", "runtime-tokio", "tls-rustls-aws-lc-rs"] }
+sqlx = { version = "=0.9.0", default-features = false, features = ["json", "postgres", "runtime-tokio", "tls-rustls-aws-lc-rs"] }
 # Chunking a file for the model (by syntax where a grammar exists).
-text-splitter = { version = "=0.33.0", features = ["code"] }
+text-splitter = { version = "=0.33.1", features = ["code"] }
 thiserror = "=2.0.21"
 # The investigation's cancellation token (adk's runner takes one).
-tokio-util = { version = "=0.7.19", default-features = false }
-tokio = { version = "=1.53.2", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "=0.7.20", default-features = false }
+tokio = { version = "=1.54.1", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "=0.1.44"
 
 [features]
@@ -83,7 +83,7 @@ loopback-git-http = ["elitea-repo-ingest/loopback-git-http"]
 elitea-inventory-core = { path = "../../libs/rust/inventory-core", features = ["test-support"] }
 # The ingestion tests' local smart-HTTP git server (`git http-backend`).
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
-tokio = { version = "=1.53.2", features = ["test-util"] }
+tokio = { version = "=1.54.1", features = ["test-util"] }
 # The sidecar's refusals (tests/sidecar.rs): a status code and message.
 tonic = { version = "=0.14.6", default-features = false }
 # The model fakes served as elitea.llm.v1.ModelService over real gRPC

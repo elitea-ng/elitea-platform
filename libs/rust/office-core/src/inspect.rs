@@ -239,22 +239,22 @@ pub(crate) fn resolve(base_dir: &str, target: &str) -> String {
     parts.join("/")
 }
 
-pub(crate) fn attr(e: &BytesStart<'_>, local: &[u8]) -> Option<String> {
+pub(crate) fn attr(e: &BytesStart<'_>, local: &str) -> Option<String> {
     e.attributes()
         .flatten()
         .find(|a| a.key.local_name().as_ref() == local)
-        .map(|a| String::from_utf8_lossy(&a.value).into_owned())
+        .map(|a| a.value.to_string())
 }
 
 /// The value of the namespaced `r:id`-style attribute (not the numeric `id`).
-pub(crate) fn rel_attr(e: &BytesStart<'_>, local: &[u8]) -> Option<String> {
+pub(crate) fn rel_attr(e: &BytesStart<'_>, local: &str) -> Option<String> {
     e.attributes()
         .flatten()
         .find(|a| {
             let k = a.key.as_ref();
             a.key.local_name().as_ref() == local && k.len() > local.len()
         })
-        .map(|a| String::from_utf8_lossy(&a.value).into_owned())
+        .map(|a| a.value.to_string())
 }
 
 /// The target of a relationship whose type ends with `suffix`.
@@ -262,9 +262,9 @@ fn rel_target_of_type(xml: &[u8], suffix: &str) -> Option<String> {
     let mut r = Reader::from_reader(xml);
     loop {
         match r.read_event() {
-            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == b"Relationship" => {
-                if attr(&e, b"Type").is_some_and(|t| t.ends_with(suffix)) {
-                    return attr(&e, b"Target");
+            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == "Relationship" => {
+                if attr(&e, "Type").is_some_and(|t| t.ends_with(suffix)) {
+                    return attr(&e, "Target");
                 }
             }
             Ok(Event::Eof) | Err(_) => return None,
@@ -279,16 +279,15 @@ fn part_text(xml: &[u8]) -> String {
     let (mut in_t, mut out) = (false, String::new());
     loop {
         match r.read_event() {
-            Ok(Event::Start(e)) if e.local_name().as_ref() == b"t" => in_t = true,
+            Ok(Event::Start(e)) if e.local_name().as_ref() == "t" => in_t = true,
             Ok(Event::End(e)) => match e.local_name().as_ref() {
-                b"t" => in_t = false,
-                b"p" if !out.is_empty() && !out.ends_with('\n') => out.push('\n'),
+                "t" => in_t = false,
+                "p" if !out.is_empty() && !out.ends_with('\n') => out.push('\n'),
                 _ => {}
             },
             Ok(Event::Text(t)) if in_t => {
-                if let Ok(s) = t.decode() {
-                    out.push_str(&s);
-                }
+                let s: &str = &t;
+                out.push_str(s);
             }
             Ok(Event::Eof) | Err(_) => break,
             Ok(_) => {}
@@ -302,8 +301,8 @@ pub(crate) fn read_rels(xml: &[u8]) -> HashMap<String, String> {
     let mut r = Reader::from_reader(xml);
     loop {
         match r.read_event() {
-            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == b"Relationship" => {
-                if let (Some(id), Some(target)) = (attr(&e, b"Id"), attr(&e, b"Target")) {
+            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == "Relationship" => {
+                if let (Some(id), Some(target)) = (attr(&e, "Id"), attr(&e, "Target")) {
                     out.insert(id, target);
                 }
             }
@@ -321,15 +320,15 @@ fn read_presentation(xml: &[u8]) -> ((i64, i64), Vec<String>) {
     loop {
         match r.read_event() {
             Ok(Event::Empty(e) | Event::Start(e)) => match e.local_name().as_ref() {
-                b"sldSz" => {
-                    let cx = attr(&e, b"cx").and_then(|v| v.parse().ok());
-                    let cy = attr(&e, b"cy").and_then(|v| v.parse().ok());
+                "sldSz" => {
+                    let cx = attr(&e, "cx").and_then(|v| v.parse().ok());
+                    let cy = attr(&e, "cy").and_then(|v| v.parse().ok());
                     if let (Some(cx), Some(cy)) = (cx, cy) {
                         size = (cx, cy);
                     }
                 }
-                b"sldId" => {
-                    if let Some(id) = rel_attr(&e, b"id") {
+                "sldId" => {
+                    if let Some(id) = rel_attr(&e, "id") {
                         ids.push(id);
                     }
                 }
@@ -345,8 +344,9 @@ fn read_presentation(xml: &[u8]) -> ((i64, i64), Vec<String>) {
 fn unescape_general_ref(g: &quick_xml::events::BytesRef<'_>, into: &mut String) {
     if let Ok(Some(c)) = g.resolve_char_ref() {
         into.push(c);
-    } else if let Ok(n) = g.decode() {
-        match n.as_ref() {
+    } else {
+        let n: &str = g;
+        match n {
             "amp" => into.push('&'),
             "lt" => into.push('<'),
             "gt" => into.push('>'),
@@ -399,7 +399,7 @@ fn read_slide(xml: &[u8], slide: usize, size: (i64, i64)) -> (SlideFacts, Vec<Pe
         let is_start = matches!(ev, Ok(Event::Start(_)));
         match ev {
             Ok(Event::Start(e) | Event::Empty(e)) => {
-                let name = e.local_name().as_ref().to_vec();
+                let name = e.local_name().as_ref().as_bytes().to_vec();
                 let top_level = stack.last().is_some_and(|p| p == b"spTree");
                 match name.as_slice() {
                     b"sp" | b"pic" | b"graphicFrame" | b"cxnSp" | b"grpSp" if top_level => {
@@ -437,34 +437,33 @@ fn read_slide(xml: &[u8], slide: usize, size: (i64, i64)) -> (SlideFacts, Vec<Pe
                         if let Some(f) = acc.facts.as_mut()
                             && f.name.is_empty()
                         {
-                            f.name = attr(&e, b"name").unwrap_or_default();
+                            f.name = attr(&e, "name").unwrap_or_default();
                         }
                     }
                     b"ph" if acc.facts.is_some() => {
                         if let Some(f) = acc.facts.as_mut() {
-                            f.placeholder =
-                                Some(attr(&e, b"type").unwrap_or_else(|| "body".into()));
+                            f.placeholder = Some(attr(&e, "type").unwrap_or_else(|| "body".into()));
                         }
                     }
                     b"spPr" if acc.facts.is_some() => in_sp_pr = true,
                     b"xfrm" if acc.facts.is_some() => in_xfrm = true,
                     b"off" if in_xfrm => {
-                        let x = attr(&e, b"x").and_then(|v| v.parse().ok());
-                        let y = attr(&e, b"y").and_then(|v| v.parse().ok());
+                        let x = attr(&e, "x").and_then(|v| v.parse().ok());
+                        let y = attr(&e, "y").and_then(|v| v.parse().ok());
                         if let (Some(x), Some(y)) = (x, y) {
                             off = Some((x, y));
                         }
                     }
                     b"ext" if in_xfrm => {
-                        let w = attr(&e, b"cx").and_then(|v| v.parse().ok());
-                        let h = attr(&e, b"cy").and_then(|v| v.parse().ok());
+                        let w = attr(&e, "cx").and_then(|v| v.parse().ok());
+                        let h = attr(&e, "cy").and_then(|v| v.parse().ok());
                         if let (Some(w), Some(h)) = (w, h) {
                             ext = Some((w, h));
                         }
                     }
                     b"tbl" if acc.facts.is_some() => acc.has_table = true,
                     b"chart" if acc.facts.is_some() => {
-                        if let Some(rid) = rel_attr(&e, b"id") {
+                        if let Some(rid) = rel_attr(&e, "id") {
                             acc.has_chart = Some(rid);
                         }
                     }
@@ -477,7 +476,7 @@ fn read_slide(xml: &[u8], slide: usize, size: (i64, i64)) -> (SlideFacts, Vec<Pe
                     b"rPr" if acc.facts.is_some() => {
                         in_text_color = true;
                         if let (Some(sz), Some(f)) = (
-                            attr(&e, b"sz").and_then(|v| v.parse::<f32>().ok()),
+                            attr(&e, "sz").and_then(|v| v.parse::<f32>().ok()),
                             acc.facts.as_mut(),
                         ) {
                             let pt = sz / 100.0;
@@ -493,7 +492,7 @@ fn read_slide(xml: &[u8], slide: usize, size: (i64, i64)) -> (SlideFacts, Vec<Pe
                     b"srgbClr" if acc.facts.is_some() => {
                         let in_solid = stack.last().is_some_and(|p| p == b"solidFill");
                         if in_solid
-                            && let (Some(v), Some(f)) = (attr(&e, b"val"), acc.facts.as_mut())
+                            && let (Some(v), Some(f)) = (attr(&e, "val"), acc.facts.as_mut())
                         {
                             if in_text_color && stack.iter().any(|s| s == b"rPr") {
                                 if f.text_color.is_none() {
@@ -525,11 +524,11 @@ fn read_slide(xml: &[u8], slide: usize, size: (i64, i64)) -> (SlideFacts, Vec<Pe
             Ok(Event::End(e)) => {
                 stack.pop();
                 match e.local_name().as_ref() {
-                    b"t" => in_t = false,
-                    b"rPr" => in_text_color = false,
-                    b"spPr" => in_sp_pr = false,
-                    b"xfrm" => in_xfrm = false,
-                    b"p" => {
+                    "t" => in_t = false,
+                    "rPr" => in_text_color = false,
+                    "spPr" => in_sp_pr = false,
+                    "xfrm" => in_xfrm = false,
+                    "p" => {
                         if let Some(p) = acc.para.take() {
                             if acc.in_cell {
                                 acc.cell_paras.push(p);
@@ -538,16 +537,16 @@ fn read_slide(xml: &[u8], slide: usize, size: (i64, i64)) -> (SlideFacts, Vec<Pe
                             }
                         }
                     }
-                    b"tc" if acc.has_table => {
+                    "tc" if acc.has_table => {
                         acc.in_cell = false;
                         acc.row.push(acc.cell_paras.join("\n"));
                         acc.cell_paras = Vec::new();
                     }
-                    b"tr" if acc.has_table => {
+                    "tr" if acc.has_table => {
                         let row = std::mem::take(&mut acc.row);
                         acc.cells.push(row);
                     }
-                    b"sp" | b"pic" | b"graphicFrame" | b"cxnSp" | b"grpSp"
+                    "sp" | "pic" | "graphicFrame" | "cxnSp" | "grpSp"
                         if stack.len() == acc.depth_at_start && acc.facts.is_some() =>
                     {
                         if let Some(mut f) = acc.facts.take() {
@@ -584,8 +583,9 @@ fn read_slide(xml: &[u8], slide: usize, size: (i64, i64)) -> (SlideFacts, Vec<Pe
                 }
             }
             Ok(Event::Text(t)) if in_t => {
-                if let (Some(p), Ok(s)) = (acc.para.as_mut(), t.decode()) {
-                    p.push_str(&s);
+                if let Some(p) = acc.para.as_mut() {
+                    let s: &str = &t;
+                    p.push_str(s);
                 }
             }
             Ok(Event::GeneralRef(g)) if in_t => {
@@ -630,7 +630,7 @@ fn read_chart(xml: &[u8]) -> ChartRead {
         let is_start = matches!(ev, Ok(Event::Start(_)));
         match ev {
             Ok(Event::Start(e) | Event::Empty(e)) => {
-                let name = e.local_name().as_ref().to_vec();
+                let name = e.local_name().as_ref().as_bytes().to_vec();
                 let n = name.as_slice();
                 if kind.is_empty()
                     && n.ends_with(b"Chart")
@@ -648,7 +648,7 @@ fn read_chart(xml: &[u8]) -> ChartRead {
                     };
                 }
                 if n == b"barDir"
-                    && let Some(v) = attr(&e, b"val")
+                    && let Some(v) = attr(&e, "val")
                 {
                     bar_dir = v;
                 }
@@ -659,7 +659,7 @@ fn read_chart(xml: &[u8]) -> ChartRead {
                     cur_cats = Vec::new();
                 }
                 if n == b"pt" {
-                    pt_idx = attr(&e, b"idx").and_then(|v| v.parse().ok());
+                    pt_idx = attr(&e, "idx").and_then(|v| v.parse().ok());
                 }
                 if n == b"v" {
                     in_v = true;
@@ -670,7 +670,7 @@ fn read_chart(xml: &[u8]) -> ChartRead {
                 }
             }
             Ok(Event::End(e)) => {
-                let name = e.local_name().as_ref().to_vec();
+                let name = e.local_name().as_ref().as_bytes().to_vec();
                 stack.pop();
                 match name.as_slice() {
                     b"v" => {
@@ -707,15 +707,14 @@ fn read_chart(xml: &[u8]) -> ChartRead {
                 }
             }
             Ok(Event::Text(t)) => {
-                if let Ok(s) = t.decode() {
-                    if in_v {
-                        grabbing.push_str(&s);
-                    } else if !in_ser
-                        && stack.last().is_some_and(|p| p == b"t")
-                        && stack.iter().any(|s| s == b"title")
-                    {
-                        title.push_str(&s);
-                    }
+                let s: &str = &t;
+                if in_v {
+                    grabbing.push_str(s);
+                } else if !in_ser
+                    && stack.last().is_some_and(|p| p == b"t")
+                    && stack.iter().any(|s| s == b"title")
+                {
+                    title.push_str(s);
                 }
             }
             Ok(Event::Eof) | Err(_) => break,

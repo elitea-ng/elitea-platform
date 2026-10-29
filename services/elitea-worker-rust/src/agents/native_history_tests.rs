@@ -202,11 +202,11 @@ async fn native_runner_stream_refresh_preserves_delivery_without_retaining_parti
         assert_eq!((partials, finals), (64, 1));
         let retained = maximum.load(Ordering::SeqCst);
         println!("refresh={refresh} maximum model-visible session items={retained}");
-        if refresh {
-            assert_eq!(retained, 2);
-        } else {
-            assert_eq!(retained, 66);
-        }
+        // The user turn and the terminal event only. Since ADK 2.3.0 the
+        // model-visible history skips partial deltas with or without refresh
+        // (2.2.0 exposed all 64 of them, 66 items, when refresh was off); the
+        // refresh path must still deliver every fragment and store none.
+        assert_eq!(retained, 2);
         let stored = sessions
             .get(GetRequest {
                 app_name: "stream-probe".into(),

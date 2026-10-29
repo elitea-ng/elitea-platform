@@ -62,7 +62,7 @@ function renderRow(participant: unknown): void {
   );
 }
 
-describe('ParticipantItemRow mention aria-label', () => {
+describe('ParticipantItemRow accessible name', () => {
   it('substitutes the participant name, rather than rendering a literal {{name}}', async () => {
     stubCurrentAuthor('me');
     renderRow({ entity_meta: { id: 'someone-else', name: 'Ada Lovelace' }, meta: {} });

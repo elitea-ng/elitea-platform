@@ -122,7 +122,8 @@ pub(super) async fn begin_bounded(
     pool: &PgPool,
     limits: SessionLimits,
 ) -> Result<Transaction<'static, Postgres>, PostgresSessionError> {
-    pool.begin_with(limits.begin_statement())
+    // The statement is formatted from the configured duration limits, never input.
+    pool.begin_with(sqlx::AssertSqlSafe(limits.begin_statement()))
         .await
         .map_err(storage_error)
 }
@@ -784,7 +785,7 @@ WHERE tenant_id = $1
             "{} SELECT event_payload, event_timestamp FROM active_events ORDER BY event_ordinal DESC LIMIT $13",
             include_str!("postgres_session_active_events.sql")
         );
-        let rows = sqlx::query(&query)
+        let rows = sqlx::query(sqlx::AssertSqlSafe(&*query))
             .bind(&self.authority.tenant_id)
             .bind(self.authority.resource_project_id)
             .bind(self.authority.projection_project_id)
@@ -965,7 +966,7 @@ WHERE tenant_id = $1
                     OR latest_snapshot IS NULL OR event_ordinal <> latest_snapshot))",
             include_str!("postgres_session_active_events.sql")
         );
-        let (count, bytes) = sqlx::query_as::<_, (i64, i64)>(&query)
+        let (count, bytes) = sqlx::query_as::<_, (i64, i64)>(sqlx::AssertSqlSafe(&*query))
             .bind(&self.authority.tenant_id)
             .bind(self.authority.resource_project_id)
             .bind(self.authority.projection_project_id)

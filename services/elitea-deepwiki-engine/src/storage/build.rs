@@ -1827,7 +1827,7 @@ async fn analyze_one(
     // `query`, not `raw_sql`: the `raw_sql` future is not `Send` for every
     // lifetime, which would make the whole publish future non-`Send`.
     let statement = format!("ANALYZE {table}");
-    sqlx::query(&statement)
+    sqlx::query(sqlx::AssertSqlSafe(&*statement))
         .persistent(false)
         .execute(&mut *tx)
         .await?;

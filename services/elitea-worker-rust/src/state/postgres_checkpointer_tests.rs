@@ -53,10 +53,12 @@ impl IsolatedPostgres {
             std::process::id(),
             unique & u128::from(u64::MAX)
         );
-        sqlx::query(&format!("CREATE DATABASE {database_name}"))
-            .execute(&admin_pool)
-            .await
-            .expect("create isolated checkpoint database");
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE DATABASE {database_name}"
+        )))
+        .execute(&admin_pool)
+        .await
+        .expect("create isolated checkpoint database");
         admin_pool.close().await;
 
         let pool = crate::test_pg::pool_options()
@@ -97,10 +99,11 @@ impl Drop for IsolatedPostgres {
                             .connect_with(admin_options)
                             .await
                         {
-                            let _ =
-                                sqlx::query(&format!("DROP DATABASE {database_name} WITH (FORCE)"))
-                                    .execute(&admin_pool)
-                                    .await;
+                            let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
+                                "DROP DATABASE {database_name} WITH (FORCE)"
+                            )))
+                            .execute(&admin_pool)
+                            .await;
                             admin_pool.close().await;
                         }
                     })

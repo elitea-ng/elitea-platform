@@ -108,16 +108,18 @@ pub async fn empty_database(name: &str) -> Option<PgPool> {
         .await
         .expect("connect to the test server");
     // Identifiers cannot be bound; the name is checked above.
-    sqlx::raw_sql(&format!(
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "DROP DATABASE IF EXISTS \"{database}\" WITH (FORCE)"
-    ))
+    )))
     .execute(&admin)
     .await
     .expect("drop the test database");
-    sqlx::raw_sql(&format!("CREATE DATABASE \"{database}\""))
-        .execute(&admin)
-        .await
-        .expect("create the test database");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE DATABASE \"{database}\""
+    )))
+    .execute(&admin)
+    .await
+    .expect("create the test database");
     admin.close().await;
     let pool = PgPoolOptions::new()
         .max_connections(8)

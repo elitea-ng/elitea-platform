@@ -48,7 +48,7 @@ Node transformations and state channel reducers have separate contracts.
 A node shapes its result. A channel reducer combines accepted updates to a declared variable.
 Keep existing overwrite behavior by default. Do not infer a reducer from the connected node family.
 
-The pinned ADK 2.2.0 supplies Overwrite, Append, Sum and Custom in `adk-graph/src/state.rs`.
+The pinned ADK 2.3.0 supplies Overwrite, Append, Sum and Custom in `adk-graph/src/state.rs`.
 Its Append accepts scalars, and its Sum converts through floating-point values with zero fallback.
 Those permissive defaults cannot define strict user-facing list and numeric contracts.
 

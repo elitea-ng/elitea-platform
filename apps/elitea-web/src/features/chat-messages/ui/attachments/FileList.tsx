@@ -140,8 +140,8 @@ export function FileList({ attachments, onDeleteAttachment, disabled = false }: 
               onClick={handleMoreClick}
               aria-haspopup="menu"
               aria-expanded={open ? 'true' : undefined}
-              // eslint-disable-next-line i18next/no-literal-string — icon-only chip aria label
-              aria-label="Show more files"
+              // Carries the visible count: a label must contain the chip's text (WCAG 2.5.3).
+              aria-label={t('chatMessages.fileList.showMoreFiles', 'Show {{count}} more files', { count: hiddenAttachments.length })}
             />
           </ListItem>
         )}

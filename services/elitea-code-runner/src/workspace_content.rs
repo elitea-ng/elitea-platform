@@ -69,7 +69,9 @@ impl std::fmt::Display for WorkspaceError {
 impl std::error::Error for WorkspaceError {}
 type Result<T> = std::result::Result<T, WorkspaceError>;
 
-fn hex(value: &[u8]) -> String {
+/// Lowercase hex of `value` (a SHA-256 digest here): sha2 0.11 digests no
+/// longer implement `LowerHex`.
+pub(crate) fn hex(value: &[u8]) -> String {
     const HEX: &[u8] = b"0123456789abcdef";
     value
         .iter()

@@ -1004,7 +1004,7 @@ fn read_shapes(xml: &[u8]) -> Vec<ShapeInfo> {
         let is_start = matches!(ev, Ok(Event::Start(_)));
         match ev {
             Ok(Event::Start(e) | Event::Empty(e)) => {
-                let name = e.local_name().as_ref().to_vec();
+                let name = e.local_name().as_ref().as_bytes().to_vec();
                 let parent_is = |n: &[u8]| stack.last().is_some_and(|p| p == n);
                 match name.as_slice() {
                     b"sp" if parent_is(b"spTree") => {
@@ -1022,8 +1022,8 @@ fn read_shapes(xml: &[u8]) -> Vec<ShapeInfo> {
                     {
                         if let Some(c) = cur.as_mut() {
                             for a in e.attributes().flatten() {
-                                if a.key.local_name().as_ref() == b"name" {
-                                    c.name = String::from_utf8_lossy(&a.value).into_owned();
+                                if a.key.local_name().as_ref() == "name" {
+                                    c.name = a.value.to_string();
                                 }
                             }
                         }
@@ -1033,8 +1033,8 @@ fn read_shapes(xml: &[u8]) -> Vec<ShapeInfo> {
                             c.is_placeholder = true;
                             c.kind = "body".into();
                             for a in e.attributes().flatten() {
-                                if a.key.local_name().as_ref() == b"type" {
-                                    c.kind = String::from_utf8_lossy(&a.value).into_owned();
+                                if a.key.local_name().as_ref() == "type" {
+                                    c.kind = a.value.to_string();
                                 }
                             }
                         }
@@ -1044,7 +1044,7 @@ fn read_shapes(xml: &[u8]) -> Vec<ShapeInfo> {
                             && !c.is_placeholder
                             && e.attributes()
                                 .flatten()
-                                .any(|a| a.key.local_name().as_ref() == b"txBox")
+                                .any(|a| a.key.local_name().as_ref() == "txBox")
                         {
                             c.kind = "textbox".into();
                         }
@@ -1075,8 +1075,8 @@ fn read_shapes(xml: &[u8]) -> Vec<ShapeInfo> {
             Ok(Event::End(e)) => {
                 stack.pop();
                 match e.local_name().as_ref() {
-                    b"t" => in_t = false,
-                    b"r" => {
+                    "t" => in_t = false,
+                    "r" => {
                         if let (Some(r), Some(p)) = (run.take(), para.as_mut()) {
                             p.text.push_str(&r);
                             p.runs.push(RunInfo {
@@ -1085,12 +1085,12 @@ fn read_shapes(xml: &[u8]) -> Vec<ShapeInfo> {
                             });
                         }
                     }
-                    b"p" => {
+                    "p" => {
                         if let (Some(p), Some(c)) = (para.take(), cur.as_mut()) {
                             c.paragraphs.push(p);
                         }
                     }
-                    b"sp" if stack.last().is_some_and(|p| p == b"spTree") => {
+                    "sp" if stack.last().is_some_and(|p| p == b"spTree") => {
                         if let Some(mut c) = cur.take() {
                             c.text = c
                                 .paragraphs
@@ -1105,16 +1105,18 @@ fn read_shapes(xml: &[u8]) -> Vec<ShapeInfo> {
                 }
             }
             Ok(Event::Text(t)) if in_t => {
-                if let (Some(r), Ok(s)) = (run.as_mut(), t.decode()) {
-                    r.push_str(&s);
+                if let Some(r) = run.as_mut() {
+                    let s: &str = &t;
+                    r.push_str(s);
                 }
             }
             Ok(Event::GeneralRef(g)) if in_t => {
                 if let Some(r) = run.as_mut() {
                     if let Ok(Some(c)) = g.resolve_char_ref() {
                         r.push(c);
-                    } else if let Ok(n) = g.decode() {
-                        match n.as_ref() {
+                    } else {
+                        let n: &str = &g;
+                        match n {
                             "amp" => r.push('&'),
                             "lt" => r.push('<'),
                             "gt" => r.push('>'),

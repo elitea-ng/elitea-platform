@@ -20,8 +20,8 @@ describe('VersionSelector', () => {
         onSelect={vi.fn()}
       />,
     );
-    expect(screen.getByRole('button', { name: 'version selector menu' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'version selector menu' }));
+    expect(screen.getByRole('button', { name: /^version selector menu/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^version selector menu/ }));
     expect(screen.getByRole('menuitem', { name: 'base' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'v2' })).toBeInTheDocument();
   });
@@ -49,7 +49,7 @@ describe('VersionSelector', () => {
         onCloseEditor={onCloseEditor}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'version selector menu' }));
+    fireEvent.click(screen.getByRole('button', { name: /^version selector menu/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'v2' }));
     expect(onCloseEditor).toHaveBeenCalledTimes(1);
     expect(onSelect).toHaveBeenCalledWith(versions[1]);
@@ -69,7 +69,7 @@ describe('VersionSelector', () => {
           onShowVersionChangeAlert={onShowVersionChangeAlert}
         />,
       );
-      fireEvent.click(screen.getByRole('button', { name: 'version selector menu' }));
+      fireEvent.click(screen.getByRole('button', { name: /^version selector menu/ }));
       fireEvent.click(screen.getByRole('menuitem', { name: 'v2' }));
       expect(onShowVersionChangeAlert).toHaveBeenCalledTimes(1);
       expect(onSelect).toHaveBeenCalledWith(versions[1]);
@@ -86,7 +86,7 @@ describe('VersionSelector', () => {
         onSelect={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'version selector menu' }));
+    fireEvent.click(screen.getByRole('button', { name: /^version selector menu/ }));
     expect(screen.queryByText('Versions')).not.toBeInTheDocument();
   });
 
@@ -106,7 +106,7 @@ describe('VersionSelector', () => {
         onRefresh={onRefresh}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'version selector menu' }));
+    fireEvent.click(screen.getByRole('button', { name: /^version selector menu/ }));
     fireEvent.click(screen.getByLabelText('Refresh versions'));
     expect(onRefresh).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText('Refresh versions')).toBeDisabled();

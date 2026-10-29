@@ -160,7 +160,7 @@ function CreateEntityTrigger({
     // is collapsed, and fires a direct navigation against a possibly-stale
     // `activeKind` on every simple/unrecognised route.
     return (
-      <Tooltip title={CREATE_NEW_TOOLTIP()}>
+      <Tooltip title={CREATE_NEW_TOOLTIP()} describeChild={!collapsed}>
         <BaseBtn
           variant="special"
           disabled={disabled}
@@ -177,7 +177,7 @@ function CreateEntityTrigger({
 
   return (
     <>
-      <Tooltip title={CREATE_NEW_TOOLTIP()}>
+      <Tooltip title={CREATE_NEW_TOOLTIP()} describeChild>
         <BaseBtn
           variant="special"
           disabled={disabled}

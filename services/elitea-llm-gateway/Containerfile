@@ -1,12 +1,13 @@
 # syntax=docker/dockerfile:1.7
 #
-# elitea-llm-gateway is a STANDALONE Go module that needs Go 1.26.4 or above
-# (required by github.com/maximhq/bifrost/core); its go.mod asks for 1.26.9,
-# the standard-library security floor held by
+# elitea-llm-gateway is a STANDALONE Go module that needs Go 1.27.3 or above
+# (required by github.com/maximhq/bifrost/core 1.13); its go.mod asks for
+# 1.27.3, at or above the 1.27 standard-library security floor held by
 # services/elitea-main/tests/buildcontext/toolchain_floor_test.go. It is
 # deliberately NOT part of the root go.work workspace. The workspace was kept
-# off it while elitea-main and elitea-scheduler were on the Go 1.25 series;
-# both are on the 1.26 series now, so the build stays standalone by choice.
+# off it while elitea-main and elitea-scheduler were on the Go 1.25 series.
+# Since 2026-10 the gateway is on the 1.27 series and the workspace on 1.26, so
+# the standalone build is again required, not only a choice.
 #
 # ── THE BUILD CONTEXT IS THE REPOSITORY ROOT ─────────────────────────────────
 #
@@ -20,7 +21,7 @@
 # Nothing about the toolchain changes with the wider context. go.work is NOT
 # copied into the image, and the build below still sets GOWORK=off, so the
 # workspace toolchain is not consulted whether or not the file is reachable
-# from the context. `golang:1.26-trixie` below remains the only toolchain here.
+# from the context. `golang:1.27-trixie` below remains the only toolchain here.
 #
 # Every caller passes the root: .github/workflows/ci-image-scan.yml,
 # .github/workflows/publish.yml, docker-bake.hcl, Taskfile.yml (images:gateway)
@@ -29,13 +30,15 @@
 # The tag was `golang:1.26.4-alpine`. An exact patch pin freezes the Go standard
 # library, and the standard library gets CVEs like any other package: the scan
 # in ci-image-scan.yml reported 9 HIGH findings against stdlib v1.26.4, all
-# fixed in 1.26.6 (#433). The series tag still satisfies the 1.26.4 minimum
-# and takes each patch release, which is what elitea-main and elitea-scheduler
-# do with the same `golang:1.26-trixie`. It names `trixie` because every image
+# fixed in 1.26.6 (#433). A series tag takes each patch release, which is what
+# elitea-main and elitea-scheduler do with `golang:1.26-trixie`. This image is
+# on the 1.27 series because bifrost/core 1.13 needs go 1.27.3; the go.mod
+# directive makes a stale cached 1.27 image below 1.27.3 refuse to build
+# (GOTOOLCHAIN=local in the golang image). It names `trixie` because every image
 # this repository builds sits on Debian 13; the builder was `-alpine` until
 # 2026-10. CGO_ENABLED=0 below keeps the binary static, so the glibc builder
 # does not change what static-debian13 has to provide.
-FROM golang:1.26-trixie AS builder
+FROM golang:1.27-trixie AS builder
 WORKDIR /src
 
 # Cache module downloads separately from source.

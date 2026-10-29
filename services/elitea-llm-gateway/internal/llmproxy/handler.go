@@ -597,7 +597,7 @@ func (h *Handler) buildContext(w http.ResponseWriter, r *http.Request, detach bo
 	if id := identityFromHeaders(r.Header); id.projectID != "" {
 		ctx.SetValue(schemas.BifrostContextKeyVirtualKey, id.projectID)
 		if id.userID != "" {
-			ctx.SetValue(schemas.BifrostContextKeyUserID, id.userID)
+			ctx.SetValue(schemas.BifrostContextKeyUserID, id.userID) //nolint:staticcheck // SA1019: bifrost core 1.13 still reads this key (schemas/context.go, plugin pipelines); its Grant API has no setter for the gateway
 		}
 		// The tenant is the governance CEL `customer_id`. It has been forwarded
 		// by the edge since the identity path was written and, until the
@@ -606,7 +606,7 @@ func (h *Handler) buildContext(w http.ResponseWriter, r *http.Request, detach bo
 		// customer needs it, so it goes on the context with the rest of the
 		// identity rather than being re-read from headers later.
 		if id.tenantID != "" {
-			ctx.SetValue(schemas.BifrostContextKeyGovernanceCustomerID, id.tenantID)
+			ctx.SetValue(schemas.BifrostContextKeyGovernanceCustomerID, id.tenantID) //nolint:staticcheck // SA1019: bifrost core 1.13 still reads this key (schemas/context.go, plugin pipelines); its Grant API has no setter for the gateway
 		}
 		// The runtime execution this call was made from. It rides the context
 		// with the rest of the identity rather than being re-read from the

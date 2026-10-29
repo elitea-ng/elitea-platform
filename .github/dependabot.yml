@@ -154,6 +154,20 @@ updates:
       # Repeated in all three cargo entries: every workspace that path-depends
       # on libs/rust carries zavora-* in its own lock.
       - dependency-name: "zavora-*"
+      # adk-agent, adk-runner and adk-sandbox are patched copies in
+      # libs/rust/vendor applied through [patch.crates-io]; Dependabot cannot
+      # move a path crate, so a bump of their pins resolves the unpatched
+      # registry crate and the runtime's compile guard fails. Their re-vendor
+      # is a reviewed diff (libs/rust/vendor/README.md). The rest of adk-*
+      # still moves here; when an adk minor lands, the group PR breaks against
+      # the old patched copies, and that is the cue to re-vendor. Lift when the
+      # patches are upstream. adk-rust re-exports adk-agent and adk-runner and
+      # moves with them. In both entries that patch them (not the inventory
+      # engine's, which uses the registry crates).
+      - dependency-name: "adk-agent"
+      - dependency-name: "adk-runner"
+      - dependency-name: "adk-sandbox"
+      - dependency-name: "adk-rust"
 
   - package-ecosystem: cargo
     directories:
@@ -187,6 +201,20 @@ updates:
       # Repeated in all three cargo entries: every workspace that path-depends
       # on libs/rust carries zavora-* in its own lock.
       - dependency-name: "zavora-*"
+      # adk-agent, adk-runner and adk-sandbox are patched copies in
+      # libs/rust/vendor applied through [patch.crates-io]; Dependabot cannot
+      # move a path crate, so a bump of their pins resolves the unpatched
+      # registry crate and the runtime's compile guard fails. Their re-vendor
+      # is a reviewed diff (libs/rust/vendor/README.md). The rest of adk-*
+      # still moves here; when an adk minor lands, the group PR breaks against
+      # the old patched copies, and that is the cue to re-vendor. Lift when the
+      # patches are upstream. adk-rust re-exports adk-agent and adk-runner and
+      # moves with them. In both entries that patch them (not the inventory
+      # engine's, which uses the registry crates).
+      - dependency-name: "adk-agent"
+      - dependency-name: "adk-runner"
+      - dependency-name: "adk-sandbox"
+      - dependency-name: "adk-rust"
 
   - package-ecosystem: pip
     directories:
@@ -200,7 +228,6 @@ updates:
     directories:
       - /apps/elitea-web
       - /apps/elitea-desktop
-      - /apps/elitea-docs
       - /scripts/ci
     multi-ecosystem-group: nightly
     patterns: ["*"]
@@ -260,3 +287,53 @@ updates:
         versions: [">= 1.63.0"]
       - dependency-name: playwright
         versions: [">= 1.63.0"]
+      # msw 3 (3.0.0-3.0.3, @mswjs/interceptors 0.45.6-0.45.10) intercepts
+      # Node's fetch at the SOCKET level, and that layer has an open upstream
+      # defect: mswjs/interceptors#862. A request that HAS a handler escapes to
+      # the real network when undici reuses a kept-alive socket after an
+      # aborted exchange, or when a fresh connection writes its request later
+      # than one setImmediate (the "read-first passthrough"). On an origin with
+      # nothing listening, the request fails with ECONNREFUSED (AggregateError)
+      # and the component renders the failure instead of the mock.
+      #
+      # Measured on PR #1520 with msw 3.0.3 + interceptors 0.45.10, the same
+      # files green on 2.15.0:
+      #   - GenerateAgentButton, ToolMenu, AppShell: a query that the previous
+      #     test aborted on unmount takes out the next test's request (3/60
+      #     tests, every run; an undici Agent with keep-alive off, the
+      #     upstream workaround, fixes the first two but not AppShell);
+      #   - shared/api/artifacts: multipart XHR uploads never reach the handler
+      #     (5 tests, every run);
+      #   - shared/api/upload: the XHR interceptor now sends a CORS preflight,
+      #     so a cross-origin upload hits an unhandled OPTIONS, and the
+      #     abort-wiring test no longer sees xhr.abort() (2 tests).
+      # The code side of the move is small and known: `server.listen({
+      # onUnhandledRequest })` becomes `onUnhandledFrame` in
+      # src/test/setup.ts (the R-M5 fixture pair checks the option name).
+      # Lift when mswjs/interceptors#862 is closed in a release, then run the
+      # files above and check-gates-selftest.mjs.
+      - dependency-name: msw
+        versions: [">= 3.0.0"]
+
+  # /apps/elitea-docs is its own npm entry ONLY so that it can carry an ignore
+  # the other npm directories must not: an `ignore` holds a package name in
+  # every directory of its entry, and apps/elitea-web is already on
+  # TypeScript 7. Same `nightly` group, so it is still one pull request.
+  - package-ecosystem: npm
+    directories:
+      - /apps/elitea-docs
+    multi-ecosystem-group: nightly
+    patterns: ["*"]
+    ignore:
+      # TypeScript 7 (the native compiler) does not ship the JavaScript
+      # compiler API (its package exports only `.` and `./unstable/*`), and
+      # `astro check` runs on that API through @astrojs/check and
+      # @astrojs/language-server (Volar). @astrojs/check 0.9.12, the latest,
+      # declares `typescript: ^5.0.0 || ^6.0.0`, so `npm ci` fails with
+      # ERESOLVE on 7.0.2 (PR #1520), and an override would only move the
+      # failure to run time. The web app is on TypeScript 7 because it runs
+      # plain `tsc --noEmit` and has no consumer of the compiler API.
+      # Lift when an @astrojs/check release admits typescript 7 in its peer
+      # range; then bump typescript here and run `npm run typecheck`.
+      - dependency-name: typescript
+        versions: [">= 7.0.0"]

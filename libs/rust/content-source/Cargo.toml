@@ -14,15 +14,15 @@ serde = { version = "1.0.228", features = ["derive"] }
 # `preserve_order` (ADR-0029 decision 2). The engines that link it turn
 # both features on themselves (engine-core and the others), so their
 # builds are unchanged.
-serde_json = "1.0.151"
-sha2 = "0.10.9"
-thiserror = "2.0.20"
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+thiserror = "2.0.21"
 # `spawn_blocking`: a source's walks and reads run off the async workers
 # (`blocking`). The same line every crate that links this one already has.
-tokio = { version = "1.53.1", features = ["rt"] }
+tokio = { version = "1.54.1", features = ["rt"] }
 
 [dev-dependencies]
-tokio = { version = "1.53.1", features = ["macros", "rt", "time"] }
+tokio = { version = "1.54.1", features = ["macros", "rt", "time"] }
 
 [lints]
 workspace = true

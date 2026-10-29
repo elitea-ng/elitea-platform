@@ -1,5 +1,5 @@
 import type { MouseEvent, ReactNode } from 'react';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import Box from '@mui/material/Box';
@@ -32,6 +32,8 @@ interface ArtifactPaginationProps {
  */
 export function ArtifactPagination(props: ArtifactPaginationProps): ReactNode {
   const [sizeAnchor, setSizeAnchor] = useState<HTMLElement>();
+  const labelId = useId();
+  const sizeButtonId = useId();
   if (props.total === 0) return null;
   const firstPage = props.page === 0;
   const lastPage = (props.page + 1) * props.pageSize >= props.total;
@@ -43,16 +45,19 @@ export function ArtifactPagination(props: ArtifactPaginationProps): ReactNode {
       <Box sx={contentSx}>
         <Box sx={leftSx}>
           <Typography
+            id={labelId}
             variant="bodyMedium"
             color="text.primary"
           >
             {t('artifacts.table.rowsPerPage', 'Rows per page:')}
           </Typography>
+          {/* Named "Rows per page: 10": the caption, then the value it shows (WCAG 2.5.3). */}
           <Box
             component="button"
             type="button"
-            aria-haspopup="listbox"
-            aria-label={t('artifacts.table.rowsPerPage', 'Rows per page:')}
+            id={sizeButtonId}
+            aria-haspopup="menu"
+            aria-labelledby={`${labelId} ${sizeButtonId}`}
             sx={sizeButtonSx}
             onClick={(event: MouseEvent<HTMLElement>) => setSizeAnchor(event.currentTarget)}
           >

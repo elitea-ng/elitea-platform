@@ -41,10 +41,17 @@ import (
 // Raise a floor when govulncheck reports a reachable standard-library finding.
 // Never lower one.
 //
-// scripts/ci/check-gateway-toolchain.sh reads this constant by name from an
-// indented `stdlibFloorGo126 = "…"` line, so it stays inside a const block.
+// elitea-llm-gateway alone is on the 1.27 series: bifrost/core 1.13 requires
+// go 1.27.3. Its floor is go1.27.2, released on 2026-10-08 with go1.26.9 and
+// carrying the same standard-library fixes. The gateway's go.mod asks for
+// 1.27.3, which is above that floor.
+//
+// scripts/ci/check-gateway-toolchain.sh reads these constants by name from an
+// indented `stdlibFloorGo1NN = "…"` line, choosing the one named for the series
+// of the gateway's `go` directive, so they stay inside a const block.
 const (
 	stdlibFloorGo126 = "1.26.9"
+	stdlibFloorGo127 = "1.27.2"
 )
 
 // toolchainFloors lists every Go module that ships an image, plus the
@@ -79,7 +86,7 @@ var toolchainFloors = []struct {
 		name:          "elitea-llm-gateway",
 		goFile:        "services/elitea-llm-gateway/go.mod",
 		containerfile: "services/elitea-llm-gateway/Containerfile",
-		floor:         stdlibFloorGo126,
+		floor:         stdlibFloorGo127,
 	},
 	{
 		name:          "elitea-egress-proxy",

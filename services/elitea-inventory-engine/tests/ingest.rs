@@ -370,11 +370,13 @@ async fn database(name: &str) -> Option<PgPool> {
     let dsn = dsn()?;
     let database = format!("invi_{name}");
     let mut admin = PgConnection::connect(&dsn).await.expect("connect");
-    sqlx::query(&format!("DROP DATABASE IF EXISTS {database} WITH (FORCE)"))
-        .execute(&mut admin)
-        .await
-        .expect("drop");
-    sqlx::query(&format!("CREATE DATABASE {database}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {database} WITH (FORCE)"
+    )))
+    .execute(&mut admin)
+    .await
+    .expect("drop");
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
         .execute(&mut admin)
         .await
         .expect("create");

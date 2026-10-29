@@ -270,15 +270,15 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
                         ));
                     }
                     let supervisor = Arc::clone(&self.supervisor);
-                    let outcome = self
-                        .job_owners
-                        .run(async move {
+                    let outcome = Box::pin(self.job_owners.run(async move {
+                        Box::pin(
                             supervisor
-                                .reconcile_snapshot_compile(&authority, &job, &control, &content)
-                                .await
-                                .map_err(|error| service_error(&error))
-                        })
-                        .await?;
+                                .reconcile_snapshot_compile(&authority, &job, &control, &content),
+                        )
+                        .await
+                        .map_err(|error| service_error(&error))
+                    }))
+                    .await?;
                     return Ok(Response::new(match outcome {
                         Some(outcome) => snapshot_response(outcome)?,
                         None => SubmitRustCompiledSnapshotResponseV1 {
@@ -344,24 +344,21 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
                         .await
                 } else {
                     let supervisor = Arc::clone(&self.supervisor);
-                    self.job_owners
-                        .run(async move {
-                            let delivery =
-                                delivery.as_ref().map(|(authorization, bundle, grant)| {
-                                    DependencyDelivery {
-                                        client: &content,
-                                        authorization,
-                                        bundle,
-                                        grant,
-                                    }
-                                });
-                            Ok(supervisor
-                                .submit_snapshot_compile(
-                                    &authority, &job, &control, delivery, &content,
-                                )
-                                .await)
-                        })
-                        .await?
+                    Box::pin(self.job_owners.run(async move {
+                        let delivery = delivery.as_ref().map(|(authorization, bundle, grant)| {
+                            DependencyDelivery {
+                                client: &content,
+                                authorization,
+                                bundle,
+                                grant,
+                            }
+                        });
+                        Ok(Box::pin(supervisor.submit_snapshot_compile(
+                            &authority, &job, &control, delivery, &content,
+                        ))
+                        .await)
+                    }))
+                    .await?
                 }
             }
         }

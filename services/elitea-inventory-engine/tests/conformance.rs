@@ -108,7 +108,11 @@ fn every_golden_answer_is_this_runners_answer() {
                         json!({
                             "name": artifact["name"],
                             "type": artifact["type"],
-                            "data_sha256": format!("{digest:x}"),
+                            "data_sha256": digest.iter().fold(String::new(), |mut hex, byte| {
+                                use std::fmt::Write as _;
+                                let _ = write!(hex, "{byte:02x}");
+                                hex
+                            }),
                         })
                     })
                     .collect();
