@@ -151,48 +151,6 @@ pub(super) fn model_requests(captured: &CapturedModelRequests) -> usize {
     captured.lock().expect("captured model requests").len()
 }
 
-/// How often [`run_until_model_requests`] looks at the captured requests.
-const MODEL_REQUEST_POLL: std::time::Duration = std::time::Duration::from_millis(20);
-/// A bound on a stuck run, not a stand-in for the event: the wait ends at the event.
-const MODEL_REQUEST_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// Drive `run` until the scripted gateway has captured `expected` model requests, then drop it:
-/// a Worker lost while that model call is in flight.
-///
-/// The count is checked before the run is polled again, so the run is dropped right after the
-/// request is recorded, before the gateway's header timeout can answer it, however slowly the
-/// run got there. Panics if the run ends first or the deadline passes.
-pub(super) async fn run_until_model_requests<T: std::fmt::Debug>(
-    run: impl std::future::Future<Output = T>,
-    captured: &CapturedModelRequests,
-    expected: usize,
-) {
-    let deadline = tokio::time::Instant::now() + MODEL_REQUEST_DEADLINE;
-    let mut run = std::pin::pin!(run);
-    loop {
-        let seen = model_requests(captured);
-        if seen >= expected {
-            assert_eq!(
-                seen, expected,
-                "more model requests than the run should reach"
-            );
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the run never reached model request {expected} ({seen} seen) within {MODEL_REQUEST_DEADLINE:?}"
-        );
-        tokio::select! {
-            biased;
-            () = tokio::time::sleep(MODEL_REQUEST_POLL) => {}
-            outcome = &mut run => panic!(
-                "the run ended before model request {expected} ({} seen): {outcome:?}",
-                model_requests(captured)
-            ),
-        }
-    }
-}
-
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_two_nested_agent_pauses_resume_across_process_replacement() {
     let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {

@@ -8,9 +8,11 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import failedFixture from '../__tests__/nested-wake-failed-frames.json';
 import fixture from '../__tests__/nested-wake-frames.json';
 
 import { applyChatStreamFrame, type ChatStreamContext } from './chatStreamReducer';
+import type { ToolAction } from './chatStreamToolAction';
 import type { ChatMessage } from './convertMessagesToChatHistory';
 
 const MESSAGE_ID = '7946ae2d-7226-5316-a395-3bf246433b69';
@@ -48,5 +50,32 @@ describe('a wake of a Parallel parked inside a saved child pipeline', () => {
     const woken = replay(attached, fixture.wake);
     expect(woken[0]?.fanoutParked).toBe(true);
     expect(woken[0]?.hitlInterrupts).toHaveLength(2);
+  });
+});
+
+/**
+ * The browser run that first reported the open card as lost (fanpar,
+ * 2026-10-29): `bell` answered, its resumed model call failed upstream
+ * (On Error `continue`), `lights` re-parked. These are that run's frames as
+ * Main replays them (`execution_replay_events`): the park, then the wake.
+ */
+describe('a wake whose answered branch fails', () => {
+  it('keeps the other branch\'s open card live and marks the failed member', () => {
+    const parked = replay([pendingAssistant()], failedFixture.park);
+    expect(parked[0]?.fanoutParked).toBe(true);
+    const open = parked[0]?.hitlInterrupts ?? [];
+    expect(open).toHaveLength(1);
+
+    const attached = parked.map((message) => ({ ...message, fanoutParked: false, executionGeneration: undefined, isStreaming: true, isLoading: true }));
+    // The last frame is the user's later answer to the open card.
+    const wake = failedFixture.wake.slice(0, -1);
+    expect(failedFixture.wake[failedFixture.wake.length - 1]?.type).toBe('agent_hitl_resolved');
+    const woken = replay(attached, wake);
+    expect(woken[0]?.fanoutParked).toBe(true);
+    expect(woken[0]?.exception).toBeUndefined();
+    expect(woken[0]?.hitlInterrupts).toEqual(open);
+    const actions = (woken[0]?.toolActions ?? []) as readonly ToolAction[];
+    const failed = actions.filter((action) => action.id.startsWith('fanout-member:') && action.status === 'error');
+    expect(failed).toHaveLength(1);
   });
 });
