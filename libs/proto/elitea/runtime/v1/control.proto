@@ -9,6 +9,7 @@ import "elitea/runtime/v1/envelope.proto";
 import "elitea/runtime/v1/errors.proto";
 import "elitea/runtime/v1/input.proto";
 import "elitea/runtime/v1/output.proto";
+import "elitea/runtime/v1/run_step.proto";
 import "elitea/runtime/v1/sandbox.proto";
 
 option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
@@ -362,4 +363,5 @@ service RuntimeControlService {
   rpc RemoveIndex(RemoveIndexRequestV1) returns (RemoveIndexResponseV1);
   rpc ClaimSteeringMessages(ClaimSteeringMessagesRequestV1) returns (ClaimSteeringMessagesResponseV1);
   rpc ReportEgressSummary(ReportEgressSummaryRequestV1) returns (ReportEgressSummaryResponseV1);
+  rpc ReportRunSteps(ReportRunStepsRequestV1) returns (ReportRunStepsResponseV1);
 }
