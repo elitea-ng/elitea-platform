@@ -13,8 +13,9 @@
 //! rows included, carries `elitea.pipeline.execution.v1` (spike finding 2). A
 //! fresh turn sees only its own execution's root frontier; an explicit
 //! continuation (a `fanout_wake` or a decision resume) reads the frontier an
-//! earlier execution parked. Child threads and exact immutable replays pass
-//! through unchanged.
+//! earlier execution parked. Child pipeline threads beneath the root follow the
+//! same rule (as `TurnCheckpointer`); exact immutable replays pass through
+//! unchanged.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -70,8 +71,16 @@ impl FanoutTurnAuthority {
         })
     }
 
+    /// A thread of this turn: the root thread or a saved child pipeline's
+    /// thread beneath it, as `TurnCheckpointer` scopes every thread. A fresh
+    /// turn must not see an earlier turn's child rows (FU-249: the root binds
+    /// this authority when only a child holds a Parallel). Parallel branch
+    /// threads are read and written through the branch factory, not here.
     fn root(&self, thread: &str) -> bool {
         thread == self.root_thread
+            || thread
+                .strip_prefix(self.root_thread.as_str())
+                .is_some_and(|rest| rest.starts_with('/'))
     }
 
     /// A root row this turn may see: any row on a continuation, only its own

@@ -1706,6 +1706,106 @@ async fn postgres_a_child_pipeline_lost_outside_a_parallel_is_not_resumed() {
     db.pool.close().await;
 }
 
+/// A second fresh turn in the same conversation through the same Agent node
+/// and an ordinary saved child pipeline (one LLM node, no Parallel), the task
+/// mapped from the user input as the browser's "FP outer" does.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_second_turn_through_the_same_child_pipeline_runs() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    for (turn, execution) in [(1u8, "execution-turn-one"), (2, "execution-turn-two")] {
+        let (assembler, captured) = assembler(
+            &db.pool,
+            vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+                "done",
+            ))],
+            pipeline_connector(),
+            asking_pipeline(),
+        );
+        let mut request = child_parallel_request();
+        let yaml = request.payload.application["version_details"]["instructions"]
+            .as_str()
+            .expect("root yaml")
+            .replace(
+                "task: {type: fixed, value: 'Summarize the release'}",
+                "task: {type: variable, value: input}",
+            )
+            .replace("state:\n", "state:\n  input: str\n");
+        request.payload.application["version_details"]["instructions"] = json!(yaml);
+        request.payload.user_input = super::super::request::UserInput::Text(format!("turn {turn}"));
+        let invocation = assembler
+            .assemble(AuthorizedNativeAssembly::from_authorized(
+                &request,
+                test_runtime_context_authority(),
+                test_session_authority_for_reclaim(execution, GENERATION, turn),
+                Arc::new(TestStateWriterLease::current()),
+                AuthorizedNativeCommandBinding::fixture_for_execution(execution),
+            ))
+            .await
+            .unwrap_or_else(|error| panic!("assemble turn {turn}: {error}"));
+        run_collecting(invocation)
+            .await
+            .unwrap_or_else(|error| panic!("turn {turn} completes: {error}"));
+        assert_eq!(model_requests(&captured), 1, "turn {turn} runs its child");
+    }
+    db.pool.close().await;
+}
+
+/// FU-249: a second fresh turn in the same conversation through the same
+/// Agent node and saved child pipeline holding a Parallel. The child thread
+/// holds the first turn's completed visit (its occurrence closed by the join);
+/// the second visit runs a new occurrence and joins again.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_second_turn_through_a_child_pipeline_parallel_runs() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    for (turn, execution) in [(1u8, "execution-turn-one"), (2, "execution-turn-two")] {
+        let (assembler, captured) = assembler(
+            &db.pool,
+            (0..3)
+                .map(|_| TestModelGatewayOutcome::Response(pipeline_text_response("done")))
+                .collect(),
+            pipeline_connector(),
+            parallel_child_pipeline(),
+        );
+        let mut request = child_parallel_request();
+        request.payload.user_input = super::super::request::UserInput::Text(format!("turn {turn}"));
+        let invocation = assembler
+            .with_fanout_decisions_for_tests(ledger.client(u64::from(turn)))
+            .assemble(AuthorizedNativeAssembly::from_authorized(
+                &request,
+                test_runtime_context_authority(),
+                test_session_authority_for_reclaim(execution, GENERATION, turn),
+                Arc::new(TestStateWriterLease::current()),
+                AuthorizedNativeCommandBinding::fixture_for_execution(execution),
+            ))
+            .await
+            .unwrap_or_else(|error| panic!("assemble turn {turn}: {error}"));
+        run_collecting(invocation)
+            .await
+            .unwrap_or_else(|error| panic!("turn {turn} completes: {error}"));
+        assert_eq!(model_requests(&captured), 3, "turn {turn}");
+    }
+    db.pool.close().await;
+}
+
 fn pipeline_connector() -> Arc<PipelineMcpConnector> {
     Arc::new(PipelineMcpConnector {
         connections: Arc::new(AtomicUsize::new(0)),

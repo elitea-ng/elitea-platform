@@ -135,7 +135,7 @@ fn an_invalid_turn_identity_is_refused() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn every_new_root_row_is_stamped_and_child_rows_and_replays_are_not() {
+async fn every_new_row_of_the_turn_is_stamped_and_replays_are_not() {
     let store = Arc::new(Store::default());
     let authority = turn(&store, "execution-1", false);
     let first = row(ROOT, 0, &["gather"]);
@@ -185,7 +185,46 @@ async fn every_new_root_row_is_stamped_and_child_rows_and_replays_are_not() {
     for root_row in appended.iter().filter(|row| row.thread_id == ROOT) {
         assert_eq!(stamp(root_row), Some(&json!(["execution-1", 1])));
     }
-    assert_eq!(stamp(&appended[3]), None, "a child row is never stamped");
+    // A saved child pipeline's thread beneath the root is part of the turn, as
+    // `TurnCheckpointer` scopes it (FU-249): stamped, and hidden from a fresh
+    // turn of another execution while a continuation still reads it.
+    assert_eq!(
+        stamp(&appended[3]),
+        Some(&json!(["execution-1", 1])),
+        "a child pipeline row carries the turn"
+    );
+    let child_thread = format!("{ROOT}/left");
+    assert!(
+        turn(&store, "execution-2", false)
+            .load(&child_thread)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        turn(&store, "execution-2", true)
+            .load(&child_thread)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    // A thread that only shares the root's prefix is not beneath it.
+    assert_eq!(
+        authority
+            .save(&row(&format!("{ROOT}x"), 0, &[]))
+            .await
+            .map(|_| ())
+            .ok(),
+        Some(())
+    );
+    let sibling = store
+        .appended
+        .lock()
+        .expect("appended")
+        .last()
+        .cloned()
+        .expect("sibling row");
+    assert_eq!(stamp(&sibling), None, "a foreign thread is never stamped");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
