@@ -18,7 +18,7 @@ How to turn the export on is in [Post-install configuration](/deployment/configu
 | `schema` | string | `elitea.audit.v1`. |
 | `event_id` | string | Stable identifier. Delivery is at least once, so **deduplicate on it**. A security audit event keeps its UUID; an audit trail row has a name-based UUID derived from its row id, so a replay carries the same id. |
 | `time` | RFC 3339 string | When the audited operation happened (UTC). |
-| `source` | enum | `security_audit` (the governed security audit outbox), `admin_audit` (`centry.audit_events`, the Audit Trail). `run_step`, `approval` and `suspension` are reserved for evidence added later. |
+| `source` | enum | `security_audit` (the security audit outbox), `admin_audit` (`centry.audit_events`, the Audit Trail), `run_step` (the [step records](/admin/enterprise-controls/audit-evidence-and-retention#run-step-records) of agent runs). `approval` and `suspension` are reserved for evidence added later. |
 | `event_type` | string | The producer's type: a CloudEvents type such as `ai.elitea.security.v1.decision`, or `api`, `socketio`, `rpc`, `agent`, `tool`, `llm`, `schedule`, `admin_task` for the Audit Trail. |
 | `ocsf` | object, optional | `class_uid` and `category_uid` when an OCSF class fits: 3003 Authorize Session, 3004 Entity Management, 3005 User Access Management, 6003 API Activity. |
 | `tenant.project_id` | integer or null | The tenant project. `0` is the platform partition of the security audit chain. |
@@ -27,7 +27,7 @@ How to turn the export on is in [Post-install configuration](/deployment/configu
 | `target` | object, optional | `type`, `id`, `name` of what the action acted on. |
 | `outcome` | enum | `allow` or `deny` for authorisation decisions; `success` or `failure` for operations; `unknown`. |
 | `correlation` | object, optional | `trace_id`, `span_id`, `parent_span_id`, `correlation_id`. |
-| `chain` | object, optional | `partition`, `sequence`, `prev_hash`, `hash` (hex SHA-256) when the source keeps a tamper-evident chain. Present on `security_audit` events. |
+| `chain` | object, optional | `partition`, `sequence`, `prev_hash`, `hash` (hex SHA-256) when the source keeps a tamper-evident chain. Present on every `security_audit` and `run_step` event (partition `run:<run id>`, one chain per run), and on `admin_audit` events written since the trail was chained (partition `0`, one platform-wide chain). |
 | `details` | object | Fields specific to the source, listed below. |
 
 The OCSF mapping, in the schema's own description: `event_id` to `metadata.uid`, `time` to `time`, `source` to `metadata.product.feature.name`, `ocsf.*` to `class_uid` and `category_uid`, `tenant.project_id` to `cloud.project_uid`, `actor.id` to `actor.user.uid`, `actor.email` to `actor.user.email_addr`, `action` to `activity_name`, `target.*` to `resources[]`, `outcome` to `status_id` and the authorization disposition, `correlation.trace_id` to `metadata.correlation_uid`. `chain.*` and `details.*` have no OCSF attribute and travel in `unmapped`.
@@ -39,6 +39,12 @@ The OCSF mapping, in the schema's own description: `event_id` to `metadata.uid`,
 ### `details` for `admin_audit`
 
 `row_id` (`centry.audit_events.id`), `is_error`, and, when recorded: `http_method`, `http_route` (the matched route pattern, never the raw URL), `status_code`, `duration_ms`.
+
+### `details` for `run_step`
+
+`row_id`, `run_id`, `step_id`, `seq`, `generation`, `kind` (`model_call`, `tool_call`, `retrieval`, `approval`, `delegation`, `cap`, `error`, `output`), `started_at`, `ended_at`, `summary` (small fields per kind), `cited_step_ids`, `cited_document_ids`, `inputs` and `outputs` (each `digest`, `size`, `original_size`, `truncated`, `filtered`, `media_type` and `ref`, the object-store reference), and, when known: `application_id`, `release_id`, `definition_digest`, `node_id`, `name`, `toolkit_id`, `retrieval` (`index_name`, `query`, `filters_json`, `top_k`, `documents` with `document_id`, `source`, `score`, `rank`). The event carries digests and references, never the content.
+
+When a run ends, its chain is anchored by a `security_audit` event of type `ai.elitea.security.v1.run.steps.anchored` whose `details` carry `chain_head` (the run's last hash) and `chain_length`.
 
 ## Example
 

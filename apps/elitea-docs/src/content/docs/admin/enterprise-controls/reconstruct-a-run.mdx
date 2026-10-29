@@ -1,0 +1,75 @@
+---
+title: "Reconstruct an agent run"
+description: "Go from a chat answer to the run that produced it, list every step the agent took, read what went in and out of each step, and verify that the record was not altered."
+---
+
+Use this procedure to answer "what exactly did the agent do for this answer?". It uses the [run step records](/admin/enterprise-controls/audit-evidence-and-retention#run-step-records). You need the `runs.evidence.read` permission and an API token of a user who has it. The examples use project `31`.
+
+<Steps>
+<Step title="Find the run">
+Open the conversation and copy its id from the address bar. List its runs:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "$ELITEA/api/v2/elitea_core/conversation_runs/prompt_lib/31/$CONVERSATION_UUID"
+```
+
+Each run lists the `message_id` of the answer it produced, its step count, and whether it is `anchored`. Pick the run whose `message_id` is the answer you are investigating.
+</Step>
+<Step title="List its steps">
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "$ELITEA/api/v2/elitea_core/run_steps/prompt_lib/31/$RUN_ID"
+```
+
+`run` is the head: the agent (`application_id`), the conversation, the step count and the head hash. `steps` lists every record in order (`seq` 1, 2, 3, …). For a run with more than 1000 steps, pass `after_seq` with the `next_after_seq` of the previous page.
+
+Read the record of each step:
+
+- `kind` and `name`: what happened, for example `tool_call` of `jira_search`.
+- `release_id` and `definition_digest`: the exact agent definition that ran. Compare them with **⋮ › Release history** of the agent ([Agent lifecycle](/admin/enterprise-controls/agent-lifecycle#releases-revisions-and-rollback)).
+- `summary`: model and token counts, tool status, cap or error code.
+- `retrieval`: for a search, the index, the query, the filters and each returned document with its score and rank.
+- `cited_step_ids` and `cited_document_ids` on the `output` step: which retrieved sources the answer names.
+- `inputs` and `outputs`: the digest and status of what went in and came out. The content is not in the list.
+</Step>
+<Step title="Read a step's inputs or outputs">
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "$ELITEA/api/v2/elitea_core/run_steps/prompt_lib/31/$RUN_ID/$STEP_ID/outputs"
+```
+
+The content is checked against its recorded digest before it is returned; a mismatch is refused with 409. `truncated` means the content was cut at 256 KiB, and `filtered` means the toolkit's `evidence_fields` kept only some fields. When retention has removed the content, the answer is `expired` with the date and the policy that removed it.
+
+Each content read is written to the [audit trail](/admin/audit-trail) with your name, the run and the step.
+</Step>
+<Step title="Verify the chain">
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "$ELITEA/api/v2/elitea_core/run_steps/prompt_lib/31/$RUN_ID/verify"
+```
+
+`ok: true` means every record links to the one before it and its hash matches its content, from `seq` 1 to the head. Otherwise `break` names the first `seq` that does not verify and why. `anchored_seq` is how far the run's chain is anchored in the security audit log.
+</Step>
+<Step title="Check the anchor against your SIEM copy">
+In your SIEM or archive, find the `ai.elitea.security.v1.run.steps.anchored` event for the run. Its `chain_head` must equal the run's `head_hash`, and its `chain_length` the step count. Because the anchor is part of the tenant's security audit chain, rewriting a run's records without breaking that chain is not possible. The exported `run_step` events of the run carry the same hashes, so the SIEM copy can be checked without the platform.
+</Step>
+</Steps>
+
+## Gaps
+
+A run is complete when its steps end with an `output` or an `error` step and it is anchored. Two things can leave it shorter:
+
+- **The run is still going.** It is not anchored yet. Check again after it ends.
+- **A worker process died during the run.** Steps the worker had not sent yet are lost; the run continues on another worker. The record then has no steps for that stretch, and the run is still anchored at its real end.
+
+A lost stretch is a gap in what was recorded, not a break in the chain: `verify` still reports `ok`, because no stored record was changed.
+
+## Related
+
+- [Audit evidence and retention](/admin/enterprise-controls/audit-evidence-and-retention)
+- [Evidence guide for auditors](/admin/enterprise-controls/evidence-guide)
+- [Audit event schema](/reference/audit-event-schema)

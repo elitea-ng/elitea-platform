@@ -34,6 +34,7 @@ export const adminTab: NavTab = {
         { kind: 'page', slug: 'admin/enterprise-controls/least-privilege-and-trust', title: 'Least privilege and trust' },
         { kind: 'page', slug: 'admin/enterprise-controls/agent-lifecycle', title: 'Agent lifecycle' },
         { kind: 'page', slug: 'admin/enterprise-controls/evidence-guide', title: 'Evidence guide for auditors' },
+        { kind: 'page', slug: 'admin/enterprise-controls/reconstruct-a-run', title: 'Reconstruct an agent run' },
       ],
     },
   ],
