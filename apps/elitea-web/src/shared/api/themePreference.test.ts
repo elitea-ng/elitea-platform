@@ -184,7 +184,10 @@ describe('saveThemePreference', () => {
   });
 
   it('keeps the mark in memory when storage refuses the write', async () => {
-    const setItem = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+    // On the prototype, where both a real Storage and the test shim keep their
+    // methods: jsdom's (vitest 5) treats an own `setItem` as a stored key, so
+    // an instance spy never intercepts the write.
+    const setItem = vi.spyOn(Object.getPrototypeOf(localStorage) as Storage, 'setItem').mockImplementation(() => {
       throw new DOMException('quota', 'QuotaExceededError');
     });
     servePuts(Array.from({ length: 20 }, () => 500));

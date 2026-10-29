@@ -183,3 +183,30 @@ output: [result]
         .unwrap();
     assert_eq!(output.updates["result"], json!("4|3.0|5"));
 }
+
+#[tokio::test]
+async fn state_modifier_round_trips_a_list_of_objects_through_json() {
+    // minijinja 3 prints compound values as Python reprs (`{'sku': 'x'}`);
+    // the formatter keeps them JSON so the list projects back as a list.
+    let definition = StateModifierNodeDefinition::from_yaml(
+        r"
+id: enrich
+type: state_modifier
+template: '{{ lines }}'
+input: [lines]
+output: [lines]
+",
+    )
+    .unwrap();
+    let lines = json!([{"sku": "x", "qty": 2, "tags": ["a", "b"]}, {"sku": "y", "qty": 1.5}]);
+    let context = NodeContext::new(
+        HashMap::from([("lines".into(), lines.clone())]),
+        ExecutionConfig::new("list-round-trip"),
+        0,
+    );
+    let output = StateModifierNode::new(definition)
+        .execute(&context)
+        .await
+        .unwrap();
+    assert_eq!(output.updates["lines"], lines);
+}

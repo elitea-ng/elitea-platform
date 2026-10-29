@@ -6,8 +6,10 @@ use std::io;
 use adk_graph::{GraphError, Node, NodeContext, NodeOutput};
 use async_trait::async_trait;
 use base64::Engine as _;
-use minijinja::value::Value as JinjaValue;
-use minijinja::{Environment, Error as JinjaError, ErrorKind, UndefinedBehavior};
+use minijinja::value::{Value as JinjaValue, ValueKind};
+use minijinja::{
+    Environment, Error as JinjaError, ErrorKind, Output, State as JinjaState, UndefinedBehavior,
+};
 use regex::Regex;
 use ring::digest;
 use serde::Deserialize;
@@ -243,6 +245,7 @@ fn render_template(
     let mut environment = Environment::new();
     environment.set_undefined_behavior(UndefinedBehavior::Lenient);
     environment.set_fuel(Some(TEMPLATE_FUEL));
+    environment.set_formatter(json_compound_formatter);
     environment.add_filter("from_json", from_json_filter);
     environment.add_filter("base64_to_string", base64_to_string_filter);
     environment.add_filter("split_by_words", split_by_words_filter);
@@ -292,6 +295,26 @@ pub fn template_value(value: &Value) -> JinjaValue {
                 .collect::<BTreeMap<_, _>>(),
         ),
     }
+}
+
+// `{{ lines }}` on a list or map must print JSON, because `project_rendered`
+// parses the output back into a list/object state value. minijinja 2 printed
+// compound values JSON-compatibly (double-quoted strings); 3 prints Python
+// reprs (`{'sku': 'x'}`), which serde_json rejects, so the value silently
+// became a string and the next node failed. Scalars keep the default output.
+fn json_compound_formatter(
+    out: &mut Output,
+    state: &mut JinjaState,
+    value: &JinjaValue,
+) -> Result<(), JinjaError> {
+    if matches!(value.kind(), ValueKind::Seq | ValueKind::Map) && !value.is_safe() {
+        let json = serde_json::to_string(value)
+            .map_err(|error| JinjaError::new(ErrorKind::BadSerialization, error.to_string()))?;
+        return out
+            .write_str(&json)
+            .map_err(|error| JinjaError::new(ErrorKind::WriteFailure, error.to_string()));
+    }
+    minijinja::escape_formatter(out, state, value)
 }
 
 fn from_json_filter(value: JinjaValue) -> JinjaValue {
