@@ -558,9 +558,9 @@ func (s *Server) PrepareSettlement(ctx context.Context, request *runtimev1.Prepa
 	// The command settled: no further egress report can come for this turn,
 	// so its worker row is final.
 	s.settleWorkerEgress(ctx, fence)
-	// The worker flushed every step before settling: anchor the run's step
-	// chain into the tenant's security audit chain.
-	s.anchorRunSteps(ctx, fence.ExecutionID)
+	// The worker flushed every step before settling: mark the run for
+	// main.run_step_anchor (no security audit chain lock on this path).
+	s.requestRunStepAnchor(ctx, fence.ExecutionID)
 	return &runtimev1.PrepareSettlementResponseV1{
 		SettlementReceiptId: receipt.ID,
 		Outcome:             settlementOutcomeProto(receipt.Outcome),

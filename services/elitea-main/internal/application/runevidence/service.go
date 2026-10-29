@@ -118,9 +118,20 @@ type Store interface {
 	// lock: it skips step_ids already stored, assigns seq and the chain
 	// fields, and returns the number stored.
 	Append(ctx context.Context, run RunContext, records []Record) (int, error)
-	// Anchor appends the run head to the tenant's security audit chain when
-	// it moved since the last anchor.
-	Anchor(ctx context.Context, runID string) error
+	// JournalContent commits a journal entry per object key BEFORE the
+	// objects are written (row-first): a key whose step row is never stored
+	// is found by the step_content routine and its object deleted.
+	JournalContent(ctx context.Context, run RunContext, entries []PendingContent) error
+	// RequestAnchor marks the run's head for main.run_step_anchor. It is the
+	// settlement path's only write and takes no security audit chain lock.
+	RequestAnchor(ctx context.Context, runID string) error
+}
+
+// PendingContent is one journal entry: an object key about to be written
+// for a step.
+type PendingContent struct {
+	Key    string
+	StepID string
 }
 
 // ContentStore holds step content (object storage, ADR-0016).
@@ -194,6 +205,7 @@ func (s *Service) Report(ctx context.Context, executionID string, generation uin
 	}
 	fieldsByToolkit := map[string]*[]string{}
 	records := make([]Record, 0, len(normalized))
+	pending := make([]pendingSides, 0, len(normalized))
 	for _, n := range normalized {
 		if stored[n.record.StepID] {
 			continue
@@ -219,31 +231,54 @@ func (s *Service) Report(ctx context.Context, executionID string, generation uin
 				outputs = FilterFields(outputs, *fields)
 			}
 		}
-		if record.Inputs, err = s.storeSide(ctx, run, record.StepID, SideInputs, n.inputs); err != nil {
-			return 0, err
-		}
-		if record.Outputs, err = s.storeSide(ctx, run, record.StepID, SideOutputs, outputs); err != nil {
-			return 0, err
-		}
+		record.Inputs = s.sideMeta(run, record.StepID, SideInputs, n.inputs)
+		record.Outputs = s.sideMeta(run, record.StepID, SideOutputs, outputs)
 		records = append(records, record)
+		pending = append(pending, pendingSides{inputs: n.inputs, outputs: outputs})
 	}
 	if len(records) == 0 {
 		return 0, nil
 	}
+	// Row-first: the keys are journalled (committed) before any object is
+	// written, so a persist that never lands leaves nothing untracked.
+	var journal []PendingContent
+	for _, r := range records {
+		for _, key := range []string{r.Inputs.ObjectKey, r.Outputs.ObjectKey} {
+			if key != "" {
+				journal = append(journal, PendingContent{Key: key, StepID: r.StepID})
+			}
+		}
+	}
+	if err := s.store.JournalContent(ctx, run, journal); err != nil {
+		return 0, err
+	}
+	for i, r := range records {
+		if err := s.put(ctx, r.Inputs, pending[i].inputs); err != nil {
+			return 0, err
+		}
+		if err := s.put(ctx, r.Outputs, pending[i].outputs); err != nil {
+			return 0, err
+		}
+	}
 	return s.store.Append(ctx, run, records)
 }
 
-// Anchor anchors the run's head (on settlement).
-func (s *Service) Anchor(ctx context.Context, executionID string) error {
-	return s.store.Anchor(ctx, executionID)
+type pendingSides struct {
+	inputs, outputs *ContentInput
 }
 
-// storeSide writes one side's bytes before the row's transaction. The key is
-// deterministic per step, so a persist that fails after this write leaves an
-// object the retried report overwrites.
-func (s *Service) storeSide(ctx context.Context, run RunContext, stepID string, side Side, content *ContentInput) (ContentMeta, error) {
+// RequestAnchor asks for the run's head to be anchored (on settlement); the
+// main.run_step_anchor routine appends it to the security audit chain.
+func (s *Service) RequestAnchor(ctx context.Context, executionID string) error {
+	return s.store.RequestAnchor(ctx, executionID)
+}
+
+// sideMeta is what the row keeps of one side: digest, sizes and, when an
+// object store is composed, the side's deterministic key (a retried report
+// overwrites its own object).
+func (s *Service) sideMeta(run RunContext, stepID string, side Side, content *ContentInput) ContentMeta {
 	if content == nil {
-		return ContentMeta{}, nil
+		return ContentMeta{}
 	}
 	meta := ContentMeta{
 		Size: int64(len(content.Bytes)), OriginalSize: max(content.OriginalSize, int64(len(content.Bytes))),
@@ -251,19 +286,26 @@ func (s *Service) storeSide(ctx context.Context, run RunContext, stepID string, 
 	}
 	if len(content.Bytes) == 0 {
 		meta.MediaType = ""
-		return meta, nil
+		return meta
 	}
 	digest := sha256.Sum256(content.Bytes)
 	meta.Digest = digest[:]
-	if s.content == nil {
-		return meta, nil
+	if s.content != nil {
+		meta.ObjectKey = ContentKey(run.ProjectID, run.RunID, stepID, side)
 	}
-	key := ContentKey(run.ProjectID, run.RunID, stepID, side)
-	if err := s.content.Put(ctx, key, content.Bytes, content.MediaType, meta.Digest); err != nil {
-		return ContentMeta{}, fmt.Errorf("store step content: %w", err)
+	return meta
+}
+
+// put writes one side's bytes after the key was journalled and before the
+// row's transaction.
+func (s *Service) put(ctx context.Context, meta ContentMeta, content *ContentInput) error {
+	if meta.ObjectKey == "" || content == nil {
+		return nil
 	}
-	meta.ObjectKey = key
-	return meta, nil
+	if err := s.content.Put(ctx, meta.ObjectKey, content.Bytes, content.MediaType, meta.Digest); err != nil {
+		return fmt.Errorf("store step content: %w", err)
+	}
+	return nil
 }
 
 type normalizedStep struct {

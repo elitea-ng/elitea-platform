@@ -63,7 +63,7 @@ In your SIEM or archive, find the `ai.elitea.security.v1.run.steps.anchored` eve
 
 A run is complete when its steps end with an `output` or an `error` step and it is anchored. Two things can leave it shorter:
 
-- **The run is still going.** It is not anchored yet. Check again after it ends.
+- **The run is still going, or just ended.** It is not anchored yet: anchoring happens within about a minute of the run ending. Check again after that.
 - **A worker process died during the run.** The worker sends steps at least every two seconds while the run produces output, and the rest before the run settles; steps it had not sent yet are lost. When another worker takes the run over, its first step is an `error` step named `steps_possibly_lost` with summary `{"reason": "worker_restart"}`, so the gap is visible where it happened. The run is still anchored at its real end.
 
 A lost stretch is a gap in what was recorded, not a break in the chain: `verify` still reports `ok`, because no stored record was changed. The `steps_possibly_lost` marker says steps *may* be missing: in rare cases, such as a lost acknowledgement at settlement, it appears although nothing was lost.

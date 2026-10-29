@@ -97,6 +97,13 @@ type fakeStore struct {
 	fields   map[string][]string
 	stored   map[string]bool
 	appended []Record
+	events   *[]string
+}
+
+func (f *fakeStore) log(event string) {
+	if f.events != nil {
+		*f.events = append(*f.events, event)
+	}
 }
 
 func (f *fakeStore) RunContext(context.Context, string, uint64) (RunContext, error) {
@@ -113,17 +120,36 @@ func (f *fakeStore) StoredStepIDs(context.Context, string, []string) (map[string
 }
 
 func (f *fakeStore) Append(_ context.Context, _ RunContext, records []Record) (int, error) {
+	f.log("append")
 	f.appended = append(f.appended, records...)
 	return len(records), nil
 }
 
-func (f *fakeStore) Anchor(context.Context, string) error { return nil }
+func (f *fakeStore) JournalContent(_ context.Context, _ RunContext, entries []PendingContent) error {
+	for _, e := range entries {
+		f.log("journal " + e.Key)
+	}
+	return nil
+}
+
+func (f *fakeStore) RequestAnchor(context.Context, string) error { return nil }
 
 type memContent map[string][]byte
 
 func (m memContent) Put(_ context.Context, key string, body []byte, _ string, _ []byte) error {
 	m[key] = body
 	return nil
+}
+
+// orderedContent logs each Put into the store's event list.
+type orderedContent struct {
+	memContent
+	events *[]string
+}
+
+func (o orderedContent) Put(ctx context.Context, key string, body []byte, media string, digest []byte) error {
+	*o.events = append(*o.events, "put "+key)
+	return o.memContent.Put(ctx, key, body, media, digest)
 }
 func (m memContent) Get(_ context.Context, key string) ([]byte, error) { return m[key], nil }
 func (m memContent) Delete(context.Context, []string) error            { return nil }
@@ -181,5 +207,35 @@ func TestReportRefusesOutOfBounds(t *testing.T) {
 		if _, err := service.Report(context.Background(), "run-1", 1, steps); !errors.Is(err, ErrInvalidReport) {
 			t.Fatalf("%s: err = %v", name, err)
 		}
+	}
+}
+
+// Every object key is journalled (committed) before any object is written,
+// and the rows are appended last: a persist that fails leaves journalled
+// keys the step_content routine can find, never an untracked object.
+func TestReportJournalsKeysBeforeWritingObjects(t *testing.T) {
+	var events []string
+	store := &fakeStore{events: &events}
+	service, _ := NewService(store, orderedContent{memContent: memContent{}, events: &events}, nil)
+	a := step("0192f0c1-7b6e-7c3a-8f00-0000000000a1", KindModelCall)
+	a.Inputs = &ContentInput{Bytes: []byte("in"), MediaType: MediaText}
+	a.Outputs = &ContentInput{Bytes: []byte("out"), MediaType: MediaText}
+	b := step("0192f0c1-7b6e-7c3a-8f00-0000000000a2", KindOutput)
+	b.Outputs = &ContentInput{Bytes: []byte("final"), MediaType: MediaText}
+	if _, err := service.Report(context.Background(), "run-1", 1, []StepInput{a, b}); err != nil {
+		t.Fatal(err)
+	}
+	prefix := "3/runs/run-1/"
+	want := []string{
+		"journal " + prefix + "0192f0c1-7b6e-7c3a-8f00-0000000000a1/inputs",
+		"journal " + prefix + "0192f0c1-7b6e-7c3a-8f00-0000000000a1/outputs",
+		"journal " + prefix + "0192f0c1-7b6e-7c3a-8f00-0000000000a2/outputs",
+		"put " + prefix + "0192f0c1-7b6e-7c3a-8f00-0000000000a1/inputs",
+		"put " + prefix + "0192f0c1-7b6e-7c3a-8f00-0000000000a1/outputs",
+		"put " + prefix + "0192f0c1-7b6e-7c3a-8f00-0000000000a2/outputs",
+		"append",
+	}
+	if strings.Join(events, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("events:\n%s", strings.Join(events, "\n"))
 	}
 }

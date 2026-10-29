@@ -9,26 +9,37 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/libs/go/routines"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runevidence"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auditexport"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
-// startStepRetention runs the step evidence retention sweeps (ADR-0042
-// decision 4, issue #1499) on the routine registry, one replica at a time,
-// hourly by default and switchable on the admin Schedules page:
+// startStepRetention runs the run step routines (ADR-0042 decisions 1 and
+// 4, issue #1499) on the routine registry, one replica at a time, each
+// switchable on the admin Schedules page:
 //
-//   - main.step_content_retention expires stored step content past the
-//     step_content maximum (rows first) and deletes the objects of every
-//     expired side, including those a conversation deletion expired;
-//   - main.step_record_retention anchors settled runs whose anchor was
-//     missed, then deletes whole runs past the step_record maximum.
+//   - main.run_step_anchor (every minute) anchors the runs whose settlement
+//     asked for it, off the settlement path;
+//   - main.step_content_retention (hourly) expires stored step content past
+//     the step_content maximum (rows first), deletes the objects of every
+//     expired side, including those a conversation deletion expired, and
+//     the objects a failed persist left with no row (content journal);
+//   - main.step_record_retention (hourly) anchors settled runs whose anchor
+//     request was missed, then deletes whole runs past the step_record
+//     maximum once every sink exporting run_steps passed them.
 //
-// Both skip what an active legal hold covers and pause in maintenance. With
-// the seeded policies (keep forever) they delete nothing.
-func startStepRetention(ctx context.Context, pool *pgxpool.Pool, objectStore storage.ObjectStore, logger *slog.Logger) error {
+// All pause in maintenance; the sweeps skip what an active legal hold
+// covers. With the seeded policies (keep forever) they expire nothing.
+func startStepRetention(ctx context.Context, lookup func(string) (string, bool), pool *pgxpool.Pool, objectStore storage.ObjectStore, logger *slog.Logger) error {
 	if pool == nil {
 		return nil
+	}
+	// The sinks that export run_steps now: only their cursors hold a run's
+	// deletion. The boot validated this configuration already.
+	exportCfg, err := auditexport.ConfigFromEnv(lookup)
+	if err != nil {
+		return err
 	}
 	store, err := dbrepos.ComposeRunSteps(pool)
 	if err != nil {
@@ -49,20 +60,25 @@ func startStepRetention(ctx context.Context, pool *pgxpool.Pool, objectStore sto
 		return state.Enabled, nil
 	}
 	sweeper, err := runevidence.NewSweeper(dbrepos.NewRetentionPolicyRepo(pool), store, content, gate,
-		runevidence.RetentionConfig{}, logger)
+		runevidence.RetentionConfig{ExportSinks: exportCfg.RunStepsSinks()}, logger)
 	if err != nil {
 		return err
 	}
 	for _, routine := range []struct {
 		id, description string
+		schedule        string
+		minInterval     time.Duration
 		pass            func(context.Context) (string, error)
 	}{
+		{runevidence.AnchorRoutineID,
+			"Anchors the step chains of settled runs into their tenant's security audit chain (head hash and step count), within about a minute of the run ending.",
+			"1m", time.Minute, sweeper.AnchorPass},
 		{runevidence.ContentRoutineID,
-			"Expires run step content older than the step_content retention maximum, except under legal hold, and deletes the stored content of expired steps.",
-			sweeper.ContentPass},
+			"Expires run step content older than the step_content retention maximum, except under legal hold, deletes the stored content of expired steps, and deletes content objects no step record names an hour after they were written.",
+			"1h", 5 * time.Minute, sweeper.ContentPass},
 		{runevidence.RecordRoutineID,
 			"Anchors settled runs' step chains whose anchor was missed, and deletes run step records older than the step_record retention maximum, except under legal hold.",
-			sweeper.RecordPass},
+			"1h", 5 * time.Minute, sweeper.RecordPass},
 	} {
 		loop := &routines.Loop{
 			Backend: routines.NewStore(pool),
@@ -70,8 +86,8 @@ func startStepRetention(ctx context.Context, pool *pgxpool.Pool, objectStore sto
 				ID:              routine.id,
 				Owner:           routines.OwnerMain,
 				Description:     routine.description,
-				DefaultSchedule: "1h",
-				MinInterval:     5 * time.Minute,
+				DefaultSchedule: routine.schedule,
+				MinInterval:     routine.minInterval,
 			},
 			Logger: logger,
 		}
