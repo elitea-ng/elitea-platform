@@ -850,12 +850,26 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
         .expect("apply checkpoint migration");
     let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
     let tool_calls = Arc::new(AtomicUsize::new(0));
+    // Every branch raises a card, so no sibling keeps the runner busy while
+    // this test decides them: under load it fetched before a decision landed,
+    // parked, and the approved tool never ran. `third` asks only after the
+    // first two cards are decided, and the first resumed reply waits for the
+    // third decision, so some branch is always in flight until all three land.
+    let two_decided = Arc::new(tokio::sync::Notify::new());
+    let all_decided = Arc::new(tokio::sync::Notify::new());
+    let decisions = AtomicUsize::new(0);
     let (platform, model_facade, captured) = saved_runtime(
         vec![
             TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
             TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(pipeline_text_response("resumed done")),
+            TestModelGatewayOutcome::Gated {
+                gate: Arc::clone(&two_decided),
+                response: pipeline_mcp_tool_call_response(),
+            },
+            TestModelGatewayOutcome::Gated {
+                gate: Arc::clone(&all_decided),
+                response: pipeline_text_response("resumed done"),
+            },
             TestModelGatewayOutcome::Response(pipeline_text_response("resumed done")),
             TestModelGatewayOutcome::Response(pipeline_text_response("resumed done")),
         ],
@@ -895,6 +909,11 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
             (Some("second"), Some("tool_guard")) => ledger.decide(key, "approve", None),
             (Some("third"), Some("tool_guard")) => ledger.decide(key, "reject", None),
             other => panic!("unexpected card {other:?}"),
+        }
+        match decisions.fetch_add(1, Ordering::AcqRel) + 1 {
+            2 => two_decided.notify_one(),
+            3 => all_decided.notify_one(),
+            _ => {}
         }
     })
     .await
