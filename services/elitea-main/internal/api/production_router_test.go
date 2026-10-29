@@ -1925,6 +1925,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/elitea_core/applications/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/attachments/prompt_lib/{projectID}/{conversationID}/{name}",
 		"GET /api/v2/elitea_core/audit/{mode}",
+		"GET /api/v2/elitea_core/audit_chain_verify/administration",
 		"GET /api/v2/elitea_core/audit_heatmap/{mode}",
 		"GET /api/v2/elitea_core/audit_trace_heatmap/{mode}",
 		"GET /api/v2/elitea_core/audit_traces/{mode}",

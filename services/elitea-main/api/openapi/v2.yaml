@@ -6470,6 +6470,67 @@ components:
         executions: { type: integer, format: int64 }
         last_seen: { type: string, format: date-time }
 
+    AuditChainVerification:
+      type: object
+      description: >
+        The result of one walk of the centry.audit_events hash chain. `ok` is
+        true when every checked row links to the previous one and its hash
+        matches its content, and no row is missing up to the chain head.
+      required: [ok, partition, from, checked, head_seq, pruned_through, truncated, next_from, unchained, break]
+      properties:
+        ok: { type: boolean }
+        partition:
+          type: string
+          description: The chain partition; 0, the one platform-wide chain.
+        from:
+          type: integer
+          format: int64
+          description: The first chain position checked.
+        checked:
+          type: integer
+          format: int64
+          description: How many rows verified.
+        head_seq:
+          type: integer
+          format: int64
+          description: The chain head (the last position written) when the walk started.
+        pruned_through:
+          type: integer
+          format: int64
+          description: The last position the retention sweep deleted; 0 when it has deleted none.
+        truncated:
+          type: boolean
+          description: True when `limit` stopped the walk before the head.
+        next_from:
+          type: integer
+          format: int64
+          nullable: true
+          description: Where to continue when truncated; null otherwise.
+        unchained:
+          type: integer
+          format: int64
+          description: Rows written before the chain existed. They are not checked.
+        break:
+          allOf:
+            - $ref: '#/components/schemas/AuditChainBreak'
+          nullable: true
+          description: The first place the chain does not verify; null when it holds.
+
+    AuditChainBreak:
+      type: object
+      required: [partition_seq, row_id, reason]
+      properties:
+        partition_seq:
+          type: integer
+          format: int64
+          description: The chain position that does not verify (for a missing row, the missing position).
+        row_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: The centry.audit_events id of the row the walk stopped at; null when no row follows.
+        reason: { type: string }
+
     WorkerEgressHostsResponse:
       type: object
       description: >
@@ -29676,6 +29737,62 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/audit_chain_verify/administration:
+    get:
+      operationId: verifyAuditChain
+      summary: Verify the audit trail's hash chain
+      description: |
+        Walks the hash chain over centry.audit_events (ADR-0042 decision 3,
+        shared migration 0206) and reports whether it holds. Every row written
+        since that migration is chained in its inserting transaction:
+        `hash = sha256(prev_hash || canonical row)`, one platform-wide chain,
+        partition `0`. The walk starts at the retention prune anchor (the
+        last position the retention sweep deleted, whose hash the first
+        surviving row must link to) or at `from`, and checks at most `limit`
+        rows in one read-only snapshot. A longer chain is verified in steps:
+        `truncated` is then true and `next_from` is where to continue.
+
+        `ok` is false when the chain breaks; `break` names the first chain
+        position that does not verify, the id of the row the walk stopped at
+        (null when the rows after the last stored one are missing) and the
+        reason: a missing row, a wrong `prev_hash`, or a `hash` that does not
+        match the row's content (the row was changed). `unchained` counts the
+        rows written before the chain existed; they are not checked. No row
+        content is returned. Gated on `models.admin.audit_trail.view`, the
+        permission of the audit trail reads.
+      tags: [admin]
+      parameters:
+        - name: from
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+          description: "The first chain position to check. Default: the position after the prune anchor."
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1, maximum: 1000000, default: 100000 }
+          description: The most rows to check in this request.
+      responses:
+        '200':
+          description: The verification result, holding or broken
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditChainVerification'
+        '400':
+          description: A from below 1 or a limit outside 1 to 1000000
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: This deployment has no database, or migration 0206 has not run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /elitea_core/public_applications/prompt_lib:
     get:

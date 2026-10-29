@@ -61,6 +61,7 @@ import type {
   AgentRegistryList,
   AgentToolkitPin,
   AgentToolkitPinRequest,
+  AuditChainVerification,
   BackgroundJobListResponse,
   BrandingAsset,
   BrandingPackageReport,
@@ -171,6 +172,7 @@ import type {
   UserProjectPermissionsUpdate,
   UserProjectRoleMap,
   UserRolesUpdateRequest,
+  VerifyAuditChainParams,
   WorkerEgressHostsResponse,
 } from "../model";
 
@@ -20400,6 +20402,252 @@ export function useListAdminPublishedAgents<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getListAdminPublishedAgentsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type verifyAuditChainResponse200 = {
+  data: AuditChainVerification;
+  status: 200;
+};
+
+export type verifyAuditChainResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type verifyAuditChainResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type verifyAuditChainResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type verifyAuditChainResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type verifyAuditChainResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type verifyAuditChainResponseSuccess = verifyAuditChainResponse200 & {
+  headers: Headers;
+};
+export type verifyAuditChainResponseError = (
+  | verifyAuditChainResponse400
+  | verifyAuditChainResponse401
+  | verifyAuditChainResponse403
+  | verifyAuditChainResponse500
+  | verifyAuditChainResponse503
+) & {
+  headers: Headers;
+};
+
+export type verifyAuditChainResponse =
+  verifyAuditChainResponseSuccess | verifyAuditChainResponseError;
+
+export const getVerifyAuditChainUrl = (params?: VerifyAuditChainParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/audit_chain_verify/administration?${stringifiedParams}`
+    : `/elitea_core/audit_chain_verify/administration`;
+};
+
+/**
+ * Walks the hash chain over centry.audit_events (ADR-0042 decision 3,
+ * shared migration 0206) and reports whether it holds. Every row written
+ * since that migration is chained in its inserting transaction:
+ * `hash = sha256(prev_hash || canonical row)`, one platform-wide chain,
+ * partition `0`. The walk starts at the retention prune anchor (the
+ * last position the retention sweep deleted, whose hash the first
+ * surviving row must link to) or at `from`, and checks at most `limit`
+ * rows in one read-only snapshot. A longer chain is verified in steps:
+ * `truncated` is then true and `next_from` is where to continue.
+ *
+ * `ok` is false when the chain breaks; `break` names the first chain
+ * position that does not verify, the id of the row the walk stopped at
+ * (null when the rows after the last stored one are missing) and the
+ * reason: a missing row, a wrong `prev_hash`, or a `hash` that does not
+ * match the row's content (the row was changed). `unchained` counts the
+ * rows written before the chain existed; they are not checked. No row
+ * content is returned. Gated on `models.admin.audit_trail.view`, the
+ * permission of the audit trail reads.
+ * @summary Verify the audit trail's hash chain
+ */
+export const verifyAuditChain = async (
+  params?: VerifyAuditChainParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<verifyAuditChainResponse> => {
+  return eliteaFetch<verifyAuditChainResponse>(getVerifyAuditChainUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getVerifyAuditChainQueryKey = (
+  params?: VerifyAuditChainParams,
+) => {
+  return [
+    `/elitea_core/audit_chain_verify/administration`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getVerifyAuditChainQueryOptions = <
+  TData = Awaited<ReturnType<typeof verifyAuditChain>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  params?: VerifyAuditChainParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof verifyAuditChain>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getVerifyAuditChainQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof verifyAuditChain>>
+  > = ({ signal }) => verifyAuditChain(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof verifyAuditChain>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type VerifyAuditChainQueryResult = NonNullable<
+  Awaited<ReturnType<typeof verifyAuditChain>>
+>;
+export type VerifyAuditChainQueryError =
+  ErrorResponse | N401Response | N403Response | N500Response;
+
+export function useVerifyAuditChain<
+  TData = Awaited<ReturnType<typeof verifyAuditChain>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  params: undefined | VerifyAuditChainParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof verifyAuditChain>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof verifyAuditChain>>,
+          TError,
+          Awaited<ReturnType<typeof verifyAuditChain>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useVerifyAuditChain<
+  TData = Awaited<ReturnType<typeof verifyAuditChain>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  params?: VerifyAuditChainParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof verifyAuditChain>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof verifyAuditChain>>,
+          TError,
+          Awaited<ReturnType<typeof verifyAuditChain>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useVerifyAuditChain<
+  TData = Awaited<ReturnType<typeof verifyAuditChain>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  params?: VerifyAuditChainParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof verifyAuditChain>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Verify the audit trail's hash chain
+ */
+
+export function useVerifyAuditChain<
+  TData = Awaited<ReturnType<typeof verifyAuditChain>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  params?: VerifyAuditChainParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof verifyAuditChain>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getVerifyAuditChainQueryOptions(params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

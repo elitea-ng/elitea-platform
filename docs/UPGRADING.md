@@ -4,6 +4,34 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## The audit trail is hash-chained (#1499)
+
+* **Shared migration 0206** adds four nullable columns to
+  `centry.audit_events` (`partition_key`, `partition_seq`, `prev_hash`,
+  `hash`; catalogue-only, no table rewrite), a unique partial index on the
+  chain position (built once, it reads the table), the head table
+  `elitea_runtime.audit_events_chain_heads`, and two triggers: every insert
+  is chained in its own transaction, and an `UPDATE` of a chained row is
+  refused. Rows written before the upgrade keep NULL chain columns and are
+  never checked. Nothing in the platform updates audit rows; a site script
+  that does will now fail with `a chained audit event is append-only`.
+* **All audit writers serialise on one chain head.** At admin-request rates
+  this is not measurable; a bulk import into `centry.audit_events` (for
+  example replaying a legacy trail) runs one row at a time through the head.
+* **Retention deletes the chain as a prefix.** The scheduler's
+  `admin_audit` sweep deletes chained rows oldest-position first and stops
+  at the first row still inside the window, so an expired row written late
+  (a session end) can keep rows behind it for up to one relay interval. It
+  records what it deleted in the head's prune anchor so verification still
+  passes.
+* **New admin route** `GET /api/v2/elitea_core/audit_chain_verify/administration`
+  (operation `verifyAuditChain`, permission `models.admin.audit_trail.view`)
+  verifies the chain and names the first break.
+* **The SIEM export** (`elitea.audit.v1`) now carries the optional `chain`
+  object (`partition` `0`, `sequence`, `prev_hash`, `hash`) on `admin_audit`
+  events from chained rows. Receivers with a strict schema copy should take
+  the updated `libs/jsonschema/audit/v1/event.schema.json`.
+
 ## Agent registry, change requests, release gate, recertification and attestations (#1497)
 
 * **Shared migration 0203** creates the release gate tables

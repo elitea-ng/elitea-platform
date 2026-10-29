@@ -259,7 +259,8 @@ SELECT last_txid, last_id FROM elitea_runtime.audit_export_cursors WHERE stream 
 
 const auditColumns = `e.id, e.timestamp, e.user_id, e.user_email, e.project_id, e.event_type, e.action,
        e.http_method, e.http_route, e.status_code, e.duration_ms, e.is_error,
-       e.entity_type, e.entity_id, e.entity_name, e.trace_id, e.span_id, e.parent_span_id`
+       e.entity_type, e.entity_id, e.entity_name, e.trace_id, e.span_id, e.parent_span_id,
+       e.partition_key, e.partition_seq, e.prev_hash, e.hash`
 
 // selectLegacyRowsSQL reads rows inserted before 0196 (export_txid 0). That
 // set is closed: the migration's lock waited for every inserting transaction.
@@ -400,7 +401,8 @@ func scanAuditRows(rows pgx.Rows) ([]Event, []position, error) {
 		)
 		if err := rows.Scan(&txid, &row.ID, &row.Timestamp, &userID, &userEmail, &projectID, &row.EventType, &row.Action,
 			&method, &route, &statusCode, &row.DurationMS, &row.IsError,
-			&entityType, &entityID, &entityName, &traceID, &spanID, &parentSpanID); err != nil {
+			&entityType, &entityID, &entityName, &traceID, &spanID, &parentSpanID,
+			&row.PartitionKey, &row.PartitionSeq, &row.PrevHash, &row.Hash); err != nil {
 			return nil, nil, err
 		}
 		row.UserID, row.ProjectID, row.EntityID = widen(userID), widen(projectID), widen(entityID)

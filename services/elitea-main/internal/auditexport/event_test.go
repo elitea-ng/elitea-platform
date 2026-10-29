@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,6 +168,10 @@ func TestAuditRowMapperOutputConformsToSchema(t *testing.T) {
 		"failed request": {ID: 1002, Timestamp: at, UserID: ptr(int64(7)), EventType: "api", Action: "GET /x", IsError: true, StatusCode: ptr(int32(500))},
 		"scheduled task": {ID: 1003, Timestamp: at, EventType: "schedule", Action: "nightly"},
 		"minimal":        {ID: 1004, Timestamp: at, EventType: "tool", Action: ""},
+		"chained": {
+			ID: 1005, Timestamp: at, EventType: "api", Action: "GET /x",
+			PartitionKey: ptr("0"), PartitionSeq: ptr(int64(12)), PrevHash: make([]byte, 32), Hash: bytes.Repeat([]byte{0xab}, 32),
+		},
 	}
 	for name, row := range rows {
 		t.Run(name, func(t *testing.T) {
@@ -188,7 +193,17 @@ func TestAuditRowMapperFields(t *testing.T) {
 		t.Fatalf("api rows are OCSF API Activity: %+v", event.OCSF)
 	}
 	if event.Chain != nil {
-		t.Fatal("audit_events rows carry no chain yet")
+		t.Fatal("a row from before the chain carries no chain object")
+	}
+	chained := FromAuditRow(AuditRow{ID: 8, Timestamp: at, EventType: "api", Action: "GET /x",
+		PartitionKey: ptr("0"), PartitionSeq: ptr(int64(3)), PrevHash: make([]byte, 32), Hash: bytes.Repeat([]byte{1}, 32)})
+	if c := chained.Chain; c == nil || c.Partition != "0" || c.Sequence != 3 ||
+		c.PrevHash != strings.Repeat("00", 32) || c.Hash != strings.Repeat("01", 32) {
+		t.Fatalf("chained row: chain = %+v", chained.Chain)
+	}
+	if FromAuditRow(AuditRow{ID: 9, Timestamp: at, EventType: "api", Action: "GET /x",
+		PartitionKey: ptr("0"), PartitionSeq: ptr(int64(3)), PrevHash: []byte{1}, Hash: []byte{2}}).Chain != nil {
+		t.Fatal("malformed links must not be exported as a chain")
 	}
 	if event.EventID != AuditEventID(7) || AuditEventID(7) == AuditEventID(8) {
 		t.Fatal("event id must be a stable function of the row id")

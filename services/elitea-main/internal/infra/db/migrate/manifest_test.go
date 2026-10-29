@@ -901,7 +901,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// models.applications.governance to super_admin, admin and the project
 	// admin, and lifecycle.attestations.write and lifecycle.registry.mark_due
 	// to the project admin.
-	require.EqualValues(t, 204, Head(shared))
+	//
+	// 206: shared/0206_audit_events_chain.sql, centry.audit_events chained
+	// from now on (ADR-0042 decision 3, #1499): nullable chain columns,
+	// elitea_runtime.audit_events_chain_heads (head lock and retention prune
+	// anchor), the canonical-form function, the BEFORE INSERT chain trigger
+	// and an append-only UPDATE guard on chained rows. No data apart from the
+	// head row, no permission.
+	require.EqualValues(t, 206, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

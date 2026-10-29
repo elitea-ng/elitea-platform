@@ -114,6 +114,7 @@ type flakySink struct {
 	mu        sync.Mutex
 	down      bool
 	delivered []string
+	chains    []*Chain
 	// onSend runs before each delivery (tests that race the relay).
 	onSend func()
 }
@@ -135,6 +136,7 @@ func (f *flakySink) Send(_ context.Context, events []Event) error {
 	}
 	for _, e := range events {
 		f.delivered = append(f.delivered, e.Ref())
+		f.chains = append(f.chains, e.Chain)
 	}
 	return nil
 }
@@ -243,6 +245,15 @@ func TestAuditEventsRelayStartsAtNewestRowAndDeliversNewOnes(t *testing.T) {
 	if cursor(t, pool, "test").id != fresh[6] {
 		t.Fatalf("cursor = %+v, want id %d", cursor(t, pool, "test"), fresh[6])
 	}
+	// Shared 0206 chains every row; the export carries its links (#1499).
+	sink.mu.Lock()
+	for i, chain := range sink.chains {
+		if chain == nil || chain.Partition != "0" || len(chain.Hash) != 64 ||
+			(i > 0 && (chain.Sequence != sink.chains[i-1].Sequence+1 || chain.PrevHash != sink.chains[i-1].Hash)) {
+			t.Errorf("event %d chain = %+v; want consecutive links in partition 0", i, chain)
+		}
+	}
+	sink.mu.Unlock()
 	if n, _ := relay.Drain(context.Background()); n != 0 {
 		t.Fatal("exported the same rows twice")
 	}
@@ -320,6 +331,13 @@ func TestAuditEventsRelayNeverSkipsALateCommittingRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = slow.Rollback(context.Background()) }()
+	// Since shared 0206 every chained insert takes the chain head lock, so a
+	// chained row can no longer be passed by a later one: the later writer
+	// waits. An unchained writer (the trigger off for its session) still can,
+	// and the cursor must hold for it too.
+	if _, err := slow.Exec(context.Background(), `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatal(err)
+	}
 	var lateID int64
 	if err := slow.QueryRow(context.Background(), insertAuditSQL, 0.0).Scan(&lateID); err != nil {
 		t.Fatal(err)

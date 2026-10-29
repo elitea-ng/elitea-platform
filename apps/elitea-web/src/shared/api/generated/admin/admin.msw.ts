@@ -50,6 +50,7 @@ import type {
   AgentIdentityBindingListResponse,
   AgentRegistryList,
   AgentToolkitPin,
+  AuditChainVerification,
   BackgroundJobListResponse,
   BrandingAsset,
   BrandingPackageReport,
@@ -2459,6 +2460,29 @@ export const getListAdminPublishedAgentsResponseMock = (
   total: faker.number.int(),
   page: faker.number.int(),
   page_size: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getVerifyAuditChainResponseMock = (
+  overrideResponse: Partial<Extract<AuditChainVerification, object>> = {},
+): AuditChainVerification => ({
+  ok: faker.datatype.boolean(),
+  partition: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  from: faker.number.int(),
+  checked: faker.number.int(),
+  head_seq: faker.number.int(),
+  pruned_through: faker.number.int(),
+  truncated: faker.datatype.boolean(),
+  next_from: faker.helpers.arrayElement([faker.number.int(), null]),
+  unchained: faker.number.int(),
+  break: faker.helpers.arrayElement([
+    {
+      partition_seq: faker.number.int(),
+      row_id: faker.helpers.arrayElement([faker.number.int(), null]),
+      reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    },
+    null,
+  ]),
   ...overrideResponse,
 });
 
@@ -4937,6 +4961,32 @@ export const getListAdminPublishedAgentsMockHandler = (
   );
 };
 
+export const getVerifyAuditChainMockHandler = (
+  overrideResponse?:
+    | AuditChainVerification
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AuditChainVerification> | AuditChainVerification),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/audit_chain_verify/administration",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getVerifyAuditChainResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListCredentialUseGrantsMockHandler = (
   overrideResponse?:
     | CredentialUseGrantListResponse
@@ -5258,6 +5308,7 @@ export const getAdminMock = () => [
   getGetPlatformSettingsMockHandler(),
   getGetBrandingAssetMockHandler(),
   getListAdminPublishedAgentsMockHandler(),
+  getVerifyAuditChainMockHandler(),
   getListCredentialUseGrantsMockHandler(),
   getProposeCredentialUseGrantMockHandler(),
   getApproveCredentialUseGrantMockHandler(),

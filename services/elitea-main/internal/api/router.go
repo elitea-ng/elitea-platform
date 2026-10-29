@@ -5088,6 +5088,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireAuditTrail).Get("/audit_heatmap/{mode}", coreHandler.AuditHeatmap)
 				r.With(requireAuditTrail).Get("/audit_traces/{mode}", coreHandler.AuditTraces)
 				r.With(requireAuditTrail).Get("/audit_trace_heatmap/{mode}", coreHandler.AuditTraceHeatmap)
+				// The audit_events hash chain's verification (ADR-0042, issue
+				// 1499; shared 0206). A read of the same table, so the same
+				// gate; no new permission, no grant migration.
+				r.With(requireAuditTrail).Get("/audit_chain_verify/administration", coreHandler.AuditChainVerify)
 
 				// Per-user event counts for ONE project — the admin Projects
 				// page's activity drawer (unit A14). Same table and therefore

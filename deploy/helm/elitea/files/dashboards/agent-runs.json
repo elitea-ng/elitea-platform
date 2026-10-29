@@ -1,0 +1,782 @@
+{
+  "uid": "elitea-agent-runs",
+  "title": "Elitea / Agent runs, errors, tool calls and spend",
+  "description": "Agent runs, errors, tool calls and spend from the metrics Elitea services actually export (elitea-main audit export, LLM gateway, scheduler). No Elitea service exports a per-agent (or per-application) label on any Prometheus series, and none is added for this dashboard: an agent id is unbounded cardinality. Every panel is platform-wide; per-agent figures come from the ADR-0042 run-step records and the usage ledger, not from Prometheus. There is no tool-call metric and no spend-amount metric: those rows say so instead of charting something else under that name.",
+  "tags": [
+    "elitea",
+    "agents",
+    "adr-0042"
+  ],
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "timezone": "",
+  "annotations": {
+    "list": []
+  },
+  "links": [],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Data source",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "options": []
+      },
+      {
+        "name": "namespace",
+        "label": "Namespace (regex)",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0,
+        "options": [],
+        "description": "Regex on the namespace label of the scraped series. .* also matches series scraped without one."
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "id": 1,
+      "title": "Agent runs",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 2,
+      "title": "Run-step records exported to the SIEM",
+      "description": "No Elitea service exports a per-agent (or per-application) label on any Prometheus series, and none is added for this dashboard: an agent id is unbounded cardinality. This is the platform-wide rate of ADR-0042 run-step records the audit export delivered (elitea_audit_export_delivered_total, source=\"run_step\"), by sink. It counts steps, not runs, and only exists when the SIEM audit export is configured (ELITEA_AUDIT_EXPORT_OTLP_ENDPOINT or _WEBHOOK_URL). The series appears with the first delivered run step. For a per-agent breakdown, query the run-step records in the SIEM or the database, where the agent id is a field rather than a label.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "expr": "sum by (sink) (rate(elitea_audit_export_delivered_total{source=\"run_step\",namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{sink}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 3,
+      "title": "Concurrent LLM streams (gateway)",
+      "description": "Concurrent /llm SSE streams the LLM gateway is serving (gateway_llm_sse_active_connections, a gauge), summed over replicas. Every streaming agent turn holds one, so this is the closest live measure of agent load. Platform-wide: the gauge carries no agent, project or model label.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "expr": "sum(gateway_llm_sse_active_connections{namespace=~\"$namespace\"})",
+          "legendFormat": "streams"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 4,
+      "title": "Audit export backlog by stream",
+      "description": "Undelivered events per export stream (elitea_audit_export_backlog). The run-step stream is one stream beside security_audit and admin_audit; the EliteaAuditExportBacklog alert fires per stream.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "expr": "max by (stream) (elitea_audit_export_backlog{namespace=~\"$namespace\"})",
+          "legendFormat": "{{stream}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 5,
+      "title": "Audit export lag by stream",
+      "description": "Age of the oldest undelivered event per stream (elitea_audit_export_lag_seconds). The EliteaAuditExportLag alert fires per stream.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "expr": "max by (stream) (elitea_audit_export_lag_seconds{namespace=~\"$namespace\"})",
+          "legendFormat": "{{stream}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 6,
+      "title": "Errors",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 7,
+      "title": "Audit export delivery failures",
+      "description": "Failed batch deliveries by sink and kind (elitea_audit_export_failed_total). transient is retried; permanent leads to dead-lettering after repeated refusals. Not per agent.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "expr": "sum by (sink, kind) (rate(elitea_audit_export_failed_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{sink}} {{kind}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 8,
+      "title": "Audit events dead-lettered",
+      "description": "Events given up on, by sink and source (elitea_audit_export_dead_lettered_total). source=\"run_step\" is run-step evidence. Any increase pages (EliteaAuditExportDeadLettered).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "expr": "sum by (sink, source) (increase(elitea_audit_export_dead_lettered_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{sink}} {{source}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 9,
+      "title": "LLM requests the gateway refused",
+      "description": "No Elitea service exports a per-agent (or per-application) label on any Prometheus series, and none is added for this dashboard: an agent id is unbounded cardinality. Requests the gateway refused before reaching a provider: the model map could not resolve the project model set (gateway_model_map_refused_*_total), an audio model with no catalog price under a budget (gateway_audio_refused_unpriced_model_total), and realtime refusals (gateway_realtime_refused_capacity_total, gateway_realtime_refused_unpriced_model_total, gateway_realtime_turns_refused_total). Provider errors and agent run failures are not exported as metrics.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "expr": "sum(rate(gateway_model_map_refused_no_project_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "model map: no project"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "B",
+          "expr": "sum(rate(gateway_model_map_refused_no_database_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "model map: no database"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "C",
+          "expr": "sum(rate(gateway_model_map_refused_lookup_failed_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "model map: lookup failed"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "D",
+          "expr": "sum(rate(gateway_audio_refused_unpriced_model_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "audio: unpriced model"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "E",
+          "expr": "sum(rate(gateway_realtime_refused_capacity_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "realtime: capacity"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "F",
+          "expr": "sum(rate(gateway_realtime_refused_unpriced_model_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "realtime: unpriced model"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "G",
+          "expr": "sum(rate(gateway_realtime_turns_refused_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "realtime: turn refused by budget"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 10,
+      "title": "Tool calls",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      },
+      "panels": []
+    },
+    {
+      "type": "text",
+      "id": 11,
+      "title": "Tool calls: no metric exists",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**No Elitea service exports a tool-call metric.** The Rust worker (services/elitea-worker-rust) exports traces only (OTLP), no metrics, and elitea-main's OpenTelemetry instruments have no meter provider installed, so nothing they record reaches Prometheus.\n\nTool calls are recorded as ADR-0042 run-step records. Count them per agent and per tool where those records land: the SIEM (via the audit export, `source=run_step`) or the database. The *Run-step records exported* panel above is the platform-wide rate of all steps, tool calls included."
+      }
+    },
+    {
+      "type": "row",
+      "id": 12,
+      "title": "Spend (integrity)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "panels": []
+    },
+    {
+      "type": "text",
+      "id": 13,
+      "title": "Spend: no amount metric exists",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**No service exports spend as a metric**, per agent or in total: spend is accounted in the database (gateway.llm_budget_accumulators and the usage ledger), which is where a per-agent or per-project amount must be read. The panels below are the money-path integrity controls the gateway and scheduler do export: spend that was not priced, not billed or not written back."
+      }
+    },
+    {
+      "type": "stat",
+      "id": 14,
+      "title": "Budget enforcement",
+      "description": "1 when every gateway replica enforces budgets (min of gateway_budget_enforcement_enabled); 0 when any does not.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 37
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "expr": "min(gateway_budget_enforcement_enabled{namespace=~\"$namespace\"})",
+          "legendFormat": "Budget enforcement"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 15,
+      "title": "Unpriced or unbilled LLM usage",
+      "description": "Usage that billed zero or a non-catalog figure: gateway_audio_unpriced_total, gateway_audio_default_priced_total, gateway_realtime_turns_unpriced_total, gateway_realtime_turns_unbilled_total (known spend dropped while draining) and gateway_realtime_turn_basis_mismatch_total. Billed realtime turns (gateway_realtime_turns_billed_total) are shown for scale. Platform-wide.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 18,
+        "x": 6,
+        "y": 37
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "expr": "sum(rate(gateway_realtime_turns_billed_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "realtime turns billed"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "B",
+          "expr": "sum(rate(gateway_realtime_turns_unpriced_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "realtime turns unpriced"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "C",
+          "expr": "sum(rate(gateway_realtime_turns_unbilled_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "realtime turns unbilled"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "D",
+          "expr": "sum(rate(gateway_realtime_turn_basis_mismatch_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "realtime basis mismatch"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "E",
+          "expr": "sum(rate(gateway_audio_unpriced_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "audio unpriced"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "F",
+          "expr": "sum(rate(gateway_audio_default_priced_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "audio default-priced"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 16,
+      "title": "Spend deltas dropped by budget write-back",
+      "description": "Deltas the scheduler terminated because their apply failed permanently (budget_writeback_dropped_total, by SQLSTATE class). Each is spend missing from the accumulators; EliteaBudgetWriteBackDroppedDelta pages on any.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "expr": "sum by (sqlstate_class) (increase(budget_writeback_dropped_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "class {{sqlstate_class}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 17,
+      "title": "Budget write-back ack pending",
+      "description": "Deliveries of the budget-writeback consumer not yet acked (budget_writeback_num_ack_pending) and redelivered (budget_writeback_num_redelivered). Growth means durable spend is behind.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "expr": "max(budget_writeback_num_ack_pending{namespace=~\"$namespace\"})",
+          "legendFormat": "ack pending"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "B",
+          "expr": "max(budget_writeback_num_redelivered{namespace=~\"$namespace\"})",
+          "legendFormat": "redelivered"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 18,
+      "title": "Budget outage rows and recovery failures",
+      "description": "Accumulator rows the gateway recovery pass still owns (gateway_budget_outage_rows; above zero, durable spend for those scopes does not advance) and the rate of scopes a recovery pass could not reconcile (gateway_budget_recovery_failures_total).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "expr": "max(gateway_budget_outage_rows{namespace=~\"$namespace\"})",
+          "legendFormat": "outage rows"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "B",
+          "expr": "sum(rate(gateway_budget_recovery_failures_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "recovery failures/s"
+        }
+      ]
+    }
+  ]
+}

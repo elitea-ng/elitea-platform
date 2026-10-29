@@ -109,12 +109,12 @@
       "additionalProperties": false,
       "required": ["partition", "sequence", "prev_hash", "hash"],
       "properties": {
-        "partition": { "type": "string", "pattern": "^(0|[1-9][0-9]{0,18})$", "description": "The hash chain partition (the tenant project id; 0 is the platform)." },
+        "partition": { "type": "string", "pattern": "^(0|[1-9][0-9]{0,18})$", "description": "The hash chain partition (for security_audit the tenant project id; 0 is the platform). admin_audit has one platform-wide chain, partition 0." },
         "sequence": { "type": "integer", "minimum": 1, "description": "Position in the partition chain: 1, 2, 3 with no gap." },
         "prev_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Hex SHA-256 of the previous event; 64 zeros for the first event of a partition." },
-        "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Hex SHA-256 over prev_hash and the canonical stored event. Verify with the elitea-main security audit verifier; the hash covers the stored CloudEvents form, not this envelope." }
+        "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Hex SHA-256 over prev_hash and the canonical stored event, not this envelope. security_audit: the stored CloudEvents form, verified with the elitea-main security audit verifier. admin_audit: the canonical form of the centry.audit_events row (centry.audit_event_canonical), verified by the admin audit chain verification route." }
       },
-      "description": "Present when the producer keeps a tamper-evident chain (security_audit today)."
+      "description": "Present when the producer keeps a tamper-evident chain: always for security_audit; for admin_audit on every row written since centry.audit_events was chained (shared migration 0206), absent on older rows. A gap in sequence for admin_audit is either a row deleted by retention (verification starts at the retention anchor) or a break."
     },
     "details": {
       "type": "object",

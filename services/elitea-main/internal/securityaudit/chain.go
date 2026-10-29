@@ -70,12 +70,25 @@ type ChainVerifier struct {
 	next         int64
 	prev         Hash
 	checked      int64
+	canonical    Canonicalizer
 }
 
+// Canonicalizer returns the bytes a row's hash covers. It is what lets a
+// chain whose rows are not security audit envelopes (centry.audit_events,
+// shared migration 0206) reuse this verifier.
+type Canonicalizer func(row StoredRow) ([]byte, error)
+
 // NewChainVerifier starts at partition sequence from, whose prev_hash must
-// be anchor. From 1 the anchor is ZeroHash.
+// be anchor. From 1 the anchor is ZeroHash. Rows are security audit
+// envelopes: Check re-canonicalises row.Event and checks it against its row.
 func NewChainVerifier(partitionKey string, from int64, anchor Hash) *ChainVerifier {
 	return &ChainVerifier{partitionKey: partitionKey, next: from, prev: anchor}
+}
+
+// NewChainVerifierWith is NewChainVerifier for another chained table: the
+// hash of a row covers canonical(row) instead of a security audit envelope.
+func NewChainVerifierWith(partitionKey string, from int64, anchor Hash, canonical Canonicalizer) *ChainVerifier {
+	return &ChainVerifier{partitionKey: partitionKey, next: from, prev: anchor, canonical: canonical}
 }
 
 // Checked is the number of rows that verified.
@@ -102,12 +115,21 @@ func (v *ChainVerifier) Check(row StoredRow) *Break {
 	if !bytes.Equal(row.PrevHash, v.prev[:]) {
 		return fail("prev_hash does not match the previous row's hash")
 	}
-	env, canonical, err := recanonicalize(row.Event)
-	if err != nil {
-		return fail("%v", err)
-	}
-	if env.PartitionKey != row.PartitionKey || env.Sequence != FormatSequence(row.PartitionSeq) || env.ID != row.EventID {
-		return fail("event envelope does not match its row")
+	var canonical []byte
+	if v.canonical != nil {
+		var err error
+		if canonical, err = v.canonical(row); err != nil {
+			return fail("%v", err)
+		}
+	} else {
+		env, recanonical, err := recanonicalize(row.Event)
+		if err != nil {
+			return fail("%v", err)
+		}
+		if env.PartitionKey != row.PartitionKey || env.Sequence != FormatSequence(row.PartitionSeq) || env.ID != row.EventID {
+			return fail("event envelope does not match its row")
+		}
+		canonical = recanonical
 	}
 	computed := ChainHash(v.prev, canonical)
 	if !bytes.Equal(computed[:], row.Hash) {

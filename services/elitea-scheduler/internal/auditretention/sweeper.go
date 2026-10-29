@@ -8,10 +8,13 @@
 // # What it does, and the one thing it must not do
 //
 // It DELETES rows whose `timestamp` is older than a window, in bounded batches,
-// on a timer. It never inserts, never updates, and never reads a row's content.
-// The audit table has exactly one writer — the middleware in elitea-main — and
-// a sweeper that also rewrote rows would be a second author of the trail's
-// meaning, which is the failure this package is written to avoid.
+// on a timer. It never inserts, never updates an audit row, and never reads a
+// row's content. The audit table has exactly one writer — the middleware in
+// elitea-main — and a sweeper that also rewrote rows would be a second author
+// of the trail's meaning, which is the failure this package is written to
+// avoid. The one thing it does write is the chain head's prune anchor (shared
+// migration 0206): which chain position it deleted through, and that row's
+// hash, so the hash chain over the surviving rows still verifies.
 //
 // Deletion is HARD, not an archive. An archive needs a destination, a format
 // and a restore path, and this platform has decided none of the three; a
@@ -183,6 +186,81 @@ const deleteBatchHeldSQL = `
 	DELETE FROM centry.audit_events AS victim
 	 USING doomed
 	 WHERE victim.id = doomed.id`
+
+// chainedDeleteSQL is the batch delete once shared migration 0206 chains the
+// table (ADR-0042, issue #1499). It deletes, in one statement and so in one
+// transaction:
+//
+//   - rows written before the chain (partition_seq NULL), oldest first, as
+//     deleteBatchSQL does;
+//   - chained rows only as a contiguous PREFIX of the chain: walking from the
+//     prune anchor in partition_seq order, it stops at the first row that is
+//     not yet expired (or not yet exported). Deleting by timestamp alone would
+//     punch holes in the middle of the chain, because chain order is insert
+//     order and a row's timestamp is when its operation completed (a session
+//     end is written by a relay after the fact). The rows behind such a
+//     straggler go once it expires, at most one relay interval later.
+//
+// and it moves the head's prune anchor to the last chained row it deletes, so
+// the chain still verifies from the anchor. The head is locked first: two
+// sweepers serialise on it instead of deleting overlapping prefixes, and a
+// writer waits for one batch at most. $2 bounds the whole batch; the chained
+// part gets what the unchained part leaves. holdCondition is empty or the
+// export hold over $3 and $4.
+func chainedDeleteSQL(holdCondition string) string {
+	return `
+	WITH head AS (
+	    SELECT pruned_seq
+	      FROM elitea_runtime.audit_events_chain_heads
+	     WHERE partition_key = '0'
+	       FOR UPDATE
+	), unchained AS (
+	    SELECT id
+	      FROM centry.audit_events
+	     WHERE partition_seq IS NULL
+	       AND timestamp < $1` + holdCondition + `
+	     ORDER BY timestamp
+	     LIMIT $2
+	       FOR UPDATE SKIP LOCKED
+	), next_rows AS (
+	    SELECT e.id, e.partition_seq, e.hash,
+	           (e.timestamp < $1` + holdCondition + `) AS expired
+	      FROM centry.audit_events AS e, head
+	     WHERE e.partition_key = '0' AND e.partition_seq > head.pruned_seq
+	     ORDER BY e.partition_seq
+	     LIMIT GREATEST($2 - (SELECT count(*) FROM unchained), 0)
+	), prefix AS (
+	    SELECT id, partition_seq, hash
+	      FROM (SELECT id, partition_seq, hash,
+	                   bool_and(expired) OVER (ORDER BY partition_seq) AS unbroken
+	              FROM next_rows) AS walked
+	     WHERE unbroken
+	), anchor AS (
+	    UPDATE elitea_runtime.audit_events_chain_heads AS h
+	       SET pruned_seq = tip.partition_seq, pruned_hash = tip.hash, pruned_at = clock_timestamp()
+	      FROM (SELECT partition_seq, hash FROM prefix ORDER BY partition_seq DESC LIMIT 1) AS tip
+	     WHERE h.partition_key = '0' AND tip.partition_seq > h.pruned_seq
+	    RETURNING 1
+	), doomed AS (
+	    SELECT id FROM unchained
+	    UNION ALL
+	    SELECT id FROM prefix
+	)
+	DELETE FROM centry.audit_events AS victim
+	 USING doomed
+	 WHERE victim.id = doomed.id`
+}
+
+// The chained statements, without and with the export hold.
+var (
+	deleteChainedBatchSQL     = chainedDeleteSQL("")
+	deleteChainedBatchHeldSQL = chainedDeleteSQL(`
+	       AND (export_txid, id) <= ($3::bigint, $4::bigint)`)
+)
+
+// chainHeadTableSQL tells a database with migration 0206 from one without:
+// the chained statements name columns an older table does not have.
+const chainHeadTableSQL = `SELECT to_regclass('elitea_runtime.audit_events_chain_heads') IS NOT NULL`
 
 // exportCursorTableSQL and exportPositionSQL are two statements on purpose:
 // see the package doc.
@@ -485,9 +563,17 @@ func (s *Sweeper) Sweep(ctx context.Context) (Stats, error) {
 		return stats, fmt.Errorf("read the audit export position: %w", err)
 	}
 	stats.HeldForExport = hold
-	statement, args := deleteBatchSQL, []any{stats.Cutoff, s.cfg.BatchSize}
+	var chained bool
+	if err := s.store.QueryRow(ctx, chainHeadTableSQL).Scan(&chained); err != nil {
+		return stats, fmt.Errorf("check the audit chain: %w", err)
+	}
+	plain, held := deleteBatchSQL, deleteBatchHeldSQL
+	if chained {
+		plain, held = deleteChainedBatchSQL, deleteChainedBatchHeldSQL
+	}
+	statement, args := plain, []any{stats.Cutoff, s.cfg.BatchSize}
 	if hold != nil {
-		statement, args = deleteBatchHeldSQL, []any{stats.Cutoff, s.cfg.BatchSize, hold.TxID, hold.ID}
+		statement, args = held, []any{stats.Cutoff, s.cfg.BatchSize, hold.TxID, hold.ID}
 	}
 
 	for stats.Batches < s.cfg.MaxBatchesPerPass {

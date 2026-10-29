@@ -4071,6 +4071,23 @@ main:
         # EliteaAuditExportBacklog: more undelivered events than this.
         backlogEvents: 10000
 
+  # Grafana dashboard "Elitea / Agent runs, errors, tool calls and spend"
+  # (ADR-0042, #1499): a ConfigMap labelled grafana_dashboard: "1" for a
+  # Grafana dashboard sidecar (kube-prometheus-stack's, for example), with the
+  # JSON from files/dashboards/agent-runs.json. Off by default. It charts only
+  # metrics the services export: the audit export's (main.auditExport.metrics),
+  # the LLM gateway's (llmGateway.metrics) and the scheduler's
+  # (scheduler.metrics). No series carries an agent label, so every panel is
+  # platform-wide; there is no tool-call or spend-amount metric, and the
+  # dashboard says so rather than charting a stand-in.
+  grafanaDashboard:
+    enabled: false
+    # Extra labels, e.g. one your sidecar's label selector needs.
+    labels: {}
+    # Annotations, e.g. grafana_folder: Elitea for a sidecar with
+    # folderAnnotation set.
+    annotations: {}
+
   # Kubernetes execution path for the versioned migration corpus
   # (services/elitea-main/migrations/{shared,tenant}, applied by the separate
   # cmd/elitea-migrate binary already built into this chart's image) — distinct

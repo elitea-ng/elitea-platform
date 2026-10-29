@@ -51,7 +51,10 @@ spec:
         # The oldest undelivered audit event is older than the threshold: the
         # receiver is down, refusing the credential, or too slow. Nothing is
         # lost (the events wait in their source tables and are re-sent), but
-        # the SIEM is behind. A stream is "security_audit" or "admin_audit".
+        # the SIEM is behind. Each rule here groups by the `stream` label and
+        # names it in its annotations, so a new export stream (ADR-0042's
+        # run-step evidence beside security_audit and admin_audit) alerts on
+        # its own series with no rule change.
         - alert: EliteaAuditExportLag
           expr: max by (stream) (elitea_audit_export_lag_seconds) > {{ $lag }}
           for: 5m
@@ -68,7 +71,7 @@ spec:
             severity: warning
           annotations:
             summary: "{{ "{{" }} $value {{ "}}" }} audit events are waiting for export on {{ "{{" }} $labels.stream {{ "}}" }}"
-            description: "More than {{ $backlog }} events are undelivered. No event is dropped: the security audit outbox and centry.audit_events keep them, and the relays send them in order once the receiver accepts."
+            description: "More than {{ $backlog }} {{ "{{" }} $labels.stream {{ "}}" }} events are undelivered. No event is dropped: the {{ "{{" }} $labels.stream {{ "}}" }} stream's source table keeps them, and its relay sends them in order once the receiver accepts."
         # A batch the receiver refused as malformed five times (400, 413 or
         # 422) was dead-lettered so it stops blocking the stream. The events
         # remain in their source tables and in

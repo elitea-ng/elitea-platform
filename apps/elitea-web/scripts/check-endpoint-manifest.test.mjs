@@ -854,7 +854,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // overrideAgentChangeRequestGate) and attestations
 // (listAgentAttestations, recordAgentAttestation, revokeAgentAttestation).
 // The web app now calls 16 of them (see MANIFEST_ENTRY_COUNT below).
-const GENERATED_OPERATION_COUNT = 436;
+// 436 -> 437 (issue 1499, ADR-0042 decision 3): verifyAuditChain, the
+// verification of the centry.audit_events hash chain. Admin routes are not
+// in the manifest, so its count is unchanged.
+const GENERATED_OPERATION_COUNT = 437;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

@@ -298,6 +298,12 @@ type AuditRow struct {
 	TraceID      string
 	SpanID       string
 	ParentSpanID string
+	// The chain position and links (shared migration 0206). Nil on a row
+	// written before the chain existed.
+	PartitionKey *string
+	PartitionSeq *int64
+	PrevHash     []byte
+	Hash         []byte
 }
 
 // auditNamespace derives event ids of audit_events rows. The id is a pure
@@ -341,6 +347,18 @@ func FromAuditRow(row AuditRow) Event {
 	if row.TraceID != "" || row.SpanID != "" || row.ParentSpanID != "" {
 		correlation = &Correlation{TraceID: row.TraceID, SpanID: row.SpanID, ParentSpanID: row.ParentSpanID}
 	}
+	// A row from before the chain, or one whose links are malformed, carries
+	// no chain object rather than one that cannot verify.
+	var chain *Chain
+	if row.PartitionKey != nil && row.PartitionSeq != nil && *row.PartitionSeq >= 1 &&
+		len(row.PrevHash) == len(securityaudit.Hash{}) && len(row.Hash) == len(securityaudit.Hash{}) {
+		chain = &Chain{
+			Partition: *row.PartitionKey,
+			Sequence:  *row.PartitionSeq,
+			PrevHash:  hex.EncodeToString(row.PrevHash),
+			Hash:      hex.EncodeToString(row.Hash),
+		}
+	}
 	return Event{
 		Schema:      SchemaVersion,
 		EventID:     AuditEventID(row.ID),
@@ -354,6 +372,7 @@ func FromAuditRow(row AuditRow) Event {
 		Target:      target,
 		Outcome:     outcome,
 		Correlation: correlation,
+		Chain:       chain,
 		Details: AdminAuditDetails{
 			RowID: row.ID, HTTPMethod: row.HTTPMethod, HTTPRoute: row.HTTPRoute,
 			StatusCode: row.StatusCode, DurationMS: row.DurationMS, IsError: row.IsError,
