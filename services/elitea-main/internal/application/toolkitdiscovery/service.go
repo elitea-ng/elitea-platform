@@ -220,10 +220,7 @@ func (s *Service) keepPinned(ctx context.Context, projectID int64, inputs Author
 // worker's pin check computes) are pinned; an unapproved server (no pins)
 // keeps none.
 func FilterPinnedResult(pins []connectorapproval.PinnedTool, result Result) Result {
-	allowed := make(map[connectorapproval.PinnedTool]bool, len(pins))
-	for _, pin := range pins {
-		allowed[pin] = true
-	}
+	allowed := connectorapproval.NewPinSet(pins)
 	kept := Result{Tools: make([]Tool, 0, len(result.Tools)), ArgsSchemas: map[string]json.RawMessage{}}
 	for _, tool := range result.Tools {
 		var schema any
@@ -235,7 +232,7 @@ func FilterPinnedResult(pins []connectorapproval.PinnedTool, result Result) Resu
 			schema = decoded
 		}
 		digest, err := connectorapproval.ToolDigest(tool.Name, tool.Description, schema)
-		if err != nil || !allowed[connectorapproval.PinnedTool{Name: tool.Name, Digest: digest}] {
+		if err != nil || !allowed.Has(tool.Name, digest) {
 			continue
 		}
 		kept.Tools = append(kept.Tools, tool)

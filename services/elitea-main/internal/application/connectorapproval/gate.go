@@ -248,14 +248,30 @@ func (v View) AllowsType(toolkitType string) bool {
 	return v.Decide(toolkitType, nil).Allowed
 }
 
+// PinSet matches tools against pins by name and digest. The category of a
+// pin does not take part: it says how the approval policy treats the tool,
+// not which tool was approved.
+type PinSet map[[2]string]bool
+
+// NewPinSet is the set of the pins' names and digests.
+func NewPinSet(pins []PinnedTool) PinSet {
+	set := make(PinSet, len(pins))
+	for _, pin := range pins {
+		set[[2]string{pin.Name, pin.Digest}] = true
+	}
+	return set
+}
+
+// Has reports whether a pin names this tool with this digest.
+func (s PinSet) Has(name, digest string) bool {
+	return s[[2]string{name, digest}]
+}
+
 // FilterTools keeps the discovered tools of a custom MCP server whose name
 // and digest are pinned. The hidden tools' names come back too, for the
 // caller to report.
 func FilterTools(pins []PinnedTool, tools []mcpregistry.Tool) ([]mcpregistry.Tool, []string) {
-	allowed := map[PinnedTool]bool{}
-	for _, pin := range pins {
-		allowed[pin] = true
-	}
+	allowed := NewPinSet(pins)
 	kept := make([]mcpregistry.Tool, 0, len(tools))
 	var hidden []string
 	for _, tool := range tools {
@@ -264,7 +280,7 @@ func FilterTools(pins []PinnedTool, tools []mcpregistry.Tool) ([]mcpregistry.Too
 			schema = tool.InputSchema
 		}
 		digest, err := ToolDigest(tool.Name, tool.Description, schema)
-		if err == nil && allowed[PinnedTool{Name: tool.Name, Digest: digest}] {
+		if err == nil && allowed.Has(tool.Name, digest) {
 			kept = append(kept, tool)
 			continue
 		}
