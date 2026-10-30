@@ -16,12 +16,14 @@
 import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalanceWalletOutlined';
 import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
+import ContentCutOutlinedIcon from '@mui/icons-material/ContentCutOutlined';
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
 import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import MailOutlineIcon from '@mui/icons-material/MailOutlined';
 // The reference imports `@mui/icons-material/PeopleOutline`, which MUI 9 no
 // longer ships under that name; `PeopleOutlineOutlined` is the same glyph.
@@ -243,6 +245,23 @@ export function navGroups(): readonly AdminNavGroup[] {
           label: t('pages.admin.nav.agentRegistry', 'Agent registry'),
           icon: FactCheckOutlinedIcon,
           anyPermission: ['configuration.governance'],
+        },
+        {
+          // ADR-0044 decision 5 (#1501): shared migration 0208 grants
+          // `credentials.inventory.read` to the administration `admin` and
+          // `super_admin` roles, the name the server route is gated on.
+          id: 'credential-inventory',
+          path: '/credential-inventory',
+          label: t('pages.admin.nav.credentialInventory', 'Credential inventory'),
+          icon: KeyOutlinedIcon,
+          anyPermission: ['credentials.inventory.read'],
+        },
+        {
+          id: 'permission-trimming',
+          path: '/permission-trimming',
+          label: t('pages.admin.nav.permissionTrimming', 'Permission trimming'),
+          icon: ContentCutOutlinedIcon,
+          anyPermission: ['credentials.inventory.read'],
         },
         {
           id: 'budgets',

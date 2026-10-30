@@ -149,6 +149,22 @@ func TestCredentialInventory_ListsCredentialsWithoutSecrets(t *testing.T) {
 	now := time.Now().UTC()
 	store := newCredentialReviewTestStore(t, pool, now, platformconfig.DefaultCredentialReviewPolicy())
 
+	// No pass has seen the credentials yet: nothing is judged stale, not
+	// even PAT 502 issued 200 days ago (its use before 0208 is unknown).
+	unseen, _, err := store.Inventory(t.Context(), InventoryFilter{Kind: credentialuse.KindPAT})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old := findCredential(unseen, credentialuse.KindPAT, "502"); old == nil || old.Stale {
+		t.Fatalf("pat 502 before any pass = %+v, want listed and not stale", old)
+	}
+	// A pass 100 days ago saw them: PAT 502's clock started then, PAT 501's
+	// at its creation 10 days ago (the later of the two).
+	earlier := newCredentialReviewTestStore(t, pool, now.Add(-100*24*time.Hour), platformconfig.DefaultCredentialReviewPolicy())
+	if _, err := earlier.StalenessPass(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
 	rows, total, err := store.Inventory(t.Context(), InventoryFilter{})
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +178,7 @@ func TestCredentialInventory_ListsCredentialsWithoutSecrets(t *testing.T) {
 	}
 	old := findCredential(rows, credentialuse.KindPAT, "502")
 	if old == nil || !old.Stale {
-		t.Fatalf("pat 502 issued 200 days ago and never used is not stale: %+v", old)
+		t.Fatalf("pat 502 unused since a pass saw it 100 days ago is not stale: %+v", old)
 	}
 	secret := findCredential(rows, credentialuse.KindToolkitSecret, "1:aha_token")
 	if secret == nil || secret.Revocable || derefInt(secret.ProjectID) != 1 || len(secret.Agents) != 1 ||
@@ -205,11 +221,20 @@ func TestCredentialStaleness_FlagsThenRevokesWithNotification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// PAT 502 only: the toolkit secret was first seen just now.
-	if summary.Flagged != 1 || summary.Revoked != 0 || summary.Notified != 1 {
+	// The first pass only starts the clocks: last use is unknown before it.
+	if summary.Flagged != 0 || summary.Revoked != 0 || summary.Notified != 0 {
 		t.Fatalf("first pass = %s", summary)
 	}
-	again, err := store.StalenessPass(t.Context())
+	// 91 days on, nothing used: both PATs and the toolkit secret are stale.
+	flagging := newCredentialReviewTestStore(t, pool, now.Add(91*24*time.Hour), policy)
+	summary, err = flagging.StalenessPass(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Flagged != 3 || summary.Revoked != 0 || summary.Notified < 2 {
+		t.Fatalf("flag pass = %s", summary)
+	}
+	again, err := flagging.StalenessPass(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,9 +250,8 @@ SELECT count(*) FROM centry.notifications WHERE event_type = $1 AND user_id = 12
 		t.Fatalf("stale notices to the owner = %d, want 1", notices)
 	}
 
-	// 100 days later under revoke: PAT 502 is revoked (deleted), PAT 501
-	// (never used, issued 110 days before) too; the toolkit secret is
-	// flagged only.
+	// 100 days on under revoke: both PATs are revoked (deleted); the
+	// toolkit secret stays flagged only.
 	later := now.Add(100 * 24 * time.Hour)
 	policy.StaleAction = platformconfig.StaleActionRevoke
 	revoking := newCredentialReviewTestStore(t, pool, later, policy)

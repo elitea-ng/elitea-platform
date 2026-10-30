@@ -209,6 +209,11 @@ func (h *Handler) Inventory(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []repos.InventoryCredential{}
 	}
+	for i := range rows {
+		if rows[i].Agents == nil {
+			rows[i].Agents = []repos.InventoryAgent{}
+		}
+	}
 	writeJSON(w, http.StatusOK, InventoryList{Total: total, Rows: rows,
 		StaleAfterDays: policy.StaleAfterDays, StaleAction: string(policy.StaleAction)})
 }
@@ -282,7 +287,7 @@ func (h *Handler) AdminTrimming(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, report)
+	writeJSON(w, http.StatusOK, normalizeReport(report))
 }
 
 // ProjectTrimming answers GET /elitea_core/permission_trimming/prompt_lib/{projectID}.
@@ -305,7 +310,23 @@ func (h *Handler) ProjectTrimming(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, report)
+	writeJSON(w, http.StatusOK, normalizeReport(report))
+}
+
+// normalizeReport answers empty arrays, never null, as the contract says.
+func normalizeReport(report repos.TrimmingReport) repos.TrimmingReport {
+	if report.Items == nil {
+		report.Items = []repos.TrimmingItem{}
+	}
+	for i := range report.Items {
+		if report.Items[i].Scopes == nil {
+			report.Items[i].Scopes = []string{}
+		}
+		if report.Items[i].UnusedScopes == nil {
+			report.Items[i].UnusedScopes = []string{}
+		}
+	}
+	return report
 }
 
 // RemoveBody is a removal request.

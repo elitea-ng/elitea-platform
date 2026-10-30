@@ -107,12 +107,21 @@ type InventoryCredential struct {
 }
 
 // referenceTime is what staleness is measured from: the last use, else the
-// creation, else when the routine first saw it.
+// later of the creation and when the routine first saw it.
+//
+// Without a recorded use the clock starts at the later of creation and the
+// first staleness pass that saw the credential: last use is only recorded
+// from migration 0208 on, so a token created a year ago and used every day
+// must not read as stale (and be revoked under the revoke policy) on the
+// first pass after the upgrade. A credential no pass has seen yet is not
+// judged at all.
 func (c InventoryCredential) referenceTime() *time.Time {
 	switch {
 	case c.LastUsedAt != nil:
 		return c.LastUsedAt
-	case c.CreatedAt != nil:
+	case c.FirstSeenAt == nil:
+		return nil
+	case c.CreatedAt != nil && c.CreatedAt.After(*c.FirstSeenAt):
 		return c.CreatedAt
 	default:
 		return c.FirstSeenAt

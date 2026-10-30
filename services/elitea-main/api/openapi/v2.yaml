@@ -8062,6 +8062,150 @@ components:
       description: >
         NOTE(W2): internal/api/v2/agentlifecycle/handler.go, Handler.ListAttestations.
 
+    CredentialKind:
+      type: string
+      enum: [pat, toolkit_secret, mcp_oauth_token, provider_oauth_grant, credential_reference, credential_grant]
+      description: >
+        pat and credential_grant are revocable here; the others are issued
+        outside the platform (or are secrets) and are flagged only.
+    CredentialReviewRefusal:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: >
+            invalid_request, not_found, credential_not_revocable,
+            not_removable, forbidden, unavailable or internal_error.
+        message: { type: string }
+    CredentialInventoryAgent:
+      type: object
+      required: [project_id, application_id, name]
+      properties:
+        project_id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        name: { type: string }
+    CredentialInventoryCredential:
+      type: object
+      description: One credential. Never carries a secret value.
+      required: [kind, credential_id, name, scope, state, agents, stale, revocable]
+      properties:
+        kind: { $ref: '#/components/schemas/CredentialKind' }
+        credential_id:
+          type: string
+          description: The key of the credential within its kind (a token id, project:secret name, a reference or grant id).
+        name: { type: string }
+        owner_id: { type: integer, format: int64, nullable: true }
+        project_id: { type: integer, format: int64, nullable: true }
+        scope: { type: string }
+        state: { type: string }
+        created_at: { type: string, format: date-time, nullable: true }
+        expires_at: { type: string, format: date-time, nullable: true }
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Coalesced to at most one write per credential per hour.
+        first_seen_at: { type: string, format: date-time, nullable: true }
+        flagged_at: { type: string, format: date-time, nullable: true }
+        agents:
+          type: array
+          items: { $ref: '#/components/schemas/CredentialInventoryAgent' }
+        stale: { type: boolean }
+        revocable: { type: boolean }
+    CredentialInventoryList:
+      type: object
+      required: [total, rows, stale_after_days, stale_action]
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/CredentialInventoryCredential' }
+        stale_after_days: { type: integer }
+        stale_action: { type: string, enum: [flag, revoke] }
+    CredentialRevokeRequest:
+      type: object
+      required: [kind, credential_id]
+      additionalProperties: false
+      properties:
+        kind: { $ref: '#/components/schemas/CredentialKind' }
+        credential_id: { type: string, minLength: 1 }
+        reason: { type: string, maxLength: 500 }
+    CredentialRevokeResult:
+      type: object
+      required: [kind, credential_id, revoked_at]
+      properties:
+        kind: { $ref: '#/components/schemas/CredentialKind' }
+        credential_id: { type: string }
+        project_id: { type: integer, format: int64, nullable: true }
+        owner_id: { type: integer, format: int64, nullable: true }
+        revoked_at: { type: string, format: date-time }
+    PermissionTrimmingItemKind:
+      type: string
+      enum: [tool, toolkit, credential_grant, egress_host]
+    PermissionTrimmingItem:
+      type: object
+      required: [kind, key, project_id, application_id, used, uses, candidate, removable]
+      properties:
+        kind: { $ref: '#/components/schemas/PermissionTrimmingItemKind' }
+        key:
+          type: string
+          description: The item's key, passed back to the remove route.
+        project_id: { type: integer, format: int64, description: 0 for a platform egress entry. }
+        application_id: { type: integer, format: int64, description: 0 for an egress entry. }
+        application_name: { type: string }
+        version_id: { type: integer, format: int64, nullable: true }
+        version_name: { type: string }
+        toolkit_id: { type: integer, format: int64, nullable: true }
+        toolkit_name: { type: string }
+        tool: { type: string }
+        grant_id: { type: string }
+        credential_reference_id: { type: string }
+        scopes:
+          type: array
+          items: { type: string }
+        unused_scopes:
+          type: array
+          items: { type: string }
+        host: { type: string }
+        allowlist_level: { type: string, description: project or platform. }
+        used: { type: boolean }
+        uses: { type: integer, format: int64 }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        candidate: { type: boolean }
+        removable: { type: boolean }
+        not_removable_reason: { type: string }
+        candidate_since: { type: string, format: date-time, nullable: true }
+        notified_at: { type: string, format: date-time, nullable: true }
+    PermissionTrimmingReport:
+      type: object
+      required: [window_days, since, items]
+      properties:
+        window_days: { type: integer }
+        since: { type: string, format: date-time }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/PermissionTrimmingItem' }
+    PermissionTrimmingRemoveRequest:
+      type: object
+      required: [kind, key]
+      additionalProperties: false
+      properties:
+        project_id:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Required on the admin route (0 with a platform egress key); the path names it on the project route.
+        application_id: { type: integer, format: int64, minimum: 0 }
+        kind: { $ref: '#/components/schemas/PermissionTrimmingItemKind' }
+        key: { type: string, minLength: 1, maxLength: 1024 }
+    PermissionTrimmingRemoveResult:
+      type: object
+      required: [kind, key, removed_at]
+      properties:
+        kind: { $ref: '#/components/schemas/PermissionTrimmingItemKind' }
+        key: { type: string }
+        removed_at: { type: string, format: date-time }
     AgentLifecycleRefusal:
       type: object
       required: [error, code, message]
@@ -18661,6 +18805,202 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
 
+  /admin/credential_inventory:
+    get:
+      operationId: listCredentialInventory
+      summary: List every credential an agent can use
+      description: >
+        The credential inventory (ADR-0044 decision 5): personal access
+        tokens, toolkit secrets, MCP OAuth tokens, provider OAuth grants,
+        ADR-0039 credential references and credential use grants, with
+        owner, project, scope, dates, last use, the agents that use each
+        credential and the stale flag under the Credential Review policy.
+        Never carries a secret value. Gated on `credentials.inventory.read`
+        in the administration mode.
+      tags: [admin]
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/CredentialKind' }
+        - name: project_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: stale
+          in: query
+          required: false
+          description: true lists only stale credentials; false only fresh ones.
+          schema: { type: boolean }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, maximum: 500, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: The inventory page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialInventoryList' }
+        '400':
+          description: (code invalid_request) A filter that is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: (code unavailable) No database
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+
+  /admin/credential_inventory/revoke:
+    post:
+      operationId: revokeInventoryCredential
+      summary: Revoke a personal access token or a credential use grant
+      description: >
+        Revokes one credential from the inventory: a personal access token
+        is deleted with its project binding, a credential use grant moves to
+        revoked through the grant service. Toolkit secrets and externally
+        issued OAuth tokens are flagged only (409 credential_not_revocable).
+        Written to the security audit chain as credential.revoked. Gated on
+        `credentials.inventory.manage` in the administration mode.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CredentialRevokeRequest' }
+      responses:
+        '200':
+          description: The revoked credential
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialRevokeResult' }
+        '400':
+          description: (code invalid_request) A body that is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) The credential does not exist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+        '409':
+          description: (code credential_not_revocable or not_removable) The credential cannot be revoked here
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+        '503':
+          description: (code unavailable) No database
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+
+  /admin/permission_trimming:
+    get:
+      operationId: listAdminPermissionTrimming
+      summary: Report granted permissions against their use across projects
+      description: >
+        The permission trimming report (ADR-0044 decision 5) across
+        projects: per agent the selected tools, attached toolkits and
+        credential use grants (with scopes), and the project and platform
+        egress allowlist entries, against the step records and egress
+        summaries of the window. Unused items are removal candidates. Gated
+        on `credentials.inventory.read` in the administration mode.
+      tags: [admin]
+      parameters:
+        - name: project_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: application_id
+          in: query
+          required: false
+          description: Needs project_id.
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: window_days
+          in: query
+          required: false
+          description: The usage window; the Credential Review trimming_window_days when absent (default 30).
+          schema: { type: integer, minimum: 1, maximum: 365 }
+        - name: candidates_only
+          in: query
+          required: false
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: The report
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PermissionTrimmingReport' }
+        '400':
+          description: (code invalid_request) A filter that is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: (code unavailable) No database
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+
+  /admin/permission_trimming/remove:
+    post:
+      operationId: removeAdminPermissionTrimmingItem
+      summary: Remove one unused permission
+      description: >
+        Removes one report item through its existing mutation path: a tool
+        from the draft version's selected tools, a toolkit from the draft
+        version, a credential use grant (revoked), or a project or platform
+        egress allowlist entry. Written to the security audit chain as
+        permission.trimmed. Gated on `credentials.inventory.manage` in the
+        administration mode.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PermissionTrimmingRemoveRequest' }
+      responses:
+        '200':
+          description: The removed item
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PermissionTrimmingRemoveResult' }
+        '400':
+          description: (code invalid_request) A body that is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) The item does not exist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+        '409':
+          description: (code not_removable) The item cannot be removed (published version or the last selected tool)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+        '503':
+          description: (code unavailable) No database
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+
   /admin/execution_suspensions:
     get:
       operationId: listExecutionSuspensions
@@ -24657,6 +24997,97 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+
+  /elitea_core/permission_trimming/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listProjectPermissionTrimming
+      summary: Report the project's granted permissions against their use
+      description: >
+        The project's permission trimming report (ADR-0044 decision 5): per
+        agent the selected tools, attached toolkits and credential use
+        grants, and the project egress allowlist entries, against the step
+        records of the window. Requires `agents.trimming.manage`.
+      tags: [applications]
+      parameters:
+        - name: application_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: window_days
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 365 }
+        - name: candidates_only
+          in: query
+          required: false
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: The report
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PermissionTrimmingReport' }
+        '400':
+          description: (code invalid_request) A filter that is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: (code unavailable) No database
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+
+  /elitea_core/permission_trimming/prompt_lib/{project_id}/remove:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: removeProjectPermissionTrimmingItem
+      summary: Remove one unused permission of the project
+      description: >
+        Removes one item of the project's report through its existing
+        mutation path, audited as permission.trimmed. Requires
+        `agents.trimming.manage`; a project egress entry also requires
+        `models.project_settings.edit`. Platform entries are removed by an
+        administrator.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PermissionTrimmingRemoveRequest' }
+      responses:
+        '200':
+          description: The removed item
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PermissionTrimmingRemoveResult' }
+        '400':
+          description: (code invalid_request) A body that is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) The item does not exist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+        '409':
+          description: (code not_removable) The item cannot be removed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+        '503':
+          description: (code unavailable) No database
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
 
   /elitea_core/agent_registry/prompt_lib/{project_id}/{application_id}/mark_due:
     parameters:

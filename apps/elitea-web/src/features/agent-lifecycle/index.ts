@@ -18,3 +18,5 @@ export type { EntityLifecycle } from './model/useEntityLifecycle';
 export { buildEntityShareLink, getLifecycleBasename } from './lib/shareLink';
 export type { LifecycleEntity } from './lib/shareLink';
 export type { EntityExportDocument } from './api/lifecycleApi';
+export { PermissionTrimmingTable, trimmingItemKey } from './ui/PermissionTrimmingTable';
+export { credentialReviewErrorMessage } from './api/trimmingApi';

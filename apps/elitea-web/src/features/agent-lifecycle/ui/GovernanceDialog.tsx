@@ -18,6 +18,7 @@ import { useAgentRegistry } from '../api/governanceApi';
 import { GovernanceAttestationsTab } from './GovernanceAttestationsTab';
 import { GovernanceChangeRequestsTab } from './GovernanceChangeRequestsTab';
 import { GovernanceRegistryTab } from './GovernanceRegistryTab';
+import { GovernanceTrimmingTab } from './GovernanceTrimmingTab';
 import { certificationStateLabel, formatWhen } from './governanceLabels';
 
 /**
@@ -28,6 +29,8 @@ import { certificationStateLabel, formatWhen } from './governanceLabels';
  * certification. Change requests: release and recertification requests with
  * their release gate, approvals and the approve, reject, withdraw and gate
  * override actions. Attestations: reviews done outside the platform.
+ * Permission trimming (ADR-0044 decision 5, #1501): granted tools, toolkits
+ * and credential grants unused in the window, each removable in one click.
  *
  * A lapsed or suspended certification is a banner above the tabs, because
  * under the `suspend` lapse action the agent's runs are already refused with
@@ -41,7 +44,7 @@ export interface GovernanceDialogProps {
   readonly onClose: () => void;
 }
 
-type GovernanceTab = 'registry' | 'changes' | 'attestations';
+type GovernanceTab = 'registry' | 'changes' | 'attestations' | 'trimming';
 
 export function GovernanceDialog({ open, projectId, applicationId, onClose }: GovernanceDialogProps): ReactNode {
   const [tab, setTab] = useState<GovernanceTab>('registry');
@@ -76,6 +79,11 @@ export function GovernanceDialog({ open, projectId, applicationId, onClose }: Go
             label={t('features.agentLifecycle.governance.tabAttestations', 'Attestations')}
             data-testid="governance-tab-attestations"
           />
+          <Tab
+            value="trimming"
+            label={t('features.agentLifecycle.governance.tabTrimming', 'Permission trimming')}
+            data-testid="governance-tab-trimming"
+          />
         </Tabs>
         <Box sx={{ paddingTop: '1rem' }}>
           {tab === 'registry' && (
@@ -93,6 +101,12 @@ export function GovernanceDialog({ open, projectId, applicationId, onClose }: Go
           )}
           {tab === 'attestations' && (
             <GovernanceAttestationsTab
+              projectId={projectId}
+              applicationId={applicationId}
+            />
+          )}
+          {tab === 'trimming' && (
+            <GovernanceTrimmingTab
               projectId={projectId}
               applicationId={applicationId}
             />
