@@ -104,7 +104,7 @@ export function PermissionTrimmingTable({
       <Typography variant="bodyMedium" data-testid="permission-trimming-empty">
         {t(
           'features.agentLifecycle.trimming.empty',
-          'No removal candidates: every granted permission was used in the window.',
+          'No removal candidates: every granted permission was used in the window or is too new to judge.',
         )}
       </Typography>
     );

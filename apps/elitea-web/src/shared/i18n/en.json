@@ -5357,7 +5357,7 @@
   "pages.admin.users.error.exportEntitlements": "Failed to export entitlements.",
   "features.agentLifecycle.governance.tabTrimming": "Permission trimming",
   "features.agentLifecycle.trimming.agent": "Agent",
-  "features.agentLifecycle.trimming.empty": "No removal candidates: every granted permission was used in the window.",
+  "features.agentLifecycle.trimming.empty": "No removal candidates: every granted permission was used in the window or is too new to judge.",
   "features.agentLifecycle.trimming.intro": "Permissions granted to this agent against their use in the last {{days}} days. An unused one is a removal candidate; removing it edits the draft version.",
   "features.agentLifecycle.trimming.item": "Permission",
   "features.agentLifecycle.trimming.kind.credentialGrant": "Credential grant",
