@@ -132,8 +132,8 @@ func newFakeCloudProvider(status, tokenStatus int) *fakeCloudProvider {
 	// that the server closed under load, net/http retries the request without
 	// telling the caller, and an exact Hits() count then reads one call too
 	// many (a CI flake on TestProbeVertex_ListRefusalIsUnauthorized).
-	fp.Server.Config.SetKeepAlivesEnabled(false)
-	fp.Server.Start()
+	fp.Config.SetKeepAlivesEnabled(false)
+	fp.Start()
 	return fp
 }
 
