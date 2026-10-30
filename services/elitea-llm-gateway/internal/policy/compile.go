@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/guardrail"
 )
 
 // Row is one raw `gateway.governance_config` row as the gateway reads it.
@@ -61,9 +63,13 @@ func Compile(rows []Row, now time.Time) *Snapshot {
 		// A throttle scope means something only to a rate limit. On any other
 		// type the gateway would ignore it and apply the row more widely than
 		// it was authored, so the row is refused instead.
-		if scope.throttles() && row.Type != TypeRateLimit {
-			reject("scope.agent_ids and scope.user_ids apply to rate_limit entries only; remove them from this " +
-				row.Type + " entry")
+		//
+		// A guardrail row may name agents (ADR-0043 decision 1 scopes a
+		// guardrail by platform, project, model or agent), but not users.
+		if scope.throttles() && row.Type != TypeRateLimit &&
+			(row.Type != TypeGuardrail || len(scope.UserIDs) > 0) {
+			reject("scope.user_ids applies to rate_limit entries only, and scope.agent_ids to rate_limit and " +
+				"guardrail entries only; remove them from this " + row.Type + " entry")
 			continue
 		}
 		// A team scope makes any row unenforceable, whatever its type. Report it
@@ -206,6 +212,19 @@ func Compile(rows []Row, now time.Time) *Snapshot {
 				snap.routing = append(snap.routing, rule)
 			}
 
+		case TypeGuardrail:
+			if len(scope.AgentIDs) > 0 && len(scope.ProjectIDs) != 1 {
+				reject(fmt.Sprintf("scope.agent_ids needs exactly one entry in scope.project_ids, the project "+
+					"that owns the agents (application ids are per project); got %d", len(scope.ProjectIDs)))
+				continue
+			}
+			compiled, err := guardrail.ParseRow(name, data)
+			if err != nil {
+				reject(err.Error())
+				continue
+			}
+			snap.guardrails = append(snap.guardrails, GuardrailDef{Name: name, Scope: scope, Row: compiled})
+
 		case TypeBudgetAlert:
 			// Enforced, but not here: internal/failmode reads this row inside
 			// the budget snapshot SQL on every /llm call. Skipping it silently
@@ -218,6 +237,7 @@ func Compile(rows []Row, now time.Time) *Snapshot {
 	}
 
 	sortRouting(snap.routing)
+	sortGuardrails(snap.guardrails)
 	return snap
 }
 

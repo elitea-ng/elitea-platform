@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.guardrail.http.v1.request",
+  "title": "Guardrail HTTP adapter request v1",
+  "description": "The body the LLM gateway POSTs to a guardrail http detector URL (ADR-0043 decision 1). Mirrors AdapterRequest in services/elitea-llm-gateway/internal/guardrail/httpadapter.go. Content is the text the detector inspects: the request messages (stage input) or the model answer (stage output). On a streamed answer the gateway sends one request per evaluated window: the held text plus up to one window of text already released.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "stage", "detector", "content"],
+  "properties": {
+    "version": {"const": "elitea.guardrail.http.v1"},
+    "stage": {"enum": ["input", "output"]},
+    "detector": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,63}$"},
+    "content": {"type": "string"}
+  }
+}

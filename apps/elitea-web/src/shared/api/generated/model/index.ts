@@ -744,6 +744,7 @@ export * from "./roleListParams.zod";
 export * from "./runCapOverride.zod";
 export * from "./runCapOverrideRequest.zod";
 export * from "./runCapRefusal.zod";
+export * from "./runGuardrailVerdict.zod";
 export * from "./runPipelineInboundTriggerParams.zod";
 export * from "./runStep.zod";
 export * from "./runStepContent.zod";

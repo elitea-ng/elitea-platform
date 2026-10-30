@@ -3,7 +3,8 @@
 // runs.evidence.read project permission:
 //
 //	GET /run_steps/prompt_lib/{projectID}/{runID}
-//	    the run's head and a page of its steps (?after_seq=, ?limit=)
+//	    the run's head and a page of its steps (?after_seq=, ?limit=); the
+//	    first page also carries the run's guardrail verdicts
 //	GET /run_steps/prompt_lib/{projectID}/{runID}/verify
 //	    recomputes the run's chain: ok, or the first seq that breaks and why
 //	GET /run_steps/prompt_lib/{projectID}/{runID}/{stepID}/{inputs|outputs}
@@ -51,6 +52,9 @@ const (
 	defaultPage = 200
 	maxPage     = 1000
 	maxRunID    = 128
+
+	// maxGuardrailVerdicts bounds the guardrail verdicts on the first page.
+	maxGuardrailVerdicts = 1000
 )
 
 // Store is *repos.RunSteps.
@@ -62,6 +66,9 @@ type Store interface {
 	VerifyRun(ctx context.Context, projectID int64, runID string) (repos.RunVerification, error)
 	Step(ctx context.Context, projectID int64, runID, stepID string) (runevidence.Record, error)
 	ConversationRuns(ctx context.Context, projectID int64, conversationUUID string) ([]repos.ConversationRun, error)
+	// GuardrailVerdicts reads the LLM gateway's guardrail verdicts of the run
+	// (ADR-0043 decision 1), oldest first.
+	GuardrailVerdicts(ctx context.Context, projectID int64, runID string, limit int) ([]repos.GuardrailVerdict, error)
 	RecordContentRead(ctx context.Context, userID, projectID int64, runID, stepID string, side runevidence.Side, route string) error
 }
 
@@ -144,6 +151,27 @@ type StepsPage struct {
 	Run     Run    `json:"run"`
 	Steps   []Step `json:"steps"`
 	NextSeq *int64 `json:"next_after_seq"`
+	// GuardrailVerdicts is set on the first page only (no after_seq).
+	GuardrailVerdicts []GuardrailVerdict `json:"guardrail_verdicts,omitempty"`
+}
+
+// GuardrailVerdict is one guardrail check of an LLM request of the run
+// (ADR-0043 decision 1). It never holds the inspected or the matched text.
+type GuardrailVerdict struct {
+	OccurredAt   time.Time `json:"occurred_at"`
+	Route        string    `json:"route"`
+	Stage        string    `json:"stage"`
+	Row          string    `json:"row"`
+	Detector     string    `json:"detector"`
+	DetectorType string    `json:"detector_type"`
+	Action       string    `json:"action"`
+	Outcome      string    `json:"outcome"`
+	FailMode     string    `json:"fail_mode"`
+	Labels       []string  `json:"labels"`
+	Findings     int32     `json:"findings"`
+	MaxScore     float32   `json:"max_score"`
+	LatencyMS    int64     `json:"latency_ms"`
+	Runs         int32     `json:"runs"`
 }
 
 // Verification is the verify response.
@@ -223,6 +251,20 @@ func (h *Handler) ListSteps(w http.ResponseWriter, r *http.Request) {
 	if n := len(records); n == int(limit) && records[n-1].Seq < head.LastSeq {
 		next := records[n-1].Seq
 		page.NextSeq = &next
+	}
+	if afterSeq == 0 {
+		verdicts, err := h.store.GuardrailVerdicts(r.Context(), projectID, runID, maxGuardrailVerdicts)
+		if err != nil {
+			writeError(r.Context(), w, err)
+			return
+		}
+		for _, v := range verdicts {
+			page.GuardrailVerdicts = append(page.GuardrailVerdicts, GuardrailVerdict{
+				OccurredAt: v.OccurredAt, Route: v.Route, Stage: v.Stage, Row: v.Row, Detector: v.Detector,
+				DetectorType: v.DetectorType, Action: v.Action, Outcome: v.Outcome, FailMode: v.FailMode,
+				Labels: nonNil(v.Labels), Findings: v.Findings, MaxScore: v.MaxScore, LatencyMS: v.LatencyMS, Runs: v.Runs,
+			})
+		}
 	}
 	writeJSON(w, http.StatusOK, page)
 }

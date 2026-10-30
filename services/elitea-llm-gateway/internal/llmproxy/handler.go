@@ -222,6 +222,10 @@ type Handler struct {
 	// routes (check_connection, list_provider_models). The zero value refuses
 	// every one; see checkconnection_workload_identity.go.
 	workloadIdentity probeWorkloadIdentity
+
+	// guardrailSecrets resolves the auth secret of a guardrail http adapter
+	// (guardrail_gate.go). nil fails every adapter that names one.
+	guardrailSecrets GuardrailSecretResolver
 }
 
 // HandlerOption customises Handler construction. It keeps NewHandler's core
@@ -685,6 +689,12 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		sc.cancel() // rejected before dispatch: nothing owns the context
 		return
 	}
+	// The input guardrails, before the budget gate for the same reason.
+	defer recordGuardrailVerdicts(ctx)
+	if !h.applyInputGuardrails(w, ctx, provider, model, policy.TrafficGeneration, chatRequestTexts(bifReq)) {
+		sc.cancel() // rejected before dispatch: nothing owns the context
+		return
+	}
 	// Pre-flight budget check (admission only; the cost is billed post-response).
 	if !h.checkBudget(w, ctx, model) {
 		sc.cancel() // blocked before dispatch: nothing owns the context
@@ -715,10 +725,20 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	// overhead that runs inside that call (issue #17). writeUnary below writes
 	// the first body byte, so the header is still in time.
 	setElapsedHeader(w, meter.Overhead(preDispatch))
-	// Write the response FIRST (client-visible), then bill asynchronously.
-	// updateUsage spawns a bounded goroutine so the HTTP response latency does
-	// not include the NATS billing round-trip (FIX #18).
-	h.writeUnary(w, resp, bErr)
+	// The output guardrails run on the decoded answer before any byte of it
+	// is written. A blocked answer is still billed below.
+	if bErr == nil && resp != nil {
+		if v := h.applyOutputGuardrails(ctx, provider, model, chatResponseTexts(resp)); v != nil {
+			writeGuardrailRefusal(w, v)
+		} else {
+			h.writeUnary(w, resp, bErr)
+		}
+	} else {
+		// Write the response FIRST (client-visible), then bill asynchronously.
+		// updateUsage spawns a bounded goroutine so the HTTP response latency
+		// does not include the NATS billing round-trip (FIX #18).
+		h.writeUnary(w, resp, bErr)
+	}
 	if bErr == nil && resp != nil {
 		in, out := usageFromChatResponse(resp)
 		recordLoggedCacheTokens(ctx, resp.Usage)
@@ -744,12 +764,16 @@ func (h *Handler) TextCompletion(w http.ResponseWriter, r *http.Request) {
 	}
 	// FIX #4: enforce the budget gate before calling the provider.
 	provider, model := providerModelFromTextReq(bifReq)
+	defer recordGuardrailVerdicts(ctx)
+	if !h.applyInputGuardrails(w, ctx, provider, model, policy.TrafficGeneration, textRequestTexts(bifReq)) {
+		return
+	}
 	if !h.checkBudget(w, ctx, model) {
 		return
 	}
 
 	resp, bErr := h.router.TextCompletionRequest(ctx, bifReq)
-	h.writeUnary(w, resp, bErr)
+	h.writeGuardedUnary(w, ctx, provider, model, resp, bErr, func() []*string { return textResponseTexts(resp) })
 	if bErr == nil && resp != nil {
 		in, out := usageFromTextCompletionResponse(resp)
 		recordLoggedCacheTokens(ctx, resp.Usage)
@@ -776,6 +800,12 @@ func (h *Handler) Embeddings(w http.ResponseWriter, r *http.Request) {
 	}
 	// FIX #4: enforce the budget gate before calling the provider.
 	provider, model := providerModelFromEmbeddingReq(bifReq)
+	// Embeddings (and so indexing) run only the input rows that opt in
+	// with apply_to_embeddings, and no output row.
+	defer recordGuardrailVerdicts(ctx)
+	if !h.applyInputGuardrails(w, ctx, provider, model, policy.TrafficEmbedding, embeddingRequestTexts(bifReq)) {
+		return
+	}
 	if !h.checkBudget(w, ctx, model) {
 		return
 	}
@@ -815,6 +845,11 @@ func (h *Handler) Responses(w http.ResponseWriter, r *http.Request) {
 		sc.cancel() // rejected before dispatch: nothing owns the context
 		return
 	}
+	defer recordGuardrailVerdicts(ctx)
+	if !h.applyInputGuardrails(w, ctx, provider, model, policy.TrafficGeneration, responsesRequestTexts(bifReq)) {
+		sc.cancel() // rejected before dispatch: nothing owns the context
+		return
+	}
 	if !h.checkBudget(w, ctx, model) {
 		sc.cancel() // blocked before dispatch: nothing owns the context
 		return
@@ -829,7 +864,7 @@ func (h *Handler) Responses(w http.ResponseWriter, r *http.Request) {
 	}
 	defer sc.cancel()
 	resp, bErr := h.router.ResponsesRequest(ctx, bifReq)
-	h.writeUnary(w, resp, bErr)
+	h.writeGuardedUnary(w, ctx, provider, model, resp, bErr, func() []*string { return responsesResponseTexts(resp) })
 	// FIX #3: bill the unary response after writing to the client.
 	if bErr == nil && resp != nil {
 		in, out := usageFromResponsesResponse(resp)
@@ -911,6 +946,11 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 		sc.cancel() // rejected before dispatch: nothing owns the context
 		return
 	}
+	defer recordGuardrailVerdicts(ctx)
+	if !h.applyInputGuardrails(w, ctx, provider, model, policy.TrafficGeneration, responsesRequestTexts(bifReq)) {
+		sc.cancel() // rejected before dispatch: nothing owns the context
+		return
+	}
 	// Pre-flight budget check (see Chat handler comment).
 	if !h.checkBudget(w, ctx, model) {
 		sc.cancel() // blocked before dispatch: nothing owns the context
@@ -933,8 +973,13 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 		h.writeOpenAIError(w, bErr)
 		return
 	}
-	// Write the response first, then bill asynchronously (FIX #18).
-	writeJSON(w, http.StatusOK, anthropic.ToAnthropicResponsesResponse(ctx, resp))
+	// Write the response first, then bill asynchronously (FIX #18). The
+	// output guardrails run before the write; a blocked answer is billed.
+	if v := h.applyOutputGuardrails(ctx, provider, model, responsesResponseTexts(resp)); v != nil {
+		writeGuardrailRefusal(w, v)
+	} else {
+		writeJSON(w, http.StatusOK, anthropic.ToAnthropicResponsesResponse(ctx, resp))
+	}
 	in, out := usageFromResponsesResponse(resp)
 	recordLoggedResponsesCacheTokens(ctx, resp.Usage)
 	h.updateUsage(ctx, provider, model, in, out, identityProjectFromCtx(ctx), identityUserFromCtx(ctx))
@@ -1079,6 +1124,26 @@ func (h *Handler) writeUnary(w http.ResponseWriter, resp interface{}, bErr *sche
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// writeGuardedUnary is writeUnary with the output guardrails applied to the
+// texts of a successful answer first. A refused answer is written as the
+// guardrail refusal; the caller still bills it.
+func (h *Handler) writeGuardedUnary(
+	w http.ResponseWriter,
+	ctx *schemas.BifrostContext,
+	provider, model string,
+	resp interface{},
+	bErr *schemas.BifrostError,
+	texts func() []*string,
+) {
+	if bErr == nil && resp != nil {
+		if v := h.applyOutputGuardrails(ctx, provider, model, texts()); v != nil {
+			writeGuardrailRefusal(w, v)
+			return
+		}
+	}
+	h.writeUnary(w, resp, bErr)
+}
+
 // streamOpenAI writes the OpenAI SSE framing: each chunk is a data-only frame,
 // then a terminal "data: [DONE]" marker on normal completion. A mid-stream
 // error is emitted as a data frame carrying the OpenAI-shaped error and ends
@@ -1135,6 +1200,7 @@ func (h *Handler) streamOpenAI(
 		s.settleEarly(lossReasonBeginStreamFail)
 		return
 	}
+	gs := h.newGuardedStream(ctx, provider, model)
 	for {
 		chunk, exit := nextChunk(ch, clientGone)
 		if exit == streamExitClient {
@@ -1161,6 +1227,13 @@ func (h *Handler) streamOpenAI(
 		// Capture usage from the final usage-carrying chunk (providers send
 		// usage in the last chunk before [DONE]; earlier chunks have Usage=nil).
 		s.observe(chunk)
+		// The output guardrails filter the content deltas in place. A block
+		// ends the stream with the refusal as the error event.
+		if v := gs.chatChunk(ctx, chunk.BifrostChatResponse); v != nil {
+			_ = sw.Data(guardrailErrorJSON(v))
+			s.settleEarly(lossReasonGuardrail)
+			return
+		}
 		data, mErr := json.Marshal(chunk)
 		if mErr != nil {
 			h.logger.Warn("marshal stream chunk", "err", mErr)
@@ -1169,6 +1242,18 @@ func (h *Handler) streamOpenAI(
 		if writeErr := sw.Data(string(data)); writeErr != nil {
 			s.settleEarly(lossReasonWriteError) // client disconnected
 			return
+		}
+	}
+	// Release the text the guardrails still hold.
+	extra, blocked := gs.finishChat(ctx)
+	if blocked != nil {
+		_ = sw.Data(guardrailErrorJSON(blocked))
+		s.settleClean()
+		return
+	}
+	if extra != nil {
+		if data, mErr := json.Marshal(extra); mErr == nil {
+			_ = sw.Data(string(data))
 		}
 	}
 	_ = sw.Data("[DONE]")
@@ -1225,6 +1310,7 @@ func (h *Handler) streamResponses(
 		s.settleEarly(lossReasonBeginStreamFail)
 		return
 	}
+	gs := h.newGuardedStream(ctx, provider, model)
 	for {
 		chunk, exit := nextChunk(ch, clientGone)
 		if exit == streamExitClient {
@@ -1250,6 +1336,16 @@ func (h *Handler) streamResponses(
 		// Capture usage from the response.completed event (carries Response.Usage).
 		s.observe(chunk)
 		sr := chunk.BifrostResponsesStreamResponse
+		before, blocked := gs.responsesEvent(ctx, sr)
+		if blocked != nil {
+			_ = sw.Event("error", guardrailErrorJSON(blocked))
+			s.settleEarly(lossReasonGuardrail)
+			return
+		}
+		if writeErr := writeResponsesEvents(sw, before); writeErr != nil {
+			s.settleEarly(lossReasonWriteError)
+			return
+		}
 		event := string(sr.Type)
 		data, mErr := json.Marshal(sr)
 		if mErr != nil {
@@ -1261,6 +1357,13 @@ func (h *Handler) streamResponses(
 			return
 		}
 	}
+	leftover, blocked := gs.finishResponses(ctx)
+	if blocked != nil {
+		_ = sw.Event("error", guardrailErrorJSON(blocked))
+		s.settleClean()
+		return
+	}
+	_ = writeResponsesEvents(sw, leftover)
 	if sendDone {
 		_ = sw.Data("[DONE]")
 	}
@@ -1317,6 +1420,7 @@ func (h *Handler) streamAnthropic(
 		s.settleEarly(lossReasonBeginStreamFail)
 		return
 	}
+	gs := h.newGuardedStream(ctx, provider, model)
 	for {
 		chunk, exit := nextChunk(ch, clientGone)
 		if exit == streamExitClient {
@@ -1342,24 +1446,63 @@ func (h *Handler) streamAnthropic(
 		// Capture usage from the response.completed event.
 		s.observe(chunk)
 		sr := chunk.BifrostResponsesStreamResponse
-		events := anthropic.ToAnthropicResponsesStreamResponse(ctx, sr)
-		for _, ev := range events {
-			if ev == nil {
-				continue
-			}
-			data, mErr := json.Marshal(ev)
-			if mErr != nil {
-				h.logger.Warn("marshal anthropic event", "err", mErr)
-				continue
-			}
-			if writeErr := sw.Event(string(ev.Type), string(data)); writeErr != nil {
+		before, blocked := gs.responsesEvent(ctx, sr)
+		if blocked != nil {
+			_ = sw.Event("error", anthropicGuardrailErrorJSON(blocked))
+			s.settleEarly(lossReasonGuardrail)
+			return
+		}
+		for _, item := range append(before, sr) {
+			if writeErr := h.writeAnthropicEvents(sw, ctx, item); writeErr != nil {
 				s.settleEarly(lossReasonWriteError)
 				return
 			}
 		}
 	}
+	leftover, blocked := gs.finishResponses(ctx)
+	if blocked != nil {
+		_ = sw.Event("error", anthropicGuardrailErrorJSON(blocked))
+		s.settleClean()
+		return
+	}
+	for _, item := range leftover {
+		_ = h.writeAnthropicEvents(sw, ctx, item)
+	}
 	// Bill after the channel drains successfully.
 	s.settleClean()
+}
+
+// writeResponsesEvents writes Responses stream events in the Responses framing.
+func writeResponsesEvents(sw *ssewriter.Writer, events []*schemas.BifrostResponsesStreamResponse) error {
+	for _, ev := range events {
+		data, err := json.Marshal(ev)
+		if err != nil {
+			continue
+		}
+		if err := sw.Event(string(ev.Type), string(data)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeAnthropicEvents converts one Responses stream event to the Anthropic
+// framing and writes it.
+func (h *Handler) writeAnthropicEvents(sw *ssewriter.Writer, ctx *schemas.BifrostContext, sr *schemas.BifrostResponsesStreamResponse) error {
+	for _, ev := range anthropic.ToAnthropicResponsesStreamResponse(ctx, sr) {
+		if ev == nil {
+			continue
+		}
+		data, mErr := json.Marshal(ev)
+		if mErr != nil {
+			h.logger.Warn("marshal anthropic event", "err", mErr)
+			continue
+		}
+		if err := sw.Event(string(ev.Type), string(data)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // beginStream applies header hygiene, then constructs the SSE writer (which

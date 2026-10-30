@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.guardrail.http.v1.response",
+  "title": "Guardrail HTTP adapter response v1",
+  "description": "The body a guardrail http detector returns with status 200 (ADR-0043 decision 1). Mirrors AdapterResponse in services/elitea-llm-gateway/internal/guardrail/httpadapter.go. An empty findings list means no finding. start and end are offsets in Unicode code points of the request content, end exclusive; a finding with neither covers the whole content. A finding without a score counts as score 1. Any other status, a body over 1 MiB, more than 1000 findings, or a body that does not match this schema is a detector failure, and the row's fail mode applies.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["findings"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["label"],
+        "properties": {
+          "label": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,63}$"},
+          "score": {"type": "number", "minimum": 0, "maximum": 1},
+          "start": {"type": "integer", "minimum": 0},
+          "end": {"type": "integer", "minimum": 0}
+        },
+        "dependentRequired": {"start": ["end"], "end": ["start"]}
+      }
+    }
+  }
+}

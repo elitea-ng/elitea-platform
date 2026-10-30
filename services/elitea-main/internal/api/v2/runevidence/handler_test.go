@@ -23,6 +23,14 @@ type fakeStore struct {
 	records  []runevidence.Record
 	auditErr error
 	audited  []string
+	verdicts []repos.GuardrailVerdict
+}
+
+func (f *fakeStore) GuardrailVerdicts(_ context.Context, projectID int64, runID string, _ int) ([]repos.GuardrailVerdict, error) {
+	if projectID != f.head.ProjectID || runID != f.head.RunID {
+		return nil, nil
+	}
+	return f.verdicts, nil
 }
 
 func (f *fakeStore) Head(_ context.Context, projectID int64, runID string) (repos.RunHead, error) {
@@ -209,5 +217,37 @@ func TestNilStoreAnswers503(t *testing.T) {
 	handler := NewHandler(typed, nil)
 	if serve(t, ConversationRunsPath, "/conversation_runs/prompt_lib/3/x", handler.ListConversationRuns).Code != http.StatusServiceUnavailable {
 		t.Fatal("nil store did not answer 503")
+	}
+}
+
+// TestListStepsCarriesGuardrailVerdicts: the first page carries the run's
+// guardrail verdicts (ADR-0043 decision 1), a later page does not, and a
+// verdict has no field that could hold the matched text.
+func TestListStepsCarriesGuardrailVerdicts(t *testing.T) {
+	store := chain(t, []byte(`{"q":1}`))
+	store.verdicts = []repos.GuardrailVerdict{{
+		Stage: "output", Row: "no-secrets", Detector: "secrets", DetectorType: "secrets", Action: "mask",
+		Outcome: "masked", FailMode: "closed", Labels: []string{"github-token"}, Findings: 1, LatencyMS: 2, Runs: 3,
+	}}
+	handler := NewHandler(store, nil)
+	recorder := serve(t, StepsPath, "/run_steps/prompt_lib/3/run-1", handler.ListSteps)
+	page := decode[StepsPage](t, recorder)
+	if len(page.GuardrailVerdicts) != 1 || page.GuardrailVerdicts[0].Outcome != "masked" || page.GuardrailVerdicts[0].Labels[0] != "github-token" {
+		t.Fatalf("verdicts = %+v", page.GuardrailVerdicts)
+	}
+	var raw struct {
+		GuardrailVerdicts []map[string]any `json:"guardrail_verdicts"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	for key := range raw.GuardrailVerdicts[0] {
+		if strings.Contains(key, "content") || strings.Contains(key, "text") || strings.Contains(key, "match") {
+			t.Fatalf("verdict field %q could carry content", key)
+		}
+	}
+	later := decode[map[string]any](t, serve(t, StepsPath, "/run_steps/prompt_lib/3/run-1?after_seq=1", handler.ListSteps))
+	if _, present := later["guardrail_verdicts"]; present {
+		t.Fatal("a later page carries the verdicts again")
 	}
 }

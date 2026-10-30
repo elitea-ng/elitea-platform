@@ -294,6 +294,8 @@ func validateGovernanceRow(row GovernanceRow) error {
 		return validateBudgetAlertData(row.Data)
 	case egressAllowlistType:
 		return validateEgressAllowlistData(row.Data)
+	case guardrailType:
+		return validateGuardrailData(row.Data)
 	}
 	return nil
 }

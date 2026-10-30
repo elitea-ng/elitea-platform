@@ -971,7 +971,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// two-person resume approval columns, and
 	// agent_registry.circuit_breaker (the per-agent override). No data, no
 	// permission.
-	require.EqualValues(t, 213, Head(shared))
+	//
+	// 214: shared/0214_guardrail_pipeline.sql, the gateway guardrail pipeline
+	// (ADR-0043 decision 1, #1500): `guardrail` joins the type check of
+	// gateway.governance_config, and gateway.guardrail_verdicts holds one
+	// verdict per detector per request (no content). No data, no permission.
+	require.EqualValues(t, 214, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

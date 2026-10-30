@@ -21,6 +21,7 @@ import TextField from '@mui/material/TextField';
 import { t } from '@/shared/i18n';
 
 import { BUDGET_PERIODS, NATS_FAIL_MODES, RATE_POLICIES } from './api/adminGovernanceApi';
+import { GuardrailFields, GuardrailScopeFields } from './GovernanceGuardrailFields';
 import { RoutingFields } from './GovernanceRoutingFields';
 import { ThrottleScopeFields } from './GovernanceThrottleFields';
 import { draftFieldErrors, type GovernanceDraft } from './useGatewayGovernancePage';
@@ -51,6 +52,8 @@ export function typeLabel(type: string): string {
       return t('pages.admin.governance.type.routingRule', 'CEL routing rule');
     case 'egress_allowlist':
       return t('pages.admin.governance.type.egressAllowlist', 'Egress allowlist');
+    case 'guardrail':
+      return t('pages.admin.governance.type.guardrail', 'Content guardrail');
     default:
       return type;
   }
@@ -93,6 +96,11 @@ export function typeHelp(type: string): string {
       return t(
         'pages.admin.governance.help.egressAllowlist',
         'The hosts a provider credential may point at. It applies to every project, and it is added to the GATEWAY_EGRESS_ALLOWLIST the chart sets; nothing here can withdraw a host the chart named.',
+      );
+    case 'guardrail':
+      return t(
+        'pages.admin.governance.help.guardrail',
+        'Detectors that check the request or the answer. Each detector blocks, masks or flags what it finds. Every matching entry runs, and each check is recorded without the matched text.',
       );
     default:
       return '';
@@ -172,6 +180,7 @@ export function ScopeFields({
       {draft.type === 'rate_limit' ? (
         <ThrottleScopeFields draft={draft} errors={errors} onChange={onChange} />
       ) : null}
+      {draft.type === 'guardrail' ? <GuardrailScopeFields draft={draft} errors={errors} onChange={onChange} /> : null}
     </>
   );
 }
@@ -350,6 +359,8 @@ export function TypeFields({
           slotProps={{ htmlInput: { 'data-testid': 'governance-egress-allowlist' } }}
         />
       );
+    case 'guardrail':
+      return <GuardrailFields draft={draft} errors={draftFieldErrors(draft)} onChange={onChange} />;
     case 'model_config':
       return null;
   }

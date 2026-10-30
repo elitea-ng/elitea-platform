@@ -41,6 +41,10 @@ type Store struct {
 	// metered tool row is written WITHOUT the shared migration 0174 columns.
 	// Zero means "write them". See WriteBatch.
 	meteredUntil atomic.Int64
+	// verdictsUntil is the unix-nano time before which the guardrail
+	// verdicts are not written, because the database has no
+	// gateway.guardrail_verdicts table yet (shared 0214). See writeVerdicts.
+	verdictsUntil atomic.Int64
 }
 
 // NewStore returns a sink over the pool. A nil pool returns nil, which New()
@@ -114,19 +118,28 @@ func (s *Store) WriteBatch(ctx context.Context, records []Record) error {
 	}
 	if hasMetered(records) && !s.legacyColumns() && !s.latched(&s.meteredUntil) {
 		err := s.writeMeteredBatch(ctx, records)
-		if err == nil || !isUndefinedColumn(err) {
+		if err == nil {
+			return s.writeVerdicts(ctx, records)
+		}
+		if !isUndefinedColumn(err) {
 			return err
 		}
 		s.meteredUntil.Store(s.now().Add(legacyColumnsRetry).UnixNano())
 	}
 	if !s.legacyColumns() {
 		err := s.writeBatch(ctx, records, false)
-		if err == nil || !isUndefinedColumn(err) {
+		if err == nil {
+			return s.writeVerdicts(ctx, records)
+		}
+		if !isUndefinedColumn(err) {
 			return err
 		}
 		s.legacyUntil.Store(s.now().Add(legacyColumnsRetry).UnixNano())
 	}
-	return s.writeBatch(ctx, records, true)
+	if err := s.writeBatch(ctx, records, true); err != nil {
+		return err
+	}
+	return s.writeVerdicts(ctx, records)
 }
 
 // legacyColumns reports whether the pre-0139 column list is latched.
@@ -282,7 +295,9 @@ func (s *Store) Prune(ctx context.Context, olderThan time.Time) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("prune request logs: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	removed := tag.RowsAffected()
+	verdicts, err := s.pruneVerdicts(ctx, olderThan)
+	return removed + verdicts, err
 }
 
 // nullableID turns the header string into an integer or NULL.

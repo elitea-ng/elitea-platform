@@ -189,6 +189,9 @@ func main() {
 	// account is a hard dependency of bifrost.Init, the policy store is
 	// optional and is built later.
 	var eliteaAccount *account.EliteaAccount
+	// guardrailVault resolves the auth_secret of a guardrail http adapter
+	// (ADR-0043 decision 1). It is the same vault the Account reads.
+	var guardrailVault *account.FernetVault
 	if pool != nil {
 		vault, verr := account.NewFernetVault(account.NewPoolQuerier(pool))
 		if verr != nil {
@@ -197,6 +200,7 @@ func main() {
 			slog.Error("FATAL: Fernet vault init failed", "err", verr)
 			os.Exit(1)
 		}
+		guardrailVault = vault
 		eliteaAcct, aerr := account.New(account.Config{
 			DB:                  account.NewPoolQuerier(pool),
 			Vault:               vault,
@@ -497,6 +501,7 @@ func main() {
 			llmproxy.WithStreamGrace(cfg.StreamGrace),
 			llmproxy.WithStreamDrainLimit(cfg.StreamDrainLimit),
 			llmproxy.WithEgressPolicy(egressPolicy),
+			llmproxy.WithGuardrailSecrets(guardrailSecretResolver(guardrailVault, cfg.PublicProjectIDString())),
 			llmproxy.WithWorkloadIdentity(cfg.WorkloadIdentityEnabled, cfg.PublicProjectIDString(), identityTokens),
 			llmproxy.WithRealtimeDialer(llmproxy.NewBifrostRealtimeDialer(srv.Core(), logger)),
 			llmproxy.WithRealtimeBudgetRecheck(cfg.RealtimeBudgetRecheck),
@@ -1436,5 +1441,19 @@ func makeReadyzHandler(p pinger, enforcementUnwired func() bool, details ...func
 			Status: "ready",
 			Checks: map[string]string{"nats": "ok"},
 		}))
+	}
+}
+
+// guardrailSecretResolver resolves a guardrail adapter's {{secret.NAME}} from
+// the vault of the platform's public project: guardrail rows are platform
+// configuration, and platform administrators keep shared secrets there. It
+// returns nil without a vault or a public project, and an adapter that names
+// a secret then fails under its row's fail mode.
+func guardrailSecretResolver(vault *account.FernetVault, publicProjectID string) llmproxy.GuardrailSecretResolver {
+	if vault == nil || publicProjectID == "" {
+		return nil
+	}
+	return func(ctx context.Context, ref string) (string, error) {
+		return vault.Resolve(ctx, publicProjectID, ref)
 	}
 }

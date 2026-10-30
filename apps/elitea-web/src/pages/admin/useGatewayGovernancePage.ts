@@ -31,6 +31,7 @@ import {
   type GovernanceRow,
   type GovernanceType,
 } from './api/adminGovernanceApi';
+import { EMPTY_GUARDRAIL_DRAFT, guardrailDraftFromData, guardrailDraftToData, type GuardrailDraft } from './governanceGuardrailDraft';
 import { draftFieldErrors, splitIntList, splitList } from './governanceIdLists';
 
 export { draftFieldErrors } from './governanceIdLists';
@@ -50,7 +51,7 @@ export interface RoutingTargetDraft {
  * back to "0"; the coercion happens once, in `draftToData`, where an
  * unparsable value can be left out instead of becoming a silent zero.
  */
-export interface GovernanceDraft {
+export interface GovernanceDraft extends GuardrailDraft {
   readonly id?: string | undefined;
   readonly type: GovernanceType;
   readonly name: string;
@@ -112,6 +113,7 @@ export const EMPTY_DRAFT: GovernanceDraft = {
   cel: '',
   priority: '0',
   targets: [{ provider: '', model: '', weight: '1' }],
+  ...EMPTY_GUARDRAIL_DRAFT,
 };
 
 /** Joins a stored list back into the comma-separated form the field shows. */
@@ -150,9 +152,12 @@ function draftToScope(draft: GovernanceDraft): Record<string, unknown> | undefin
   if (models.length > 0) scope.models = models;
   // The throttle dimensions mean something to a rate limit only, and the
   // server refuses them on every other type.
-  if (draft.type === 'rate_limit') {
+  if (draft.type === 'rate_limit' || draft.type === 'guardrail') {
     const agentIds = splitIntList(draft.scopeAgentIds);
     if (agentIds.length > 0) scope.agent_ids = agentIds;
+  }
+  // A guardrail can name agents, but not users (ADR-0043 decision 1).
+  if (draft.type === 'rate_limit') {
     const userIds = splitIntList(draft.scopeUserIds);
     if (userIds.length > 0) scope.user_ids = userIds;
   }
@@ -230,6 +235,9 @@ export function draftToData(draft: GovernanceDraft): Record<string, unknown> {
     case 'routing_rule':
       Object.assign(data, draftToRoutingRule(draft));
       break;
+    case 'guardrail':
+      data.guardrail = guardrailDraftToData(draft);
+      break;
     case 'model_config':
       // The scope IS the definition. Nothing else to write.
       break;
@@ -280,6 +288,7 @@ export function rowToDraft(row: GovernanceRow): GovernanceDraft {
           };
         })
       : EMPTY_DRAFT.targets,
+    ...guardrailDraftFromData(readRecord(row.data, 'guardrail')),
   };
 }
 

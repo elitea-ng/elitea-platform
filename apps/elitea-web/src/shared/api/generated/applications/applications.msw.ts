@@ -1882,6 +1882,42 @@ export const getListRunStepsResponseMock = (
     ]),
   })),
   next_after_seq: faker.helpers.arrayElement([faker.number.int(), null]),
+  guardrail_verdicts: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      occurred_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      route: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      stage: faker.helpers.arrayElement(["input", "output"] as const),
+      row: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      detector: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      detector_type: faker.helpers.arrayElement([
+        "regex",
+        "secrets",
+        "http",
+      ] as const),
+      action: faker.helpers.arrayElement(["block", "mask", "flag"] as const),
+      outcome: faker.helpers.arrayElement([
+        "pass",
+        "flagged",
+        "masked",
+        "blocked",
+        "error_open",
+        "error_closed",
+      ] as const),
+      fail_mode: faker.helpers.arrayElement(["open", "closed"] as const),
+      labels: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      findings: faker.number.int(),
+      max_score: faker.number.float({ fractionDigits: 2 }),
+      latency_ms: faker.number.int(),
+      runs: faker.number.int(),
+    })),
+    undefined,
+  ]),
   ...overrideResponse,
 });
 

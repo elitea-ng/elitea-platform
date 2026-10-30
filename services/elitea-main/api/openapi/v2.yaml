@@ -8092,6 +8092,37 @@ components:
           type: array
           items: { $ref: '#/components/schemas/RunStep' }
         next_after_seq: { type: integer, format: int64, nullable: true, description: The after_seq of the next page; null on the last. }
+        guardrail_verdicts:
+          type: array
+          description: >
+            The guardrail checks the LLM gateway made on the requests of the
+            run (ADR-0043 decision 1), oldest first, at most 1000. Only the
+            first page (no after_seq) has them. They are not part of the hash
+            chain.
+          items: { $ref: '#/components/schemas/RunGuardrailVerdict' }
+
+    RunGuardrailVerdict:
+      type: object
+      description: >
+        One guardrail detector on one LLM request of the run. It never holds
+        the inspected text or the matched text.
+      required: [occurred_at, route, stage, row, detector, detector_type, action, outcome, fail_mode, labels,
+        findings, max_score, latency_ms, runs]
+      properties:
+        occurred_at: { type: string, format: date-time }
+        route: { type: string }
+        stage: { type: string, enum: [input, output] }
+        row: { type: string, description: The name of the guardrail governance entry. }
+        detector: { type: string }
+        detector_type: { type: string, enum: [regex, secrets, http] }
+        action: { type: string, enum: [block, mask, flag] }
+        outcome: { type: string, enum: [pass, flagged, masked, blocked, error_open, error_closed] }
+        fail_mode: { type: string, enum: [open, closed] }
+        labels: { type: array, items: { type: string } }
+        findings: { type: integer, format: int32 }
+        max_score: { type: number, format: float }
+        latency_ms: { type: integer, format: int64 }
+        runs: { type: integer, format: int32, description: The number of checks merged into the record. A streamed answer is checked once per window. }
 
     RunStepsBreak:
       type: object
