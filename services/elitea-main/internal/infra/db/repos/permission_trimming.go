@@ -69,6 +69,26 @@ var (
 	ErrTrimItemNotRemovable = errors.New("permission trimming: the item cannot be removed")
 )
 
+// The codes of a TrimRefusal: Remove takes out only a current removable
+// candidate, re-judged when it runs, never what an old report showed.
+const (
+	TrimRefusalUnknown      = "trim_item_unknown"
+	TrimRefusalTooNew       = "trim_item_too_new"
+	TrimRefusalUsed         = "trim_item_used"
+	TrimRefusalNotRemovable = "trim_item_not_removable"
+)
+
+// TrimRefusal refuses a removal of an item that is not a removable
+// candidate now: not in the report (unknown, or on a published version),
+// granted for less than the window, used in the window, or not removable
+// (the last selected tool).
+type TrimRefusal struct {
+	Code   string
+	Reason string
+}
+
+func (e *TrimRefusal) Error() string { return "permission trimming: " + e.Reason }
+
 // TrimmingItem is one granted permission in the report.
 type TrimmingItem struct {
 	Kind            string     `json:"kind"`
@@ -95,6 +115,18 @@ type TrimmingItem struct {
 	NotRemovable    string     `json:"not_removable_reason"`
 	CandidateSince  *time.Time `json:"candidate_since"`
 	NotifiedAt      *time.Time `json:"notified_at"`
+	// GrantedAt is since when the item has been granted, as far as it is
+	// known; null when nothing says so yet. TooNew marks an unused item
+	// granted for less than the window: too new to judge, so it is neither
+	// a candidate nor notified.
+	GrantedAt *time.Time `json:"granted_at"`
+	TooNew    bool       `json:"too_new"`
+
+	// grantedSince is the item's own timestamp; observed says it is only
+	// trustworthy together with the routine's first sighting, the later of
+	// the two (or alone when grantedSince is nil).
+	grantedSince *time.Time
+	observed     bool
 }
 
 // TrimmingFilter selects the report.
@@ -134,16 +166,10 @@ func NewPermissionTrimming(review *CredentialReview) (*PermissionTrimming, error
 
 // Report computes the report.
 func (t *PermissionTrimming) Report(ctx context.Context, filter TrimmingFilter) (TrimmingReport, error) {
-	window := filter.WindowDays
-	if window <= 0 {
-		policy, err := t.review.policy(ctx)
-		if err != nil {
-			return TrimmingReport{}, fmt.Errorf("permission trimming: read the policy: %w", err)
-		}
-		window = policy.TrimmingWindowDays
+	window, since, err := t.window(ctx, filter.WindowDays)
+	if err != nil {
+		return TrimmingReport{}, err
 	}
-	window = min(max(window, platformconfig.MinTrimmingWindowDays), platformconfig.MaxTrimmingWindowDays)
-	since := t.review.now().Add(-time.Duration(window) * 24 * time.Hour)
 	report := TrimmingReport{WindowDays: window, Since: since.UTC(), Items: []TrimmingItem{}}
 
 	projects, err := t.projects(ctx, filter.ProjectID)
@@ -164,6 +190,9 @@ func (t *PermissionTrimming) Report(ctx context.Context, filter TrimmingFilter) 
 		}
 		report.Items = append(report.Items, items...)
 	}
+	if err := t.applyGrantAge(ctx, report.Items, since); err != nil {
+		return TrimmingReport{}, err
+	}
 	if err := t.decorateCandidates(ctx, report.Items); err != nil {
 		return TrimmingReport{}, err
 	}
@@ -177,6 +206,70 @@ func (t *PermissionTrimming) Report(ctx context.Context, filter TrimmingFilter) 
 		report.Items = kept
 	}
 	return report, nil
+}
+
+// window resolves the window (the policy's when days is 0) and its start.
+func (t *PermissionTrimming) window(ctx context.Context, days int) (int, time.Time, error) {
+	if days <= 0 {
+		policy, err := t.review.policy(ctx)
+		if err != nil {
+			return 0, time.Time{}, fmt.Errorf("permission trimming: read the policy: %w", err)
+		}
+		days = policy.TrimmingWindowDays
+	}
+	days = min(max(days, platformconfig.MinTrimmingWindowDays), platformconfig.MaxTrimmingWindowDays)
+	return days, t.review.now().Add(-time.Duration(days) * 24 * time.Hour), nil
+}
+
+// requireCandidate re-judges the one item a removal names, with the
+// policy's window and the evidence as it is now: a removal takes out only a
+// current removable candidate. Callers run it inside their transaction,
+// after locking the row the removal rewrites.
+func (t *PermissionTrimming) requireCandidate(ctx context.Context, request RemoveRequest) error {
+	_, since, err := t.window(ctx, 0)
+	if err != nil {
+		return err
+	}
+	var items []TrimmingItem
+	switch {
+	case request.Kind == TrimEgressHost && request.Platform:
+		items, err = t.platformEgressItems(ctx, since)
+	case request.Kind == TrimEgressHost:
+		// Only the project's allowlist: a project with no agents has an
+		// allowlist all the same.
+		var schema string
+		if schema, err = tenantSchema(strconv.FormatInt(request.ProjectID, 10)); err != nil {
+			return &TrimRefusal{Code: TrimRefusalUnknown, Reason: "the project is not valid"}
+		}
+		items, err = t.projectEgressItems(ctx, request.ProjectID, schema, since)
+	default:
+		items, err = t.projectItems(ctx, request.ProjectID, request.ApplicationID, since)
+	}
+	if err != nil {
+		return err
+	}
+	if err := t.applyGrantAge(ctx, items, since); err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.Kind != request.Kind || item.Key != request.Key {
+			continue
+		}
+		switch {
+		case item.Used:
+			return &TrimRefusal{Code: TrimRefusalUsed, Reason: "the item was used in the window"}
+		case item.TooNew:
+			return &TrimRefusal{Code: TrimRefusalTooNew, Reason: "the item was granted for less than the window; too new to judge"}
+		case item.NotRemovable == "last_selected_tool":
+			return &TrimRefusal{Code: TrimRefusalNotRemovable,
+				Reason: "it is the last selected tool of the toolkit; remove the toolkit instead"}
+		case !item.Candidate || !item.Removable:
+			return &TrimRefusal{Code: TrimRefusalNotRemovable, Reason: "the item is not a removable candidate"}
+		}
+		return nil
+	}
+	return &TrimRefusal{Code: TrimRefusalUnknown,
+		Reason: "the item is not in the report (removed already, or on a published version)"}
 }
 
 func (t *PermissionTrimming) projects(ctx context.Context, projectID int64) ([]int64, error) {
@@ -288,7 +381,7 @@ func toolNameEndsWith(name, tool string) bool {
 		return false
 	}
 	separator := name[len(name)-len(tool)-1]
-	return !(separator >= 'a' && separator <= 'z' || separator >= 'A' && separator <= 'Z' || separator >= '0' && separator <= '9')
+	return (separator < 'a' || separator > 'z') && (separator < 'A' || separator > 'Z') && (separator < '0' || separator > '9')
 }
 
 type grantedToolkit struct {
@@ -296,6 +389,10 @@ type grantedToolkit struct {
 	versionName, applicationName        string
 	toolkitName                         string
 	stored, agent                       []string
+	// attachedAt and editedAt are the mapping row's created_at and
+	// updated_at (UTC wall clock); editedAt is nil until the selection is
+	// edited.
+	attachedAt, editedAt *time.Time
 }
 
 // effectiveTools is agentrelease.ProjectSettings' selection rule: the
@@ -346,7 +443,8 @@ func (t *PermissionTrimming) projectItems(ctx context.Context, projectID, applic
 	}
 	pool := t.review.pool
 	rows, err := pool.Query(ctx, fmt.Sprintf(`
-SELECT v.id, v.name, a.id, a.name, m.tool_id, t.name, t.settings->'selected_tools', m.selected_tools
+SELECT v.id, v.name, a.id, a.name, m.tool_id, t.name, t.settings->'selected_tools', m.selected_tools,
+       m.created_at AT TIME ZONE 'UTC', m.updated_at AT TIME ZONE 'UTC'
 FROM %[1]s.application_versions AS v
 JOIN %[1]s.applications AS a ON a.id = v.application_id
 JOIN %[1]s.entity_tool_mapping AS m ON m.entity_version_id = v.id AND m.entity_type IN ('agent', 'application')
@@ -362,7 +460,7 @@ ORDER BY a.id, v.id, m.tool_id`, schema), applicationID)
 		var g grantedToolkit
 		var stored, agent []byte
 		if err := rows.Scan(&g.versionID, &g.versionName, &g.applicationID, &g.applicationName, &g.toolkitID,
-			&g.toolkitName, &stored, &agent); err != nil {
+			&g.toolkitName, &stored, &agent, &g.attachedAt, &g.editedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -397,6 +495,9 @@ ORDER BY a.id, v.id, m.tool_id`, schema), applicationID)
 		toolkitItem := base
 		toolkitItem.Kind = TrimToolkit
 		toolkitItem.Key = fmt.Sprintf("%d/%d", g.versionID, g.toolkitID)
+		// The mapping row is created by the attach and deleted by the
+		// detach: its created_at is when the toolkit was granted.
+		toolkitItem.grantedSince = g.attachedAt
 		markUse(&toolkitItem, toolkitUse)
 		items = append(items, toolkitItem)
 
@@ -406,6 +507,15 @@ ORDER BY a.id, v.id, m.tool_id`, schema), applicationID)
 			item.Kind = TrimTool
 			item.Key = fmt.Sprintf("%d/%d/%s", g.versionID, g.toolkitID, tool)
 			item.Tool = tool
+			// A selection never edited since the attach was granted with
+			// it. An edited one may have added this tool at the edit: the
+			// routine's first sighting of the tool dates it, and until it
+			// has one the edit does (the later, so never too old).
+			if g.editedAt == nil {
+				item.grantedSince = g.attachedAt
+			} else {
+				item.grantedSince, item.observed = g.editedAt, true
+			}
 			markUse(&item, toolUse(names, tool))
 			if item.Candidate && len(tools) == 1 {
 				item.Removable = false
@@ -448,7 +558,7 @@ func (t *PermissionTrimming) grantItems(ctx context.Context, projectID, applicat
 	}
 	rows, err := pool.Query(ctx, `
 SELECT g.id::text, g.agent_binding_id::text, g.toolkit_id, g.credential_reference_id::text, g.operation_scopes,
-       b.application_id, u.last_used_at,
+       b.application_id, u.last_used_at, g.updated_at,
        COALESCE((
            SELECT array_agg(DISTINCT i.operation_id)
            FROM elitea_runtime.bound_tool_invocations AS i
@@ -473,7 +583,8 @@ ORDER BY b.application_id, g.id`, projectID, applicationID, since)
 		var toolkit, app int64
 		var scopes, usedOperations []string
 		var lastUsed *time.Time
-		if err := rows.Scan(&id, &binding, &toolkit, &reference, &scopes, &app, &lastUsed, &usedOperations); err != nil {
+		var changed time.Time
+		if err := rows.Scan(&id, &binding, &toolkit, &reference, &scopes, &app, &lastUsed, &changed, &usedOperations); err != nil {
 			return nil, err
 		}
 		toolkitID := toolkit
@@ -481,6 +592,9 @@ ORDER BY b.application_id, g.id`, projectID, applicationID, since)
 			Kind: TrimCredentialGrant, Key: grantUseKey(binding, toolkit, reference),
 			ProjectID: projectID, ApplicationID: app, ToolkitID: &toolkitID, GrantID: id, ReferenceID: reference,
 			Scopes: scopes, UnusedScopes: []string{},
+			// The grant's last change (created, activated, re-activated,
+			// scopes edited): a grant is in its current form since then.
+			grantedSince: &changed,
 		}
 		used := map[string]bool{}
 		for _, operation := range usedOperations {
@@ -600,6 +714,9 @@ func egressItems(entries, reached []string, projectID int64, level string) []Tri
 		item := TrimmingItem{
 			Kind: TrimEgressHost, Key: level + ":" + entry, ProjectID: projectID, Host: entry,
 			AllowlistLevel: level, Scopes: []string{}, UnusedScopes: []string{},
+			// An allowlist is one list with no per-entry timestamp: the
+			// routine's first sighting of the entry is its age.
+			observed: true,
 		}
 		item.Used = entryUsed(entry, reached)
 		item.Candidate = !item.Used
@@ -607,6 +724,113 @@ func egressItems(entries, reached []string, projectID int64, level string) []Tri
 		items = append(items, item)
 	}
 	return items
+}
+
+// applyGrantAge dates every item and takes the ones granted for less than
+// the window out of the candidates: an item added yesterday is unused in
+// the window because it is new, not because it is not needed. An item that
+// needs the routine's first sighting and has none yet is too new as well.
+func (t *PermissionTrimming) applyGrantAge(ctx context.Context, items []TrimmingItem, since time.Time) error {
+	observed, err := t.observations(ctx, items)
+	if err != nil {
+		return err
+	}
+	for i := range items {
+		item := &items[i]
+		granted := item.grantedSince
+		if item.observed {
+			first, ok := observed[trimKey{item.ProjectID, item.ApplicationID, item.Kind, item.Key}]
+			switch {
+			case !ok:
+				// Never seen: nothing dates the grant yet.
+				granted = nil
+			case granted == nil || first.Before(*granted):
+				// The sighting predates the item's own (later) timestamp,
+				// or there is none: the item was granted by then.
+				granted = &first
+			}
+		}
+		if granted != nil {
+			at := granted.UTC()
+			item.GrantedAt = &at
+		}
+		if item.Used {
+			continue
+		}
+		if granted == nil || granted.After(since) {
+			item.TooNew = true
+			item.Candidate = false
+			item.Removable = false
+		}
+	}
+	return nil
+}
+
+type trimKey struct {
+	project, app int64
+	kind, item   string
+}
+
+// observations reads the routine's first sightings of the items that need one.
+func (t *PermissionTrimming) observations(ctx context.Context, items []TrimmingItem) (map[trimKey]time.Time, error) {
+	needed := false
+	for _, item := range items {
+		if item.observed {
+			needed = true
+			break
+		}
+	}
+	out := map[trimKey]time.Time{}
+	if !needed {
+		return out, nil
+	}
+	if exists, err := relationExists(ctx, t.review.pool, "elitea_lifecycle.permission_trimming_observed"); err != nil || !exists {
+		return out, err
+	}
+	rows, err := t.review.pool.Query(ctx, `
+SELECT tenant_project_id, application_id, item_kind, item_key, first_seen_at
+FROM elitea_lifecycle.permission_trimming_observed`)
+	if err != nil {
+		return nil, fmt.Errorf("permission trimming: read the observed items: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k trimKey
+		var first time.Time
+		if err := rows.Scan(&k.project, &k.app, &k.kind, &k.item, &first); err != nil {
+			return nil, err
+		}
+		out[k] = first
+	}
+	return out, rows.Err()
+}
+
+// recordObservations stores the first sighting of every granted item and
+// forgets the items no longer granted, so a re-grant starts over.
+func (t *PermissionTrimming) recordObservations(ctx context.Context, items []TrimmingItem, now time.Time) error {
+	var projects, apps []int64
+	var kinds, keys []string
+	for _, item := range items {
+		projects = append(projects, item.ProjectID)
+		apps = append(apps, item.ApplicationID)
+		kinds = append(kinds, item.Kind)
+		keys = append(keys, item.Key)
+	}
+	pool := t.review.pool
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_lifecycle.permission_trimming_observed AS o
+    (tenant_project_id, application_id, item_kind, item_key, first_seen_at, last_seen_at)
+SELECT u.p, u.a, u.k, u.key, $5, $5
+FROM unnest($1::bigint[], $2::bigint[], $3::text[], $4::text[]) AS u(p, a, k, key)
+ON CONFLICT (tenant_project_id, application_id, item_kind, item_key) DO UPDATE
+SET last_seen_at = EXCLUDED.last_seen_at`, projects, apps, kinds, keys, now); err != nil {
+		return fmt.Errorf("permission trimming: record the observed items: %w", err)
+	}
+	if _, err := pool.Exec(ctx, `
+DELETE FROM elitea_lifecycle.permission_trimming_observed WHERE last_seen_at < $1`, now); err != nil {
+		return fmt.Errorf("permission trimming: forget the items no longer granted: %w", err)
+	}
+	return nil
 }
 
 // decorateCandidates joins what the weekly routine stored: since when an
@@ -731,6 +955,12 @@ FOR UPDATE OF m`, schema), versionID, toolkitID).Scan(&applicationID, &entityTyp
 		if err := toolrelation.CheckVersionEditable(ctx, tx, schema, versionID); err != nil {
 			return fmt.Errorf("%w: %v", ErrTrimItemNotRemovable, err)
 		}
+		// The mapping row is locked: re-judge the item under the lock.
+		judged := request
+		judged.ApplicationID = applicationID
+		if err := t.requireCandidate(ctx, judged); err != nil {
+			return err
+		}
 		if request.Kind == TrimToolkit {
 			if _, err := toolrelation.Detach(ctx, tx, schema, versionID, toolkitID); err != nil {
 				return err
@@ -798,6 +1028,12 @@ WHERE g.tenant_project_id = $1 AND g.agent_binding_id::text = $2 AND g.toolkit_i
 	if request.ApplicationID > 0 && applicationID != request.ApplicationID {
 		return RemoveResult{}, ErrTrimItemNotFound
 	}
+	// The grant service revokes in its own transaction (with its audit and
+	// epoch invalidation), so the re-judgement runs right before it.
+	request.ApplicationID = applicationID
+	if err := t.requireCandidate(ctx, request); err != nil {
+		return RemoveResult{}, err
+	}
 	actor := "system:permission_trimming"
 	if request.ActorID > 0 {
 		actor = strconv.FormatInt(request.ActorID, 10)
@@ -805,7 +1041,6 @@ WHERE g.tenant_project_id = $1 AND g.agent_binding_id::text = $2 AND g.toolkit_i
 	if err := t.review.grants(ctx, request.ProjectID, grantID, actor); err != nil {
 		return RemoveResult{}, fmt.Errorf("permission trimming: revoke the use grant: %w", err)
 	}
-	request.ApplicationID = applicationID
 	var result RemoveResult
 	err = pgx.BeginTxFunc(ctx, t.review.pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		at, err := t.recordTrimmed(ctx, tx, request)
@@ -825,11 +1060,25 @@ func (t *PermissionTrimming) removeEgress(ctx context.Context, request RemoveReq
 	err := pgx.BeginTxFunc(ctx, t.review.pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		switch {
 		case level == "project" && request.ProjectID > 0:
+			if err := lockProjectEgress(ctx, tx, request.ProjectID); err != nil {
+				return err
+			}
+			if err := t.requireCandidate(ctx, request); err != nil {
+				return err
+			}
 			if err := removeProjectEgressEntry(ctx, tx, request.ProjectID, entry, request.ActorID); err != nil {
 				return err
 			}
 		case level == "platform" && request.Platform:
 			request.ProjectID = 0
+			if _, err := tx.Exec(ctx, `
+SELECT 1 FROM centry.platform_config WHERE section = $1 AND key = $2 FOR UPDATE`,
+				platformconfig.SectionWorkerEgress, platformconfig.KeyWorkerEgressAllowlist); err != nil {
+				return err
+			}
+			if err := t.requireCandidate(ctx, request); err != nil {
+				return err
+			}
 			if err := removePlatformEgressEntry(ctx, tx, entry, request.ActorID); err != nil {
 				return err
 			}
@@ -841,6 +1090,17 @@ func (t *PermissionTrimming) removeEgress(ctx context.Context, request RemoveReq
 		return err
 	})
 	return result, err
+}
+
+// lockProjectEgress locks the project's worker_egress row for the removal.
+func lockProjectEgress(ctx context.Context, tx pgx.Tx, projectID int64) error {
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return ErrTrimItemNotFound
+	}
+	_, err = tx.Exec(ctx, fmt.Sprintf(`
+SELECT 1 FROM %s.configuration WHERE type = 'worker_egress' FOR UPDATE`, schema))
+	return err
 }
 
 func withoutEntry(entries []string, entry string) ([]string, bool) {
@@ -967,6 +1227,12 @@ WHERE tenant_project_id = $1 AND application_id = $2 AND item_kind = $3 AND item
 		request.ProjectID, request.ApplicationID, request.Kind, request.Key, at); err != nil {
 		return at, err
 	}
+	if _, err := tx.Exec(ctx, `
+DELETE FROM elitea_lifecycle.permission_trimming_observed
+WHERE tenant_project_id = $1 AND application_id = $2 AND item_kind = $3 AND item_key = $4`,
+		request.ProjectID, request.ApplicationID, request.Kind, request.Key); err != nil {
+		return at, err
+	}
 	err := t.review.audit.Append(ctx, tx, securityaudit.SecurityEvent{
 		Type: securityaudit.TypeCredentialReview, TenantProjectID: request.ProjectID,
 		Action: "permission.trimmed", Reasons: []string{"kind:" + request.Kind},
@@ -1017,6 +1283,12 @@ func (t *PermissionTrimming) TrimmingPass(ctx context.Context) (TrimmingSummary,
 	}
 	summary.Items = len(report.Items)
 	pool := t.review.pool
+	now := t.review.now()
+	// The report above judged the ages with the sightings before this pass;
+	// an item first seen now is too new for this pass in any case.
+	if err := t.recordObservations(ctx, report.Items, now); err != nil {
+		return summary, err
+	}
 	var projects, apps []int64
 	var kinds, keys []string
 	for _, item := range report.Items {
@@ -1029,7 +1301,6 @@ func (t *PermissionTrimming) TrimmingPass(ctx context.Context) (TrimmingSummary,
 		kinds = append(kinds, item.Kind)
 		keys = append(keys, item.Key)
 	}
-	now := t.review.now()
 	// Upsert the candidates seen now; a resolved row that is a candidate
 	// again starts over (a new candidate, notified again).
 	tag, err := pool.Exec(ctx, `

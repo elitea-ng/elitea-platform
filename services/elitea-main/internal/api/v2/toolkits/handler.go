@@ -1483,7 +1483,7 @@ func (h *Handler) updateToolRelation(w http.ResponseWriter, r *http.Request, pro
 	// Guard: block changes to published/embedded versions. The same rules
 	// serve the permission trimming report's removals (toolrelation).
 	if err := toolrelation.CheckVersionEditable(ctx, h.pool, s, entityVersionID); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": toolrelation.PublishedVersionMessage})
 		return
 	}
 
@@ -1555,12 +1555,6 @@ func selectedToolsPayload(body map[string]any) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("selected_tools must be an array of tool names")
 	}
 	return encoded, true, nil
-}
-
-// selectedToolsRelationInsertSQL is toolrelation.AttachSQL (the statement
-// moved there so the permission trimming removals share it).
-func selectedToolsRelationInsertSQL(schema string, withSelectedTools bool) string {
-	return toolrelation.AttachSQL(schema, withSelectedTools)
 }
 
 // Delete removes a toolkit instance. With a cleanup journal wired the delete is

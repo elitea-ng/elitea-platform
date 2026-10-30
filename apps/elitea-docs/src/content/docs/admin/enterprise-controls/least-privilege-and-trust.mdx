@@ -235,7 +235,7 @@ Agents are granted more than they use: a toolkit added for a test, a tool nobody
 
 ### What is available
 
-The trimming report compares what each agent is granted (tools, toolkits, credential grants and their scopes, egress hosts) with what its [run step records](/admin/enterprise-controls/audit-evidence-and-retention#run-step-records) and egress summaries show it used in the window (30 days by default). Each grant shows its uses and last use; one not used in the window is a **removal candidate**.
+The trimming report compares what each agent is granted (tools, toolkits, credential grants and their scopes, egress hosts) with what its [run step records](/admin/enterprise-controls/audit-evidence-and-retention#run-step-records) and egress summaries show it used in the window (30 days by default). Each grant shows its uses and last use; one not used in the window is a **removal candidate**, but only once it has been granted for the whole window. A grant younger than the window (a toolkit attached last week, an egress host added yesterday) shows as **Too new to judge**: it is not a candidate and its owners are not notified. A toolkit is dated by when it was attached and a credential grant by its last change; a tool added to an edited selection and an egress allowlist entry, which carry no date of their own, by when the weekly routine first saw them.
 
 - **Per agent:** the **Permission trimming** tab in the agent's **⋮ › Governance** dialog (permission `agents.trimming.manage`, held by the project `admin` role).
 - **Across projects:** **Admin › Permission trimming** (`credentials.inventory.read` to read, `credentials.inventory.manage` to remove).
@@ -246,7 +246,7 @@ A weekly routine, `main.permission_trimming`, recomputes the report and notifies
 
 ### Evidence
 
-Each removal is an audit event `permission.trimmed` with the agent, the item and who removed it. Owner notifications are `permission_trimming_candidates`.
+A removal re-checks the item when it runs: an item that has since been used, is too new, or is no longer granted is refused (`trim_item_used`, `trim_item_too_new`, `trim_item_unknown`) rather than removed from a stale report. Taking an egress host off an allowlist on the settings page also resets its age, so a host added back waits a full window again. Each removal is an audit event `permission.trimmed` with the agent, the item and who removed it. Owner notifications are `permission_trimming_candidates`.
 
 ### Customer responsibility
 

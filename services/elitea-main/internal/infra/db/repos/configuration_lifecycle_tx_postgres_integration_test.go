@@ -131,6 +131,13 @@ func TestPermissionTrimming_EgressRemovalAppendsTheLifecycleEvent(t *testing.T) 
 		t.Fatal(err)
 	}
 	const remover int64 = 13
+	// The entry has been listed longer than the window: a candidate.
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO elitea_lifecycle.permission_trimming_observed
+    (tenant_project_id, application_id, item_kind, item_key, first_seen_at, last_seen_at)
+VALUES (1, 0, 'egress_host', 'project:jira.example.com', now() - interval '40 days', now())`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := trimming.Remove(t.Context(), RemoveRequest{ProjectID: 1, Kind: TrimEgressHost,
 		Key: "project:jira.example.com", ActorID: remover}); err != nil {
 		t.Fatalf("remove: %v", err)
@@ -143,5 +150,53 @@ func TestPermissionTrimming_EgressRemovalAppendsTheLifecycleEvent(t *testing.T) 
 		!slices.Equal(e.Before, []string{"api.atlassian.com", "jira.example.com"}) ||
 		!slices.Equal(e.After, []string{"api.atlassian.com"}) {
 		t.Fatalf("removal event %+v", e)
+	}
+}
+
+// A direct writer that takes an entry off a project's egress allowlist (here
+// the trimming's row rewrite on its own, without the trimming's bookkeeping)
+// forgets the entry's sighting in its transaction through the lifecycle
+// event hook, so an entry added back starts its trimming window over. The
+// entry kept keeps its sighting.
+func TestEgressEntryRemovalForgetsItsSighting(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	_, store := newConnectorTestStore(t, pool, false)
+	request := approvedToolkitRequest(t, store, "jira", "jira.example.com", "api.atlassian.com")
+	if _, err := store.Approve(t.Context(), request.ID, connectorApprover, ""); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO elitea_lifecycle.permission_trimming_observed
+    (tenant_project_id, application_id, item_kind, item_key, first_seen_at, last_seen_at)
+VALUES (1, 0, 'egress_host', 'project:jira.example.com', now() - interval '40 days', now()),
+       (1, 0, 'egress_host', 'project:api.atlassian.com', now() - interval '40 days', now())`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(t.Context()) }()
+	if err := removeProjectEgressEntry(t.Context(), tx, 1, "jira.example.com", 13); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	rows, err := pool.Query(t.Context(), `SELECT item_key FROM elitea_lifecycle.permission_trimming_observed ORDER BY item_key`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, key)
+	}
+	if !slices.Equal(keys, []string{"project:api.atlassian.com"}) {
+		t.Fatalf("sightings after the removal = %v, want only the kept entry", keys)
 	}
 }

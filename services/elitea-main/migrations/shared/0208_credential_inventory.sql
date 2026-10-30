@@ -39,6 +39,14 @@
 --       told; a candidate that is used again is resolved, and one that turns
 --       up again later is a new candidate (notified again).
 --
+--   elitea_lifecycle.permission_trimming_observed
+--       When the routine first saw each granted item (candidate or not). It
+--       is the grant age of the items with no trustworthy timestamp of their
+--       own (an egress allowlist entry, a tool added to an edited selection):
+--       an item granted for less than the window is too new to judge and is
+--       never a candidate. A removed item's row is deleted, so a re-grant
+--       starts over.
+--
 -- Permissions: credentials.inventory.read and credentials.inventory.manage
 -- for super_admin and admin (administration mode); agents.trimming.manage for
 -- the project admin (default mode). 0060 returns early on an existing
@@ -99,6 +107,16 @@ CREATE TABLE IF NOT EXISTS elitea_lifecycle.permission_trimming_candidates (
 CREATE INDEX IF NOT EXISTS permission_trimming_candidates_unnotified
     ON elitea_lifecycle.permission_trimming_candidates (tenant_project_id, application_id)
     WHERE notified_at IS NULL AND resolved_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS elitea_lifecycle.permission_trimming_observed (
+    tenant_project_id  bigint NOT NULL CHECK (tenant_project_id >= 0),
+    application_id     bigint NOT NULL CHECK (application_id >= 0),
+    item_kind          text NOT NULL CHECK (item_kind IN ('tool', 'toolkit', 'credential_grant', 'egress_host')),
+    item_key           text NOT NULL CHECK (length(item_key) BETWEEN 1 AND 1024),
+    first_seen_at      timestamptz NOT NULL DEFAULT clock_timestamp(),
+    last_seen_at       timestamptz NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (tenant_project_id, application_id, item_kind, item_key)
+);
 
 DO $$
 BEGIN

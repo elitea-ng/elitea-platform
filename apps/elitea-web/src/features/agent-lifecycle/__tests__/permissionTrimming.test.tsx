@@ -55,6 +55,15 @@ beforeEach(() => {
     window_days: 30,
     since: '2026-09-29T00:00:00Z',
     items: [
+      item({
+        key: '11/53/fresh',
+        toolkit_id: 53,
+        toolkit_name: 'Confluence',
+        tool: 'fresh',
+        candidate: false,
+        removable: false,
+        too_new: true,
+      }),
       item({}),
       item({
         key: '11/51/search',
@@ -88,7 +97,7 @@ beforeEach(() => {
           { status: removeStatus },
         );
       }
-      report = { ...report, items: report.items.slice(1) };
+      report = { ...report, items: report.items.filter((row) => row.key !== '11/51/create_issue') };
       return HttpResponse.json({
         kind: 'tool',
         key: '11/51/create_issue',
@@ -111,6 +120,8 @@ describe('GovernanceTrimmingTab', () => {
     expect(screen.queryByTestId('permission-trimming-remove-tool-11/51/search')).not.toBeInTheDocument();
     expect(screen.getByTestId('permission-trimming-row-tool-11/51/search')).toHaveTextContent('4 uses');
     expect(screen.queryByTestId('permission-trimming-remove-tool-11/52/only')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('permission-trimming-remove-tool-11/53/fresh')).not.toBeInTheDocument();
+    expect(screen.getByTestId('permission-trimming-row-tool-11/53/fresh')).toHaveTextContent('Too new to judge');
     expect(screen.getByTestId('permission-trimming-row-tool-11/52/only')).toHaveTextContent(
       'remove the toolkit instead',
     );

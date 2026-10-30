@@ -5470,5 +5470,6 @@
   "pages.admin.connectorRequests.inventory.create": "Create requests for connectors in use",
   "pages.admin.connectorRequests.inventory.created": "Created {{created}} request(s); {{skipped}} connector(s) already had an open or approved request. Another connector approver must decide them.",
   "pages.admin.connectorRequests.inventory.failed": "No request could be created for {{count}} connector(s); request them by hand:",
-  "pages.admin.connectorRequests.inventoryOrigin": "Connectors in use (created by {{who}})"
+  "pages.admin.connectorRequests.inventoryOrigin": "Connectors in use (created by {{who}})",
+  "features.agentLifecycle.trimming.tooNew": "Too new to judge: granted for less than the window"
 }

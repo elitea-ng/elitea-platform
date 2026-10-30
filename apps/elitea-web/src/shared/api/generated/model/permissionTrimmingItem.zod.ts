@@ -70,6 +70,18 @@ export const PermissionTrimmingItem = zod.object({
   not_removable_reason: zod.string().optional(),
   candidate_since: zod.iso.datetime({ offset: true }).nullish(),
   notified_at: zod.iso.datetime({ offset: true }).nullish(),
+  granted_at: zod.iso
+    .datetime({ offset: true })
+    .nullish()
+    .describe(
+      "Since when the item is granted (a toolkit's attach, a grant's last change, else the routine's first sighting); null when nothing dates it yet.\n",
+    ),
+  too_new: zod
+    .boolean()
+    .optional()
+    .describe(
+      "An unused item granted for less than the window; too new to judge, so not a candidate.",
+    ),
 });
 
 export type PermissionTrimmingItem = zod.input<typeof PermissionTrimmingItem>;

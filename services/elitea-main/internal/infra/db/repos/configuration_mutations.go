@@ -401,6 +401,11 @@ func (s *currentConfigurationMutationStore) AppendLifecycleIntent(
 	if err != nil {
 		return err
 	}
+	// An entry taken off a project's egress allowlist starts its trimming
+	// window over if it is added back (permission_trimming_sightings.go).
+	if err := forgetRemovedProjectEgressSightings(ctx, s.tx, intent.Before, intent.After); err != nil {
+		return currentConfigurationStorageError(ctx, err)
+	}
 	snapshot, err := configurationapp.EncodeCurrentConfigurationLifecycleIntent(intent)
 	if err != nil || len(snapshot) == 0 || len(snapshot) > maxCurrentLifecycleSnapshotBytes {
 		return ErrInvalidCurrentConfigurationTransaction
