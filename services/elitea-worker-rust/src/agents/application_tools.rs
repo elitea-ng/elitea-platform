@@ -857,6 +857,7 @@ fn build_nested_application_resume(
             let root_event_id_of_call = insert_pipeline_resume(
                 &mut builders,
                 events,
+                applications,
                 &mut submitted_interrupt_ids,
                 decision,
             )?;
@@ -1254,6 +1255,12 @@ fn nested_application_branch(parent_branch: &str) -> String {
     format!("{parent_branch}.application_{ordinal}")
 }
 
+/// The number of application hops below the root in one descendant branch.
+///
+/// A nested agent sits at most `MAX_AGENT_TIERS - 1` hops down. A saved
+/// pipeline that the deepest agent tier calls sits one hop further, so the
+/// deepest admitted branch is `MAX_AGENT_TIERS` (ADR-0041 decision 5). The
+/// agent tiers themselves are enforced when the composition is built.
 fn application_branch_depth(branch: &str) -> Option<usize> {
     let suffix = branch
         .strip_prefix(APPLICATION_BRANCH_ROOT)?
@@ -1266,7 +1273,7 @@ fn application_branch_depth(branch: &str) -> Option<usize> {
         }
         depth += 1;
     }
-    (depth > 0 && depth < MAX_AGENT_TIERS).then_some(depth)
+    (depth > 0 && depth <= MAX_AGENT_TIERS).then_some(depth)
 }
 
 fn application_parent_branch(branch: &str) -> Option<&str> {
@@ -1366,17 +1373,20 @@ fn insert_resume_decision(
     Err(invalid_configuration())
 }
 
-/// Build the single-hop resume of one paused child PIPELINE (#973).
+/// Build the resume of one paused child PIPELINE (#973).
 ///
-/// Depth is deliberately one. A pipeline child of a nested AGENT would need the
-/// branch-walked chain above, and it carries no branch precisely because its
-/// pause is a graph interrupt projected as the root of its own descendant
-/// projector — so the two contracts are kept apart rather than blended.
-/// Returns the id of the event carrying the parent's tool call, which is what
+/// A pipeline the ROOT agent calls is one hop. A pipeline a nested saved agent
+/// calls (ADR-0041 decision 5) sits one more agent hop down for each agent
+/// tier: the branch-walked chain proves each hop, every agent above the
+/// pipeline replays its own call, and the pipeline re-enters its checkpoint
+/// once, at its own level. The agent tiers and the run's delegation depth
+/// bound the chain.
+/// Returns the id of the event carrying the root's tool call, which is what
 /// scopes the completeness check.
 fn insert_pipeline_resume(
     builders: &mut HashMap<String, ChildApplicationResumeBuilder>,
     events: &[Event],
+    applications: &ApplicationToolPresentationCatalog,
     submitted_interrupt_ids: &mut HashSet<String>,
     decision: ResolvedDirectHitlDecision,
 ) -> Result<String, NativeAgentAssemblyError> {
@@ -1384,14 +1394,13 @@ fn insert_pipeline_resume(
         .application_route()
         .ok_or_else(invalid_configuration)?
         .clone();
-    // ONE nesting level, checked on the branch the child's own events carry.
-    // A pipeline child of a nested AGENT would need the branch-walked chain
-    // `application_call_chain` performs, so the two contracts stay apart.
-    if application_branch_depth(route.branch()) != Some(1) {
-        return Err(unsupported_capability());
-    }
+    // The depth is read from the branch the child's own events carry.
+    let depth = application_branch_depth(route.branch()).ok_or_else(unsupported_capability)?;
     if !submitted_interrupt_ids.insert(decision.interrupt_id().to_owned()) {
         return Err(unsupported_capability());
+    }
+    if depth > 1 {
+        return insert_nested_pipeline_resume(builders, events, applications, decision);
     }
     let (event, call, ordinal) = exact_application_call(
         events,
@@ -1446,6 +1455,70 @@ fn insert_pipeline_resume(
         return Err(unsupported_capability());
     }
     Ok(root_event_id)
+}
+
+/// The resume of a pipeline a NESTED saved agent called (ADR-0041 decision 5).
+///
+/// The chain runs from the pipeline's own call up to the root's call. Each
+/// agent hop above the pipeline gets the builder that replays its call with
+/// its own history; the pipeline hop gets the checkpoint. A hop that already
+/// holds another kind of continuation refuses the decision.
+fn insert_nested_pipeline_resume(
+    builders: &mut HashMap<String, ChildApplicationResumeBuilder>,
+    events: &[Event],
+    applications: &ApplicationToolPresentationCatalog,
+    decision: ResolvedDirectHitlDecision,
+) -> Result<String, NativeAgentAssemblyError> {
+    let chain = application_call_chain(events, &decision)?;
+    let root_event_id = chain
+        .last()
+        .map(|hop| hop.event_id.clone())
+        .ok_or_else(invalid_configuration)?;
+    let pipeline = decision
+        .into_pipeline_resume()
+        .ok_or_else(invalid_configuration)?;
+    let mut current = builders;
+    let mut catalog = applications;
+    for (index, hop) in chain.iter().rev().enumerate() {
+        let child_catalog = catalog
+            .child_tools(&hop.tool_name)
+            .ok_or_else(invalid_configuration)?;
+        if completed_application_calls(events, &hop.event_id)?.contains_key(&hop.call_id) {
+            return Err(invalid_configuration());
+        }
+        let is_pipeline = index + 1 == chain.len();
+        let history = if is_pipeline {
+            Vec::new()
+        } else {
+            let task = application_task_with_variables(&hop.arguments)?;
+            let mut history = vec![Content::new("user").with_text(task)];
+            history.extend(application_resume_history(
+                events,
+                &hop.owned_invocation_id,
+            )?);
+            history
+        };
+        let builder = pipeline_boundary_builder(current, hop, history)?;
+        if builder.decision.is_some()
+            || builder.pipeline.is_some()
+            || builder.pipeline_descendants.is_some()
+            || builder.pipeline_static.is_some()
+            || builder.retained.is_some()
+            || builder.retained_pipeline.is_some()
+        {
+            return Err(unsupported_capability());
+        }
+        if is_pipeline {
+            if !builder.children.is_empty() {
+                return Err(unsupported_capability());
+            }
+            builder.pipeline = Some(pipeline);
+            return Ok(root_event_id);
+        }
+        current = &mut builder.children;
+        catalog = child_catalog;
+    }
+    Err(invalid_configuration())
 }
 
 pub(super) fn application_task(arguments: &Value) -> Result<&str, NativeAgentAssemblyError> {
@@ -1960,21 +2033,34 @@ fn retain_pending_nested_decisions(
         } else if let Some(pause) =
             pipeline_pause_identity(event).map_err(|_| invalid_configuration())?
         {
-            let (call_event, call, ordinal) = exact_application_call(
-                events,
-                &pause.container_invocation_id,
-                &pause.parent_call_id,
-            )?;
-            let chain = vec![ApplicationCallHop {
-                event_id: original_application_batch_id(call_event)?,
-                ordinal: application_replay_ordinal(call_event, &pause.parent_call_id)?
-                    .unwrap_or(ordinal),
-                call_id: pause.parent_call_id,
-                tool_name: call.name.to_owned(),
-                arguments: call.args.clone(),
-                owned_invocation_id: event.invocation_id.clone(),
-            }];
-            (pause.interrupt_id, chain, vec![event.clone()])
+            // A pipeline a nested saved agent called (ADR-0041 decision 5):
+            // the chain names every agent hop above it.
+            if application_branch_depth(&event.branch).is_some_and(|depth| depth > 1) {
+                let chain = application_call_chain_from(
+                    events,
+                    &event.invocation_id,
+                    &pause.container_invocation_id,
+                    &pause.parent_call_id,
+                    &event.branch,
+                )?;
+                (pause.interrupt_id, chain, vec![event.clone()])
+            } else {
+                let (call_event, call, ordinal) = exact_application_call(
+                    events,
+                    &pause.container_invocation_id,
+                    &pause.parent_call_id,
+                )?;
+                let chain = vec![ApplicationCallHop {
+                    event_id: original_application_batch_id(call_event)?,
+                    ordinal: application_replay_ordinal(call_event, &pause.parent_call_id)?
+                        .unwrap_or(ordinal),
+                    call_id: pause.parent_call_id,
+                    tool_name: call.name.to_owned(),
+                    arguments: call.args.clone(),
+                    owned_invocation_id: event.invocation_id.clone(),
+                }];
+                (pause.interrupt_id, chain, vec![event.clone()])
+            }
         } else {
             continue;
         };
@@ -3074,6 +3160,17 @@ pub(crate) async fn materialize_application_runtime(
 /// tool forwards what it drains onto the parent's descendant channel, so a
 /// pipeline child's `llm` and `tool` node progress shows up in the parent's
 /// transcript the same way a nested agent's does.
+/// Names one left-out pipeline child, up to the bound on named children.
+fn push_skipped_pipeline(skipped: &mut Vec<SkippedApplicationChild>, alias: &str, too_large: bool) {
+    if skipped.len() < MAX_SKIPPED_APPLICATION_CHILDREN {
+        skipped.push(SkippedApplicationChild {
+            agent_type: PIPELINE_APPLICATION_AGENT_TYPE.to_owned(),
+            name: crate::toolkits::bounded_label(alias),
+            too_large,
+        });
+    }
+}
+
 async fn materialize_pipeline_children(
     snapshot: &AdmittedToolSnapshot<'_>,
     platform: &PlatformClient,
@@ -3144,13 +3241,7 @@ async fn materialize_pipeline_children(
             // where the root offers its attachments to its own model; a pipeline Agent node
             // that selects it cannot run without it.
             Err(error) if is_composition_size(&error) && selected_aliases.is_none() => {
-                if skipped.len() < MAX_SKIPPED_APPLICATION_CHILDREN {
-                    skipped.push(SkippedApplicationChild {
-                        agent_type: PIPELINE_APPLICATION_AGENT_TYPE.to_owned(),
-                        name: crate::toolkits::bounded_label(&reference.alias),
-                        too_large: true,
-                    });
-                }
+                push_skipped_pipeline(&mut skipped, &reference.alias, true);
                 continue;
             }
             Err(error) => {
@@ -3158,15 +3249,15 @@ async fn materialize_pipeline_children(
                     application_id = reference.identity.0,
                     version_id = reference.identity.1,
                     error_code = error.code().as_str(),
+                    cause = error
+                        .cause()
+                        .map(super::runtime::NativeAgentAssemblyCause::code),
+                    cause_detail = error
+                        .cause()
+                        .and_then(super::runtime::NativeAgentAssemblyCause::detail),
                     "an attached pipeline child could not be built and was skipped"
                 );
-                if skipped.len() < MAX_SKIPPED_APPLICATION_CHILDREN {
-                    skipped.push(SkippedApplicationChild {
-                        agent_type: PIPELINE_APPLICATION_AGENT_TYPE.to_owned(),
-                        name: crate::toolkits::bounded_label(&reference.alias),
-                        too_large: false,
-                    });
-                }
+                push_skipped_pipeline(&mut skipped, &reference.alias, false);
                 continue;
             }
         };

@@ -401,3 +401,10 @@ The refused start returns the error above. No run starts, so no run step is writ
 
 - Add a `hitl` node before each node that sends outside the organisation or pays, in pipelines at the tiers you select.
 - Set the tiers of pipelines on their registry records.
+
+
+### Nested pauses
+
+A human approval can pause a run inside a nested composition. Examples are an agent that calls an agent or a pipeline, and a pipeline that runs a saved pipeline. Each pause shows one approval card with the path of its callers. The worker keeps a checkpoint at each level. After an approval or a rejection, the paused level continues one time. Then each caller continues. When a person rejects, the tool is not called, and the caller reads the rejection result.
+
+A pause can have a maximum of 3 delegations above it. The delegation depth limit under **Configuration › Delegation** also applies. The worker does not offer an attached pipeline that can pause in a position that it cannot resume. The worker writes a log entry with the reason `pipeline.child_pause_unsupported` and a detail code that names the pause kind. The [HITL node page](/how-tos/pipelines/nodes/interaction-nodes#hitl-nodes-in-nested-agents-and-pipelines) lists the pause kinds. To find the pipelines that the worker did not offer, search the worker logs for this reason.

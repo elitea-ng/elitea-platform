@@ -24,6 +24,11 @@
 //!   stores and continues from). Phase `static_continue` (a replacement Worker) continues the
 //!   pipeline once after its tick; phase `static_repeat` sends the same continuation again and
 //!   runs nothing.
+//! * `nested_gate` (ADR-0041 decision 5): an ordinary Agent calls a saved Agent whose saved
+//!   pipeline tool pauses on a `hitl` node. Phase `gate_start` pauses with one card whose owner
+//!   path names both calls; phase `gate_answer` re-enters the pipeline once and both Agents
+//!   continue once; phase `gate_repeat` sends the same decision again and is refused before any
+//!   model call.
 
 use super::restart_pg_tests::{
     CHECKPOINT_MIGRATION, PHASE_DEADLINE, authorized_turn, connect, model_requests, pending_card,
@@ -93,6 +98,23 @@ fn is_sensitive_mcp(scenario: &str) -> bool {
 }
 
 fn versions(scenario: &str) -> BTreeMap<Saved, Value> {
+    if scenario == "nested_gate" {
+        return BTreeMap::from([
+            (
+                (5, 6),
+                super::scoped_tests::plain_agent(vec![reference((7, 8), "pipeline", "gate")]),
+            ),
+            (
+                (7, 8),
+                saved_version(
+                    "pipeline",
+                    super::scoped_tests::GATE_GRAPH,
+                    &json!({}),
+                    Vec::new(),
+                ),
+            ),
+        ]);
+    }
     if scenario == "static_tool" {
         return BTreeMap::from([(
             (7, 8),
@@ -196,9 +218,10 @@ async fn run_scenario(url: &str, scenario: &str, phases: &[&str]) -> IsolatedPos
 /// The production ordinary assembler on the `PostgreSQL` session store.
 fn ordinary_assembler(
     pool: &sqlx::PgPool,
+    scenario: &str,
     outcomes: Vec<TestModelGatewayOutcome>,
 ) -> (OrdinaryNativeAgentAssembler, CapturedModelRequests) {
-    let (platform, model_facade, captured, _) = saved_runtime(&versions("static_tool"), outcomes);
+    let (platform, model_facade, captured, _) = saved_runtime(&versions(scenario), outcomes);
     (
         OrdinaryNativeAgentAssembler::new(
             platform,
@@ -231,6 +254,7 @@ async fn static_tool_phase(pool: &sqlx::PgPool, phase: &str, pending: &str) {
         "static_start" => {
             let (assembler, captured) = ordinary_assembler(
                 pool,
+                "static_tool",
                 vec![TestModelGatewayOutcome::Response(
                     super::scoped_tests::tool_call_response(
                         "inner-call",
@@ -259,6 +283,7 @@ async fn static_tool_phase(pool: &sqlx::PgPool, phase: &str, pending: &str) {
         "static_continue" | "static_repeat" => {
             let (assembler, captured) = ordinary_assembler(
                 pool,
+                "static_tool",
                 vec![super::scoped_tests::text("agent continued after tick")],
             );
             let request = static_tool_continuation(pending);
@@ -308,6 +333,133 @@ async fn static_tool_phase(pool: &sqlx::PgPool, phase: &str, pending: &str) {
         }
         other => panic!("unknown static_tool phase {other}"),
     }
+}
+
+/// ADR-0041 decision 5: an ordinary root → saved Agent → that Agent's saved
+/// pipeline tool → `hitl`, on the `PostgreSQL` session store, each phase in its
+/// own Worker process.
+fn nested_gate_decision(pending: &str, digest: u8) -> super::super::request::AgentExecutionRequest {
+    let mut request = ordinary_agent_request(vec![reference((5, 6), "agent", "helper")]);
+    request.binding.request_content_digest = [digest; 32];
+    request.payload.should_continue = true;
+    request.payload.hitl_resume = true;
+    request.payload.hitl_action = Some("approve".to_owned());
+    request.payload.hitl_value = Some(String::new());
+    request.payload.hitl_decisions = vec![json!({
+        "interrupt_id": pending, "action": "approve", "value": ""
+    })];
+    request
+}
+
+async fn nested_gate_phase(pool: &sqlx::PgPool, phase: &str, pending: &str) {
+    match phase {
+        "gate_start" => {
+            let (assembler, captured) = ordinary_assembler(
+                pool,
+                "nested_gate",
+                vec![
+                    TestModelGatewayOutcome::Response(super::scoped_tests::tool_call_response(
+                        "helper-call",
+                        "elitea_agent_5_v_6",
+                        &json!({"task":"review"}),
+                    )),
+                    TestModelGatewayOutcome::Response(super::scoped_tests::tool_call_response(
+                        "gate-call",
+                        "elitea_agent_7_v_8",
+                        &json!({"task":"ship it"}),
+                    )),
+                ],
+            );
+            let request = ordinary_agent_request(vec![reference((5, 6), "agent", "helper")]);
+            let (browser, paused) = run_ordinary_authorized(
+                &assembler,
+                authorized_turn(&request, "execution-gate-start", 1),
+            )
+            .await;
+            assert!(paused, "gate_start: the gate pauses the run: {browser:?}");
+            let cards = browser
+                .iter()
+                .filter(|event| event["type"] == "agent_hitl_interrupt")
+                .collect::<Vec<_>>();
+            assert_eq!(cards.len(), 1, "gate_start: one card: {browser:?}");
+            let path = cards[0]["response_metadata"]["parent_agent_path"]
+                .as_array()
+                .cloned()
+                .expect("gate_start: owner path");
+            assert_eq!(
+                path.iter()
+                    .map(|tier| tier["call_id"].clone())
+                    .collect::<Vec<_>>(),
+                vec![json!("helper-call"), json!("gate-call")]
+            );
+            assert_eq!(model_requests(&captured), 2, "gate_start: two Agent calls");
+            println!(
+                "{PENDING_MARKER}{}",
+                cards[0]["response_metadata"]["hitl_interrupts"][0]["interrupt_id"]
+                    .as_str()
+                    .expect("gate_start: interrupt id")
+            );
+        }
+        "gate_answer" => {
+            let (assembler, captured) = ordinary_assembler(
+                pool,
+                "nested_gate",
+                vec![
+                    super::scoped_tests::text("helper after the gate"),
+                    super::scoped_tests::text("root after the gate"),
+                ],
+            );
+            let request = nested_gate_decision(pending, 51);
+            let (browser, paused) = run_ordinary_authorized(
+                &assembler,
+                authorized_turn(&request, "execution-gate-answer", 1),
+            )
+            .await;
+            assert!(!paused, "gate_answer: {browser:?}");
+            assert!(
+                browser
+                    .iter()
+                    .any(|event| event["content"] == "root after the gate"),
+                "{browser:?}"
+            );
+            let requests = captured.lock().expect("captured model requests");
+            assert_eq!(requests.len(), 2, "gate_answer: each Agent continues once");
+            let helper = String::from_utf8_lossy(&requests[0].body).into_owned();
+            assert!(
+                helper.contains("APPROVED ship it"),
+                "gate_answer: the helper reads the gate's route: {helper}"
+            );
+        }
+        "gate_repeat" => {
+            let (assembler, captured) = ordinary_assembler(
+                pool,
+                "nested_gate",
+                vec![super::scoped_tests::text("never")],
+            );
+            let request = nested_gate_decision(pending, 52);
+            let refused = assembler
+                .assemble(authorized_turn(&request, "execution-gate-repeat", 1))
+                .await;
+            assert!(refused.is_err(), "gate_repeat: an answered gate is refused");
+            assert_eq!(model_requests(&captured), 0, "gate_repeat: no model call");
+        }
+        other => panic!("unknown nested_gate phase {other}"),
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_nested_pipeline_gate_of_a_saved_agent_resumes_once_after_process_replacement() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the nested pause PostgreSQL proof");
+        return;
+    };
+    let db = run_scenario(
+        &url,
+        "nested_gate",
+        &["gate_start", "gate_answer", "gate_repeat"],
+    )
+    .await;
+    db.pool.close().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -608,6 +760,11 @@ async fn postgres_scoped_child() {
     let pool = connect(&database).await;
     if scenario == "static_tool" {
         static_tool_phase(&pool, &phase, &pending).await;
+        pool.close().await;
+        return;
+    }
+    if scenario == "nested_gate" {
+        nested_gate_phase(&pool, &phase, &pending).await;
         pool.close().await;
         return;
     }

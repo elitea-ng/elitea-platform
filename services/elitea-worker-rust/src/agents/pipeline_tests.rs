@@ -4905,6 +4905,30 @@ fn a_nested_pipeline_with_ask_user_declares_its_clarifying_pause() {
     );
 }
 
+/// ADR-0041 decision 5: each pause kind a pipeline called as an Agent's tool
+/// cannot resume is refused with one typed cause whose detail names the kind.
+#[test]
+fn an_unsupported_child_pause_is_refused_with_a_cause_naming_its_kind() {
+    for (kind, detail) in [
+        ("sensitive tool approval", "sensitive_tool_approval"),
+        ("clarifying questions", "clarifying_questions"),
+        ("MCP authorization", "mcp_authorization"),
+        ("ordinary child continuation", "unscoped_agent_node"),
+        ("static continuation", "static_pause_under_graph_root"),
+        ("hitl gate", "hitl_gate_under_graph_root"),
+        ("owner path", "pause_past_owner_path_tiers"),
+    ] {
+        let error = super::pipeline::unsupported_pipeline_child_pauses(kind);
+        assert_eq!(
+            error.code(),
+            super::runtime::NativeAgentAssemblyErrorCode::UnsupportedCapability
+        );
+        let cause = error.cause().expect("typed cause");
+        assert_eq!(cause.code(), super::pipeline::UNSUPPORTED_CHILD_PAUSE_CODE);
+        assert_eq!(cause.detail(), Some(detail), "{kind}");
+    }
+}
+
 #[tokio::test]
 async fn direct_mcp_setup_failure_preserves_configuration_category_without_model() {
     let connections = Arc::new(AtomicUsize::new(0));
