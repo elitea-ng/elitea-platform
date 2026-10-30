@@ -56,6 +56,9 @@ import type {
   BrandingPackageReport,
   BrandingSettings,
   BulkInviteSummary,
+  ConnectorApprovalOutcome,
+  ConnectorRequest,
+  ConnectorRequestList,
   CredentialConsentResult,
   CredentialConsentStart,
   CredentialProbeResult,
@@ -487,6 +490,278 @@ export const getResumeExecutionSuspensionResponseMock =
     resumed_by: null,
     resume_reason: null,
   });
+
+export const getListAdminConnectorRequestsResponseMock = (
+  overrideResponse: Partial<Extract<ConnectorRequestList, object>> = {},
+): ConnectorRequestList => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    project_id: faker.number.int(),
+    target_kind: "toolkit_type",
+    target: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    toolkit_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    platform_wide: faker.datatype.boolean(),
+    project_ids: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.number.int()),
+    tools: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      name: faker.string.alpha({ length: { min: 1, max: 128 } }),
+      category: "read",
+      description: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 4096 } }),
+        undefined,
+      ]),
+      input_schema: faker.helpers.arrayElement([{}, undefined]),
+      digest: faker.helpers.arrayElement([
+        faker.helpers.fromRegExp("^[0-9a-f]{64}$"),
+        undefined,
+      ]),
+    })),
+    egress_hosts: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    data_classes: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    justification: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    state: "submitted",
+    requested_by: faker.number.int(),
+    requester_name: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    requester_email: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    decided_by: faker.helpers.arrayElement([faker.number.int(), null]),
+    decision_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    attestation_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    submitted_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    decided_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+  })),
+  total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getGetAdminConnectorRequestResponseMock = (
+  overrideResponse: Partial<Extract<ConnectorRequest, object>> = {},
+): ConnectorRequest => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  target_kind: "toolkit_type",
+  target: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  toolkit_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  platform_wide: faker.datatype.boolean(),
+  project_ids: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.number.int()),
+  tools: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    name: faker.string.alpha({ length: { min: 1, max: 128 } }),
+    category: "read",
+    description: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 4096 } }),
+      undefined,
+    ]),
+    input_schema: faker.helpers.arrayElement([{}, undefined]),
+    digest: faker.helpers.arrayElement([
+      faker.helpers.fromRegExp("^[0-9a-f]{64}$"),
+      undefined,
+    ]),
+  })),
+  egress_hosts: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  data_classes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  justification: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: "submitted",
+  requested_by: faker.number.int(),
+  requester_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  requester_email: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  decision_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  attestation_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  submitted_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getApproveConnectorRequestResponseMock = (
+  overrideResponse: Partial<Extract<ConnectorApprovalOutcome, object>> = {},
+): ConnectorApprovalOutcome => ({
+  request: {
+    id: faker.number.int(),
+    project_id: faker.number.int(),
+    target_kind: "toolkit_type",
+    target: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    toolkit_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    platform_wide: faker.datatype.boolean(),
+    project_ids: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.number.int()),
+    tools: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      name: faker.string.alpha({ length: { min: 1, max: 128 } }),
+      category: "read",
+      description: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 4096 } }),
+        undefined,
+      ]),
+      input_schema: faker.helpers.arrayElement([{}, undefined]),
+      digest: faker.helpers.arrayElement([
+        faker.helpers.fromRegExp("^[0-9a-f]{64}$"),
+        undefined,
+      ]),
+    })),
+    egress_hosts: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    data_classes: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    justification: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    state: "submitted",
+    requested_by: faker.number.int(),
+    requester_name: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    requester_email: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    decided_by: faker.helpers.arrayElement([faker.number.int(), null]),
+    decision_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    attestation_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    submitted_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    decided_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+  },
+  granted_projects: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.number.int()),
+  egress_hosts: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  ...overrideResponse,
+});
+
+export const getRejectConnectorRequestResponseMock = (
+  overrideResponse: Partial<Extract<ConnectorRequest, object>> = {},
+): ConnectorRequest => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  target_kind: "toolkit_type",
+  target: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  toolkit_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  platform_wide: faker.datatype.boolean(),
+  project_ids: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.number.int()),
+  tools: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    name: faker.string.alpha({ length: { min: 1, max: 128 } }),
+    category: "read",
+    description: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 4096 } }),
+      undefined,
+    ]),
+    input_schema: faker.helpers.arrayElement([{}, undefined]),
+    digest: faker.helpers.arrayElement([
+      faker.helpers.fromRegExp("^[0-9a-f]{64}$"),
+      undefined,
+    ]),
+  })),
+  egress_hosts: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  data_classes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  justification: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: "submitted",
+  requested_by: faker.number.int(),
+  requester_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  requester_email: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  decision_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  attestation_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  submitted_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  ...overrideResponse,
+});
 
 export const getListPlatformRoutinesResponseMock = (
   overrideResponse: Partial<Extract<PlatformRoutineListResponse, object>> = {},
@@ -3311,6 +3586,110 @@ export const getResumeExecutionSuspensionMockHandler = (
   );
 };
 
+export const getListAdminConnectorRequestsMockHandler = (
+  overrideResponse?:
+    | ConnectorRequestList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ConnectorRequestList> | ConnectorRequestList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/connector_requests",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAdminConnectorRequestsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAdminConnectorRequestMockHandler = (
+  overrideResponse?:
+    | ConnectorRequest
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ConnectorRequest> | ConnectorRequest),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/connector_requests/:requestId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAdminConnectorRequestResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getApproveConnectorRequestMockHandler = (
+  overrideResponse?:
+    | ConnectorApprovalOutcome
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ConnectorApprovalOutcome> | ConnectorApprovalOutcome),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/connector_requests/:requestId/approve",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getApproveConnectorRequestResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRejectConnectorRequestMockHandler = (
+  overrideResponse?:
+    | ConnectorRequest
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ConnectorRequest> | ConnectorRequest),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/connector_requests/:requestId/reject",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRejectConnectorRequestResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListPlatformRoutinesMockHandler = (
   overrideResponse?:
     | PlatformRoutineListResponse
@@ -5245,6 +5624,10 @@ export const getAdminMock = () => [
   getListExecutionSuspensionsMockHandler(),
   getCreateExecutionSuspensionMockHandler(),
   getResumeExecutionSuspensionMockHandler(),
+  getListAdminConnectorRequestsMockHandler(),
+  getGetAdminConnectorRequestMockHandler(),
+  getApproveConnectorRequestMockHandler(),
+  getRejectConnectorRequestMockHandler(),
   getListPlatformRoutinesMockHandler(),
   getUpdatePlatformRoutineMockHandler(),
   getListRetentionPoliciesMockHandler(),

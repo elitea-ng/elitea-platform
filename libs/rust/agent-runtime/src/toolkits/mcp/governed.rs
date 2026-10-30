@@ -45,7 +45,7 @@ use super::{
     BoundedMcpTool, MAX_MCP_SERVERS, McpAuthorizationRequiredTool, McpConnector,
     McpMaterializationError, McpMaterializationErrorCode, McpSession, RemoteMcpConfig,
     contains_tool_name, dependency_unavailable, discover_tools, invalid_configuration,
-    materialized_toolset_error, resource_exhausted, select_tools, selection_description,
+    materialized_toolset_error, resource_exhausted, selection_description,
 };
 use crate::toolkits::delegated_auth::{
     DelegatedAuthorizationCatalog, DelegatedAuthorizationRequirement, delegated_authorization_error,
@@ -254,6 +254,7 @@ impl GovernedServer {
             toolkit_id: base.toolkit_id,
             tool_list_ttl: None,
             internal_builder: false,
+            pinned_tools: base.pinned_tools.clone(),
         }
     }
 
@@ -334,7 +335,7 @@ async fn declarations(
     session: &McpSession,
 ) -> Result<Vec<ToolDeclaration>, McpMaterializationError> {
     let (tools, _) = discover_tools(config, session).await?;
-    let tools = select_tools(tools, config.selected_tools(), config.excluded_tools())?;
+    let tools = config.select_pinned_tools(tools)?;
     tools
         .iter()
         .map(|tool| ToolDeclaration::of(tool.as_ref(), server.name()))
@@ -485,7 +486,8 @@ impl GovernedMcpTool {
         let (tools, _) = discover_tools(&config, &session)
             .await
             .map_err(|error| session_error(error.code()))?;
-        let tool = tools
+        // A tool changed since its approval is not served (#1501).
+        let tool = crate::toolkits::mcp_pin::keep_pinned(tools, config.pinned_tools.as_ref())
             .into_iter()
             .find(|tool| tool.name() == name)
             .ok_or_else(|| GovernedError::ToolNotServed.into_adk_error())?;

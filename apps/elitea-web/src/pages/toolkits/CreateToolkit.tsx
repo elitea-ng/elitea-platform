@@ -15,6 +15,7 @@ import { CreateToolkitToolTabBar, ToolkitForm, ToolkitTypeSelector, type Toolkit
 import { t } from '@/shared/i18n';
 
 import { useToolkitCredentialPickerSlot } from './lib/credentialPickerSlots';
+import { useConnectorRefusal } from './lib/useConnectorRefusal';
 import { useMcpLoadTools } from './lib/useMcpLoadTools';
 import { SHAREPOINT_AUTH_MODALS } from './lib/sharepointAuthModals';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
@@ -181,10 +182,11 @@ function resolveCreateTitle(isApplication: boolean, isMCP: boolean): string {
  */
 export function CreateToolkit({ isMCP = false, isApplication = false, deps }: CreateToolkitProps): ReactNode {
   const defaultCreateToolkit = useToolkitCreate();
-  const createToolkitMutation = deps?.createToolkit ?? defaultCreateToolkit;
   const navigate = useNavigate();
   const params = useParams({ strict: false }) as CreateToolkitRouteParams;
   const projectId = useSelectedProjectId();
+  const connector = useConnectorRefusal(deps?.createToolkit ?? defaultCreateToolkit, projectId);
+  const createToolkitMutation = connector.wrapped;
   // #902: names the secret picker's CREATE entry after the project scope.
   const isTeamProject = useProjectScopeIsTeam(projectId);
 
@@ -360,10 +362,10 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
         )}
       </Box>
       <Box sx={editToolDetail ? contentSx : selectorContentSx}>
-        {createError !== undefined && (
+        {createError !== undefined && connector.orFallback(
           <Typography role="alert" variant="bodyMedium" sx={errorSx}>
             {t('pages.toolkits.createToolkit.error', 'Failed to create the toolkit.')}
-          </Typography>
+          </Typography>,
         )}
         {editToolDetail ? (
           <ToolkitForm

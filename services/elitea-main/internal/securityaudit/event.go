@@ -69,6 +69,11 @@ const (
 	// ChainLength its step count, at settlement. Written on every install,
 	// whatever the credential governance profile.
 	TypeRunStepsAnchored EventType = "ai.elitea.security.v1.run.steps.anchored"
+	// TypeConnectorApproval is a connector request state change (ADR-0044
+	// decision 1, #1501): created, submitted, withdrawn, approved (with the
+	// grants and egress entries it wrote) or rejected (action
+	// connector.request.*).
+	TypeConnectorApproval EventType = "ai.elitea.security.v1.connector.approval"
 )
 
 // OCSF class and category uids (https://schema.ocsf.io).
@@ -98,6 +103,7 @@ var ocsfClasses = map[EventType]int{
 	TypeProbe:                   OCSFClassAPIActivity,
 	TypeAgentLifecycle:          OCSFClassEntityManagement,
 	TypeRunStepsAnchored:        OCSFClassAPIActivity,
+	TypeConnectorApproval:       OCSFClassEntityManagement,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.

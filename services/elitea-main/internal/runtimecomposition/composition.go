@@ -21,6 +21,7 @@ import (
 	toolkitrun "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	connectorapprovalapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/connectorapproval"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/conversationactivity"
 	egressaudit "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/egressaudit"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
@@ -379,7 +380,20 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, fmt.Errorf("construct dispatch refusals: %w", err)
 	}
-	producer.WithEgressPolicy(egressPolicy).WithDispatchRefusals(dispatchRefusals)
+	// The connector catalogue (ADR-0044 decision 1, #1501) sits on the same
+	// seam: under approved_only (or the governed profile, or a governed run)
+	// a command naming a connector its project may not use fails at once
+	// with CONNECTOR_NOT_APPROVED (shared 0207) before its egress policy is
+	// assembled. It catches a run frozen before the mode switched.
+	connectorGate, _, err := repos.ComposeConnectorGate(dependencies.AdmissionPool, dependencies.CredentialProfile.Governed())
+	if err != nil {
+		return nil, fmt.Errorf("construct the connector catalogue gate: %w", err)
+	}
+	commandPolicy, err := connectorapprovalapp.NewCommandGate(connectorGate, egressSources, egressPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("construct the connector command gate: %w", err)
+	}
+	producer.WithEgressPolicy(commandPolicy).WithDispatchRefusals(dispatchRefusals)
 
 	dispatchPolicy := repos.ValidationDispatchPolicy{
 
@@ -588,7 +602,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct index ingest producer: %w", err)
 		}
-		indexProducer.WithEgressPolicy(egressPolicy).WithDispatchRefusals(dispatchRefusals)
+		indexProducer.WithEgressPolicy(commandPolicy).WithDispatchRefusals(dispatchRefusals)
 		indexOutbox, err := repos.NewCommandOutboxRepository(dependencies.AdmissionPool, config.IndexIngestCommandStream)
 		if err != nil {
 			return nil, fmt.Errorf("construct index ingest command outbox: %w", err)
@@ -632,7 +646,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct tool-run producer: %w", err)
 		}
-		toolkitCallToolProducer.WithEgressPolicy(egressPolicy).WithDispatchRefusals(dispatchRefusals)
+		toolkitCallToolProducer.WithEgressPolicy(commandPolicy).WithDispatchRefusals(dispatchRefusals)
 		if config.ToolkitDiscoveryEnabled {
 			toolkitDiscoveryProducer, err = commandbus.NewToolkitAvailableToolsProducer(commandbus.ToolkitAvailableToolsProducerConfig{
 				Stream: toolkitRoute.stream, Consumer: toolkitRoute.consumer, ValidationStream: config.CommandStream, ProtocolRevision: protocolRevision, EnvelopeSchemaRevision: envelopeSchemaRevision, CapabilityVersion: toolkitCallToolCapabilityVersion, Limits: toolkitLimits,
@@ -640,7 +654,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			if err != nil {
 				return nil, err
 			}
-			toolkitDiscoveryProducer.WithEgressPolicy(egressPolicy).WithDispatchRefusals(dispatchRefusals)
+			toolkitDiscoveryProducer.WithEgressPolicy(commandPolicy).WithDispatchRefusals(dispatchRefusals)
 		}
 	}
 	var agentJobs *repos.AgentExecutionJobsRepository
@@ -697,7 +711,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct agent execution producer: %w", err)
 		}
-		agentProducer.WithEgressPolicy(egressPolicy).WithDispatchRefusals(dispatchRefusals)
+		agentProducer.WithEgressPolicy(commandPolicy).WithDispatchRefusals(dispatchRefusals)
 		// The catalogue project is the SAME id the freezer resolves shared
 		// models against, taken from the same place, so the one project a turn
 		// may borrow a published agent from and the one project it may borrow a
@@ -821,6 +835,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		)
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent version freezer: %w", targetErr)
+		}
+		if connectorGate != nil {
+			agentVersions = agentVersions.WithConnectorGate(connectorGate)
 		}
 		// The SAME freezer instance the interactive start path uses. A nested
 		// child has to be frozen by the identical rules as its parent —

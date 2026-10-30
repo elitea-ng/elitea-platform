@@ -61,7 +61,7 @@ export { useMcpTokenChange } from './model/useMcpTokenChange';
  * be added until the operation is described. Describing it in v2.yaml, then
  * recording the endpoint, is the follow-up.
  */
-export { useGetRemoteMcpTools } from './model/useGetRemoteMcpTools';
+export { useGetRemoteMcpTools, type McpConnectorApprovalRequired } from './model/useGetRemoteMcpTools';
 
 // lib — the storage/flow primitives a non-UI caller (e.g. a chat tool-action
 // handler reacting to `mcp_authorization_required`, per manifest JRNY-018)

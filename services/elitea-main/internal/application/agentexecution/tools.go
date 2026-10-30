@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/connectorapproval"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
@@ -86,6 +87,25 @@ type CurrentApplicationToolSnapshotService struct {
 	// (ADR-0030 I1). nil on the Python indexing path, where the key is not
 	// written and the SDK worker serves the index tools.
 	indexes CurrentAgentIndexCatalogResolver
+	// connectors is the connector catalogue gate (ADR-0044 decision 1,
+	// #1501). nil is the open mode.
+	connectors CurrentAgentConnectorGate
+}
+
+// CurrentAgentConnectorGate answers one project's connector catalogue view
+// (connectorapproval.Gate). Under approved_only the freeze drops a toolkit
+// whose connector the project may not use, and writes an approved custom MCP
+// server's pinned tools into its frozen settings.
+type CurrentAgentConnectorGate interface {
+	ForProject(ctx context.Context, projectID int64, governedRun bool) (connectorapproval.View, error)
+}
+
+// WithConnectorGate makes the freeze apply the connector catalogue.
+func (service *CurrentApplicationToolSnapshotService) WithConnectorGate(
+	gate CurrentAgentConnectorGate,
+) *CurrentApplicationToolSnapshotService {
+	service.connectors = gate
+	return service
 }
 
 // CurrentAgentIndexCatalogResolver lists the searchable indexes of the
@@ -195,6 +215,19 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 		}
 		return nil, unsupportedStartBecause("guardrails policy resolution", err)
 	}
+	// The connector catalogue, resolved once like the guardrails, and like
+	// them a failed read fails the freeze: an unreadable approval list is
+	// not "everything approved".
+	connectors := connectorapproval.View{}
+	if service.connectors != nil {
+		connectors, err = service.connectors.ForProject(ctx, int64(request.ProjectID), false)
+		if err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return nil, contextErr
+			}
+			return nil, unsupportedStartBecause("connector catalogue resolution", err)
+		}
+	}
 
 	// Rebuilt rather than index-assigned: a blocked toolkit is DROPPED, which
 	// changes the length.
@@ -250,6 +283,16 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 		if _, internal := mcpregistry.InternalBuilderForType(toolType); internal {
 			tool["settings"] = map[string]any{"server_name": toolType}
 			frozenTools = append(frozenTools, tool)
+			continue
+		}
+		// An unapproved connector is dropped under approved_only, as a
+		// blocked toolkit is: an agent saved before the mode switched still
+		// names it, and the agent runs without it.
+		rawSettings, _ := tool["settings"].(map[string]any)
+		connector := connectors.Decide(toolType, rawSettings)
+		if !connector.Allowed {
+			slog.WarnContext(ctx, "connector catalogue: dropped an unapproved connector from an agent execution",
+				"toolkit_type", toolType, "target_kind", string(connector.Kind), "project_id", request.ProjectID)
 			continue
 		}
 		toolID, ok := positiveCurrentAgentJSONInteger(tool["id"])
@@ -308,7 +351,8 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 			return nil, unsupportedStartBecause("toolkit name resolution", err)
 		}
 		tool["id"] = toolID
-		tool["settings"] = withoutBlockedSelectedTools(ctx, policy, toolType, toolkitName, frozen)
+		tool["settings"] = withPinnedTools(connector,
+			withoutBlockedSelectedTools(ctx, policy, toolType, toolkitName, frozen))
 		tool["toolkit_name"] = toolkitName
 		if service.indexes != nil && indexcatalog.Family(toolType) {
 			if toolID > math.MaxInt32 {
@@ -926,5 +970,21 @@ func withoutBlockedSelectedTools(
 		rebuilt[key] = value
 	}
 	rebuilt["selected_tools"] = kept
+	return rebuilt
+}
+
+// withPinnedTools writes an approved custom MCP server's pinned tools into
+// its frozen settings (connectorapproval.PinnedToolsSetting): the worker
+// keeps only the listed tools whose live digest matches. Every other toolkit
+// is returned as it is.
+func withPinnedTools(decision connectorapproval.Decision, settings map[string]any) map[string]any {
+	if !decision.Gated || decision.Kind != connectorapproval.TargetCustomMCP || settings == nil {
+		return settings
+	}
+	rebuilt := make(map[string]any, len(settings)+1)
+	for key, value := range settings {
+		rebuilt[key] = value
+	}
+	rebuilt[connectorapproval.PinnedToolsSetting] = connectorapproval.PinsSetting(decision.Pins)
 	return rebuilt
 }

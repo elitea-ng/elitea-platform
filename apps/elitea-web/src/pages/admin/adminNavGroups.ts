@@ -22,6 +22,7 @@ import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
 import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import LinkOutlinedIcon from '@mui/icons-material/LinkOutlined';
 import MailOutlineIcon from '@mui/icons-material/MailOutlined';
 // The reference imports `@mui/icons-material/PeopleOutline`, which MUI 9 no
 // longer ships under that name; `PeopleOutlineOutlined` is the same glyph.
@@ -243,6 +244,16 @@ export function navGroups(): readonly AdminNavGroup[] {
           label: t('pages.admin.nav.agentRegistry', 'Agent registry'),
           icon: FactCheckOutlinedIcon,
           anyPermission: ['configuration.governance'],
+        },
+        {
+          // ADR-0044 decision 1 (#1501): the connector approval queue.
+          // `connector.approve` is granted to super_admin and admin in the
+          // administration mode by shared migration 0207.
+          id: 'connector-requests',
+          path: '/connector-requests',
+          label: t('pages.admin.nav.connectorRequests', 'Connector requests'),
+          icon: LinkOutlinedIcon,
+          anyPermission: ['connector.approve'],
         },
         {
           id: 'budgets',

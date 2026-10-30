@@ -918,7 +918,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// anchor), the canonical-form function, the AFTER INSERT chain trigger
 	// and an append-only UPDATE guard on chained rows. No data apart from the
 	// head row, no permission.
-	require.EqualValues(t, 206, Head(shared))
+	//
+	// 207: shared/0207_connector_approval.sql, default-deny catalogue mode
+	// and connector approval (ADR-0044 decision 1, #1501):
+	// centry.connector_requests (four eyes by CHECK), the
+	// CONNECTOR_NOT_APPROVED outbox refusal code, the `connector`
+	// attestation subject, and connector.approve for super_admin and admin.
+	require.EqualValues(t, 207, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

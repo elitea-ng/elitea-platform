@@ -7,6 +7,7 @@ import (
 	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
 	safetyapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/emailsettings"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -38,6 +39,7 @@ import (
 	v2budgets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/budgets"
 	v2canvaspresence "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
 	v2configs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	v2connectorrequests "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/connectorrequests"
 	v2contextmgr "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2credentialconsent "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialconsent"
@@ -85,6 +87,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/artifactbootstrap"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/connectorapproval"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/conversationactivity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/nativepolicy"
 	notificationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/notifications"
@@ -451,6 +454,10 @@ type RouterConfig struct {
 	// recertification resumed a certification suspension. Nil: the
 	// gate's snapshot age applies.
 	SuspensionChanged func(id int64)
+	// CatalogueGoverned is the process's credential governance profile
+	// (ADR-0039): when governed, the connector catalogue (ADR-0044 decision
+	// 1, #1501) is approved_only whatever the platform section says.
+	CatalogueGoverned bool
 	// OnProjectProvisioner, when set, is called once with the one shared project
 	// provisioner, after it is built. The process uses it to start the
 	// project-deletion reconciler (#1211) over the same provisioner the routes
@@ -1470,8 +1477,10 @@ func newToolkitHandler(
 	cfg RouterConfig,
 	prebuiltMCPStore *mcpregistry.PrebuiltStore,
 	journal *toolkitcleanup.Journal,
+	connectorGate *connectorapproval.Gate,
 ) *v2toolkits.Handler {
 	options := []v2toolkits.Option{
+		v2toolkits.WithConnectorGate(connectorGate),
 		v2toolkits.WithArgumentSchemas(cfg.ToolkitArgumentSchemas),
 		v2toolkits.WithDiscovery(cfg.ToolkitDiscovery),
 		v2toolkits.WithSettingsDefinitions(cfg.ToolkitSettingsDefinitions),
@@ -2069,7 +2078,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			cfg.OnToolkitCleanupJournal(cleanupJournal)
 		}
 	}
-	toolkitHandler := newToolkitHandler(cfg, prebuiltMCPStore, cleanupJournal)
+	// The connector catalogue gate and the approval queue (ADR-0044
+	// decision 1, #1501). Without a pool both stay nil: the gate is open and
+	// the request routes answer 503.
+	connectorGate, connectorRequests, err := dbrepos.ComposeConnectorGate(cfg.Pool, cfg.CatalogueGoverned)
+	if err != nil {
+		slog.Error("connector catalogue: compose the gate", "err", err)
+	}
+	toolkitHandler := newToolkitHandler(cfg, prebuiltMCPStore, cleanupJournal, connectorGate)
 	// The platform MCP vault and eliteacore handler are constructed here rather
 	// than inside /api/v2 because both REST and the root-mounted internal MCP
 	// server consume them. One instance keeps project-context validation and
@@ -2134,6 +2150,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithCostBudgets(cfg.GatewayStatus != nil),
 		v2core.WithEvents(cfg.DomainEvents),
 		v2core.WithPublishAIValidation(publishAIValidator(cfg.PredictCompleter)),
+		v2core.WithConnectorGate(connectorGate),
 	)
 	agentLifecycle.ComposePublisher(coreHandler)
 
@@ -3105,6 +3122,19 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Agent Lifecycle section.
 				r.With(central("configuration.governance")).
 					Get(v2agentlifecycle.AdminRegistryPath, v2agentlifecycle.NewHandler(agentLifecycle, nil).AdminRegistry)
+
+				// The connector approval queue (ADR-0044 decision 1, #1501):
+				// every request, approve and reject, behind connector.approve
+				// in the administration mode (shared 0207). Mounted
+				// unconditionally: a nil store answers 503.
+				{
+					connectors := v2connectorrequests.NewHandler(connectorRequests, connectorGate)
+					approve := central(connectorapproval.ApprovePermission)
+					r.With(approve).Get(v2connectorrequests.AdminRequestsPath, connectors.AdminList)
+					r.With(approve).Get(v2connectorrequests.AdminRequestPath, connectors.AdminGet)
+					r.With(approve).Post(v2connectorrequests.AdminApprovePath, connectors.Approve)
+					r.With(approve).Post(v2connectorrequests.AdminRejectPath, connectors.Reject)
+				}
 
 				// Regular app admin endpoints (with projectID)
 				//
@@ -4470,6 +4500,22 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(requirePublish).Post(v2agentreleases.RollbackPath, releases.Rollback)
 					r.With(projectPermission("models.applications.versions.get")).
 						Get(v2agentreleases.RevisionsPath, releases.Revisions)
+				}
+				// The connector approval queue, project side (ADR-0044
+				// decision 1, #1501). Reads take the toolkit list
+				// permission; a request, its submit and its withdrawal take
+				// the permission that adds a toolkit
+				// (models.applications.tools.create).
+				{
+					connectors := v2connectorrequests.NewHandler(connectorRequests, connectorGate)
+					readToolkits := projectPermission("models.applications.tools.list")
+					requestConnector := projectPermission(connectorapproval.RequestPermission)
+					r.With(readToolkits).Get(v2connectorrequests.CataloguePath, connectors.Catalogue)
+					r.With(readToolkits).Get(v2connectorrequests.RequestsPath, connectors.ListProject)
+					r.With(requestConnector).Post(v2connectorrequests.RequestsPath, connectors.Create)
+					r.With(readToolkits).Get(v2connectorrequests.RequestPath, connectors.GetProject)
+					r.With(requestConnector).Post(v2connectorrequests.SubmitPath, connectors.Submit)
+					r.With(requestConnector).Post(v2connectorrequests.WithdrawPath, connectors.Withdraw)
 				}
 				// Agent lifecycle governance (ADR-0040 decisions 1, 3, 5 and
 				// 6). The reads take the version reads' permission; a change

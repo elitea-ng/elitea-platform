@@ -16,6 +16,7 @@ import { useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
 
 import { useScheduleCredentialsSelectSlot, useToolkitCredentialPickerSlot } from './lib/credentialPickerSlots';
 import { useCopyLinkMenuItem, useToolkitActionPermissions } from './lib/useToolkitHeaderActions';
+import { useConnectorRefusal } from './lib/useConnectorRefusal';
 import { useToolkitSaveControls } from './lib/useToolkitSaveControls';
 import { ToolkitSaveBar } from './ui/ToolkitSaveBar';
 import { useConfigurationTabSlots } from './lib/configurationTabSlots';
@@ -219,10 +220,11 @@ function useSaveToolkitMutation(deps: EditToolkitDeps | undefined): ReturnType<t
 }
 
 export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNode {
-  const saveToolkitMutation = useSaveToolkitMutation(deps);
   const params = useParams({ strict: false }) as EditToolkitRouteParams;
   const toolkitId = params.toolkitId ?? params.mcpId ?? params.appId;
   const projectId = useSelectedProjectId();
+  const connector = useConnectorRefusal(useSaveToolkitMutation(deps), projectId);
+  const saveToolkitMutation = connector.wrapped;
   // #952/ELITEA-1092,1094,1099: threaded to `ConfigurationTab`/`ToolkitForm`
   // below, which gates the "Credential Configuration Change" modal on it.
   const isTeamProject = useIsTeamProject(projectId);
@@ -350,7 +352,7 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
           {!indexesTab.hidden && <BaseTab label={t('pages.toolkits.editToolkit.indexesTab', 'Indexes')} />}
         </BaseTabs>
       </Box>
-      {saveControls.saveError !== undefined && (
+      {saveControls.saveError !== undefined && connector.orFallback(
         <Typography
           role="alert"
           variant="bodyMedium"
@@ -358,7 +360,7 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
           sx={saveErrorSx}
         >
           {saveControls.saveError}
-        </Typography>
+        </Typography>,
       )}
       <Box
         sx={contentSx}

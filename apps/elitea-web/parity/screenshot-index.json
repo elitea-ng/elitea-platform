@@ -729,6 +729,16 @@
     },
     {
       "file": null,
+      "route": "/admin/app/connector-requests",
+      "targetComponent": "src/pages/admin/ConnectorRequests.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "The connector approval queue (ADR-0044 decision 1, issue 1501): every project's connector requests with the requester, declared tools and categories, egress hosts and data classes, Approve and Reject with a reason. WIRED and NOT snapshotted yet — see the EXEMPT entry in scripts/check-visual-coverage.mjs.",
+      "surface": "admin",
+      "baseline": null
+    },
+    {
+      "file": null,
       "route": "/admin/app/retention",
       "targetComponent": "src/pages/admin/Retention.tsx",
       "theme": "dark",

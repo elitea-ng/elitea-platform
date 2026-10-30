@@ -30,6 +30,16 @@ interface McpSyncToolsResult {
   error?: string;
   tools?: readonly unknown[];
   args_schemas?: Record<string, unknown>;
+  /**
+   * The `approved_only` connector catalogue (ADR-0044 decision 1, #1501):
+   * the server is not an approved connector of the project, so `tools` is an
+   * unstored preview to request it with.
+   */
+  connector_approval_required?: boolean;
+  connector_target_kind?: string;
+  connector_target?: string;
+  /** An approved server's tools the approval does not pin (new or changed since); never offered. */
+  hidden_tools?: readonly string[];
 }
 
 /** Some deployments wrap the result in `{result: {...}}`; others return it at the top level (baseline: `useGetRemoteMcpTools.hooks.js:94`). */

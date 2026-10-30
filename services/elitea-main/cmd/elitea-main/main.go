@@ -3044,6 +3044,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		EvalOrchestrator:  evalOrchestrator,
 		ReleaseGate:       releaseGate,
 		SuspensionChanged: executionSuspensions.gate.Notify,
+		// ADR-0044 decision 1 (#1501): the governed profile forces the
+		// connector catalogue to approved_only.
+		CatalogueGoverned: credentialAdmission.Governed(),
 		// WebhookRepo is the sixth instance of the same defect, and it hid one
 		// step deeper than the other five. Its gate mounts a subrouter —
 		// `r.Mount("/webhooks/prompt_lib/{projectID}", webhook.NewHandler(...).Routes())`

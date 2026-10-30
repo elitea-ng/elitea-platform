@@ -154,7 +154,7 @@ FROM p_1.chat_message_group WHERE uuid = $1`, responseMessageID).Scan(&isStreami
 		t.Fatal(err)
 	}
 	if isStreaming || isError == nil || *isError != "true" || errorText == nil || *errorText != refusalTestMessage ||
-		errorCode == nil || *errorCode != refusalChatErrorCode {
+		errorCode == nil || *errorCode != refusalChatErrorCodes[refusalCodeEgressPolicyInvalid] {
 		t.Fatalf("answer streaming=%v is_error=%v error=%v code=%v", isStreaming, isError, errorText, errorCode)
 	}
 }

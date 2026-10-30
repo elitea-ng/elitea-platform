@@ -18,6 +18,7 @@ import (
 
 	toolkitrun "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/connectorapproval"
 	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
@@ -133,6 +134,9 @@ type Handler struct {
 	// did before the policy existed. See type_policy.go for the composition
 	// contract this handler's catalogue path must keep.
 	typePolicy ToolkitTypePolicySource
+	// connectors is the connector catalogue gate (ADR-0044 decision 1,
+	// #1501). Nil is the open mode. See connector_gate.go.
+	connectors *connectorapproval.Gate
 	// projections contribute catalogue entries no snapshot can hold: the
 	// pre-built MCP servers an operator registered, and the toolkits an
 	// admitted provider publishes. See projection.go for the merge contract.
@@ -294,7 +298,7 @@ func (h *Handler) ListTypes(w http.ResponseWriter, r *http.Request) {
 	// last so a blocked type cannot re-enter through the tenant read or through
 	// a policy row.
 	merged = filterTypesByPolicy(
-		h.typePolicyFilter(r.Context(), "toolkit_types", projectID), merged)
+		h.catalogueFilter(r.Context(), "toolkit_types", projectID), merged)
 	merged = filterBlockedToolkitTypes(h.guardrailPolicy(r.Context(), "toolkit_types"), merged)
 
 	writeJSON(w, http.StatusOK, map[string]any{"rows": merged, "total": len(merged)})
@@ -700,7 +704,7 @@ func (h *Handler) listTypeSchemas(w http.ResponseWriter, r *http.Request, discov
 	// exist; these two steps decide who may see them, in this order and no
 	// other — type_policy.go states the contract and why each rule is there.
 	catalogue = applyTypePolicyToCatalogue(
-		h.typePolicyFilter(r.Context(), "list_type_schemas", chi.URLParam(r, "projectID")),
+		h.catalogueFilter(r.Context(), "list_type_schemas", chi.URLParam(r, "projectID")),
 		catalogue,
 	)
 	catalogue = applyGuardrailsToCatalogue(
@@ -918,6 +922,12 @@ func (h *Handler) ForkToolkit(w http.ResponseWriter, r *http.Request) {
 	}
 	if forked, _ := body["type"].(string); h.refuseBlockedToolkitType(w, r, "fork_toolkit", forked) {
 		return
+	}
+	if forked, _ := body["type"].(string); forked != "" {
+		forkedSettings, _ := body["settings"].(map[string]any)
+		if h.refuseUnapprovedConnector(w, r, "fork_toolkit", projectID, forked, forkedSettings) {
+			return
+		}
 	}
 	tool, err := h.repo.ForkToolkit(r.Context(), projectID, body)
 	if err != nil {
@@ -1250,6 +1260,13 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if h.refuseBlockedToolkitType(w, r, "create_toolkit", createdType) {
 		return
 	}
+	// The connector catalogue (ADR-0044 decision 1): under approved_only the
+	// type, the pre-built MCP server or the custom MCP URL must be approved
+	// for this project.
+	createdSettings, _ := body["settings"].(map[string]any)
+	if h.refuseUnapprovedConnector(w, r, "create_toolkit", projectID, createdType, createdSettings) {
+		return
+	}
 	// A create with no settings at all has no bucket either (review S2): a
 	// file-store toolkit is judged as if it sent empty settings. An update
 	// without settings is a rename and stays unjudged.
@@ -1354,6 +1371,16 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	updatedType, _ := body["type"].(string)
 	if h.refuseBlockedToolkitType(w, r, "update_toolkit", updatedType) {
 		return
+	}
+	// The connector catalogue (ADR-0044 decision 1): an update that restates
+	// the type or replaces the settings configures the connector, so it is
+	// judged on what the toolkit becomes (the body's type and settings, the
+	// stored ones where the body omits them). A rename is not judged, so an
+	// unapproved toolkit can still be renamed and deleted.
+	if newSettings, hasSettings := body["settings"].(map[string]any); hasSettings || updatedType != "" {
+		if h.refuseUnapprovedUpdate(w, r, projectID, toolkitID, updatedType, newSettings, hasSettings) {
+			return
+		}
 	}
 	// An update that changes the TYPE to a file-store type and sends no
 	// settings keeps the stored settings, so it is judged against them: a

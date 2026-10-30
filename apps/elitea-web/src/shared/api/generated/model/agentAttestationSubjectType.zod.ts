@@ -47,6 +47,7 @@ export const AgentAttestationSubjectType = zod.enum([
   "release",
   "toolkit",
   "index",
+  "connector",
 ]);
 
 export type AgentAttestationSubjectType = zod.input<

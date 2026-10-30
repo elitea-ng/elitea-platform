@@ -167,6 +167,12 @@ components:
       schema:
         type: string
       description: Project identifier (extracted from URL path)
+    ConnectorRequestId:
+      name: request_id
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+      description: The connector request id.
     RunStepRunId:
       name: run_id
       in: path
@@ -7832,7 +7838,7 @@ components:
 
     AgentAttestationSubjectType:
       type: string
-      enum: [agent, release, toolkit, index]
+      enum: [agent, release, toolkit, index, connector]
       example: agent
 
     AgentAttestationCreate:
@@ -8172,6 +8178,217 @@ components:
         suspensions:
           type: array
           items: { $ref: '#/components/schemas/ExecutionSuspension' }
+
+    ConnectorRequestState:
+      type: string
+      enum: [draft, submitted, approved, rejected, withdrawn]
+      example: submitted
+
+    ConnectorTargetKind:
+      type: string
+      description: >
+        toolkit_type is a toolkit type (not an MCP one, not a platform-internal
+        one); prebuilt_mcp is a pre-built MCP catalogue key; custom_mcp is a
+        custom MCP server URL (https, canonicalised).
+      enum: [toolkit_type, prebuilt_mcp, custom_mcp]
+      example: toolkit_type
+
+    ConnectorToolCategory:
+      type: string
+      description: The ADR-0041 tool category. A tool declared without one is write.
+      enum: [read, write, delete, external_send, payment, code_execution]
+      example: read
+
+    ConnectorDeclaredTool:
+      type: object
+      required: [name, category]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 128 }
+        category: { $ref: '#/components/schemas/ConnectorToolCategory' }
+        description: { type: string, maxLength: 4096 }
+        input_schema:
+          type: object
+          description: >
+            The tool's JSON Schema as the MCP server lists it. Required for a
+            custom MCP server's tools: its digest pins the tool.
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): an MCP tool's inputSchema is the SERVER's JSON Schema,
+            not this spec's; it is stored and echoed untouched and only
+            digested (internal/application/connectorapproval/digest.go:1 and
+            internal/api/v2/connectorrequests/handler.go:86).
+        digest:
+          type: string
+          readOnly: true
+          description: >
+            Lower-case hex SHA-256 of the canonical JSON of the tool's name,
+            description and input schema; set by the server for a custom MCP
+            server's tools.
+          pattern: '^[0-9a-f]{64}$'
+
+    ConnectorRequestCreate:
+      type: object
+      additionalProperties: false
+      required: [target_kind, target, justification]
+      properties:
+        target_kind: { $ref: '#/components/schemas/ConnectorTargetKind' }
+        target:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          description: The toolkit type, the pre-built MCP catalogue key or the custom MCP server URL.
+        platform_wide:
+          type: boolean
+          description: Requests the connector for every project. Exclusive with project_ids.
+        project_ids:
+          type: array
+          maxItems: 64
+          description: The projects to grant; this project when empty and not platform_wide.
+          items: { type: integer, format: int64, minimum: 1 }
+        tools:
+          type: array
+          maxItems: 256
+          items: { $ref: '#/components/schemas/ConnectorDeclaredTool' }
+        egress_hosts:
+          type: array
+          maxItems: 64
+          description: Worker egress allowlist entries (a host or a host:port) the approval appends.
+          items: { type: string, minLength: 1 }
+        data_classes:
+          type: array
+          maxItems: 32
+          items: { type: string, pattern: '^[a-z0-9][a-z0-9_.-]{0,63}$' }
+        justification: { type: string, minLength: 1, maxLength: 4000 }
+        submit:
+          type: boolean
+          description: Submits the request at once instead of keeping a draft.
+
+    ConnectorRequest:
+      type: object
+      required: [id, project_id, target_kind, target, toolkit_type, platform_wide, project_ids, tools,
+                 egress_hosts, data_classes, justification, state, requested_by, requester_name,
+                 requester_email, decided_by, decision_reason, attestation_id, created_at, updated_at,
+                 submitted_at, decided_at]
+      properties:
+        id: { type: integer, format: int64 }
+        project_id:
+          type: integer
+          format: int64
+          description: The project the request was made in.
+        target_kind: { $ref: '#/components/schemas/ConnectorTargetKind' }
+        target: { type: string }
+        toolkit_type:
+          type: string
+          description: The toolkit type the approval grants (mcp_<key> for a pre-built server, mcp for a custom one).
+        platform_wide: { type: boolean }
+        project_ids:
+          type: array
+          items: { type: integer, format: int64 }
+        tools:
+          type: array
+          items: { $ref: '#/components/schemas/ConnectorDeclaredTool' }
+        egress_hosts:
+          type: array
+          items: { type: string }
+        data_classes:
+          type: array
+          items: { type: string }
+        justification: { type: string }
+        state: { $ref: '#/components/schemas/ConnectorRequestState' }
+        requested_by: { type: integer, format: int64 }
+        requester_name: { type: string, nullable: true }
+        requester_email: { type: string, nullable: true }
+        decided_by: { type: integer, format: int64, nullable: true }
+        decision_reason: { type: string }
+        attestation_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: The architecture attestation an approval checked, when the setting required one.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        submitted_at: { type: string, format: date-time, nullable: true }
+        decided_at: { type: string, format: date-time, nullable: true }
+
+    ConnectorRequestList:
+      type: object
+      required: [rows, total]
+      properties:
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/ConnectorRequest' }
+        total: { type: integer }
+
+    ConnectorDecisionReason:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: { type: string, maxLength: 1000 }
+
+    ConnectorApprovalOutcome:
+      type: object
+      required: [request, granted_projects, egress_hosts]
+      properties:
+        request: { $ref: '#/components/schemas/ConnectorRequest' }
+        granted_projects:
+          type: array
+          description: The projects granted the toolkit type; empty for a platform-wide approval.
+          items: { type: integer, format: int64 }
+        egress_hosts:
+          type: array
+          description: The egress allowlist entries the approval added.
+          items: { type: string }
+
+    ConnectorCatalogueEntry:
+      type: object
+      required: [target_kind, target]
+      properties:
+        target_kind: { $ref: '#/components/schemas/ConnectorTargetKind' }
+        target: { type: string }
+        tools:
+          type: array
+          description: custom_mcp only, the approved tool names.
+          items: { type: string }
+
+    ConnectorCatalogue:
+      type: object
+      required: [mode, platform_mode, governed, require_architecture_attestation, approved]
+      properties:
+        mode:
+          type: string
+          enum: [open, approved_only]
+          description: The mode in force for this project.
+        platform_mode:
+          type: string
+          enum: [open, approved_only]
+          description: The catalogue.mode platform setting.
+        governed:
+          type: boolean
+          description: The deployment runs the governed credential profile, which forces approved_only.
+        require_architecture_attestation: { type: boolean }
+        approved:
+          type: array
+          items: { $ref: '#/components/schemas/ConnectorCatalogueEntry' }
+
+    ConnectorRefusal:
+      type: object
+      required: [error, code, message]
+      properties:
+        error: { type: string, description: 'The code again: some clients read error only.' }
+        code:
+          type: string
+          description: >
+            invalid_request, not_found, connector_request_state_conflict,
+            self_approval_refused, connector_request_requester_only,
+            attestation_missing, toolkit_type_disabled, egress_allowlist_full,
+            connector_not_approved or connector_catalogue_unavailable.
+        message: { type: string }
+        target_kind:
+          type: string
+          description: connector_not_approved only, the kind of target a request would approve.
+        target:
+          type: string
+          description: connector_not_approved only, the target a request would approve.
 
     ExecutionSuspensionCreate:
       type: object
@@ -18789,6 +19006,177 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  /admin/connector_requests:
+    get:
+      operationId: listAdminConnectorRequests
+      summary: List the connector requests of every project
+      description: >
+        The admin Connector requests page (ADR-0044 decision 1). Every
+        request of every project, newest first, at most 500, optionally of
+        one state or one project. Gated on `connector.approve` in the
+        administration mode.
+      tags: [admin]
+      parameters:
+        - name: state
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/ConnectorRequestState' }
+        - name: project_id
+          in: query
+          required: false
+          description: Only the requests made in this project.
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: The requests
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRequestList' }
+        '400':
+          description: (code invalid_request) A filter that is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: (code connector_catalogue_unavailable) The connector requests are not composed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+
+  /admin/connector_requests/{request_id}:
+    parameters:
+      - $ref: '#/components/parameters/ConnectorRequestId'
+    get:
+      operationId: getAdminConnectorRequest
+      summary: Read a connector request
+      description: >
+        Any project's request, with its declared tools, egress hosts, data
+        classes and requester. Gated on `connector.approve` in the
+        administration mode.
+      tags: [admin]
+      responses:
+        '200':
+          description: The request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRequest' }
+        '400':
+          description: (code invalid_request) A malformed request id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) No such request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+
+  /admin/connector_requests/{request_id}/approve:
+    parameters:
+      - $ref: '#/components/parameters/ConnectorRequestId'
+    post:
+      operationId: approveConnectorRequest
+      summary: Approve a connector request
+      description: >
+        Approves a submitted request. One transaction writes the toolkit-type
+        grants of the request's projects (or enables the type platform-wide),
+        appends its egress hosts to the worker egress allowlists, pins a
+        custom MCP server's declared tools, and moves the request to
+        approved. The approver may not be the requester (code
+        self_approval_refused, also a database constraint). When the
+        `catalogue.require_architecture_attestation` setting is on, a valid
+        `architecture` attestation of subject `connector` with the request id
+        must exist in the request's project. Written to the security audit
+        outbox as connector.request.approved. Gated on `connector.approve` in
+        the administration mode.
+      tags: [admin]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConnectorDecisionReason' }
+      responses:
+        '200':
+          description: The approved request and what the approval wrote
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorApprovalOutcome' }
+        '400':
+          description: (code invalid_request) A malformed request id or body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks connector.approve, or (code self_approval_refused) the caller made the request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '404':
+          description: (code not_found) No such request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '409':
+          description: >-
+            (code connector_request_state_conflict) The request is not
+            submitted; (code attestation_missing) the required architecture
+            attestation is missing; (code toolkit_type_disabled) the toolkit
+            type is disabled platform-wide; (code egress_allowlist_full) an
+            egress allowlist would exceed its bound
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+
+  /admin/connector_requests/{request_id}/reject:
+    parameters:
+      - $ref: '#/components/parameters/ConnectorRequestId'
+    post:
+      operationId: rejectConnectorRequest
+      summary: Reject a connector request
+      description: >
+        Rejects a submitted request with a reason; nothing is granted. The
+        approver may not be the requester. Written to the security audit
+        outbox as connector.request.rejected. Gated on `connector.approve` in
+        the administration mode.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConnectorDecisionReason' }
+      responses:
+        '200':
+          description: The rejected request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRequest' }
+        '400':
+          description: (code invalid_request) A malformed request id or a missing reason
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks connector.approve, or (code self_approval_refused) the caller made the request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '404':
+          description: (code not_found) No such request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '409':
+          description: (code connector_request_state_conflict) The request is not submitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+
   /admin/platform_routines/administration:
     get:
       operationId: listPlatformRoutines
@@ -25201,6 +25589,220 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+
+  /elitea_core/connector_catalogue/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getConnectorCatalogue
+      summary: Read the project's connector catalogue mode
+      description: >
+        The catalogue mode in force for the project (ADR-0044 decision 1) and
+        the connectors approved for it. In `approved_only` a toolkit type, a
+        pre-built MCP server or a custom MCP server URL is usable only after
+        an approved connector request names the project (or the whole
+        platform). A governed deployment always reads `approved_only`.
+        Requires `models.applications.tools.list`.
+      tags: [toolkits]
+      responses:
+        '200':
+          description: The mode and the approved connectors
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorCatalogue' }
+        '400':
+          description: (code invalid_request) A malformed project id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: (code connector_catalogue_unavailable) The catalogue could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+
+  /elitea_core/connector_requests/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listConnectorRequests
+      summary: List the project's connector requests
+      description: >
+        The project's connector requests, newest first, at most 500,
+        optionally of one state. Requires `models.applications.tools.list`.
+      tags: [toolkits]
+      parameters:
+        - name: state
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/ConnectorRequestState' }
+      responses:
+        '200':
+          description: The requests
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRequestList' }
+        '400':
+          description: (code invalid_request) A filter that is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    post:
+      operationId: createConnectorRequest
+      summary: Request a connector
+      description: >
+        Drafts (or, with `submit`, submits) a request to use a toolkit type,
+        a pre-built MCP server or a custom MCP server URL. It names the
+        projects (this project by default) or the whole platform, the tools
+        with their ADR-0041 categories (an undeclared category is write), the
+        egress hosts, the data classes and a justification. A custom MCP
+        server's tools need their `input_schema`: the server computes each
+        tool's digest, and only the approved names and digests are served.
+        Written to the security audit outbox as connector.request.created
+        (and connector.request.submitted). Requires
+        `models.applications.tools.create`.
+      tags: [toolkits]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConnectorRequestCreate' }
+      responses:
+        '201':
+          description: The request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRequest' }
+        '400':
+          description: (code invalid_request) A malformed body, an unknown target kind, a platform-internal toolkit type, an egress host or a data class that is not valid, or a custom MCP tool without an input schema
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) A named project does not exist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+
+  /elitea_core/connector_requests/prompt_lib/{project_id}/{request_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/ConnectorRequestId'
+    get:
+      operationId: getConnectorRequest
+      summary: Read a connector request of the project
+      description: Requires `models.applications.tools.list`.
+      tags: [toolkits]
+      responses:
+        '200':
+          description: The request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRequest' }
+        '400':
+          description: (code invalid_request) A malformed id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) No such request in the project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+
+  /elitea_core/connector_requests/prompt_lib/{project_id}/{request_id}/submit:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/ConnectorRequestId'
+    post:
+      operationId: submitConnectorRequest
+      summary: Submit a draft connector request
+      description: >
+        Sends a draft to the approvers. Only the requester may submit it.
+        Written to the security audit outbox as connector.request.submitted.
+        Requires `models.applications.tools.create`.
+      tags: [toolkits]
+      responses:
+        '200':
+          description: The submitted request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRequest' }
+        '400':
+          description: (code invalid_request) A malformed id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or (code connector_request_requester_only) is not the requester
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '404':
+          description: (code not_found) No such request in the project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '409':
+          description: (code connector_request_state_conflict) The request is not a draft
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+
+  /elitea_core/connector_requests/prompt_lib/{project_id}/{request_id}/withdraw:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/ConnectorRequestId'
+    post:
+      operationId: withdrawConnectorRequest
+      summary: Withdraw a connector request
+      description: >
+        Withdraws a draft or submitted request. Only the requester may
+        withdraw it. Written to the security audit outbox as
+        connector.request.withdrawn. Requires
+        `models.applications.tools.create`.
+      tags: [toolkits]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConnectorDecisionReason' }
+      responses:
+        '200':
+          description: The withdrawn request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRequest' }
+        '400':
+          description: (code invalid_request) A malformed id or body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or (code connector_request_requester_only) is not the requester
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '404':
+          description: (code not_found) No such request in the project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
+        '409':
+          description: (code connector_request_state_conflict) The request was already decided or withdrawn
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectorRefusal' }
 
   /elitea_core/run_steps/prompt_lib/{project_id}/{run_id}:
     parameters:

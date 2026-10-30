@@ -55,6 +55,12 @@ import type {
 
 import type {
   ClientUpgradeRequiredResponse,
+  ConnectorCatalogue,
+  ConnectorDecisionReason,
+  ConnectorRefusal,
+  ConnectorRequest,
+  ConnectorRequestCreate,
+  ConnectorRequestList,
   DesktopOperationError,
   ErrorResponse,
   GetToolkitToolResult202,
@@ -65,6 +71,7 @@ import type {
   InternalMcpPatStatus,
   InvalidClientVersionError,
   InvalidClientVersionResponse,
+  ListConnectorRequestsParams,
   ListToolkitAvailableTools200,
   ListToolkitInstancesParams,
   McpDcrProxyRequest,
@@ -93,6 +100,34 @@ import type {
 } from "../model";
 
 import { eliteaFetch } from ".././mutator";
+
+// https://stackoverflow.com/questions/49579094/typescript-conditional-types-filter-out-readonly-properties-pick-only-requir/49579497#49579497
+type IfEquals<X, Y, A = X, B = never> =
+  (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? A : B;
+
+type WritableKeys<T> = {
+  [P in keyof T]-?: IfEquals<
+    { [Q in P]: T[P] },
+    { -readonly [Q in P]: T[P] },
+    P
+  >;
+}[keyof T];
+
+type UnionToIntersection<U> = (U extends any ? (k: U) => void : never) extends (
+  k: infer I,
+) => void
+  ? I
+  : never;
+type DistributeReadOnlyOverUnions<T> = T extends any ? NonReadonly<T> : never;
+
+type Writable<T> = Pick<T, WritableKeys<T>>;
+type NonReadonly<T> = [T] extends [UnionToIntersection<T>]
+  ? {
+      [P in keyof Writable<T>]: T[P] extends object
+        ? NonReadonly<NonNullable<T[P]>>
+        : T[P];
+    }
+  : DistributeReadOnlyOverUnions<T>;
 
 export type HTTPStatusCode1xx = 100 | 101 | 102 | 103;
 export type HTTPStatusCode2xx = 200 | 201 | 202 | 203 | 204 | 205 | 206 | 207;
@@ -657,6 +692,1500 @@ export function useRegisterMcpOAuthClient<
   const queryOptions = getRegisterMcpOAuthClientQueryOptions(
     projectId,
     mcpDcrProxyRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getConnectorCatalogueResponse200 = {
+  data: ConnectorCatalogue;
+  status: 200;
+};
+
+export type getConnectorCatalogueResponse400 = {
+  data: ConnectorRefusal;
+  status: 400;
+};
+
+export type getConnectorCatalogueResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getConnectorCatalogueResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getConnectorCatalogueResponse503 = {
+  data: ConnectorRefusal;
+  status: 503;
+};
+
+export type getConnectorCatalogueResponseSuccess =
+  getConnectorCatalogueResponse200 & {
+    headers: Headers;
+  };
+export type getConnectorCatalogueResponseError = (
+  | getConnectorCatalogueResponse400
+  | getConnectorCatalogueResponse401
+  | getConnectorCatalogueResponse403
+  | getConnectorCatalogueResponse503
+) & {
+  headers: Headers;
+};
+
+export type getConnectorCatalogueResponse =
+  getConnectorCatalogueResponseSuccess | getConnectorCatalogueResponseError;
+
+export const getGetConnectorCatalogueUrl = (projectId: string) => {
+  return `/elitea_core/connector_catalogue/prompt_lib/${projectId}`;
+};
+
+/**
+ * The catalogue mode in force for the project (ADR-0044 decision 1) and the connectors approved for it. In `approved_only` a toolkit type, a pre-built MCP server or a custom MCP server URL is usable only after an approved connector request names the project (or the whole platform). A governed deployment always reads `approved_only`. Requires `models.applications.tools.list`.
+ * @summary Read the project's connector catalogue mode
+ */
+export const getConnectorCatalogue = async (
+  projectId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getConnectorCatalogueResponse> => {
+  return eliteaFetch<getConnectorCatalogueResponse>(
+    getGetConnectorCatalogueUrl(projectId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetConnectorCatalogueQueryKey = (projectId: string) => {
+  return [`/elitea_core/connector_catalogue/prompt_lib/${projectId}`] as const;
+};
+
+export const getGetConnectorCatalogueQueryOptions = <
+  TData = Awaited<ReturnType<typeof getConnectorCatalogue>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConnectorCatalogue>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetConnectorCatalogueQueryKey(projectId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getConnectorCatalogue>>
+  > = ({ signal }) =>
+    getConnectorCatalogue(projectId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getConnectorCatalogue>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetConnectorCatalogueQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getConnectorCatalogue>>
+>;
+export type GetConnectorCatalogueQueryError =
+  ConnectorRefusal | N401Response | N403Response;
+
+export function useGetConnectorCatalogue<
+  TData = Awaited<ReturnType<typeof getConnectorCatalogue>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConnectorCatalogue>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getConnectorCatalogue>>,
+          TError,
+          Awaited<ReturnType<typeof getConnectorCatalogue>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetConnectorCatalogue<
+  TData = Awaited<ReturnType<typeof getConnectorCatalogue>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConnectorCatalogue>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getConnectorCatalogue>>,
+          TError,
+          Awaited<ReturnType<typeof getConnectorCatalogue>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetConnectorCatalogue<
+  TData = Awaited<ReturnType<typeof getConnectorCatalogue>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConnectorCatalogue>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read the project's connector catalogue mode
+ */
+
+export function useGetConnectorCatalogue<
+  TData = Awaited<ReturnType<typeof getConnectorCatalogue>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConnectorCatalogue>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetConnectorCatalogueQueryOptions(projectId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listConnectorRequestsResponse200 = {
+  data: ConnectorRequestList;
+  status: 200;
+};
+
+export type listConnectorRequestsResponse400 = {
+  data: ConnectorRefusal;
+  status: 400;
+};
+
+export type listConnectorRequestsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listConnectorRequestsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listConnectorRequestsResponseSuccess =
+  listConnectorRequestsResponse200 & {
+    headers: Headers;
+  };
+export type listConnectorRequestsResponseError = (
+  | listConnectorRequestsResponse400
+  | listConnectorRequestsResponse401
+  | listConnectorRequestsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listConnectorRequestsResponse =
+  listConnectorRequestsResponseSuccess | listConnectorRequestsResponseError;
+
+export const getListConnectorRequestsUrl = (
+  projectId: string,
+  params?: ListConnectorRequestsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/connector_requests/prompt_lib/${projectId}?${stringifiedParams}`
+    : `/elitea_core/connector_requests/prompt_lib/${projectId}`;
+};
+
+/**
+ * The project's connector requests, newest first, at most 500, optionally of one state. Requires `models.applications.tools.list`.
+ * @summary List the project's connector requests
+ */
+export const listConnectorRequests = async (
+  projectId: string,
+  params?: ListConnectorRequestsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listConnectorRequestsResponse> => {
+  return eliteaFetch<listConnectorRequestsResponse>(
+    getListConnectorRequestsUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListConnectorRequestsQueryKey = (
+  projectId: string,
+  params?: ListConnectorRequestsParams,
+) => {
+  return [
+    `/elitea_core/connector_requests/prompt_lib/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListConnectorRequestsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listConnectorRequests>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListConnectorRequestsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConnectorRequests>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListConnectorRequestsQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listConnectorRequests>>
+  > = ({ signal }) =>
+    listConnectorRequests(projectId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listConnectorRequests>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListConnectorRequestsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listConnectorRequests>>
+>;
+export type ListConnectorRequestsQueryError =
+  ConnectorRefusal | N401Response | N403Response;
+
+export function useListConnectorRequests<
+  TData = Awaited<ReturnType<typeof listConnectorRequests>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  params: undefined | ListConnectorRequestsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConnectorRequests>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listConnectorRequests>>,
+          TError,
+          Awaited<ReturnType<typeof listConnectorRequests>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListConnectorRequests<
+  TData = Awaited<ReturnType<typeof listConnectorRequests>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListConnectorRequestsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConnectorRequests>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listConnectorRequests>>,
+          TError,
+          Awaited<ReturnType<typeof listConnectorRequests>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListConnectorRequests<
+  TData = Awaited<ReturnType<typeof listConnectorRequests>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListConnectorRequestsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConnectorRequests>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the project's connector requests
+ */
+
+export function useListConnectorRequests<
+  TData = Awaited<ReturnType<typeof listConnectorRequests>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListConnectorRequestsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listConnectorRequests>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListConnectorRequestsQueryOptions(
+    projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createConnectorRequestResponse201 = {
+  data: ConnectorRequest;
+  status: 201;
+};
+
+export type createConnectorRequestResponse400 = {
+  data: ConnectorRefusal;
+  status: 400;
+};
+
+export type createConnectorRequestResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createConnectorRequestResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createConnectorRequestResponse404 = {
+  data: ConnectorRefusal;
+  status: 404;
+};
+
+export type createConnectorRequestResponseSuccess =
+  createConnectorRequestResponse201 & {
+    headers: Headers;
+  };
+export type createConnectorRequestResponseError = (
+  | createConnectorRequestResponse400
+  | createConnectorRequestResponse401
+  | createConnectorRequestResponse403
+  | createConnectorRequestResponse404
+) & {
+  headers: Headers;
+};
+
+export type createConnectorRequestResponse =
+  createConnectorRequestResponseSuccess | createConnectorRequestResponseError;
+
+export const getCreateConnectorRequestUrl = (projectId: string) => {
+  return `/elitea_core/connector_requests/prompt_lib/${projectId}`;
+};
+
+/**
+ * Drafts (or, with `submit`, submits) a request to use a toolkit type, a pre-built MCP server or a custom MCP server URL. It names the projects (this project by default) or the whole platform, the tools with their ADR-0041 categories (an undeclared category is write), the egress hosts, the data classes and a justification. A custom MCP server's tools need their `input_schema`: the server computes each tool's digest, and only the approved names and digests are served. Written to the security audit outbox as connector.request.created (and connector.request.submitted). Requires `models.applications.tools.create`.
+ * @summary Request a connector
+ */
+export const createConnectorRequest = async (
+  projectId: string,
+  connectorRequestCreate: NonReadonly<ConnectorRequestCreate>,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createConnectorRequestResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createConnectorRequestResponse>(
+    getCreateConnectorRequestUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(connectorRequestCreate),
+    },
+  );
+};
+
+export const getCreateConnectorRequestQueryKey = (
+  projectId: string,
+  connectorRequestCreate?: NonReadonly<ConnectorRequestCreate>,
+) => {
+  return [
+    "POST",
+    `/elitea_core/connector_requests/prompt_lib/${projectId}`,
+    connectorRequestCreate,
+  ] as const;
+};
+
+export const getCreateConnectorRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof createConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  connectorRequestCreate: NonReadonly<ConnectorRequestCreate>,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConnectorRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateConnectorRequestQueryKey(projectId, connectorRequestCreate);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createConnectorRequest>>
+  > = ({ signal }) =>
+    createConnectorRequest(projectId, connectorRequestCreate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof createConnectorRequest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateConnectorRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createConnectorRequest>>
+>;
+export type CreateConnectorRequestQueryError =
+  ConnectorRefusal | N401Response | N403Response;
+
+export function useCreateConnectorRequest<
+  TData = Awaited<ReturnType<typeof createConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  connectorRequestCreate: NonReadonly<ConnectorRequestCreate>,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConnectorRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createConnectorRequest>>,
+          TError,
+          Awaited<ReturnType<typeof createConnectorRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateConnectorRequest<
+  TData = Awaited<ReturnType<typeof createConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  connectorRequestCreate: NonReadonly<ConnectorRequestCreate>,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConnectorRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createConnectorRequest>>,
+          TError,
+          Awaited<ReturnType<typeof createConnectorRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateConnectorRequest<
+  TData = Awaited<ReturnType<typeof createConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  connectorRequestCreate: NonReadonly<ConnectorRequestCreate>,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConnectorRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Request a connector
+ */
+
+export function useCreateConnectorRequest<
+  TData = Awaited<ReturnType<typeof createConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  connectorRequestCreate: NonReadonly<ConnectorRequestCreate>,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConnectorRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateConnectorRequestQueryOptions(
+    projectId,
+    connectorRequestCreate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getConnectorRequestResponse200 = {
+  data: ConnectorRequest;
+  status: 200;
+};
+
+export type getConnectorRequestResponse400 = {
+  data: ConnectorRefusal;
+  status: 400;
+};
+
+export type getConnectorRequestResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getConnectorRequestResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getConnectorRequestResponse404 = {
+  data: ConnectorRefusal;
+  status: 404;
+};
+
+export type getConnectorRequestResponseSuccess =
+  getConnectorRequestResponse200 & {
+    headers: Headers;
+  };
+export type getConnectorRequestResponseError = (
+  | getConnectorRequestResponse400
+  | getConnectorRequestResponse401
+  | getConnectorRequestResponse403
+  | getConnectorRequestResponse404
+) & {
+  headers: Headers;
+};
+
+export type getConnectorRequestResponse =
+  getConnectorRequestResponseSuccess | getConnectorRequestResponseError;
+
+export const getGetConnectorRequestUrl = (
+  projectId: string,
+  requestId: number,
+) => {
+  return `/elitea_core/connector_requests/prompt_lib/${projectId}/${requestId}`;
+};
+
+/**
+ * Requires `models.applications.tools.list`.
+ * @summary Read a connector request of the project
+ */
+export const getConnectorRequest = async (
+  projectId: string,
+  requestId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getConnectorRequestResponse> => {
+  return eliteaFetch<getConnectorRequestResponse>(
+    getGetConnectorRequestUrl(projectId, requestId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetConnectorRequestQueryKey = (
+  projectId: string,
+  requestId: number,
+) => {
+  return [
+    `/elitea_core/connector_requests/prompt_lib/${projectId}/${requestId}`,
+  ] as const;
+};
+
+export const getGetConnectorRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof getConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  requestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConnectorRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetConnectorRequestQueryKey(projectId, requestId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getConnectorRequest>>
+  > = ({ signal }) =>
+    getConnectorRequest(projectId, requestId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      requestId !== null &&
+      requestId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getConnectorRequest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetConnectorRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getConnectorRequest>>
+>;
+export type GetConnectorRequestQueryError =
+  ConnectorRefusal | N401Response | N403Response;
+
+export function useGetConnectorRequest<
+  TData = Awaited<ReturnType<typeof getConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  requestId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConnectorRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getConnectorRequest>>,
+          TError,
+          Awaited<ReturnType<typeof getConnectorRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetConnectorRequest<
+  TData = Awaited<ReturnType<typeof getConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  requestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConnectorRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getConnectorRequest>>,
+          TError,
+          Awaited<ReturnType<typeof getConnectorRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetConnectorRequest<
+  TData = Awaited<ReturnType<typeof getConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  requestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConnectorRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read a connector request of the project
+ */
+
+export function useGetConnectorRequest<
+  TData = Awaited<ReturnType<typeof getConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  requestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConnectorRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetConnectorRequestQueryOptions(
+    projectId,
+    requestId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type submitConnectorRequestResponse200 = {
+  data: ConnectorRequest;
+  status: 200;
+};
+
+export type submitConnectorRequestResponse400 = {
+  data: ConnectorRefusal;
+  status: 400;
+};
+
+export type submitConnectorRequestResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type submitConnectorRequestResponse403 = {
+  data: ConnectorRefusal;
+  status: 403;
+};
+
+export type submitConnectorRequestResponse404 = {
+  data: ConnectorRefusal;
+  status: 404;
+};
+
+export type submitConnectorRequestResponse409 = {
+  data: ConnectorRefusal;
+  status: 409;
+};
+
+export type submitConnectorRequestResponseSuccess =
+  submitConnectorRequestResponse200 & {
+    headers: Headers;
+  };
+export type submitConnectorRequestResponseError = (
+  | submitConnectorRequestResponse400
+  | submitConnectorRequestResponse401
+  | submitConnectorRequestResponse403
+  | submitConnectorRequestResponse404
+  | submitConnectorRequestResponse409
+) & {
+  headers: Headers;
+};
+
+export type submitConnectorRequestResponse =
+  submitConnectorRequestResponseSuccess | submitConnectorRequestResponseError;
+
+export const getSubmitConnectorRequestUrl = (
+  projectId: string,
+  requestId: number,
+) => {
+  return `/elitea_core/connector_requests/prompt_lib/${projectId}/${requestId}/submit`;
+};
+
+/**
+ * Sends a draft to the approvers. Only the requester may submit it. Written to the security audit outbox as connector.request.submitted. Requires `models.applications.tools.create`.
+ * @summary Submit a draft connector request
+ */
+export const submitConnectorRequest = async (
+  projectId: string,
+  requestId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<submitConnectorRequestResponse> => {
+  return eliteaFetch<submitConnectorRequestResponse>(
+    getSubmitConnectorRequestUrl(projectId, requestId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getSubmitConnectorRequestQueryKey = (
+  projectId: string,
+  requestId: number,
+) => {
+  return [
+    "POST",
+    `/elitea_core/connector_requests/prompt_lib/${projectId}/${requestId}/submit`,
+  ] as const;
+};
+
+export const getSubmitConnectorRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof submitConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response,
+>(
+  projectId: string,
+  requestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof submitConnectorRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSubmitConnectorRequestQueryKey(projectId, requestId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof submitConnectorRequest>>
+  > = ({ signal }) =>
+    submitConnectorRequest(projectId, requestId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      requestId !== null &&
+      requestId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof submitConnectorRequest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SubmitConnectorRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof submitConnectorRequest>>
+>;
+export type SubmitConnectorRequestQueryError = ConnectorRefusal | N401Response;
+
+export function useSubmitConnectorRequest<
+  TData = Awaited<ReturnType<typeof submitConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response,
+>(
+  projectId: string,
+  requestId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof submitConnectorRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof submitConnectorRequest>>,
+          TError,
+          Awaited<ReturnType<typeof submitConnectorRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSubmitConnectorRequest<
+  TData = Awaited<ReturnType<typeof submitConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response,
+>(
+  projectId: string,
+  requestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof submitConnectorRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof submitConnectorRequest>>,
+          TError,
+          Awaited<ReturnType<typeof submitConnectorRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSubmitConnectorRequest<
+  TData = Awaited<ReturnType<typeof submitConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response,
+>(
+  projectId: string,
+  requestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof submitConnectorRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Submit a draft connector request
+ */
+
+export function useSubmitConnectorRequest<
+  TData = Awaited<ReturnType<typeof submitConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response,
+>(
+  projectId: string,
+  requestId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof submitConnectorRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSubmitConnectorRequestQueryOptions(
+    projectId,
+    requestId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type withdrawConnectorRequestResponse200 = {
+  data: ConnectorRequest;
+  status: 200;
+};
+
+export type withdrawConnectorRequestResponse400 = {
+  data: ConnectorRefusal;
+  status: 400;
+};
+
+export type withdrawConnectorRequestResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type withdrawConnectorRequestResponse403 = {
+  data: ConnectorRefusal;
+  status: 403;
+};
+
+export type withdrawConnectorRequestResponse404 = {
+  data: ConnectorRefusal;
+  status: 404;
+};
+
+export type withdrawConnectorRequestResponse409 = {
+  data: ConnectorRefusal;
+  status: 409;
+};
+
+export type withdrawConnectorRequestResponseSuccess =
+  withdrawConnectorRequestResponse200 & {
+    headers: Headers;
+  };
+export type withdrawConnectorRequestResponseError = (
+  | withdrawConnectorRequestResponse400
+  | withdrawConnectorRequestResponse401
+  | withdrawConnectorRequestResponse403
+  | withdrawConnectorRequestResponse404
+  | withdrawConnectorRequestResponse409
+) & {
+  headers: Headers;
+};
+
+export type withdrawConnectorRequestResponse =
+  | withdrawConnectorRequestResponseSuccess
+  | withdrawConnectorRequestResponseError;
+
+export const getWithdrawConnectorRequestUrl = (
+  projectId: string,
+  requestId: number,
+) => {
+  return `/elitea_core/connector_requests/prompt_lib/${projectId}/${requestId}/withdraw`;
+};
+
+/**
+ * Withdraws a draft or submitted request. Only the requester may withdraw it. Written to the security audit outbox as connector.request.withdrawn. Requires `models.applications.tools.create`.
+ * @summary Withdraw a connector request
+ */
+export const withdrawConnectorRequest = async (
+  projectId: string,
+  requestId: number,
+  connectorDecisionReason?: ConnectorDecisionReason,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<withdrawConnectorRequestResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<withdrawConnectorRequestResponse>(
+    getWithdrawConnectorRequestUrl(projectId, requestId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(connectorDecisionReason),
+    },
+  );
+};
+
+export const getWithdrawConnectorRequestQueryKey = (
+  projectId: string,
+  requestId: number,
+  connectorDecisionReason?: ConnectorDecisionReason,
+) => {
+  return [
+    "POST",
+    `/elitea_core/connector_requests/prompt_lib/${projectId}/${requestId}/withdraw`,
+    connectorDecisionReason,
+  ] as const;
+};
+
+export const getWithdrawConnectorRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof withdrawConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response,
+>(
+  projectId: string,
+  requestId: number,
+  connectorDecisionReason?: ConnectorDecisionReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof withdrawConnectorRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getWithdrawConnectorRequestQueryKey(
+      projectId,
+      requestId,
+      connectorDecisionReason,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof withdrawConnectorRequest>>
+  > = ({ signal }) =>
+    withdrawConnectorRequest(projectId, requestId, connectorDecisionReason, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      requestId !== null &&
+      requestId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof withdrawConnectorRequest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type WithdrawConnectorRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof withdrawConnectorRequest>>
+>;
+export type WithdrawConnectorRequestQueryError =
+  ConnectorRefusal | N401Response;
+
+export function useWithdrawConnectorRequest<
+  TData = Awaited<ReturnType<typeof withdrawConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response,
+>(
+  projectId: string,
+  requestId: number,
+  connectorDecisionReason: undefined | ConnectorDecisionReason,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof withdrawConnectorRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof withdrawConnectorRequest>>,
+          TError,
+          Awaited<ReturnType<typeof withdrawConnectorRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useWithdrawConnectorRequest<
+  TData = Awaited<ReturnType<typeof withdrawConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response,
+>(
+  projectId: string,
+  requestId: number,
+  connectorDecisionReason?: ConnectorDecisionReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof withdrawConnectorRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof withdrawConnectorRequest>>,
+          TError,
+          Awaited<ReturnType<typeof withdrawConnectorRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useWithdrawConnectorRequest<
+  TData = Awaited<ReturnType<typeof withdrawConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response,
+>(
+  projectId: string,
+  requestId: number,
+  connectorDecisionReason?: ConnectorDecisionReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof withdrawConnectorRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Withdraw a connector request
+ */
+
+export function useWithdrawConnectorRequest<
+  TData = Awaited<ReturnType<typeof withdrawConnectorRequest>>,
+  TError = ConnectorRefusal | N401Response,
+>(
+  projectId: string,
+  requestId: number,
+  connectorDecisionReason?: ConnectorDecisionReason,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof withdrawConnectorRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getWithdrawConnectorRequestQueryOptions(
+    projectId,
+    requestId,
+    connectorDecisionReason,
     options,
   );
 

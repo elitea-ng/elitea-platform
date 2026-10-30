@@ -742,6 +742,11 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 	//	worker_egress     → platformconfig.LoadWorkerEgressSettings, read by
 	//	                    the worker egress policy resolver whenever a worker
 	//	                    command is prepared (ADR-0044 decision 2, #1490)
+	//	catalogue         → platformconfig.LoadCatalogueSettings, read by the
+	//	                    connector gate (application/connectorapproval)
+	//	                    on the toolkit catalogue, toolkit writes, MCP
+	//	                    discovery, the agent freeze and every worker
+	//	                    command (ADR-0044 decision 1, #1501)
 	//	session_policy    → platformconfig.LoadSessionPolicy through a cached
 	//	                    reader: browsersession.Manager clamps every new
 	//	                    session and holds every validated one to it, and
@@ -769,6 +774,9 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		// ADR-0044 decision 2 (#1490): every worker command's preparation
 		// reads it (workeregress.Resolver).
 		"worker_egress": true,
+		// ADR-0044 decision 1 (#1501): the toolkit catalogue, the toolkit and
+		// MCP write paths, the agent freeze and every worker command.
+		"catalogue": true,
 		// ADR-0042 decision 5 (#1496): session creation and validation.
 		"session_policy": true,
 		// ADR-0041 decision 3 (#1496, #1498): every agent lease renewal.

@@ -1190,7 +1190,13 @@ JOIN (VALUES
     -- Issue 1499, run step evidence (ADR-0042). Existing databases get the
     -- grant from migrations/shared/0205_run_steps.sql.
     ('super_admin', 'runs.evidence.read'),
-    ('admin', 'runs.evidence.read')
+    ('admin', 'runs.evidence.read'),
+    -- Issue 1501, connector approval (ADR-0044 decision 1). Platform
+    -- administrators approve or reject connector requests. Existing
+    -- databases get the grant from
+    -- migrations/shared/0207_connector_approval.sql.
+    ('super_admin', 'connector.approve'),
+    ('admin', 'connector.approve')
 ) AS grant_row(role_name, permission) ON grant_row.role_name = role.name
 WHERE role.mode = 'administration'
 ON CONFLICT (role_id, permission) DO NOTHING;

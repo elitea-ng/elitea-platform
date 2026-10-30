@@ -30,6 +30,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/connectorapproval"
 	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
 	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
@@ -59,6 +60,9 @@ func mustJSON(v any) []byte {
 }
 
 type Handler struct {
+	// connectors is the connector catalogue gate (ADR-0044 decision 1,
+	// #1501): mcp_connector_gate.go. Nil is the open mode.
+	connectors *connectorapproval.Gate
 	// memoryUsers journals the removal of a user's personal memories from a
 	// project the user leaves; nil when the deployment keeps none in the
 	// vector store.
@@ -5110,6 +5114,36 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The connector catalogue (ADR-0044 decision 1): an unapproved server's
+	// tools are a preview for the request form and are not stored; an
+	// approved custom server answers only its pinned tools.
+	projectParam := chi.URLParam(r, "projectID")
+	connector, err := h.mcpDiscoveryDecision(ctx, projectParam, body.ToolkitType, endpoint.String())
+	if err != nil {
+		slog.ErrorContext(ctx, "mcp_sync_tools: connector catalogue read failed", "project_id", projectParam, "err", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"success": false,
+			"error":   "the connector catalogue could not be read",
+		})
+		return
+	}
+	var hiddenTools []string
+	if connector.pinsOnly {
+		tools, hiddenTools = connectorapproval.FilterTools(connector.pins, tools)
+	}
+	if connector.approvalRequired {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success":                     true,
+			"tools":                       tools,
+			"count":                       len(tools),
+			"server_url":                  endpoint.String(),
+			"connector_approval_required": true,
+			"connector_target_kind":       string(connector.kind),
+			"connector_target":            connector.target,
+		})
+		return
+	}
+
 	// The registration is stored under the toolkit type, because that is the
 	// name a worker matches a toolkit against: the SDK looks the toolkit's
 	// `type` up among the server names that `tools_list` returns
@@ -5133,12 +5167,16 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	answer := map[string]any{
 		"success":    true,
 		"tools":      tools,
 		"count":      len(tools),
 		"server_url": endpoint.String(),
-	})
+	}
+	if len(hiddenTools) > 0 {
+		answer["hidden_tools"] = hiddenTools
+	}
+	writeJSON(w, http.StatusOK, answer)
 }
 
 // mcpSyncDefaultTimeout and mcpSyncMaxTimeout bound the outbound discovery.
