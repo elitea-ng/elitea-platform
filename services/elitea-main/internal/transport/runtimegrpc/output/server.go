@@ -16,6 +16,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	configurationdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/configurations"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/outputcontract"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runcaps"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/nodeevent"
@@ -1212,6 +1213,13 @@ func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFai
 		if cap, ok := runcaps.WorkerCap(payload.GetSafeMessage()); ok {
 			return runtimeFailurePolicy{Code: runcaps.Code, SafeMessage: payload.GetSafeMessage(), Cap: cap}, true
 		}
+	}
+	// The final answer did not meet its output contract after one retry
+	// (ADR-0043 decision 2): one fixed sentence under MODEL_RESPONSE_INVALID,
+	// not retryable, so no new error code reaches a Main of an earlier
+	// release.
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_RESPONSE_INVALID && payload.GetSafeMessage() == outputcontract.ViolationSafeMessage {
+		return runtimeFailurePolicy{Code: outputcontract.ViolationCode, SafeMessage: outputcontract.ViolationSafeMessage}, true
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT {
 		switch payload.GetSafeMessage() {

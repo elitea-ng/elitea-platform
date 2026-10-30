@@ -9931,6 +9931,54 @@ components:
         tier_cap: { type: number, description: The platform's cap at that tier. }
         requested: { type: number, description: The value the save asked for. }
 
+    OutputContract:
+      type: object
+      additionalProperties: false
+      required: [type]
+      description: >
+        The output contract of an agent version or of a pipeline LLM node
+        (ADR-0043 decision 2). The worker sends a JSON Schema to the model
+        provider as its response format where the provider takes one,
+        validates the final answer, retries once with the validation error as
+        feedback, and ends the run with OUTPUT_CONTRACT_VIOLATION when the
+        second answer fails too. Set exactly the one field that the type
+        names.
+      properties:
+        type: { type: string, enum: [json_schema, regex, format] }
+        schema:
+          type: object
+          additionalProperties: true
+          description: >
+            json_schema only. A JSON Schema (draft 2020-12 unless it names
+            another draft) of at most 32 KiB and 32 levels of nesting. Only
+            local references (#/...) are allowed.
+          x-elitea-passthrough: >-
+            NOTE(#1500): an author-written JSON Schema, stored verbatim in
+            application_versions.meta and checked with a JSON Schema compiler
+            on save (internal/domain/outputcontract).
+        pattern:
+          type: string
+          maxLength: 1024
+          description: >
+            regex only. An RE2 expression that must match the whole answer
+            (no back references or look-around).
+        format: { type: string, enum: [json, markdown, csv], description: format only. }
+
+    OutputContractRefusal:
+      type: object
+      required: [error, code, reason]
+      description: The 422 of a save whose output contract is not valid (OUTPUT_CONTRACT_INVALID).
+      properties:
+        error: { type: string, maxLength: 512 }
+        code: { type: string, enum: [OUTPUT_CONTRACT_INVALID] }
+        reason:
+          type: string
+          enum: [shape, schema_too_large, schema_invalid, pattern_too_long, pattern_invalid, format_unknown, structured_output]
+        node_id:
+          type: string
+          maxLength: 256
+          description: The pipeline LLM node of the refused contract; absent for an agent.
+
     RunCapOverrideRequest:
       type: object
       additionalProperties: false
@@ -10033,6 +10081,13 @@ components:
             RUN_CAP_ABOVE_TIER. Omit a key, or set it to null, to keep the
             tier's cap. `step_limit` still bounds each agent loop: with
             `max_model_turns` the lower of the two stops first.
+        output_contract:
+          allOf: [{ $ref: '#/components/schemas/OutputContract' }]
+          nullable: true
+          description: >
+            The shape the agent's final answer must have (ADR-0043 decision
+            2). Null or absent is no contract. A save with an invalid
+            contract is refused with 422 OUTPUT_CONTRACT_INVALID.
       additionalProperties: true
       x-elitea-passthrough: >-
         NOTE(W2): DB jsonb column `application_versions.meta` round-trips
@@ -31586,10 +31641,13 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '422':
-          description: (RUN_CAP_ABOVE_TIER, RUN_CAP_INVALID) meta.run_caps raises a platform run cap or is not a valid cap
+          description: (RUN_CAP_ABOVE_TIER, RUN_CAP_INVALID) meta.run_caps raises a platform run cap or is not a valid cap; (OUTPUT_CONTRACT_INVALID) meta.output_contract or the output_contract of a pipeline LLM node is not a valid contract
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/RunCapRefusal' }
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/RunCapRefusal'
+                  - $ref: '#/components/schemas/OutputContractRefusal'
 
   /elitea_core/admin_published_agents/administration:
     get:
@@ -32192,10 +32250,13 @@ paths:
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
         '422':
-          description: (RUN_CAP_ABOVE_TIER, RUN_CAP_INVALID) meta.run_caps raises a platform run cap or is not a valid cap
+          description: (RUN_CAP_ABOVE_TIER, RUN_CAP_INVALID) meta.run_caps raises a platform run cap or is not a valid cap; (OUTPUT_CONTRACT_INVALID) meta.output_contract or the output_contract of a pipeline LLM node is not a valid contract
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/RunCapRefusal' }
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/RunCapRefusal'
+                  - $ref: '#/components/schemas/OutputContractRefusal'
 
     patch:
       operationId: getApplicationVersionDetailExpanded
@@ -32308,10 +32369,13 @@ paths:
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
         '422':
-          description: (RUN_CAP_ABOVE_TIER, RUN_CAP_INVALID) meta.run_caps raises a platform run cap or is not a valid cap
+          description: (RUN_CAP_ABOVE_TIER, RUN_CAP_INVALID) meta.run_caps raises a platform run cap or is not a valid cap; (OUTPUT_CONTRACT_INVALID) meta.output_contract or the output_contract of a pipeline LLM node is not a valid contract
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/RunCapRefusal' }
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/RunCapRefusal'
+                  - $ref: '#/components/schemas/OutputContractRefusal'
 
   # NOTE(W1, waiver W-009): aligned to the router's real contract —
   # internal/api/router.go:343 registers

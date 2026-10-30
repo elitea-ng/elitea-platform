@@ -69,8 +69,28 @@ type Producer struct {
 	approval ApprovalPolicyResolver
 	// runCaps answers an agent execution command's run caps (ADR-0041
 	// decision 3); nil leaves the field absent (the worker's defaults).
-	runCaps  RunCapsResolver
-	refusals DispatchRefusalRecorder
+	runCaps RunCapsResolver
+	// outputContracts marks an agent execution command whose frozen
+	// definition holds an output contract (ADR-0043 decision 2); nil never
+	// marks one.
+	outputContracts OutputContractsResolver
+	refusals        DispatchRefusalRecorder
+}
+
+// OutputContractsResolver answers field 70 of an agent execution command
+// (ADR-0043 decision 2; workeroutputcontract.Resolver): present only when the
+// frozen definition holds an output contract, so a worker that cannot
+// enforce one refuses the command. An error refuses the command and the
+// dispatch is retried.
+type OutputContractsResolver interface {
+	WorkerOutputContracts(ctx context.Context, command *runtimev1.WorkerCommandV1) (*runtimev1.WorkerOutputContractsV1, error)
+}
+
+// WithOutputContracts makes every agent execution command this producer
+// prepares carry field 70 when its definition holds an output contract.
+func (p *Producer) WithOutputContracts(resolver OutputContractsResolver) *Producer {
+	p.outputContracts = resolver
+	return p
 }
 
 // RunCapsResolver answers the run caps an agent execution command carries
@@ -238,6 +258,13 @@ func (p *Producer) prepareCommand(ctx context.Context, command *runtimev1.Worker
 			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker run caps: %w", err)
 		}
 		command.RunCaps = caps
+	}
+	if p.outputContracts != nil && command.GetAgentExecution() != nil {
+		contracts, err := p.outputContracts.WorkerOutputContracts(ctx, command)
+		if err != nil {
+			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker output contracts: %w", err)
+		}
+		command.OutputContracts = contracts
 	}
 	if err := validateBoundedStrings(command, p.config.Limits.MaxStringBytes); err != nil {
 		return executionapp.PreparedCommandEnvelope{}, err

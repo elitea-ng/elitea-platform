@@ -571,6 +571,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			if !h.checkRunCaps(w, r, projectID, "", vBody) {
 				return
 			}
+			if !checkOutputContracts(w, vBody) {
+				return
+			}
 			req.InitialVersion = versionFromBody(vBody, ownerID)
 			initialVariables, _ = vBody["variables"].([]any)
 			initialTags, _ = vBody["tags"].([]any)
@@ -1212,6 +1215,9 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 	if !h.checkRunCaps(w, r, projectID, applicationID, body) {
 		return
 	}
+	if !checkOutputContracts(w, body) {
+		return
+	}
 
 	input := versionFromBody(body, ownerID)
 	input.CopySkillsFromVersionID = optionalSkillSourceVersionID(body["copy_skills_from_version_id"])
@@ -1368,6 +1374,11 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	// `step_limit` included, which is one of the gates the Rust runtime
 	// admits a stored agent on, so an agent could be edited into being
 	// unrunnable by a request that answered 201.
+	// ADR-0043 decision 2: an invalid output contract (meta or a pipeline
+	// LLM node) is refused before anything is written.
+	if !checkOutputContracts(w, body) {
+		return
+	}
 	if meta, ok := body["meta"].(map[string]any); ok {
 		if !h.checkRunCaps(w, r, projectID, applicationID, body) {
 			return

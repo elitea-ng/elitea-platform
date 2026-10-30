@@ -3545,6 +3545,39 @@
                         "notes": {
                           "type": "string"
                         },
+                        "output_contract": {
+                          "type": "object",
+                          "nullable": true,
+                          "required": [
+                            "type"
+                          ],
+                          "properties": {
+                            "format": {
+                              "type": "string",
+                              "enum": [
+                                "csv",
+                                "json",
+                                "markdown"
+                              ]
+                            },
+                            "pattern": {
+                              "type": "string",
+                              "max_length": 1024
+                            },
+                            "schema": {
+                              "type": "object",
+                              "open": true
+                            },
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "format",
+                                "json_schema",
+                                "regex"
+                              ]
+                            }
+                          }
+                        },
                         "parent_author_id": {
                           "type": "string"
                         },
@@ -3751,6 +3784,39 @@
                           },
                           "notes": {
                             "type": "string"
+                          },
+                          "output_contract": {
+                            "type": "object",
+                            "nullable": true,
+                            "required": [
+                              "type"
+                            ],
+                            "properties": {
+                              "format": {
+                                "type": "string",
+                                "enum": [
+                                  "csv",
+                                  "json",
+                                  "markdown"
+                                ]
+                              },
+                              "pattern": {
+                                "type": "string",
+                                "max_length": 1024
+                              },
+                              "schema": {
+                                "type": "object",
+                                "open": true
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "format",
+                                  "json_schema",
+                                  "regex"
+                                ]
+                              }
+                            }
                           },
                           "parent_author_id": {
                             "type": "string"
@@ -8093,6 +8159,39 @@
                           },
                           "notes": {
                             "type": "string"
+                          },
+                          "output_contract": {
+                            "type": "object",
+                            "nullable": true,
+                            "required": [
+                              "type"
+                            ],
+                            "properties": {
+                              "format": {
+                                "type": "string",
+                                "enum": [
+                                  "csv",
+                                  "json",
+                                  "markdown"
+                                ]
+                              },
+                              "pattern": {
+                                "type": "string",
+                                "max_length": 1024
+                              },
+                              "schema": {
+                                "type": "object",
+                                "open": true
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "format",
+                                  "json_schema",
+                                  "regex"
+                                ]
+                              }
+                            }
                           },
                           "parent_author_id": {
                             "type": "string"
