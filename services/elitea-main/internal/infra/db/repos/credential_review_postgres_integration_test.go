@@ -32,6 +32,8 @@ ALTER TABLE centry.project ADD COLUMN owner_id INTEGER NOT NULL DEFAULT 11;
 ALTER TABLE p_1.entity_tool_mapping
     ADD COLUMN created_at TIMESTAMP, ADD COLUMN updated_at TIMESTAMP,
     ADD CONSTRAINT _entity_tool_unique UNIQUE (entity_version_id, tool_id, entity_type);
+-- Toolkit 51 was attached 60 days ago, longer than the 30-day window.
+UPDATE p_1.entity_tool_mapping SET created_at = (now() - interval '60 days') AT TIME ZONE 'UTC';
 CREATE TABLE IF NOT EXISTS public.auth_core__token (
     id SERIAL PRIMARY KEY, uuid VARCHAR(36) UNIQUE, expires TIMESTAMP,
     user_id INTEGER, name TEXT
@@ -441,12 +443,26 @@ SELECT count(*) FROM centry.notifications WHERE event_type = $1`, PermissionTrim
 	if second.New != 0 || second.Notified != 0 || notices() != 1 {
 		t.Fatalf("second pass notified known candidates: %s", second)
 	}
-	// A second toolkit attached and unused: one new notification, naming
-	// only the new candidate.
+	// A second toolkit attached today and unused: too new to judge, so no
+	// candidate and no notice.
 	if _, err := pool.Exec(t.Context(), `
 INSERT INTO p_1.elitea_tools (id, type, name, description, settings, author_id, meta, created_at)
 VALUES (52, 'github', 'repo', 'GitHub', '{}'::jsonb, 11, '{}'::jsonb, now() AT TIME ZONE 'UTC');
-INSERT INTO p_1.entity_tool_mapping (tool_id, entity_id, entity_version_id, entity_type) VALUES (52, 31, 41, 'agent');`); err != nil {
+INSERT INTO p_1.entity_tool_mapping (tool_id, entity_id, entity_version_id, entity_type, created_at)
+VALUES (52, 31, 41, 'agent', now() AT TIME ZONE 'UTC');`); err != nil {
+		t.Fatal(err)
+	}
+	young, err := trimming.TrimmingPass(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if young.New != 0 || young.Notified != 0 || notices() != 1 {
+		t.Fatalf("a toolkit attached today was notified: %s, notices = %d", young, notices())
+	}
+	// Once it has been attached for the window: one new notification,
+	// naming only the new candidate.
+	if _, err := pool.Exec(t.Context(), `
+UPDATE p_1.entity_tool_mapping SET created_at = (now() - interval '31 days') AT TIME ZONE 'UTC' WHERE tool_id = 52`); err != nil {
 		t.Fatal(err)
 	}
 	third, err := trimming.TrimmingPass(t.Context())
@@ -464,5 +480,84 @@ SELECT meta->'items'::text FROM centry.notifications WHERE event_type = $1 ORDER
 	}
 	if !strings.Contains(items, "toolkit 41/52") || strings.Contains(items, "41/51") {
 		t.Fatalf("the new notice names %s, want only the new candidate", items)
+	}
+}
+
+// An item granted for less than the window is too new to judge: not a
+// candidate, not removable, not notified. A toolkit is dated by its
+// attach, a tool of an edited selection and an egress allowlist entry by
+// the routine's first sighting (the edit until then).
+func TestPermissionTrimming_GrantsYoungerThanTheWindowAreNotCandidates(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCredentialReviewFixture(t, pool)
+	ctx := t.Context()
+	// The selection was edited yesterday; a project egress entry exists.
+	if _, err := pool.Exec(ctx, `
+UPDATE p_1.entity_tool_mapping SET updated_at = (now() - interval '1 day') AT TIME ZONE 'UTC'
+WHERE entity_version_id = 41 AND tool_id = 51;
+INSERT INTO p_1.configuration (uuid, project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source, author_id, created_at)
+VALUES ('70000000-0000-4000-8000-000000001501', 1, 'Egress', 'worker_egress', 'worker_egress', 'project',
+        '{"allowlist":["api.unused.example"]}'::jsonb, '{}'::jsonb, false, true, 'user', 11, now() AT TIME ZONE 'UTC');`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	trimming, err := NewPermissionTrimming(newCredentialReviewTestStore(t, pool, now, platformconfig.DefaultCredentialReviewPolicy()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := trimming.Report(ctx, TrimmingFilter{ProjectID: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolkit := findTrim(report.Items, TrimToolkit, "41/51")
+	tool := findTrim(report.Items, TrimTool, "41/51/list_products")
+	egress := findTrim(report.Items, TrimEgressHost, "project:api.unused.example")
+	if toolkit == nil || !toolkit.Candidate || toolkit.TooNew || toolkit.GrantedAt == nil {
+		t.Fatalf("toolkit attached 60 days ago = %+v, want a candidate", toolkit)
+	}
+	if tool == nil || tool.Candidate || tool.Removable || !tool.TooNew {
+		t.Fatalf("tool of a selection edited yesterday = %+v, want too new", tool)
+	}
+	if egress == nil || egress.Candidate || !egress.TooNew || egress.GrantedAt != nil {
+		t.Fatalf("egress entry never seen = %+v, want too new and undated", egress)
+	}
+
+	// The routine sees them now: still too new, nothing notified.
+	pass, err := trimming.TrimmingPass(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pass.Candidates != 1 {
+		t.Fatalf("pass = %s, want only the toolkit", pass)
+	}
+	// Seen 31 days ago: the tool and the entry are judged now.
+	if _, err := pool.Exec(ctx, `
+UPDATE elitea_lifecycle.permission_trimming_observed SET first_seen_at = now() - interval '31 days'`); err != nil {
+		t.Fatal(err)
+	}
+	report, err = trimming.Report(ctx, TrimmingFilter{ProjectID: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool = findTrim(report.Items, TrimTool, "41/51/list_products")
+	egress = findTrim(report.Items, TrimEgressHost, "project:api.unused.example")
+	if tool == nil || !tool.Candidate || tool.TooNew {
+		t.Fatalf("tool seen 31 days ago = %+v, want a candidate", tool)
+	}
+	if egress == nil || !egress.Candidate || !egress.Removable || egress.TooNew {
+		t.Fatalf("egress entry seen 31 days ago = %+v, want a removable candidate", egress)
+	}
+	// Removing it forgets the sighting: a re-grant starts over.
+	if _, err := trimming.Remove(ctx, RemoveRequest{ProjectID: 1, Kind: TrimEgressHost,
+		Key: "project:api.unused.example", ActorID: 11}); err != nil {
+		t.Fatal(err)
+	}
+	var sightings int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM elitea_lifecycle.permission_trimming_observed WHERE item_kind = 'egress_host'`).Scan(&sightings); err != nil {
+		t.Fatal(err)
+	}
+	if sightings != 0 {
+		t.Fatalf("the removed entry's sighting was kept")
 	}
 }

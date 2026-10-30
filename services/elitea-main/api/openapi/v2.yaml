@@ -8234,6 +8234,17 @@ components:
         not_removable_reason: { type: string }
         candidate_since: { type: string, format: date-time, nullable: true }
         notified_at: { type: string, format: date-time, nullable: true }
+        granted_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            Since when the item is granted (a toolkit's attach, a grant's last
+            change, else the routine's first sighting); null when nothing
+            dates it yet.
+        too_new:
+          type: boolean
+          description: An unused item granted for less than the window; too new to judge, so not a candidate.
     PermissionTrimmingReport:
       type: object
       required: [window_days, since, items]

@@ -84,6 +84,9 @@ function notRemovableLabel(reason: string | undefined): string {
 }
 
 function usage(item: PermissionTrimmingItem): string {
+  if (item.too_new === true) {
+    return t('features.agentLifecycle.trimming.tooNew', 'Too new to judge: granted for less than the window');
+  }
   if (!item.used) return t('features.agentLifecycle.trimming.unused', 'Not used in the window');
   const last = item.last_used_at ? new Date(item.last_used_at).toLocaleDateString() : '—';
   return t('features.agentLifecycle.trimming.used', '{{uses}} uses, last {{last}}', { uses: item.uses, last });

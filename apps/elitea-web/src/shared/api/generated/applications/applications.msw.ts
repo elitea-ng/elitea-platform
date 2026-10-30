@@ -1381,6 +1381,14 @@ export const getListProjectPermissionTrimmingResponseMock = (
       ]),
       undefined,
     ]),
+    granted_at: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        null,
+      ]),
+      undefined,
+    ]),
+    too_new: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
   })),
   ...overrideResponse,
 });

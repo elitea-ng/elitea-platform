@@ -17,7 +17,11 @@ import (
 
 // ErrPublishedVersion refuses a change to a published or embedded version:
 // what runs is its release, changed by editing the draft and publishing.
-var ErrPublishedVersion = errors.New("Cannot change tools on a published version. Unpublish first.")
+var ErrPublishedVersion = errors.New("cannot change tools on a published version")
+
+// PublishedVersionMessage is the toolkit route's wire text for
+// ErrPublishedVersion (clients match it; the web app's ToolMenu shows it).
+const PublishedVersionMessage = "Cannot change tools on a published version. Unpublish first."
 
 // DB is a pool or a transaction.
 type DB interface {
