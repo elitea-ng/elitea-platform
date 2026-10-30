@@ -33,9 +33,11 @@ A connector request records the requester, the target (toolkit type, prebuilt MC
 <Steps>
   <Step title="Seed requests for what is in use">
     Before switching modes, open **Admin › Connector requests** and select **Create requests for connectors in use**. It files a submitted request for every connector configured in any project, with the projects using it, the tools their toolkits select (a custom MCP server's tools as its last **Load tools** stored them, so they can be pinned) and the hosts of their URL settings. A connector that already has an open or approved request is skipped, so running it again is safe. Tool categories are not known from a toolkit's settings, so every tool starts as `write`. Review and approve them. The administrator who created them cannot approve them.
+
+    A custom MCP server whose tools were never loaded gets a request with no tools: approving it pins nothing, so all its tools stay hidden. Run **Load tools** on it first. Hosts are read from URL fields in the toolkit's own settings; add hosts that come from a referenced configuration to the request by hand. A connector used in more than 64 projects is requested platform-wide.
   </Step>
   <Step title="Switch the mode">
-    Open **Configuration › Connector Catalogue** and set **Mode** to `approved_only`. The page warns you how many connectors in use still have no approved request; each of them stops working at once.
+    Open **Configuration › Connector Catalogue** and set **Mode** to `approved_only`. The page warns you how many connectors in use still have no approved request; each of them stops working at once. (The warning needs `connector.approve` to read the count; without it the save goes through with no warning.)
   </Step>
   <Step title="Request a connector (project members)">
     When a toolkit or MCP server is refused, select **Request connector**. For MCP, **Load tools** prefills the discovered tools and their schemas. Enter the projects, hosts, data classes and justification, and submit. Follow the request on the toolkit page.
