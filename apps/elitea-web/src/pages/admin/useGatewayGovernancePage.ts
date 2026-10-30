@@ -33,7 +33,7 @@ import {
 } from './api/adminGovernanceApi';
 import { draftFieldErrors, splitIntList, splitList } from './governanceIdLists';
 
-export { draftFieldErrors, type IdListField } from './governanceIdLists';
+export { draftFieldErrors } from './governanceIdLists';
 
 /** One weighted routing target as the dialog edits it: all strings. */
 export interface RoutingTargetDraft {

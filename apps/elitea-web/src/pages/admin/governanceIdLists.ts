@@ -7,8 +7,7 @@
  */
 import { t } from '@/shared/i18n';
 
-import { isGlobalGovernanceType } from './api/adminGovernanceApi';
-import type { GovernanceDraft } from './useGatewayGovernancePage';
+import { isGlobalGovernanceType, type GovernanceType } from './api/adminGovernanceApi';
 
 /** Splits a comma or newline separated list into trimmed, non-empty entries. */
 export function splitList(raw: string): string[] {
@@ -35,7 +34,10 @@ function invalidIdEntries(raw: string): string[] {
 }
 
 /** The draft fields that hold id lists, and so are checked by `draftFieldErrors`. */
-export type IdListField = 'scopeProjectIds' | 'scopeAgentIds' | 'scopeUserIds';
+type IdListField = 'scopeProjectIds' | 'scopeAgentIds' | 'scopeUserIds';
+
+/** The part of a governance draft that the id-list check reads. */
+type IdListDraft = { readonly type: GovernanceType } & Readonly<Record<IdListField, string>>;
 
 /**
  * The id-list fields of a draft that cannot be saved, each with its reason.
@@ -49,7 +51,7 @@ export type IdListField = 'scopeProjectIds' | 'scopeAgentIds' | 'scopeUserIds';
  * Only the fields the chosen type sends are checked, so a value left in a
  * field the dialog does not show cannot block a save.
  */
-export function draftFieldErrors(draft: GovernanceDraft): Partial<Record<IdListField, string>> {
+export function draftFieldErrors(draft: IdListDraft): Partial<Record<IdListField, string>> {
   const errors: Partial<Record<IdListField, string>> = {};
   if (isGlobalGovernanceType(draft.type)) return errors;
   const fields: IdListField[] =
