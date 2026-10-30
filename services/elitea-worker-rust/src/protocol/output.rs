@@ -146,7 +146,7 @@ pub enum RuntimeFailureKind {
     /// the cap's name. Never retryable.
     CapReached(elitea_agent_runtime::run_caps::RunCap),
     /// The final answer did not meet its output contract after one retry
-    /// (ADR-0043 decision 2): [`OUTPUT_CONTRACT_VIOLATION_MESSAGE`] under
+    /// (ADR-0043 decision 2): `OUTPUT_CONTRACT_VIOLATION_MESSAGE` under
     /// `MODEL_RESPONSE_INVALID`, not retryable. Main shows it as
     /// `OUTPUT_CONTRACT_VIOLATION`.
     OutputContractViolation,
