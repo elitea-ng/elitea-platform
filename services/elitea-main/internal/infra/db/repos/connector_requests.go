@@ -636,15 +636,21 @@ func writeProjectEgressEntries(ctx context.Context, tx pgx.Tx, projectID int64, 
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+		var createdID int64
+		if err := tx.QueryRow(ctx, fmt.Sprintf(`
 INSERT INTO %s.configuration (uuid, project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source, author_id, created_at)
 VALUES (gen_random_uuid(), $1, 'Worker egress', $2 || '_' || substr(md5(random()::text || clock_timestamp()::text), 1, 12),
-        $2, $3, $4::jsonb, '{}'::jsonb, false, true, 'user', $5, now() AT TIME ZONE 'UTC')`, schema),
+        $2, $3, $4::jsonb, '{}'::jsonb, false, true, 'user', $5, now() AT TIME ZONE 'UTC')
+RETURNING id`, schema),
 			projectID, configurationapp.WorkerEgressConfigurationType, configurationapp.WorkerEgressSection,
-			string(data), approverID); err != nil {
+			string(data), approverID).Scan(&createdID); err != nil {
 			return fmt.Errorf("connector requests: create the project allowlist: %w", err)
 		}
-		return nil
+		after, err := readConfigurationLifecycleSnapshot(ctx, tx, schema, createdID, workerEgressLifecycleData)
+		if err != nil {
+			return err
+		}
+		return appendConfigurationLifecycleEventTx(ctx, tx, approverID, nil, after)
 	}
 	var setting map[string]any
 	if len(raw) > 0 {
@@ -673,6 +679,10 @@ VALUES (gen_random_uuid(), $1, 'Worker egress', $2 || '_' || substr(md5(random()
 			"A project's worker egress allowlist would hold more than %d entries.", platformconfig.MaxWorkerEgressProjectEntries),
 			Detail: map[string]any{"project_id": projectID}}
 	}
+	before, err := readConfigurationLifecycleSnapshot(ctx, tx, schema, rowID, workerEgressLifecycleData)
+	if err != nil {
+		return err
+	}
 	setting["allowlist"] = merged
 	data, err := json.Marshal(setting)
 	if err != nil {
@@ -682,7 +692,11 @@ VALUES (gen_random_uuid(), $1, 'Worker egress', $2 || '_' || substr(md5(random()
 		rowID, string(data)); err != nil {
 		return fmt.Errorf("connector requests: write the project allowlist: %w", err)
 	}
-	return nil
+	after, err := readConfigurationLifecycleSnapshot(ctx, tx, schema, rowID, workerEgressLifecycleData)
+	if err != nil {
+		return err
+	}
+	return appendConfigurationLifecycleEventTx(ctx, tx, approverID, before, after)
 }
 
 func decodeAllowlist(raw []byte) ([]string, error) {

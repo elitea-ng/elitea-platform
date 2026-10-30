@@ -825,7 +825,7 @@ func (t *PermissionTrimming) removeEgress(ctx context.Context, request RemoveReq
 	err := pgx.BeginTxFunc(ctx, t.review.pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		switch {
 		case level == "project" && request.ProjectID > 0:
-			if err := removeProjectEgressEntry(ctx, tx, request.ProjectID, entry); err != nil {
+			if err := removeProjectEgressEntry(ctx, tx, request.ProjectID, entry, request.ActorID); err != nil {
 				return err
 			}
 		case level == "platform" && request.Platform:
@@ -858,8 +858,9 @@ func withoutEntry(entries []string, entry string) ([]string, bool) {
 
 // removeProjectEgressEntry rewrites the project's worker_egress
 // configuration row without the entry: the row the configuration route
-// writes, the remaining list validated as that route's normaliser does.
-func removeProjectEgressEntry(ctx context.Context, tx pgx.Tx, projectID int64, entry string) error {
+// writes, the remaining list validated as that route's normaliser does, and
+// the configuration lifecycle event that route appends (actor: the remover).
+func removeProjectEgressEntry(ctx context.Context, tx pgx.Tx, projectID int64, entry string, actorID int64) error {
 	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
 	if err != nil {
 		return ErrTrimItemNotFound
@@ -895,13 +896,23 @@ SELECT id, data FROM %s.configuration WHERE type = 'worker_egress' ORDER BY id L
 	if err := platformconfig.ValidateWorkerEgressEntries(remaining, platformconfig.MaxWorkerEgressProjectEntries); err != nil {
 		return fmt.Errorf("%w: %v", ErrTrimItemNotRemovable, err)
 	}
+	before, err := readConfigurationLifecycleSnapshot(ctx, tx, schema, id, workerEgressLifecycleData)
+	if err != nil {
+		return err
+	}
 	data["allowlist"] = remaining
 	encoded, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.configuration SET data = $2::jsonb WHERE id = $1`, schema), id, encoded)
-	return err
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.configuration SET data = $2::jsonb WHERE id = $1`, schema), id, encoded); err != nil {
+		return err
+	}
+	after, err := readConfigurationLifecycleSnapshot(ctx, tx, schema, id, workerEgressLifecycleData)
+	if err != nil {
+		return err
+	}
+	return appendConfigurationLifecycleEventTx(ctx, tx, actorID, before, after)
 }
 
 // removePlatformEgressEntry rewrites the platform's worker_egress allowlist
