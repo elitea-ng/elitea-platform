@@ -710,8 +710,12 @@ pub(crate) struct AuthorizedNativeCommandBinding {
 }
 
 impl AuthorizedNativeCommandBinding {
+    /// The binding of a verified command to the run's input. The input's
+    /// platform preamble (ADR-0043 decision 3) must be the one the command
+    /// names by revision and digest.
     pub(crate) fn from_verified(
         verified: &VerifiedAgentCommand,
+        request: &super::request::AgentExecutionRequest,
     ) -> Result<Self, NativeAgentAssemblyError> {
         let command = verified.command();
         let Some(worker_command_v1::CapabilityCommand::AgentExecution(agent)) =
@@ -726,13 +730,20 @@ impl AuthorizedNativeCommandBinding {
         // fails the command closed rather than run without its approvals.
         let approval = crate::protocol::approval_policy::policy_from_command(command)
             .map_err(|_| invalid_input())?;
-        Ok(Self::new(command, agent, approval))
+        let content = crate::protocol::preamble::controls_from_command(
+            command,
+            &approval,
+            request.payload.platform_preamble.as_ref(),
+        )
+        .map_err(|_| invalid_input())?;
+        Ok(Self::new(command, agent, approval, content))
     }
 
     fn new(
         command: &crate::protocol::elitea::runtime::v1::WorkerCommandV1,
         agent: &AgentExecutionCommandV1,
         approval: std::sync::Arc<elitea_agent_runtime::approval_policy::ApprovalPolicy>,
+        content: std::sync::Arc<elitea_agent_runtime::preamble::ContentControls>,
     ) -> Self {
         Self {
             tenant_id: command.tenant_id.clone(),
@@ -746,7 +757,7 @@ impl AuthorizedNativeCommandBinding {
             sio_event: agent.sio_event.clone(),
             deadline_unix_millis: command.deadline_unix_millis,
             egress: crate::protocol::egress::run_egress(command),
-            content: crate::protocol::preamble::controls_from_command(command, &approval),
+            content,
             approval,
             run_caps: crate::protocol::run_caps::meter_from_command(command),
         }

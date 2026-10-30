@@ -18,7 +18,8 @@ func TestDisclosureContractCopyIsCurrent(t *testing.T) {
 	}
 }
 
-// Every listed tool is external_send, and its text parameters are
+// Every listed tool is external_send or write (a pull request, issue, case,
+// ticket or page body keeps its category), and its text parameters are
 // arguments of the tool in the SDK catalogue the platform serves.
 func TestDisclosureNamesExternalSendToolsAndTheirArguments(t *testing.T) {
 	t.Parallel()
@@ -40,8 +41,8 @@ func TestDisclosureNamesExternalSendToolsAndTheirArguments(t *testing.T) {
 	}
 	for toolkit, tools := range document.Toolkits {
 		for tool, entry := range tools {
-			if got := Of(toolkit, tool); got != ExternalSend {
-				t.Errorf("%s.%s is %q, not external_send", toolkit, tool, got)
+			if got := Of(toolkit, tool); got != ExternalSend && got != Write {
+				t.Errorf("%s.%s is %q, not external_send or write", toolkit, tool, got)
 			}
 			found := false
 			for _, catalogue := range snapshot.Entries {

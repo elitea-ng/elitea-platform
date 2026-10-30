@@ -10,7 +10,8 @@ ADR-0043 decisions 3 and 4. Shared migration **0216** adds
 `elitea_runtime.platform_preamble_revisions` (append-only: one row per
 change of the platform preamble, with its SHA-256, author and the id of its
 security audit event). Worker commands gain field **71**
-(`WorkerCommandV1.content_controls`).
+(`WorkerCommandV1.content_controls`), and the agent input bundle gains field
+**67** (`AgentExecutionInputV1.platform_preamble`).
 
 - **Rollout order.** Roll out elitea-main first, then the workers. Main sends
   field 71 only after an administrator saves **Configuration › AI
@@ -20,13 +21,29 @@ security audit event). Worker commands gain field **71**
   sections only after every worker runs this release. An approval policy that
   an earlier release saved does not have the new key, so it does not send
   field 71.
+- **The preamble text is not on the command bus.** Admission freezes the
+  newest preamble revision (text, revision, SHA-256) into the turn's input
+  bundle (field 67), which the worker fetches over gRPC. Field 71 carries
+  only the revision and the SHA-256; the worker refuses a turn when the text
+  does not match its SHA-256 or the command names another revision. Field 67
+  is present only after the first save of **Configuration › Platform
+  Preamble**; a worker of an earlier release refuses an input bundle with it.
+  Field 71 still carries the marker text: it is at most 200 bytes, control
+  characters are replaced, it never goes to a model, and it is posted to
+  external systems by design.
 - **Behaviour change: outbound text gets a marker.** A worker of this
   release adds `Generated with Elitea AI` (a blank line, then the text) to
   the text of the tools in `libs/proto/contracts/tool-disclosure-v1.json`,
   also before any section is saved. Markdown targets also get
   `<!-- elitea-run-id: … -->`. To change the text, save **Configuration › AI
   Disclosure**. Automations that compare the text of comments that agents
-  wrote must allow for the marker.
+  wrote must allow for the marker. Some `write` tools also get the marker
+  (their category, so their approval, does not change): GitHub
+  `create_pull_request`, `create_issue`, `update_issue`,
+  `create_issue_on_project`, `update_issue_on_project`; GitLab and GitLab Org
+  `create_pull_request`; Azure DevOps Repos `create_pull_request`; Bitbucket
+  `close_pull_request`; Confluence `create_page`; Salesforce `create_case`,
+  `update_case`; Carrier `create_ticket`; TestIO `confirm_bug_fix`.
 - **Behaviour change: tool results are wrapped.** Each tool result now
   reaches the model as `<untrusted source="TOOL">…</untrusted>`, and a
   built-in preamble (approximately 30 tokens) goes before every system

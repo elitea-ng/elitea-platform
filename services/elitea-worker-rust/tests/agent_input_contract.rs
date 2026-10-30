@@ -96,6 +96,52 @@ fn summary_model_requires_its_own_limits_and_preserves_its_selection() {
 }
 
 #[test]
+fn platform_preamble_is_admitted_only_when_its_digest_matches_the_text() {
+    use elitea_worker_rust::protocol::elitea::runtime::v1::PlatformPreambleSnapshotV1;
+    use prost::Message;
+    // SHA-256 of "Acme rules apply."
+    const ACME_SHA256: &str = "5e99f680c289cfed1270184e8120f98a9a1a6f62a7a39c92c1bebf5d1bcc38e4";
+    let mut message = application_message();
+    assert!(message.platform_preamble.is_none());
+    let absent = request_from(message.clone(), AgentExecutionKind::Application, binding()).unwrap();
+    assert!(absent.payload.platform_preamble.is_none());
+    message.platform_preamble = Some(PlatformPreambleSnapshotV1 {
+        revision: 3,
+        sha256: ACME_SHA256.to_owned(),
+        text: "Acme rules apply.".to_owned(),
+    });
+    let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
+    let request = request_from(decoded, AgentExecutionKind::Application, binding()).unwrap();
+    let preamble = request.payload.platform_preamble.unwrap();
+    assert_eq!(preamble.revision, 3);
+    assert_eq!(preamble.sha256, ACME_SHA256);
+    assert_eq!(preamble.text, "Acme rules apply.");
+    for broken in [
+        PlatformPreambleSnapshotV1 {
+            revision: 3,
+            sha256: ACME_SHA256.to_owned(),
+            text: "Acme rules changed.".to_owned(),
+        },
+        PlatformPreambleSnapshotV1 {
+            revision: 0,
+            sha256: ACME_SHA256.to_owned(),
+            text: "Acme rules apply.".to_owned(),
+        },
+        PlatformPreambleSnapshotV1 {
+            revision: 3,
+            sha256: String::new(),
+            text: String::new(),
+        },
+    ] {
+        message.platform_preamble = Some(broken);
+        assert!(matches!(
+            request_from(message.clone(), AgentExecutionKind::Application, binding()),
+            Err(AgentProtocolError::InvalidInput(_))
+        ));
+    }
+}
+
+#[test]
 fn python_generated_application_fixture_maps_all_current_fields() {
     let raw = application_bytes();
     let message = parse_agent_execution_input(&raw).expect("canonical Python protobuf");

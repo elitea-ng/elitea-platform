@@ -9,8 +9,9 @@ import (
 )
 
 // The AI disclosure contract (ADR-0043 decision 3, #1500): the text
-// parameters of the built-in external_send tools that write human-readable
-// text outside the platform. The worker appends the disclosure marker to
+// parameters of the built-in tools that write human-readable text outside
+// the platform (every external_send tool, and the write tools that create a
+// pull request, an issue, a case, a ticket or a page). The worker appends the disclosure marker to
 // them; Main reads the contract for the toolkit types an administrator may
 // let projects opt out of. The shared copy is
 // libs/proto/contracts/tool-disclosure-v1.json; a test holds this copy equal.

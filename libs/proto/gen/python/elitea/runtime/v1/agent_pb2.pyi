@@ -36,7 +36,7 @@ class AgentExecutionCommandV1(_message.Message):
     def __init__(self, request_entry_id: _Optional[str] = ..., client_stream_id: _Optional[str] = ..., client_message_id: _Optional[str] = ..., sio_event: _Optional[str] = ...) -> None: ...
 
 class AgentExecutionInputV1(_message.Message):
-    __slots__ = ("schema_revision", "llm", "chat_history", "user_input", "thread_id", "checkpoint_id", "debug", "tools", "application", "internal_tools", "steps_limit", "mcp_tokens", "ignored_mcp_servers", "user_declined_mcp_servers", "should_continue", "hitl_resume", "hitl_action", "hitl_value", "hitl_decisions", "execution_generation", "is_regenerate", "meta", "conversation_id", "persona", "context_settings", "supports_vision", "return_chat_history", "invoked_skills", "applied_skills", "auto_approve_sensitive_actions", "attached_skills", "input_attachments", "parallel_reconcile", "parallel_terminal_errors", "exception_handling_enabled", "debug_mode", "next_input_suggestion", "toolkit_guardrails", "truncated_content", "project_context", "model_context_limits", "summary_model")
+    __slots__ = ("schema_revision", "llm", "chat_history", "user_input", "thread_id", "checkpoint_id", "debug", "tools", "application", "internal_tools", "steps_limit", "mcp_tokens", "ignored_mcp_servers", "user_declined_mcp_servers", "should_continue", "hitl_resume", "hitl_action", "hitl_value", "hitl_decisions", "execution_generation", "is_regenerate", "meta", "conversation_id", "persona", "context_settings", "supports_vision", "return_chat_history", "invoked_skills", "applied_skills", "auto_approve_sensitive_actions", "attached_skills", "input_attachments", "parallel_reconcile", "parallel_terminal_errors", "exception_handling_enabled", "debug_mode", "next_input_suggestion", "toolkit_guardrails", "truncated_content", "project_context", "model_context_limits", "summary_model", "platform_preamble")
     SCHEMA_REVISION_FIELD_NUMBER: _ClassVar[int]
     LLM_FIELD_NUMBER: _ClassVar[int]
     CHAT_HISTORY_FIELD_NUMBER: _ClassVar[int]
@@ -79,6 +79,7 @@ class AgentExecutionInputV1(_message.Message):
     PROJECT_CONTEXT_FIELD_NUMBER: _ClassVar[int]
     MODEL_CONTEXT_LIMITS_FIELD_NUMBER: _ClassVar[int]
     SUMMARY_MODEL_FIELD_NUMBER: _ClassVar[int]
+    PLATFORM_PREAMBLE_FIELD_NUMBER: _ClassVar[int]
     schema_revision: str
     llm: bytes
     chat_history: bytes
@@ -121,7 +122,18 @@ class AgentExecutionInputV1(_message.Message):
     project_context: ProjectContextSnapshotV1
     model_context_limits: ModelContextLimitsV1
     summary_model: SummaryModelSnapshotV1
-    def __init__(self, schema_revision: _Optional[str] = ..., llm: _Optional[bytes] = ..., chat_history: _Optional[bytes] = ..., user_input: _Optional[bytes] = ..., thread_id: _Optional[str] = ..., checkpoint_id: _Optional[str] = ..., debug: _Optional[bool] = ..., tools: _Optional[bytes] = ..., application: _Optional[bytes] = ..., internal_tools: _Optional[bytes] = ..., steps_limit: _Optional[int] = ..., mcp_tokens: _Optional[bytes] = ..., ignored_mcp_servers: _Optional[bytes] = ..., user_declined_mcp_servers: _Optional[bytes] = ..., should_continue: _Optional[bool] = ..., hitl_resume: _Optional[bool] = ..., hitl_action: _Optional[str] = ..., hitl_value: _Optional[str] = ..., hitl_decisions: _Optional[bytes] = ..., execution_generation: _Optional[str] = ..., is_regenerate: _Optional[bool] = ..., meta: _Optional[bytes] = ..., conversation_id: _Optional[str] = ..., persona: _Optional[str] = ..., context_settings: _Optional[bytes] = ..., supports_vision: _Optional[bool] = ..., return_chat_history: _Optional[bool] = ..., invoked_skills: _Optional[bytes] = ..., applied_skills: _Optional[bytes] = ..., auto_approve_sensitive_actions: _Optional[bool] = ..., attached_skills: _Optional[bytes] = ..., input_attachments: _Optional[bytes] = ..., parallel_reconcile: _Optional[bytes] = ..., parallel_terminal_errors: _Optional[bytes] = ..., exception_handling_enabled: _Optional[bool] = ..., debug_mode: _Optional[bool] = ..., next_input_suggestion: _Optional[bytes] = ..., toolkit_guardrails: _Optional[bytes] = ..., truncated_content: _Optional[bytes] = ..., project_context: _Optional[_Union[ProjectContextSnapshotV1, _Mapping]] = ..., model_context_limits: _Optional[_Union[ModelContextLimitsV1, _Mapping]] = ..., summary_model: _Optional[_Union[SummaryModelSnapshotV1, _Mapping]] = ...) -> None: ...
+    platform_preamble: PlatformPreambleSnapshotV1
+    def __init__(self, schema_revision: _Optional[str] = ..., llm: _Optional[bytes] = ..., chat_history: _Optional[bytes] = ..., user_input: _Optional[bytes] = ..., thread_id: _Optional[str] = ..., checkpoint_id: _Optional[str] = ..., debug: _Optional[bool] = ..., tools: _Optional[bytes] = ..., application: _Optional[bytes] = ..., internal_tools: _Optional[bytes] = ..., steps_limit: _Optional[int] = ..., mcp_tokens: _Optional[bytes] = ..., ignored_mcp_servers: _Optional[bytes] = ..., user_declined_mcp_servers: _Optional[bytes] = ..., should_continue: _Optional[bool] = ..., hitl_resume: _Optional[bool] = ..., hitl_action: _Optional[str] = ..., hitl_value: _Optional[str] = ..., hitl_decisions: _Optional[bytes] = ..., execution_generation: _Optional[str] = ..., is_regenerate: _Optional[bool] = ..., meta: _Optional[bytes] = ..., conversation_id: _Optional[str] = ..., persona: _Optional[str] = ..., context_settings: _Optional[bytes] = ..., supports_vision: _Optional[bool] = ..., return_chat_history: _Optional[bool] = ..., invoked_skills: _Optional[bytes] = ..., applied_skills: _Optional[bytes] = ..., auto_approve_sensitive_actions: _Optional[bool] = ..., attached_skills: _Optional[bytes] = ..., input_attachments: _Optional[bytes] = ..., parallel_reconcile: _Optional[bytes] = ..., parallel_terminal_errors: _Optional[bytes] = ..., exception_handling_enabled: _Optional[bool] = ..., debug_mode: _Optional[bool] = ..., next_input_suggestion: _Optional[bytes] = ..., toolkit_guardrails: _Optional[bytes] = ..., truncated_content: _Optional[bytes] = ..., project_context: _Optional[_Union[ProjectContextSnapshotV1, _Mapping]] = ..., model_context_limits: _Optional[_Union[ModelContextLimitsV1, _Mapping]] = ..., summary_model: _Optional[_Union[SummaryModelSnapshotV1, _Mapping]] = ..., platform_preamble: _Optional[_Union[PlatformPreambleSnapshotV1, _Mapping]] = ...) -> None: ...
+
+class PlatformPreambleSnapshotV1(_message.Message):
+    __slots__ = ("revision", "sha256", "text")
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    SHA256_FIELD_NUMBER: _ClassVar[int]
+    TEXT_FIELD_NUMBER: _ClassVar[int]
+    revision: int
+    sha256: str
+    text: str
+    def __init__(self, revision: _Optional[int] = ..., sha256: _Optional[str] = ..., text: _Optional[str] = ...) -> None: ...
 
 class SummaryModelSnapshotV1(_message.Message):
     __slots__ = ("llm_settings", "model_context_limits")

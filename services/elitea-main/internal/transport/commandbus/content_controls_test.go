@@ -60,7 +60,7 @@ func TestProducerSignsTheContentControlsOnlyOnceSaved(t *testing.T) {
 		t.Fatal("unsaved content controls changed the command")
 	}
 	resolver := &contentControlsResolverStub{controls: &runtimev1.WorkerContentControlsV1{
-		DisclosureText: "Generated with Elitea AI", PlatformPreamble: "Rules.", PlatformPreambleRevision: 2, UntrustedReadThenAct: true,
+		DisclosureText: "Generated with Elitea AI", PlatformPreambleSha256: "6d3a0b0e5b2b5f4d2a1c9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b", PlatformPreambleRevision: 2, UntrustedReadThenAct: true,
 	}}
 	saved, err := preparedContentControlsCommand(t, resolver)
 	if err != nil {

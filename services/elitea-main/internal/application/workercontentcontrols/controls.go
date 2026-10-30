@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"strconv"
 
+	"google.golang.org/protobuf/proto"
+
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerapprovalpolicy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerdelegation"
@@ -66,11 +68,14 @@ func NewResolver(
 }
 
 // WorkerContentControls answers the command's controls, or nil while no
-// administrator saved the sections or the rule tiers: such a command is
-// unchanged byte for byte, so a worker of an earlier release still accepts
-// it (the chart rolls Main out first), and the worker applies its built-in
-// defaults. Only an agent execution command carries them. An error is a
-// source that could not be read; the dispatch is retried.
+// administrator saved the sections or the rule tiers and the run's input
+// carries no platform preamble: such a command is unchanged byte for byte,
+// so a worker of an earlier release still accepts it (the chart rolls Main
+// out first), and the worker applies its built-in defaults. Only an agent
+// execution command carries them. The preamble's text stays in the input
+// bundle (admission froze it there); the command names only its revision
+// and digest. An error is a source that could not be read; the dispatch is
+// retried.
 func (r *Resolver) WorkerContentControls(ctx context.Context, command *runtimev1.WorkerCommandV1) (*runtimev1.WorkerContentControlsV1, error) {
 	if command.GetAgentExecution() == nil {
 		return nil, nil
@@ -79,9 +84,17 @@ func (r *Resolver) WorkerContentControls(ctx context.Context, command *runtimev1
 	if err != nil {
 		return nil, fmt.Errorf("worker content controls: read the platform settings: %w", err)
 	}
-	if !settings.Stored {
+	input, raw, err := r.input(ctx, command)
+	if err != nil {
+		return nil, err
+	}
+	preamble := input.GetPlatformPreamble()
+	if !settings.Stored && preamble == nil {
 		return nil, nil
 	}
+	// A snapshot is always a saved preamble: the cache of this replica may
+	// not have seen the save yet.
+	settings.Stored = true
 	projectID, _ := strconv.ParseInt(command.GetResourceProjectId(), 10, 64)
 	var project ProjectSetting
 	if projectID > 0 {
@@ -92,12 +105,12 @@ func (r *Resolver) WorkerContentControls(ctx context.Context, command *runtimev1
 	}
 	tier := agentlifecycle.TierLow
 	if needsTier(settings) {
-		tier, err = r.rootTier(ctx, command, projectID)
+		tier, err = r.rootTier(ctx, raw, projectID)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return Controls(settings, project, tier), nil
+	return Controls(settings, project, tier, preamble), nil
 }
 
 // needsTier reports whether the rule's answer depends on the tier.
@@ -105,11 +118,15 @@ func needsTier(settings platformconfig.ContentControlsSettings) bool {
 	return len(settings.UntrustedReadThenActTiers) > 0 && len(settings.UntrustedReadThenActTiers) < len(agentlifecycle.Tiers)
 }
 
-// Controls is the command field for the settings, the project's setting and
-// the root agent's tier: nil while nothing was saved. The project's text
+// Controls is the command field for the settings, the project's setting,
+// the root agent's tier and the preamble the run's input carries: nil while
+// nothing was saved. The project's text
 // replaces the platform's; an empty one keeps it. A project's opt-out takes
 // effect only for a type the platform allows.
-func Controls(settings platformconfig.ContentControlsSettings, project ProjectSetting, tier agentlifecycle.Tier) *runtimev1.WorkerContentControlsV1 {
+func Controls(
+	settings platformconfig.ContentControlsSettings, project ProjectSetting, tier agentlifecycle.Tier,
+	preamble *runtimev1.PlatformPreambleSnapshotV1,
+) *runtimev1.WorkerContentControlsV1 {
 	if !settings.Stored {
 		return nil
 	}
@@ -137,8 +154,8 @@ func Controls(settings platformconfig.ContentControlsSettings, project ProjectSe
 	return &runtimev1.WorkerContentControlsV1{
 		DisclosureText:               text,
 		DisclosureOptOutToolkitTypes: optOuts,
-		PlatformPreamble:             settings.Preamble,
-		PlatformPreambleRevision:     settings.PreambleRevision,
+		PlatformPreambleSha256:       preamble.GetSha256(),
+		PlatformPreambleRevision:     preamble.GetRevision(),
 		UntrustedReadThenAct:         settings.UntrustedReadThenAct(tier),
 	}
 }
@@ -152,19 +169,36 @@ func contains(list []string, value string) bool {
 	return false
 }
 
-// rootTier reads the risk tier of the run's root agent, as the approval
-// policy does: an ad hoc conversation is low.
-func (r *Resolver) rootTier(ctx context.Context, command *runtimev1.WorkerCommandV1, projectID int64) (agentlifecycle.Tier, error) {
+// input reads the command's agent input. A command without one (no bundle
+// reference) has none.
+func (r *Resolver) input(ctx context.Context, command *runtimev1.WorkerCommandV1) (*runtimev1.AgentExecutionInputV1, []byte, error) {
 	bundle := command.GetInputBundleRef().GetInputBundleId()
 	entryID := command.GetAgentExecution().GetRequestEntryId()
-	if bundle == "" || entryID == "" || projectID <= 0 {
-		return agentlifecycle.TierLow, nil
+	if bundle == "" || entryID == "" {
+		return nil, nil, nil
 	}
 	contents, err := r.inputs.InputEntries(ctx, bundle, []string{entryID})
 	if err != nil {
-		return "", fmt.Errorf("worker content controls: read the command's input: %w", err)
+		return nil, nil, fmt.Errorf("worker content controls: read the command's input: %w", err)
 	}
-	applicationID := workerdelegation.ApplicationID(contents[entryID])
+	content, ok := contents[entryID]
+	if !ok {
+		return nil, nil, nil
+	}
+	var input runtimev1.AgentExecutionInputV1
+	if err := proto.Unmarshal(content, &input); err != nil {
+		return nil, nil, fmt.Errorf("worker content controls: decode the command's input: %w", err)
+	}
+	return &input, content, nil
+}
+
+// rootTier reads the risk tier of the run's root agent, as the approval
+// policy does: an ad hoc conversation is low.
+func (r *Resolver) rootTier(ctx context.Context, raw []byte, projectID int64) (agentlifecycle.Tier, error) {
+	if len(raw) == 0 || projectID <= 0 {
+		return agentlifecycle.TierLow, nil
+	}
+	applicationID := workerdelegation.ApplicationID(raw)
 	if applicationID <= 0 {
 		return agentlifecycle.TierLow, nil
 	}

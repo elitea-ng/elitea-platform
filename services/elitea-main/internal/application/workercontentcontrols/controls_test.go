@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
@@ -55,9 +57,13 @@ func (s *tierStub) AgentRiskTier(context.Context, int64, int64) (string, error) 
 	return s.tier, nil
 }
 
-func agentCommand(t *testing.T) (*runtimev1.WorkerCommandV1, inputStub) {
+func agentCommand(t *testing.T, preamble ...*runtimev1.PlatformPreambleSnapshotV1) (*runtimev1.WorkerCommandV1, inputStub) {
 	t.Helper()
-	content, err := proto.Marshal(&runtimev1.AgentExecutionInputV1{Application: []byte(`{"id":5}`)})
+	input := &runtimev1.AgentExecutionInputV1{Application: []byte(`{"id":5}`)}
+	if len(preamble) > 0 {
+		input.PlatformPreamble = preamble[0]
+	}
+	content, err := proto.Marshal(input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +103,7 @@ func TestResolverCarriesTheProjectTextAndTheTierRule(t *testing.T) {
 	settings := platformconfig.ContentControlsSettingsFromValues(
 		platformconfig.Values{"marker_text": "Drafted with ACME AI", "opt_out_toolkit_types": []any{"slack"}},
 		platformconfig.Values{"text": "You work for ACME."},
-		platformconfig.Values{}, 4)
+		platformconfig.Values{})
 	for name, test := range map[string]struct {
 		tier    string
 		project ProjectSetting
@@ -111,7 +117,7 @@ func TestResolverCarriesTheProjectTextAndTheTierRule(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			command, inputs := agentCommand(t)
+			command, inputs := agentCommand(t, acmePreamble())
 			resolver, err := NewResolver(settingsStub{settings: settings}, &projectStub{setting: test.project}, inputs, &tierStub{tier: test.tier})
 			if err != nil {
 				t.Fatal(err)
@@ -121,7 +127,7 @@ func TestResolverCarriesTheProjectTextAndTheTierRule(t *testing.T) {
 				t.Fatal(err)
 			}
 			if controls.GetDisclosureText() != test.text || !slices.Equal(controls.GetDisclosureOptOutToolkitTypes(), test.optOuts) ||
-				controls.GetUntrustedReadThenAct() != test.rule || controls.GetPlatformPreamble() != "You work for ACME." ||
+				controls.GetUntrustedReadThenAct() != test.rule || controls.GetPlatformPreambleSha256() != acmePreamble().GetSha256() ||
 				controls.GetPlatformPreambleRevision() != 4 {
 				t.Fatalf("controls = %v", controls)
 			}
@@ -132,17 +138,17 @@ func TestResolverCarriesTheProjectTextAndTheTierRule(t *testing.T) {
 func TestControlsDefaultTextAndTierFreeRule(t *testing.T) {
 	t.Parallel()
 	settings := platformconfig.ContentControlsSettingsFromValues(platformconfig.Values{},
-		platformconfig.Values{}, platformconfig.Values{"untrusted_read_then_act_tiers": []any{"low", "medium", "high", "critical"}}, 0)
+		platformconfig.Values{}, platformconfig.Values{"untrusted_read_then_act_tiers": []any{"low", "medium", "high", "critical"}})
 	if !settings.Stored || needsTier(settings) {
 		t.Fatalf("settings = %+v", settings)
 	}
-	controls := Controls(settings, ProjectSetting{}, agentlifecycle.TierLow)
+	controls := Controls(settings, ProjectSetting{}, agentlifecycle.TierLow, nil)
 	if controls.GetDisclosureText() != "Generated with Elitea AI" || !controls.GetUntrustedReadThenAct() {
 		t.Fatalf("controls = %v", controls)
 	}
 	off := platformconfig.ContentControlsSettingsFromValues(platformconfig.Values{}, platformconfig.Values{},
-		platformconfig.Values{"untrusted_read_then_act_tiers": []any{}}, 0)
-	if Controls(off, ProjectSetting{}, agentlifecycle.TierCritical).GetUntrustedReadThenAct() {
+		platformconfig.Values{"untrusted_read_then_act_tiers": []any{}})
+	if Controls(off, ProjectSetting{}, agentlifecycle.TierCritical, nil).GetUntrustedReadThenAct() {
 		t.Fatal("an empty tier list must turn the rule off")
 	}
 }
@@ -164,5 +170,34 @@ func TestResolverFailsClosed(t *testing.T) {
 	}
 	if _, err := NewResolver(nil, nil, nil, nil); err == nil {
 		t.Error("want an error for missing readers")
+	}
+}
+
+func acmePreamble() *runtimev1.PlatformPreambleSnapshotV1 {
+	const text = "You work for ACME."
+	return &runtimev1.PlatformPreambleSnapshotV1{Revision: 4, Sha256: agentexecution.PlatformPreambleDigest(text), Text: text}
+}
+
+// The preamble text never goes on the command: only its revision and
+// digest. An input that carries a preamble sends the controls also when this
+// replica's cache has not seen the save yet.
+func TestResolverNamesTheInputsPreambleByDigestOnly(t *testing.T) {
+	t.Parallel()
+	command, inputs := agentCommand(t, acmePreamble())
+	resolver, err := NewResolver(settingsStub{settings: platformconfig.DefaultContentControlsSettings()}, &projectStub{}, inputs, &tierStub{tier: "high"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	controls, err := resolver.WorkerContentControls(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := proto.Marshal(controls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if controls.GetPlatformPreambleSha256() != acmePreamble().GetSha256() || controls.GetPlatformPreambleRevision() != 4 ||
+		strings.Contains(string(encoded), "ACME") || !controls.GetUntrustedReadThenAct() {
+		t.Fatalf("controls = %v", controls)
 	}
 }

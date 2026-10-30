@@ -286,7 +286,8 @@ type WorkerCommandV1 struct {
 	// from an earlier release run.
 	RunCaps *WorkerRunCapsV1 `protobuf:"bytes,69,opt,name=run_caps,json=runCaps,proto3" json:"run_caps,omitempty"`
 	// The content controls of an agent run (ADR-0043 decisions 3 and 4,
-	// #1500): the AI disclosure marker, the platform preamble and the "read
+	// #1500): the AI disclosure marker, the platform preamble's revision and
+	// digest (its text is in the input bundle) and the "read
 	// untrusted, then act" switch for the root agent's tier. Absent means the
 	// worker's defaults: the default marker text on every listed outbound
 	// tool, the built-in preamble only, and the rule on at the high and
@@ -840,11 +841,14 @@ type WorkerContentControlsV1 struct {
 	// Toolkit types whose outbound tools get no marker: the types the
 	// project opted out of, each one the administrator allowed. At most 64.
 	DisclosureOptOutToolkitTypes []string `protobuf:"bytes,2,rep,name=disclosure_opt_out_toolkit_types,json=disclosureOptOutToolkitTypes,proto3" json:"disclosure_opt_out_toolkit_types,omitempty"`
-	// The administrator's platform preamble, at most 8 KiB. The worker puts
-	// the built-in preamble and then this text before every agent's system
-	// prompt. Empty: the built-in preamble only.
-	PlatformPreamble string `protobuf:"bytes,3,opt,name=platform_preamble,json=platformPreamble,proto3" json:"platform_preamble,omitempty"`
-	// The revision of platform_preamble (each save is one); 0 when none.
+	// The lowercase hex SHA-256 of the administrator's platform preamble that
+	// the run's input carries (AgentExecutionInputV1.platform_preamble, field
+	// 67). The text itself is a prompt: it travels in the input bundle, never
+	// on the command bus. The worker refuses the command when the input's
+	// text does not have this digest, or when the input has a preamble and
+	// this is empty. Empty: the built-in preamble only.
+	PlatformPreambleSha256 string `protobuf:"bytes,3,opt,name=platform_preamble_sha256,json=platformPreambleSha256,proto3" json:"platform_preamble_sha256,omitempty"`
+	// The revision of that preamble (each change is one); 0 when none.
 	PlatformPreambleRevision uint32 `protobuf:"varint,4,opt,name=platform_preamble_revision,json=platformPreambleRevision,proto3" json:"platform_preamble_revision,omitempty"`
 	// Whether the "read untrusted, then act" rule is on for the root agent's
 	// tier: a call of an external_send, delete or payment tool after a tool
@@ -898,9 +902,9 @@ func (x *WorkerContentControlsV1) GetDisclosureOptOutToolkitTypes() []string {
 	return nil
 }
 
-func (x *WorkerContentControlsV1) GetPlatformPreamble() string {
+func (x *WorkerContentControlsV1) GetPlatformPreambleSha256() string {
 	if x != nil {
-		return x.PlatformPreamble
+		return x.PlatformPreambleSha256
 	}
 	return ""
 }
@@ -1045,11 +1049,11 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\x11root_data_classes\x18\x03 \x03(\tR\x0frootDataClassesJ\x04\b\x04\x10\v\"l\n" +
 	"\x16WorkerApprovalPolicyV1\x12\x1b\n" +
 	"\trisk_tier\x18\x01 \x01(\tR\briskTier\x12/\n" +
-	"\x13approval_categories\x18\x02 \x03(\tR\x12approvalCategoriesJ\x04\b\x03\x10\v\"\xb2\x02\n" +
+	"\x13approval_categories\x18\x02 \x03(\tR\x12approvalCategoriesJ\x04\b\x03\x10\v\"\xbf\x02\n" +
 	"\x17WorkerContentControlsV1\x12'\n" +
 	"\x0fdisclosure_text\x18\x01 \x01(\tR\x0edisclosureText\x12F\n" +
-	" disclosure_opt_out_toolkit_types\x18\x02 \x03(\tR\x1cdisclosureOptOutToolkitTypes\x12+\n" +
-	"\x11platform_preamble\x18\x03 \x01(\tR\x10platformPreamble\x12<\n" +
+	" disclosure_opt_out_toolkit_types\x18\x02 \x03(\tR\x1cdisclosureOptOutToolkitTypes\x128\n" +
+	"\x18platform_preamble_sha256\x18\x03 \x01(\tR\x16platformPreambleSha256\x12<\n" +
 	"\x1aplatform_preamble_revision\x18\x04 \x01(\rR\x18platformPreambleRevision\x125\n" +
 	"\x17untrusted_read_then_act\x18\x05 \x01(\bR\x14untrustedReadThenActJ\x04\b\x06\x10\v\"\x8f\x01\n" +
 	"\x0fWorkerRunCapsV1\x12$\n" +

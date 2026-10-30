@@ -6,11 +6,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"sync"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
@@ -93,4 +97,45 @@ VALUES ($1, $2, $3, $4, $5::uuid)`, revision, text, sum, author, record.EventID)
 		return PlatformPreambleRevision{}, fmt.Errorf("platform preamble: write the revision: %w", err)
 	}
 	return PlatformPreambleRevision{Revision: revision, Recorded: true}, nil
+}
+
+// PlatformPreambleRevisions reads the newest revision for admission
+// (agentexecution.PlatformPreambleSource): the text is frozen into each
+// turn's input, never sent on the command bus.
+type PlatformPreambleRevisions struct{ pool *pgxpool.Pool }
+
+var _ agentexecution.PlatformPreambleSource = (*PlatformPreambleRevisions)(nil)
+
+// NewPlatformPreambleRevisions reads through pool.
+func NewPlatformPreambleRevisions(pool *pgxpool.Pool) (*PlatformPreambleRevisions, error) {
+	if pool == nil {
+		return nil, errors.New("platform preamble revisions: the database is required")
+	}
+	return &PlatformPreambleRevisions{pool: pool}, nil
+}
+
+// PlatformPreamble answers the newest revision, or nil when there is none,
+// its text is empty, or shared 0216 has not run.
+func (r *PlatformPreambleRevisions) PlatformPreamble(ctx context.Context) (*runtimev1.PlatformPreambleSnapshotV1, error) {
+	var (
+		revision int64
+		text     string
+		sum      string
+	)
+	err := r.pool.QueryRow(ctx, `
+SELECT revision, text, sha256 FROM elitea_runtime.platform_preamble_revisions
+ORDER BY revision DESC LIMIT 1`).Scan(&revision, &text, &sum)
+	if errors.Is(err, pgx.ErrNoRows) || undefinedTable(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("platform preamble: read the newest revision: %w", err)
+	}
+	if text == "" {
+		return nil, nil
+	}
+	if revision <= 0 || revision > math.MaxUint32 {
+		return nil, fmt.Errorf("platform preamble: revision %d is out of range", revision)
+	}
+	return &runtimev1.PlatformPreambleSnapshotV1{Revision: uint32(revision), Sha256: sum, Text: text}, nil
 }

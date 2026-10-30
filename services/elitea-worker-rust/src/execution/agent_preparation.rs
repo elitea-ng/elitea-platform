@@ -1114,26 +1114,27 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                 ),
             };
         };
-        let command_binding = match AuthorizedNativeCommandBinding::from_verified(&verified) {
-            Ok(binding) => binding,
-            Err(error) => {
-                return AgentNativeAssemblyOutcome::Failed {
-                    run: Box::new(Self {
-                        delivery,
-                        verified,
-                        request,
-                        publisher,
-                        lease,
-                        permit,
-                        runtime_context,
-                        session,
-                        checkpoint,
-                        sandbox_stop,
-                    }),
-                    error,
-                };
-            }
-        };
+        let command_binding =
+            match AuthorizedNativeCommandBinding::from_verified(&verified, &request) {
+                Ok(binding) => binding,
+                Err(error) => {
+                    return AgentNativeAssemblyOutcome::Failed {
+                        run: Box::new(Self {
+                            delivery,
+                            verified,
+                            request,
+                            publisher,
+                            lease,
+                            permit,
+                            runtime_context,
+                            session,
+                            checkpoint,
+                            sandbox_stop,
+                        }),
+                        error,
+                    };
+                }
+            };
         // Remote MCP calls of this run carry a delegation assertion that Main
         // mints under the live claim (ADR-0044 decision 4). A governed run
         // requires one: a call it cannot sign is refused.

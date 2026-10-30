@@ -119,7 +119,7 @@ where
                     .await;
             }
         };
-        let command = match AuthorizedNativeCommandBinding::from_verified(&verified) {
+        let command = match AuthorizedNativeCommandBinding::from_verified(&verified, &request) {
             Ok(command) => command,
             Err(error) => {
                 return self

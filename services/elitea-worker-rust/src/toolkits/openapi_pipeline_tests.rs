@@ -305,5 +305,6 @@ fn resume_payload(authorize: bool, resource: &str) -> AgentExecutionPayload {
         project_context: None,
         model_context_limits: None,
         summary_model: None,
+        platform_preamble: None,
     }
 }

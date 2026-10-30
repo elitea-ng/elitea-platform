@@ -15,7 +15,7 @@ An agent can post a comment, send a message or send an email to people outside t
 
 Each outbound tool that writes human-readable text outside the platform adds a **disclosure marker** to the end of the text that it sends. The marker is a blank line and then the marker text. The default text is `Generated with Elitea AI`.
 
-The tools are declared in one contract, [`libs/proto/contracts/tool-disclosure-v1.json`](https://github.com/elitea-ng/elitea-platform/blob/main/libs/proto/contracts/tool-disclosure-v1.json). For each tool, the contract names the parameters that hold the text and the format of the target. The worker compiles the contract in, and the main service reads the same file. Each tool in the contract has the category `external_send`.
+The tools are declared in one contract, [`libs/proto/contracts/tool-disclosure-v1.json`](https://github.com/elitea-ng/elitea-platform/blob/main/libs/proto/contracts/tool-disclosure-v1.json). For each tool, the contract names the parameters that hold the text and the format of the target. The worker compiles the contract in, and the main service reads the same file. The contract lists each tool that writes human-readable text outside the platform, also when its category is `write` (for example a pull request description). The contract does not change the category of a tool, so it does not change the approval of the tool.
 
 | Toolkit | Tools | Format |
 | --- | --- | --- |
@@ -24,11 +24,17 @@ The tools are declared in one contract, [`libs/proto/contracts/tool-disclosure-v
 | Gmail (`yagmail`) | `send_gmail_message` | Plain text |
 | Aha! | `add_comment` | Plain text |
 | Figma | `post_file_comment` | Plain text |
-| GitHub | `comment_on_issue` | Markdown |
-| GitLab | `comment_on_issue`, `comment_on_pr`, `create_pr_change_comment` | Markdown |
-| GitLab Org | `comment_on_issue`, `create_pr_change_comment` | Markdown |
-| Bitbucket | `add_pull_request_comment` | Markdown |
-| Azure DevOps Repos | `comment_on_pull_request` (also each inline comment) | Markdown |
+| Confluence | `create_page` | Plain text |
+| Salesforce | `create_case`, `update_case` | Plain text |
+| Carrier | `create_ticket` | Plain text |
+| TestIO | `confirm_bug_fix` | Plain text |
+| GitHub | `comment_on_issue`, `create_pull_request`, `create_issue`, `update_issue`, `create_issue_on_project`, `update_issue_on_project` | Markdown |
+| GitLab | `comment_on_issue`, `comment_on_pr`, `create_pr_change_comment`, `create_pull_request` | Markdown |
+| GitLab Org | `comment_on_issue`, `create_pr_change_comment`, `create_pull_request` | Markdown |
+| Bitbucket | `add_pull_request_comment`, `close_pull_request` (the close message) | Markdown |
+| Azure DevOps Repos | `comment_on_pull_request` (also each inline comment), `create_pull_request` | Markdown |
+
+An update of a body that already has a marker does not get a second marker. This is also true when the marker has the run id of an earlier run.
 
 Jira `update_comment_with_file` is `external_send` but has no marker: it replaces the text of a comment that already exists, and that comment got its marker when the agent wrote it.
 
@@ -43,7 +49,7 @@ A project can change the marker text, but it cannot remove the marker. Only a pl
 - The marker text is at most 200 bytes. The worker replaces control characters with spaces.
 - The worker adds the marker only to the tools in the contract. A tool that writes text in another parameter, or a new tool, needs a contract entry.
 - The tools of a custom MCP server do not get the marker.
-- A pull request or an issue that a `write` tool creates (for example GitHub `create_pull_request`) does not get the marker. Only `external_send` tools are in the contract.
+- A tool that sends its text inside a JSON document parameter does not get the marker: Jira `create_issue`, Bitbucket `create_pull_request` and Azure DevOps Boards `create_work_item`.
 - An agent can still write text that looks like a marker, or ask a person to remove it. The marker is a disclosure, not a watermark.
 
 ### Configure
@@ -80,14 +86,16 @@ The worker puts two texts before the system prompt of every agent, every nested 
 
 The agent author cannot change or remove either text. The preamble goes into the system message of each model call, in front of the author's instructions.
 
-Each save that changes the platform preamble is a new **revision**, numbered from 1. The same transaction writes the revision and a security audit event. Each agent command carries the current text and its revision number.
+Each save that changes the platform preamble is a new **revision**, numbered from 1. The same transaction writes the revision and a security audit event.
+
+When the main service admits an agent turn, it freezes the newest revision into the turn's input bundle: the text, the revision number and the SHA-256 of the text. The input bundle is immutable and content-addressed, and the worker fetches it over gRPC. The agent command carries only the revision number and the SHA-256, not the text. The worker refuses the turn when the SHA-256 of the text is not the SHA-256 in the input bundle, or when the command and the input bundle name different revisions.
 
 #### Limits
 
 - The platform preamble is at most 8 KiB. Keep it short: each model call sends it, and it uses tokens.
 - The preamble is an instruction to the model. The model can still fail to follow it. Use the approval policy, guardrails and output contracts for rules that must hold.
 - A save of the platform preamble does not need a second approver. Platform configuration has no four-eyes control. The revision and the audit event record who changed it.
-- A change applies to the commands that the main service sends after the change, at once on the replica that saved it and within 15 seconds on the other replicas. A turn that already started keeps the preamble it started with.
+- A change applies to the turns that the main service admits after the save, on each replica. A turn that already started keeps the preamble that is in its input bundle.
 
 ### Configure
 

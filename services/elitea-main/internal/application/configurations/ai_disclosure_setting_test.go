@@ -17,7 +17,7 @@ func TestNormalizeAIDisclosureSetting(t *testing.T) {
 		nil,
 		{"marker_text": 7},
 		{"marker_text": "line\nbreak"},
-		{"opt_out_toolkit_types": []any{"confluence"}},
+		{"opt_out_toolkit_types": []any{"sharepoint"}},
 		{"opt_out_toolkit_types": "slack"},
 	} {
 		if _, err := normalizeAIDisclosureSetting(data); err == nil {

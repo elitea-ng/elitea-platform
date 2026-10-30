@@ -120,6 +120,24 @@ message AgentExecutionInputV1 {
   // Main resolves this optional model from the actor's authorized catalogue.
   // Absence uses the task model for summarization. Never accept a client-authored snapshot.
   SummaryModelSnapshotV1 summary_model = 66;
+  // The administrator's platform preamble (ADR-0043 decision 3, #1500),
+  // frozen at admission: a later change does not reach this turn. The worker
+  // puts its built-in preamble and then this text before every agent's
+  // system prompt. Absent: no administrator preamble. Main sets it only
+  // after an administrator saved a preamble, so inputs are unchanged while
+  // workers from an earlier release run.
+  PlatformPreambleSnapshotV1 platform_preamble = 67;
+}
+
+// One revision of the platform preamble (shared 0216). The command's
+// content_controls (field 71) names the same revision and digest.
+message PlatformPreambleSnapshotV1 {
+  uint32 revision = 1;
+  // Lowercase hex SHA-256 of the exact UTF-8 text bytes.
+  string sha256 = 2;
+  // At most 8 KiB, no NUL.
+  string text = 3;
+  reserved 4 to 15;
 }
 
 // A separately authorized summarizer. Credentials stay in claim-scoped redemption.

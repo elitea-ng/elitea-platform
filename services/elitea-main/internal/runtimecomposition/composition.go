@@ -868,6 +868,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct governed agent credentials: %w", governedErr)
 		}
 		agentAdmissions.WithGovernedCredentials(governedCredentials)
+		// Each turn's input freezes the newest platform preamble (ADR-0043
+		// decision 3): a prompt is data-plane content, never a command field.
+		preambleRevisions, preambleErr := repos.NewPlatformPreambleRevisions(dependencies.AdmissionPool)
+		if preambleErr != nil {
+			return nil, fmt.Errorf("construct platform preamble revisions: %w", preambleErr)
+		}
+		agentAdmissions.WithPlatformPreamble(preambleRevisions)
 		agentTargets, targetErr := newCurrentAgentStartRepository(
 			dependencies.AdmissionPool,
 			catalogueProjectID,

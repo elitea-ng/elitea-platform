@@ -12,7 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 )
 
 func TestPlatformPreamble_EachChangeIsARevisionWithAnAuditEvent(t *testing.T) {
@@ -58,9 +58,21 @@ WHERE o.event_type = 'ai.elitea.security.v1.config.changed'`).Scan(&events, &rea
 	if events != 2 || !strings.Contains(reason, "revision:") {
 		t.Fatalf("events = %d, reasons = %s", events, reason)
 	}
-	settings, err := platformconfig.LoadContentControlsSettings(ctx, pool)
-	if err != nil || settings.PreambleRevision != 2 || settings.Stored {
-		t.Fatalf("settings = %+v, err = %v", settings, err)
+	// Admission reads the newest revision; a cleared text is none.
+	source, err := NewPlatformPreambleRevisions(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, err := source.PlatformPreamble(ctx); err != nil || snapshot != nil {
+		t.Fatalf("cleared preamble = %v, err = %v", snapshot, err)
+	}
+	if got := save("Be brief."); !got.Recorded || got.Revision != 3 {
+		t.Fatalf("third text = %+v", got)
+	}
+	snapshot, err := source.PlatformPreamble(ctx)
+	if err != nil || snapshot.GetRevision() != 3 || snapshot.GetText() != "Be brief." ||
+		!agentexecution.ValidPlatformPreambleSnapshot(snapshot) {
+		t.Fatalf("snapshot = %v, err = %v", snapshot, err)
 	}
 
 	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.platform_preamble_revisions SET text = 'x'`); err == nil {

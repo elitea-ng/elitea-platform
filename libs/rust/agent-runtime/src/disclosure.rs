@@ -295,11 +295,28 @@ impl DisclosurePolicy {
 /// The separator between the text and the marker.
 const SEPARATOR: &str = "\n\n";
 
+/// The start of the hidden run id comment of a Markdown marker.
+const RUN_ID_COMMENT: &str = " <!-- elitea-run-id: ";
+
+/// Whether `text` already ends with the marker's text, with or without the
+/// run id comment of any run. An update tool (for example a new issue body
+/// that keeps the old marker) then does not get a second marker.
+fn already_marked(text: &str, marker: &str) -> bool {
+    let marker_text = marker.split(RUN_ID_COMMENT).next().unwrap_or(marker);
+    let mut end = text.trim_end();
+    if end.ends_with("-->")
+        && let Some(start) = end.rfind(RUN_ID_COMMENT)
+    {
+        end = &end[..start];
+    }
+    end.ends_with(marker_text)
+}
+
 fn append_marker(value: &mut Value, marker: &str) -> bool {
     let Value::String(text) = value else {
         return false;
     };
-    if text.trim().is_empty() || text.trim_end().ends_with(marker) {
+    if text.trim().is_empty() || already_marked(text, marker) {
         return false;
     }
     let trimmed = text.trim_end().len();
@@ -332,16 +349,19 @@ mod tests {
     }
 
     #[test]
-    fn the_compiled_in_contract_is_well_formed_and_lists_only_external_send_tools() {
+    fn the_compiled_in_contract_is_well_formed_and_lists_only_send_and_write_tools() {
         let declared = parse_contract(CONTRACT).expect("the contract parses");
         assert!(declared.len() >= 10, "toolkits = {}", declared.len());
         let contract: Value = serde_json::from_str(CONTRACT).expect("json");
         for (toolkit, tools) in contract["toolkits"].as_object().expect("toolkits") {
             for tool in tools.as_object().expect("tools").keys() {
-                assert_eq!(
-                    declared_category(toolkit, tool),
-                    Some(ToolCategory::ExternalSend),
-                    "{toolkit}.{tool} is not external_send"
+                // An outbound message is external_send; a pull request, an
+                // issue, a case, a ticket or a page with a body keeps its
+                // category (write), so the approval defaults do not change.
+                let category = declared_category(toolkit, tool).unwrap_or(ToolCategory::Write);
+                assert!(
+                    matches!(category, ToolCategory::ExternalSend | ToolCategory::Write),
+                    "{toolkit}.{tool} is {category}, not external_send or write"
                 );
             }
         }
@@ -396,6 +416,30 @@ mod tests {
         // Applied once: a replayed call is not marked twice.
         assert_eq!(policy.apply("jira", "add_comments", &mut call), 0);
         assert_eq!(call["comment"], "Fixed in 1.2.\n\nGenerated with Elitea AI");
+    }
+
+    /// A pull request or issue body is `write`, not `external_send`, but it
+    /// is text outside the platform: it gets the marker, once, also when an
+    /// update keeps the marker of an earlier run.
+    #[test]
+    fn pull_request_and_issue_bodies_get_the_marker_once() {
+        let policy = DisclosurePolicy::new("Generated with Elitea AI", Vec::<String>::new())
+            .with_run_id("exec-2");
+        let mut call = arguments(&json!({"title": "Fix", "body": "Fixes the build."}));
+        assert_eq!(policy.apply("github", "create_pull_request", &mut call), 1);
+        assert_eq!(
+            call["body"],
+            "Fixes the build.\n\nGenerated with Elitea AI <!-- elitea-run-id: exec-2 -->"
+        );
+        let mut update = arguments(&json!({
+            "issue_id": 7,
+            "body": "Old text.\n\nGenerated with Elitea AI <!-- elitea-run-id: exec-1 -->"
+        }));
+        assert_eq!(policy.apply("github", "update_issue", &mut update), 0);
+        assert_eq!(
+            declared_category("github", "create_pull_request").unwrap_or(ToolCategory::Write),
+            ToolCategory::Write
+        );
     }
 
     #[test]

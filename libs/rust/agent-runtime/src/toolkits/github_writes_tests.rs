@@ -1056,7 +1056,10 @@ async fn create_pull_request_defaults_the_base_and_names_what_github_refused() {
     );
     assert_eq!(
         body_of(&script.writes()[0]),
-        &json!({"title": "Add x", "body": "Why", "head": "work", "base": "main"})
+        // ADR-0043 decision 3: a pull request description is text outside
+        // the platform, so it gets the AI disclosure marker, although the
+        // tool's category stays write.
+        &json!({"title": "Add x", "body": "Why\n\nGenerated with Elitea AI", "head": "work", "base": "main"})
     );
     // An explicit base is used; a null one falls back.
     rig.says(
@@ -1113,7 +1116,7 @@ async fn create_issue_sends_empty_lists_when_none_are_given() {
     .await;
     assert_eq!(
         body_of(&script.writes()[1]),
-        &json!({"title": "Bug", "body": "## x", "labels": ["bug"], "assignees": ["octocat"]})
+        &json!({"title": "Bug", "body": "## x\n\nGenerated with Elitea AI", "labels": ["bug"], "assignees": ["octocat"]})
     );
 
     for (status, expected) in [
@@ -1160,7 +1163,7 @@ async fn update_issue_leaves_labels_and_assignees_alone_unless_told() {
     assert!(!says.contains("removed"), "{says}");
     assert_eq!(
         body_of(&script.writes()[1]),
-        &json!({"labels": ["bug"], "assignees": ["octocat"], "title": "New", "body": "B"})
+        &json!({"labels": ["bug"], "assignees": ["octocat"], "title": "New", "body": "B\n\nGenerated with Elitea AI"})
     );
     let says = rig
         .says(
@@ -1896,7 +1899,7 @@ async fn an_issue_is_created_on_the_board_and_its_fields_are_set_in_order() {
     assert_eq!(&order[..3], ["EliteaBoard", "EliteaDraft", "EliteaConvert"]);
     assert_eq!(
         ops[1].1,
-        json!({"projectId": "PROJ", "title": "Fix nav", "body": "Mobile"})
+        json!({"projectId": "PROJ", "title": "Fix nav", "body": "Mobile\n\nGenerated with Elitea AI"})
     );
     assert_eq!(ops[2].1, json!({"itemId": "DRAFT", "repositoryId": "REPO"}));
     let rest: Vec<_> = ops[3..].iter().collect();
@@ -2105,7 +2108,7 @@ async fn an_issue_on_the_board_is_found_updated_and_its_fields_changed() {
     assert_eq!(ops[2].0, "EliteaUpdateIssue");
     assert_eq!(
         ops[2].1,
-        json!({"issueId": "ISSUE", "title": "New title", "body": "New body"})
+        json!({"issueId": "ISSUE", "title": "New title", "body": "New body\n\nGenerated with Elitea AI"})
     );
     // An empty list removes what the issue has now; nothing else is touched.
     let remove_labels = ops

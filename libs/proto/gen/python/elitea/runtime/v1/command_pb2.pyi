@@ -161,18 +161,18 @@ class WorkerApprovalPolicyV1(_message.Message):
     def __init__(self, risk_tier: _Optional[str] = ..., approval_categories: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class WorkerContentControlsV1(_message.Message):
-    __slots__ = ("disclosure_text", "disclosure_opt_out_toolkit_types", "platform_preamble", "platform_preamble_revision", "untrusted_read_then_act")
+    __slots__ = ("disclosure_text", "disclosure_opt_out_toolkit_types", "platform_preamble_sha256", "platform_preamble_revision", "untrusted_read_then_act")
     DISCLOSURE_TEXT_FIELD_NUMBER: _ClassVar[int]
     DISCLOSURE_OPT_OUT_TOOLKIT_TYPES_FIELD_NUMBER: _ClassVar[int]
-    PLATFORM_PREAMBLE_FIELD_NUMBER: _ClassVar[int]
+    PLATFORM_PREAMBLE_SHA256_FIELD_NUMBER: _ClassVar[int]
     PLATFORM_PREAMBLE_REVISION_FIELD_NUMBER: _ClassVar[int]
     UNTRUSTED_READ_THEN_ACT_FIELD_NUMBER: _ClassVar[int]
     disclosure_text: str
     disclosure_opt_out_toolkit_types: _containers.RepeatedScalarFieldContainer[str]
-    platform_preamble: str
+    platform_preamble_sha256: str
     platform_preamble_revision: int
     untrusted_read_then_act: bool
-    def __init__(self, disclosure_text: _Optional[str] = ..., disclosure_opt_out_toolkit_types: _Optional[_Iterable[str]] = ..., platform_preamble: _Optional[str] = ..., platform_preamble_revision: _Optional[int] = ..., untrusted_read_then_act: _Optional[bool] = ...) -> None: ...
+    def __init__(self, disclosure_text: _Optional[str] = ..., disclosure_opt_out_toolkit_types: _Optional[_Iterable[str]] = ..., platform_preamble_sha256: _Optional[str] = ..., platform_preamble_revision: _Optional[int] = ..., untrusted_read_then_act: _Optional[bool] = ...) -> None: ...
 
 class WorkerRunCapsV1(_message.Message):
     __slots__ = ("max_tool_calls", "max_model_turns", "max_records_read")

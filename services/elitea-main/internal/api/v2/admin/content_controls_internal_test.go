@@ -16,7 +16,7 @@ func TestValidateContentControlsValues(t *testing.T) {
 	}{
 		"marker":               {platformconfig.SectionAIDisclosure, map[string]any{"marker_text": "AI", "opt_out_toolkit_types": []any{"slack", "Jira"}}, false},
 		"long marker":          {platformconfig.SectionAIDisclosure, map[string]any{"marker_text": strings.Repeat("a", 201)}, true},
-		"unknown opt-out":      {platformconfig.SectionAIDisclosure, map[string]any{"opt_out_toolkit_types": []any{"confluence"}}, true},
+		"unknown opt-out":      {platformconfig.SectionAIDisclosure, map[string]any{"opt_out_toolkit_types": []any{"sharepoint"}}, true},
 		"opt-out not a list":   {platformconfig.SectionAIDisclosure, map[string]any{"opt_out_toolkit_types": "slack"}, true},
 		"preamble":             {platformconfig.SectionPlatformPreamble, map[string]any{"text": "Be careful."}, false},
 		"long preamble":        {platformconfig.SectionPlatformPreamble, map[string]any{"text": strings.Repeat("a", 8193)}, true},

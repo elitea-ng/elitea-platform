@@ -2,10 +2,7 @@ package platformconfig
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
@@ -14,19 +11,19 @@ import (
 
 // The content controls of ADR-0043 decisions 3 and 4 (#1500).
 //
-//   - SectionAIDisclosure: the AI disclosure marker that outbound tools
-//     (external_send tools that write human-readable text outside the
-//     platform) append, and the toolkit types whose projects may opt out.
+//   - SectionAIDisclosure: the AI disclosure marker that the tools which
+//     write human-readable text outside the platform append, and the toolkit types whose projects may opt out.
 //     A project can change the text (project setting `ai_disclosure`) but
 //     cannot remove the marker unless the type is listed here.
 //   - SectionPlatformPreamble: instruction text that the worker puts before
 //     every agent's system prompt, outside author control. Each save that
 //     changes the text is a new revision (shared 0216) with a security audit
-//     event.
+//     event. Admission freezes the newest revision's text into each turn's
+//     input; the command carries only its revision and digest.
 //   - KeyApprovalUntrustedReadThenActTiers in SectionApprovalPolicy: the
 //     tiers whose runs have the "read untrusted, then act" rule.
 //
-// Main sends the three on each agent command (WorkerCommandV1 field 71)
+// Main sends the controls on each agent command (WorkerCommandV1 field 71)
 // only once one of them is stored: a worker of an earlier release rejects
 // the field, and the chart rolls Main out first. Until then the worker
 // applies its built-in defaults, which are the ADR defaults.
@@ -57,18 +54,15 @@ func DefaultUntrustedReadThenActTiers() []agentlifecycle.Tier {
 	return []agentlifecycle.Tier{agentlifecycle.TierHigh, agentlifecycle.TierCritical}
 }
 
-// ContentControlsSettings is what Main sends on field 71.
+// ContentControlsSettings is what Main sends on field 71. The platform
+// preamble's text is not part of it: admission freezes the newest revision
+// into each turn's input (agentexecution.WithPlatformPreamble).
 type ContentControlsSettings struct {
 	// MarkerText is the administrator's marker text; empty is the default.
 	MarkerText string
 	// OptOutToolkitTypes are the toolkit types whose projects may opt out
 	// of the marker, by their contract names.
 	OptOutToolkitTypes []string
-	// Preamble is the administrator's preamble text; empty is none.
-	Preamble string
-	// PreambleRevision is the preamble's newest revision (shared 0216); 0
-	// when none was saved.
-	PreambleRevision uint32
 	// UntrustedReadThenActTiers are the tiers whose runs have the rule.
 	UntrustedReadThenActTiers []agentlifecycle.Tier
 
@@ -96,7 +90,7 @@ func (s ContentControlsSettings) UntrustedReadThenAct(tier agentlifecycle.Tier) 
 // ContentControlsSettingsFromValues is the overlay of the three stored
 // parts on the defaults. A value of the wrong type keeps the default; an
 // unknown toolkit type or tier is skipped.
-func ContentControlsSettingsFromValues(disclosure, preamble, approval Values, revision uint32) ContentControlsSettings {
+func ContentControlsSettingsFromValues(disclosure, preamble, approval Values) ContentControlsSettings {
 	settings := DefaultContentControlsSettings()
 	settings.MarkerText = disclosure.trimmed(KeyAIDisclosureMarkerText)
 	for _, raw := range disclosure.Strings(KeyAIDisclosureOptOutToolkitTypes) {
@@ -104,8 +98,6 @@ func ContentControlsSettingsFromValues(disclosure, preamble, approval Values, re
 			settings.OptOutToolkitTypes = appendUnique(settings.OptOutToolkitTypes, name)
 		}
 	}
-	settings.Preamble = preamble.trimmed(KeyPlatformPreambleText)
-	settings.PreambleRevision = revision
 	_, tiersStored := approval[KeyApprovalUntrustedReadThenActTiers]
 	if _, isList := approval[KeyApprovalUntrustedReadThenActTiers].([]any); isList {
 		tiers := []agentlifecycle.Tier{}
@@ -129,8 +121,8 @@ func appendUnique(list []string, value string) []string {
 	return append(list, value)
 }
 
-// LoadContentControlsSettings reads the two sections, the rule tiers of the
-// approval policy and the preamble's newest revision. A database without
+// LoadContentControlsSettings reads the two sections and the rule tiers of
+// the approval policy. A database without
 // a table never saved what it holds: that part is the default.
 func LoadContentControlsSettings(ctx context.Context, pool *pgxpool.Pool) (ContentControlsSettings, error) {
 	if pool == nil {
@@ -147,27 +139,5 @@ func LoadContentControlsSettings(ctx context.Context, pool *pgxpool.Pool) (Conte
 		}
 		sections = append(sections, values)
 	}
-	revision, err := LatestPlatformPreambleRevision(ctx, pool)
-	if err != nil {
-		return DefaultContentControlsSettings(), err
-	}
-	return ContentControlsSettingsFromValues(sections[0], sections[1], sections[2], revision), nil
-}
-
-// LatestPlatformPreambleRevision reads the newest preamble revision; 0
-// when there is none or shared 0216 has not run.
-func LatestPlatformPreambleRevision(ctx context.Context, pool *pgxpool.Pool) (uint32, error) {
-	var revision int64
-	err := pool.QueryRow(ctx,
-		`SELECT COALESCE(max(revision), 0) FROM elitea_runtime.platform_preamble_revisions`).Scan(&revision)
-	if UndefinedTable(err) || errors.Is(err, pgx.ErrNoRows) {
-		return 0, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("platform preamble: read the newest revision: %w", err)
-	}
-	if revision < 0 || revision > int64(^uint32(0)) {
-		return 0, fmt.Errorf("platform preamble: revision %d is out of range", revision)
-	}
-	return uint32(revision), nil
+	return ContentControlsSettingsFromValues(sections[0], sections[1], sections[2]), nil
 }
