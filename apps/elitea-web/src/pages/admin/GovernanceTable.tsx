@@ -110,6 +110,10 @@ export function describeScope(row: GovernanceRow): string {
   const parts = [projectPart];
   if (providers.length > 0) parts.push(providers.join(', '));
   if (models.length > 0) parts.push(models.join(', '));
+  const agents = list(record.agent_ids);
+  if (agents.length > 0) parts.push(`${t('pages.admin.governance.scope.agents', 'agents')} ${agents.join(', ')}`);
+  const users = list(record.user_ids);
+  if (users.length > 0) parts.push(`${t('pages.admin.governance.scope.users', 'users')} ${users.join(', ')}`);
   return parts.join(' · ');
 }
 

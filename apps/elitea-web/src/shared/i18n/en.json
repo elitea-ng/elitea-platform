@@ -1249,7 +1249,7 @@
   "pages.admin.governance.help.credentialPolicy": "How usage is accounted: billed normally, metered at zero cost, or excluded from accounting entirely.",
   "pages.admin.governance.help.mcpAllowlist": "The MCP servers a request may name. An empty list turns the allowlist off and permits every server.",
   "pages.admin.governance.help.modelConfig": "The providers and models the selected projects may use. Leave both empty to exempt those projects from every other allowlist row.",
-  "pages.admin.governance.help.rateLimit": "Requests and tokens per minute, counted per project. The token ceiling is applied to the request after the one that crossed it, because a request’s token cost is unknown until the provider answers.",
+  "pages.admin.governance.help.rateLimit": "Requests and tokens per minute, counted per project. Name agents or users to make it a throttle: each agent or user then gets its own counter, in addition to the project limit. The token ceiling is applied to the request after the one that crossed it, because a request’s token cost is unknown until the provider answers.",
   "pages.admin.governance.help.routingRule": "A CEL predicate plus weighted targets. When it matches, the request is dispatched to one of the targets instead. A routed target is still judged by the model allowlist.",
   "pages.admin.governance.propagation": "A saved definition takes effect within the gateway’s refresh interval (30 seconds by default), not immediately. The gateway’s /governance/status endpoint reports what it has loaded, and names any entry it rejected or that can match nothing.",
   "pages.admin.governance.readOnlyRow": "This entry is authored on the budget-alerts surface. Editing it here would discard its settings.",
@@ -5471,5 +5471,11 @@
   "pages.admin.connectorRequests.inventory.created": "Created {{created}} request(s); {{skipped}} connector(s) already had an open or approved request. Another connector approver must decide them.",
   "pages.admin.connectorRequests.inventory.failed": "No request could be created for {{count}} connector(s); request them by hand:",
   "pages.admin.connectorRequests.inventoryOrigin": "Connectors in use (created by {{who}})",
-  "features.agentLifecycle.trimming.tooNew": "Too new to judge: granted for less than the window"
+  "features.agentLifecycle.trimming.tooNew": "Too new to judge: granted for less than the window",
+  "pages.admin.governance.field.agentIds": "Throttled agents",
+  "pages.admin.governance.field.agentIdsHelp": "Comma-separated agent ids of the ONE project in Projects. Each agent gets its own counter. At most 100.",
+  "pages.admin.governance.field.userIds": "Throttled users",
+  "pages.admin.governance.field.userIdsHelp": "Comma-separated user ids. Each user gets its own counter across the selected projects. At most 100.",
+  "pages.admin.governance.scope.agents": "agents",
+  "pages.admin.governance.scope.users": "users"
 }

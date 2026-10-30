@@ -57,6 +57,9 @@ export interface GovernanceDraft {
   readonly scopeProjectIds: string;
   readonly scopeProviders: string;
   readonly scopeModels: string;
+  // rate_limit throttles (ADR-0041 decision 4)
+  readonly scopeAgentIds: string;
+  readonly scopeUserIds: string;
 
   // budget
   readonly budgetIsUnlimited: boolean;
@@ -91,6 +94,8 @@ export const EMPTY_DRAFT: GovernanceDraft = {
   scopeProjectIds: '',
   scopeProviders: '',
   scopeModels: '',
+  scopeAgentIds: '',
+  scopeUserIds: '',
   budgetIsUnlimited: false,
   budgetLimitUsd: '',
   budgetPeriod: 'monthly',
@@ -155,6 +160,14 @@ function draftToScope(draft: GovernanceDraft): Record<string, unknown> | undefin
   if (providers.length > 0) scope.providers = providers;
   const models = splitList(draft.scopeModels);
   if (models.length > 0) scope.models = models;
+  // The throttle dimensions mean something to a rate limit only, and the
+  // server refuses them on every other type.
+  if (draft.type === 'rate_limit') {
+    const agentIds = splitIntList(draft.scopeAgentIds);
+    if (agentIds.length > 0) scope.agent_ids = agentIds;
+    const userIds = splitIntList(draft.scopeUserIds);
+    if (userIds.length > 0) scope.user_ids = userIds;
+  }
   return Object.keys(scope).length > 0 ? scope : undefined;
 }
 
@@ -255,6 +268,8 @@ export function rowToDraft(row: GovernanceRow): GovernanceDraft {
     scopeProjectIds: joinList(scope.project_ids),
     scopeProviders: joinList(scope.providers),
     scopeModels: joinList(scope.models),
+    scopeAgentIds: joinList(scope.agent_ids),
+    scopeUserIds: joinList(scope.user_ids),
     budgetIsUnlimited: budget.is_unlimited === true,
     budgetLimitUsd: readString(budget, 'limit_usd'),
     budgetPeriod: readString(budget, 'period', 'monthly'),

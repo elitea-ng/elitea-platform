@@ -290,3 +290,43 @@ describe('egress_allowlist rows', () => {
     expect(describeScope(row({ type: 'egress_allowlist', data: {} }))).toBe('no destinations');
   });
 });
+
+describe('rate-limit throttles (ADR-0041 decision 4)', () => {
+  it('writes agent and user ids as integer lists on a rate limit', () => {
+    const data = draftToData(
+      draft({ type: 'rate_limit', scopeProjectIds: '7', scopeAgentIds: '3, 4', scopeUserIds: '11\nx', requestsPerMin: '5' }),
+    );
+    expect(data.scope).toEqual({ project_ids: [7], agent_ids: [3, 4], user_ids: [11] });
+  });
+
+  it('never writes throttle ids on another type, whatever the draft carries', () => {
+    const data = draftToData(draft({ type: 'budget', scopeAgentIds: '3', scopeUserIds: '11' }));
+    expect(data.scope).toBeUndefined();
+  });
+
+  it('reads a stored throttle back into the fields', () => {
+    const back = rowToDraft({
+      id: '1',
+      type: 'rate_limit',
+      section: 'governance',
+      name: 'agent-cap',
+      enabled: true,
+      data: { scope: { project_ids: [7], agent_ids: [3], user_ids: [11, 12] }, rate_limit: { requests_per_min: 5 } },
+    });
+    expect(back.scopeAgentIds).toBe('3');
+    expect(back.scopeUserIds).toBe('11, 12');
+  });
+
+  it('names the throttled agents and users in the scope column', () => {
+    const text = describeScope({
+      id: '1',
+      type: 'rate_limit',
+      section: 'governance',
+      name: 'agent-cap',
+      enabled: true,
+      data: { scope: { project_ids: [7], agent_ids: [3], user_ids: [11] } },
+    });
+    expect(text).toContain('agents 3');
+    expect(text).toContain('users 11');
+  });
+});
