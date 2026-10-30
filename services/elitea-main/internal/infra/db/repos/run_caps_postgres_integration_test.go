@@ -9,6 +9,7 @@ package repos
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,9 +129,19 @@ WHERE event_type = 'ai.elitea.security.v1.agent.cap.override' AND event->'data'-
 		t.Fatalf("regenerate bound %+v, %v", bound, err)
 	}
 
+	// A run whose command carries no caps does not burn a worker cap grant.
+	unsent := h.newResponse()
+	h.bindToConversation(unsent)
+	if bound, err := repo.BindRunCaps(ctx, workerruncaps.Binding{ExecutionID: h.executions[unsent], Generation: 1, ProjectID: 1, Caps: caps}); err != nil || bound != caps {
+		t.Fatalf("run without sent caps bound %+v, %v", bound, err)
+	}
+	if record := readRunCapsRecord(t, h, h.executions[unsent]); record["override"] != nil {
+		t.Fatalf("a run without sent caps consumed a worker cap grant: %v", record)
+	}
+
 	next := h.newResponse()
 	h.bindToConversation(next)
-	bound, err = repo.BindRunCaps(ctx, workerruncaps.Binding{ExecutionID: h.executions[next], Generation: 1, ProjectID: 1, Caps: caps})
+	bound, err = repo.BindRunCaps(ctx, workerruncaps.Binding{ExecutionID: h.executions[next], Generation: 1, ProjectID: 1, Caps: caps, WorkerCapsSent: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,14 +152,14 @@ WHERE event_type = 'ai.elitea.security.v1.agent.cap.override' AND event->'data'-
 		t.Fatalf("record = %v", record)
 	}
 	// A redispatch of the same execution reuses the snapshot.
-	again, err := repo.BindRunCaps(ctx, workerruncaps.Binding{ExecutionID: h.executions[next], Generation: 1, ProjectID: 1, Caps: caps})
+	again, err := repo.BindRunCaps(ctx, workerruncaps.Binding{ExecutionID: h.executions[next], Generation: 1, ProjectID: 1, Caps: caps, WorkerCapsSent: true})
 	if err != nil || again != bound {
 		t.Fatalf("rebind = %+v, %v", again, err)
 	}
 	// The run after that gets the plain caps: the grant is spent.
 	third := h.newResponse()
 	h.bindToConversation(third)
-	if bound, err := repo.BindRunCaps(ctx, workerruncaps.Binding{ExecutionID: h.executions[third], Generation: 1, ProjectID: 1, Caps: caps}); err != nil || bound != caps {
+	if bound, err := repo.BindRunCaps(ctx, workerruncaps.Binding{ExecutionID: h.executions[third], Generation: 1, ProjectID: 1, Caps: caps, WorkerCapsSent: true}); err != nil || bound != caps {
 		t.Fatalf("third run bound %+v, %v", bound, err)
 	}
 	var consumed string
@@ -178,6 +189,34 @@ func TestRunCaps_ExpiredGrantIsNotConsumed(t *testing.T) {
 	}
 	if record := readRunCapsRecord(t, h, h.executions[next]); record["override"] != nil {
 		t.Fatalf("an expired grant was consumed: %v", record)
+	}
+	// The expired, unused grant does not block a new grant in the
+	// conversation: it lapses, and the new grant is the live one.
+	recapped := h.newResponse()
+	h.bindToConversation(recapped)
+	h.capResponse(recapped, "max_spend")
+	grant, err := repo.GrantRunCapOverride(t.Context(), workerruncaps.OverrideRequest{
+		ProjectID: 1, ActorUserID: 7, MessageID: recapped, ExpiresIn: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("a grant after an expired grant: %v", err)
+	}
+	var lapsed int
+	if err := h.pool.QueryRow(t.Context(), `SELECT count(*) FROM elitea_runtime.run_cap_overrides
+WHERE source_message_id = $1 AND lapsed_at IS NOT NULL AND consumed_execution_id IS NULL`, capped).Scan(&lapsed); err != nil || lapsed != 1 {
+		t.Fatalf("lapsed grants = %d, %v", lapsed, err)
+	}
+	// A Main cap grant is consumed also when the command carries no caps.
+	last := h.newResponse()
+	h.bindToConversation(last)
+	bound, err := repo.BindRunCaps(t.Context(), workerruncaps.Binding{ExecutionID: h.executions[last], Generation: 1, ProjectID: 1, Caps: caps})
+	if err != nil || bound != caps.Raised(platformconfig.RunCapMaxSpend) {
+		t.Fatalf("bound %+v, %v", bound, err)
+	}
+	var consumed string
+	if err := h.pool.QueryRow(t.Context(), `SELECT consumed_execution_id FROM elitea_runtime.run_cap_overrides WHERE id = $1`,
+		grant.ID).Scan(&consumed); err != nil || consumed != h.executions[last] {
+		t.Fatalf("consumed by %q, %v", consumed, err)
 	}
 }
 
@@ -328,4 +367,41 @@ func capInTx(t *testing.T, h *interruptHarness, run func(sqlExecutor) (string, e
 		return err
 	})
 	return out, err
+}
+
+// The spend routine reads only the log rows of each capped run, through
+// idx_llm_request_logs_execution_time, and not every row of the project
+// since the run started.
+func TestRunCaps_SpendRoutineReadsTheRunsLogRowsByIndex(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedAgentRun(t, pool, "spend-indexed", 1, 31)
+	if _, err := pool.Exec(t.Context(), `
+UPDATE elitea_runtime.execution_jobs SET run_caps = '{"max_spend": 5}'::jsonb
+WHERE execution_id = 'spend-indexed';
+INSERT INTO gateway.llm_request_logs (project_id, provider, model, prompt_tokens, completion_tokens, execution_id)
+SELECT 1, 'p-test', 'm-test', 10, 10, 'other-run-' || (n % 500)
+FROM generate_series(1, 20000) AS n;
+ANALYZE gateway.llm_request_logs;
+ANALYZE elitea_runtime.execution_jobs`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := pool.Query(t.Context(), "EXPLAIN "+enforceSpendCapsSQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, line)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(plan, "\n")
+	if !strings.Contains(joined, "idx_llm_request_logs_execution_time") {
+		t.Fatalf("the spend routine does not read the run's log rows by index:\n%s", joined)
+	}
 }

@@ -89,7 +89,17 @@ that cancelled a run: `max_wall_seconds` or `max_spend`), the table
 `elitea_runtime.run_cap_overrides`, and the permission
 `safety.override_cap` for the platform administrators (`super_admin`,
 `admin`) and the project `admin` role, including projects whose role matrix
-was saved. No backfill.
+was saved. It also adds the index `idx_llm_request_logs_execution_time` on
+`gateway.llm_request_logs (execution_id, occurred_at)` for the spend routine.
+No backfill.
+
+- **Lock during the upgrade.** The migration runner is transactional, so the
+  index is not built `CONCURRENTLY`. While the index builds, writes to
+  `gateway.llm_request_logs` wait (the gateway's request log writes are
+  delayed, reads continue). On a large log table, run the migration in a
+  quiet period, or create the index before the upgrade:
+  `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_llm_request_logs_execution_time ON gateway.llm_request_logs (execution_id, occurred_at) WHERE execution_id IS NOT NULL;`
+  The migration then skips it.
 
 - **Setting.** Configuration › Run Caps (`run_caps` section,
   `configuration.governance`) keeps **Maximum Run Time** and gains, for each
@@ -127,7 +137,10 @@ was saved. No backfill.
   agent run of the conversation of a `CAP_REACHED` answer use twice that cap.
   Each grant writes an `ai.elitea.security.v1.agent.cap.override` event to
   the security audit outbox. A worker cap cannot be overridden before the
-  per-tier caps are saved.
+  per-tier caps are saved. One unused override is permitted for each
+  conversation; an override that expired unused does not block the next
+  one. A run whose command carries no caps does not use an override on a
+  worker cap.
 - **Evidence.** The metric `elitea.runtime.run_caps.reached` gains the label
   value `cap=max_spend`. The worker logs `agent_run_cap_reached` for a worker
   cap. Counters are per execution: a run that continues after an approval

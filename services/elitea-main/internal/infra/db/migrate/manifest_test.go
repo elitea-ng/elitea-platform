@@ -958,7 +958,9 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// (ADR-0041 decision 3, #1498): execution_jobs.run_caps (the run's
 	// effective caps) and cancel_cap (max_wall_seconds or max_spend), and
 	// elitea_runtime.run_cap_overrides (one grant per stopped response,
-	// consumed by the conversation's next run). Grants safety.override_cap to
+	// consumed by the conversation's next run, lapsed_at for one that
+	// expired unused), and the spend routine's index
+	// idx_llm_request_logs_execution_time. Grants safety.override_cap to
 	// super_admin and admin in the administration mode and to the project
 	// admin.
 	//

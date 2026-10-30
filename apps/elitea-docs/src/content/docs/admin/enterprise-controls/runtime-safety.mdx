@@ -309,7 +309,7 @@ A value that is not a positive number in the cap's range fails with `RUN_CAP_INV
 
 The answer shows a message that names the cap, for example "The run stopped because it reached the maximum number of tool calls an administrator set. The task may be incomplete. Check what it completed before you continue."
 
-**Override.** A user with the permission `safety.override_cap` can let the conversation continue past the cap one time. The platform administrators and the project `admin` role have this permission. The user selects **Allow the next run past this cap** on the stopped answer (or calls `POST /api/v2/elitea_core/run_cap_overrides/prompt_lib/{project_id}` with `message_id`). The next agent run of that conversation gets twice the cap that stopped the answer. The other caps do not change. One override is permitted for each stopped answer, and one unused override for each conversation. An unused override expires after one hour. A worker cap cannot be overridden until an administrator saves the per-tier caps (HTTP 422 `tier_caps_not_saved`).
+**Override.** A user with the permission `safety.override_cap` can let the conversation continue past the cap one time. The platform administrators and the project `admin` role have this permission. The user selects **Allow the next run past this cap** on the stopped answer (or calls `POST /api/v2/elitea_core/run_cap_overrides/prompt_lib/{project_id}` with `message_id`). The next agent run of that conversation gets twice the cap that stopped the answer. The other caps do not change. One override is permitted for each stopped answer, and one unused override for each conversation. An unused override expires after one hour. After it expires, a user can give a new override on a different stopped answer in that conversation. A worker cap cannot be overridden until an administrator saves the per-tier caps (HTTP 422 `tier_caps_not_saved`). If an administrator removes the per-tier caps after an override on a worker cap, the next run does not use that override, because the worker does not get the caps. The override stays available until it expires.
 
 #### Limits
 
@@ -333,7 +333,7 @@ Until an administrator saves a per-tier value, the worker applies its defaults (
 ### Evidence
 
 - `elitea_runtime.execution_jobs.run_caps` records the effective caps of each run, and `override` names the cap that an override raised. `cancel_cap` names the Main cap that cancelled a run.
-- `elitea_runtime.run_cap_overrides` records each override: the answer, the cap, who granted it, when, and the run that used it.
+- `elitea_runtime.run_cap_overrides` records each override: the answer, the cap, who granted it, when, and the run that used it. `lapsed_at` records when an override that expired unused was closed.
 - Each override is a security audit event, in the same transaction as the override (excerpt):
 
 ```json
