@@ -1,0 +1,121 @@
+{{- if and .Values.main.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+{{- /* Runtime safety alerts (ADR-0041 decisions 1 and 2, #1498): the agent
+       circuit breaker's trips and the active execution suspensions (kill
+       switch). elitea-main serves the figures on the main metrics listener
+       (ELITEA_AUDIT_EXPORT_METRICS_ADDR, port audit-metrics) with or without
+       an audit exporter. They render with the Prometheus Operator API and
+       only when that listener is on.
+
+       The scrape path: when the audit export's PodMonitor renders
+       (audit-export-monitoring.yaml), it already scrapes the same port and
+       this file adds none, because two PodMonitors on one port double every
+       sum(). Otherwise this file's PodMonitor scrapes it. No series carries a
+       project or an agent label. */ -}}
+{{- $safety := .Values.main.safetyAlerts }}
+{{- $export := .Values.main.auditExport }}
+{{- $env := .Values.main.env | default dict }}
+{{- $listener := index $env "ELITEA_AUDIT_EXPORT_METRICS_ADDR" }}
+{{- $exportConfigured := or (index $env "ELITEA_AUDIT_EXPORT_OTLP_ENDPOINT") (index $env "ELITEA_AUDIT_EXPORT_WEBHOOK_URL") }}
+{{- $exportScrapes := and $exportConfigured $export.metrics.podMonitor.enabled }}
+{{- $ownPodMonitor := and $listener (not $exportScrapes) $safety.podMonitor.enabled }}
+{{- $scraped := and $listener (or $exportScrapes $ownPodMonitor) }}
+{{- if $ownPodMonitor }}
+# Scrapes elitea-main's GET /metrics on the audit-metrics port for the runtime
+# safety figures (elitea_safety_suspensions_active, elitea_breaker_*).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "elitea-main.fullname" . }}-safety
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "elitea-main.labels" . | nindent 4 }}
+    {{- with $safety.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "elitea-main.selectorLabels" . | nindent 6 }}
+  podMetricsEndpoints:
+    - port: audit-metrics
+      path: /metrics
+      interval: {{ $safety.podMonitor.interval }}
+---
+{{- end }}
+{{- if and $scraped $safety.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "elitea-main.fullname" . }}-safety
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "elitea-main.labels" . | nindent 4 }}
+    {{- with $safety.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: elitea-runtime-safety
+      rules:
+        # The circuit breaker stopped one or more agents. Each trip is a
+        # breaker suspension at agent scope: new runs of the agent are
+        # refused and its runs in flight were cancelled. Series exist at 0
+        # from the first scrape, so increase() sees the first trip; the
+        # `unless ... offset` arm catches a series that appears late (a
+        # restart between scrapes). The admin Kill switch page names the
+        # agent, the rule and the observed value.
+        - alert: EliteaAgentBreakerTripped
+          expr: |
+            (sum by (rule) (increase(elitea_breaker_trips_total[10m])) > 0)
+            or
+            (sum by (rule) (elitea_breaker_trips_total unless elitea_breaker_trips_total offset 10m) > 0)
+          labels:
+            severity: warning
+          annotations:
+            summary: "The agent circuit breaker stopped an agent (rule {{ "{{" }} $labels.rule {{ "}}" }})"
+            description: "The {{ "{{" }} $labels.rule {{ "}}" }} rule tripped in the last 10 minutes. The agent stays stopped until an administrator resumes it. See Admin > Kill switch for the agent, the observed value and the limit, and the security audit event agent.breaker.tripped."
+        # More agents would have tripped in one pass than the storm limit
+        # allows, so the breaker stopped none of them on error_rate or
+        # tool_failure_streak. A shared dependency (a model provider, an
+        # external API) is the likely cause.
+        - alert: EliteaAgentBreakerStorm
+          expr: |
+            (sum (increase(elitea_breaker_storms_total[10m])) > 0)
+            or
+            (sum (elitea_breaker_storms_total unless elitea_breaker_storms_total offset 10m) > 0)
+          labels:
+            severity: critical
+          annotations:
+            summary: "Many agents are failing at the same time"
+            description: "A circuit breaker pass found more failing agents than the storm limit and stopped none of them. Examine the model providers and the external tools the agents use. The elitea-main WARN log \"breaker: storm\" gives the count."
+        # The breaker pass fails again and again: no agent is protected.
+        - alert: EliteaAgentBreakerPassFailing
+          expr: sum (increase(elitea_breaker_pass_failures_total[15m])) >= 5
+          labels:
+            severity: warning
+          annotations:
+            summary: "The agent circuit breaker pass is failing"
+            description: "{{ "{{" }} $value {{ "}}" }} breaker passes failed in the last 15 minutes, so the breaker does not stop failing agents. The elitea-main log lines that start with \"breaker:\" give the error."
+        # The platform is stopped: every run is refused. Every replica reports
+        # the same count, so max() is the value. The scheduled self-test's
+        # own short stop (source self_test) is not alerted on.
+        - alert: EliteaPlatformExecutionSuspended
+          expr: max by (source) (elitea_safety_suspensions_active{scope="platform",source!="self_test"}) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Every run on the platform is suspended (source {{ "{{" }} $labels.source {{ "}}" }})"
+            description: "A platform suspension is active: admission refuses every run with execution_suspended. Resume it in Admin > Kill switch when the incident is over."
+        # A project, agent or toolkit type stays suspended. A trip alerts
+        # once (above); this one says the stop is still in effect.
+        - alert: EliteaExecutionSuspensionsActive
+          expr: max by (scope, source) (elitea_safety_suspensions_active{scope!="platform",source!="self_test"}) > 0
+          for: {{ $safety.prometheusRule.activeFor }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ "{{" }} $value {{ "}}" }} {{ "{{" }} $labels.scope {{ "}}" }} suspension(s) of source {{ "{{" }} $labels.source {{ "}}" }} are active"
+            description: "New runs of the suspended targets are refused. Resume each one in Admin > Kill switch when its cause is fixed."
+{{- end }}
+{{- end }}

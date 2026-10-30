@@ -447,11 +447,12 @@ jobs:
       # ack-pending alert at 80% of MaxAckPending. Pinned Prometheus release,
       # verified by SHA-256; SCHEDULER_ALERTS_REQUIRE_PROMTOOL makes a missing
       # binary fail instead of skip.
-      - name: Scheduler alerts — promtool proves the budget write-back rules fire
+      - name: Scheduler and safety alerts — promtool proves the rules fire
         env:
           PROMETHEUS_VERSION: "3.15.0"
           PROMETHEUS_SHA256: "2a542df32eac02ee17b9d844fb2aa1de00dafa5476579ba8a3ba862e9d572ea0"
           SCHEDULER_ALERTS_REQUIRE_PROMTOOL: "1"
+          SAFETY_ALERTS_REQUIRE_PROMTOOL: "1"
         run: |
           tarball="${RUNNER_TEMP}/prometheus.tar.gz"
           curl -fsSL -o "$tarball" \
@@ -460,6 +461,10 @@ jobs:
           tar -xzf "$tarball" -C "${RUNNER_TEMP}"
           PROMTOOL="${RUNNER_TEMP}/prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool" \
             bash deploy/helm/tests/render-scheduler-alerts.sh
+          # The runtime safety alerts (ADR-0041, #1498): breaker trips and
+          # active suspensions render where they can fire, and fire.
+          PROMTOOL="${RUNNER_TEMP}/prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool" \
+            bash deploy/helm/tests/render-safety-alerts.sh
 
       # `helm lint` covers every chart. The `template` job below covers only the
       # charts its matrix names, and a chart in neither list is never rendered
