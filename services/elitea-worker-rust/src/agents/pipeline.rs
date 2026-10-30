@@ -111,6 +111,10 @@ struct PipelineApplicationRuntime<'a> {
     model_scopes: ModelScopeSessions,
     conversation_thread_id: String,
     materialization: ApplicationMaterializationPath,
+    /// The run's fenced node journals, lent to every saved child pipeline so its
+    /// effectful direct nodes run behind a journal too (FU-248). `None` where
+    /// the run has no root journal owner (a pipeline served as an agent's tool).
+    node_recovery: Option<Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>>,
 }
 
 /// Frozen, fully admitted application pipeline definition.
@@ -587,6 +591,7 @@ impl PipelineNativeAgentAssembler {
         continuation: ApplicationContinuation,
         conversation_thread_id: String,
         conversation_id: String,
+        node_recovery: Option<Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>>,
     ) -> Result<PipelineRuntimeBindings, NativeAgentAssemblyError> {
         let has_llm_nodes = profile.definition().has_llm_nodes();
         let has_direct_tool_nodes = profile.definition().has_direct_tool_nodes();
@@ -825,6 +830,7 @@ impl PipelineNativeAgentAssembler {
                     model_scopes: model_scopes.clone(),
                     conversation_thread_id,
                     materialization: materialization.clone(),
+                    node_recovery: node_recovery.clone(),
                 },
             );
         let (application_resolver, application_runtime, application_scopes) = match continuation {
@@ -1430,6 +1436,7 @@ impl PipelineNativeAgentAssembler {
                     continuation,
                     plan.session_id().to_owned(),
                     plan.conversation_id().to_owned(),
+                    state.node_recovery_authority(),
                 )
                 .await?;
             if let (Some(factory), Some(authority)) = (&self.sandbox, sandbox_authority) {
@@ -1638,6 +1645,13 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
         // The existing rebinder retains saved identity, call owners and exact scope.
         self.rebind_parallel_events(&events)
             .map(|resolver| Arc::new(resolver) as Arc<dyn PipelineApplicationResolver>)
+    }
+
+    fn for_branch_journals(
+        &self,
+        journals: Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>,
+    ) -> Option<Arc<dyn PipelineApplicationResolver>> {
+        Some(Arc::new(self.rebind_branch_journals(&journals)))
     }
 
     fn for_parallel_events(
@@ -2060,6 +2074,7 @@ pub(super) async fn materialize_saved_pipeline_tool(
         model_scopes,
         conversation_thread_id,
         materialization,
+        node_recovery: None,
     };
     let (definition, bound) = match admit_saved_pipeline_child(
         platform,
@@ -2699,6 +2714,11 @@ async fn bind_saved_pipeline_runtimes(
         .with_events(runtime.node_events.clone());
     if let Some(code) = &runtime.code {
         runtimes = runtimes.with_code(code.clone());
+    }
+    // FU-248: an effectful direct node in a saved child runs behind the run's
+    // own fenced journal, scoped to the child's visit, like one on the root.
+    if let Some(authority) = &runtime.node_recovery {
+        runtimes = runtimes.with_direct_tool_recovery(Arc::clone(authority));
     }
     Ok(BoundSavedPipeline {
         runtimes,

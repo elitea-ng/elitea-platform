@@ -48,6 +48,9 @@ const PIPELINE_APPLICATION_HITL_MESSAGE: &str =
 pub(super) const APPLICATION_TASK_STATE_KEY: &str = "__elitea_application_task_v1";
 pub(super) const APPLICATION_MESSAGES_STATE_KEY: &str = "__elitea_application_messages_v1";
 pub(super) const APPLICATION_RESULT_STATE_KEY: &str = "__elitea_application_result_v1";
+/// The visit of a saved child pipeline (FU-248): hex of the Agent node's open
+/// activation digest. A child's node journals are scoped to it.
+pub(crate) const APPLICATION_VISIT_STATE_KEY: &str = "__elitea_application_visit_v1";
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -378,6 +381,17 @@ pub(crate) trait PipelineApplicationResolver: Send + Sync {
         Err(ApplicationExecutionError::Unavailable)
     }
 
+    /// The same frozen resolver whose saved pipelines journal their effectful
+    /// direct nodes through one fixed Parallel branch's own family (FU-248):
+    /// a member's child threads belong to the branch, not the run root.
+    /// `None` keeps this resolver.
+    fn for_branch_journals(
+        &self,
+        _journals: Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>,
+    ) -> Option<Arc<dyn PipelineApplicationResolver>> {
+        None
+    }
+
     /// Rebind the existing frozen resolver to one exact branch event sender.
     fn for_parallel_events(
         &self,
@@ -634,6 +648,7 @@ impl ApplicationNode {
             super::static_pause::STATIC_AFTER_CHECKPOINTS_STATE_KEY,
             super::static_pause::STATIC_TEXT_RESUME_STATE_KEY,
             PIPELINE_NODE_EVENT_SCOPE_STATE_KEY,
+            APPLICATION_VISIT_STATE_KEY,
         ] {
             if node.graph().schema().channels.contains_key(channel) {
                 node = node.with_input(channel, channel);
@@ -705,7 +720,7 @@ impl ApplicationNode {
                 .ok_or_else(|| node_failure(self.name()))?;
             activation_inputs.insert(key.clone(), value);
         }
-        let _activation = self
+        let activation = self
             .activation_checkpointer
             .as_ref()
             .map(|owner| {
@@ -718,6 +733,17 @@ impl ApplicationNode {
                 )
             })
             .transpose()?;
+        // FU-248: the child's node journals are scoped to this visit. Its
+        // thread and steps are reused by every visit; the activation is not.
+        // Without an activation the child gets no visit (never its parent's),
+        // so an effectful journal in it is refused rather than mis-scoped.
+        state.insert(
+            APPLICATION_VISIT_STATE_KEY.to_owned(),
+            match &activation {
+                Some(activation) => json!(hex(&activation.visit_digest()?)),
+                None => Value::Null,
+            },
+        );
         let parent_scope = PipelineNodeEventScope::from_state(
             context.state.get(PIPELINE_NODE_EVENT_SCOPE_STATE_KEY),
         )
@@ -755,18 +781,30 @@ impl ApplicationNode {
             .get(super::static_pause::STATIC_TEXT_RESUME_STATE_KEY)
             .and_then(|value| value.get(&checkpoint_thread_id))
             .and_then(Value::as_str);
-        // FU-249: a child holding a Parallel re-entered at its own unfinished
-        // frontier (a wake) already holds its input. The subgraph merges the
-        // input through the channel reducers again, so the task message would
-        // be appended twice and the parked occurrence would no longer match.
-        // A text resume is a new message and is still sent.
-        let resumes_frontier = self.child_fanout
+        // FU-249, FU-248: a child re-entered at its own unfinished frontier
+        // (a wake, or a reclaim after the Worker was lost inside it) already
+        // holds its input. The subgraph merges the input through the channel
+        // reducers again, so the task message would be appended twice: a
+        // parked occurrence would no longer match, and a journaled call's
+        // input would no longer be the one its journal recorded. Nothing the
+        // child already holds is re-sent: its mapped variables (overwrite
+        // channels; a nested pipeline cannot declare typed reducers) and the
+        // appending `hitl_decisions` channel stay as restored. Only the
+        // activation overlay shows exactly this visit's frontier, so the rule
+        // holds where there is one (or for a Parallel's wake, as before). The
+        // activation input digest proves the mapped variables are this
+        // visit's. A text resume is a new message and is still sent.
+        let resumes_frontier = (self.child_fanout || self.activation_checkpointer.is_some())
             && text_resume.is_none()
             && self.child_resumes_frontier(&checkpoint_thread_id).await?;
         let task = text_resume.unwrap_or(task).to_owned();
         state.insert(APPLICATION_TASK_STATE_KEY.to_owned(), json!(task));
         if resumes_frontier {
             state.remove(APPLICATION_MESSAGES_STATE_KEY);
+            state.remove("hitl_decisions");
+            for key in self.definition.variables.keys() {
+                state.remove(&self.definition.variable_channel(key));
+            }
         } else {
             state.insert(
                 APPLICATION_MESSAGES_STATE_KEY.to_owned(),

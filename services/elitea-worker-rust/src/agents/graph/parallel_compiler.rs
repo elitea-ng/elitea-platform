@@ -864,6 +864,7 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
             }
             None => Arc::clone(self.resolver()?),
         };
+        let resolver = branch_journal_resolver(&execution, resolver);
         // A continued authored `after` pause re-arms only its proven checkpoint.
         let checkpointer = if execution.static_after_checkpoints().is_empty() {
             execution.checkpointer()
@@ -895,6 +896,7 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
             APPLICATION_TASK_STATE_KEY.to_owned(),
             APPLICATION_MESSAGES_STATE_KEY.to_owned(),
             APPLICATION_RESULT_STATE_KEY.to_owned(),
+            super::super::application::APPLICATION_VISIT_STATE_KEY.to_owned(),
             super::super::application::PARALLEL_AGENT_INPUTS_STATE_KEY.to_owned(),
             HITL_RESUME_STATE_KEY.to_owned(),
             DIRECT_TOOL_RESUME_STATE_KEY.to_owned(),
@@ -1016,6 +1018,18 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         };
         super::super::parallel_cards::child_resume(pause, catalog, decisions).await
     }
+}
+
+/// FU-248: an Agent member's child threads belong to its branch's family, so
+/// the saved pipeline it runs journals its effectful direct nodes through it.
+fn branch_journal_resolver(
+    execution: &ParallelBranchExecution,
+    resolver: Arc<dyn PipelineApplicationResolver>,
+) -> Arc<dyn PipelineApplicationResolver> {
+    execution
+        .node_recovery()
+        .and_then(|journals| resolver.for_branch_journals(journals))
+        .unwrap_or(resolver)
 }
 
 /// A scoped Agent call proves itself against its own thread's frontier (the

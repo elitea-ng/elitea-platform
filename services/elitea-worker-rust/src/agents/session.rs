@@ -1663,12 +1663,27 @@ impl PipelineStateServices {
         // The digest of the Agent node that stamps the next level's rows.
         let mut stamped_by = None;
         for depth in 0..MAX_RECOVERY_LEVELS {
-            let child = self
+            let Some(child) = self
                 .checkpointer
                 .load(&thread)
                 .await
                 .map_err(|_| dependency_unavailable())?
-                .ok_or_else(|| child_refused(CHILD_MISSING))?;
+            else {
+                // FU-248: a child lost inside its first call has saved no row.
+                // Only a child that starts at a direct toolkit/MCP node may
+                // resume from there: that call's visit-scoped journal decides
+                // it. Before assembly the first level's absence is bound as is
+                // and assembly decides with the frozen definition.
+                if validates
+                    && level.is_some_and(|(definition, _)| definition.starts_at_direct_tool())
+                {
+                    return Ok(bound.unwrap_or(serde_json::Value::Null));
+                }
+                if !validates && depth == 0 {
+                    return Ok(serde_json::Value::Null);
+                }
+                return Err(child_refused(CHILD_MISSING));
+            };
             if depth == 0 {
                 bound = Some(serde_json::to_value(&child).map_err(|_| invalid_configuration())?);
             } else if !child
@@ -1705,6 +1720,13 @@ impl PipelineStateServices {
                 level.ok_or_else(|| child_refused(CHILD_DEFINITION_MISMATCH))?;
             if !child_definition.has_node(pending) {
                 return Err(child_refused(CHILD_DEFINITION_MISMATCH));
+            }
+            // FU-248: a child lost inside a direct toolkit/MCP node's call is a
+            // leaf too. Its journal, scoped to this visit, decides the call:
+            // a committed result replays, a started call ends typed and is
+            // never repeated, a call that never started runs once.
+            if child_definition.is_unowned_direct_tool(pending) {
+                return bound.ok_or_else(invalid_configuration);
             }
             let aliases = child_level.admitted_aliases();
             if !child_definition

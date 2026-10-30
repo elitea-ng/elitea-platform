@@ -24,6 +24,8 @@ mod child_batch;
 mod fanout_children;
 mod map_children;
 mod node_attempts;
+#[cfg(test)]
+pub(in crate::state) use node_attempts::journal_activation_id;
 mod parallel_append;
 mod parallel_children;
 

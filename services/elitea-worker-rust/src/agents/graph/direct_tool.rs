@@ -598,6 +598,11 @@ impl DirectToolNode {
             return handed_over;
         }
         result.map_err(|error| {
+            if matches!(&error, GraphError::Other(code)
+                if code == super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE)
+            {
+                return DirectNodeFailure::may_have_started();
+            }
             tracing::error!(failure_reason = %error, "pipeline direct-tool node recovery stopped");
             DirectNodeFailure::policy(
                 "tool_execution",
@@ -828,6 +833,34 @@ impl Node for DirectToolNode {
             Ok(output) => {
                 span.record("outcome", "completed");
                 Ok(output)
+            }
+            Err(failure) if matches!(failure.cause, DirectNodeFailureCause::MayHaveStarted) => {
+                span.record("outcome", "failed");
+                span.record(
+                    "error_code",
+                    crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+                );
+                // The registered "may have started, not repeated" stop, as an
+                // approved saved-Agent call: a Parallel member's branch fails
+                // typed, any other run ends with the registered reason.
+                if let Some(events) = &self.events
+                    && let Some(error) = events
+                        .approved_call_stop(
+                            crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+                            self.name(),
+                        )
+                        .await
+                {
+                    return Err(error);
+                }
+                Err(GraphError::NodeExecutionFailed {
+                    node: self.name().to_owned(),
+                    message: format!(
+                        "{}: {}",
+                        crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE,
+                        crate::protocol::output::RECOVERY_REFUSED_DETAIL
+                    ),
+                })
             }
             Err(failure) => {
                 span.record("outcome", "failed");
@@ -1694,6 +1727,10 @@ enum DirectNodeFailureCause {
     Policy(&'static str),
     #[error("The tool call failed. Inspect its error code before repeating actions.")]
     Tool,
+    /// A journaled call in a saved child started before the Worker was lost
+    /// and may have reached its tool (FU-248).
+    #[error("The tool call may already have run; it was not repeated.")]
+    MayHaveStarted,
 }
 
 impl DirectNodeFailure {
@@ -1726,6 +1763,14 @@ impl DirectNodeFailure {
         Self {
             stage,
             cause: DirectNodeFailureCause::Policy(message),
+            upstream_code: None,
+        }
+    }
+
+    const fn may_have_started() -> Self {
+        Self {
+            stage: "tool_execution",
+            cause: DirectNodeFailureCause::MayHaveStarted,
             upstream_code: None,
         }
     }

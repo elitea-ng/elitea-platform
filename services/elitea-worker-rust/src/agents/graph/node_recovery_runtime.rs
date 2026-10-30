@@ -27,6 +27,9 @@ pub(crate) struct NodeAttemptActivation {
     pub(crate) step: u64,
     pub(crate) node_digest: [u8; 32],
     pub(crate) input_digest: [u8; 32],
+    /// The saved child visit this node runs in (FU-248), from the state the
+    /// Agent node handed the child; `None` on the run root.
+    pub(crate) visit: Option<[u8; 32]>,
 }
 
 impl NodeAttemptActivation {
@@ -55,7 +58,32 @@ impl NodeAttemptActivation {
                 .map_err(|_| recovery_error("pipeline.node_recovery.invalid_activation"))?,
             node_digest,
             input_digest: sha256(&bytes),
+            visit: visit_from_state(&context.state)?,
         })
+    }
+}
+
+/// The visit the Agent node stamped into a saved child's state: exactly 64
+/// lowercase hex digits, or absent. Anything else is a broken activation.
+fn visit_from_state(state: &adk_rust::graph::State) -> Result<Option<[u8; 32]>, GraphError> {
+    let invalid = || recovery_error("pipeline.node_recovery.invalid_activation");
+    match state.get(super::application::APPLICATION_VISIT_STATE_KEY) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(hex)) if hex.len() == 64 => {
+            let mut visit = [0; 32];
+            for (index, byte) in visit.iter_mut().enumerate() {
+                let pair = hex.get(index * 2..index * 2 + 2).ok_or_else(invalid)?;
+                if pair
+                    .bytes()
+                    .any(|digit| !matches!(digit, b'0'..=b'9' | b'a'..=b'f'))
+                {
+                    return Err(invalid());
+                }
+                *byte = u8::from_str_radix(pair, 16).map_err(|_| invalid())?;
+            }
+            Ok(Some(visit))
+        }
+        Some(_) => Err(invalid()),
     }
 }
 
@@ -928,6 +956,17 @@ impl RecoverableNode {
                         recovery_error("pipeline.node_recovery.corrupt_journal")
                     })?);
                 }
+                // FU-248: a saved child's visit has no operator reconcile route
+                // (Main's receipts name the run root). A call that may have
+                // reached its tool ends typed and is never repeated.
+                NodeAttemptPhase::Failed(
+                    RecoveryDecision::Stop(
+                        super::node_recovery::StopReason::OperatorApprovalRequired,
+                    )
+                    | RecoveryDecision::Reconcile { .. },
+                ) if activation.visit.is_some() => {
+                    return Err(recovery_error(CHILD_EFFECT_UNKNOWN_CODE));
+                }
                 NodeAttemptPhase::Failed(
                     RecoveryDecision::Stop(
                         super::node_recovery::StopReason::OperatorApprovalRequired,
@@ -1154,6 +1193,10 @@ fn finish(hash: digest::Context) -> [u8; 32] {
 fn policy_error(_: super::node_recovery::NodeRecoveryError) -> GraphError {
     recovery_error("pipeline.node_recovery.invalid_transition")
 }
+/// A journaled call in a saved child's visit started and may have reached its
+/// tool; there is no result to replay and it is never repeated (FU-248).
+pub(crate) const CHILD_EFFECT_UNKNOWN_CODE: &str = "pipeline.node_recovery.child_effect_unknown";
+
 pub(crate) fn recovery_error(code: &'static str) -> GraphError {
     GraphError::Other(code.to_owned())
 }

@@ -390,6 +390,7 @@ impl MapWorkerGraphFactory for CompilerMapWorker {
                 crate::agents::graph::application::APPLICATION_TASK_STATE_KEY.to_owned(),
                 crate::agents::graph::application::APPLICATION_MESSAGES_STATE_KEY.to_owned(),
                 crate::agents::graph::application::APPLICATION_RESULT_STATE_KEY.to_owned(),
+                crate::agents::graph::application::APPLICATION_VISIT_STATE_KEY.to_owned(),
             ]);
         }
         let mut schema = StateSchema::new();

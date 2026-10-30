@@ -173,6 +173,7 @@ impl ParallelChildCheckpointerFactory for Shared {
             admitted_threads: BTreeSet::from([thread_id.clone()]),
             thread_id,
             checkpointer: self.0.clone(),
+            node_recovery: None,
         })
     }
 }

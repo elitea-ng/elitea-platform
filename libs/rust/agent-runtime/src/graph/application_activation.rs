@@ -30,6 +30,26 @@ impl ApplicationActivation {
     fn child_thread(&self) -> String {
         format!("{}/{}", self.parent_thread, self.node_name)
     }
+
+    /// One visit of the child: everything the stamp records, hashed with a
+    /// domain of its own.
+    fn visit_digest(&self) -> Option<[u8; 32]> {
+        let mut context = digest::Context::new(&digest::SHA256);
+        context.update(b"elitea.pipeline.application-visit.v1\0");
+        for field in [
+            self.parent_thread.as_bytes(),
+            self.node_name.as_bytes(),
+            &u64::try_from(self.parent_step).ok()?.to_be_bytes(),
+            &self.definition_digest,
+            &self.input_digest,
+        ] {
+            context.update(&u64::try_from(field.len()).ok()?.to_be_bytes());
+            context.update(field);
+        }
+        let mut visit = [0; 32];
+        visit.copy_from_slice(context.finish().as_ref());
+        Some(visit)
+    }
 }
 
 /// The Agent node definition digest the activation stamp on a row of `thread`
@@ -224,6 +244,21 @@ pub struct ApplicationActivationGuard {
     active: Arc<Mutex<Option<ApplicationActivation>>>,
 }
 
+impl ApplicationActivationGuard {
+    /// This open visit's identity (FU-248): a digest of everything the
+    /// activation stamp records (parent thread, node, parent step, definition
+    /// and input digests). A saved child thread and its steps are reused by
+    /// every visit; this is what scopes its node journals to one visit.
+    pub fn visit_digest(&self) -> Result<[u8; 32], GraphError> {
+        self.active
+            .lock()
+            .map_err(|_| activation_error())?
+            .as_ref()
+            .and_then(ApplicationActivation::visit_digest)
+            .ok_or_else(activation_error)
+    }
+}
+
 impl Drop for ApplicationActivationGuard {
     fn drop(&mut self) {
         if let Ok(mut stored) = self.active.lock() {
@@ -303,6 +338,32 @@ mod tests {
             hex,
             "a016bd2a1351e57ffa58603da9809e476392dbd1a3300828b141f6ebe724d5c5"
         );
+    }
+
+    /// REVIEW-1541 R7: the visit identity is equal for an equal stamp (a
+    /// reclaim re-enters the same visit) and differs with the parent step, the
+    /// parent thread, the node, the definition and the inputs.
+    #[test]
+    fn a_visit_digest_is_stable_for_its_stamp_and_unique_per_visit() {
+        let visit = |thread: &str, node: &str, step: usize, definition: u8, task: &str| {
+            let overlay =
+                ApplicationActivationCheckpointer::new(Arc::new(MemoryCheckpointer::new()));
+            let guard = overlay
+                .enter(thread, node, step, [definition; 32], &json!({"task": task}))
+                .expect("enter");
+            guard.visit_digest().expect("visit")
+        };
+        let base = visit("root", "delegate", 3, 1, "one");
+        assert_eq!(base, visit("root", "delegate", 3, 1, "one"));
+        for other in [
+            visit("root", "delegate", 4, 1, "one"),
+            visit("root/branch", "delegate", 3, 1, "one"),
+            visit("root", "summarize", 3, 1, "one"),
+            visit("root", "delegate", 3, 2, "one"),
+            visit("root", "delegate", 3, 1, "two"),
+        ] {
+            assert_ne!(base, other);
+        }
     }
 
     #[tokio::test]

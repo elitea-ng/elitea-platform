@@ -282,6 +282,7 @@ impl ParallelChildCheckpointerFactory for MemoryChildCheckpoints {
             admitted_threads: std::collections::BTreeSet::from([thread_id.clone()]),
             thread_id,
             checkpointer,
+            node_recovery: None,
         })
     }
 }

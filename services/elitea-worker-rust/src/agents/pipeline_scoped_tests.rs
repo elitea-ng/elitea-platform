@@ -282,6 +282,31 @@ async fn a_graph_agent_node_runs_on_the_scoped_resolver_and_owns_original_call_r
     );
 }
 
+/// REVIEW-1541 R5: a child re-entered at its own paused frontier keeps the
+/// task message it already holds; the resume does not append it again.
+async fn assert_child_task_once(
+    checkpointer: &MemoryCheckpointer,
+    request: &super::super::request::AgentExecutionRequest,
+) {
+    let child = checkpointer
+        .load(&format!(
+            "{}/delegate",
+            private_pipeline_session_id(request)
+        ))
+        .await
+        .expect("read the child checkpoint")
+        .expect("the child saved its rows");
+    let tasks = child
+        .state
+        .get("messages")
+        .and_then(Value::as_array)
+        .expect("the child's messages")
+        .iter()
+        .filter(|message| message["content"] == "Summarize the release")
+        .count();
+    assert_eq!(tasks, 1, "the child's task message once: {:?}", child.state);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn an_ordinary_agent_in_a_saved_child_pipeline_asks_and_resumes_once_after_process_replacement()
  {
@@ -361,6 +386,7 @@ async fn an_ordinary_agent_in_a_saved_child_pipeline_asks_and_resumes_once_after
         1,
         "only the resumed Agent calls the model"
     );
+    assert_child_task_once(&checkpointer, &make_request()).await;
 
     // The consumed card cannot be answered a second time: no model call, no second answer.
     let (again, again_calls, _) = process(
