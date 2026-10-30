@@ -1215,7 +1215,7 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 	if !h.checkRunCaps(w, r, projectID, applicationID, body) {
 		return
 	}
-	if !checkOutputContracts(w, body, bodyAgentType(body, "")) {
+	if !checkOutputContracts(w, body, bodyAgentType(body, h.storedApplicationAgentType(r.Context(), projectID, applicationID, body))) {
 		return
 	}
 
