@@ -142,3 +142,35 @@ func TestThrottleFailsOpenWhenTheCounterIsBroken(t *testing.T) {
 		t.Error("the fail-open was not counted in Degraded")
 	}
 }
+
+// A throttled agent that retries after its 429 must not spend the project's
+// rate limit: other work in the project keeps its allowance.
+func TestThrottledAgentRetriesKeepTheProjectAllowance(t *testing.T) {
+	agents := mapAgentLookup{"run-a": {ProjectID: 42, ApplicationID: 3}}
+	h := throttledHandler(t, newStubCounter(), agents,
+		govRow(policy.TypeRateLimit, "project-cap", map[string]any{
+			"scope":      map[string]any{"project_ids": []any{42.0}},
+			"rate_limit": map[string]any{"requests_per_min": 3.0},
+		}),
+		govRow(policy.TypeRateLimit, "agent-cap", map[string]any{
+			"scope":      map[string]any{"project_ids": []any{42.0}, "agent_ids": []any{3.0}},
+			"rate_limit": map[string]any{"requests_per_min": 1.0},
+		}))
+
+	if rec := chatStatus(h, throttledReq(t, "", "run-a")); rec.Code != http.StatusOK {
+		t.Fatalf("the agent's first call was refused: %d", rec.Code)
+	}
+	for i := 0; i < 5; i++ {
+		if rec := chatStatus(h, throttledReq(t, "", "run-a")); rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("agent retry %d = %d, want 429", i+1, rec.Code)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if rec := chatStatus(h, throttledReq(t, "", "")); rec.Code != http.StatusOK {
+			t.Fatalf("project call %d = %d, want 200: the agent's refused retries ate the project allowance", i+1, rec.Code)
+		}
+	}
+	if rec := chatStatus(h, throttledReq(t, "", "")); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("the 4th project call = %d, want 429 from the project limit", rec.Code)
+	}
+}

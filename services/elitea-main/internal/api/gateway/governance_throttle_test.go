@@ -142,3 +142,78 @@ func TestThrottleIDsMustExist(t *testing.T) {
 		}
 	})
 }
+
+// flatThrottleBody puts the throttle keys at the top level of data, where the
+// gateway also reads them when data has no scope object.
+func flatThrottleBody(t *testing.T, typ string, data map[string]any) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{"type": typ, "name": "throttle", "data": data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// The gateway reads agent_ids and user_ids from the top level of data when the
+// scope object is absent or empty. Main must check them there too.
+func TestTopLevelThrottleKeysAreValidated(t *testing.T) {
+	cases := []struct {
+		name string
+		typ  string
+		data map[string]any
+		want string
+	}{
+		{"top-level agent ids without a project", "rate_limit",
+			map[string]any{"agent_ids": []any{3}}, "exactly one entry"},
+		{"top-level agent ids beside an empty scope", "rate_limit",
+			map[string]any{"scope": map[string]any{}, "agent_ids": []any{3}}, "exactly one entry"},
+		{"a top-level fractional user id", "rate_limit",
+			map[string]any{"user_ids": []any{1.5}}, "positive whole-number"},
+		{"top-level user ids on a budget", "budget",
+			map[string]any{"user_ids": []any{4}}, "rate_limit entries only"},
+		{"top-level team ids", "rate_limit",
+			map[string]any{"team_ids": []any{1}}, "team_ids is not supported"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &throttleQuerier{users: 1, agents: 1}
+			rr := doJSON(NewGovernanceHandler(q), http.MethodPost, "/governance", flatThrottleBody(t, tc.typ, tc.data))
+			if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), tc.want) {
+				t.Fatalf("status %d body %s, want 400 naming %q", rr.Code, rr.Body.String(), tc.want)
+			}
+		})
+	}
+
+	t.Run("a top-level unknown user", func(t *testing.T) {
+		q := &throttleQuerier{users: 0}
+		rr := doJSON(NewGovernanceHandler(q), http.MethodPost, "/governance",
+			flatThrottleBody(t, "rate_limit", map[string]any{"user_ids": []any{4}}))
+		if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "user that does not exist") {
+			t.Fatalf("status %d body %s", rr.Code, rr.Body.String())
+		}
+	})
+	t.Run("a top-level agent of the top-level project is looked up there", func(t *testing.T) {
+		q := &throttleQuerier{agents: 0}
+		rr := doJSON(NewGovernanceHandler(q), http.MethodPost, "/governance",
+			flatThrottleBody(t, "rate_limit", map[string]any{"project_ids": []any{7}, "agent_ids": []any{3}}))
+		if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "agent that does not exist") {
+			t.Fatalf("status %d body %s", rr.Code, rr.Body.String())
+		}
+		if !strings.Contains(strings.Join(q.countSQL, " "), "p_7") {
+			t.Fatalf("the agents were not looked up in project 7's schema: %v", q.countSQL)
+		}
+	})
+	t.Run("a non-empty scope wins over the top level, as in the gateway", func(t *testing.T) {
+		// The gateway ignores top-level keys when scope has any key, so they
+		// are not checked here either: they have no effect.
+		q := &throttleQuerier{users: 1}
+		rr := doJSON(NewGovernanceHandler(q), http.MethodPost, "/governance",
+			flatThrottleBody(t, "rate_limit", map[string]any{
+				"scope":     map[string]any{"user_ids": []any{4}},
+				"agent_ids": []any{3},
+			}))
+		if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "agent_ids") {
+			t.Fatalf("a top-level key the gateway ignores was refused: %s", rr.Body.String())
+		}
+	})
+}

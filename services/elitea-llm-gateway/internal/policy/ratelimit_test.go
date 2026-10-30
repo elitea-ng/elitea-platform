@@ -19,6 +19,8 @@ type fakeCounter struct {
 	totals   map[string]int64
 	failIncr error
 	failRead error
+	// failDecr fails only negative deltas: the compensation of AdmitAll.
+	failDecr error
 	incrs    []string
 	reads    []string
 }
@@ -33,6 +35,9 @@ func (f *fakeCounter) IncrRateLimit(_ context.Context, subject string, delta int
 	f.incrs = append(f.incrs, subject)
 	if f.failIncr != nil {
 		return 0, f.failIncr
+	}
+	if delta < 0 && f.failDecr != nil {
+		return 0, f.failDecr
 	}
 	f.totals[subject] += delta
 	return f.totals[subject], nil

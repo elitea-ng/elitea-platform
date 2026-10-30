@@ -295,7 +295,8 @@ func (h *Handler) checkMCPAllowlist(
 //
 // Up to three limits apply: the project's rate limit, a throttle on the
 // request's agent and a throttle on its user (Snapshot.RateLimits). The first
-// one that refuses answers 429 with Retry-After. A throttle delays or refuses
+// one that refuses answers 429 with Retry-After, and a refused request consumes
+// no allowance of the other limits (Limiter.AdmitAll). A throttle delays or refuses
 // the call; it never suspends the agent or the user (ADR-0041 decision 4).
 func (h *Handler) rateVerdict(ctx context.Context, model string, mode admissionMode) budgetVerdict {
 	if h.policy == nil || !h.rateLimiter.Enabled() {
@@ -310,14 +311,8 @@ func (h *Handler) rateVerdict(ctx context.Context, model string, mode admissionM
 	// does not match here — see the note on Scope.selects: a constraint the
 	// subject cannot answer does not apply, rather than applying on a guess.
 	sub := h.rateSubject(ctx, snap, "", model)
-	for _, def := range snap.RateLimits(sub) {
-		if !def.Limited() {
-			continue
-		}
-		dec := h.rateLimiter.Admit(ctx, def, sub, mode == admissionArrival)
-		if dec.Allowed {
-			continue
-		}
+	dec := h.rateLimiter.AdmitAll(ctx, snap.RateLimits(sub), sub, mode == admissionArrival)
+	if !dec.Allowed {
 		h.logger.WarnContext(ctx, "governance: authored rate limit refused the request",
 			"rule", dec.Rule, "class", dec.Class.String(), "bucket", dec.Bucket,
 			"limit", dec.Limit, "observed", dec.Observed, "project_id", sub.ProjectID,
