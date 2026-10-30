@@ -1,0 +1,175 @@
+---
+title: "Content controls"
+description: "Controls that inspect and change model content: the guardrail pipeline at the LLM gateway, with regex, secrets and HTTP adapter detectors that block, mask or flag text."
+---
+
+Content controls act on the text that goes to a model and the text that comes back. This page describes the controls of ADR-0043.
+
+## Guardrail pipeline
+
+### The risk
+
+A prompt can carry data that must not leave the platform, for example a cloud key, a customer record or a confidential project name. A model answer can also contain such data, or text that your policy does not permit. A control in the agent configuration is not sufficient, because agents, DeepWiki, Inventory and direct API callers all send model traffic. The control must apply at the one point that all model traffic goes through, and it must keep evidence of each decision without a copy of the sensitive text.
+
+### What is enforced
+
+The LLM gateway runs **guardrail** entries on every `/llm` model request. An administrator creates the entries under **Admin › LLM Governance**, with the type **Content guardrail**.
+
+An entry has these settings:
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| Scope | Projects, providers and models, as in the other governance entries. Agents of one project (`scope.agent_ids`), with exactly one project in `scope.project_ids`. Users are not permitted. | Every request |
+| `stage` | `input`: the request, before the provider call. `output`: the answer, streamed or not. | — (required) |
+| `detectors` | An ordered list of 1 to 16 detectors. Each detector has a `type` (`regex`, `secrets` or `http`) and an `action` (`block`, `mask` or `flag`). | — (required) |
+| `timeout_ms` | 50 to 30000. The time limit for all detectors of the entry on one content. | 2000 |
+| `fail_mode` | `closed`: a detector failure or a timeout refuses the request. `open`: the request continues and the verdict records the failure. | `closed` when a detector blocks or masks; `open` when all detectors flag |
+| `apply_to_embeddings` | `true` applies an input entry to embedding requests too. | `false` |
+| `stream_window_bytes` | 64 to 8192. The look-behind buffer of a streamed answer for an output entry. | 256 |
+
+The gateway applies the entries as follows:
+
+1. **Every matching entry runs.** The narrowest entry does not replace the wider ones. The entries run from the widest scope to the narrowest, and then by name. The detectors of an entry run in their order.
+2. **Every detector reads the original content.** The gateway collects the spans of all `mask` detectors and replaces them one time, with `[REDACTED:<label>]`.
+3. **A `block` result stops the check** and refuses the request or the answer. A `flag` result changes nothing and adds a verdict.
+4. **The input stage runs before the provider call.** A blocked request does not reach the provider. A masked request goes to the provider with the markers.
+5. **The output stage runs on unary and streamed answers**, in the OpenAI chat and completions, Responses and Anthropic Messages formats.
+
+A refusal uses the OpenAI error shape on all `/llm` routes:
+
+| Cause | HTTP status | `error.type` | `error.code` |
+| --- | --- | --- | --- |
+| A detector with `action: block` found a match | 400 | `guardrail_error` | `guardrail_blocked` |
+| A detector failed or timed out, and the fail mode is `closed` | 503 | `guardrail_error` | `guardrail_unavailable` |
+
+The error message names the entry, the detector and the labels. It never contains the matched text.
+
+#### Detectors
+
+- **`regex`** finds the `patterns` (1 to 64 expressions of at most 1024 bytes) and the `terms` (at most 1000 words or phrases, 64 KiB in total). The patterns use the RE2 syntax, which has linear time and no back-references. A pattern that matches an empty string is refused. A term matches without case, on word boundaries. Set a `label` to name the findings (default `custom`).
+- **`secrets`** uses the platform secret rules: `aws-access-key-id`, `aws-secret-access-key`, `private-key`, `github-token`, `github-fine-grained-token`, `gitlab-token`, `slack-token`, `slack-webhook`, `connection-string-password`, `password-assignment` and `jwt`. These are the rules that the desktop handoff uses. Set `rules` to use only some of them. The label of a finding is its rule id. When a rule names a secret group, a `mask` action replaces only the secret value, not the key name around it.
+- **`http`** sends the content to a classifier that you operate, with the [HTTP adapter contract](#http-adapter-contract).
+
+Example entry, which masks secrets and blocks a confidential project name in answers:
+
+```json
+{
+  "scope": { "project_ids": [7] },
+  "guardrail": {
+    "stage": "output",
+    "detectors": [
+      { "type": "secrets", "action": "mask" },
+      { "name": "codenames", "type": "regex", "action": "block", "label": "codename", "terms": ["project falcon"] }
+    ],
+    "timeout_ms": 500,
+    "stream_window_bytes": 512
+  }
+}
+```
+
+#### HTTP adapter contract
+
+The gateway sends one `POST` with a JSON body for each content check. A request or a unary answer is one check: the gateway joins its messages with a blank line. A streamed answer is one check for each window.
+
+```json
+{
+  "version": "elitea.guardrail.http.v1",
+  "stage": "input",
+  "detector": "pii",
+  "content": "the text to check"
+}
+```
+
+The adapter answers with HTTP 200 and a list of findings:
+
+```json
+{
+  "findings": [
+    { "label": "email", "score": 0.97, "start": 12, "end": 29 },
+    { "label": "toxicity", "score": 0.12 }
+  ]
+}
+```
+
+- `start` and `end` are offsets in Unicode code points (characters) of `content`; `end` is exclusive. A finding without offsets covers all of the content. A `mask` action then replaces all of it.
+- `score` is from 0 to 1. A finding without a score counts as score 1.
+- An empty `findings` list means that the content passes.
+- A status that is not 200, a body that is larger than 1 MiB, more than 1000 findings, or an answer that is not valid JSON is a detector failure. The fail mode of the entry then applies.
+
+The JSON schemas are `libs/jsonschema/guardrail/v1/http-adapter-request.schema.json` and `http-adapter-response.schema.json` in the platform repository.
+
+The detector settings are:
+
+| Setting | Meaning |
+| --- | --- |
+| `url` | The adapter endpoint, `http` or `https`. A URL with a user name or a password is refused. |
+| `auth_header` | The request header for the credential. Default `Authorization`. |
+| `auth_secret` | A `{{secret.NAME}}` reference to a secret of the public project. A raw value is refused. The gateway reads the value from the secrets vault for each call. |
+| `labels` | When set, the gateway keeps only the findings with one of these labels. |
+| `min_score` | The gateway ignores findings with a lower score. |
+
+The call to the adapter is outbound traffic. The gateway applies its egress rules to the URL: the same allowlist that applies to provider endpoints, the refusal of private, link-local and cloud-metadata addresses unless the allowlist names them, and no redirects. To use an adapter in the cluster, add its address under the **Egress allowlist** governance entry.
+
+#### Streamed answers
+
+- **`block`**: the gateway ends the stream with a typed error event and does not send more text. The OpenAI format gets a `data:` frame with the error body. The Responses and Anthropic formats get an `event: error` frame. The tokens that the provider generated are billed.
+- **`mask`**: the gateway holds back the last `stream_window_bytes` of the text and checks the held text together with the text before it. A match that is split across two or more chunks is masked before the client gets any part of it. The client never gets raw text that a `mask` detector matched. When a match crosses the release point, the gateway holds the text from the start of the match. The gateway always releases the text when it holds 16 times the window.
+- **`flag`**: a flag detector does not delay the stream. It runs one time on the full answer (up to 1 MiB) when the stream ends.
+
+**Latency of a mask entry.** The client gets the text `stream_window_bytes` later than without the entry, at the default of 256 bytes about 60 tokens. The last part comes when the stream ends. A larger window masks longer matches across chunks but makes the delay longer.
+
+#### Embeddings and indexing
+
+Embedding requests have no text output, so output entries do not apply to them. Input entries apply to embedding requests only when they set `apply_to_embeddings: true`. The gateway cannot tell an indexing model call from a chat model call, so input and output entries apply to the chat calls that indexing makes.
+
+#### What is not inspected
+
+- Tool call arguments in requests and answers, and the provider refusal field.
+- Image, audio, real-time and token count requests.
+
+### Evidence
+
+Each detector run is a **verdict**. A verdict records the entry, the detector, its type, the action, the outcome, the fail mode, the labels, the number of findings, the highest score, the latency and the number of checks it merges. **A verdict never contains the inspected text or the matched text.** The outcome is one of `pass`, `flagged`, `masked`, `blocked`, `error_open` (the detector failed and the request continued) and `error_closed` (the detector failed and the request was refused).
+
+A streamed answer is checked one time for each window. The gateway merges these checks into one verdict for each detector, with `runs` set to the number of checks.
+
+Example verdict:
+
+```json
+{
+  "occurred_at": "2026-10-30T09:14:02Z",
+  "route": "/llm/v1/chat/completions",
+  "stage": "output",
+  "row": "no-secrets",
+  "detector": "secrets",
+  "detector_type": "secrets",
+  "action": "mask",
+  "outcome": "masked",
+  "fail_mode": "closed",
+  "labels": ["github-token"],
+  "findings": 1,
+  "max_score": 0,
+  "latency_ms": 1,
+  "runs": 14
+}
+```
+
+The gateway writes the verdicts to the table `gateway.guardrail_verdicts` together with its request log, with the project, the user and the execution id of the request. A request without an execution id also gets its verdicts. The verdicts are kept for the retention window of the `gateway_request_log` data class.
+
+For an agent run, the [run steps API](/admin/enterprise-controls/reconstruct-a-run) returns the verdicts of the run in `guardrail_verdicts` on the first page of `GET /api/v2/elitea_core/run_steps/prompt_lib/{project_id}/{run_id}`. The verdicts are not part of the run's hash chain: the gateway writes them, and elitea-main writes the chain.
+
+### Configure
+
+1. Open **Admin › LLM Governance** and select **New entry**.
+2. Select the type **Content guardrail**.
+3. Set the scope: the projects, and optionally the providers, models and agents.
+4. Select the stage and write the detectors as a JSON list.
+5. Set the timeout, the fail mode and the stream window if the defaults do not apply.
+6. Save. The gateway applies the entry within its refresh interval (`LLM_GOVERNANCE_REFRESH_SEC`, 30 seconds by default).
+
+For an `http` detector, first create the secret in the public project and add the adapter host to the **Egress allowlist** entry.
+
+### Limitations
+
+- The built-in detectors find patterns, terms and known secret formats. Harm categories and personal data need a classifier through the HTTP adapter.
+- Adapters for named classifier services are not available yet. Use the HTTP adapter with a small service that calls them.
