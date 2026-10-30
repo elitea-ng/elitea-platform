@@ -618,6 +618,8 @@ export * from "./notificationErrorResponse.zod";
 export * from "./notificationListing.zod";
 export * from "./objectSummary.zod";
 export * from "./okResponse.zod";
+export * from "./outputContract.zod";
+export * from "./outputContractRefusal.zod";
 export * from "./participantCandidate.zod";
 export * from "./participantCandidatesPage.zod";
 export * from "./participantSettingsRequest.zod";

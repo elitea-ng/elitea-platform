@@ -6,7 +6,8 @@ import {
   toAgentLlmSettings,
   type AgentLlmSettings,
 } from '@/shared/api/agentLlmSettings';
-import type { ApplicationVersionDetail } from '@/shared/api/generated/model';
+import type { ApplicationVersionDetail, OutputContract } from '@/shared/api/generated/model';
+import { areOutputContractsEqual, readOutputContract } from '@/shared/ui/OutputContractField';
 
 /**
  * The version-level fields `CreateAgentForm` renders on the agent EDIT page
@@ -69,6 +70,12 @@ export interface EditApplicationVersionFields {
    * on the Go side). It is documentation only — never sent to the model.
    */
   readonly notes: string;
+  /**
+   * `meta.output_contract` — the shape the agent's final answer must have
+   * (ADR-0043 decision 2, #1500). `null` is no contract, and a save sends
+   * `null` so that None clears a stored contract.
+   */
+  readonly outputContract: OutputContract | null;
 }
 
 export interface EditApplicationVersionFieldsState {
@@ -121,6 +128,7 @@ function fromVersion(version: ApplicationVersionDetail | undefined): EditApplica
     llmSettings: toAgentLlmSettings(version?.llm_settings),
     tags: toTags(version),
     notes: typeof metaRecord['notes'] === 'string' ? metaRecord['notes'] : '',
+    outputContract: readOutputContract(metaRecord['output_contract']),
   };
 }
 
@@ -129,6 +137,7 @@ function areEqual(a: EditApplicationVersionFields, b: EditApplicationVersionFiel
   if (a.welcomeMessage !== b.welcomeMessage) return false;
   if (a.stepLimit !== b.stepLimit) return false;
   if (a.notes !== b.notes) return false;
+  if (!areOutputContractsEqual(a.outputContract, b.outputContract)) return false;
   // Key by key, never by identity: the settings dialog hands back a fresh
   // object each time, so identity would report "dirty" from the first render.
   if (!areAgentLlmSettingsEqual(a.llmSettings, b.llmSettings)) return false;
@@ -229,6 +238,9 @@ export function useEditApplicationVersionFields(
         return true;
       case 'version_details.notes':
         setFields((previous) => ({ ...previous, notes: typeof value === 'string' ? value : '' }));
+        return true;
+      case 'version_details.meta.output_contract':
+        setFields((previous) => ({ ...previous, outputContract: readOutputContract(value) }));
         return true;
       case 'version_details.meta.step_limit':
         setFields((previous) => ({ ...previous, stepLimit: typeof value === 'number' ? value : undefined }));

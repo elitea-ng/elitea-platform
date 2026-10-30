@@ -153,7 +153,7 @@ describe('useEditApplicationVersionControls', () => {
       // Save-As-Version resets `step_limit` and drops `internal_tools`.
       // #898 — `notes` travels in the same blob; "" is the value an editor
       // with an empty Notes box sends.
-      meta: { internal_tools: [], notes: '' },
+      meta: { internal_tools: [], notes: '', output_contract: null },
     });
   });
 

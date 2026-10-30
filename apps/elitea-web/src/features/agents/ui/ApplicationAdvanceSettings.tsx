@@ -1,14 +1,16 @@
 import type { ChangeEvent, KeyboardEvent, ReactNode } from 'react';
-import { useCallback, useMemo } from 'react';
+import { useCallback } from 'react';
 
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import type { OutputContract } from '@/shared/api/generated/model';
 import { MAX_STEP_LIMIT, MIN_STEP_LIMIT } from '@/shared/lib/limits';
 import { t } from '@/shared/i18n';
 import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { InfoLabelWithTooltip } from '@/shared/ui/InfoLabelWithTooltip';
+import { OutputContractField, readOutputContract } from '@/shared/ui/OutputContractField';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
 
 /**
@@ -41,6 +43,15 @@ export interface ApplicationAdvanceSettingsProps {
    * below, and it is this component's.
    */
   readonly modelSettingsSlot?: ReactNode | undefined;
+  /**
+   * #1500 — `meta.output_contract` (ADR-0043 decision 2). The field shows only
+   * with `showOutputContract`: only the agent create and edit pages route the
+   * path to a save today, so only they opt in (through `CreateAgentForm`'s
+   * prop of the same name). The stored value is opaque `meta` content, read here.
+   */
+  readonly outputContract?: unknown;
+  readonly showOutputContract?: boolean | undefined;
+  readonly onOutputContractChange?: ((next: OutputContract | null) => void) | undefined;
   readonly sx?: SxProps<Theme> | undefined;
 }
 
@@ -85,6 +96,9 @@ export function ApplicationAdvanceSettings({
   onIgnoreProjectContextChange,
   disabled,
   modelSettingsSlot,
+  outputContract,
+  onOutputContractChange,
+  showOutputContract,
   sx,
 }: ApplicationAdvanceSettingsProps): ReactNode {
   const handleChange = useCallback(
@@ -108,57 +122,65 @@ export function ApplicationAdvanceSettings({
     [onIgnoreProjectContextChange],
   );
 
-  const accordionItems = useMemo(
-    () => [
-      {
-        title: t('features.agents.applicationAdvanceSettings.title', 'Advanced'),
-        content: (
-          <Box sx={fieldContainerSx}>
-            {modelSettingsSlot}
-            <StyledInputEnhancer
-              value={stepLimit ?? ''}
-              onChange={handleChange}
-              onKeyDown={handleKeyDown}
+  // A plain array, not a `useMemo`: the dependency list passed the §3.5
+  // hook-deps budget (8) when the output contract joined it, and the React
+  // compiler memoises this render anyway.
+  const accordionItems = [
+    {
+      title: t('features.agents.applicationAdvanceSettings.title', 'Advanced'),
+      content: (
+        <Box sx={fieldContainerSx}>
+          {modelSettingsSlot}
+          <StyledInputEnhancer
+            value={stepLimit ?? ''}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            disabled={disabled}
+            label={
+              <InfoLabelWithTooltip
+                label={t('features.agents.applicationAdvanceSettings.stepLimit.label', 'Step limit')}
+                tooltip={t(
+                  'features.agents.applicationAdvanceSettings.stepLimit.tooltip',
+                  'The maximum number of steps to take before ending the execution loop (tools call limit).',
+                )}
+                variant="bodyMedium"
+              />
+            }
+            type="text"
+            slotProps={{
+              htmlInput: { inputMode: 'numeric', pattern: '[0-9]*', min: MIN_STEP_LIMIT, max: MAX_STEP_LIMIT },
+            }}
+          />
+          {showOutputContract === true && onOutputContractChange !== undefined && (
+            <OutputContractField
+              value={readOutputContract(outputContract)}
+              onChange={onOutputContractChange}
               disabled={disabled}
-              label={
-                <InfoLabelWithTooltip
-                  label={t('features.agents.applicationAdvanceSettings.stepLimit.label', 'Step limit')}
-                  tooltip={t(
-                    'features.agents.applicationAdvanceSettings.stepLimit.tooltip',
-                    'The maximum number of steps to take before ending the execution loop (tools call limit).',
-                  )}
-                  variant="bodyMedium"
-                />
-              }
-              type="text"
-              slotProps={{
-                htmlInput: { inputMode: 'numeric', pattern: '[0-9]*', min: MIN_STEP_LIMIT, max: MAX_STEP_LIMIT },
-              }}
+              testIdPrefix="agent-output-contract"
             />
-            {showIgnoreProjectContext && (
-              <Box sx={toggleRowSx}>
-                <BaseCheckbox
-                  checked={ignoreProjectContext}
-                  onChange={handleIgnoreToggle}
-                  disabled={disabled}
-                />
-                <InfoLabelWithTooltip
-                  label={t('features.agents.applicationAdvanceSettings.ignoreProjectContext.label', 'Ignore Project Context')}
-                  tooltip={t(
-                    'features.agents.applicationAdvanceSettings.ignoreProjectContext.tooltip',
-                    'When enabled, this agent will not use the project background context in its responses.',
-                  )}
-                  variant="bodyMedium"
-                  sx={labelSx}
-                />
-              </Box>
-            )}
-          </Box>
-        ),
-      },
-    ],
-    [stepLimit, handleChange, handleKeyDown, showIgnoreProjectContext, ignoreProjectContext, handleIgnoreToggle, disabled, modelSettingsSlot],
-  );
+          )}
+          {showIgnoreProjectContext && (
+            <Box sx={toggleRowSx}>
+              <BaseCheckbox
+                checked={ignoreProjectContext}
+                onChange={handleIgnoreToggle}
+                disabled={disabled}
+              />
+              <InfoLabelWithTooltip
+                label={t('features.agents.applicationAdvanceSettings.ignoreProjectContext.label', 'Ignore Project Context')}
+                tooltip={t(
+                  'features.agents.applicationAdvanceSettings.ignoreProjectContext.tooltip',
+                  'When enabled, this agent will not use the project background context in its responses.',
+                )}
+                variant="bodyMedium"
+                sx={labelSx}
+              />
+            </Box>
+          )}
+        </Box>
+      ),
+    },
+  ];
 
   return (
     <BasicAccordion

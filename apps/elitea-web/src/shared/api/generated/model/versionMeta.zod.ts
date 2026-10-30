@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { OutputContract } from "./outputContract.zod";
 import { VersionRunCaps } from "./versionRunCaps.zod";
 import { VersionVariable } from "./versionVariable.zod";
 
@@ -83,6 +84,12 @@ export const VersionMeta = zod.object({
     .optional()
     .describe(
       "The author's run caps of this agent (ADR-0041 decision 3). Each key LOWERS the platform's cap for the agent's risk tier (Configuration › Run caps); the lower value applies. A save that sets a value above the tier's cap is refused with 422 RUN_CAP_ABOVE_TIER. Omit a key, or set it to null, to keep the tier's cap. `step_limit` still bounds each agent loop: with `max_model_turns` the lower of the two stops first.\n",
+    ),
+  output_contract: zod
+    .union([OutputContract, zod.null()])
+    .optional()
+    .describe(
+      "The shape the agent's final answer must have (ADR-0043 decision 2). Null or absent is no contract. A save with an invalid contract is refused with 422 OUTPUT_CONTRACT_INVALID.\n",
     ),
 });
 

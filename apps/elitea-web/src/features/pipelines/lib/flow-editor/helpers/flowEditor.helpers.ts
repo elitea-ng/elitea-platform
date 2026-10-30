@@ -126,7 +126,17 @@ export const updateYamlNode = <TDoc extends YamlDocLike>(
 };
 
 /** Only verified node-edit deletion markers are normalized; nested YAML values remain strict. */
-const NODE_DELETION_FIELDS: readonly string[] = ['transition', 'toolkit_name', 'tool', 'input_mapping', 'loop_toolkit_name', 'loop_tool', 'variables_mapping'];
+const NODE_DELETION_FIELDS: readonly string[] = [
+  'transition',
+  'toolkit_name',
+  'tool',
+  'input_mapping',
+  'loop_toolkit_name',
+  'loop_tool',
+  'variables_mapping',
+  // #1500 — an LLM node with no output contract has no key (None, or structured output on).
+  'output_contract',
+];
 
 export const batchUpdateYamlNode = <TDoc extends YamlDocLike>(
   id: string,

@@ -14,6 +14,7 @@ const BASE: CreateAgentFormExtraFields = {
   variables: [{ name: 'a', value: '1' }],
   stepLimit: 25,
   llmSettings: undefined,
+  outputContract: null,
 };
 
 function httpError(body: unknown): EliteaApiError {

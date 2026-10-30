@@ -150,6 +150,7 @@ import type {
   N409Response,
   N500Response,
   OkResponse,
+  OutputContractRefusal,
   PermissionTrimmingRemoveRequest,
   PermissionTrimmingRemoveResult,
   PermissionTrimmingReport,
@@ -13031,7 +13032,7 @@ export type createApplicationResponse403 = {
 };
 
 export type createApplicationResponse422 = {
-  data: RunCapRefusal;
+  data: RunCapRefusal | OutputContractRefusal;
   status: 422;
 };
 
@@ -13113,7 +13114,12 @@ export const getCreateApplicationQueryKey = (
 
 export const getCreateApplicationQueryOptions = <
   TData = Awaited<ReturnType<typeof createApplication>>,
-  TError = N400Response | N401Response | N403Response | RunCapRefusal,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | RunCapRefusal
+    | OutputContractRefusal,
 >(
   projectId: string,
   applicationCreateRequest: ApplicationCreateRequest,
@@ -13158,11 +13164,20 @@ export type CreateApplicationQueryResult = NonNullable<
   Awaited<ReturnType<typeof createApplication>>
 >;
 export type CreateApplicationQueryError =
-  N400Response | N401Response | N403Response | RunCapRefusal;
+  | N400Response
+  | N401Response
+  | N403Response
+  | RunCapRefusal
+  | OutputContractRefusal;
 
 export function useCreateApplication<
   TData = Awaited<ReturnType<typeof createApplication>>,
-  TError = N400Response | N401Response | N403Response | RunCapRefusal,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | RunCapRefusal
+    | OutputContractRefusal,
 >(
   projectId: string,
   applicationCreateRequest: ApplicationCreateRequest,
@@ -13190,7 +13205,12 @@ export function useCreateApplication<
 };
 export function useCreateApplication<
   TData = Awaited<ReturnType<typeof createApplication>>,
-  TError = N400Response | N401Response | N403Response | RunCapRefusal,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | RunCapRefusal
+    | OutputContractRefusal,
 >(
   projectId: string,
   applicationCreateRequest: ApplicationCreateRequest,
@@ -13218,7 +13238,12 @@ export function useCreateApplication<
 };
 export function useCreateApplication<
   TData = Awaited<ReturnType<typeof createApplication>>,
-  TError = N400Response | N401Response | N403Response | RunCapRefusal,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | RunCapRefusal
+    | OutputContractRefusal,
 >(
   projectId: string,
   applicationCreateRequest: ApplicationCreateRequest,
@@ -13242,7 +13267,12 @@ export function useCreateApplication<
 
 export function useCreateApplication<
   TData = Awaited<ReturnType<typeof createApplication>>,
-  TError = N400Response | N401Response | N403Response | RunCapRefusal,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | RunCapRefusal
+    | OutputContractRefusal,
 >(
   projectId: string,
   applicationCreateRequest: ApplicationCreateRequest,
@@ -15942,7 +15972,7 @@ export type updateApplicationVersionResponse404 = {
 };
 
 export type updateApplicationVersionResponse422 = {
-  data: RunCapRefusal;
+  data: RunCapRefusal | OutputContractRefusal;
   status: 422;
 };
 
@@ -16036,7 +16066,12 @@ export const getUpdateApplicationVersionQueryKey = (
 export const getUpdateApplicationVersionQueryOptions = <
   TData = Awaited<ReturnType<typeof updateApplicationVersion>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | RunCapRefusal
+    | OutputContractRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -16097,12 +16132,22 @@ export type UpdateApplicationVersionQueryResult = NonNullable<
   Awaited<ReturnType<typeof updateApplicationVersion>>
 >;
 export type UpdateApplicationVersionQueryError =
-  N400Response | N401Response | N403Response | N404Response | RunCapRefusal;
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | RunCapRefusal
+  | OutputContractRefusal;
 
 export function useUpdateApplicationVersion<
   TData = Awaited<ReturnType<typeof updateApplicationVersion>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | RunCapRefusal
+    | OutputContractRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -16133,7 +16178,12 @@ export function useUpdateApplicationVersion<
 export function useUpdateApplicationVersion<
   TData = Awaited<ReturnType<typeof updateApplicationVersion>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | RunCapRefusal
+    | OutputContractRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -16164,7 +16214,12 @@ export function useUpdateApplicationVersion<
 export function useUpdateApplicationVersion<
   TData = Awaited<ReturnType<typeof updateApplicationVersion>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | RunCapRefusal
+    | OutputContractRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -16191,7 +16246,12 @@ export function useUpdateApplicationVersion<
 export function useUpdateApplicationVersion<
   TData = Awaited<ReturnType<typeof updateApplicationVersion>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | RunCapRefusal
+    | OutputContractRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -16823,7 +16883,7 @@ export type saveApplicationNewVersionResponse404 = {
 };
 
 export type saveApplicationNewVersionResponse422 = {
-  data: RunCapRefusal;
+  data: RunCapRefusal | OutputContractRefusal;
   status: 422;
 };
 
@@ -16917,7 +16977,12 @@ export const getSaveApplicationNewVersionQueryKey = (
 export const getSaveApplicationNewVersionQueryOptions = <
   TData = Awaited<ReturnType<typeof saveApplicationNewVersion>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | RunCapRefusal
+    | OutputContractRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -16973,12 +17038,22 @@ export type SaveApplicationNewVersionQueryResult = NonNullable<
   Awaited<ReturnType<typeof saveApplicationNewVersion>>
 >;
 export type SaveApplicationNewVersionQueryError =
-  N400Response | N401Response | N403Response | N404Response | RunCapRefusal;
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | RunCapRefusal
+  | OutputContractRefusal;
 
 export function useSaveApplicationNewVersion<
   TData = Awaited<ReturnType<typeof saveApplicationNewVersion>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | RunCapRefusal
+    | OutputContractRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -17008,7 +17083,12 @@ export function useSaveApplicationNewVersion<
 export function useSaveApplicationNewVersion<
   TData = Awaited<ReturnType<typeof saveApplicationNewVersion>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | RunCapRefusal
+    | OutputContractRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -17038,7 +17118,12 @@ export function useSaveApplicationNewVersion<
 export function useSaveApplicationNewVersion<
   TData = Awaited<ReturnType<typeof saveApplicationNewVersion>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | RunCapRefusal
+    | OutputContractRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -17064,7 +17149,12 @@ export function useSaveApplicationNewVersion<
 export function useSaveApplicationNewVersion<
   TData = Awaited<ReturnType<typeof saveApplicationNewVersion>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | RunCapRefusal
+    | OutputContractRefusal,
 >(
   projectId: string,
   applicationId: number,
