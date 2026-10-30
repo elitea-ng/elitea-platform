@@ -18,7 +18,7 @@ An output contract is a rule for the final answer of an agent or of a pipeline L
 ### Where to set a contract
 
 - **Agent.** In the agent editor, open **Advanced** and set **Output contract**. The value is stored in the version meta as `meta.output_contract`.
-- **Pipeline LLM node.** In the node settings, set **Output contract**. The value is stored in the node YAML as the `output_contract` field. A node with **Structured output** cannot also have a contract, because its output is already a JSON object.
+- **Pipeline LLM node.** In the node settings, set **Output contract**. The value is stored in the node YAML as the `output_contract` field. A pipeline cannot have a contract in its version meta. A node with **Structured output** cannot also have a contract, because its output is already a JSON object.
 
 The contract is part of the version. A run uses the contract of the version that it runs.
 
@@ -36,6 +36,7 @@ Main validates the contract when you create an agent or save a version. If the c
 | Pattern syntax | RE2, not empty | `pattern_invalid` |
 | Format name | `json`, `markdown` or `csv` | `format_unknown` |
 | Structured output | Not on the same LLM node | `structured_output` |
+| Pipeline version meta | Not permitted: set the contract on an LLM node of the pipeline | `pipeline_contract_on_node` |
 
 ### What happens in a run
 

@@ -9973,7 +9973,7 @@ components:
         code: { type: string, enum: [OUTPUT_CONTRACT_INVALID] }
         reason:
           type: string
-          enum: [shape, schema_too_large, schema_invalid, pattern_too_long, pattern_invalid, format_unknown, structured_output]
+          enum: [shape, schema_too_large, schema_invalid, pattern_too_long, pattern_invalid, format_unknown, structured_output, pipeline_contract_on_node]
         node_id:
           type: string
           maxLength: 256

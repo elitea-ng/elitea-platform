@@ -16,7 +16,8 @@ an RE2 regex (`{"type":"regex","pattern":"..."}`) or a named format
   version with a contract that is not correct answers HTTP 422
   `OUTPUT_CONTRACT_INVALID` with `reason` and, for a pipeline, `node_id`.
   Limits: schema 32 KiB and 32 levels, local `$ref` only; pattern 1024
-  bytes; a structured LLM node cannot have a contract.
+  bytes; a structured LLM node cannot have a contract; a pipeline version
+  cannot have `meta.output_contract` (`pipeline_contract_on_node`).
 - **Behaviour.** The worker validates the final answer, retries one time
   with the validation error, and then ends the agent or node with
   `output_contract.violation`. Main shows `OUTPUT_CONTRACT_VIOLATION`

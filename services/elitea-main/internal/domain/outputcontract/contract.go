@@ -63,16 +63,21 @@ const (
 	// structured_output: the node's output is then already a JSON object
 	// built from the pipeline state, so the two cannot both apply.
 	ReasonStructuredOutput = "structured_output"
+	// ReasonPipelineContractOnNode is a contract in the version meta of a
+	// pipeline: a pipeline's contracts belong on its LLM nodes, and the
+	// worker reads no contract from a pipeline's meta.
+	ReasonPipelineContractOnNode = "pipeline_contract_on_node"
 )
 
 var reasonMessages = map[string]string{
-	ReasonShape:            "The output contract must be an object with type json_schema (and schema), regex (and pattern) or format (and format), and no other field.",
-	ReasonSchemaTooLarge:   fmt.Sprintf("The output contract JSON Schema exceeds %d KiB or %d levels of nesting. Make it smaller.", MaxSchemaBytes/1024, MaxSchemaDepth),
-	ReasonSchemaInvalid:    "The output contract JSON Schema is not a valid JSON Schema, or it refers to a schema outside itself. Use only local references (#/...).",
-	ReasonPatternTooLong:   fmt.Sprintf("The output contract regex exceeds %d bytes. Make it shorter.", MaxPatternBytes),
-	ReasonPatternInvalid:   "The output contract regex is empty or is not a valid RE2 expression. Back references and look-around are not supported.",
-	ReasonFormatUnknown:    "The output contract format must be json, markdown or csv.",
-	ReasonStructuredOutput: "An LLM node with structured output cannot also have an output contract. Turn off structured output or remove the contract.",
+	ReasonShape:                  "The output contract must be an object with type json_schema (and schema), regex (and pattern) or format (and format), and no other field.",
+	ReasonSchemaTooLarge:         fmt.Sprintf("The output contract JSON Schema exceeds %d KiB or %d levels of nesting. Make it smaller.", MaxSchemaBytes/1024, MaxSchemaDepth),
+	ReasonSchemaInvalid:          "The output contract JSON Schema is not a valid JSON Schema, or it refers to a schema outside itself. Use only local references (#/...).",
+	ReasonPatternTooLong:         fmt.Sprintf("The output contract regex exceeds %d bytes. Make it shorter.", MaxPatternBytes),
+	ReasonPatternInvalid:         "The output contract regex is empty or is not a valid RE2 expression. Back references and look-around are not supported.",
+	ReasonFormatUnknown:          "The output contract format must be json, markdown or csv.",
+	ReasonStructuredOutput:       "An LLM node with structured output cannot also have an output contract. Turn off structured output or remove the contract.",
+	ReasonPipelineContractOnNode: "A pipeline cannot have an output contract in its version meta. Set the contract on an LLM node of the pipeline.",
 }
 
 // Error is a refused contract.
@@ -89,6 +94,20 @@ func (e *Error) Error() string {
 		return fmt.Sprintf("Node %q: %s", e.NodeID, message)
 	}
 	return message
+}
+
+// PipelineAgentType is the agent_type of a pipeline version.
+const PipelineAgentType = "pipeline"
+
+// CheckMeta checks the contract of a version meta. A pipeline version
+// (agentType PipelineAgentType) cannot have one: its contracts are on its
+// LLM nodes.
+func CheckMeta(agentType string, meta map[string]any) error {
+	raw := meta[MetaKey]
+	if raw != nil && agentType == PipelineAgentType {
+		return &Error{Reason: ReasonPipelineContractOnNode}
+	}
+	return Check(raw)
 }
 
 // Check checks one stored contract. Nil (absent or JSON null) is no contract.

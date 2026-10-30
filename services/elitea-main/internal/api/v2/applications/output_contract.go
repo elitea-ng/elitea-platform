@@ -17,16 +17,17 @@ type outputContractRefusal struct {
 }
 
 // checkOutputContracts checks the output contracts a version save carries:
-// body.meta.output_contract (an agent) and the output_contract of every LLM
-// node of body.instructions (a pipeline). It answers false when it wrote the
-// 422.
-func checkOutputContracts(w http.ResponseWriter, body map[string]any) bool {
+// body.meta.output_contract (an agent; refused on a pipeline) and the
+// output_contract of every LLM node of body.instructions (a pipeline).
+// agentType is the version's agent_type: the body's, else the stored one.
+// It answers false when it wrote the 422.
+func checkOutputContracts(w http.ResponseWriter, body map[string]any, agentType string) bool {
 	if body == nil {
 		return true
 	}
 	var err error
 	if meta, _ := body["meta"].(map[string]any); meta != nil {
-		err = outputcontract.Check(meta[outputcontract.MetaKey])
+		err = outputcontract.CheckMeta(agentType, meta)
 	}
 	if instructions, _ := body["instructions"].(string); err == nil && instructions != "" {
 		err = outputcontract.CheckPipeline(instructions)
@@ -45,4 +46,12 @@ func checkOutputContracts(w http.ResponseWriter, body map[string]any) bool {
 		NodeID: refusal.NodeID,
 	})
 	return false
+}
+
+// bodyAgentType is the agent_type a version body sets, or fallback.
+func bodyAgentType(body map[string]any, fallback string) string {
+	if agentType, ok := body["agent_type"].(string); ok && agentType != "" {
+		return agentType
+	}
+	return fallback
 }

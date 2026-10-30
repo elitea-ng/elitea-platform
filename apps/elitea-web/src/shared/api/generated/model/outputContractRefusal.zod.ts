@@ -58,6 +58,7 @@ export const OutputContractRefusal = zod
       "pattern_invalid",
       "format_unknown",
       "structured_output",
+      "pipeline_contract_on_node",
     ]),
     node_id: zod
       .string()

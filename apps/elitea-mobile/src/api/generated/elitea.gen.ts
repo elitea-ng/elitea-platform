@@ -3740,7 +3740,7 @@ export interface components {
             /** @description The pipeline LLM node of the refused contract; absent for an agent. */
             node_id?: string;
             /** @enum {string} */
-            reason: "shape" | "schema_too_large" | "schema_invalid" | "pattern_too_long" | "pattern_invalid" | "format_unknown" | "structured_output";
+            reason: "shape" | "schema_too_large" | "schema_invalid" | "pattern_too_long" | "pattern_invalid" | "format_unknown" | "structured_output" | "pipeline_contract_on_node";
         };
         /** @description A project member. NOTE(W2): internal/api/v2/conversations/candidates.go:40 (`ParticipantCandidate`). */
         ParticipantCandidate: {

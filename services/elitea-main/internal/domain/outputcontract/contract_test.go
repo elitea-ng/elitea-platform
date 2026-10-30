@@ -105,3 +105,18 @@ nodes:
 		t.Fatalf("CheckPipeline(unparsable) = %v", err)
 	}
 }
+
+func TestCheckMetaRefusesAContractOnAPipeline(t *testing.T) {
+	t.Parallel()
+	meta := map[string]any{MetaKey: map[string]any{"type": "format", "format": "json"}}
+	var refusal *Error
+	if err := CheckMeta(PipelineAgentType, meta); !errors.As(err, &refusal) || refusal.Reason != ReasonPipelineContractOnNode {
+		t.Fatalf("pipeline meta contract: err = %v", err)
+	}
+	if err := CheckMeta("agent", meta); err != nil {
+		t.Fatalf("agent meta contract: err = %v", err)
+	}
+	if err := CheckMeta(PipelineAgentType, map[string]any{MetaKey: nil}); err != nil {
+		t.Fatalf("a cleared pipeline contract: err = %v", err)
+	}
+}
