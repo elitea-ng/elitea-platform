@@ -78,7 +78,9 @@ impl AssertingClient {
 pub(crate) const ASSERTION_HEADER: HeaderName = HeaderName::from_static("elitea-agent-assertion");
 
 fn unavailable() -> ClientError {
-    StreamableHttpError::UnexpectedServerResponse(crate::remote_assertion::ASSERTION_UNAVAILABLE.into())
+    StreamableHttpError::UnexpectedServerResponse(
+        crate::remote_assertion::ASSERTION_UNAVAILABLE.into(),
+    )
 }
 
 impl StreamableHttpClient for AssertingClient {

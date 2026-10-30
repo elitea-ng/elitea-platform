@@ -123,7 +123,9 @@ impl McpMaterializationError {
     /// The refused delegation assertion, when that is why the connection
     /// was refused (reason code [`crate::remote_assertion::ASSERTION_UNAVAILABLE`]).
     #[must_use]
-    pub const fn assertion_refusal(&self) -> Option<crate::remote_assertion::DelegationAssertionError> {
+    pub const fn assertion_refusal(
+        &self,
+    ) -> Option<crate::remote_assertion::DelegationAssertionError> {
         self.assertion
     }
 }

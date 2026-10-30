@@ -2276,8 +2276,10 @@ async fn admit_saved_pipeline_child(
     fallback: &OrdinaryNoToolProfile,
     identity: (u64, u64),
     project_id: Option<u64>,
-) -> Result<Result<(PipelineDefinition, BoundSavedPipeline), RefusedDelegation>, NativeAgentAssemblyError>
-{
+) -> Result<
+    Result<(PipelineDefinition, BoundSavedPipeline), RefusedDelegation>,
+    NativeAgentAssemblyError,
+> {
     let admitted = composition::admit_tool_composition(
         platform,
         runtime_context,

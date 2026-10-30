@@ -23,7 +23,10 @@ fn refusal_of(result: Result<Delegation, Box<RefusedDelegation>>) -> DelegationR
 
 #[test]
 fn a_toolkit_the_caller_lacks_is_refused_by_name() {
-    let caller = scope(&[toolkit(7, "Jira", &json!({}))], DelegationPolicy::default());
+    let caller = scope(
+        &[toolkit(7, "Jira", &json!({}))],
+        DelegationPolicy::default(),
+    );
     let mut delegated = vec![
         toolkit(7, "Jira", &json!({})),
         toolkit(9, "Payroll", &json!({})),
@@ -49,7 +52,11 @@ fn a_toolkit_the_caller_lacks_is_refused_by_name() {
 #[test]
 fn a_tool_the_caller_did_not_select_is_refused_and_a_wider_selection_narrows() {
     let caller = scope(
-        &[toolkit(7, "Jira", &json!({"selected_tools": ["search", "read"]}))],
+        &[toolkit(
+            7,
+            "Jira",
+            &json!({"selected_tools": ["search", "read"]}),
+        )],
         DelegationPolicy::default(),
     );
     let mut explicit = vec![toolkit(
@@ -82,7 +89,11 @@ fn a_tool_the_caller_did_not_select_is_refused_and_a_wider_selection_narrows() {
 #[test]
 fn a_credential_reference_the_caller_lacks_is_refused() {
     let caller = scope(
-        &[toolkit(7, "Jira", &json!({"credential_reference_id": "ref-a"}))],
+        &[toolkit(
+            7,
+            "Jira",
+            &json!({"credential_reference_id": "ref-a"}),
+        )],
         DelegationPolicy::default(),
     );
     let mut delegated = vec![toolkit(
@@ -98,7 +109,11 @@ fn a_credential_reference_the_caller_lacks_is_refused() {
             toolkit: Some("Jira".to_owned()),
         }
     );
-    let mut same = vec![toolkit(7, "Jira", &json!({"credential_reference_id": "ref-a"}))];
+    let mut same = vec![toolkit(
+        7,
+        "Jira",
+        &json!({"credential_reference_id": "ref-a"}),
+    )];
     caller
         .delegate(&mut same, &BTreeSet::new(), &PublicPolicy::Open)
         .expect("held");
@@ -166,7 +181,12 @@ fn the_combined_depth_is_capped_by_the_policy() {
     );
     assert_eq!(refused.refusal.code(), DEPTH_EXCEEDED);
     // A sub-agent counts toward the same depth.
-    assert!(second.scope.delegate_subagent("read_only", &BTreeSet::new()).is_err());
+    assert!(
+        second
+            .scope
+            .delegate_subagent("read_only", &BTreeSet::new())
+            .is_err()
+    );
     let evidence = first
         .scope
         .delegate_subagent("read_only", &BTreeSet::new())
@@ -186,7 +206,10 @@ fn report_mode_records_the_missing_grant_and_runs() {
     assert_eq!(tools.len(), 1, "the callee keeps its toolkit");
     assert!(!delegated.evidence.enforced);
     assert_eq!(
-        delegated.evidence.refusal.map(|refusal| refusal.to_value()["name"].clone()),
+        delegated
+            .evidence
+            .refusal
+            .map(|refusal| refusal.to_value()["name"].clone()),
         Some(json!("Payroll"))
     );
 }
@@ -256,11 +279,7 @@ fn the_policy_bounds_depth_and_classes() {
         Err(DelegationPolicyError::MalformedDataClass)
     );
     assert_eq!(
-        DelegationPolicy::new(
-            4,
-            NarrowingMode::Enforce,
-            (0..33).map(|n| format!("c{n}"))
-        ),
+        DelegationPolicy::new(4, NarrowingMode::Enforce, (0..33).map(|n| format!("c{n}"))),
         Err(DelegationPolicyError::TooManyDataClasses)
     );
     assert_eq!(DelegationPolicy::default().max_depth(), DEFAULT_MAX_DEPTH);

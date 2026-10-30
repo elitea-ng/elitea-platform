@@ -37,7 +37,6 @@ use super::internal_tools::{
     InternalToolCatalog, decode_ask_user_request,
 };
 use super::sensitive_tools::SensitiveToolCatalog;
-use elitea_agent_runtime::delegation::DelegationEvidence;
 use crate::protocol::ProtocolError;
 use crate::protocol::elitea::runtime::v1::NodeEventV1;
 use crate::protocol::node_event::{
@@ -47,6 +46,7 @@ use crate::toolkits::{
     DELEGATED_AUTHORIZATION_METADATA_KEY, DelegatedAuthorizationCatalog,
     DelegatedAuthorizationRequirement, decode_delegated_authorization_requirement,
 };
+use elitea_agent_runtime::delegation::DelegationEvidence;
 
 const MAX_TOOL_CALLS_PER_MODEL_TURN: usize = 16;
 const MAX_TOOL_RESULT_BYTES: usize = 1024 * 1024;

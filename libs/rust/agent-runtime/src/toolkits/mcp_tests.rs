@@ -2143,8 +2143,10 @@ impl crate::remote_assertion::DelegationAssertionSource for RefusedMint {
     async fn mint(
         &self,
         _audience: &str,
-    ) -> Result<crate::remote_assertion::MintedAssertion, crate::remote_assertion::DelegationAssertionError>
-    {
+    ) -> Result<
+        crate::remote_assertion::MintedAssertion,
+        crate::remote_assertion::DelegationAssertionError,
+    > {
         self.0.fetch_add(1, Ordering::SeqCst);
         Err(crate::remote_assertion::DelegationAssertionError::Unavailable)
     }

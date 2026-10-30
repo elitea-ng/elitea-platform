@@ -10,12 +10,12 @@ use ring::rand::{SecureRandom as _, SystemRandom};
 use serde_json::{Value, json};
 
 use super::child::{self, Child, InputRefused};
-use crate::delegation::DelegationEvidence;
 use super::{
     CHILD_AGENT_PREFIX, CLOSE_AGENT, ChildIdentity, DEFAULT_WAIT_SECONDS, DEPTH_EXCEEDED,
     MAX_CHILD_STEPS, MAX_LABEL_CHARS, MAX_TASK_CHARS, MAX_WAIT_IDS, MAX_WAIT_SECONDS, Registry,
     SEND_INPUT, SPAWN_AGENT, WAIT_AGENT,
 };
+use crate::delegation::DelegationEvidence;
 
 #[derive(Clone, Copy)]
 pub(super) enum Action {

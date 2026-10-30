@@ -201,7 +201,11 @@ impl AgentEventProjector {
             } else {
                 for key in ["depth", "effective_grant_digest"] {
                     if let Some(value) = delegation.get(key) {
-                        let key = if key == "depth" { "delegation_depth" } else { key };
+                        let key = if key == "depth" {
+                            "delegation_depth"
+                        } else {
+                            key
+                        };
                         step = step.summary(key, value.clone());
                     }
                 }

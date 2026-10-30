@@ -1403,7 +1403,10 @@ async fn call_refused(fixture: &Fixture, scope: DelegationScope) -> (Value, Valu
         )
         .await
         .expect("the refusal is a tool result the model reads");
-    assert!(fixture.models.lock().unwrap().is_empty(), "the child never ran");
+    assert!(
+        fixture.models.lock().unwrap().is_empty(),
+        "the child never ran"
+    );
     let refusal = result["delegation_refusal"].clone();
     assert_eq!(result["failure"]["code"], refusal["code"]);
     assert!(
@@ -1553,7 +1556,11 @@ async fn delegation_past_the_administrators_depth_is_refused() {
     )
     .unwrap();
     let authority = test_runtime_context_authority().with_delegation_policy_for_test(policy);
-    let root = version("agent", "Root", vec![reference((32, 42), "agent", "worker")]);
+    let root = version(
+        "agent",
+        "Root",
+        vec![reference((32, 42), "agent", "worker")],
+    );
     let frozen = FrozenToolSnapshot::from_version_details(root.as_object().unwrap()).unwrap();
     let admission = ToolAdmissionPolicy::new(&[], &BTreeMap::new()).unwrap();
     let scope = root_delegation_scope(
@@ -1571,7 +1578,10 @@ async fn delegation_past_the_administrators_depth_is_refused() {
         .unwrap();
     let runtime = runtime.unwrap();
     let worker = runtime.tools[0].tool.name();
-    assert_eq!(runtime.presentations.delegation_of(worker).unwrap().depth, 1);
+    assert_eq!(
+        runtime.presentations.delegation_of(worker).unwrap().depth,
+        1
+    );
     let inner = runtime
         .presentations
         .child_tools(worker)

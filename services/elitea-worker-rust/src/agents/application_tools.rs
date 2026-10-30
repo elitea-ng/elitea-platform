@@ -64,9 +64,6 @@ use super::session::{
     BoundOrdinaryAgentModel, clarifying_question_agent, delegated_authorization_agent,
 };
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
-use elitea_agent_runtime::delegation::{
-    Delegation, DelegationEvidence, DelegationRefusal, DelegationScope, GrantSet, RefusedDelegation,
-};
 use crate::toolkits::{
     AdmittedToolSnapshot, DelegatedAuthorizationCatalog, FrozenToolKind, FrozenToolSnapshot,
     FrozenToolSnapshotErrorCode, McpConnector, McpMaterializationErrorCode, ToolAdmissionPolicy,
@@ -81,6 +78,9 @@ use crate::transport::model_facade::{
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 use crate::transport::runtime_context::SavedAgentFingerprint;
+use elitea_agent_runtime::delegation::{
+    Delegation, DelegationEvidence, DelegationRefusal, DelegationScope, GrantSet, RefusedDelegation,
+};
 #[cfg(test)]
 pub(in crate::agents) use materialization::MAX_MATERIALIZATION_VERSION_BYTES;
 pub(super) use materialization::{ApplicationContinuation, ApplicationMaterializationPath};
@@ -3801,13 +3801,15 @@ fn refused_application(
         code = refused.refusal.code(),
         "a delegated saved agent needs a grant its caller does not hold, or is past the depth"
     );
-    Ok(AssembledApplication::Refused(Arc::new(RefusedApplication {
-        name: application_tool_name(reference.identity),
-        description: application_description(reference, &[]),
-        variables: super::variables::AgentCallVariables::admit(version)?,
-        refusal: refused.refusal,
-        evidence: refused.evidence,
-    })))
+    Ok(AssembledApplication::Refused(Arc::new(
+        RefusedApplication {
+            name: application_tool_name(reference.identity),
+            description: application_description(reference, &[]),
+            variables: super::variables::AgentCallVariables::admit(version)?,
+            refusal: refused.refusal,
+            evidence: refused.evidence,
+        },
+    )))
 }
 
 /// The tool a refused saved agent is offered as.

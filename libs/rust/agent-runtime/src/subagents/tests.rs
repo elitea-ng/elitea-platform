@@ -779,10 +779,7 @@ async fn a_child_counts_toward_the_delegation_depth() {
 
     let roomy = DelegationScope::root(Arc::default(), GrantSet::unconstrained());
     let host = TestHost::new();
-    let children = SubAgents::new(
-        host.clone(),
-        SubAgentConfig::new("").with_delegation(roomy),
-    );
+    let children = SubAgents::new(host.clone(), SubAgentConfig::new("").with_delegation(roomy));
     let responses = run_parent("parent", &children, script()).await;
     let started = &responses
         .iter()

@@ -318,7 +318,9 @@ async fn list(
         }
         // The run must sign the call and cannot (ADR-0044 decision 4).
         Err(error) if error.assertion_refusal().is_some() => {
-            return Ok(Listing::Refused(crate::remote_assertion::ASSERTION_UNAVAILABLE));
+            return Ok(Listing::Refused(
+                crate::remote_assertion::ASSERTION_UNAVAILABLE,
+            ));
         }
         // The server refused the redeemed token (never a fallback to the
         // browser flow on a governed run) or did not answer.
