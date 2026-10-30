@@ -68,7 +68,9 @@ func continuationNamesPausedWriter(kind agentexecutionapp.CurrentContinuationKin
 }
 
 // withPausedWriter runs resolve, then names the paused writer on target in the
-// same transaction.
+// same transaction. A response without exactly one settled paused terminal
+// (one paused before settlements existed, or an ambiguous one) names none;
+// the service refuses that continuation only while it names paused writers.
 func withPausedWriter(
 	ctx context.Context, target *agentexecutionapp.CurrentContinuationTarget, responseMessageID pgtype.UUID,
 	kind agentexecutionapp.CurrentContinuationKind, resolve func(sqlExecutor) error,
@@ -81,6 +83,9 @@ func withPausedWriter(
 			return nil
 		}
 		execution, generation, err := readPausedWriter(ctx, tx, responseMessageID, false)
+		if errors.Is(err, agentexecutionapp.ErrUnsupportedCurrentAgentStart) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -94,7 +99,7 @@ func withPausedWriter(
 // another (FU-265, C5): the marker is bound to the decision this
 // transaction admits.
 func verifyPausedWriter(ctx context.Context, tx pgx.Tx, turn agentexecutionapp.CurrentContinueTurn) error {
-	if !continuationNamesPausedWriter(turn.ContinuationKind) {
+	if !continuationNamesPausedWriter(turn.ContinuationKind) || turn.PausedExecutionID == "" {
 		return nil
 	}
 	response, err := currentPGUUID(turn.ResponseMessageID)
@@ -105,7 +110,7 @@ func verifyPausedWriter(ctx context.Context, tx pgx.Tx, turn agentexecutionapp.C
 	if err != nil {
 		return err
 	}
-	if turn.PausedExecutionID == "" || execution != turn.PausedExecutionID || generation != turn.PausedGeneration {
+	if execution != turn.PausedExecutionID || generation != turn.PausedGeneration {
 		return errors.Join(agentexecutionapp.ErrUnsupportedCurrentAgentStart, errPausedWriterMoved)
 	}
 	return nil

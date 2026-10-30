@@ -214,14 +214,17 @@ type CurrentApplicationStartOutcome struct {
 }
 
 type CurrentApplicationStartService struct {
-	originalSources      OriginalRootSourceOwner
-	resolver             CurrentApplicationResolver
-	adhocResolver        CurrentAdhocResolver
-	regenerationResolver CurrentRegenerationResolver
-	continuationResolver CurrentContinuationResolver
-	guardrails           CurrentAgentGuardrailResolver
-	freezer              CurrentApplicationVersionFreezer
-	admissions           admissionSubmitter
+	// continuationPausedWriter names the paused writer in continuation
+	// commands (FU-265, WithContinuationPausedWriter).
+	continuationPausedWriter bool
+	originalSources          OriginalRootSourceOwner
+	resolver                 CurrentApplicationResolver
+	adhocResolver            CurrentAdhocResolver
+	regenerationResolver     CurrentRegenerationResolver
+	continuationResolver     CurrentContinuationResolver
+	guardrails               CurrentAgentGuardrailResolver
+	freezer                  CurrentApplicationVersionFreezer
+	admissions               admissionSubmitter
 	// memories is optional — attached after construction via WithMemories
 	// (#870, memories.go). A service nobody attaches it to injects no
 	// long-term memory, exactly its pre-#870 behavior.

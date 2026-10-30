@@ -51,6 +51,28 @@ func TestContinuationCommandNamesThePausedWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Off (an older Worker may still run): no marker.
+	request0 := CurrentContinuationRequest{
+		ProjectID: 7, ActorUserID: 11,
+		ConversationUUID:  "8bc66e50-46c4-4e2c-94ec-daec6c596ac0",
+		ResponseMessageID: "30e0913e-10d4-43db-b8d0-c7b79480935a",
+		ThreadID:          "thread-current-1", Action: "approve",
+	}
+	if _, err := service.ContinueCurrentAgent(context.Background(), request0); err != nil {
+		t.Fatalf("naming off: %v", err)
+	}
+	if meta := admissions.requests[0].Input.GetMeta(); len(meta) != 0 && string(meta) != "{}" && json.Valid(meta) {
+		var keys map[string]json.RawMessage
+		_ = json.Unmarshal(meta, &keys)
+		if _, named := keys[PausedWriterMetaKey]; named {
+			t.Fatalf("naming off sent a marker: %s", meta)
+		}
+	}
+	if turn := admissions.requests[0].CurrentContinueTurn; turn.PausedExecutionID != "" {
+		t.Fatalf("naming off: turn %+v", turn)
+	}
+	admissions.requests = nil
+	service = service.WithContinuationPausedWriter(true)
 	request := CurrentContinuationRequest{
 		ProjectID: 7, ActorUserID: 11,
 		ConversationUUID:  "8bc66e50-46c4-4e2c-94ec-daec6c596ac0",
@@ -87,7 +109,8 @@ func TestContinuationCommandNamesThePausedWriter(t *testing.T) {
 func TestOutputLimitContinuationNamesNoPausedWriterAndAWakeDropsIt(t *testing.T) {
 	input := &runtimev1.AgentExecutionInputV1{}
 	turn := &CurrentContinueTurn{ContinuationKind: CurrentContinuationOutputLimit}
-	if err := namePausedWriter(input, turn, CurrentContinuationTarget{}); err != nil || len(input.Meta) != 0 {
+	service := (&CurrentApplicationStartService{}).WithContinuationPausedWriter(true)
+	if err := service.namePausedWriter(input, turn, CurrentContinuationTarget{}); err != nil || len(input.Meta) != 0 {
 		t.Fatalf("output limit: %v %s", err, input.Meta)
 	}
 	if !slices.Contains(fanoutWakeResumeMarkers, PausedWriterMetaKey) {

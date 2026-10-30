@@ -659,7 +659,7 @@ func (service *CurrentApplicationStartService) ContinueCurrentAgent(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
-	if err := namePausedWriter(input, turn, target); err != nil {
+	if err := service.namePausedWriter(input, turn, target); err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
 	projectID := strconv.FormatInt(request.ProjectID, 10)
@@ -996,11 +996,19 @@ func stringPointer(value string) *string {
 // continuation's decision envelope.
 const PausedWriterMetaKey = "elitea.continuation.paused_writer.v1"
 
+// WithContinuationPausedWriter turns on naming the paused writer in every
+// continuation command (FU-265). Off, commands carry no marker, as for a
+// Worker from an earlier release, which refuses one.
+func (service *CurrentApplicationStartService) WithContinuationPausedWriter(enabled bool) *CurrentApplicationStartService {
+	service.continuationPausedWriter = enabled
+	return service
+}
+
 // namePausedWriter writes the paused writer the resolver read into the
 // command's meta and the admitted turn. An output-limit continuation names
-// none; any other continuation without one is refused.
-func namePausedWriter(input *runtimev1.AgentExecutionInputV1, turn *CurrentContinueTurn, target CurrentContinuationTarget) error {
-	if turn.ContinuationKind == CurrentContinuationOutputLimit {
+// none; with naming on, any other continuation without one is refused.
+func (service *CurrentApplicationStartService) namePausedWriter(input *runtimev1.AgentExecutionInputV1, turn *CurrentContinueTurn, target CurrentContinuationTarget) error {
+	if !service.continuationPausedWriter || turn.ContinuationKind == CurrentContinuationOutputLimit {
 		return nil
 	}
 	if target.PausedExecutionID == "" || target.PausedGeneration < 1 {

@@ -99,7 +99,6 @@ func TestPostgresPausedWriterIsTheResponsesSettledPausedExecution(t *testing.T) 
 		"another execution": func(turn *agentexecutionapp.CurrentContinueTurn) {
 			turn.PausedExecutionID = "fedcba9876543210fedcba9876543210"
 		},
-		"none named": func(turn *agentexecutionapp.CurrentContinueTurn) { turn.PausedExecutionID = "" },
 	} {
 		moved := turn
 		mutate(&moved)
@@ -107,7 +106,14 @@ func TestPostgresPausedWriterIsTheResponsesSettledPausedExecution(t *testing.T) 
 			t.Fatalf("%s: %v, want a refusal", name, err)
 		}
 	}
-	// An output-limit continuation names no paused writer.
+	// A command that names none (naming off, or an output limit) has nothing
+	// to re-read.
+	if err := verifyPausedWriter(t.Context(), tx, agentexecutionapp.CurrentContinueTurn{
+		ContinuationKind:  agentexecutionapp.CurrentContinuationHITL,
+		ResponseMessageID: "40000000-0000-4000-8000-000000000265",
+	}); err != nil {
+		t.Fatalf("none named: %v", err)
+	}
 	if err := verifyPausedWriter(t.Context(), tx, agentexecutionapp.CurrentContinueTurn{
 		ContinuationKind: agentexecutionapp.CurrentContinuationOutputLimit,
 	}); err != nil {
