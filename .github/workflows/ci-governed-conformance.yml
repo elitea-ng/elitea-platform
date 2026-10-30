@@ -89,6 +89,17 @@ jobs:
         uses: ./.github/actions/go-cache
         with:
           cache-dependency-path: go.work.sum
+      - name: Free runner disk for the stack images
+        # The stack images and their Go module downloads filled the runner's
+        # disk (ENOSPC in go mod download, PR #1545). Bounded and NON-FATAL,
+        # as in deepwiki-real-engine.yml: a refused rm only warns, and the
+        # build then fails honestly on ENOSPC.
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
+            || echo "::warning::could not remove every preinstalled toolchain; continuing"
+          df -h / | tail -1
       - name: Build the stack images (shared cache, read only)
         # The base stack only: governed-mocks is not a bake target, and the
         # script builds it (STANDALONE_SKIP_BUILD=1 builds that one image).
