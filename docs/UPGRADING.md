@@ -4,6 +4,51 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## AI disclosure, platform preamble and untrusted content (#1500)
+
+ADR-0043 decisions 3 and 4. Shared migration **0216** adds
+`elitea_runtime.platform_preamble_revisions` (append-only: one row per
+change of the platform preamble, with its SHA-256, author and the id of its
+security audit event). Worker commands gain field **71**
+(`WorkerCommandV1.content_controls`).
+
+- **Rollout order.** Roll out elitea-main first, then the workers. Main sends
+  field 71 only after an administrator saves **Configuration › AI
+  Disclosure**, **Configuration › Platform Preamble**, or the new key
+  `untrusted_read_then_act_tiers` of **Configuration › Approval Policy**. A
+  worker of an earlier release refuses a command with field 71. Save these
+  sections only after every worker runs this release. An approval policy that
+  an earlier release saved does not have the new key, so it does not send
+  field 71.
+- **Behaviour change: outbound text gets a marker.** A worker of this
+  release adds `Generated with Elitea AI` (a blank line, then the text) to
+  the text of the tools in `libs/proto/contracts/tool-disclosure-v1.json`,
+  also before any section is saved. Markdown targets also get
+  `<!-- elitea-run-id: … -->`. To change the text, save **Configuration › AI
+  Disclosure**. Automations that compare the text of comments that agents
+  wrote must allow for the marker.
+- **Behaviour change: tool results are wrapped.** Each tool result now
+  reaches the model as `<untrusted source="TOOL">…</untrusted>`, and a
+  built-in preamble (approximately 30 tokens) goes before every system
+  prompt. Each tool result costs approximately 10 to 15 more tokens. Tools
+  that read the model's input, for example an evaluation that compares it
+  with a raw tool result, see the envelope.
+- **Behaviour change: read untrusted, then act.** At the `high` and
+  `critical` tiers, a `delete`, `external_send` or `payment` call that comes
+  after a tool result in the same turn asks for an approval. Under the default
+  approval policy these calls already ask at these tiers, so nothing changes.
+  Before the approval policy is saved, a worker of this release applies the
+  rule only when the command carries the approval policy (field 68). To turn
+  the rule off, save an empty **Tiers With the Read Untrusted, Then Act
+  Rule**.
+- **Project setting.** A new configuration type `ai_disclosure` (section
+  `project_settings`, gate `models.project_settings.edit`) holds a
+  project's marker text and opt-outs. Opt-outs take effect only for the
+  toolkit types that the platform section allows.
+- **Evidence.** A preamble change writes
+  `ai.elitea.security.v1.config.changed` (action
+  `config.platform_preamble.revised`) to the security audit outbox.
+
 ## Agent circuit breaker (#1498, on by default)
 
 ADR-0041 decision 2. Shared migration **0213** adds
