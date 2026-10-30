@@ -226,8 +226,15 @@ fn toolset(client: &Arc<GovernedOperationClient>, family: &Family) -> Arc<dyn To
 /// redeemed exactly once, and served by the family's own tool on a client
 /// built from the envelope (the call's malformed arguments are the family's
 /// own refusal, not a governed one, and nothing reaches the network).
+///
+/// Strict (`crate::egress::strict`): the per-call client is built after
+/// materialization, so a build outside the run's egress scope fails here.
 #[tokio::test]
 async fn each_reference_family_redeems_once_and_runs_on_the_envelope_client() {
+    crate::egress::strict(each_reference_family_redeems_once()).await;
+}
+
+async fn each_reference_family_redeems_once() {
     for family in families() {
         let (kind, material, target) = (family.kind, family.material, family.target);
         let (client, redeemer) = governed(answering(kind, material, target));

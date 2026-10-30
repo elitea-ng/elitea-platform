@@ -702,3 +702,87 @@ fn canonical_resource_uri_matches_the_shared_vectors() {
         "refusals are pinned too"
     );
 }
+
+/// A governed run is always under an allowlist (#1490). A server whose host
+/// is not on it is never contacted, as on the legacy path: no redemption, no
+/// listing and no session; its selected tools stay listed and fail as
+/// `egress_host_not_allowed` naming the host. A server on the list is served
+/// and counted as reached.
+#[tokio::test]
+async fn a_server_outside_the_runs_allowlist_is_never_contacted() {
+    use crate::egress::{EGRESS_HOST_NOT_ALLOWED, PublicPolicy, RunEgress};
+
+    let egress =
+        RunEgress::new(PublicPolicy::allowlist(["a.mcp.example.test"]).expect("allowlist"));
+    let policy = Arc::new(
+        super::policy::ToolAdmissionPolicy::new(&[], &BTreeMap::new())
+            .expect("policy")
+            .with_egress(Arc::clone(&egress)),
+    );
+    let version = json!({"tools": [
+        mcp_tool(Some(41), "alpha", SERVER_A, &json!({})),
+        mcp_tool(Some(42), "beta", SERVER_B, &json!({"selected_tools": ["lookup"]})),
+    ]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(policy.as_ref());
+    let servers = Arc::new(MockServers::default());
+    let connector: Arc<dyn McpConnector> = Arc::new(Connector(Arc::clone(&servers)));
+    let (client, redeemer) = governed(per_server());
+    let built = materialize_governed_mcp_toolsets(&snapshot, &connector, &policy, &client)
+        .await
+        .expect("governed MCP");
+
+    assert!(
+        redeemer.calls().iter().all(|call| call.toolkit_id == 41),
+        "nothing is redeemed for the refused server"
+    );
+    assert!(
+        servers
+            .sessions()
+            .iter()
+            .all(|(endpoint, _)| endpoint == SERVER_A),
+        "the refused server is never dialled: {:?}",
+        servers.sessions()
+    );
+    assert_eq!(built.toolsets.len(), 2);
+    let mut refused = None;
+    for toolset in &built.toolsets {
+        let readonly: Arc<dyn ReadonlyContext> = context();
+        for tool in toolset.tools(readonly).await.expect("tools") {
+            if let Err(error) = tool.execute(context(), json!({"query": "1"})).await
+                && error.code == EGRESS_HOST_NOT_ALLOWED
+            {
+                refused = Some(error);
+            }
+        }
+    }
+    let refused = refused.expect("the refused server's tool fails as egress_host_not_allowed");
+    assert!(
+        refused.message.contains("b.mcp.example.test:443"),
+        "{}",
+        refused.message
+    );
+    assert!(
+        servers
+            .sessions()
+            .iter()
+            .all(|(endpoint, _)| endpoint == SERVER_A),
+        "a call never dials the refused server either"
+    );
+    let summary = egress.summary();
+    assert!(
+        summary
+            .reached
+            .iter()
+            .any(|host| host.host == "a.mcp.example.test"),
+        "{summary:?}"
+    );
+    assert!(
+        summary
+            .refused
+            .iter()
+            .any(|host| host.host == "b.mcp.example.test"),
+        "{summary:?}"
+    );
+}

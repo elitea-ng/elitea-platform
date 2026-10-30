@@ -119,6 +119,23 @@ pub async fn materialize_governed_mcp_toolsets(
             ));
             continue;
         };
+        // A server outside the run's egress policy is never contacted
+        // (#1490), as on the legacy path: no redemption, no listing, no
+        // session. Its selected tools stay listed and fail as
+        // `egress_host_not_allowed` naming the host.
+        let endpoint = super::public_endpoint(&server.config);
+        if let Some(endpoint) = &endpoint
+            && policy.egress().check_url(endpoint).is_err()
+        {
+            super::push_egress_refused_toolset(
+                reference,
+                &server.config,
+                endpoint,
+                policy,
+                &mut out.toolsets,
+            )?;
+            continue;
+        }
         admitted.push((reference, Arc::new(server)));
     }
     // Each listing redeems and dials its own server; they run together,
@@ -136,6 +153,9 @@ pub async fn materialize_governed_mcp_toolsets(
     for ((reference, server), listing) in admitted.into_iter().zip(listings) {
         match listing? {
             Listing::Tools(tools) => {
+                if let Some(endpoint) = super::public_endpoint(&server.config) {
+                    policy.egress().record_reached(&endpoint);
+                }
                 let tools = tools
                     .into_iter()
                     .map(|declaration| {
