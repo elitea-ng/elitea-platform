@@ -838,6 +838,16 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 		if connectorGate != nil {
 			agentVersions = agentVersions.WithConnectorGate(connectorGate)
+			// A continuation or nested child of a governed run stays
+			// governed on a process that now runs legacy; the freeze reads
+			// it only where the profile can have left governed pins.
+			if dependencies.CredentialProfile.Governed() || dependencies.CredentialProfile.ContinuationGuard() {
+				governance, governanceErr := repos.NewRunGovernance(dependencies.AdmissionPool)
+				if governanceErr != nil {
+					return nil, fmt.Errorf("construct run governance reader: %w", governanceErr)
+				}
+				agentVersions = agentVersions.WithRunGovernance(governance)
+			}
 		}
 		// The SAME freezer instance the interactive start path uses. A nested
 		// child has to be frozen by the identical rules as its parent —
@@ -987,6 +997,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		)
 		if toolkitErr != nil {
 			return nil, fmt.Errorf("construct current direct toolkit freezer: %w", toolkitErr)
+		}
+		if connectorGate != nil {
+			toolkitFreezer = toolkitFreezer.WithConnectorGate(connectorGate)
 		}
 		// No index catalog here (review round 1, finding 3): a
 		// toolkit.execute.read.v1 claim carries no vector token and the worker
@@ -2228,6 +2241,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			dependencies.ExecutionSuspensions,
 			dependencies.Logger,
 			indexCatalogOption(indexCatalog),
+			toolkitConnectorOption(connectorGate),
 		)
 		if toolRunErr != nil {
 			return nil, toolRunErr

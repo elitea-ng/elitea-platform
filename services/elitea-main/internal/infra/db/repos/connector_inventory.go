@@ -31,7 +31,8 @@ type ConnectorInUse struct {
 	Projects []int64
 	// Tools are the tools the toolkits select (a custom MCP server's with
 	// the description and input schema its last Load Tools stored, so they
-	// can be pinned), at most connectorapproval.MaxTools.
+	// can be pinned), as the toolkits hold them: the on-ramp sanitises them
+	// (connectorapproval.SanitizeInventoryDraft).
 	Tools []connectorapproval.DeclaredTool
 	// EgressHosts are the hosts of the toolkits' URL-valued settings.
 	EgressHosts []string
@@ -220,20 +221,10 @@ func (s *ConnectorRequests) inventoryTools(ctx context.Context, use ConnectorInU
 			tools = append(tools, connectorapproval.DeclaredTool{Name: name})
 		}
 	}
-	kept := tools[:0]
-	seen := map[string]bool{}
-	for _, tool := range tools {
-		lower := strings.ToLower(tool.Name)
-		if !connectorapproval.ValidToolName(tool.Name) || seen[lower] || len(tool.Description) > connectorapproval.MaxToolDescription {
-			continue
-		}
-		seen[lower] = true
-		kept = append(kept, tool)
-	}
-	if len(kept) > connectorapproval.MaxTools {
-		kept = kept[:connectorapproval.MaxTools]
-	}
-	return kept, nil
+	// Not filtered here: connectorapproval.SanitizeInventoryDraft drops a
+	// tool that cannot be requested and names it in the justification, so
+	// the approver sees what the request leaves out.
+	return tools, nil
 }
 
 // registeredMCPTools reads the tools Load Tools stored for a custom MCP
@@ -312,25 +303,42 @@ type connectorCoverage struct {
 	projects map[connectorKey]map[int64]bool
 }
 
+// The ONE coverage rule of the inventory and the on-ramp: a connector is
+// covered when its requests name the whole platform or every project that
+// uses it. The inventory counts approved requests (what approved_only
+// admits); the on-ramp counts open and approved ones (what is already asked
+// for).
 func (c connectorCoverage) covers(use ConnectorInUse) bool {
+	return len(c.uncovered(use)) == 0
+}
+
+// uncovered are the projects using the connector that no request covers.
+func (c connectorCoverage) uncovered(use ConnectorInUse) []int64 {
 	key := connectorKey{kind: use.Kind, target: use.Target}
 	if c.platform[key] {
-		return true
+		return nil
 	}
+	var out []int64
 	for _, id := range use.Projects {
 		if !c.projects[key][id] {
-			return false
+			out = append(out, id)
 		}
 	}
-	return true
+	return out
 }
 
 func approvedCoverage(ctx context.Context, q interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }) (connectorCoverage, error) {
+	return requestCoverage(ctx, q, []string{string(connectorapproval.StateApproved)})
+}
+
+func requestCoverage(ctx context.Context, q interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}, states []string) (connectorCoverage, error) {
 	coverage := connectorCoverage{platform: map[connectorKey]bool{}, projects: map[connectorKey]map[int64]bool{}}
 	rows, err := q.Query(ctx, `
-SELECT target_kind, target, platform_wide, project_ids FROM centry.connector_requests WHERE state = 'approved'`)
+SELECT target_kind, target, platform_wide, project_ids FROM centry.connector_requests WHERE state = ANY($1::text[])`, states)
 	if undefinedTable(err) {
 		return coverage, nil
 	}
@@ -363,19 +371,32 @@ SELECT target_kind, target, platform_wide, project_ids FROM centry.connector_req
 // InventoryOutcome is what CreateInventoryRequests wrote.
 type InventoryOutcome struct {
 	Created []connectorapproval.Request
-	// Skipped counts the connectors in use that already have an open
-	// (draft or submitted) or an approved request.
-	Skipped int
+	// Skipped are the connectors in use whose open (draft or submitted) or
+	// approved requests already cover every project using them.
+	Skipped []InventoryConnectorNote
+	// Failed are the connectors no valid request could be built for, even
+	// after SanitizeInventoryDraft; the others were still created.
+	Failed []InventoryConnectorNote
+}
+
+// InventoryConnectorNote names one connector the on-ramp did not request,
+// and why.
+type InventoryConnectorNote struct {
+	Kind   connectorapproval.TargetKind
+	Target string
+	Reason string
 }
 
 // CreateInventoryRequests creates one SUBMITTED inventory request per
-// connector in use that has no open or approved request: origin inventory,
-// no requester, created_by the administrator, the projects using it (the
-// whole platform when more than connectorapproval.MaxProjects do), the
-// selected or discovered tools and the configured hosts. Each is audited as
-// a member's request is (created, then submitted). Idempotent: a second run
-// skips what the first created; concurrent runs serialise on a transaction
-// lock.
+// connector in use that open or approved requests do not cover for every
+// project using it (the coverage rule the inventory uses): origin
+// inventory, no requester, created_by the administrator, the UNCOVERED
+// projects (the whole platform when more than connectorapproval.MaxProjects
+// are), the selected or discovered tools and the configured hosts. Each is
+// audited as a member's request is (created, then submitted). A connector
+// whose draft is invalid even after SanitizeInventoryDraft is reported in
+// Failed and does not stop the others. Idempotent: a second run skips what
+// the first created; concurrent runs serialise on a transaction lock.
 func (s *ConnectorRequests) CreateInventoryRequests(ctx context.Context, adminID int64) (InventoryOutcome, error) {
 	if adminID <= 0 {
 		return InventoryOutcome{}, connectorapproval.Refuse(connectorapproval.InvalidCode, "Creating requests needs a signed-in administrator.")
@@ -384,50 +405,45 @@ func (s *ConnectorRequests) CreateInventoryRequests(ctx context.Context, adminID
 	if err != nil {
 		return InventoryOutcome{}, err
 	}
-	outcome := InventoryOutcome{Created: []connectorapproval.Request{}}
+	outcome := InventoryOutcome{Created: []connectorapproval.Request{}, Skipped: []InventoryConnectorNote{}, Failed: []InventoryConnectorNote{}}
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('connector_requests:inventory'))`); err != nil {
 			return fmt.Errorf("connector inventory: lock: %w", err)
 		}
-		live := map[connectorKey]bool{}
-		rows, err := tx.Query(ctx, `
-SELECT DISTINCT target_kind, target FROM centry.connector_requests WHERE state IN ('draft', 'submitted', 'approved')`)
+		coverage, err := requestCoverage(ctx, tx, []string{
+			string(connectorapproval.StateDraft), string(connectorapproval.StateSubmitted), string(connectorapproval.StateApproved),
+		})
 		if err != nil {
-			return fmt.Errorf("connector inventory: read the live requests: %w", err)
-		}
-		for rows.Next() {
-			var kind, target string
-			if err := rows.Scan(&kind, &target); err != nil {
-				rows.Close()
-				return err
-			}
-			live[connectorKey{kind: connectorapproval.TargetKind(kind), target: target}] = true
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
 			return err
 		}
 		now := s.now()
 		for _, use := range found {
-			if live[connectorKey{kind: use.Kind, target: use.Target}] {
-				outcome.Skipped++
+			projects := coverage.uncovered(use)
+			if len(projects) == 0 {
+				outcome.Skipped = append(outcome.Skipped, InventoryConnectorNote{Kind: use.Kind, Target: use.Target,
+					Reason: "open or approved requests already cover every project using it"})
 				continue
 			}
 			draft := connectorapproval.Draft{TargetKind: use.Kind, Target: use.Target, Tools: use.Tools,
 				EgressHosts: use.EgressHosts, DataClasses: []string{}}
-			if len(use.Projects) > connectorapproval.MaxProjects {
+			if len(projects) > connectorapproval.MaxProjects {
 				draft.PlatformWide = true
 				draft.Justification = fmt.Sprintf("Created from the connectors in use: configured in %d projects "+
-					"(more than %d, so requested platform-wide) before the catalogue mode switched to approved only.",
-					len(use.Projects), connectorapproval.MaxProjects)
+					"no request covers (more than %d, so requested platform-wide) before the catalogue mode switched to approved only.",
+					len(projects), connectorapproval.MaxProjects)
 			} else {
-				draft.ProjectIDs = use.Projects
+				draft.ProjectIDs = projects
 				draft.Justification = fmt.Sprintf("Created from the connectors in use: configured in %d project(s) "+
-					"before the catalogue mode switched to approved only.", len(use.Projects))
+					"no request covers before the catalogue mode switched to approved only.", len(projects))
 			}
-			normalized, toolkitType, err := connectorapproval.NormalizeInventoryDraft(draft)
+			normalized, toolkitType, err := connectorapproval.NormalizeInventoryDraft(connectorapproval.SanitizeInventoryDraft(draft))
 			if err != nil {
-				return fmt.Errorf("connector inventory: %s %s: %w", use.Kind, use.Target, err)
+				reason := err.Error()
+				if refusal, ok := connectorapproval.AsRefusal(err); ok {
+					reason = refusal.Message
+				}
+				outcome.Failed = append(outcome.Failed, InventoryConnectorNote{Kind: use.Kind, Target: use.Target, Reason: reason})
+				continue
 			}
 			tools, err := json.Marshal(normalized.Tools)
 			if err != nil {
@@ -439,7 +455,7 @@ INSERT INTO centry.connector_requests
      egress_hosts, data_classes, justification, state, origin, created_by, submitted_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'submitted', 'inventory', $11, $12)
 RETURNING `+connectorRequestColumns,
-				use.Projects[0], string(normalized.TargetKind), normalized.Target, toolkitType, normalized.PlatformWide,
+				projects[0], string(normalized.TargetKind), normalized.Target, toolkitType, normalized.PlatformWide,
 				normalized.ProjectIDs, tools, normalized.EgressHosts, normalized.DataClasses, normalized.Justification,
 				adminID, now))
 			if err != nil {

@@ -511,6 +511,13 @@ ORDER BY id DESC LIMIT 1`, request.ProjectID, strconv.FormatInt(request.ID, 10),
 // policy row) and adds an `enabled` grant per project. A `disabled` policy
 // is the operator's refusal: the approval is refused rather than overruling
 // it.
+//
+// An MCP connector (a custom server URL, a pre-built entry) is not its
+// toolkit type: approving one server, even platform-wide, never rewrites the
+// policy of the generic type (`mcp`, `mcp_<key>`), so a `restricted` type
+// stays restricted for every other server. A platform-wide MCP approval
+// writes no type policy; a project MCP approval adds only the projects'
+// grants (#1537 review item 6).
 func writeToolkitGrants(ctx context.Context, tx pgx.Tx, request connectorapproval.Request, approverID int64, reason string) ([]int64, error) {
 	decider := "user:" + strconv.FormatInt(approverID, 10)
 	var availability string
@@ -522,6 +529,9 @@ func writeToolkitGrants(ctx context.Context, tx pgx.Tx, request connectorapprova
 	if availability == string(toolkitcatalogue.AvailabilityDisabled) {
 		return nil, connectorapproval.Refuse(connectorapproval.TypeDisabledCode, fmt.Sprintf(
 			"The deployment's toolkit policy disables %q. Change it under Admin, Toolkits before approving.", request.ToolkitType))
+	}
+	if request.PlatformWide && request.TargetKind != connectorapproval.TargetToolkitType {
+		return nil, nil
 	}
 	if request.PlatformWide {
 		if availability != string(toolkitcatalogue.AvailabilityEnabled) {

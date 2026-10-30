@@ -10,6 +10,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -40,8 +41,11 @@ func ToolDigest(name, description string, inputSchema any) (string, error) {
 // CanonicalJSON writes a JSON value with object keys sorted bytewise, no
 // insignificant whitespace, strings escaped as serde_json escapes them
 // (`"`, `\` and the C0 controls only; \b \t \n \f \r, else \u00xx in lower
-// case; everything else raw UTF-8) and numbers as written (json.Number) or
-// in their shortest round-trip form. A value that is not JSON is an error.
+// case; everything else raw UTF-8) and EVERY number in one form, however it
+// was written or decoded (es6Number): `0.0`, `1E+3`, `1e-07` and `-0` are
+// `0`, `1000`, `1e-7` and `0`. The worker writes numbers by the same rule
+// (mcp_pin.rs es6_number); a number outside the double range is an error.
+// A value that is not JSON is an error.
 func CanonicalJSON(value any) ([]byte, error) {
 	var buffer bytes.Buffer
 	if err := writeCanonical(&buffer, value, 0); err != nil {
@@ -70,20 +74,17 @@ func writeCanonical(buffer *bytes.Buffer, value any, depth int) error {
 	case string:
 		writeCanonicalString(buffer, typed)
 	case json.Number:
-		buffer.WriteString(typed.String())
-	case float64:
-		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+		parsed, err := strconv.ParseFloat(typed.String(), 64)
+		if err != nil {
 			return errNotJSON
 		}
-		if typed == math.Trunc(typed) && math.Abs(typed) < 1e21 {
-			buffer.WriteString(strconv.FormatFloat(typed, 'f', -1, 64))
-		} else {
-			buffer.WriteString(strconv.FormatFloat(typed, 'g', -1, 64))
-		}
+		return writeCanonicalNumber(buffer, parsed)
+	case float64:
+		return writeCanonicalNumber(buffer, typed)
 	case int:
-		buffer.WriteString(strconv.Itoa(typed))
+		return writeCanonicalNumber(buffer, float64(typed))
 	case int64:
-		buffer.WriteString(strconv.FormatInt(typed, 10))
+		return writeCanonicalNumber(buffer, float64(typed))
 	case []any:
 		buffer.WriteByte('[')
 		for index, item := range typed {
@@ -129,6 +130,62 @@ func writeCanonical(buffer *bytes.Buffer, value any, depth int) error {
 		return writeCanonical(buffer, generic, depth)
 	}
 	return nil
+}
+
+func writeCanonicalNumber(buffer *bytes.Buffer, value float64) error {
+	text, ok := es6Number(value)
+	if !ok {
+		return errNotJSON
+	}
+	buffer.WriteString(text)
+	return nil
+}
+
+// es6Number is ECMAScript's Number.prototype.toString of a finite double:
+// the shortest digits that round-trip, positional for 1e-7 <= |x| < 1e21,
+// otherwise d.ddde±n; -0 is 0. It is the one number form of the tool digest,
+// so a schema read as a float64 (Main), a JavaScript number (the request
+// form) or number text (the worker) digests the same.
+func es6Number(value float64) (string, bool) {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return "", false
+	}
+	if value == 0 {
+		return "0", true
+	}
+	scientific := strconv.FormatFloat(value, 'e', -1, 64) // -1.2345e-07
+	mantissa, exponentText, _ := strings.Cut(scientific, "e")
+	exponent, err := strconv.Atoi(exponentText)
+	if err != nil {
+		return "", false
+	}
+	sign := ""
+	if strings.HasPrefix(mantissa, "-") {
+		sign, mantissa = "-", mantissa[1:]
+	}
+	digits := strings.Replace(mantissa, ".", "", 1)
+	k, n := len(digits), exponent+1
+	var body string
+	switch {
+	case k <= n && n <= 21:
+		body = digits + strings.Repeat("0", n-k)
+	case 0 < n && n <= 21:
+		body = digits[:n] + "." + digits[n:]
+	case -6 < n && n <= 0:
+		body = "0." + strings.Repeat("0", -n) + digits
+	default:
+		e := n - 1
+		exp := strconv.Itoa(e)
+		if e >= 0 {
+			exp = "+" + exp
+		}
+		if k == 1 {
+			body = digits + "e" + exp
+		} else {
+			body = digits[:1] + "." + digits[1:] + "e" + exp
+		}
+	}
+	return sign + body, true
 }
 
 func writeCanonicalString(buffer *bytes.Buffer, text string) {

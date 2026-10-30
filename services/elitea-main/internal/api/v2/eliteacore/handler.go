@@ -5025,6 +5025,7 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 	// from its plugin configuration. The catalogue is a table here (shared
 	// migration 0094); the resolution fills only fields the caller left empty,
 	// so a toolkit that carries its own URL still wins.
+	urlOverride := false
 	if mcpregistry.IsPrebuiltToolkitType(body.ToolkitType) {
 		callerURL := strings.TrimSpace(body.URL)
 		callerSuppliedHeaders := len(body.Headers) > 0
@@ -5045,6 +5046,19 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 		}
 		body.URL = stringSetting(resolved, "url", body.URL)
 		body.Headers = headerSettings(resolved, body.Headers)
+		// A caller URL that is not the catalogue entry's is a different
+		// server: the connector catalogue judges it as a custom MCP URL.
+		if callerURL != "" {
+			catalogueURL, err := h.prebuiltURLFor(r.Context(), body.ToolkitType)
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+					"success": false,
+					"error":   "the pre-built MCP catalogue could not be read",
+				})
+				return
+			}
+			urlOverride = prebuiltURLOverride(catalogueURL, callerURL)
+		}
 		body.Timeout = intSetting(resolved, "timeout", body.Timeout)
 		// The catalogue's headers are the operator's credentials for the
 		// catalogue's server. A caller that keeps its own URL must not receive
@@ -5118,7 +5132,7 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 	// tools are a preview for the request form and are not stored; an
 	// approved custom server answers only its pinned tools.
 	projectParam := chi.URLParam(r, "projectID")
-	connector, err := h.mcpDiscoveryDecision(ctx, projectParam, body.ToolkitType, endpoint.String())
+	connector, err := h.mcpDiscoveryDecision(ctx, projectParam, body.ToolkitType, endpoint.String(), urlOverride)
 	if err != nil {
 		slog.ErrorContext(ctx, "mcp_sync_tools: connector catalogue read failed", "project_id", projectParam, "err", err)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{

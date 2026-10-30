@@ -300,3 +300,35 @@ func RefusalMessage(decision Decision) string {
 			"and a connector approver must approve it.", decision.Target)
 	}
 }
+
+// ProjectViewer answers one project's View (Gate.ForProject).
+type ProjectViewer interface {
+	ForProject(ctx context.Context, projectID int64, governedRun bool) (View, error)
+}
+
+// PinDirectSettings writes the approved pins into the settings of a direct
+// call or read (toolkit.call_tool.v1, toolkit.execute.read.v1) of a custom
+// MCP toolkit gated under approved_only, as the agent freeze does, so the
+// worker checks each tool's digest on this path too and the command gate can
+// require the pins. Any other toolkit, and an unapproved one (the command
+// gate refuses it), comes back unchanged. A nil viewer is the open mode. A
+// view that cannot be read is an error: an unknown catalogue is not open.
+func PinDirectSettings(ctx context.Context, viewer ProjectViewer, projectID int64, toolkitType string, settings map[string]any) (map[string]any, error) {
+	if viewer == nil || settings == nil {
+		return settings, nil
+	}
+	view, err := viewer.ForProject(ctx, projectID, false)
+	if err != nil {
+		return nil, err
+	}
+	decision := view.Decide(toolkitType, settings)
+	if !decision.Allowed || !decision.Gated || decision.Kind != TargetCustomMCP {
+		return settings, nil
+	}
+	pinned := make(map[string]any, len(settings)+1)
+	for key, value := range settings {
+		pinned[key] = value
+	}
+	pinned[PinnedToolsSetting] = PinsSetting(decision.Pins)
+	return pinned, nil
+}

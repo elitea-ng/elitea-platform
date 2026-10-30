@@ -7944,7 +7944,7 @@ export const getCreateConnectorInventoryRequestsUrl = () => {
 };
 
 /**
- * Creates one submitted connector request (origin inventory, no requester, created_by the caller) for every connector in use that has no open or approved request. Each names the projects using the connector (the whole platform when more than 64 do), the tools their toolkits select (a custom MCP server's with the description and input schema its last Load Tools stored) and the hosts of their URL settings. Idempotent. Each request is written to the security audit outbox as connector.request.created and connector.request.submitted. The caller cannot decide the requests it created. Gated on `connector.approve` in the administration mode.
+ * Creates one submitted connector request (origin inventory, no requester, created_by the caller) for every connector in use that open or approved requests do not cover for every project using it (the inventory's coverage rule). Each names the uncovered projects (the whole platform when more than 64 are), the tools their toolkits select (a custom MCP server's with the description and input schema its last Load Tools stored) and the hosts of their URL settings. A connector whose request cannot be built even after dropping the tools and hosts that cannot be requested is listed in `failed` and does not stop the others. Idempotent. Each request is written to the security audit outbox as connector.request.created and connector.request.submitted. The caller cannot decide the requests it created. Gated on `connector.approve` in the administration mode.
  * @summary Create requests for the connectors in use
  */
 export const createConnectorInventoryRequests = async (

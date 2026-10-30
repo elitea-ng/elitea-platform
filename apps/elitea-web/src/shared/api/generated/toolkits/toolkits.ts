@@ -1207,7 +1207,7 @@ export const getCreateConnectorRequestUrl = (projectId: string) => {
 };
 
 /**
- * Drafts (or, with `submit`, submits) a request to use a toolkit type, a pre-built MCP server or a custom MCP server URL. It names the projects (this project by default) or the whole platform, the tools with their ADR-0041 categories (an undeclared category is write), the egress hosts, the data classes and a justification. A custom MCP server's tools need their `input_schema`: the server computes each tool's digest, and only the approved names and digests are served. Written to the security audit outbox as connector.request.created (and connector.request.submitted). Requires `models.applications.tools.create`.
+ * Drafts (or, with `submit`, submits) a request to use a toolkit type, a pre-built MCP server or a custom MCP server URL. It names the projects (this project by default) or the whole platform, the tools with their ADR-0041 categories (an undeclared category is write), the egress hosts, the data classes and a justification. A custom MCP server's tools need their `input_schema`: the server computes each tool's digest, and only the approved names and digests are served. Written to the security audit outbox as connector.request.created (and connector.request.submitted). Requires `models.applications.tools.create` in this project and in every other named project; the whole platform only for a connector approver (`connector.approve`). Otherwise 403 with code connector_request_scope_refused (and `refused_project_ids`).
  * @summary Request a connector
  */
 export const createConnectorRequest = async (

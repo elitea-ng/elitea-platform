@@ -8564,15 +8564,37 @@ components:
 
     ConnectorInventoryOutcome:
       type: object
-      required: [created, skipped, requests]
+      required: [created, skipped, requests, skipped_connectors, failed]
       properties:
         created: { type: integer }
         skipped:
           type: integer
-          description: Connectors in use that already had an open or an approved request.
+          description: >
+            Connectors in use whose open or approved requests already cover
+            every project using them.
         requests:
           type: array
           items: { $ref: '#/components/schemas/ConnectorRequest' }
+        skipped_connectors:
+          type: array
+          description: The skipped connectors, each with the reason.
+          items: { $ref: '#/components/schemas/ConnectorInventoryNote' }
+        failed:
+          type: array
+          description: >
+            Connectors no valid request could be built for, even after
+            dropping the tools and hosts that cannot be requested (each
+            adjustment is named in the created request's justification).
+            The other connectors were still requested.
+          items: { $ref: '#/components/schemas/ConnectorInventoryNote' }
+
+    ConnectorInventoryNote:
+      type: object
+      required: [target_kind, target, reason]
+      properties:
+        target_kind: { $ref: '#/components/schemas/ConnectorTargetKind' }
+        target: { type: string }
+        reason: { type: string }
 
     ConnectorDecisionReason:
       type: object
@@ -19731,11 +19753,15 @@ paths:
       description: >
         Creates one submitted connector request (origin inventory, no
         requester, created_by the caller) for every connector in use that
-        has no open or approved request. Each names the projects using the
-        connector (the whole platform when more than 64 do), the tools their
+        open or approved requests do not cover for every project using it
+        (the inventory's coverage rule). Each names the uncovered projects
+        (the whole platform when more than 64 are), the tools their
         toolkits select (a custom MCP server's with the description and
         input schema its last Load Tools stored) and the hosts of their URL
-        settings. Idempotent. Each request is written to the security audit
+        settings. A connector whose request cannot be built even after
+        dropping the tools and hosts that cannot be requested is listed in
+        `failed` and does not stop the others. Idempotent. Each request is
+        written to the security audit
         outbox as connector.request.created and connector.request.submitted.
         The caller cannot decide the requests it created. Gated on
         `connector.approve` in the administration mode.
@@ -26332,7 +26358,10 @@ paths:
         tool's digest, and only the approved names and digests are served.
         Written to the security audit outbox as connector.request.created
         (and connector.request.submitted). Requires
-        `models.applications.tools.create`.
+        `models.applications.tools.create` in this project and in every
+        other named project; the whole platform only for a connector
+        approver (`connector.approve`). Otherwise 403 with code
+        connector_request_scope_refused (and `refused_project_ids`).
       tags: [toolkits]
       requestBody:
         required: true

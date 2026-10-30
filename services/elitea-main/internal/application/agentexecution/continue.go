@@ -776,8 +776,9 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 			ctx,
 			CurrentApplicationVersionFreezeRequest{
 				ProjectID: projectID, ActorUserID: actorUserID,
-				VersionDetails: resolved.VersionDetails,
-				InternalTools:  resolved.InternalTools,
+				VersionDetails:    resolved.VersionDetails,
+				InternalTools:     resolved.InternalTools,
+				ContinuationScope: ContinuationScope(request.ConversationUUID, request.ResponseMessageID),
 			},
 		)
 		if err != nil {
@@ -847,7 +848,8 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 			ctx,
 			CurrentApplicationVersionFreezeRequest{
 				ProjectID: projectID, ActorUserID: actorUserID,
-				VersionDetails: snapshot,
+				VersionDetails:    snapshot,
+				ContinuationScope: ContinuationScope(request.ConversationUUID, request.ResponseMessageID),
 			},
 		)
 		if err != nil {

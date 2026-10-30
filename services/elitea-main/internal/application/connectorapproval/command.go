@@ -107,14 +107,15 @@ func (c *CommandGate) Admit(ctx context.Context, command *runtimev1.WorkerComman
 		if decision.Kind != TargetCustomMCP || !decision.Gated {
 			continue
 		}
-		if toolkit.toolName != "" {
-			if !PinNames(decision.Pins)[toolkit.toolName] {
-				return &RefusalError{Message: fmt.Sprintf("The tool %q of the MCP server %s is not approved. "+
-					"Request the connector again with this tool, and a connector approver must approve it.",
-					truncate(toolkit.toolName, 128), truncate(decision.Target, 256))}
-			}
-			continue
+		if toolkit.toolName != "" && !PinNames(decision.Pins)[toolkit.toolName] {
+			return &RefusalError{Message: fmt.Sprintf("The tool %q of the MCP server %s is not approved. "+
+				"Request the connector again with this tool, and a connector approver must approve it.",
+				truncate(toolkit.toolName, 128), truncate(decision.Target, 256))}
 		}
+		// A direct call or read carries the pins as an agent run does
+		// (PinDirectSettings), so the worker checks the tool's digest, not
+		// only its name: a pinned `search` the server changed since the
+		// approval is never run.
 		if toolkit.settings != nil && !frozenPinsWithin(toolkit.settings[PinnedToolsSetting], decision.Pins) {
 			return &RefusalError{Message: fmt.Sprintf("This run was prepared before the MCP server %s was "+
 				"approved as it is now, so its tools are not pinned. Start the run again.", truncate(decision.Target, 256))}

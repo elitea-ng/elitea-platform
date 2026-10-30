@@ -22,9 +22,12 @@ In `approved_only` mode:
 
 - **Unapproved connectors are refused everywhere.** They are left out of the selection lists, and creating, forking or updating a toolkit that uses one is refused with `403 connector_not_approved`, naming the connector to request. When an agent version is frozen for a run, unapproved connectors are dropped, and runtime admission refuses any command that still names one (`CONNECTOR_NOT_APPROVED`), including toolkits configured before the mode was switched.
 - **Approval needs a second person.** The approver holds `connector.approve` (granted to the platform `super_admin` and `admin` roles) and cannot be the requester; the database refuses a self-approval.
-- **Approval grants and allowlists in one step.** In one transaction it writes the toolkit type grant for the requested projects and adds the declared hosts to the [worker egress allowlist](#worker-egress-allowlist) of those projects (or to the platform allowlist for a platform-wide request), with a configuration revision naming the approver.
-- **A custom MCP server's tools are pinned at approval**, by name and schema digest. Tools the server adds or changes later are hidden from discovery and the tool lists, and a call to one is refused, until a new request for them is approved.
+- **Approval grants and allowlists in one step.** In one transaction it writes the toolkit type grant for the requested projects and adds the declared hosts to the [worker egress allowlist](#worker-egress-allowlist) of those projects (or to the platform allowlist for a platform-wide request), with a configuration revision naming the approver. Approving an MCP server never changes the policy of the generic `mcp` (or `mcp_<key>`) toolkit type: a platform-wide approval of one server leaves a `restricted` type restricted for every other server.
+- **A custom MCP server's tools are pinned at approval**, by name and digest of the name, description and input schema. Tools the server adds or changes later are hidden from discovery and the tool lists, and a call to one is refused, until a new request for them is approved. This holds for agent runs and for direct tool calls alike. When a pinned tool changes on the server, the agent sees a stand-in tool that fails with `tool.mcp.pin_mismatch`, and the worker logs `mcp_tool_pin_mismatch`, so the tool does not disappear silently.
+- **A prebuilt MCP server is approved for its catalogue URL only.** **Load tools** with a URL other than the catalogue entry's is judged as a custom MCP server URL and needs its own approval. At run time a prebuilt toolkit always connects to the catalogue entry's URL.
 - **Optional architecture review.** With **Require architecture attestation** on, a request can be approved only when a valid `architecture` [attestation](/admin/enterprise-controls/agent-lifecycle#attestations) for it exists (subject `connector`, subject id = the request id, recorded in the requesting project).
+
+A member can request a connector only for projects where they may add toolkits (`models.applications.tools.create`). Only a connector approver can request one platform-wide. Anything else is refused with `403 connector_request_scope_refused`.
 
 A connector request records the requester, the target (toolkit type, prebuilt MCP server or custom URL), the projects, the declared tools with their categories, the egress hosts, the data classes it touches and a justification. Its states are draft, submitted, approved, rejected and withdrawn.
 
@@ -32,9 +35,9 @@ A connector request records the requester, the target (toolkit type, prebuilt MC
 
 <Steps>
   <Step title="Seed requests for what is in use">
-    Before switching modes, open **Admin › Connector requests** and select **Create requests for connectors in use**. It files a submitted request for every connector configured in any project, with the projects using it, the tools their toolkits select (a custom MCP server's tools as its last **Load tools** stored them, so they can be pinned) and the hosts of their URL settings. A connector that already has an open or approved request is skipped, so running it again is safe. Tool categories are not known from a toolkit's settings, so every tool starts as `write`. Review and approve them. The administrator who created them cannot approve them.
+    Before switching modes, open **Admin › Connector requests** and select **Create requests for connectors in use**. It files a submitted request for every connector configured in any project, with the projects using it, the tools their toolkits select (a custom MCP server's tools as its last **Load tools** stored them, so they can be pinned) and the hosts of their URL settings. A connector is skipped only when open or approved requests already cover every project that uses it; otherwise the new request names the projects not yet covered. Running it again is safe. A tool or host that cannot be requested (an invalid name, a description over 4096 bytes, a custom MCP tool with no stored schema) is left out and named in the request's justification. A connector whose request still cannot be built is listed as failed with the reason, and the others are still created. Tool categories are not known from a toolkit's settings, so every tool starts as `write`. Review and approve them. The administrator who created them cannot approve them.
 
-    A custom MCP server whose tools were never loaded gets a request with no tools: approving it pins nothing, so all its tools stay hidden. Run **Load tools** on it first. Hosts are read from URL fields in the toolkit's own settings; add hosts that come from a referenced configuration to the request by hand. A connector used in more than 64 projects is requested platform-wide.
+    A custom MCP server whose tools were never loaded gets a request with no tools: approving it pins nothing, so all its tools stay hidden. Run **Load tools** on it first. Hosts are read from URL fields in the toolkit's own settings; add hosts that come from a referenced configuration to the request by hand. A connector used in more than 64 uncovered projects is requested platform-wide.
   </Step>
   <Step title="Switch the mode">
     Open **Configuration › Connector Catalogue** and set **Mode** to `approved_only`. The page warns you how many connectors in use still have no approved request; each of them stops working at once. (The warning needs `connector.approve` to read the count; without it the save goes through with no warning.)
@@ -48,7 +51,7 @@ A connector request records the requester, the target (toolkit type, prebuilt MC
 </Steps>
 
 <Warning>
-The worker must be upgraded together with elitea-main before you rely on MCP tool pinning: an older worker does not apply the pinned tool list, so only direct calls are checked.
+The worker must be upgraded together with elitea-main before you rely on MCP tool pinning: an older worker does not apply the pinned tool list, so only the tool names are checked.
 </Warning>
 
 ### Evidence

@@ -1,7 +1,9 @@
 package repos
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/connectorapproval"
@@ -52,7 +54,7 @@ func TestConnectorInventory_CreatesAuditedRequestsOnceAndKeepsFourEyes(t *testin
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if len(outcome.Created) != 2 || outcome.Skipped != 0 {
+	if len(outcome.Created) != 2 || len(outcome.Skipped) != 0 || len(outcome.Failed) != 0 {
 		t.Fatalf("outcome %+v", outcome)
 	}
 	byKind := map[connectorapproval.TargetKind]connectorapproval.Request{}
@@ -82,7 +84,7 @@ func TestConnectorInventory_CreatesAuditedRequestsOnceAndKeepsFourEyes(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(again.Created) != 0 || again.Skipped != 2 {
+	if len(again.Created) != 0 || len(again.Skipped) != 2 {
 		t.Fatalf("second run %+v", again)
 	}
 
@@ -111,7 +113,7 @@ UPDATE centry.connector_requests SET state = 'approved', decided_by = created_by
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(third.Created) != 0 || third.Skipped != 2 {
+	if len(third.Created) != 0 || len(third.Skipped) != 2 {
 		t.Fatalf("third run %+v", third)
 	}
 }
@@ -127,5 +129,103 @@ func TestConnectorInventory_UserRequestNeedsARequester(t *testing.T) {
 INSERT INTO centry.connector_requests (project_id, target_kind, target, toolkit_type, project_ids, origin)
 VALUES (1, 'toolkit_type', 'jira', 'jira', '{1}', $1)`, origin)
 		requirePgCode(t, err, "23514", origin+" request without its actor")
+	}
+}
+
+// seedJiraInProjects configures jira in each project (p_1 from the
+// continuation seed, the others created here).
+func seedJiraInProjects(t *testing.T, store *ConnectorRequests, projects ...int64) {
+	t.Helper()
+	seedCurrentAgentContinuationSchema(t, store.pool)
+	if _, err := store.pool.Exec(t.Context(), `DELETE FROM p_1.elitea_tools`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range projects {
+		if id != 1 {
+			if _, err := store.pool.Exec(t.Context(), fmt.Sprintf(`
+INSERT INTO centry.project (id, create_success, suspended) VALUES (%[1]d, TRUE, FALSE) ON CONFLICT DO NOTHING;
+CREATE SCHEMA IF NOT EXISTS p_%[1]d;
+CREATE TABLE IF NOT EXISTS p_%[1]d.elitea_tools (LIKE p_1.elitea_tools INCLUDING DEFAULTS)`, id)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := store.pool.Exec(t.Context(), fmt.Sprintf(`
+INSERT INTO p_%d.elitea_tools (type, name, description, settings, author_id, meta, created_at)
+VALUES ('jira', 'jira', '', '{"selected_tools":["search_issues"],"base_url":"https://jira.example.com"}'::jsonb, 11, '{}'::jsonb, now() AT TIME ZONE 'UTC')`, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// #1537 review item 4: jira in projects 1, 2 and 3 with an approval for 1
+// only is not covered; the on-ramp requests it for 2 and 3, and the
+// inventory and the on-ramp agree on the rule.
+func TestConnectorInventory_RequestsTheUncoveredProjects(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	_, store := newConnectorTestStore(t, pool, false)
+	seedJiraInProjects(t, store, 1, 2, 3)
+	if _, err := store.Approve(t.Context(), approvedToolkitRequest(t, store, "jira").ID, connectorApprover, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	inventory, err := store.Inventory(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory.WithoutApproval) != 1 || inventory.WithoutApproval[0].Target != "jira" {
+		t.Fatalf("inventory %+v, want jira without approval for every project", inventory)
+	}
+	outcome, err := store.CreateInventoryRequests(t.Context(), 13)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outcome.Created) != 1 || !slices.Equal(outcome.Created[0].ProjectIDs, []int64{2, 3}) {
+		t.Fatalf("outcome %+v, want one request for projects 2 and 3", outcome)
+	}
+	again, err := store.CreateInventoryRequests(t.Context(), 13)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Created) != 0 || len(again.Skipped) != 1 {
+		t.Fatalf("second run %+v, want jira skipped as covered", again)
+	}
+}
+
+// #1537 review item 5: a connector whose draft cannot be built does not
+// stop the others; what can be sanitised is, and named in the
+// justification.
+func TestConnectorInventory_OneBadConnectorDoesNotAbortTheOthers(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	_, store := newConnectorTestStore(t, pool, false)
+	seedConnectorsInUse(t, store)
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO p_1.elitea_tools (id, type, name, description, settings, author_id, meta, created_at) VALUES
+    (74, 'github', 'github', '', '{"selected_tools":["get me", "list_repos"],"base_url":"https://api.github.com","proxy":"not a host!"}'::jsonb, 11, '{}'::jsonb, now() AT TIME ZONE 'UTC')`); err != nil {
+		t.Fatal(err)
+	}
+	// A registered tool whose description is past the bound: dropped from
+	// the custom MCP request (it could not be pinned as served).
+	if _, err := pool.Exec(t.Context(), `
+UPDATE elitea_mcp.registered_tools SET description = repeat('x', 5000) WHERE name = 'search'`); err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := store.CreateInventoryRequests(t.Context(), 13)
+	if err != nil {
+		t.Fatalf("the on-ramp failed as a whole: %v", err)
+	}
+	byTarget := map[string]connectorapproval.Request{}
+	for _, request := range outcome.Created {
+		byTarget[request.Target] = request
+	}
+	github, ok := byTarget["github"]
+	if !ok || len(github.Tools) != 1 || github.Tools[0].Name != "list_repos" {
+		t.Fatalf("github request %+v, want the valid tool kept", github)
+	}
+	mcp, ok := byTarget[inventoryMCPServer]
+	if !ok || len(mcp.Tools) != 0 || !strings.Contains(mcp.Justification, `dropped the tool "search"`) {
+		t.Fatalf("custom MCP request %+v, want the unpinnable tool dropped and named", mcp)
+	}
+	if _, ok := byTarget["jira"]; !ok {
+		t.Fatalf("jira was not requested: %+v", outcome)
 	}
 }

@@ -179,6 +179,22 @@ function InventoryAction(): ReactNode {
           )}
         </Alert>
       )}
+      {create.isSuccess && create.data.failed.length > 0 && (
+        <Alert severity="warning" data-testid="connector-inventory-failed">
+          {t(
+            'pages.admin.connectorRequests.inventory.failed',
+            'No request could be created for {{count}} connector(s); request them by hand:',
+            { count: create.data.failed.length },
+          )}
+          <Box component="ul" sx={{ m: 0, pl: 2 }}>
+            {create.data.failed.map((failure) => (
+              <li key={`${failure.target_kind}:${failure.target}`}>
+                {failure.target}: {failure.reason}
+              </li>
+            ))}
+          </Box>
+        </Alert>
+      )}
       {create.isError && <Alert severity="error">{describeDecisionError(create.error)}</Alert>}
     </Box>
   );

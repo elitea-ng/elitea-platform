@@ -99,6 +99,31 @@ func HoldsResolvedPermission(
 	}
 }
 
+// HoldsPermissionIn answers whether the caller holds permission in mode for
+// a project the handler names (not the URL's), e.g. every project a request
+// body lists. A denied resolution is false, not an error.
+func HoldsPermissionIn(
+	resolver auth.PermissionResolver,
+	mode string,
+	permission string,
+) func(*http.Request, string) (bool, error) {
+	return func(r *http.Request, projectID string) (bool, error) {
+		user, ok := auth.UserFromContext(r.Context())
+		if !ok || resolver == nil {
+			return false, nil
+		}
+		resolution, err := resolver.ResolvePermissions(r.Context(), user, mode, projectID)
+		if errors.Is(err, auth.ErrPermissionDenied) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		_, held := permissionSet(resolution.Permissions)[permission]
+		return held, nil
+	}
+}
+
 // RequireCentralPermissions gates a route on a CENTRAL (project-less)
 // permission — the `administration` and `developer` modes, where
 // `legacyrbac.PostgresResolver` reads auth_core__user_role/auth_core__role

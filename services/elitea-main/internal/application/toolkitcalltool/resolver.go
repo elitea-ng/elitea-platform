@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/connectorapproval"
 	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
@@ -65,7 +66,16 @@ func WithIndexCatalog(resolver IndexCatalogResolver) ResolverOption {
 	return func(r *CurrentAuthoritativeInputResolver) { r.indexes = resolver }
 }
 
+// WithConnectorGate makes the resolver write an approved custom MCP
+// server's pins into the frozen settings under approved_only
+// (connectorapproval.PinDirectSettings), so the worker checks the called
+// tool's digest and the command gate can require the pins (#1501).
+func WithConnectorGate(gate connectorapproval.ProjectViewer) ResolverOption {
+	return func(r *CurrentAuthoritativeInputResolver) { r.connectors = gate }
+}
+
 type CurrentAuthoritativeInputResolver struct {
+	connectors connectorapproval.ProjectViewer
 	tokens     MCPAuthorizationValidator
 	guardrails CurrentGuardrailResolver
 	toolkits   CurrentToolkitReader
@@ -136,6 +146,12 @@ func (r *CurrentAuthoritativeInputResolver) Resolve(
 	}
 	if expanded == nil {
 		return AuthoritativeInputs{}, ErrInvalidAuthoritativeToolRunInput
+	}
+	if r.connectors != nil {
+		expanded, err = connectorapproval.PinDirectSettings(ctx, r.connectors, int64(projectID), toolkit.Type, expanded)
+		if err != nil {
+			return AuthoritativeInputs{}, settingsResolutionError(ctx, err)
+		}
 	}
 
 	// The SAME `toolkit_config` shape index.ingest.v1 already sends. Both

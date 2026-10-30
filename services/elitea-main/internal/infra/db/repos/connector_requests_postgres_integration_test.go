@@ -146,10 +146,21 @@ func agentCommand(t *testing.T, tools []map[string]any, governed bool) (*runtime
 	return command, connectorInputs{"request": input}
 }
 
-// toolCallCommand is a direct call of one tool of a custom MCP toolkit.
-func toolCallCommand(t *testing.T, url, tool string) (*runtimev1.WorkerCommandV1, connectorInputs) {
+// toolCallCommand is a direct call of one tool of a custom MCP toolkit,
+// its settings pinned as the tool-run resolver pins them.
+func toolCallCommand(t *testing.T, gate *connectorapproval.Gate, url, tool string) (*runtimev1.WorkerCommandV1, connectorInputs) {
 	t.Helper()
-	settings, err := json.Marshal(map[string]any{"url": url})
+	pinned, err := connectorapproval.PinDirectSettings(t.Context(), gate, 1, "mcp", map[string]any{"url": url})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rawToolCallCommand(t, pinned, tool)
+}
+
+// rawToolCallCommand is a direct call carrying settings as given.
+func rawToolCallCommand(t *testing.T, document map[string]any, tool string) (*runtimev1.WorkerCommandV1, connectorInputs) {
+	t.Helper()
+	settings, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,12 +464,20 @@ func TestConnectorCatalogue_NewMCPToolIsHiddenUntilReapproved(t *testing.T) {
 		t.Fatal("a changed tool kept its approval")
 	}
 	// Call time: delete_all is refused, search is admitted.
-	command, inputs := toolCallCommand(t, url, "delete_all")
+	command, inputs := toolCallCommand(t, gate, url, "delete_all")
 	requireNotApproved(t, admit(t, gate, command, inputs))
-	command, inputs = toolCallCommand(t, url, "search")
+	command, inputs = toolCallCommand(t, gate, url, "search")
 	if err := admit(t, gate, command, inputs); err != nil {
 		t.Fatalf("a pinned tool call was refused: %v", err)
 	}
+	// A direct call that carries no pins is refused (the worker could not
+	// check the digest), and so is one pinned to a changed `search`.
+	command, inputs = rawToolCallCommand(t, map[string]any{"url": url}, "search")
+	requireNotApproved(t, admit(t, gate, command, inputs))
+	command, inputs = rawToolCallCommand(t, map[string]any{"url": url, connectorapproval.PinnedToolsSetting: []any{
+		map[string]any{"name": "search", "digest": strings.Repeat("0", 64)},
+	}}, "search")
+	requireNotApproved(t, admit(t, gate, command, inputs))
 	// An agent run frozen with the current pins is admitted; one frozen
 	// before the approval (no pins) is not.
 	pinned := map[string]any{"url": url, connectorapproval.PinnedToolsSetting: connectorapproval.PinsSetting(decision.Pins)}
@@ -475,7 +494,7 @@ func TestConnectorCatalogue_NewMCPToolIsHiddenUntilReapproved(t *testing.T) {
 	if len(kept) != 2 || len(hidden) != 0 {
 		t.Fatalf("after re-approval kept %v hidden %v", kept, hidden)
 	}
-	command, inputs = toolCallCommand(t, url, "delete_all")
+	command, inputs = toolCallCommand(t, gate, url, "delete_all")
 	if err := admit(t, gate, command, inputs); err != nil {
 		t.Fatalf("a re-approved tool call was refused: %v", err)
 	}
@@ -555,5 +574,59 @@ SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'attestation
 	}
 	if !strings.Contains(subjects, "connector") {
 		t.Fatalf("attestations_subject_type_check %s lacks connector", subjects)
+	}
+}
+
+// #1537 review item 6: approving one custom MCP server URL never widens the
+// generic `mcp` type policy: a platform-wide approval leaves `restricted`
+// as it is, and a project approval adds only that project's grant.
+func TestConnectorCatalogue_CustomMCPApprovalKeepsTheMCPTypePolicy(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	_, store := newConnectorTestStore(t, pool, false)
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO centry.toolkit_type_policy (toolkit_type, availability, reason, decided_by, decided_at)
+VALUES ('mcp', 'restricted', 'operator', 'user:1', clock_timestamp())
+ON CONFLICT (toolkit_type) DO UPDATE SET availability = 'restricted'`); err != nil {
+		t.Fatal(err)
+	}
+	approve := func(platformWide bool, url string) {
+		t.Helper()
+		draft := connectorapproval.Draft{
+			TargetKind: connectorapproval.TargetCustomMCP, Target: url, PlatformWide: platformWide,
+			Tools:         []connectorapproval.DeclaredTool{{Name: "search", Category: "read", InputSchema: map[string]any{"type": "object"}}},
+			Justification: "docs search",
+		}
+		request, err := store.Create(t.Context(), 1, connectorRequester, draft, true)
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if _, err := store.Approve(t.Context(), request.ID, connectorApprover, ""); err != nil {
+			t.Fatalf("approve: %v", err)
+		}
+	}
+	policy := func() string {
+		t.Helper()
+		var availability string
+		if err := pool.QueryRow(t.Context(), `SELECT availability FROM centry.toolkit_type_policy WHERE toolkit_type = 'mcp'`).Scan(&availability); err != nil {
+			t.Fatal(err)
+		}
+		return availability
+	}
+
+	approve(true, "https://everyone.example/mcp")
+	if got := policy(); got != "restricted" {
+		t.Fatalf("a platform-wide custom MCP approval set the mcp type policy to %q", got)
+	}
+	approve(false, "https://project.example/mcp")
+	if got := policy(); got != "restricted" {
+		t.Fatalf("a project custom MCP approval set the mcp type policy to %q", got)
+	}
+	var grants int
+	if err := pool.QueryRow(t.Context(), `
+SELECT count(*) FROM centry.toolkit_type_project_grant WHERE toolkit_type = 'mcp' AND project_id = 1 AND availability = 'enabled'`).Scan(&grants); err != nil {
+		t.Fatal(err)
+	}
+	if grants != 1 {
+		t.Fatalf("project grants %d, want the requesting project's only", grants)
 	}
 }

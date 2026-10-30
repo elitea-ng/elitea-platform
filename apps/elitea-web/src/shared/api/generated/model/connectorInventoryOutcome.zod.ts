@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ConnectorInventoryNote } from "./connectorInventoryNote.zod";
 import { ConnectorRequest } from "./connectorRequest.zod";
 
 export const ConnectorInventoryOutcome = zod.object({
@@ -48,9 +49,17 @@ export const ConnectorInventoryOutcome = zod.object({
   skipped: zod
     .int()
     .describe(
-      "Connectors in use that already had an open or an approved request.",
+      "Connectors in use whose open or approved requests already cover every project using them.\n",
     ),
   requests: zod.array(ConnectorRequest),
+  skipped_connectors: zod
+    .array(ConnectorInventoryNote)
+    .describe("The skipped connectors, each with the reason."),
+  failed: zod
+    .array(ConnectorInventoryNote)
+    .describe(
+      "Connectors no valid request could be built for, even after dropping the tools and hosts that cannot be requested (each adjustment is named in the created request's justification). The other connectors were still requested.\n",
+    ),
 });
 
 export type ConnectorInventoryOutcome = zod.input<

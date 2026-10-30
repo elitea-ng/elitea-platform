@@ -44,7 +44,12 @@ type mcpDiscoveryGate struct {
 
 // mcpDiscoveryDecision judges a discovery of endpoint for toolkitType in
 // rawProjectID. An error is a gate that could not read: the caller refuses.
-func (h *Handler) mcpDiscoveryDecision(ctx context.Context, rawProjectID, toolkitType, endpoint string) (mcpDiscoveryGate, error) {
+//
+// urlOverride is a pre-built toolkit whose caller replaced the catalogue
+// entry's URL: the approval of the catalogue key covers the operator's
+// server, not the caller's, so the discovery is judged as a custom MCP URL
+// that needs its own approval.
+func (h *Handler) mcpDiscoveryDecision(ctx context.Context, rawProjectID, toolkitType, endpoint string, urlOverride bool) (mcpDiscoveryGate, error) {
 	if h.connectors == nil {
 		return mcpDiscoveryGate{}, nil
 	}
@@ -57,8 +62,9 @@ func (h *Handler) mcpDiscoveryDecision(ctx context.Context, rawProjectID, toolki
 		return mcpDiscoveryGate{}, nil
 	}
 	toolkitType = strings.TrimSpace(toolkitType)
-	if toolkitType == "" || !mcpregistry.IsPrebuiltToolkitType(toolkitType) {
-		// A preview with no type, or a custom server: judged by its URL.
+	if toolkitType == "" || !mcpregistry.IsPrebuiltToolkitType(toolkitType) || urlOverride {
+		// A preview with no type, a custom server, or a pre-built entry
+		// pointed at another server: judged by its URL.
 		toolkitType = "mcp"
 	}
 	decision := view.Decide(toolkitType, map[string]any{"url": endpoint})
@@ -71,4 +77,30 @@ func (h *Handler) mcpDiscoveryDecision(ctx context.Context, rawProjectID, toolki
 		gate.pins, gate.pinsOnly = decision.Pins, true
 	}
 	return gate, nil
+}
+
+// prebuiltURLOverride reports whether callerURL replaces the catalogue
+// entry's URL (catalogueURL, possibly a template). An empty caller URL takes
+// the catalogue's; a catalogue entry with no URL makes any caller URL an
+// override. A templated entry matches a caller URL on its origin and its
+// literal path prefix (the part before the first placeholder).
+func prebuiltURLOverride(catalogueURL, callerURL string) bool {
+	callerURL = strings.TrimSpace(callerURL)
+	if callerURL == "" {
+		return false
+	}
+	catalogueURL = strings.TrimSpace(catalogueURL)
+	if catalogueURL == "" {
+		return true
+	}
+	if !strings.Contains(catalogueURL, "{") {
+		catalogue, catalogueErr := connectorapproval.CanonicalMCPURL(catalogueURL)
+		caller, callerErr := connectorapproval.CanonicalMCPURL(callerURL)
+		return catalogueErr != nil || callerErr != nil || catalogue != caller
+	}
+	if !mcpCatalogueOriginMatches(catalogueURL, callerURL) {
+		return true
+	}
+	prefix := catalogueURL[:strings.Index(catalogueURL, "{")]
+	return !strings.HasPrefix(callerURL, prefix)
 }

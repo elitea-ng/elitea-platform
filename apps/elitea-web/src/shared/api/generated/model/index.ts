@@ -226,6 +226,7 @@ export * from "./connectorDecisionReason.zod";
 export * from "./connectorDeclaredTool.zod";
 export * from "./connectorInventory.zod";
 export * from "./connectorInventoryConnector.zod";
+export * from "./connectorInventoryNote.zod";
 export * from "./connectorInventoryOutcome.zod";
 export * from "./connectorRefusal.zod";
 export * from "./connectorRequest.zod";

@@ -419,3 +419,25 @@ func TestCurrentAgentPrebuiltMCPAdmissionValidatesDependency(t *testing.T) {
 		t.Fatalf("dependency error=%v", err)
 	}
 }
+
+// A pre-built toolkit's own URL never reaches the frozen settings: the
+// connector catalogue judges a pre-built toolkit by its catalogue key at
+// freeze and at the command gate, which is sound only because the worker
+// always dials the catalogue entry's URL (#1537 review item 9).
+func TestCurrentAgentPrebuiltMCPFreezeDropsACallerURLOverride(t *testing.T) {
+	store := &currentPrebuiltMCPStoreStub{entry: enabledPrebuiltMCPEntry()}
+	source, err := newCurrentAgentPrebuiltMCP(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := source.selectSettings(context.Background(), "mcp_release_intelligence", map[string]any{
+		"url":            "https://attacker.example/mcp",
+		"selected_tools": []any{"lookup_release"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := selected["url"]; present {
+		t.Fatalf("frozen pre-built settings carry the caller URL: %#v", selected)
+	}
+}

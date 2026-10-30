@@ -73,6 +73,68 @@ var _ Store = (*repos.ConnectorRequests)(nil)
 type Handler struct {
 	store Store
 	gate  *connectorapproval.Gate
+	scope RequestScope
+}
+
+// RequestScope answers what a requester may name beyond the project in the
+// path: InProject whether the caller holds the requesting permission
+// (connectorapproval.RequestPermission) in another project, PlatformWide
+// whether the caller may ask for the whole platform (a connector approver,
+// connector.approve in the administration mode). A nil scope admits the
+// path's project only.
+type RequestScope struct {
+	InProject    func(r *http.Request, projectID int64) (bool, error)
+	PlatformWide func(r *http.Request) (bool, error)
+}
+
+// WithRequestScope sets the scope check of request creation.
+func (h *Handler) WithRequestScope(scope RequestScope) *Handler {
+	h.scope = scope
+	return h
+}
+
+// checkScope refuses a draft naming a project the caller may not request
+// in, or the whole platform from a caller who may not (#1537 review item 7).
+func (h *Handler) checkScope(r *http.Request, projectID int64, draft connectorapproval.Draft) error {
+	if draft.PlatformWide {
+		allowed := false
+		if h.scope.PlatformWide != nil {
+			held, err := h.scope.PlatformWide(r)
+			if err != nil {
+				return err
+			}
+			allowed = held
+		}
+		if !allowed {
+			return connectorapproval.Refuse(connectorapproval.RequestScopeCode,
+				"Only a connector approver can request a connector for the whole platform. Name your projects instead.")
+		}
+	}
+	var refused []int64
+	checked := map[int64]bool{projectID: true}
+	for _, id := range draft.ProjectIDs {
+		if checked[id] {
+			continue
+		}
+		checked[id] = true
+		held := false
+		if h.scope.InProject != nil && id > 0 {
+			ok, err := h.scope.InProject(r, id)
+			if err != nil {
+				return err
+			}
+			held = ok
+		}
+		if !held {
+			refused = append(refused, id)
+		}
+	}
+	if len(refused) > 0 {
+		return &connectorapproval.Refusal{Code: connectorapproval.RequestScopeCode,
+			Message: "You can request a connector only for projects where you may add toolkits.",
+			Detail:  map[string]any{"refused_project_ids": refused}}
+	}
+	return nil
 }
 
 // NewHandler builds the handler. A nil store (or a typed nil) answers 503;
@@ -276,11 +338,16 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			Category: connectorapproval.ToolCategory(tool.Category), Description: tool.Description,
 			InputSchema: tool.InputSchema})
 	}
-	created, err := h.store.Create(r.Context(), projectID, actor, connectorapproval.Draft{
+	draft := connectorapproval.Draft{
 		TargetKind: connectorapproval.TargetKind(body.TargetKind), Target: body.Target,
 		PlatformWide: body.PlatformWide, ProjectIDs: body.ProjectIDs, Tools: tools,
 		EgressHosts: body.EgressHosts, DataClasses: body.DataClasses, Justification: body.Justification,
-	}, body.Submit)
+	}
+	if err := h.checkScope(r, projectID, draft); err != nil {
+		writeError(r.Context(), w, err)
+		return
+	}
+	created, err := h.store.Create(r.Context(), projectID, actor, draft, body.Submit)
 	if err != nil {
 		writeError(r.Context(), w, err)
 		return
@@ -507,10 +574,27 @@ func (h *Handler) CreateInventoryRequests(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"created":  len(outcome.Created),
-		"skipped":  outcome.Skipped,
-		"requests": h.responses(r.Context(), outcome.Created),
+		"created":            len(outcome.Created),
+		"skipped":            len(outcome.Skipped),
+		"requests":           h.responses(r.Context(), outcome.Created),
+		"skipped_connectors": inventoryNotes(outcome.Skipped),
+		"failed":             inventoryNotes(outcome.Failed),
 	})
+}
+
+// InventoryConnectorNote is one connector the on-ramp did not request.
+type InventoryConnectorNote struct {
+	TargetKind string `json:"target_kind"`
+	Target     string `json:"target"`
+	Reason     string `json:"reason"`
+}
+
+func inventoryNotes(notes []repos.InventoryConnectorNote) []InventoryConnectorNote {
+	out := make([]InventoryConnectorNote, 0, len(notes))
+	for _, note := range notes {
+		out = append(out, InventoryConnectorNote{TargetKind: string(note.Kind), Target: note.Target, Reason: note.Reason})
+	}
+	return out
 }
 
 func (h *Handler) ready(w http.ResponseWriter) bool {

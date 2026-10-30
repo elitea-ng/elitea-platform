@@ -36,6 +36,10 @@ const (
 	// CatalogueUnavailableCode is a gate that could not read the mode or the
 	// approvals (503): nothing is admitted on a failed read.
 	CatalogueUnavailableCode = "connector_catalogue_unavailable"
+	// RequestScopeCode refuses a request naming a project the requester may
+	// not request connectors in, or the whole platform from a requester who
+	// is not a connector approver (403).
+	RequestScopeCode = "connector_request_scope_refused"
 )
 
 var statuses = map[string]int{
@@ -49,6 +53,7 @@ var statuses = map[string]int{
 	EgressLimitCode:          http.StatusConflict,
 	ConnectorNotApprovedCode: http.StatusForbidden,
 	CatalogueUnavailableCode: http.StatusServiceUnavailable,
+	RequestScopeCode:         http.StatusForbidden,
 }
 
 // Refusal is a typed, caller-safe refusal.

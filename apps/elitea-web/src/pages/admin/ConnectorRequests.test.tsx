@@ -67,6 +67,8 @@ beforeEach(() => {
         created: 2,
         skipped: 1,
         requests: [{ ...ROW, id: 9, origin: 'inventory', requested_by: null, created_by: 12 }],
+        skipped_connectors: [{ target_kind: 'toolkit_type', target: 'github', reason: 'covered' }],
+        failed: [{ target_kind: 'custom_mcp', target: 'https://odd.example/mcp', reason: 'a target is required' }],
       });
     }),
     http.get('*/admin/connector_requests', ({ request }) => {
@@ -109,6 +111,9 @@ describe('AdminConnectorRequests', () => {
     );
     await user.click(screen.getByTestId('connector-inventory-create'));
     expect(await screen.findByTestId('connector-inventory-created')).toHaveTextContent('Created 2 request(s); 1 connector(s)');
+    expect(screen.getByTestId('connector-inventory-failed')).toHaveTextContent(
+      'https://odd.example/mcp: a target is required',
+    );
     expect(inventoryPosts).toBe(1);
     await waitFor(() => expect(screen.getByTestId('connector-inventory-create')).toBeDisabled());
   });

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -4565,7 +4566,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// the permission that adds a toolkit
 				// (models.applications.tools.create).
 				{
-					connectors := v2connectorrequests.NewHandler(connectorRequests, connectorGate)
+					inProject := apimw.HoldsPermissionIn(coreResolver, platformauth.PermissionModeDefault, connectorapproval.RequestPermission)
+					approver := apimw.HoldsPermissionIn(permissionResolver, platformauth.PermissionModeAdministration, connectorapproval.ApprovePermission)
+					connectors := v2connectorrequests.NewHandler(connectorRequests, connectorGate).WithRequestScope(v2connectorrequests.RequestScope{
+						InProject: func(r *http.Request, projectID int64) (bool, error) {
+							return inProject(r, strconv.FormatInt(projectID, 10))
+						},
+						// Central modes ignore the project id.
+						PlatformWide: func(r *http.Request) (bool, error) { return approver(r, "") },
+					})
 					readToolkits := projectPermission("models.applications.tools.list")
 					requestConnector := projectPermission(connectorapproval.RequestPermission)
 					r.With(readToolkits).Get(v2connectorrequests.CataloguePath, connectors.Catalogue)
