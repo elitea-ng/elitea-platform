@@ -9984,9 +9984,11 @@ components:
             another draft) of at most 32 KiB and 32 levels of nesting. Only
             local references (#/...) are allowed.
           x-elitea-passthrough: >-
-            NOTE(#1500): an author-written JSON Schema, stored verbatim in
-            application_versions.meta and checked with a JSON Schema compiler
-            on save (internal/domain/outputcontract).
+            NOTE(W2): an author-written JSON Schema (#1500), stored verbatim
+            in application_versions.meta. Its key set is JSON Schema's, not
+            this spec's. Main compiles it on save and refuses a schema that
+            does not compile
+            (internal/domain/outputcontract/contract.go:149-179).
         pattern:
           type: string
           maxLength: 1024
