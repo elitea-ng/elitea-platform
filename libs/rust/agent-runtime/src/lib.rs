@@ -17,6 +17,8 @@
 //! * [`memory_tools`] — `save_memory`, `search_memory` and `delete_memory`
 //!   over the host's [`host::MemoryStore`] (decision 8, gate 7b);
 //! * [`tool_namespacing`] — the provider-alias notice for renamed tools;
+//! * [`tool_category`], [`approval_policy`] — the category of every tool and
+//!   the tier by category approval policy (ADR-0041 decision 5);
 //! * [`context`] — shrinking older tool results in a long turn's model
 //!   requests (host opt-in);
 //! * [`step_limit`] — the end of a run that used its model steps, and the
@@ -54,6 +56,7 @@
     )
 )]
 
+pub mod approval_policy;
 pub mod assembly_error;
 pub mod bounded_yaml;
 pub mod canonical;
@@ -79,6 +82,7 @@ pub mod request;
 pub mod step_limit;
 pub mod subagents;
 pub mod text;
+pub mod tool_category;
 pub mod tool_namespacing;
 pub mod toolkits;
 pub mod workspace_archive;

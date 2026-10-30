@@ -292,6 +292,7 @@ func configSections() []map[string]any {
 		entitlementExportSection(),
 		runCapsSection(),
 		delegationSection(),
+		approvalPolicySection(),
 		sessionPolicySection(),
 		agentLifecycleSection(),
 		credentialReviewSection(),

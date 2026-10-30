@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
+use crate::approval_policy::{ApprovalPolicy, ApprovalRule};
 use crate::egress::RunEgress;
+use crate::tool_category::tool_category;
 
 const MAX_POLICY_IDENTIFIERS: usize = 16_384;
 const MAX_POLICY_IDENTIFIER_BYTES: usize = 1_024;
@@ -80,6 +82,11 @@ impl std::error::Error for ToolAdmissionPolicyError {}
 /// ([`crate::egress::RunEgress`], #1490): every tool the policy admits runs
 /// under it, and every client a family builds while materializing under this
 /// policy is bound to it. Open unless the host lends one.
+///
+/// It also carries the run's approval policy ([`ApprovalPolicy`], ADR-0041
+/// decision 5): a tool whose category the policy names for the run's tier is
+/// sensitive like a tool the platform's sensitive tools name. None unless the
+/// host lends one.
 #[derive(Clone)]
 pub struct ToolAdmissionPolicy {
     blocked_toolkits: HashSet<Box<str>>,
@@ -92,6 +99,7 @@ pub struct ToolAdmissionPolicy {
     sensitive_company_name: Box<str>,
     sensitive_message_template: Box<str>,
     egress: Arc<RunEgress>,
+    approval: Arc<ApprovalPolicy>,
 }
 
 /// Model/UI-safe presentation for one sensitive concrete tool.
@@ -105,6 +113,7 @@ pub struct SensitiveToolPolicy {
     toolkit_name: Box<str>,
     action_name: Box<str>,
     policy_message: Box<str>,
+    rule: ApprovalRule,
 }
 
 impl SensitiveToolPolicy {
@@ -128,6 +137,13 @@ impl SensitiveToolPolicy {
         &self.policy_message
     }
 
+    /// The rule that makes the tool sensitive (ADR-0041 decision 5). The
+    /// interrupt payload carries it as `approval_rule`.
+    #[must_use]
+    pub const fn rule(&self) -> ApprovalRule {
+        self.rule
+    }
+
     /// The cloud workspace's `run_command` when its command is destructive
     /// or escaping (ADR-0034 decision 9, ADR-0029 addendum item 3): asked
     /// as a server HITL interrupt before it runs.
@@ -138,6 +154,7 @@ impl SensitiveToolPolicy {
             toolkit_name: "local".into(),
             action_name: "run_command".into(),
             policy_message: "This command is destructive or reaches outside the workspace (a recursive delete, a history rewrite or push, a publish, privilege, or a write outside the workspace). Approve it to run it in the cloud workspace.".into(),
+            rule: ApprovalRule::Builtin,
         }
     }
 
@@ -152,6 +169,7 @@ impl SensitiveToolPolicy {
             toolkit_name: "workspace".into(),
             action_name: "open_pull_request".into(),
             policy_message: "The agent wants to push a new branch with this thread's commits to the folder's GitHub or GitLab repository and open a pull request (a merge request on GitLab). Approve it to push and open it.".into(),
+            rule: ApprovalRule::Builtin,
         }
     }
 
@@ -164,6 +182,7 @@ impl SensitiveToolPolicy {
             toolkit_name: "workspace".into(),
             action_name: "git_push".into(),
             policy_message: "The agent wants to push this thread's commits to the folder's GitHub or GitLab repository as a new branch. Nothing existing is overwritten. Approve it to push.".into(),
+            rule: ApprovalRule::Builtin,
         }
     }
 }
@@ -287,6 +306,7 @@ impl ToolAdmissionPolicy {
                 .unwrap_or(DEFAULT_MESSAGE_TEMPLATE)
                 .into(),
             egress: RunEgress::open(),
+            approval: ApprovalPolicy::none(),
         })
     }
 
@@ -301,6 +321,21 @@ impl ToolAdmissionPolicy {
     #[must_use]
     pub const fn egress(&self) -> &Arc<RunEgress> {
         &self.egress
+    }
+
+    /// This generation bound to one run's approval policy (ADR-0041
+    /// decision 5). The policy only adds sensitive tools: a tool the
+    /// platform's sensitive tools name stays sensitive.
+    #[must_use]
+    pub fn with_approval_policy(mut self, approval: Arc<ApprovalPolicy>) -> Self {
+        self.approval = approval;
+        self
+    }
+
+    /// The run's approval policy.
+    #[must_use]
+    pub const fn approval_policy(&self) -> &Arc<ApprovalPolicy> {
+        &self.approval
     }
 
     #[must_use]
@@ -337,7 +372,8 @@ impl ToolAdmissionPolicy {
     }
 
     /// Resolve a configured sensitive-tool rule against toolkit type, toolkit
-    /// display/name identity, wildcard, and the SDK's prefixed tool aliases.
+    /// display/name identity, wildcard, and the SDK's prefixed tool aliases,
+    /// then the approval policy against the tool's declared category.
     #[must_use]
     pub fn sensitive_tool(
         &self,
@@ -345,15 +381,39 @@ impl ToolAdmissionPolicy {
         toolkit_name: &str,
         tool_name: &str,
     ) -> Option<SensitiveToolPolicy> {
-        [toolkit_type, toolkit_name]
+        self.sensitive_tool_in(toolkit_type, toolkit_name, None, tool_name)
+    }
+
+    /// [`Self::sensitive_tool`] for a toolkit whose settings are at hand: an
+    /// approved MCP server's pins give its tools their category.
+    ///
+    /// The platform rule wins when both rules name the tool. Neither rule
+    /// reads anything an agent author sets, except the pins' category for a
+    /// tool the contract does not declare; the administrator who approved
+    /// the server set those.
+    #[must_use]
+    pub fn sensitive_tool_in(
+        &self,
+        toolkit_type: &str,
+        toolkit_name: &str,
+        settings: Option<&Map<String, Value>>,
+        tool_name: &str,
+    ) -> Option<SensitiveToolPolicy> {
+        let platform = [toolkit_type, toolkit_name]
             .into_iter()
             .filter_map(canonical_runtime_key)
             .chain(std::iter::once("*".to_owned()))
-            .find(|identifier| {
+            .any(|identifier| {
                 self.sensitive_tools
                     .get(identifier.as_str())
                     .is_some_and(|tools| any_alias_matches(tool_name, tools))
-            })?;
+            });
+        let rule = if platform {
+            ApprovalRule::Platform
+        } else {
+            self.approval
+                .rule_for(tool_category(toolkit_type, settings, tool_name))?
+        };
         let toolkit_label = if toolkit_name.trim().is_empty() {
             toolkit_type.trim()
         } else {
@@ -372,6 +432,7 @@ impl ToolAdmissionPolicy {
             toolkit_name: toolkit_name.trim().into(),
             action_name: action_name.into(),
             policy_message: policy_message.into(),
+            rule,
         })
     }
 }

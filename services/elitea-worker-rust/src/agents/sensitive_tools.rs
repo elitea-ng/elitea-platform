@@ -35,10 +35,15 @@ pub(crate) fn policy_for_guardrails(
     guardrails: Option<&Map<String, Value>>,
     fallback: &Arc<ToolAdmissionPolicy>,
     egress: &Arc<elitea_agent_runtime::egress::RunEgress>,
+    approval: &Arc<elitea_agent_runtime::approval_policy::ApprovalPolicy>,
 ) -> Result<Arc<ToolAdmissionPolicy>, NativeAgentAssemblyError> {
     let Some(guardrails) = guardrails else {
         return Ok(Arc::new(
-            fallback.as_ref().clone().with_egress(Arc::clone(egress)),
+            fallback
+                .as_ref()
+                .clone()
+                .with_egress(Arc::clone(egress))
+                .with_approval_policy(Arc::clone(approval)),
         ));
     };
     let runtime = Map::from_iter([(
@@ -46,7 +51,13 @@ pub(crate) fn policy_for_guardrails(
         Value::Object(guardrails.clone()),
     )]);
     ToolAdmissionPolicy::from_runtime_config(&runtime)
-        .map(|policy| Arc::new(policy.with_egress(Arc::clone(egress))))
+        .map(|policy| {
+            Arc::new(
+                policy
+                    .with_egress(Arc::clone(egress))
+                    .with_approval_policy(Arc::clone(approval)),
+            )
+        })
         .map_err(|error| match error.code() {
             crate::toolkits::ToolAdmissionPolicyErrorCode::InvalidConfiguration => {
                 invalid_configuration()
@@ -474,9 +485,12 @@ pub(crate) async fn sensitive_tools_for_kind(
             return Err(resource_exhausted());
         }
         for tool in tools {
-            let Some(sensitive) =
-                policy.sensitive_tool(reference.tool_type(), reference.toolkit_name(), tool.name())
-            else {
+            let Some(sensitive) = policy.sensitive_tool_in(
+                reference.tool_type(),
+                reference.toolkit_name(),
+                reference.settings(),
+                tool.name(),
+            ) else {
                 catalog.insert_other(reference.toolkit_name(), tool.name(), tool.is_read_only())?;
                 continue;
             };
@@ -530,6 +544,7 @@ mod tests {
 
     use adk_rust::tool::{BasicToolset, FunctionTool};
     use adk_rust::{Tool, Toolset};
+    use elitea_agent_runtime::approval_policy::ApprovalPolicy;
     use serde_json::{Map, Value, json};
 
     use super::{
@@ -587,7 +602,8 @@ mod tests {
         let fallback = policy(json!({"sensitive_tools": {"*": ["delete_file"]}}));
 
         let open = elitea_agent_runtime::egress::RunEgress::open();
-        let absent = policy_for_guardrails(None, &fallback, &open).expect("absent policy");
+        let absent = policy_for_guardrails(None, &fallback, &open, &ApprovalPolicy::none())
+            .expect("absent policy");
         assert!(Arc::ptr_eq(absent.egress(), &open), "bound to the run");
         assert!(
             absent
@@ -596,7 +612,9 @@ mod tests {
         );
 
         let empty = Map::new();
-        let resolved = policy_for_guardrails(Some(&empty), &fallback, &open).expect("empty policy");
+        let resolved =
+            policy_for_guardrails(Some(&empty), &fallback, &open, &ApprovalPolicy::none())
+                .expect("empty policy");
         assert!(!Arc::ptr_eq(&resolved, &fallback));
         assert!(
             resolved
@@ -620,8 +638,13 @@ mod tests {
             elitea_agent_runtime::egress::PublicPolicy::allowlist(["api.example.com"])
                 .expect("policy"),
         );
-        let resolved =
-            policy_for_guardrails(Some(&guardrails), &fallback, &egress).expect("command policy");
+        let resolved = policy_for_guardrails(
+            Some(&guardrails),
+            &fallback,
+            &egress,
+            &ApprovalPolicy::none(),
+        )
+        .expect("command policy");
         assert!(Arc::ptr_eq(resolved.egress(), &egress), "bound to the run");
         assert_ne!(
             resolved.toolkit_decision("sharepoint"),

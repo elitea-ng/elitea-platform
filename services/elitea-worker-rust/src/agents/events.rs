@@ -2133,6 +2133,9 @@ impl AgentEventProjector {
             "action_label": policy.action_name(),
             "tool_args": tool_args,
             "policy_message": policy.policy_message(),
+            // The rule that paused the call (ADR-0041 decision 5): platform,
+            // policy (tier and category) or builtin.
+            "approval_rule": policy.rule().to_json(),
         });
         let metadata = json!({
             "thread_id": self.context.thread_id,
@@ -2504,6 +2507,7 @@ impl AgentEventProjector {
             "policy_message": data.policy_message,
             "definition_digest": data.definition_digest,
             "argument_digest": data.argument_digest,
+            "approval_rule": pipeline_approval_rule(data.approval_rule.as_ref()),
         });
         let metadata = json!({
             "thread_id": self.context.thread_id,
@@ -4349,8 +4353,20 @@ struct PipelineToolHitlData {
     tool_args: Value,
     argument_digest: String,
     policy_message: String,
+    /// The approval policy rule (ADR-0041 decision 5). A pipeline pause
+    /// writes it only for a policy rule, so a worker from an earlier release
+    /// still reads the pauses of a platform rule; absent is the platform rule.
+    #[serde(default)]
+    approval_rule: Option<Value>,
     #[serde(default)]
     llm_replay: Option<PipelineLlmReplayEnvelope>,
+}
+
+/// The `approval_rule` of a pipeline tool pause: the one it carries, else
+/// the platform rule.
+fn pipeline_approval_rule(rule: Option<&Value>) -> Value {
+    rule.cloned()
+        .unwrap_or_else(|| elitea_agent_runtime::approval_policy::ApprovalRule::Platform.to_json())
 }
 
 #[derive(Deserialize)]
@@ -5142,6 +5158,7 @@ pub(crate) fn fanout_card_parts(
             "toolkit_type": data.toolkit_type, "action_label": data.action_label,
             "tool_args": data.tool_args, "policy_message": data.policy_message,
             "definition_digest": data.definition_digest, "argument_digest": data.argument_digest,
+            "approval_rule": pipeline_approval_rule(data.approval_rule.as_ref()),
         });
         let display = CardDisplay {
             action_label: Some(data.action_label.clone()).filter(|label| !label.is_empty()),
@@ -7297,6 +7314,7 @@ pub(crate) fn fanout_member_card(
                 "toolkit_name": policy.toolkit_name(), "toolkit_type": policy.toolkit_type(),
                 "action_label": policy.action_name(), "tool_args": tool_args,
                 "policy_message": policy.policy_message(),
+                "approval_rule": policy.rule().to_json(),
             });
             let display = json!({
                 "action_label": policy.action_name(),

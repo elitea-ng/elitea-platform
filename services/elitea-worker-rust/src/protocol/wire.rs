@@ -64,7 +64,7 @@ mod merge_contract_tests {
             Err(super::ProtocolError::InvalidInput(_))
         ));
         // Field 66 is the egress policy (#1490), 67 the delegation policy
-        // (#1501); 68 is still unknown.
+        // (#1501), 68 the approval policy (#1498); 70 is still unknown.
         assert!(
             scan_message(&[0x92, 0x04, 0x00], Schema::WorkerCommand)
                 .unwrap()
@@ -75,8 +75,13 @@ mod merge_contract_tests {
                 .unwrap()
                 .contains(67)
         );
+        assert!(
+            scan_message(&[0xa2, 0x04, 0x00], Schema::WorkerCommand)
+                .unwrap()
+                .contains(68)
+        );
         assert!(matches!(
-            scan_message(&[0xa2, 0x04, 0x00], Schema::WorkerCommand),
+            scan_message(&[0xb2, 0x04, 0x00], Schema::WorkerCommand),
             Err(super::ProtocolError::IncompatibleVersion(_))
         ));
         // The reference holds 1-3; an unknown nested field 4 is refused.
@@ -151,6 +156,25 @@ mod merge_contract_tests {
     }
 
     #[test]
+    fn the_approval_policy_holds_a_tier_and_repeated_categories() {
+        // risk_tier 1 (string), approval_categories 2 (repeated string).
+        let policy = scan_message(
+            &[0x0a, 0x01, b'h', 0x12, 0x01, b'a', 0x12, 0x01, b'b'],
+            Schema::WorkerApprovalPolicy,
+        )
+        .unwrap();
+        assert_eq!(policy.repeated_field(2).len(), 2);
+        assert!(matches!(
+            scan_message(&[0x0a, 0x00, 0x0a, 0x00], Schema::WorkerApprovalPolicy),
+            Err(super::ProtocolError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            scan_message(&[0x1a, 0x00], Schema::WorkerApprovalPolicy),
+            Err(super::ProtocolError::IncompatibleVersion(_))
+        ));
+    }
+
+    #[test]
     fn the_egress_policy_holds_a_mode_and_repeated_entries() {
         // mode 1 (varint), allow 2 (repeated string): tags 0x08 and 0x12.
         let policy = scan_message(
@@ -218,6 +242,8 @@ pub(crate) enum Schema {
     WorkerEgressPolicy,
     /// `WorkerCommandV1.delegation_policy` (field 67, ADR-0044 #1501).
     WorkerDelegationPolicy,
+    /// `WorkerCommandV1.approval_policy` (field 68, ADR-0041 #1498).
+    WorkerApprovalPolicy,
 }
 
 #[derive(Clone, Copy)]
@@ -391,8 +417,9 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         },
         Schema::WorkerCommand => match field {
             // 65 is the governed security context reference (#1115), 66 the
-            // public egress policy (#1490), 67 the delegation policy (#1501).
-            1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 | 65..=67 => Some(length()),
+            // public egress policy (#1490), 67 the delegation policy (#1501),
+            // 68 the approval policy (#1498).
+            1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 | 65..=68 => Some(length()),
             4 | 6..=7 | 21..=22 => Some(varint()),
             // Preserve the complete language-neutral capability oneof.
             32..=36 | 64 => Some(FieldRule {
@@ -450,6 +477,7 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         },
         Schema::WorkerEgressPolicy => egress_policy_rule(field),
         Schema::WorkerDelegationPolicy => delegation_policy_rule(field),
+        Schema::WorkerApprovalPolicy => approval_policy_rule(field),
         Schema::SecurityContextReference
         | Schema::SecurityContext
         | Schema::CallerContext
@@ -477,6 +505,20 @@ const fn delegation_policy_rule(field: u32) -> Option<FieldRule> {
     match field {
         1 | 2 => Some(varint()),
         3 => Some(FieldRule {
+            wire_type: 2,
+            oneof: None,
+            repeated: true,
+        }),
+        _ => None,
+    }
+}
+
+/// `WorkerApprovalPolicyV1` (#1498): the risk tier 1 and the repeated
+/// approval categories 2.
+const fn approval_policy_rule(field: u32) -> Option<FieldRule> {
+    match field {
+        1 => Some(length()),
+        2 => Some(FieldRule {
             wire_type: 2,
             oneof: None,
             repeated: true,

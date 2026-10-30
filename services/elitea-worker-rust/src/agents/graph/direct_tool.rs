@@ -1037,24 +1037,29 @@ impl DirectToolNode {
         let Some(raw) = raw else {
             let masked = mask_sensitive_arguments(arguments, 0)
                 .map_err(|_| DirectToolExecutionError::ResourceExhausted)?;
-            return Ok(SensitiveDirectToolDecision::Pause(json!({
-                "schema_revision": TOOL_CONFIRMATION_SCHEMA,
-                "type": "hitl",
-                "guardrail_type": "sensitive_tool",
-                "node_name": self.name(),
-                "message": policy.policy_message(),
-                "available_actions": ["approve", "reject", "block_with_comment"],
-                "routes": {},
-                "definition_digest": definition_digest,
-                "tool_call_id": call_id,
-                "tool_name": self.definition.selection().tool(),
-                "toolkit_name": policy.toolkit_name(),
-                "toolkit_type": policy.toolkit_type(),
-                "action_label": policy.action_name(),
-                "tool_args": masked,
-                "argument_digest": argument_digest,
-                "policy_message": policy.policy_message(),
-            })));
+            return Ok(SensitiveDirectToolDecision::Pause(
+                super::llm::with_policy_approval_rule(
+                    json!({
+                        "schema_revision": TOOL_CONFIRMATION_SCHEMA,
+                        "type": "hitl",
+                        "guardrail_type": "sensitive_tool",
+                        "node_name": self.name(),
+                        "message": policy.policy_message(),
+                        "available_actions": ["approve", "reject", "block_with_comment"],
+                        "routes": {},
+                        "definition_digest": definition_digest,
+                        "tool_call_id": call_id,
+                        "tool_name": self.definition.selection().tool(),
+                        "toolkit_name": policy.toolkit_name(),
+                        "toolkit_type": policy.toolkit_type(),
+                        "action_label": policy.action_name(),
+                        "tool_args": masked,
+                        "argument_digest": argument_digest,
+                        "policy_message": policy.policy_message(),
+                    }),
+                    policy.rule(),
+                ),
+            ));
         };
         let resumes = resumes.ok_or(DirectToolExecutionError::InvalidArguments)?;
         let decision =

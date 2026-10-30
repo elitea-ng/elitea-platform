@@ -471,6 +471,7 @@ fn scan_agent_worker_command(raw: &[u8]) -> Result<(), ProtocolError> {
     scan_security_context_reference(&fields)?;
     scan_egress_policy(&fields)?;
     scan_delegation_policy(&fields)?;
+    scan_approval_policy(&fields)?;
     let input_reference = fields.length_field(16, "the input bundle reference is missing")?;
     let input_fields = scan_message(input_reference, Schema::InputBundleReference)?;
     let input_digest = input_fields.length_field(3, "the input bundle digest is missing")?;
@@ -561,6 +562,18 @@ fn scan_delegation_policy(fields: &ScannedFields<'_>) -> Result<(), ProtocolErro
     Ok(())
 }
 
+/// Field 68 (ADR-0041 decision 5, #1498): the policy admits no unknown
+/// field. Only an agent execution carries it.
+fn scan_approval_policy(fields: &ScannedFields<'_>) -> Result<(), ProtocolError> {
+    if fields.contains(68) {
+        scan_message(
+            fields.length_field(68, "the worker approval policy is missing")?,
+            Schema::WorkerApprovalPolicy,
+        )?;
+    }
+    Ok(())
+}
+
 fn validate_agent_command(command: &WorkerCommandV1) -> Result<AgentExecutionKind, ProtocolError> {
     if command.protocol_revision != PROTOCOL_REVISION || command.limits_revision != LIMITS_REVISION
     {
@@ -585,6 +598,7 @@ fn validate_agent_command(command: &WorkerCommandV1) -> Result<AgentExecutionKin
     super::security_context::SecurityContextReference::from_command(command)?;
     super::egress::policy_from_command(command)?;
     super::delegation::policy_from_command(command)?;
+    super::approval_policy::policy_from_command(command)?;
     Ok(kind)
 }
 

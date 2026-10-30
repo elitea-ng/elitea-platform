@@ -157,3 +157,116 @@ The answer is marked as an error, so the user sees why the run stopped. The metr
 
 - Choose a cap that is longer than your longest legitimate run, including the time that people take to approve steps.
 - Alert on `elitea.runtime.run_caps.reached` if a stopped run needs attention.
+
+## Tool categories and approval policy
+
+### The risk
+
+A list of sensitive tools names each tool one by one. A new toolkit, or a new tool in a toolkit, does not ask for approval until someone adds it to the list. An agent that can delete records, post to people outside the organisation or move money can then act without a person.
+
+### What is enforced
+
+Each tool is in one category:
+
+| Category | Meaning |
+| --- | --- |
+| `read` | Reads data and changes nothing. |
+| `write` | Creates or changes data. A tool that is not declared is `write`. |
+| `delete` | Deletes data. |
+| `external_send` | Sends something that people outside the run see: an email, a chat post, a ticket or pull request comment. |
+| `payment` | Moves money. |
+| `code_execution` | Runs code or a query that the model wrote. |
+
+The categories of the built-in tools are declared in one contract, [`libs/proto/contracts/tool-categories-v1.json`](https://github.com/elitea-ng/elitea-platform/blob/main/libs/proto/contracts/tool-categories-v1.json). The worker compiles it in, and the main service reads the same file. The tools that are not `read` or `write`:
+
+| Category | Tools |
+| --- | --- |
+| `external_send` | GitHub `comment_on_issue`; GitLab and GitLab Org `comment_on_issue`, `create_pr_change_comment`; GitLab `comment_on_pr`; Bitbucket `add_pull_request_comment`; Azure DevOps Repos `comment_on_pull_request`; Aha! `add_comment`; Jira `add_comments`, `update_comment_with_file`; Figma `post_file_comment`; Slack `send_message`; Gmail (`yagmail`) `send_gmail_message` |
+| `delete` | Every `delete_*` tool, `remove_index` and OneNote `onenote_delete_page` |
+| `code_execution` | Data Analysis `pandas_analyze_data`; Sandbox `pyodide_sandbox`, `stateful_pyodide_sandbox`; SQL `execute_sql`; BigQuery `execute` |
+| `payment` | No built-in tool yet |
+
+The tools of a custom MCP server take the category that the approver gave each tool when the connector request was approved (the pinned tools carry it). A tool without a category is `write`.
+
+A tool call needs a human approval when one of these rules applies:
+
+- **Platform rule.** The administrator's sensitive action tools name the tool. This is the list under [Sensitive action authorization](/how-tos/chat-conversations/sensitive-action-authorization-guardrail). It applies at every tier.
+- **Policy rule.** The approval policy names the tool's category for the risk tier of the run's agent.
+
+The rules only add approvals. An agent author cannot remove an approval that a rule requires. A toolkit setting cannot move a declared tool to another category.
+
+The tier is the risk tier on the root agent's registry record (a missing record is `low`). An agent, pipeline or sub-agent that the root agent calls uses the root agent's tier, not its own.
+
+The default policy is the ADR default:
+
+| Tier | Categories that need approval |
+| --- | --- |
+| `low` | None |
+| `medium` | None |
+| `high` | `delete`, `external_send`, `payment` |
+| `critical` | `delete`, `external_send`, `payment` |
+
+#### Limits
+
+- The policy applies only after an administrator saves **Configuration › Approval Policy**. Until then, only the platform rule applies, as in earlier releases. Save the section only after every worker runs this release: a worker from an earlier release refuses commands that carry the policy.
+- A tool that is not declared is `write`. A policy that names `write` asks for approval on every tool that is not declared, and on every MCP tool without a category. When you port a toolkit, declare the categories of its tools in the contract.
+- Direct tool calls from outside a run (the platform's MCP endpoint) do not use the policy. They refuse every tool that is not read-only.
+- A change to the policy applies to the commands that the main service sends after the change, at once on the replica that saved it and within 15 seconds on the other replicas.
+
+### Configure
+
+Under **Configuration › Approval Policy**, a platform administrator (permission `configuration.governance`) sets, for each tier, the categories whose tools need approval. The defaults are the table above.
+
+### Evidence
+
+When a tool call pauses because of a rule, the pause carries the field `approval_rule`:
+
+```json
+{ "source": "policy", "risk_tier": "high", "category": "external_send" }
+```
+
+The `source` is `platform` for the platform rule, `policy` for the policy rule, and `builtin` for the cloud workspace's own approvals (destructive commands, push and pull request). The platform rule is named when both rules apply. The field is on the `hitl_interrupt` and `hitl_interrupts` of the chat frame, so the decision record of the pause can name the rule.
+
+### Customer responsibility
+
+- Set each production agent's risk tier, so the policy applies the correct row.
+- Decide which categories need approval at each tier. Add `code_execution` at `high` and `critical` if the model's code or queries can reach production data.
+- Keep the platform's sensitive action tools for single tools that need approval at every tier.
+
+## Required approval in pipelines
+
+### The risk
+
+A pipeline can call a tool from a toolkit node without a model. If the path to an `external_send` or `payment` tool has no `hitl` node, the pipeline sends the message or makes the payment without a person.
+
+### What is enforced
+
+**Configuration › Approval Policy › Tiers That Require a HITL Node in Pipelines** names the tiers where the rule applies. Under the rule, every path from the pipeline's entry point to a toolkit or MCP node that calls an `external_send` or `payment` tool must go through a `hitl` node. The check follows every edge: transitions, default outputs, decision and router routes, HITL routes, parallel branches, map workers and recovery routes.
+
+A pipeline that breaks the rule does not start. The start request returns HTTP 422 with the code `PIPELINE_HITL_REQUIRED` and a message that names the node, the tool, its category and the path that has no `hitl` node, for example:
+
+```text
+Node "post" calls "send_message", which is a tool in the external_send category. The approval policy requires a hitl node on every path to such a tool for high-tier agents, and the path "draft" -> "route" -> "post" has none. Add a hitl node before "post".
+```
+
+The check runs at every start of a pipeline: chat turns, schedules and triggers. Pipelines cannot be published (publish refuses them with `pipeline_not_publishable`), so the run start is where the rule applies.
+
+The default is off: no tier requires the node.
+
+#### Limits
+
+- The check reads the pipeline's toolkit and MCP nodes. A model node (`llm` or `agent`) that can call an `external_send` tool is covered by the policy rule at call time, not by this check.
+- The check uses the tier of the pipeline's own registry record.
+
+### Configure
+
+Select the tiers under **Tiers That Require a HITL Node in Pipelines**. The [hardening checklist](/deployment/hardening-checklist) recommends `high` and `critical`.
+
+### Evidence
+
+The refused start returns the error above. No run starts, so no run step is written.
+
+### Customer responsibility
+
+- Add a `hitl` node before each node that sends outside the organisation or pays, in pipelines at the tiers you select.
+- Set the tiers of pipelines on their registry records.

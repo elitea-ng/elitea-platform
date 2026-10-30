@@ -36,6 +36,7 @@ A default install favours getting started. A deployment that will be assessed ag
 - [ ] Decide who may stop agents and projects, and who may stop the whole platform. Grant the permissions to those roles only. See [Runtime safety](/admin/enterprise-controls/runtime-safety).
 - [ ] Keep the kill-switch self-test enabled, and alert on its last-success metric. See the [emergency stop runbook](/deployment/emergency-stop-runbook).
 - [ ] Set project budgets. A reached budget refuses further model calls. See [Budgets and LLM governance](/admin/budgets-and-governance).
+- [ ] After every worker runs the release, review and save **Configuration › Approval Policy**, so tools in the `delete`, `external_send` and `payment` categories pause for approval at the high and critical tiers. Select `high` and `critical` under **Tiers That Require a HITL Node in Pipelines**. See [Tool categories and approval policy](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
 
 ## Change control
 

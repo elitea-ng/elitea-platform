@@ -86,6 +86,14 @@ message WorkerCommandV1 {
   // the default, so commands are unchanged byte for byte.
   WorkerDelegationPolicyV1 delegation_policy = 67;
 
+  // The approval policy of an agent run (ADR-0041 decision 5, #1498): the
+  // root agent's risk tier and the tool categories that need an approval
+  // at that tier. Absent means no category rule: only the platform's
+  // sensitive action tools need an approval. Main omits it until an
+  // administrator saves the `approval_policy` section, so commands are
+  // unchanged byte for byte while workers from an earlier release run.
+  WorkerApprovalPolicyV1 approval_policy = 68;
+
   reserved 15, 26 to 31;
   reserved "grant_template_id";
   reserved 37 to 63;
@@ -148,4 +156,17 @@ message WorkerDelegationPolicyV1 {
   // imposes no data class constraint.
   repeated string root_data_classes = 3;
   reserved 4 to 10;
+}
+
+// A run's approval policy (ADR-0041 decision 5). A tool call needs a
+// human approval when the platform's sensitive action tools name the tool,
+// or when the tool's category is in approval_categories. An author setting
+// cannot remove either rule. Nested callees use the root agent's tier.
+message WorkerApprovalPolicyV1 {
+  // low, medium, high or critical: the root agent's agent registry tier.
+  string risk_tier = 1;
+  // read, write, delete, external_send, payment or code_execution, each at
+  // most once. Empty: no category needs an approval at this tier.
+  repeated string approval_categories = 2;
+  reserved 3 to 10;
 }

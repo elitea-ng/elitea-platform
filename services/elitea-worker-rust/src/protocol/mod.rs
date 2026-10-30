@@ -1,3 +1,4 @@
+pub mod approval_policy;
 pub mod command;
 pub mod control;
 pub mod delegation;
