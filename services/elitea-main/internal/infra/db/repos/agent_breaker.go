@@ -9,13 +9,15 @@ package repos
 // Every read is bounded and indexed:
 //
 //   - IngestRuns ranges over execution_jobs_agent_settled (0213) for the
-//     last few minutes and reads each run's step records by
-//     run_steps_seq_key (run_id, seq).
+//     last few minutes, skips the runs already in the window by its primary
+//     key, and reads the step records of each new run by run_steps_seq_key
+//     (run_id, seq) and its failure event by execution_replay_cursor_idx.
 //   - Observe reads one agent's window by agent_breaker_runs_agent and its
 //     suspensions by execution_suspensions_project.
-//   - SpendLastHour ranges over idx_llm_request_logs_time for one hour of
-//     attributed calls and joins each execution by its primary key. It runs
-//     only when a spend limit is set.
+//   - SpendOverLimit ranges over idx_llm_request_logs_time for one hour of
+//     attributed calls, joins each execution by its primary key and each
+//     agent's registry record by its key. It runs only when a spend limit
+//     can apply.
 
 import (
 	"context"
@@ -26,12 +28,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/breaker"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runcaps"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
@@ -49,6 +51,9 @@ type AgentBreaker struct {
 	pool        *pgxpool.Pool
 	appender    securityaudit.Appender
 	suspensions *ExecutionSuspensionRepository
+	// settleGrace is how long a settled run waits before IngestRuns copies
+	// it (breaker.IngestSettleGrace).
+	settleGrace time.Duration
 }
 
 var _ breaker.Store = (*AgentBreaker)(nil)
@@ -62,25 +67,69 @@ func NewAgentBreaker(pool *pgxpool.Pool, appender securityaudit.Appender) (*Agen
 	if err != nil {
 		return nil, err
 	}
-	return &AgentBreaker{pool: pool, appender: appender, suspensions: suspensions}, nil
+	return &AgentBreaker{pool: pool, appender: appender, suspensions: suspensions,
+		settleGrace: breaker.IngestSettleGrace}, nil
 }
 
-// ingestRunsSQL copies the application runs that ended in the last $1
-// seconds into the window, with the longest streak of consecutive failures
-// of one tool (by name and toolkit) in the run's step records. A tool's
-// streak counts its own calls in order; a call of another tool between two
-// failures does not break it, a success of the same tool does. A row that
-// changed (a late step record, a settlement that moved) is updated; one that
-// did not is left alone, so RETURNING names only the agents with news.
+// capRefusalText is the text of a tool call that the worker's run caps
+// meter refused (cap_error in libs/rust/agent-runtime/src/run_caps.rs). The
+// worker writes it in the step's summary error, after the error's component
+// and category. The call did not run, or its result did not reach the model:
+// the tool did not fail.
+const capRefusalText = "the run reached a run cap an administrator set; the call does not run"
+
+// ingestRunsSQL copies into the window the application runs that ended
+// between $1 seconds and $2 seconds ago and are not in the window yet. Each
+// run is computed once ("fresh" is materialised before the step read, so a
+// run already in the window costs one primary key probe and no step read).
+// That is correct because nothing about a run changes after it settles: the
+// worker reports step records (ReportRunSteps) and its failure frame under
+// the run's live claim, and settlement ends the claim, so a later report is
+// refused. The $2 grace covers a report that passed the claim check just
+// before the settlement and commits just after it.
+//
+// Per run it records:
+//
+//   - cap_reached: a run cap stopped the run. Main's wall and spend caps
+//     cancel the run with cancel_reason cap_reached. The worker's tool call,
+//     model turn and records caps end it FAILED with the failure event code
+//     CAP_REACHED (runtimeFailurePolicyForError).
+//   - the longest streak of consecutive failures of one tool (by name and
+//     toolkit) in the run's step records. A tool's streak counts its own
+//     calls in order; a call of another tool between two failures does not
+//     break it, a success of the same tool does. A call the run caps meter
+//     refused ($3) is not a call of the tool, so it is not in the streak.
 const ingestRunsSQL = `
+WITH fresh AS MATERIALIZED (
+    SELECT j.execution_id, j.generation, j.resource_project_id, j.projection_project_id, a.application_id,
+           j.admitted_at, j.settled_at, j.state, j.cancel_reason
+    FROM elitea_runtime.execution_jobs AS j
+    JOIN elitea_runtime.agent_execution_jobs AS a
+      ON a.execution_id = j.execution_id AND a.generation = j.generation
+    WHERE j.capability_id = 'agent.execute.application.v1'
+      AND j.settled_at IS NOT NULL
+      AND j.settled_at > now() - make_interval(secs => $1::double precision)
+      AND j.settled_at <= now() - make_interval(secs => $2::double precision)
+      AND j.state IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+      AND a.application_id IS NOT NULL
+      AND j.resource_project_id > 0
+      AND NOT EXISTS (
+          SELECT 1 FROM elitea_runtime.agent_breaker_runs AS seen
+          WHERE seen.execution_id = j.execution_id AND seen.generation = j.generation)
+)
 INSERT INTO elitea_runtime.agent_breaker_runs AS r
-    (execution_id, generation, project_id, application_id, admitted_at, settled_at, state,
+    (execution_id, generation, project_id, application_id, admitted_at, settled_at, state, cap_reached,
      tool_failure_streak, tool_failure_name)
-SELECT j.execution_id, j.generation, j.resource_project_id, a.application_id, j.admitted_at, j.settled_at, j.state,
+SELECT f.execution_id, f.generation, f.resource_project_id, f.application_id, f.admitted_at, f.settled_at, f.state,
+       COALESCE(f.cancel_reason = 'cap_reached', false)
+       OR (f.state = 'FAILED' AND EXISTS (
+           SELECT 1 FROM elitea_runtime.execution_replay_events AS e
+           WHERE e.projection_project_id = f.projection_project_id
+             AND e.execution_id = f.execution_id AND e.generation = f.generation
+             AND e.event_type = 'execution.failed'
+             AND position(convert_to('"code":"' || $4::text || '"', 'UTF8') IN e.event_bytes) > 0)),
        COALESCE(streak.n, 0), COALESCE(left(streak.tool, 128), '')
-FROM elitea_runtime.execution_jobs AS j
-JOIN elitea_runtime.agent_execution_jobs AS a
-  ON a.execution_id = j.execution_id AND a.generation = j.generation
+FROM fresh AS f
 LEFT JOIN LATERAL (
     SELECT steps.name AS tool, count(*)::integer AS n
     FROM (
@@ -90,30 +139,20 @@ LEFT JOIN LATERAL (
              - row_number() OVER (PARTITION BY s.name, s.toolkit_id, COALESCE(s.summary->>'status' = 'error', false)
                                   ORDER BY s.seq) AS grp
         FROM elitea_runtime.run_steps AS s
-        WHERE s.run_id = j.execution_id AND s.kind = 'tool_call'
+        WHERE s.run_id = f.execution_id AND s.kind = 'tool_call'
+          AND strpos(COALESCE(s.summary->>'error', ''), $3::text) = 0
     ) AS steps
     WHERE steps.failed
     GROUP BY steps.name, steps.toolkit_id, steps.grp
     ORDER BY count(*) DESC, min(steps.seq)
     LIMIT 1
 ) AS streak ON TRUE
-WHERE j.capability_id = 'agent.execute.application.v1'
-  AND j.settled_at IS NOT NULL
-  AND j.settled_at > now() - make_interval(secs => $1::double precision)
-  AND j.state IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
-  AND a.application_id IS NOT NULL
-  AND j.resource_project_id > 0
-ON CONFLICT (execution_id, generation) DO UPDATE
-SET state = EXCLUDED.state, settled_at = EXCLUDED.settled_at,
-    tool_failure_streak = EXCLUDED.tool_failure_streak, tool_failure_name = EXCLUDED.tool_failure_name,
-    recorded_at = clock_timestamp()
-WHERE (r.state, r.settled_at, r.tool_failure_streak, r.tool_failure_name)
-      IS DISTINCT FROM (EXCLUDED.state, EXCLUDED.settled_at, EXCLUDED.tool_failure_streak, EXCLUDED.tool_failure_name)
+ON CONFLICT (execution_id, generation) DO NOTHING
 RETURNING r.project_id, r.application_id`
 
 // IngestRuns implements breaker.Store.
 func (b *AgentBreaker) IngestRuns(ctx context.Context, lookback time.Duration) ([]breaker.AgentKey, error) {
-	rows, err := b.pool.Query(ctx, ingestRunsSQL, lookback.Seconds())
+	rows, err := b.pool.Query(ctx, ingestRunsSQL, lookback.Seconds(), b.settleGrace.Seconds(), capRefusalText, runcaps.Code)
 	if err != nil {
 		return nil, fmt.Errorf("agent breaker: copy the ended runs: %w", err)
 	}
@@ -136,11 +175,15 @@ func (b *AgentBreaker) IngestRuns(ctx context.Context, lookback time.Duration) (
 	return out, nil
 }
 
-// spendLastHourSQL is each agent's spend in the last hour: the model calls
-// priced at the catalogue rate per row (as the run analytics price them)
-// and the metered tool calls at the cost the gateway billed. A call made
-// before the agent's last resume does not count.
-const spendLastHourSQL = `
+// spendOverLimitSQL answers the agents whose spend in the last hour is over
+// their own spend limit, with that spend. The spend is the model calls
+// priced at the catalogue rate per row (as the run analytics price them) and
+// the metered tool calls at the cost the gateway billed; a call made before
+// the agent's last resume does not count. The limit is the tier default of
+// the agent's tier ($1 low, $2 medium, $3 high, $4 critical; an agent with
+// no registry record is low), tightened by the override's
+// spend_per_hour_usd (breaker.Effective). 0 is no limit.
+const spendOverLimitSQL = `
 WITH calls AS (
     SELECT l.execution_id, l.occurred_at,
            CASE WHEN l.operation = 'tool' THEN COALESCE(l.cost_usd, 0)
@@ -165,16 +208,43 @@ runs AS (
     ) AS last ON TRUE
     WHERE a.application_id IS NOT NULL AND j.capability_id = 'agent.execute.application.v1'
     ORDER BY c.execution_id, a.generation
+),
+spend AS (
+    SELECT r.project_id, r.application_id, sum(c.cost)::double precision AS usd
+    FROM calls AS c
+    JOIN runs AS r ON r.execution_id = c.execution_id
+    WHERE r.resumed_at IS NULL OR c.occurred_at > r.resumed_at
+    GROUP BY r.project_id, r.application_id
 )
-SELECT r.project_id, r.application_id, sum(c.cost)::double precision
-FROM calls AS c
-JOIN runs AS r ON r.execution_id = c.execution_id
-WHERE r.resumed_at IS NULL OR c.occurred_at > r.resumed_at
-GROUP BY r.project_id, r.application_id`
+SELECT s.project_id, s.application_id, s.usd
+FROM spend AS s
+LEFT JOIN elitea_lifecycle.agent_registry AS g
+  ON g.tenant_project_id = s.project_id AND g.application_id = s.application_id
+CROSS JOIN LATERAL (
+    SELECT CASE COALESCE(g.risk_tier, 'low')
+               WHEN 'medium' THEN $2::double precision
+               WHEN 'high' THEN $3::double precision
+               WHEN 'critical' THEN $4::double precision
+               ELSE $1::double precision
+           END AS tier_usd,
+           CASE WHEN jsonb_typeof(g.circuit_breaker->'spend_per_hour_usd') = 'number'
+                THEN (g.circuit_breaker->>'spend_per_hour_usd')::double precision
+                ELSE 0
+           END AS override_usd
+) AS lim
+CROSS JOIN LATERAL (
+    SELECT CASE WHEN lim.tier_usd > 0 AND lim.override_usd > 0 THEN least(lim.tier_usd, lim.override_usd)
+                WHEN lim.tier_usd > 0 THEN lim.tier_usd
+                ELSE greatest(lim.override_usd, 0)
+           END AS usd
+) AS effective
+WHERE effective.usd > 0 AND s.usd > effective.usd`
 
-// SpendLastHour implements breaker.Store.
-func (b *AgentBreaker) SpendLastHour(ctx context.Context) (map[breaker.AgentKey]float64, error) {
-	rows, err := b.pool.Query(ctx, spendLastHourSQL)
+// SpendOverLimit implements breaker.Store.
+func (b *AgentBreaker) SpendOverLimit(ctx context.Context, tierLimits map[agentlifecycle.Tier]float64) (map[breaker.AgentKey]float64, error) {
+	rows, err := b.pool.Query(ctx, spendOverLimitSQL,
+		tierLimits[agentlifecycle.TierLow], tierLimits[agentlifecycle.TierMedium],
+		tierLimits[agentlifecycle.TierHigh], tierLimits[agentlifecycle.TierCritical])
 	if err != nil {
 		return nil, fmt.Errorf("agent breaker: read the spend: %w", err)
 	}
@@ -255,7 +325,7 @@ WHERE tenant_project_id = $1 AND application_id = $2`, key.ProjectID, key.Applic
 	if window > 0 {
 		rows, err := b.pool.Query(ctx, `
 SELECT state FROM elitea_runtime.agent_breaker_runs
-WHERE project_id = $1 AND application_id = $2 AND state <> 'CANCELLED'
+WHERE project_id = $1 AND application_id = $2 AND state <> 'CANCELLED' AND NOT cap_reached
   AND admitted_at > COALESCE($3::timestamptz, '-infinity'::timestamptz)
 ORDER BY settled_at DESC
 LIMIT $4`, key.ProjectID, key.ApplicationID, resumedAt, window)
@@ -313,13 +383,10 @@ func (b *AgentBreaker) Trip(ctx context.Context, trip breaker.Trip) (safety.Susp
 	if err := b.appender.Append(ctx, tx, event); err != nil {
 		return safety.Suspension{}, fmt.Errorf("agent breaker: append the audit event: %w", err)
 	}
+	// A suspension that got there first is already
+	// *safety.AlreadySuspendedError from CreateSuspensionTx (ON CONFLICT DO
+	// NOTHING), so a commit error is only a commit error.
 	if err := tx.Commit(ctx); err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			if existing, findErr := b.suspensions.activeFor(ctx, b.pool, created.Target); findErr == nil {
-				return safety.Suspension{}, &safety.AlreadySuspendedError{Existing: existing}
-			}
-		}
 		return safety.Suspension{}, fmt.Errorf("agent breaker: commit: %w", err)
 	}
 	return created, nil

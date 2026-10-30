@@ -20,7 +20,8 @@ period if the table is large.
 - **Behaviour change: agents can be stopped automatically.** The routine
   `main.agent_breaker` runs every minute. By default it suspends an agent
   when more than 50 % of its latest 20 ended runs failed, or when one tool
-  failed 5 times in a row in one run. Spend per hour and runs per hour are off.
+  failed 5 times in a row in one run. A run that a run cap stopped
+  (`CAP_REACHED`) is not a failure. Spend per hour and runs per hour are off.
   A stopped agent's new runs are refused with `execution_suspended`, and its
   runs in flight are cancelled. To keep the old behaviour, turn off
   **Configuration › Circuit Breaker › Circuit Breaker On**, or turn off the
