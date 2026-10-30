@@ -45,6 +45,7 @@ import { faker } from "@faker-js/faker";
 import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
+import { PermissionTrimmingItemKind } from "../model";
 import type {
   AgentAttestation,
   AgentAttestationList,
@@ -86,6 +87,8 @@ import type {
   IconUploadResponse,
   ImportWizardResponse,
   OkResponse,
+  PermissionTrimmingRemoveResult,
+  PermissionTrimmingReport,
   PipelineInboundTrigger,
   PipelineInboundTriggerRunAccepted,
   PipelineSchedule,
@@ -1280,6 +1283,117 @@ export const getUpdateAgentRegistryResponseMock = (): AgentRegistryRecord => ({
   state_changed_at: "2026-10-29T09:00:00Z",
   suspension_id: null,
   updated_at: "2026-10-29T09:00:00Z",
+});
+
+export const getListProjectPermissionTrimmingResponseMock = (
+  overrideResponse: Partial<Extract<PermissionTrimmingReport, object>> = {},
+): PermissionTrimmingReport => ({
+  window_days: faker.number.int(),
+  since: faker.date.past().toISOString().slice(0, 19) + "Z",
+  items: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    kind: faker.helpers.arrayElement(Object.values(PermissionTrimmingItemKind)),
+    key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    project_id: faker.number.int(),
+    application_id: faker.number.int(),
+    application_name: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    version_id: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int(), null]),
+      undefined,
+    ]),
+    version_name: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    toolkit_id: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int(), null]),
+      undefined,
+    ]),
+    toolkit_name: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    tool: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    grant_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    credential_reference_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    scopes: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+    unused_scopes: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+    host: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    allowlist_level: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    used: faker.datatype.boolean(),
+    uses: faker.number.int(),
+    last_used_at: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        null,
+      ]),
+      undefined,
+    ]),
+    candidate: faker.datatype.boolean(),
+    removable: faker.datatype.boolean(),
+    not_removable_reason: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    candidate_since: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        null,
+      ]),
+      undefined,
+    ]),
+    notified_at: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        null,
+      ]),
+      undefined,
+    ]),
+  })),
+  ...overrideResponse,
+});
+
+export const getRemoveProjectPermissionTrimmingItemResponseMock = (
+  overrideResponse: Partial<
+    Extract<PermissionTrimmingRemoveResult, object>
+  > = {},
+): PermissionTrimmingRemoveResult => ({
+  kind: faker.helpers.arrayElement(Object.values(PermissionTrimmingItemKind)),
+  key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  removed_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
 });
 
 export const getMarkAgentDueResponseMock = (): AgentRegistryRecord => ({
@@ -7501,6 +7615,60 @@ export const getUpdateAgentRegistryMockHandler = (
   );
 };
 
+export const getListProjectPermissionTrimmingMockHandler = (
+  overrideResponse?:
+    | PermissionTrimmingReport
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<PermissionTrimmingReport> | PermissionTrimmingReport),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/permission_trimming/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListProjectPermissionTrimmingResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRemoveProjectPermissionTrimmingItemMockHandler = (
+  overrideResponse?:
+    | PermissionTrimmingRemoveResult
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) =>
+        | Promise<PermissionTrimmingRemoveResult>
+        | PermissionTrimmingRemoveResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/permission_trimming/prompt_lib/:projectId/remove",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRemoveProjectPermissionTrimmingItemResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getMarkAgentDueMockHandler = (
   overrideResponse?:
     | AgentRegistryRecord
@@ -9785,6 +9953,8 @@ export const getApplicationsMock = () => [
   getRollbackApplicationReleaseMockHandler(),
   getGetAgentRegistryMockHandler(),
   getUpdateAgentRegistryMockHandler(),
+  getListProjectPermissionTrimmingMockHandler(),
+  getRemoveProjectPermissionTrimmingItemMockHandler(),
   getMarkAgentDueMockHandler(),
   getListAgentChangeRequestsMockHandler(),
   getCreateAgentChangeRequestMockHandler(),

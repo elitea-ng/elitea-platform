@@ -46,11 +46,13 @@ import (
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
 	v2credentialprobe "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialprobe"
 	v2credentialreferences "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreferences"
+	v2credentialreview "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreview"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	v2discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
 	v2drafts "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/drafts"
 	v2core "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	v2entitlements "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entitlements"
 	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
@@ -106,6 +108,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
+	entitlementsdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/entitlements"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/events"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/governedmcp"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
@@ -458,6 +461,11 @@ type RouterConfig struct {
 	// (ADR-0039): when governed, the connector catalogue (ADR-0044 decision
 	// 1, #1501) is approved_only whatever the platform section says.
 	CatalogueGoverned bool
+	// CredentialReview and PermissionTrimming serve the credential
+	// inventory and the permission trimming report (ADR-0044 decision 5,
+	// #1501). Nil leaves their six routes registered, answering 503.
+	CredentialReview   *dbrepos.CredentialReview
+	PermissionTrimming *dbrepos.PermissionTrimming
 	// OnProjectProvisioner, when set, is called once with the one shared project
 	// provisioner, after it is built. The process uses it to start the
 	// project-deletion reconciler (#1211) over the same provisioner the routes
@@ -2243,6 +2251,26 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	if cfg.SCIMClientAddresses != nil {
 		scimClientAddresses = cfg.SCIMClientAddresses
 	}
+	// The entitlement export (ADR-0044 decision 5, #1501): the read-only
+	// SCIM tree at /api/v2/scim/v2/entitlements and the admin CSV/JSON at
+	// /api/v2/admin/entitlements read the same store. Interface variables
+	// stay nil without a pool so both answer 503 rather than panic.
+	var (
+		scimEntitlements   scimapi.EntitlementSource
+		adminEntitlements  v2entitlements.Store
+		entitlementClients scimapi.EntitlementClientAllowlist
+	)
+	if cfg.Pool != nil {
+		store := dbrepos.NewEntitlements(cfg.Pool)
+		scimEntitlements, adminEntitlements = store, store
+		// The SCIM tree is opt-in per client: the `entitlement_export`
+		// section lists who may read it, read on every request.
+		pool := cfg.Pool
+		entitlementClients = func(ctx context.Context) ([]int64, error) {
+			settings, err := platformconfig.LoadEntitlementExportSettings(ctx, pool)
+			return settings.SCIMClientIDs, err
+		}
+	}
 	r.Group(func(r chi.Router) {
 		r.Use(apimw.NoStore)
 		r.With(apimw.Audit(successfulOnlyRecorder(auditRecorder))).
@@ -2251,7 +2279,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			scimapi.Authenticate(scimCredentials),
 			apimw.Audit(auditRecorder),
 			scimapi.AnnotateAuditActor,
-		).Mount(scimapi.BasePath, scimapi.NewHandler(scimdirectory.NewStore(cfg.Pool).WithMemoryUserJournal(memoryUserJournal)).Routes())
+		).Mount(scimapi.BasePath, scimapi.NewHandler(scimdirectory.NewStore(cfg.Pool).WithMemoryUserJournal(memoryUserJournal)).
+			WithEntitlements(scimEntitlements).WithEntitlementClients(entitlementClients).Routes())
 	})
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its
@@ -3134,6 +3163,31 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(approve).Get(v2connectorrequests.AdminRequestPath, connectors.AdminGet)
 					r.With(approve).Post(v2connectorrequests.AdminApprovePath, connectors.Approve)
 					r.With(approve).Post(v2connectorrequests.AdminRejectPath, connectors.Reject)
+				}
+
+				// The entitlement export (ADR-0044 decision 5, #1501): who
+				// holds which role on which project and agent, and which
+				// governance capabilities each carries. CSV (streamed) or
+				// JSON pages, behind entitlements.export (shared 0209).
+				r.With(central(entitlementsdomain.ExportPermission)).
+					Get(v2entitlements.AdminPath, v2entitlements.NewHandler(adminEntitlements).Export)
+
+				// The credential inventory and the cross-project permission
+				// trimming report (ADR-0044 decision 5): reads behind
+				// credentials.inventory.read, a revoke or a removal behind
+				// credentials.inventory.manage. Under the audited
+				// /api/v2/admin/ prefix; each change also appends a
+				// security audit event.
+				{
+					review := v2credentialreview.NewHandler(cfg.CredentialReview, cfg.PermissionTrimming, nil)
+					r.With(central(v2credentialreview.ReadPermission)).
+						Get(v2credentialreview.InventoryPath, review.Inventory)
+					r.With(central(v2credentialreview.ManagePermission)).
+						Post(v2credentialreview.InventoryRevokePath, review.Revoke)
+					r.With(central(v2credentialreview.ReadPermission)).
+						Get(v2credentialreview.AdminTrimmingPath, review.AdminTrimming)
+					r.With(central(v2credentialreview.ManagePermission)).
+						Post(v2credentialreview.AdminTrimmingRemove, review.AdminRemove)
 				}
 
 				// Regular app admin endpoints (with projectID)
@@ -4529,6 +4583,19 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					lifecycle := v2agentlifecycle.NewHandler(agentLifecycle, apimw.HoldsResolvedPermission(
 						coreResolver, platformauth.PermissionModeDefault, agentlifecycle.GovernancePermission))
 					readVersions := projectPermission("models.applications.versions.get")
+					// The project's permission trimming report and its
+					// one-click removals (ADR-0044 decision 5): the project
+					// admin's agents.trimming.manage. A project egress
+					// entry also needs the configuration route's
+					// models.project_settings.edit (resolved in the handler).
+					trimming := v2credentialreview.NewHandler(cfg.CredentialReview, cfg.PermissionTrimming,
+						apimw.HoldsResolvedPermission(coreResolver, platformauth.PermissionModeDefault,
+							v2credentialreview.ProjectEgressPermision))
+					r.With(projectPermission(v2credentialreview.TrimmingPermission)).
+						Get(v2credentialreview.ProjectTrimmingPath, trimming.ProjectTrimming)
+					r.With(projectPermission(v2credentialreview.TrimmingPermission)).
+						Post(v2credentialreview.ProjectTrimmingRemove, trimming.ProjectRemove)
+
 					r.With(readVersions).Get(v2agentlifecycle.RegistryPath, lifecycle.GetRegistry)
 					r.With(requirePublish).Put(v2agentlifecycle.RegistryPath, lifecycle.UpdateRegistry)
 					r.With(projectPermission(agentlifecycle.MarkDuePermission)).

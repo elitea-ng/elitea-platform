@@ -1,6 +1,6 @@
 ---
 title: "Least privilege and trust"
-description: "Controls that limit what an agent can reach. The worker egress allowlist restricts the public hosts an agent's tools may call to the hosts that the platform, the project and the agent's own toolkits name."
+description: "Controls that limit what an agent can reach, and the record of who may change it. The worker egress allowlist restricts the public hosts an agent's tools may call; the entitlement export lists who holds which role and what it allows, for access reviews."
 ---
 
 Least-privilege controls limit what an agent can reach and act on. This page describes the controls of ADR-0044 that are available now.
@@ -122,3 +122,44 @@ To find the same data with the API, call `GET /api/v2/admin/worker_egress/hosts`
 - Seed the allowlist from the observed hosts before you switch to `allowlist`, and watch the refused hosts after the switch.
 - Keep network egress control at your perimeter as well. This allowlist is enforced inside the worker; a firewall or egress gateway is your independent second layer.
 - Keep the list of hosts that the operator configured for the worker (web-search providers, model endpoints) under your change process, because this policy does not judge them.
+
+## Entitlement export for access reviews
+
+### The risk
+
+An access review asks who holds which role, where, and what that role allows. Without an export, a reviewer reads the Users and Roles pages by hand, and a governance tool cannot run a campaign at all.
+
+### What is available
+
+- **CSV and JSON download.** `GET /api/v2/admin/entitlements` (permission `entitlements.export`, held by the platform `super_admin` and `admin` roles) answers one row per user, scope (platform, project or agent), role, capability and how it is held (`role`, `owner` for agent registry owners). `format=csv` streams every row from one snapshot as RFC 4180 CSV; `format=json` pages with `limit` and `offset`. Filters are `user_id` and `project_id`. The admin console's **Users** page has an **Export entitlements** button for the CSV.
+- **A read-only SCIM 2.0 tree** at `/api/v2/scim/v2/entitlements` for identity governance tools: `/Users` with their groups, roles and grants, `/Groups` (one per platform role and per project role), and the discovery documents. Paging is `startIndex` and `count`; `filter` takes `userName eq "…"` and the other attributes in the discovery documents. Write requests answer `405`.
+- **Capabilities, not only role names.** Each role's permissions are mapped to governance capabilities such as `configure_agents`, `approve_change_requests`, `attest`, `approve_connectors` and `read_run_evidence`.
+
+### Configure and use
+
+The SCIM tree uses the same SCIM client credential as provisioning (see [Authentication](/admin/authentication)), but no client can read it until you allow it:
+
+<Steps>
+  <Step title="Create or choose a SCIM client">
+    Create a SCIM client for the governance tool on **Configuration › Authentication**, or choose an existing one. Note its id.
+  </Step>
+  <Step title="Allow the client">
+    Open **Configuration › Entitlement Export** (permission `entitlements.export`) and add the client id to **SCIM Clients Allowed** (`scim_client_ids`). The list is empty by default, and every client that is not on it gets `403` with a SCIM error on every path of the tree. Provisioning is not affected.
+  </Step>
+  <Step title="Point the governance tool at the tree">
+    Configure the tool with the base URL `https://<host>/api/v2/scim/v2/entitlements` and the client's credential.
+  </Step>
+</Steps>
+
+The list is read on every request, so removing an id stops that client at once.
+
+### Evidence
+
+- **Every export is audited** in `centry.audit_events` before any row is sent: entity type `entitlements`, entity name `csv`, `json` or `scim`, the row count in the action, and the administrator or `scim:<client>` as actor. When the event cannot be written, the export is refused with `503`.
+- **Refused SCIM reads** (`403`) are recorded as `api` audit events like other refused requests under `/api/v2/scim/`.
+- **Changes to the allowed clients** are recorded as `api` audit events with the user, the route and the result, like every other configuration save.
+
+### Customer responsibility
+
+- Decide which governance tools may read the entitlement tree, and review the allowed clients on a schedule.
+- Run access reviews on the exported data, and remove the roles that a review rejects.

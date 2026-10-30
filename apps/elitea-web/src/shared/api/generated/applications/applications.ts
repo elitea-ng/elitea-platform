@@ -92,6 +92,7 @@ import type {
   CapabilityUnavailableResponse,
   ClientUpgradeRequiredResponse,
   ConversationRunList,
+  CredentialReviewRefusal,
   DefaultIcon,
   DeleteApplicationVersionParams,
   DesktopOperationError,
@@ -137,6 +138,7 @@ import type {
   ListEvalDatasetsParams,
   ListEvalRunsParams,
   ListProjectIconsParams,
+  ListProjectPermissionTrimmingParams,
   ListProjectsParams,
   ListPublicApplicationsParams,
   ListRunStepsParams,
@@ -148,6 +150,9 @@ import type {
   N409Response,
   N500Response,
   OkResponse,
+  PermissionTrimmingRemoveRequest,
+  PermissionTrimmingRemoveResult,
+  PermissionTrimmingReport,
   PipelineInboundTrigger,
   PipelineInboundTriggerModeRequest,
   PipelineInboundTriggerRunAccepted,
@@ -5025,6 +5030,540 @@ export function useUpdateAgentRegistry<
     projectId,
     applicationId,
     agentRegistryUpdate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listProjectPermissionTrimmingResponse200 = {
+  data: PermissionTrimmingReport;
+  status: 200;
+};
+
+export type listProjectPermissionTrimmingResponse400 = {
+  data: CredentialReviewRefusal;
+  status: 400;
+};
+
+export type listProjectPermissionTrimmingResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listProjectPermissionTrimmingResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listProjectPermissionTrimmingResponse503 = {
+  data: CredentialReviewRefusal;
+  status: 503;
+};
+
+export type listProjectPermissionTrimmingResponseSuccess =
+  listProjectPermissionTrimmingResponse200 & {
+    headers: Headers;
+  };
+export type listProjectPermissionTrimmingResponseError = (
+  | listProjectPermissionTrimmingResponse400
+  | listProjectPermissionTrimmingResponse401
+  | listProjectPermissionTrimmingResponse403
+  | listProjectPermissionTrimmingResponse503
+) & {
+  headers: Headers;
+};
+
+export type listProjectPermissionTrimmingResponse =
+  | listProjectPermissionTrimmingResponseSuccess
+  | listProjectPermissionTrimmingResponseError;
+
+export const getListProjectPermissionTrimmingUrl = (
+  projectId: string,
+  params?: ListProjectPermissionTrimmingParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/permission_trimming/prompt_lib/${projectId}?${stringifiedParams}`
+    : `/elitea_core/permission_trimming/prompt_lib/${projectId}`;
+};
+
+/**
+ * The project's permission trimming report (ADR-0044 decision 5): per agent the selected tools, attached toolkits and credential use grants, and the project egress allowlist entries, against the step records of the window. Requires `agents.trimming.manage`.
+ * @summary Report the project's granted permissions against their use
+ */
+export const listProjectPermissionTrimming = async (
+  projectId: string,
+  params?: ListProjectPermissionTrimmingParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listProjectPermissionTrimmingResponse> => {
+  return eliteaFetch<listProjectPermissionTrimmingResponse>(
+    getListProjectPermissionTrimmingUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListProjectPermissionTrimmingQueryKey = (
+  projectId: string,
+  params?: ListProjectPermissionTrimmingParams,
+) => {
+  return [
+    `/elitea_core/permission_trimming/prompt_lib/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListProjectPermissionTrimmingQueryOptions = <
+  TData = Awaited<ReturnType<typeof listProjectPermissionTrimming>>,
+  TError = CredentialReviewRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListProjectPermissionTrimmingParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listProjectPermissionTrimming>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListProjectPermissionTrimmingQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listProjectPermissionTrimming>>
+  > = ({ signal }) =>
+    listProjectPermissionTrimming(projectId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listProjectPermissionTrimming>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListProjectPermissionTrimmingQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listProjectPermissionTrimming>>
+>;
+export type ListProjectPermissionTrimmingQueryError =
+  CredentialReviewRefusal | N401Response | N403Response;
+
+export function useListProjectPermissionTrimming<
+  TData = Awaited<ReturnType<typeof listProjectPermissionTrimming>>,
+  TError = CredentialReviewRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  params: undefined | ListProjectPermissionTrimmingParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listProjectPermissionTrimming>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listProjectPermissionTrimming>>,
+          TError,
+          Awaited<ReturnType<typeof listProjectPermissionTrimming>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListProjectPermissionTrimming<
+  TData = Awaited<ReturnType<typeof listProjectPermissionTrimming>>,
+  TError = CredentialReviewRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListProjectPermissionTrimmingParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listProjectPermissionTrimming>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listProjectPermissionTrimming>>,
+          TError,
+          Awaited<ReturnType<typeof listProjectPermissionTrimming>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListProjectPermissionTrimming<
+  TData = Awaited<ReturnType<typeof listProjectPermissionTrimming>>,
+  TError = CredentialReviewRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListProjectPermissionTrimmingParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listProjectPermissionTrimming>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Report the project's granted permissions against their use
+ */
+
+export function useListProjectPermissionTrimming<
+  TData = Awaited<ReturnType<typeof listProjectPermissionTrimming>>,
+  TError = CredentialReviewRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListProjectPermissionTrimmingParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listProjectPermissionTrimming>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListProjectPermissionTrimmingQueryOptions(
+    projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type removeProjectPermissionTrimmingItemResponse200 = {
+  data: PermissionTrimmingRemoveResult;
+  status: 200;
+};
+
+export type removeProjectPermissionTrimmingItemResponse400 = {
+  data: CredentialReviewRefusal;
+  status: 400;
+};
+
+export type removeProjectPermissionTrimmingItemResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type removeProjectPermissionTrimmingItemResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type removeProjectPermissionTrimmingItemResponse404 = {
+  data: CredentialReviewRefusal;
+  status: 404;
+};
+
+export type removeProjectPermissionTrimmingItemResponse409 = {
+  data: CredentialReviewRefusal;
+  status: 409;
+};
+
+export type removeProjectPermissionTrimmingItemResponse503 = {
+  data: CredentialReviewRefusal;
+  status: 503;
+};
+
+export type removeProjectPermissionTrimmingItemResponseSuccess =
+  removeProjectPermissionTrimmingItemResponse200 & {
+    headers: Headers;
+  };
+export type removeProjectPermissionTrimmingItemResponseError = (
+  | removeProjectPermissionTrimmingItemResponse400
+  | removeProjectPermissionTrimmingItemResponse401
+  | removeProjectPermissionTrimmingItemResponse403
+  | removeProjectPermissionTrimmingItemResponse404
+  | removeProjectPermissionTrimmingItemResponse409
+  | removeProjectPermissionTrimmingItemResponse503
+) & {
+  headers: Headers;
+};
+
+export type removeProjectPermissionTrimmingItemResponse =
+  | removeProjectPermissionTrimmingItemResponseSuccess
+  | removeProjectPermissionTrimmingItemResponseError;
+
+export const getRemoveProjectPermissionTrimmingItemUrl = (
+  projectId: string,
+) => {
+  return `/elitea_core/permission_trimming/prompt_lib/${projectId}/remove`;
+};
+
+/**
+ * Removes one item of the project's report through its existing mutation path, audited as permission.trimmed. Requires `agents.trimming.manage`; a project egress entry also requires `models.project_settings.edit`. Platform entries are removed by an administrator.
+ * @summary Remove one unused permission of the project
+ */
+export const removeProjectPermissionTrimmingItem = async (
+  projectId: string,
+  permissionTrimmingRemoveRequest: PermissionTrimmingRemoveRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<removeProjectPermissionTrimmingItemResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<removeProjectPermissionTrimmingItemResponse>(
+    getRemoveProjectPermissionTrimmingItemUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(permissionTrimmingRemoveRequest),
+    },
+  );
+};
+
+export const getRemoveProjectPermissionTrimmingItemQueryKey = (
+  projectId: string,
+  permissionTrimmingRemoveRequest?: PermissionTrimmingRemoveRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/permission_trimming/prompt_lib/${projectId}/remove`,
+    permissionTrimmingRemoveRequest,
+  ] as const;
+};
+
+export const getRemoveProjectPermissionTrimmingItemQueryOptions = <
+  TData = Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>,
+  TError = CredentialReviewRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  permissionTrimmingRemoveRequest: PermissionTrimmingRemoveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRemoveProjectPermissionTrimmingItemQueryKey(
+      projectId,
+      permissionTrimmingRemoveRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>
+  > = ({ signal }) =>
+    removeProjectPermissionTrimmingItem(
+      projectId,
+      permissionTrimmingRemoveRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RemoveProjectPermissionTrimmingItemQueryResult = NonNullable<
+  Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>
+>;
+export type RemoveProjectPermissionTrimmingItemQueryError =
+  CredentialReviewRefusal | N401Response | N403Response;
+
+export function useRemoveProjectPermissionTrimmingItem<
+  TData = Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>,
+  TError = CredentialReviewRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  permissionTrimmingRemoveRequest: PermissionTrimmingRemoveRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>,
+          TError,
+          Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRemoveProjectPermissionTrimmingItem<
+  TData = Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>,
+  TError = CredentialReviewRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  permissionTrimmingRemoveRequest: PermissionTrimmingRemoveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>,
+          TError,
+          Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRemoveProjectPermissionTrimmingItem<
+  TData = Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>,
+  TError = CredentialReviewRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  permissionTrimmingRemoveRequest: PermissionTrimmingRemoveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove one unused permission of the project
+ */
+
+export function useRemoveProjectPermissionTrimmingItem<
+  TData = Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>,
+  TError = CredentialReviewRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  permissionTrimmingRemoveRequest: PermissionTrimmingRemoveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof removeProjectPermissionTrimmingItem>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRemoveProjectPermissionTrimmingItemQueryOptions(
+    projectId,
+    permissionTrimmingRemoveRequest,
     options,
   );
 

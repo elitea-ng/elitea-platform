@@ -49,14 +49,14 @@ describe('readConnectorRefusal', () => {
       status: 403,
       url: '/x',
       body: { error: 'connector_not_approved', code: 'connector_not_approved', target_kind: 'custom_mcp', target: 'https://m.example.com/mcp' },
-    } as ConstructorParameters<typeof EliteaApiError>[0]);
+    });
     expect(readConnectorRefusal(refusal)).toEqual({ targetKind: 'custom_mcp', target: 'https://m.example.com/mcp' });
     const other = new EliteaApiError({
       kind: 'http',
       status: 403,
       url: '/x',
       body: { code: 'toolkit_type_disabled' },
-    } as ConstructorParameters<typeof EliteaApiError>[0]);
+    });
     expect(readConnectorRefusal(other)).toBeUndefined();
     expect(readConnectorRefusal(new Error('boom'))).toBeUndefined();
   });

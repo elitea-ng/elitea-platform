@@ -865,7 +865,13 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // submitConnectorRequest, withdrawConnectorRequest) and the approval queue
 // (listAdminConnectorRequests, getAdminConnectorRequest,
 // approveConnectorRequest, rejectConnectorRequest).
-const GENERATED_OPERATION_COUNT = 451;
+// 441 -> 448 (issue 1501, ADR-0044 decision 5): exportEntitlements (the
+// admin entitlement export), listCredentialInventory,
+// revokeInventoryCredential, listAdminPermissionTrimming and
+// removeAdminPermissionTrimmingItem (admin routes, not in the manifest), and
+// listProjectPermissionTrimming and removeProjectPermissionTrimmingItem.
+// The two changes merged together: 441 + 10 + 7 = 458.
+const GENERATED_OPERATION_COUNT = 458;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

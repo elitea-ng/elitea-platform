@@ -143,6 +143,10 @@ type Directory interface {
 // Handler serves the SCIM tree.
 type Handler struct {
 	directory Directory
+	// entitlements serves the read-only entitlement tree (entitlements.go).
+	entitlements EntitlementSource
+	// entitlementClients lists the SCIM clients allowed to read that tree.
+	entitlementClients EntitlementClientAllowlist
 }
 
 func NewHandler(directory Directory) *Handler {
@@ -176,6 +180,11 @@ func (h *Handler) Routes() chi.Router {
 	router.Put("/Groups/{id}", h.ReplaceGroup)
 	router.Patch("/Groups/{id}", h.PatchGroup)
 	router.Delete("/Groups/{id}", h.DeleteGroup)
+
+	// The read-only entitlement tree (ADR-0044 decision 5): a second SCIM
+	// service provider at <base>/entitlements. Only GET is routed, so every
+	// write verb is answered 405.
+	router.Route(EntitlementsPath, h.entitlementRoutes)
 	return router
 }
 

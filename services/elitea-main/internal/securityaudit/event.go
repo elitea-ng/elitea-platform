@@ -74,6 +74,12 @@ const (
 	// grants and egress entries it wrote) or rejected (action
 	// connector.request.*).
 	TypeConnectorApproval EventType = "ai.elitea.security.v1.connector.approval"
+	// TypeCredentialReview is a credential and access review action
+	// (ADR-0044 decision 5, #1501): a stale credential flagged
+	// (credential.stale.flagged), a credential revoked from the inventory or
+	// by the staleness routine (credential.revoked), or an unused grant
+	// removed from the permission trimming report (permission.trimmed).
+	TypeCredentialReview EventType = "ai.elitea.security.v1.credential.review"
 )
 
 // OCSF class and category uids (https://schema.ocsf.io).
@@ -104,6 +110,7 @@ var ocsfClasses = map[EventType]int{
 	TypeAgentLifecycle:          OCSFClassEntityManagement,
 	TypeRunStepsAnchored:        OCSFClassAPIActivity,
 	TypeConnectorApproval:       OCSFClassEntityManagement,
+	TypeCredentialReview:        OCSFClassUserAccessManagement,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.
