@@ -665,6 +665,19 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 		if err != nil {
 			return outputapp.ErrAgentExecutionResultMismatch
 		}
+		// The approval ledger (ADR-0041 decision 5): a static pause
+		// (interrupt_before / interrupt_after) writes its pause rows with the
+		// projection, and an unattended run takes its action. A failed one
+		// keeps the message but loses the pause, and ends as the typed error.
+		staticProof := cloneJSONOrDefault(message.PipelineStaticProof, []byte("null"))
+		staticTools := cloneJSONOrDefault(message.PipelineStaticTools, []byte("null"))
+		staticApproval, err := projectStaticApprovalPause(ctx, tx, expected, message)
+		if err != nil {
+			return err
+		}
+		if staticApproval == rootPauseFailed {
+			staticProof, staticTools = json.RawMessage("null"), json.RawMessage("null")
+		}
 		if err := writer.DeleteCurrentAgentProvisionalText(
 			ctx,
 			sqlcgen.DeleteCurrentAgentProvisionalTextParams{
@@ -693,14 +706,17 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 				ReferencesJson:      []byte(message.References),
 				InvokedSkills:       []byte(invokedSkills),
 				OutputLimitReached:  message.OutputLimitReached,
-				PipelineStaticProof: cloneJSONOrDefault(message.PipelineStaticProof, []byte("null")),
-				PipelineStaticTools: cloneJSONOrDefault(message.PipelineStaticTools, []byte("null")),
+				PipelineStaticProof: staticProof,
+				PipelineStaticTools: staticTools,
 				SkippedCapabilities: cloneJSONOrDefault(terminal.SkippedCapabilities, []byte("null")),
 				MessageGroupID:      int64(messageGroupID),
 			},
 		)
 		if err != nil || rows != 1 {
 			return fmt.Errorf("finalize current agent response message group: %w", terminalWriteError(err))
+		}
+		if staticApproval == rootPauseFailed {
+			return finalizeStaticApprovalFailure(ctx, tx, int64(messageGroupID))
 		}
 		return nil
 	}

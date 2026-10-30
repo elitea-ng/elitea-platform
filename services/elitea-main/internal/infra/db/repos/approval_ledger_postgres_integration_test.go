@@ -216,11 +216,13 @@ func TestApprovalLedgerInterruptApproveIsOneRowAndOneChainedEvent(t *testing.T) 
 	decision := rows[1]
 	if decision.ActorKind != "user" || decision.ActorUserID == nil || *decision.ActorUserID != interruptOwner ||
 		decision.Action != "approve" || decision.InterruptID != interruptID || decision.ToolName != "create_issue" ||
-		decision.ToolkitName != "jira" || !strings.HasPrefix(decision.Digest, "sha256:") || decision.Path != "interrupt" {
+		decision.ToolkitName != "jira" || decision.Path != "interrupt" {
 		t.Fatalf("decision row = %+v", decision)
 	}
-	if decision.Digest != rows[0].Digest {
-		t.Fatalf("pause digest %q != decision digest %q", rows[0].Digest, decision.Digest)
+	// A 0157 card has no worker digest, and the masked arguments it shows
+	// are not digested: both rows record no digest.
+	if decision.Digest != "" || rows[0].Digest != "" {
+		t.Fatalf("pause digest %q, decision digest %q: a card has no argument digest", rows[0].Digest, decision.Digest)
 	}
 	if approvalEventCount(t, h.pool) != 2 {
 		t.Fatalf("audit events = %d, want 2", approvalEventCount(t, h.pool))
@@ -464,11 +466,16 @@ WHERE execution_id = $1`, h.executions[response]).Scan(&reason); err != nil {
 const rootLedgerPauses = `[
 	{"interrupt_id":"interrupt-root-1","available_actions":["approve","reject","block_with_comment"],
 	 "guardrail_type":"sensitive_tool","tool_name":"create_issue","toolkit_name":"jira","toolkit_type":"jira",
+	 "argument_digest":"` + rootLedgerWorkerDigest + `",
 	 "tool_args":{"project":"OPS","summary":"Disk full"}},
 	{"interrupt_id":"interrupt-root-2","available_actions":["approve","reject","block_with_comment"],
 	 "guardrail_type":"sensitive_tool","tool_name":"delete_issue","toolkit_name":"jira","toolkit_type":"jira",
 	 "tool_args":{"key":"OPS-1","reason":"Disk full"}}
 ]`
+
+// rootLedgerWorkerDigest is the worker's digest of the unmasked arguments
+// of interrupt-root-1. interrupt-root-2 has none, as from an earlier worker.
+const rootLedgerWorkerDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 
 // pauseRootResponse writes a paused root response in the interrupt harness:
 // the meta projection and its ledger projection in one transaction, as the
@@ -548,9 +555,13 @@ func TestApprovalLedgerRootPauseDigestsAndMatchesTheProjection(t *testing.T) {
 	if !slices.Equal(projected, ledgered) {
 		t.Fatalf("meta pauses %v, ledger pauses %v", projected, ledgered)
 	}
-	want := canonicalArgumentDigest(map[string]any{"project": "OPS", "summary": "Disk full"})
-	if rows[0].Digest != want || rows[0].ToolName != "create_issue" || rows[0].Origin != "manual" {
-		t.Fatalf("pause row = %+v, want digest %s", rows[0], want)
+	// The worker's digest is kept; without it the masked arguments are
+	// not digested, and the row records no digest.
+	if rows[0].Digest != rootLedgerWorkerDigest || rows[0].ToolName != "create_issue" || rows[0].Origin != "manual" {
+		t.Fatalf("pause row = %+v, want digest %s", rows[0], rootLedgerWorkerDigest)
+	}
+	if rows[1].Digest != "" || rows[1].ToolName != "delete_issue" {
+		t.Fatalf("pause row without a worker digest = %+v", rows[1])
 	}
 	assertApprovalAudit(t, h.pool, 1, rows)
 }

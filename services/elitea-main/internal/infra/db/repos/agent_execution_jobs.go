@@ -736,11 +736,9 @@ WHERE execution_id = $1 AND generation = $2`,
 		var resumeErr error
 		switch turn.ContinuationKind {
 		case agentexecutionapp.CurrentContinuationStatic:
-			if turn.PipelineStaticTools != nil {
-				resumeErr = resumeCurrentAgentStaticTools(ctx, txQueries, admission.Record.Job.ID, turn)
-			} else {
-				resumeErr = resumeCurrentAgentStatic(ctx, txQueries, admission.Record.Job.ID, turn)
-			}
+			// The decision rows of the continued waits commit with the
+			// resume (ADR-0041 decision 5).
+			resumeErr = resumeCurrentAgentStaticWithLedger(ctx, tx, txQueries, admission.Record.Job.ID, turn)
 		case agentexecutionapp.CurrentContinuationOutputLimit:
 			resumeErr = resumeCurrentAgentOutputLimit(ctx, txQueries, admission.Record.Job.ID, turn)
 		case agentexecutionapp.CurrentContinuationAuthorization:

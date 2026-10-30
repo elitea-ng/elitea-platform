@@ -2110,6 +2110,9 @@ impl AgentEventProjector {
             }
             _ => AgentEventProjectionError::invalid_state(),
         })?;
+        // The ledger's argument digest covers the arguments BEFORE masking:
+        // the masked `tool_args` the person sees are not evidence of the call.
+        let argument_digest = unmasked_argument_digest(&active.arguments)?;
         let tool_args = mask_sensitive_arguments(&active.arguments, 0)?;
         let active = active.clone();
         let message = policy.policy_message().to_owned();
@@ -2132,6 +2135,7 @@ impl AgentEventProjector {
             "toolkit_type": policy.toolkit_type(),
             "action_label": policy.action_name(),
             "tool_args": tool_args,
+            "argument_digest": argument_digest,
             "policy_message": policy.policy_message(),
             // The rule that paused the call (ADR-0041 decision 5): platform,
             // policy (tier and category) or builtin.
@@ -2207,6 +2211,7 @@ impl AgentEventProjector {
         let message = questions.message().to_owned();
         let question_values = questions.questions_value();
         let tool_args = questions.arguments_value();
+        let argument_digest = unmasked_argument_digest(&request.args)?;
         let pending = json!({
             "type": "hitl",
             "interrupt_id": interrupt_id,
@@ -2222,6 +2227,7 @@ impl AgentEventProjector {
             "toolkit_name": ASK_USER_TOOL_NAME,
             "toolkit_type": "internal",
             "tool_args": tool_args,
+            "argument_digest": argument_digest,
         });
         let metadata = json!({
             "thread_id": self.context.thread_id,
@@ -6018,6 +6024,21 @@ fn valid_sha256_label(value: &str) -> bool {
     value.len() == 71
         && value.starts_with("sha256:")
         && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// The approval ledger's argument digest of a root pause (ADR-0041 decision
+/// 5): `sha256:` and the SHA-256 of the canonical JSON (object keys sorted,
+/// no insignificant space) of the arguments the tool would run with, before
+/// `mask_sensitive_arguments`. Main records it as the pause's
+/// `argument_digest`; a pause without it (an earlier worker) records none.
+pub(crate) fn unmasked_argument_digest(
+    arguments: &Value,
+) -> Result<String, AgentEventProjectionError> {
+    let canonical = canonical_json(arguments)?;
+    Ok(format!(
+        "sha256:{}",
+        hex(digest::digest(&digest::SHA256, &canonical).as_ref())
+    ))
 }
 
 fn canonical_json(value: &Value) -> Result<Vec<u8>, AgentEventProjectionError> {

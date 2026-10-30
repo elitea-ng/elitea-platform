@@ -162,7 +162,7 @@ The answer is marked as an error, so the user sees why the run stopped. The metr
 
 ### The risk
 
-A sensitive tool or a pipeline review node pauses a run until a person approves the step. An auditor must be able to prove who approved each step, what the step was, and when. A record that only the chat window shows changes with the conversation, and it is not tamper-evident. A run that a schedule or a webhook starts has no person to approve a step. If such a run approves a step on its own, the approval control does not apply to automated runs.
+A sensitive tool, a pipeline review node or a pipeline node with `interrupt_before` or `interrupt_after` (a static pause) pauses a run until a person approves or continues the step. An auditor must be able to prove who approved each step, what the step was, and when. A record that only the chat window shows changes with the conversation, and it is not tamper-evident. A run that a schedule or a webhook starts has no person to approve a step. If such a run approves a step on its own, the approval control does not apply to automated runs.
 
 ### What is enforced
 
@@ -174,11 +174,18 @@ A sensitive tool or a pipeline review node pauses a run until a person approves 
 | `notice` | `unattended_waiting`: an unattended run waits, and the platform notified its owner |
 | `decision` | `approved`, `rejected`, `edited`, `answered`, `other`, `timed_out`, `cancelled`, `superseded`, `unattended_failed`, `unattended_skipped` |
 
-Each row records the actor (a user, or the platform), the tool, the toolkit, the digest of the tool arguments, the decision and the time. The digest is `sha256:` followed by the SHA-256 of the canonical JSON of the arguments. The arguments themselves are not recorded. Rows cannot be changed: a database trigger refuses an update.
+Each row records the actor (a user, or the platform), the tool, the toolkit, the digest of the tool arguments, the decision and the time. The arguments themselves are not recorded. Rows cannot be changed: a database trigger refuses an update.
+
+The worker calculates the argument digest before it masks the arguments. The digest is `sha256:` followed by the SHA-256 of the canonical JSON (keys in sorted order, no spaces) of the arguments that the tool runs with. The masked arguments that the chat window shows are not the evidence, and the platform does not calculate a digest from them. Thus `argument_digest` is empty (`NULL`) when the worker does not send a digest:
+
+- a pause from a worker of an earlier release;
+- a card of a parallel or fan-out run (the card contract has no digest field);
+- a static pause, which has no tool call and no arguments.
 
 The platform writes a row on every path that pauses or decides a step:
 
 - a decision in the chat window, or with the continue API (a pause of the agent itself);
+- a static pause of a pipeline (`interrupt_before` or `interrupt_after`), and the continue of that pause (action `continue`, outcome `approved`). This includes a static pause in a pipeline that an agent calls as a tool;
 - a decision on one card of a parallel or fan-out run, with the per-interrupt decisions API;
 - a confirmation of a sensitive tool from the desktop app;
 - a Stop, a regenerate or a new message that ends a pause (`cancelled` or `superseded`);
@@ -201,7 +208,7 @@ The row is written in the same database transaction as the decision. If the row 
 | `skip` | The platform refuses the step. The model receives a tool result that says the step was skipped because the run has no approver, and continues without the step. | `unattended_skipped` |
 | `notify_and_wait` | The run pauses, and the run's owner gets a notification. The owner can approve or reject the step in the conversation. If nobody answers in time, the run ends with the error `approval_timed_out`. | `unattended_waiting`, then the decision or `timed_out` |
 
-No value approves a step. A `skip` of a step that has no refusal action, and an unattended pause that also waits for a credential authorization, use `fail`.
+No value approves a step. A `skip` of a step that has no refusal action, and an unattended pause that also waits for a credential authorization, use `fail`. A static pause (`interrupt_before` or `interrupt_after`) has only the action `continue`. Thus an unattended static pause with `skip` also uses `fail`: the run ends with `approval_required_unattended`, and the pause cannot be continued.
 
 ### Configuration
 
@@ -273,7 +280,7 @@ ORDER BY id;
 }
 ```
 
-An event of the platform has the `principal_ref` `system:elitea-main`. An unattended outcome has the reason `approval_required_unattended`, `approval_skipped_unattended` or `approval_timed_out`. To verify the chain, use the security audit verifier (see the [evidence guide](/admin/enterprise-controls/evidence-guide)). To send the events to your SIEM, use the [audit export](/admin/audit-trail#export-to-your-siem).
+An event of the platform has the `principal_ref` `system:elitea-main`. The security audit validator refuses a value that looks like a credential (for example, a JWT or a `Bearer` value), a control character, or a value longer than 256 bytes. When a tool name, a toolkit name or an interrupt ID has such a value, the event records the digest of the value (`sha256:` and 64 hex characters) in its place. The approval is not refused because of the name. An unattended outcome has the reason `approval_required_unattended`, `approval_skipped_unattended` or `approval_timed_out`. To verify the chain, use the security audit verifier (see the [evidence guide](/admin/enterprise-controls/evidence-guide)). To send the events to your SIEM, use the [audit export](/admin/audit-trail#export-to-your-siem).
 
 ### What is not enforced
 
@@ -282,6 +289,8 @@ An event of the platform has the `principal_ref` `system:elitea-main`. An unatte
 - When a parallel or fan-out run fails for a missing approver, the members that are already running continue until the worker sees the cancellation at its next lease renewal.
 - On a `skip` of a card of a parallel or fan-out run, the card names the run's owner as the person who decided. The ledger row names the platform (`actor_kind` `system`).
 - Pauses that started before migration 0211 have no `pause` row. A decision on such a pause is recorded.
+- `argument_digest` is empty for a pause from a worker of an earlier release, and for a card of a parallel or fan-out run.
+- When a `notify_and_wait` wait on a static pause expires, the wait ends, but the ledger has no `timed_out` row and the pause stays open. The owner can continue the pause later.
 
 ### Customer responsibility
 
