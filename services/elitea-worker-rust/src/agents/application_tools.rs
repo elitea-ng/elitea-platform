@@ -64,6 +64,9 @@ use super::session::{
     BoundOrdinaryAgentModel, clarifying_question_agent, delegated_authorization_agent,
 };
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
+use elitea_agent_runtime::delegation::{
+    Delegation, DelegationEvidence, DelegationRefusal, DelegationScope, GrantSet, RefusedDelegation,
+};
 use crate::toolkits::{
     AdmittedToolSnapshot, DelegatedAuthorizationCatalog, FrozenToolKind, FrozenToolSnapshot,
     FrozenToolSnapshotErrorCode, McpConnector, McpMaterializationErrorCode, ToolAdmissionPolicy,
@@ -279,7 +282,7 @@ pub(crate) const PIPELINE_APPLICATION_NODE_METADATA_KEY: &str =
 
 type ApplicationIdentity = (u64, u64);
 type ApplicationFuture<'a> = Pin<
-    Box<dyn Future<Output = Result<Arc<BuiltApplication>, NativeAgentAssemblyError>> + Send + 'a>,
+    Box<dyn Future<Output = Result<AssembledApplication, NativeAgentAssemblyError>> + Send + 'a>,
 >;
 
 pub(super) type ApplicationEventSender = mpsc::Sender<ApplicationEventSignal>;
@@ -2828,6 +2831,14 @@ impl<'a> ApplicationToolDependencies<'a> {
         self
     }
 
+    /// The run's root delegation scope (ADR-0044 decision 3): every saved
+    /// agent or pipeline this run calls is narrowed against it.
+    #[must_use]
+    pub(super) fn with_delegation(mut self, scope: DelegationScope) -> Self {
+        self.materialization = self.materialization.with_delegation(scope);
+        self
+    }
+
     /// Admit saved PIPELINE children, namespaced under this conversation's
     /// durable thread (#973).
     #[must_use]
@@ -2847,7 +2858,41 @@ pub(crate) struct MaterializedApplicationTool {
     sensitive_tools: SensitiveToolCatalog,
     delegated_authorization: DelegatedAuthorizationCatalog,
     internal_tools: InternalToolCatalog,
+    /// The delegation's evidence (ADR-0044 decision 3): its depth, the
+    /// effective grant digest and any refusal, for its step record.
+    delegation: Option<DelegationEvidence>,
     pub(crate) tool: Arc<dyn Tool>,
+}
+
+impl MaterializedApplicationTool {
+    /// The guard catalogs the presentation catalog joins to this tool.
+    fn guards(&self) -> ApplicationToolGuardCatalogs {
+        ApplicationToolGuardCatalogs::new(
+            self.sensitive_tools.clone(),
+            self.delegated_authorization.clone(),
+            self.internal_tools,
+        )
+        .with_delegation(self.delegation.clone())
+    }
+}
+
+/// A saved agent this assembly built, or the delegation refusal its call
+/// answers (ADR-0044 decision 3).
+#[derive(Clone)]
+enum AssembledApplication {
+    Built(Arc<BuiltApplication>),
+    Refused(Arc<RefusedApplication>),
+}
+
+/// A saved agent its caller may not delegate to: the model still sees the
+/// tool, and calling it answers the typed refusal naming the missing grant
+/// (or the depth), never a run failure.
+struct RefusedApplication {
+    name: String,
+    description: String,
+    variables: super::variables::AgentCallVariables,
+    refusal: DelegationRefusal,
+    evidence: DelegationEvidence,
 }
 
 struct BuiltApplication {
@@ -2860,6 +2905,8 @@ struct BuiltApplication {
     sensitive_tools: SensitiveToolCatalog,
     delegated_authorization: DelegatedAuthorizationCatalog,
     internal_tools: InternalToolCatalog,
+    /// The delegation's evidence (ADR-0044 decision 3).
+    delegation: DelegationEvidence,
 }
 
 /// One root toolset plus its frozen browser-presentation join.
@@ -3004,11 +3051,7 @@ pub(crate) async fn materialize_application_runtime(
                 entry.agent_type.clone(),
                 entry.model_name.clone(),
                 entry.child_tools.clone(),
-                ApplicationToolGuardCatalogs::new(
-                    entry.sensitive_tools.clone(),
-                    entry.delegated_authorization.clone(),
-                    entry.internal_tools,
-                ),
+                entry.guards(),
             )
             .map_err(|_| invalid_configuration())?;
     }
@@ -3077,8 +3120,13 @@ async fn materialize_pipeline_children(
             dependencies.materialization.clone(),
         )
         .await;
-        let (definition, runtimes, child_tools) = match built {
-            Ok(built) => built,
+        let (definition, runtimes, child_tools, delegation) = match built {
+            Ok(Ok(built)) => built,
+            // ADR-0044 decision 3: offered, and its call answers the refusal.
+            Ok(Err(refused)) => {
+                tools.push(refused_pipeline_tool(&reference, refused));
+                continue;
+            }
             // FU-244: a bound violation (cycle, depth, tiers, scopes, budgets, a pause the
             // root cannot continue) is an authoring error of the saved composition. It is
             // refused with its typed readable terminal, never dropped as an edge.
@@ -3146,6 +3194,7 @@ async fn materialize_pipeline_children(
             sensitive_tools: SensitiveToolCatalog::default(),
             delegated_authorization: DelegatedAuthorizationCatalog::default(),
             internal_tools: InternalToolCatalog::default(),
+            delegation,
             tool,
         });
     }
@@ -3209,7 +3258,11 @@ pub(crate) async fn materialize_application_tools(
         // included): one that no longer fits is left out and named, never failing the turn.
         // A pipeline Agent node that selects it cannot run without it, so there it fails.
         let application = match state.build(reference.clone(), 2).await {
-            Ok(application) => application,
+            Ok(AssembledApplication::Refused(refused)) => {
+                tools.push(refused_application_tool(&refused, alias, agent_type));
+                continue;
+            }
+            Ok(AssembledApplication::Built(application)) => application,
             Err(error) if is_composition_size(&error) && selected_aliases.is_none() => {
                 if state.skipped.len() < MAX_SKIPPED_APPLICATION_CHILDREN {
                     state.skipped.push(SkippedApplicationChild {
@@ -3231,6 +3284,7 @@ pub(crate) async fn materialize_application_tools(
             sensitive_tools: application.sensitive_tools.clone(),
             delegated_authorization: application.delegated_authorization.clone(),
             internal_tools: application.internal_tools,
+            delegation: Some(application.delegation.clone()),
             tool: Arc::new(ApplicationAgentTool::new(
                 application,
                 identity,
@@ -3251,7 +3305,10 @@ struct ApplicationAssemblyState<'a> {
     policy: Arc<ToolAdmissionPolicy>,
     mcp_connector: Arc<dyn McpConnector>,
     mcp_tokens: &'a Map<String, Value>,
-    applications: HashMap<ApplicationIdentity, Arc<BuiltApplication>>,
+    /// Built children by identity and by the caller's delegation scope: one
+    /// child called from two callers with different grants is narrowed for
+    /// each (ADR-0044 decision 3).
+    applications: HashMap<(ApplicationIdentity, String), AssembledApplication>,
     resolving: HashSet<ApplicationIdentity>,
     hops: usize,
     event_sender: Option<ApplicationEventSender>,
@@ -3304,7 +3361,8 @@ impl ApplicationAssemblyState<'_> {
                     return Err(invalid_configuration());
                 }
                 let next_path = self.materialization.enter_agent(identity)?;
-                if let Some(application) = self.applications.get(&identity) {
+                let cache_key = (identity, self.materialization.delegation().cache_key());
+                if let Some(application) = self.applications.get(&cache_key) {
                     tracing::Span::current().record("cache_hit", true);
                     return Ok(application.clone());
                 }
@@ -3318,7 +3376,7 @@ impl ApplicationAssemblyState<'_> {
                 self.materialization = parent_path;
                 self.resolving.remove(&identity);
                 if let Ok(application) = &result {
-                    self.applications.insert(identity, application.clone());
+                    self.applications.insert(cache_key, application.clone());
                 }
                 result
             }
@@ -3337,11 +3395,12 @@ impl ApplicationAssemblyState<'_> {
         })
     }
 
+    #[allow(clippy::too_many_lines)] // Keep loading, delegation narrowing and the child's own assembly in order.
     async fn build_uncached(
         &mut self,
         reference: ApplicationReference,
         tier: usize,
-    ) -> Result<Arc<BuiltApplication>, NativeAgentAssemblyError> {
+    ) -> Result<AssembledApplication, NativeAgentAssemblyError> {
         let loaded = self
             .platform
             .resolve_application_version(
@@ -3352,8 +3411,12 @@ impl ApplicationAssemblyState<'_> {
             .await
             .map_err(NativeAgentAssemblyError::from)?;
         let saved_agent_fingerprint = loaded.saved_agent_fingerprint();
-        let version = loaded.into_version_details();
+        let (mut version, data_classes) = loaded.into_parts();
         self.materialization.admit_version(&version)?;
+        let delegation = match self.delegate(&reference, &mut version, &data_classes)? {
+            Ok(evidence) => evidence,
+            Err(refused) => return Ok(refused),
+        };
         let profile = OrdinaryNoToolProfile::from_nested_version(&version, self.fallback_profile)?;
         let frozen = FrozenToolSnapshot::from_version_details(&version)
             .map_err(snapshot_error)?
@@ -3431,7 +3494,7 @@ impl ApplicationAssemblyState<'_> {
                 .map(|scopes| scopes.with_application_tools(child_tools.agent_tool_names())),
             egress: Arc::clone(self.policy.egress()),
         });
-        Ok(Arc::new(BuiltApplication {
+        Ok(AssembledApplication::Built(Arc::new(BuiltApplication {
             saved_agent_fingerprint,
             instruction_template: version
                 .get("instructions")
@@ -3445,7 +3508,35 @@ impl ApplicationAssemblyState<'_> {
             sensitive_tools,
             delegated_authorization,
             internal_tools,
-        }))
+            delegation,
+        })))
+    }
+
+    /// ADR-0044 decision 3: the child runs with the intersection of its
+    /// grants and its caller's, within the run's delegation depth, so this
+    /// path continues under the child's own scope. A refused child is still
+    /// offered: its call answers the refusal.
+    fn delegate(
+        &mut self,
+        reference: &ApplicationReference,
+        version: &mut Map<String, Value>,
+        data_classes: &BTreeSet<String>,
+    ) -> Result<Result<DelegationEvidence, AssembledApplication>, NativeAgentAssemblyError> {
+        match narrow_version(
+            self.materialization.delegation(),
+            version,
+            data_classes,
+            self.policy.egress(),
+        )? {
+            Ok(delegation) => {
+                self.materialization = self
+                    .materialization
+                    .clone()
+                    .with_delegation(delegation.scope);
+                Ok(Ok(delegation.evidence))
+            }
+            Err(refused) => refused_application(reference, version, refused).map(Err),
+        }
     }
 
     async fn materialize_nested_pipeline_children(
@@ -3521,7 +3612,24 @@ impl ApplicationAssemblyState<'_> {
             let identity = reference.identity;
             let alias = reference.name.clone();
             let agent_type = reference.agent_type.clone();
-            let application = self.build(reference, tier + 1).await?;
+            let application = match self.build(reference, tier + 1).await? {
+                AssembledApplication::Built(application) => application,
+                AssembledApplication::Refused(refused) => {
+                    let entry = refused_application_tool(&refused, alias, agent_type);
+                    presentations
+                        .insert_runtime(
+                            entry.tool.name().to_owned(),
+                            entry.alias.clone(),
+                            entry.agent_type.clone(),
+                            entry.model_name.clone(),
+                            entry.child_tools.clone(),
+                            entry.guards(),
+                        )
+                        .map_err(|_| invalid_configuration())?;
+                    tools.push(entry.tool);
+                    continue;
+                }
+            };
             let tool = Arc::new(ApplicationAgentTool::new(
                 application.clone(),
                 identity,
@@ -3539,12 +3647,14 @@ impl ApplicationAssemblyState<'_> {
                         application.sensitive_tools.clone(),
                         application.delegated_authorization.clone(),
                         application.internal_tools,
-                    ),
+                    )
+                    .with_delegation(Some(application.delegation.clone())),
                 )
                 .map_err(|_| invalid_configuration())?;
             tools.push(tool);
         }
         for entry in pipeline_children {
+            let guards = entry.guards();
             presentations
                 .insert_runtime(
                     entry.tool.name().to_owned(),
@@ -3552,11 +3662,7 @@ impl ApplicationAssemblyState<'_> {
                     entry.agent_type,
                     entry.model_name,
                     entry.child_tools,
-                    ApplicationToolGuardCatalogs::new(
-                        entry.sensitive_tools,
-                        entry.delegated_authorization,
-                        entry.internal_tools,
-                    ),
+                    guards,
                 )
                 .map_err(|_| invalid_configuration())?;
             tools.push(entry.tool);
@@ -3622,6 +3728,228 @@ impl ApplicationAssemblyState<'_> {
         )?;
         toolsets.append(&mut mcp_toolsets);
         Ok((toolsets, sensitive_tools, delegated_authorization))
+    }
+}
+
+/// The run's root delegation scope: the root agent's own frozen grants under
+/// the command's delegation policy. An ad hoc conversation's root holds no
+/// toolkit constraint: the person chose its participants.
+pub(in crate::agents) fn root_delegation_scope(
+    runtime_context: &ClaimBoundRuntimeContextAuthority,
+    kind: super::request::AgentExecutionKind,
+    snapshot: &AdmittedToolSnapshot<'_>,
+) -> DelegationScope {
+    let grants = if kind == super::request::AgentExecutionKind::Adhoc {
+        GrantSet::unconstrained()
+    } else {
+        GrantSet::from_snapshot(snapshot)
+    };
+    DelegationScope::root(Arc::clone(runtime_context.delegation_policy()), grants)
+}
+
+/// Narrow one delegated version's frozen tools against its caller (ADR-0044
+/// decision 3). The outer error is an unreadable version; the inner one the
+/// delegation's refusal.
+pub(in crate::agents) fn narrow_version(
+    caller: &DelegationScope,
+    version: &mut Map<String, Value>,
+    data_classes: &BTreeSet<String>,
+    egress: &elitea_agent_runtime::egress::RunEgress,
+) -> Result<Result<Delegation, RefusedDelegation>, NativeAgentAssemblyError> {
+    let tools = version
+        .get_mut("tools")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(invalid_configuration)?;
+    Ok(caller
+        .delegate(tools, data_classes, egress.policy())
+        .map_err(|refused| *refused))
+}
+
+/// A refused delegation where no tool result can carry it: a pipeline node
+/// that runs a saved pipeline inside the graph. The run ends with the
+/// authorization terminal; the cause names the refusal code and the grant
+/// kind, and the log names the grant.
+pub(in crate::agents) fn delegation_refused_error(
+    refusal: &DelegationRefusal,
+) -> NativeAgentAssemblyError {
+    tracing::warn!(
+        event = "delegation_refused",
+        refusal = %refusal.to_value(),
+        "a pipeline node delegates to a saved pipeline its caller may not run"
+    );
+    let detail = match refusal {
+        DelegationRefusal::GrantMissing { kind, .. } => kind.as_str(),
+        DelegationRefusal::DepthExceeded { .. } => "depth",
+    };
+    NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::AuthorizationFailed,
+        "a pipeline node delegates to a saved pipeline that needs a grant its caller does not hold, or is past the delegation depth",
+    )
+    .with_cause(refusal.code(), Some(detail))
+}
+
+/// A saved agent its caller may not delegate to, offered with its refusal.
+fn refused_application(
+    reference: &ApplicationReference,
+    version: &Map<String, Value>,
+    refused: RefusedDelegation,
+) -> Result<AssembledApplication, NativeAgentAssemblyError> {
+    tracing::warn!(
+        event = "delegation_refused",
+        application_id = reference.identity.0,
+        version_id = reference.identity.1,
+        code = refused.refusal.code(),
+        "a delegated saved agent needs a grant its caller does not hold, or is past the depth"
+    );
+    Ok(AssembledApplication::Refused(Arc::new(RefusedApplication {
+        name: application_tool_name(reference.identity),
+        description: application_description(reference, &[]),
+        variables: super::variables::AgentCallVariables::admit(version)?,
+        refusal: refused.refusal,
+        evidence: refused.evidence,
+    })))
+}
+
+/// The tool a refused saved agent is offered as.
+fn refused_application_tool(
+    refused: &RefusedApplication,
+    alias: String,
+    agent_type: String,
+) -> MaterializedApplicationTool {
+    MaterializedApplicationTool {
+        alias,
+        agent_type,
+        saved_agent_fingerprint: None,
+        model_name: REFUSED_DELEGATION_MODEL.to_owned(),
+        child_tools: ApplicationToolPresentationCatalog::default(),
+        sensitive_tools: SensitiveToolCatalog::default(),
+        delegated_authorization: DelegatedAuthorizationCatalog::default(),
+        internal_tools: InternalToolCatalog::default(),
+        delegation: Some(refused.evidence.clone()),
+        tool: Arc::new(DelegationRefusedTool::new(
+            refused.name.clone(),
+            refused.description.clone(),
+            refused.variables.schema_properties(),
+            refused.refusal.clone(),
+        )),
+    }
+}
+
+/// The tool a refused saved pipeline is offered as.
+fn refused_pipeline_tool(
+    reference: &super::application_pipeline::PipelineChildReference,
+    refused: RefusedDelegation,
+) -> MaterializedApplicationTool {
+    tracing::warn!(
+        event = "delegation_refused",
+        application_id = reference.identity.0,
+        version_id = reference.identity.1,
+        code = refused.refusal.code(),
+        "a delegated saved pipeline needs a grant its caller does not hold, or is past the depth"
+    );
+    MaterializedApplicationTool {
+        alias: reference.alias.clone(),
+        agent_type: "pipeline".to_owned(),
+        saved_agent_fingerprint: None,
+        model_name: REFUSED_DELEGATION_MODEL.to_owned(),
+        child_tools: ApplicationToolPresentationCatalog::default(),
+        sensitive_tools: SensitiveToolCatalog::default(),
+        delegated_authorization: DelegatedAuthorizationCatalog::default(),
+        internal_tools: InternalToolCatalog::default(),
+        delegation: Some(refused.evidence),
+        tool: Arc::new(DelegationRefusedTool::new(
+            application_tool_name(reference.identity),
+            pipeline_tool_description(&reference.alias, reference.description.as_deref()),
+            Map::new(),
+            refused.refusal,
+        )),
+    }
+}
+
+/// The presentation's model label of a refused delegation: no model runs.
+pub(crate) const REFUSED_DELEGATION_MODEL: &str = "delegation-refused";
+
+/// The tool result of a refused delegation: the same `error` and `failure`
+/// shape a failed child answers, with the typed refusal beside it.
+pub(crate) fn delegation_refusal_result(refusal: &DelegationRefusal) -> Value {
+    let message = refusal.message();
+    json!({
+        "error": message,
+        "failure": {
+            "code": refusal.code(),
+            "message": message,
+            "recoverable": false,
+            "retryable": false,
+            "recovery_action": "ask_administrator",
+            "guidance": "The platform refused this delegation before the child ran. Do not call it again in this run. Tell the person which grant is missing; an administrator grants it to the calling agent, or removes it from the delegated one.",
+            "partial_output_available": false,
+            "partial_output": null,
+        },
+        "delegation_refusal": refusal.to_value(),
+    })
+}
+
+/// A delegated saved agent or pipeline the run may not call (ADR-0044
+/// decision 3). Calling it answers [`delegation_refusal_result`]: a tool
+/// result the model reads, recorded as the delegation step, never a run
+/// failure.
+pub(crate) struct DelegationRefusedTool {
+    name: String,
+    description: String,
+    properties: Map<String, Value>,
+    refusal: DelegationRefusal,
+}
+
+impl DelegationRefusedTool {
+    pub(crate) const fn new(
+        name: String,
+        description: String,
+        properties: Map<String, Value>,
+        refusal: DelegationRefusal,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            properties,
+            refusal,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for DelegationRefusedTool {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        let mut properties = Map::from_iter([(
+            "task".to_owned(),
+            json!({"type": "string", "description": "The task for the delegated agent."}),
+        )]);
+        properties.extend(self.properties.clone());
+        Some(json!({
+            "type": "object",
+            "properties": properties,
+            "required": ["task"],
+        }))
+    }
+
+    async fn execute(
+        &self,
+        _ctx: Arc<dyn ToolContext>,
+        _arguments: Value,
+    ) -> adk_rust::Result<Value> {
+        tracing::info!(
+            event = "delegation_refused_call",
+            code = self.refusal.code(),
+            "a refused delegation was called; the refusal is its result"
+        );
+        Ok(delegation_refusal_result(&self.refusal))
     }
 }
 

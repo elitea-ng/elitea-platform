@@ -63,14 +63,20 @@ mod merge_contract_tests {
             scan_message(&[0x88, 0x04, 0x00], Schema::WorkerCommand),
             Err(super::ProtocolError::InvalidInput(_))
         ));
-        // Field 66 is the egress policy (#1490); 67 is still unknown.
+        // Field 66 is the egress policy (#1490), 67 the delegation policy
+        // (#1501); 68 is still unknown.
         assert!(
             scan_message(&[0x92, 0x04, 0x00], Schema::WorkerCommand)
                 .unwrap()
                 .contains(66)
         );
+        assert!(
+            scan_message(&[0x9a, 0x04, 0x00], Schema::WorkerCommand)
+                .unwrap()
+                .contains(67)
+        );
         assert!(matches!(
-            scan_message(&[0x9a, 0x04, 0x00], Schema::WorkerCommand),
+            scan_message(&[0xa2, 0x04, 0x00], Schema::WorkerCommand),
             Err(super::ProtocolError::IncompatibleVersion(_))
         ));
         // The reference holds 1-3; an unknown nested field 4 is refused.
@@ -125,6 +131,21 @@ mod merge_contract_tests {
         );
         assert!(matches!(
             scan_message(&[0x32, 0x00], Schema::GovernedCredentialReference),
+            Err(super::ProtocolError::IncompatibleVersion(_))
+        ));
+    }
+
+    #[test]
+    fn the_delegation_policy_holds_depth_mode_and_repeated_classes() {
+        // max_depth 1, mode 2 (varints), root_data_classes 3 (repeated).
+        let policy = scan_message(
+            &[0x08, 0x02, 0x10, 0x01, 0x1a, 0x01, b'a', 0x1a, 0x01, b'b'],
+            Schema::WorkerDelegationPolicy,
+        )
+        .unwrap();
+        assert_eq!(policy.repeated_field(3).len(), 2);
+        assert!(matches!(
+            scan_message(&[0x22, 0x00], Schema::WorkerDelegationPolicy),
             Err(super::ProtocolError::IncompatibleVersion(_))
         ));
     }
@@ -195,6 +216,8 @@ pub(crate) enum Schema {
     GovernedCredentialReference,
     /// `WorkerCommandV1.egress_policy` (field 66, ADR-0044 #1490).
     WorkerEgressPolicy,
+    /// `WorkerCommandV1.delegation_policy` (field 67, ADR-0044 #1501).
+    WorkerDelegationPolicy,
 }
 
 #[derive(Clone, Copy)]
@@ -368,8 +391,8 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         },
         Schema::WorkerCommand => match field {
             // 65 is the governed security context reference (#1115), 66 the
-            // public egress policy (#1490).
-            1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 | 65 | 66 => Some(length()),
+            // public egress policy (#1490), 67 the delegation policy (#1501).
+            1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 | 65..=67 => Some(length()),
             4 | 6..=7 | 21..=22 => Some(varint()),
             // Preserve the complete language-neutral capability oneof.
             32..=36 | 64 => Some(FieldRule {
@@ -426,6 +449,7 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
             _ => None,
         },
         Schema::WorkerEgressPolicy => egress_policy_rule(field),
+        Schema::WorkerDelegationPolicy => delegation_policy_rule(field),
         Schema::SecurityContextReference
         | Schema::SecurityContext
         | Schema::CallerContext
@@ -439,6 +463,20 @@ const fn egress_policy_rule(field: u32) -> Option<FieldRule> {
     match field {
         1 => Some(varint()),
         2 => Some(FieldRule {
+            wire_type: 2,
+            oneof: None,
+            repeated: true,
+        }),
+        _ => None,
+    }
+}
+
+/// `WorkerDelegationPolicyV1` (#1501): the maximum depth 1 and the mode 2
+/// (varints), and the repeated root data classes 3.
+const fn delegation_policy_rule(field: u32) -> Option<FieldRule> {
+    match field {
+        1 | 2 => Some(varint()),
+        3 => Some(FieldRule {
             wire_type: 2,
             oneof: None,
             repeated: true,

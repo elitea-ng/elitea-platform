@@ -30,6 +30,7 @@ type Identity = (u64, u64);
 struct FrozenVersions {
     versions: BTreeMap<Identity, Value>,
     fingerprints: BTreeMap<Identity, String>,
+    data_classes: BTreeMap<Identity, Vec<&'static str>>,
     reads: Arc<StdMutex<Vec<Identity>>>,
 }
 #[tonic::async_trait]
@@ -54,6 +55,9 @@ impl ContextRoutes for FrozenVersions {
                 "application_id":identity.0,"version_id":identity.1,"version_details":version});
             if let Some(fingerprint) = self.fingerprints.get(&identity) {
                 value["frozen_definition_sha256"] = json!(fingerprint);
+            }
+            if let Some(classes) = self.data_classes.get(&identity) {
+                value["data_classes"] = json!(classes);
             }
             value
         };
@@ -99,11 +103,28 @@ impl Fixture {
         responses: Vec<Response<Body>>,
         fingerprints: BTreeMap<Identity, String>,
     ) -> Self {
+        Self::with_registry(versions, responses, fingerprints, BTreeMap::new())
+    }
+    /// Versions whose envelopes declare registry data classes (ADR-0044
+    /// decision 3).
+    fn with_data_classes(
+        versions: BTreeMap<Identity, Value>,
+        data_classes: BTreeMap<Identity, Vec<&'static str>>,
+    ) -> Self {
+        Self::with_registry(versions, vec![], BTreeMap::new(), data_classes)
+    }
+    fn with_registry(
+        versions: BTreeMap<Identity, Value>,
+        responses: Vec<Response<Body>>,
+        fingerprints: BTreeMap<Identity, String>,
+        data_classes: BTreeMap<Identity, Vec<&'static str>>,
+    ) -> Self {
         let reads = Arc::new(StdMutex::new(Vec::new()));
         let rpc = RuntimeContextClient::with_rpc(
             Routes(FrozenVersions {
                 versions,
                 fingerprints,
+                data_classes,
                 reads: reads.clone(),
             }),
             RuntimeContextConfig {
@@ -155,6 +176,34 @@ impl Fixture {
         ),
         NativeAgentAssemblyError,
     > {
+        // These fixtures test composition bounds, which reach deeper than
+        // the default delegation depth (4): they run under the highest one.
+        let deepest = elitea_agent_runtime::delegation::DelegationPolicy::new(
+            elitea_agent_runtime::delegation::MAX_MAX_DEPTH,
+            elitea_agent_runtime::delegation::NarrowingMode::Enforce,
+            [],
+        )
+        .unwrap();
+        self.build_delegated(
+            root,
+            continuation,
+            DelegationScope::root(Arc::new(deepest), GrantSet::unconstrained()),
+        )
+        .await
+    }
+    /// Build under the caller's delegation `scope` (ADR-0044 decision 3).
+    async fn build_delegated(
+        &self,
+        root: Value,
+        continuation: ApplicationContinuation,
+        scope: DelegationScope,
+    ) -> Result<
+        (
+            Option<MaterializedApplicationRuntime>,
+            Vec<SkippedApplicationChild>,
+        ),
+        NativeAgentAssemblyError,
+    > {
         let authority = test_runtime_context_authority();
         let context = Arc::new(
             self.platform
@@ -190,7 +239,8 @@ impl Fixture {
             )
             .with_model_scopes(model_sessions)
             .with_conversation_thread(THREAD.to_owned())
-            .with_materialization(ApplicationMaterializationPath::new(continuation)),
+            .with_materialization(ApplicationMaterializationPath::new(continuation))
+            .with_delegation(scope),
             None,
         )
         .await
@@ -228,7 +278,7 @@ impl Fixture {
             [1; 32],
         );
         let (sender, _receiver) = pipeline_node_event_channel();
-        let (definition, actual, _) = materialize_saved_pipeline_tool(
+        let (definition, actual, _, _) = materialize_saved_pipeline_tool(
             &self.platform,
             &authority,
             context,
@@ -246,7 +296,8 @@ impl Fixture {
             ApplicationMaterializationPath::default(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .expect("the default delegation scope admits the pipeline");
         (definition, actual)
     }
 }
@@ -1299,5 +1350,359 @@ fn composition_bounds_match_the_shared_contract() {
     assert_eq!(
         contract["size_runtime_message"],
         crate::protocol::output::APPLICATION_COMPOSITION_TOO_LARGE_MESSAGE
+    );
+}
+
+// ADR-0044 decision 3 (#1501): delegation narrows and is bounded.
+
+fn toolkit(id: u64, kind: &str, name: &str, settings: &Value) -> Value {
+    json!({"id":id,"type":kind,"name":name,"toolkit_name":name,"settings":settings,"meta":{}})
+}
+
+fn caller_scope(tools: &[Value], classes: &[&str]) -> DelegationScope {
+    let policy = elitea_agent_runtime::delegation::DelegationPolicy::new(
+        4,
+        elitea_agent_runtime::delegation::NarrowingMode::Enforce,
+        classes.iter().map(|class| (*class).to_owned()),
+    )
+    .unwrap();
+    DelegationScope::root(Arc::new(policy), GrantSet::from_tools(tools))
+}
+
+/// Call the one refused tool, as the model would: its refusal and the
+/// evidence its step records.
+async fn call_refused(fixture: &Fixture, scope: DelegationScope) -> (Value, Value) {
+    let (runtime, skipped) = fixture
+        .build_delegated(
+            reference((32, 42), "agent", "worker"),
+            ApplicationContinuation::Scoped,
+            scope,
+        )
+        .await
+        .expect("a refused delegation is offered, never an assembly failure");
+    assert_eq!(skipped, []);
+    let runtime = runtime.unwrap();
+    let entry = &runtime.tools[0];
+    assert_eq!(entry.model_name, REFUSED_DELEGATION_MODEL);
+    let evidence = runtime
+        .presentations
+        .delegation_of(entry.tool.name())
+        .expect("the refusal is the delegation step's evidence")
+        .clone();
+    assert_eq!(evidence.depth, 1);
+    assert!(evidence.enforced);
+    let result = entry
+        .tool
+        .execute(
+            Arc::new(Context {
+                invocation: "delegation-turn",
+                content: Content::new("user"),
+                actions: StdMutex::default(),
+            }),
+            json!({"task":"work"}),
+        )
+        .await
+        .expect("the refusal is a tool result the model reads");
+    assert!(fixture.models.lock().unwrap().is_empty(), "the child never ran");
+    let refusal = result["delegation_refusal"].clone();
+    assert_eq!(result["failure"]["code"], refusal["code"]);
+    assert!(
+        result["error"]
+            .as_str()
+            .unwrap()
+            .starts_with(refusal["code"].as_str().unwrap())
+    );
+    (
+        refusal,
+        json!(evidence.refusal.map(|refusal| refusal.to_value())),
+    )
+}
+
+/// The ADR's verification: a sub-agent whose definition grants a toolkit its
+/// caller lacks gets a refusal naming the toolkit.
+#[tokio::test]
+async fn a_delegated_agent_needing_a_toolkit_its_caller_lacks_is_refused_naming_it() {
+    let child = version(
+        "agent",
+        "Child",
+        vec![toolkit(7, "github", "Team GitHub", &json!({}))],
+    );
+    let fixture = Fixture::with_outcomes(BTreeMap::from([((32, 42), child)]), vec![]);
+    let (refusal, evidence) = call_refused(&fixture, caller_scope(&[], &[])).await;
+    assert_eq!(
+        refusal,
+        json!({"code":"DELEGATION_GRANT_MISSING","kind":"toolkit","name":"Team GitHub"})
+    );
+    assert_eq!(evidence, refusal);
+}
+
+#[tokio::test]
+async fn a_delegated_agent_needing_a_tool_its_caller_lacks_is_refused_naming_it() {
+    let child = version(
+        "agent",
+        "Child",
+        vec![toolkit(
+            7,
+            "github",
+            "Team GitHub",
+            &json!({"selected_tools":["get_issue","create_issue"]}),
+        )],
+    );
+    let fixture = Fixture::with_outcomes(BTreeMap::from([((32, 42), child)]), vec![]);
+    let caller = [toolkit(
+        7,
+        "github",
+        "Team GitHub",
+        &json!({"selected_tools":["get_issue"]}),
+    )];
+    let (refusal, _) = call_refused(&fixture, caller_scope(&caller, &[])).await;
+    assert_eq!(
+        refusal,
+        json!({"code":"DELEGATION_GRANT_MISSING","kind":"tool","name":"create_issue","toolkit":"Team GitHub"})
+    );
+}
+
+#[tokio::test]
+async fn a_delegated_agent_using_a_credential_outside_the_callers_set_is_refused() {
+    let child = version(
+        "agent",
+        "Child",
+        vec![toolkit(
+            7,
+            "github",
+            "Team GitHub",
+            &json!({"credential_reference_id":"cred-admin"}),
+        )],
+    );
+    let fixture = Fixture::with_outcomes(BTreeMap::from([((32, 42), child)]), vec![]);
+    let caller = [toolkit(
+        7,
+        "github",
+        "Team GitHub",
+        &json!({"credential_reference_id":"cred-reader"}),
+    )];
+    let (refusal, _) = call_refused(&fixture, caller_scope(&caller, &[])).await;
+    assert_eq!(refusal["kind"], "credential");
+    assert_eq!(refusal["name"], "cred-admin");
+    assert_eq!(refusal["toolkit"], "Team GitHub");
+}
+
+#[tokio::test]
+async fn a_delegated_agent_declaring_a_data_class_outside_the_roots_is_refused() {
+    let fixture = Fixture::with_data_classes(
+        BTreeMap::from([((32, 42), version("agent", "Child", vec![]))]),
+        BTreeMap::from([((32, 42), vec!["pii"])]),
+    );
+    let (refusal, _) = call_refused(&fixture, caller_scope(&[], &["public"])).await;
+    assert_eq!(
+        refusal,
+        json!({"code":"DELEGATION_GRANT_MISSING","kind":"data_class","name":"pii"})
+    );
+}
+
+#[tokio::test]
+async fn a_permitted_delegation_records_its_depth_and_effective_grant_digest() {
+    let fixture = Fixture::with_data_classes(
+        BTreeMap::from([((32, 42), version("agent", "Child", vec![]))]),
+        BTreeMap::from([((32, 42), vec!["public"])]),
+    );
+    let (runtime, _) = fixture
+        .build_delegated(
+            reference((32, 42), "agent", "worker"),
+            ApplicationContinuation::Scoped,
+            caller_scope(&[], &["public"]),
+        )
+        .await
+        .unwrap();
+    let runtime = runtime.unwrap();
+    let entry = &runtime.tools[0];
+    assert_ne!(entry.model_name, REFUSED_DELEGATION_MODEL);
+    let evidence = runtime
+        .presentations
+        .delegation_of(entry.tool.name())
+        .unwrap();
+    assert_eq!(evidence.depth, 1);
+    assert_eq!(evidence.refusal, None);
+    assert_eq!(evidence.effective_grant_digest.len(), 64);
+    let summary = evidence.summary();
+    assert_eq!(summary[0], ("delegation_depth", json!(1)));
+    assert_eq!(summary[1].0, "effective_grant_digest");
+}
+
+#[tokio::test]
+async fn delegation_past_the_administrators_depth_is_refused() {
+    // root -> worker (depth 1) -> inner (depth 2), under a maximum of 1.
+    let fixture = Fixture::with_outcomes(
+        BTreeMap::from([
+            (
+                (32, 42),
+                version(
+                    "agent",
+                    "Call the inner agent.",
+                    vec![reference((33, 43), "agent", "inner")],
+                ),
+            ),
+            ((33, 43), version("agent", "Inner", vec![])),
+        ]),
+        vec![],
+    );
+    let policy = elitea_agent_runtime::delegation::DelegationPolicy::new(
+        1,
+        elitea_agent_runtime::delegation::NarrowingMode::Enforce,
+        [],
+    )
+    .unwrap();
+    let authority = test_runtime_context_authority().with_delegation_policy_for_test(policy);
+    let root = version("agent", "Root", vec![reference((32, 42), "agent", "worker")]);
+    let frozen = FrozenToolSnapshot::from_version_details(root.as_object().unwrap()).unwrap();
+    let admission = ToolAdmissionPolicy::new(&[], &BTreeMap::new()).unwrap();
+    let scope = root_delegation_scope(
+        &authority,
+        AgentExecutionKind::Application,
+        &frozen.apply_policy(&admission),
+    );
+    let (runtime, _) = fixture
+        .build_delegated(
+            reference((32, 42), "agent", "worker"),
+            ApplicationContinuation::Scoped,
+            scope,
+        )
+        .await
+        .unwrap();
+    let runtime = runtime.unwrap();
+    let worker = runtime.tools[0].tool.name();
+    assert_eq!(runtime.presentations.delegation_of(worker).unwrap().depth, 1);
+    let inner = runtime
+        .presentations
+        .child_tools(worker)
+        .unwrap()
+        .delegation_of("elitea_agent_33_v_43")
+        .expect("the refused inner agent carries its evidence");
+    assert_eq!(
+        inner.refusal.as_ref().map(DelegationRefusal::to_value),
+        Some(json!({"code":"DELEGATION_DEPTH_EXCEEDED","depth":2,"max_depth":1}))
+    );
+}
+
+/// Call the root's one tool and return its delegation refusal.
+async fn refusal_of(runtime: &MaterializedApplicationRuntime) -> Value {
+    let result = runtime.tools[0]
+        .tool
+        .execute(
+            Arc::new(Context {
+                invocation: "delegation-turn",
+                content: Content::new("user"),
+                actions: StdMutex::default(),
+            }),
+            json!({"task":"work"}),
+        )
+        .await
+        .unwrap();
+    result["delegation_refusal"].clone()
+}
+
+#[tokio::test]
+async fn a_saved_pipeline_tool_outside_the_callers_data_classes_is_refused() {
+    let fixture = Fixture::with_data_classes(
+        BTreeMap::from([((33, 43), version("pipeline", PLAIN_GRAPH, vec![]))]),
+        BTreeMap::from([((33, 43), vec!["pii"])]),
+    );
+    let (runtime, skipped) = fixture
+        .build_delegated(
+            reference((33, 43), "pipeline", "inner"),
+            ApplicationContinuation::Scoped,
+            caller_scope(&[], &["public"]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(skipped, []);
+    let runtime = runtime.unwrap();
+    assert_eq!(runtime.tools[0].agent_type, "pipeline");
+    assert_eq!(runtime.tools[0].model_name, REFUSED_DELEGATION_MODEL);
+    assert_eq!(
+        refusal_of(&runtime).await,
+        json!({"code":"DELEGATION_GRANT_MISSING","kind":"data_class","name":"pii"})
+    );
+    assert!(fixture.models.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_saved_pipeline_nested_in_a_pipeline_tool_is_refused_by_name() {
+    // root -> outer pipeline -> its node runs the saved pipeline `worker`.
+    let fixture = Fixture::with_data_classes(
+        BTreeMap::from([
+            (
+                (31, 41),
+                version(
+                    "pipeline",
+                    DELEGATE_GRAPH,
+                    vec![reference((33, 43), "pipeline", "worker")],
+                ),
+            ),
+            ((33, 43), version("pipeline", PLAIN_GRAPH, vec![])),
+        ]),
+        BTreeMap::from([((33, 43), vec!["pii"])]),
+    );
+    let (runtime, skipped) = fixture
+        .build_delegated(
+            reference((31, 41), "pipeline", "outer"),
+            ApplicationContinuation::Scoped,
+            caller_scope(&[], &["public"]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(skipped, []);
+    let runtime = runtime.unwrap();
+    assert_eq!(runtime.tools[0].model_name, REFUSED_DELEGATION_MODEL);
+    let evidence = runtime
+        .presentations
+        .delegation_of(runtime.tools[0].tool.name())
+        .unwrap();
+    assert_eq!(evidence.depth, 2, "the nested pipeline is one level deeper");
+    assert_eq!(
+        refusal_of(&runtime).await,
+        json!({"code":"DELEGATION_GRANT_MISSING","kind":"data_class","name":"pii"})
+    );
+}
+
+#[tokio::test]
+async fn a_pipeline_agent_node_offers_a_refused_saved_agent() {
+    // root -> outer pipeline -> its node runs the saved agent `worker`.
+    let fixture = Fixture::with_data_classes(
+        BTreeMap::from([
+            (
+                (31, 41),
+                version(
+                    "pipeline",
+                    DELEGATE_GRAPH,
+                    vec![reference((32, 42), "agent", "worker")],
+                ),
+            ),
+            ((32, 42), version("agent", "Child", vec![])),
+        ]),
+        BTreeMap::from([((32, 42), vec!["pii"])]),
+    );
+    let (runtime, _) = fixture
+        .build_delegated(
+            reference((31, 41), "pipeline", "outer"),
+            ApplicationContinuation::Scoped,
+            caller_scope(&[], &["public"]),
+        )
+        .await
+        .unwrap();
+    let runtime = runtime.unwrap();
+    let outer = runtime.tools[0].tool.name();
+    assert_ne!(runtime.tools[0].model_name, REFUSED_DELEGATION_MODEL);
+    assert_eq!(runtime.presentations.delegation_of(outer).unwrap().depth, 1);
+    let worker = runtime
+        .presentations
+        .child_tools(outer)
+        .unwrap()
+        .delegation_of("elitea_agent_32_v_42")
+        .expect("the pipeline's agent node records its delegation");
+    assert_eq!(worker.depth, 2);
+    assert_eq!(
+        worker.refusal.as_ref().map(DelegationRefusal::to_value),
+        Some(json!({"code":"DELEGATION_GRANT_MISSING","kind":"data_class","name":"pii"}))
     );
 }

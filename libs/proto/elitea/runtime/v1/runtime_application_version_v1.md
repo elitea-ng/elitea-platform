@@ -19,10 +19,13 @@ An editable application map does not provide envelope authority.
 | `version_id` | integer | Exact requested and resolved saved version, from 1 through 2,147,483,647 |
 | `version_details` | nonempty object | Main's claim-bound materialized application version |
 | `frozen_definition_sha256` | optional string | Exactly 64 lowercase hexadecimal characters |
+| `data_classes` | optional array of strings | 1 to 32 unique declared data classes from the agent registry row, each `^[a-z0-9][a-z0-9_.-]{0,63}$` (ADR-0044 decision 3) |
 
 Unknown envelope fields are invalid.
 A present null, uppercase digest, wrong-length digest, or non-hexadecimal digest is invalid.
 Omission preserves the legacy envelope.
+Main omits `data_classes` when the application declares none.
+A worker older than ADR-0044 decision 3 rejects an envelope that carries it, so deploy workers first.
 A valid digest containing only zero digits remains syntactically valid.
 Its authority still comes from the authenticated claim-bound route.
 

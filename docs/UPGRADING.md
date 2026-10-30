@@ -4,6 +4,45 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Delegation narrowing and depth cap (#1501, on by default)
+
+ADR-0044 decision 3. No migration. When an agent calls a saved agent or
+pipeline, a pipeline node runs one, or an agent starts a sub-agent, the worker
+assembles the callee with the intersection of its own and its caller's
+toolkits, tools, credential references, declared data classes and egress
+hosts. A missing grant is a tool result with `DELEGATION_GRANT_MISSING`
+(`kind` = `toolkit`, `tool`, `credential`, `data_class` or `egress_host`, and
+`name`); a delegation past the maximum depth is `DELEGATION_DEPTH_EXCEEDED`.
+Both are recorded on the `delegation` run step, which also carries
+`delegation_depth` and `effective_grant_digest` (no change to the
+`run_steps` columns).
+
+- **Setting.** Configuration › Delegation (`delegation` section, gated on
+  `configuration.governance`): `max_depth` 1..16 (default 4) and `mode` =
+  `enforce` (default) or `report`. Governed runs always enforce. The depth is
+  enforced in both modes.
+- **Upgrade the workers before Main.** Main sends the policy on the new
+  `WorkerCommandV1.delegation_policy` field (67) and the child's declared
+  data classes on the private application-version envelope
+  (`data_classes`). A worker from an earlier release rejects both (unknown
+  fields are refused at the wire layer and by the strict envelope decoder).
+  Main omits the field when the section has its defaults and the root agent
+  declares no data classes, and omits `data_classes` for a child that
+  declares none, so an old worker keeps working until then.
+- **Behaviour change: existing compositions can be refused.** A composition
+  deeper than 4 delegations (agent tiers and pipeline limits allowed more)
+  is refused at the fifth level. A callee whose toolkits, explicitly selected
+  tools, credential references or configured hosts its caller does not hold
+  is refused. Before the upgrade, or right after it, set `mode` to `report`,
+  look for `delegation` steps with `delegation_enforced: false`, and grant the
+  missing toolkit to the calling agent (or remove it from the callee). Then
+  set `mode` back to `enforce`.
+- **Data classes** come from `elitea_lifecycle.agent_registry.data_classes`.
+  They are declared metadata, not classifier output. A root agent with no
+  registry row or no data classes imposes no data class limit.
+- An ad hoc conversation root (no saved agent) imposes no toolkit limit;
+  narrowing starts at the first saved agent or pipeline.
+
 ## Default-deny connector catalogue and connector approval (#1501, off by default)
 
 ADR-0044 decision 1. Shared migration **0207_connector_approval** adds

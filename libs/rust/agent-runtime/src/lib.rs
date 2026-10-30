@@ -58,6 +58,7 @@ pub mod assembly_error;
 pub mod bounded_yaml;
 pub mod canonical;
 pub mod context;
+pub mod delegation;
 pub mod context_budget;
 pub mod context_management;
 pub mod context_status;

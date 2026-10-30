@@ -348,6 +348,11 @@ pub struct SubAgentConfig {
     /// by name (the cloud's tools that need a confirmation or a delegated
     /// authorization: a child has no way to ask).
     pub excluded_tools: BTreeSet<String>,
+    /// The parent's place in the run's delegation chain (ADR-0044 decision
+    /// 3): a child is one delegation deeper, refused past the maximum depth
+    /// with [`crate::delegation::DEPTH_EXCEEDED`]. `None` (the desktop)
+    /// counts no depth.
+    pub delegation: Option<crate::delegation::DelegationScope>,
 }
 
 impl SubAgentConfig {
@@ -357,7 +362,17 @@ impl SubAgentConfig {
             instruction: instruction.into(),
             limits: SubAgentLimits::default(),
             excluded_tools: BTreeSet::new(),
+            delegation: None,
         }
+    }
+
+    /// Count each child as one delegation below `scope` (ADR-0044 decision
+    /// 3): past the run's maximum depth `spawn_agent` is refused, and each
+    /// start answers its depth and effective grant digest.
+    #[must_use]
+    pub fn with_delegation(mut self, scope: crate::delegation::DelegationScope) -> Self {
+        self.delegation = Some(scope);
+        self
     }
 
     #[must_use]
@@ -397,6 +412,7 @@ pub(crate) struct Registry {
     isolated_instruction: String,
     limits: SubAgentLimits,
     excluded: BTreeSet<String>,
+    delegation: Option<crate::delegation::DelegationScope>,
     children: Mutex<Vec<child::Child>>,
 }
 
@@ -412,6 +428,7 @@ impl SubAgents {
                 isolated_instruction,
                 limits: config.limits.capped(),
                 excluded: config.excluded_tools,
+                delegation: config.delegation,
                 children: Mutex::new(Vec::new()),
             }),
         }

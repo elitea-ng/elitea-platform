@@ -37,6 +37,7 @@ use super::internal_tools::{
     InternalToolCatalog, decode_ask_user_request,
 };
 use super::sensitive_tools::SensitiveToolCatalog;
+use elitea_agent_runtime::delegation::DelegationEvidence;
 use crate::protocol::ProtocolError;
 use crate::protocol::elitea::runtime::v1::NodeEventV1;
 use crate::protocol::node_event::{
@@ -570,6 +571,9 @@ pub(crate) struct ApplicationToolGuardCatalogs {
     sensitive_tools: SensitiveToolCatalog,
     delegated_authorization: DelegatedAuthorizationCatalog,
     internal_tools: InternalToolCatalog,
+    /// The delegation evidence of the child this tool calls (ADR-0044
+    /// decision 3): its depth, effective grant digest and any refusal.
+    delegation: Option<DelegationEvidence>,
 }
 
 impl ApplicationToolGuardCatalogs {
@@ -582,7 +586,20 @@ impl ApplicationToolGuardCatalogs {
             sensitive_tools,
             delegated_authorization,
             internal_tools,
+            delegation: None,
         }
+    }
+
+    /// The child's delegation evidence, when it was delegated.
+    pub(crate) const fn delegation(&self) -> Option<&DelegationEvidence> {
+        self.delegation.as_ref()
+    }
+
+    /// The same guards with the child's delegation evidence.
+    #[must_use]
+    pub(crate) fn with_delegation(mut self, delegation: Option<DelegationEvidence>) -> Self {
+        self.delegation = delegation;
+        self
     }
 }
 
@@ -678,6 +695,13 @@ impl ApplicationToolPresentationCatalog {
     pub(crate) fn child_tools(&self, tool_name: &str) -> Option<&Self> {
         self.get(tool_name)
             .map(|presentation| &presentation.child_tools)
+    }
+
+    /// Test-only: the delegation evidence a nested tool's step records.
+    #[cfg(test)]
+    pub(crate) fn delegation_of(&self, tool_name: &str) -> Option<&DelegationEvidence> {
+        self.get(tool_name)
+            .and_then(|presentation| presentation.guards.delegation.as_ref())
     }
 
     pub(crate) fn nested_sensitive_tools(&self, tool_name: &str) -> Option<&SensitiveToolCatalog> {

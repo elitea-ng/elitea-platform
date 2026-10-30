@@ -276,6 +276,9 @@ pub struct AcceptedAgentClaim {
     /// The command's field 65 (ADR-0039, #1115) and, once preparation
     /// attached it, the verified context. Empty for a legacy command.
     governed: GovernedContext,
+    /// The command's field 67 (ADR-0044 decision 3, #1501): the run's
+    /// maximum delegation depth, narrowing mode and root data classes.
+    delegation: elitea_agent_runtime::delegation::DelegationPolicy,
 }
 
 impl AcceptedAgentClaim {
@@ -632,6 +635,7 @@ impl AcceptedAgentClaim {
             vector_token: _,
             toolkit_typed_refusals: _,
             governed: _,
+            delegation: _,
         } = self;
         AcceptedTerminalClaimRecovery {
             binding: RecoveryClaimBinding {
@@ -1058,6 +1062,9 @@ pub(crate) struct ClaimBoundRuntimeContextAuthority {
     /// governed command (#1120); `None` for a legacy one. Every
     /// `RedeemCredential` call names it.
     governed_context_digest: Option<[u8; 32]>,
+    /// The run's delegation policy (ADR-0044 decision 3, #1501), from the
+    /// signed command.
+    delegation: std::sync::Arc<elitea_agent_runtime::delegation::DelegationPolicy>,
 }
 
 /// The claim material one `RemoveIndex` call carries: the execution identity,
@@ -1206,7 +1213,28 @@ impl ClaimBoundRuntimeContextAuthority {
                 .reference
                 .as_ref()
                 .map(|reference| *reference.digest()),
+            delegation: std::sync::Arc::new(claim.delegation.clone()),
         }
+    }
+
+    /// The run's delegation policy (ADR-0044 decision 3): the maximum
+    /// delegation depth, the narrowing mode and the root data classes.
+    #[must_use]
+    pub(crate) fn delegation_policy(
+        &self,
+    ) -> &std::sync::Arc<elitea_agent_runtime::delegation::DelegationPolicy> {
+        &self.delegation
+    }
+
+    /// Test-only: the same authority under `policy`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_delegation_policy_for_test(
+        mut self,
+        policy: elitea_agent_runtime::delegation::DelegationPolicy,
+    ) -> Self {
+        self.delegation = std::sync::Arc::new(policy);
+        self
     }
 
     /// The security context digest of a governed command; `None` for a
@@ -1870,6 +1898,7 @@ pub(crate) fn test_lease_monitored_input_execution(
             vector_token: None,
             toolkit_typed_refusals: false,
             governed: GovernedContext::default(),
+            delegation: elitea_agent_runtime::delegation::DelegationPolicy::default(),
             request_entry: ExecutionInputEntryV1 {
                 entry_id: "agent-request".to_owned(),
                 immutable_version: "v/1".to_owned(),
@@ -1892,6 +1921,19 @@ pub(crate) fn test_runtime_context_authority() -> ClaimBoundRuntimeContextAuthor
         vector_token: None,
         index_removal: Box::new(IndexRemovalBinding::fixture()),
         governed_context_digest: None,
+        // The composition fixtures attach children whose toolkits their
+        // parents do not hold, and nest deeper than the default depth: they
+        // run with narrowing reported, at the highest depth. Enforcement is
+        // tested under explicit policies (`with_delegation_policy_for_test`)
+        // and scopes (ADR-0044 decision 3).
+        delegation: std::sync::Arc::new(
+            elitea_agent_runtime::delegation::DelegationPolicy::new(
+                elitea_agent_runtime::delegation::MAX_MAX_DEPTH,
+                elitea_agent_runtime::delegation::NarrowingMode::Report,
+                [],
+            )
+            .expect("the fixture delegation policy"),
+        ),
     }
 }
 
@@ -3649,6 +3691,16 @@ fn parse_input_claim_binding(
         vector_token: VectorClaimToken::from_receipt(receipt.vector_token),
         toolkit_typed_refusals: receipt.toolkit_typed_refusals,
         governed: governed_context(verified.command())?,
+        delegation: delegation_policy(verified.command())?,
+    })
+}
+
+/// The command's delegation policy (ADR-0044 decision 3), as claim state.
+fn delegation_policy(
+    command: &super::elitea::runtime::v1::WorkerCommandV1,
+) -> Result<elitea_agent_runtime::delegation::DelegationPolicy, ControlSemanticError> {
+    super::delegation::policy_from_command(command).map_err(|_| {
+        ControlSemanticError::InvalidInput("the command delegation policy is malformed")
     })
 }
 

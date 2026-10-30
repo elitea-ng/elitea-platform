@@ -61,7 +61,26 @@ type Producer struct {
 	signer   CommandSigner
 	appender StreamAppender
 	egress   EgressPolicyResolver
-	refusals DispatchRefusalRecorder
+	// delegation answers an agent execution command's delegation policy
+	// (ADR-0044 decision 3); nil leaves the field absent (the defaults).
+	delegation DelegationPolicyResolver
+	refusals   DispatchRefusalRecorder
+}
+
+// DelegationPolicyResolver answers the delegation policy an agent execution
+// command carries (ADR-0044 decision 3; workerdelegation.Resolver). Nil means
+// the defaults, and the field stays absent. An error refuses the command: it
+// is never signed without the policy it should carry, and the dispatch is
+// retried within the run's deadline.
+type DelegationPolicyResolver interface {
+	WorkerDelegationPolicy(ctx context.Context, command *runtimev1.WorkerCommandV1) (*runtimev1.WorkerDelegationPolicyV1, error)
+}
+
+// WithDelegationPolicy makes every agent execution command this producer
+// prepares carry its delegation policy.
+func (p *Producer) WithDelegationPolicy(resolver DelegationPolicyResolver) *Producer {
+	p.delegation = resolver
+	return p
 }
 
 // DispatchRefusalRecorder makes a refusal durable on the run's outbox row
@@ -161,6 +180,13 @@ func (p *Producer) prepareCommand(ctx context.Context, command *runtimev1.Worker
 			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker egress policy: %w", err)
 		}
 		command.EgressPolicy = policy
+	}
+	if p.delegation != nil && command.GetAgentExecution() != nil {
+		policy, err := p.delegation.WorkerDelegationPolicy(ctx, command)
+		if err != nil {
+			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker delegation policy: %w", err)
+		}
+		command.DelegationPolicy = policy
 	}
 	if err := validateBoundedStrings(command, p.config.Limits.MaxStringBytes); err != nil {
 		return executionapp.PreparedCommandEnvelope{}, err

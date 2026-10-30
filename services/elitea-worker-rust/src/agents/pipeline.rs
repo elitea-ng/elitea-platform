@@ -16,6 +16,9 @@ use std::time::Duration;
 use adk_rust::agent::LlmAgentBuilder;
 use adk_rust::{Agent, GenerateContentConfig, ReadonlyContext, Tool, Toolset};
 use async_trait::async_trait;
+use elitea_agent_runtime::delegation::{
+    Delegation, DelegationEvidence, DelegationScope, RefusedDelegation,
+};
 use serde_json::{Map, Value};
 use sqlx::PgPool;
 use tracing::Instrument as _;
@@ -794,7 +797,14 @@ impl PipelineNativeAgentAssembler {
         let direct_tool_resolver =
             build_direct_tool_resolver(profile, &toolsets, tool_policy.egress())?;
         // One assembly path for the whole graph: its shared skipped set feeds the notice (FU-243).
-        let materialization = ApplicationMaterializationPath::native_graph(continuation);
+        // ADR-0044 decision 3: every saved agent or pipeline a node runs is a
+        // delegation from this pipeline, narrowed against its own grants.
+        let materialization = ApplicationMaterializationPath::native_graph(continuation)
+            .with_delegation(super::application_tools::root_delegation_scope(
+                runtime_context,
+                super::request::AgentExecutionKind::Application,
+                &selected_snapshot,
+            ));
         let application_runtime = context
             .clone()
             .zip(model_facade.clone())
@@ -1027,7 +1037,8 @@ impl PipelineNativeAgentAssembler {
                             "pipeline".to_owned(),
                             "nested-model".to_owned(),
                             bound.presentations,
-                            ApplicationToolGuardCatalogs::default(),
+                            ApplicationToolGuardCatalogs::default()
+                                .with_delegation(bound.delegation.clone()),
                         )
                         .map_err(|_| invalid_pipeline_tool_scope())?;
                 }
@@ -2030,14 +2041,7 @@ pub(super) async fn materialize_saved_pipeline_tool(
     code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
     conversation_thread_id: String,
     materialization: ApplicationMaterializationPath,
-) -> Result<
-    (
-        PipelineDefinition,
-        PipelineNodeRuntimes,
-        ApplicationToolPresentationCatalog,
-    ),
-    NativeAgentAssemblyError,
-> {
+) -> Result<SavedPipelineTool, NativeAgentAssemblyError> {
     let runtime = PipelineApplicationRuntime {
         platform,
         authority: runtime_context,
@@ -2052,7 +2056,7 @@ pub(super) async fn materialize_saved_pipeline_tool(
         conversation_thread_id,
         materialization,
     };
-    let (definition, bound) = admit_saved_pipeline_child(
+    let (definition, bound) = match admit_saved_pipeline_child(
         platform,
         runtime_context,
         &runtime,
@@ -2061,7 +2065,11 @@ pub(super) async fn materialize_saved_pipeline_tool(
         identity,
         project_id,
     )
-    .await?;
+    .await?
+    {
+        Ok(bound) => bound,
+        Err(refused) => return Ok(Err(refused)),
+    };
     // Static and scoped ordinary descendants use their typed coordinators.
     // Direct graph sensitive, AskUser, and MCP pauses remain unsupported here.
     // A tool-owned static pause is projected only beneath an ordinary root: a graph root already
@@ -2129,7 +2137,12 @@ pub(super) async fn materialize_saved_pipeline_tool(
             &bound.guarded_interrupt_kinds,
         ));
     }
-    Ok((definition, bound.runtimes, bound.presentations))
+    Ok(Ok((
+        definition,
+        bound.runtimes,
+        bound.presentations,
+        bound.delegation,
+    )))
 }
 
 /// Whether this start continues a pause the user decided, the only start an older worker's
@@ -2188,6 +2201,66 @@ fn unsupported_pipeline_child_pauses(kinds: &[&'static str]) -> NativeAgentAssem
     )
 }
 
+/// A narrowed saved pipeline version and its own scope, or the refusal.
+type DelegatedVersion = Result<(Map<String, Value>, Delegation), RefusedDelegation>;
+
+/// Narrow one admitted saved pipeline against its caller's delegation scope
+/// on `runtime` (ADR-0044 decision 3): its narrowed version and its own scope,
+/// or the refusal.
+fn delegate_saved_pipeline(
+    runtime: &PipelineApplicationRuntime<'_>,
+    admitted: &AdmittedSavedPipeline,
+) -> Result<DelegatedVersion, NativeAgentAssemblyError> {
+    let mut version = admitted.version.clone();
+    Ok(super::application_tools::narrow_version(
+        runtime.materialization.delegation(),
+        &mut version,
+        &admitted.data_classes,
+        runtime.tool_policy.egress(),
+    )?
+    .map(|delegation| (version, delegation)))
+}
+
+/// The first refusal anywhere in one admitted saved pipeline's composition:
+/// the pipeline itself, then each saved pipeline its nodes run, each under
+/// the scope its parent was narrowed to. Saved agents its nodes run are not
+/// walked: each is offered as a tool that answers its own refusal.
+fn composition_refusal(
+    caller: &DelegationScope,
+    admitted: &AdmittedSavedPipeline,
+    egress: &elitea_agent_runtime::egress::RunEgress,
+) -> Result<Option<RefusedDelegation>, NativeAgentAssemblyError> {
+    let mut version = admitted.version.clone();
+    match super::application_tools::narrow_version(
+        caller,
+        &mut version,
+        &admitted.data_classes,
+        egress,
+    )? {
+        Err(refused) => Ok(Some(refused)),
+        Ok(delegation) => {
+            for child in admitted.children.values() {
+                if let Some(refused) = composition_refusal(&delegation.scope, child, egress)? {
+                    return Ok(Some(refused));
+                }
+            }
+            Ok(None)
+        }
+    }
+}
+
+/// A saved pipeline offered as an agent's tool, bound, with its delegation
+/// evidence; or the delegation's refusal, which its call answers.
+pub(super) type SavedPipelineTool = Result<
+    (
+        PipelineDefinition,
+        PipelineNodeRuntimes,
+        ApplicationToolPresentationCatalog,
+        Option<DelegationEvidence>,
+    ),
+    RefusedDelegation,
+>;
+
 /// Resolve and ADMIT one saved pipeline child, up to but not including what
 /// the caller will do with it (#990 review 7).
 ///
@@ -2203,7 +2276,8 @@ async fn admit_saved_pipeline_child(
     fallback: &OrdinaryNoToolProfile,
     identity: (u64, u64),
     project_id: Option<u64>,
-) -> Result<(PipelineDefinition, BoundSavedPipeline), NativeAgentAssemblyError> {
+) -> Result<Result<(PipelineDefinition, BoundSavedPipeline), RefusedDelegation>, NativeAgentAssemblyError>
+{
     let admitted = composition::admit_tool_composition(
         platform,
         runtime_context,
@@ -2214,10 +2288,21 @@ async fn admit_saved_pipeline_child(
         fallback,
     )
     .await?;
+    // The pipeline-as-tool refusal is a tool result: checked here, where the
+    // caller can still offer the refused tool.
+    // The whole composition is walked, so a saved pipeline nested inside it
+    // is refused here too, by name, and not as an assembly failure.
+    if let Some(refused) = composition_refusal(
+        runtime.materialization.delegation(),
+        admitted.as_ref(),
+        runtime.tool_policy.egress(),
+    )? {
+        return Ok(Err(refused));
+    }
     let bound =
         bind_admitted_saved_pipeline(admitted.as_ref(), runtime, mcp_connector, String::new())
             .await?;
-    Ok((admitted.profile.definition().clone(), bound))
+    Ok(Ok((admitted.profile.definition().clone(), bound)))
 }
 
 /// Bind the invocation-owned node runtimes of one saved pipeline participant.
@@ -2238,6 +2323,9 @@ pub(super) struct BoundSavedPipeline {
     /// raise none.
     pub(super) guarded_interrupt_kinds: Vec<&'static str>,
     pub(super) presentations: ApplicationToolPresentationCatalog,
+    /// This pipeline's delegation evidence when it was delegated to
+    /// (ADR-0044 decision 3), for its delegation step.
+    pub(super) delegation: Option<DelegationEvidence>,
 }
 
 type PipelineBindingFuture<'a> = std::pin::Pin<
@@ -2262,6 +2350,22 @@ fn bind_admitted_saved_pipeline<'a>(
             admitted.revision.version_id,
         ))?;
         runtime.materialization.admit_version(&admitted.version)?;
+        // ADR-0044 decision 3: the saved pipeline runs with the intersection
+        // of its grants and its caller's. A refusal here has no tool result
+        // to answer it: a pipeline-as-tool is checked before this
+        // (`materialize_saved_pipeline_tool`), so this is a node of a graph.
+        let (version, delegation) = match delegate_saved_pipeline(&runtime, admitted)? {
+            Ok(delegated) => delegated,
+            Err(refused) => {
+                return Err(super::application_tools::delegation_refused_error(
+                    &refused.refusal,
+                ));
+            }
+        };
+        runtime.materialization = runtime
+            .materialization
+            .clone()
+            .with_delegation(delegation.scope);
         let runtime = &runtime;
         let mut scopes = scoped_applications::PipelineApplicationScopeRegistry::default();
         scopes.register_scope(
@@ -2269,7 +2373,7 @@ fn bind_admitted_saved_pipeline<'a>(
             admitted.profile.definition(),
             Some(admitted.revision.clone()),
         )?;
-        let frozen = FrozenToolSnapshot::from_version_details(&admitted.version)
+        let frozen = FrozenToolSnapshot::from_version_details(&version)
             .map_err(|_| invalid_pipeline_tool_scope())?;
         let snapshot = frozen.apply_policy(runtime.tool_policy.as_ref());
         let mut nodes = BTreeMap::new();
@@ -2303,7 +2407,8 @@ fn bind_admitted_saved_pipeline<'a>(
                             "pipeline".to_owned(),
                             "nested-model".to_owned(),
                             bound.presentations,
-                            ApplicationToolGuardCatalogs::default(),
+                            ApplicationToolGuardCatalogs::default()
+                                .with_delegation(bound.delegation.clone()),
                         )
                         .map_err(|_| invalid_pipeline_tool_scope())?;
                 }
@@ -2361,6 +2466,7 @@ fn bind_admitted_saved_pipeline<'a>(
         descendant_guards.extend(bound.guarded_interrupt_kinds);
         bound.guarded_interrupt_kinds = descendant_guards.into_iter().collect();
         bound.presentations = presentations;
+        bound.delegation = Some(delegation.evidence);
         bound.runtimes = bound
             .runtimes
             .with_checkpoint_catalog(composition::checkpoint_catalog(admitted)?)
@@ -2519,6 +2625,7 @@ async fn bind_saved_pipeline_runtimes(
         runtimes,
         guarded_interrupt_kinds,
         presentations: ApplicationToolPresentationCatalog::default(),
+        delegation: None,
     })
 }
 

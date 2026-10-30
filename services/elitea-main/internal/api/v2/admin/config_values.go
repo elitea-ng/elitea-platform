@@ -271,6 +271,11 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
 		return
 	}
+	// The delegation policy's depth range and mode (ADR-0044 decision 3).
+	if reason := validateDelegationValues(section.id, body.Values); reason != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+		return
+	}
 	// The credential review policy's ranges (ADR-0044 decision 5).
 	if reason := validateCredentialReviewValues(section.id, body.Values); reason != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
@@ -293,6 +298,7 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		h.invalidateNativeClientPolicy()
 	}
 	h.invalidateRunSafety(section.id)
+	h.invalidateDelegation(section.id)
 	if section.id == platformconfig.SectionBranding {
 		h.invalidateBranding()
 		if stored, err := h.loadSectionValues(r, section.id); err == nil {

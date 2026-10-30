@@ -158,8 +158,22 @@ impl AgentEventProjector {
         } else {
             None
         };
+        // A sub-agent start is a delegation too (ADR-0044 decision 3): its
+        // result carries the child's depth and effective grant digest, or the
+        // refusal.
+        let subagent_delegation = if active.application.is_none() && active.name == "spawn_agent" {
+            response
+                .get("delegation")
+                .and_then(Value::as_object)
+                .cloned()
+        } else {
+            None
+        };
         let (kind, name) = match (&active.application, &retrieval) {
             (Some(application), _) => (RunStepKindV1::Delegation, application.display_name.clone()),
+            (None, _) if subagent_delegation.is_some() => {
+                (RunStepKindV1::Delegation, shown.to_owned())
+            }
             (None, Some(_)) => (RunStepKindV1::Retrieval, shown.to_owned()),
             (None, None) => (RunStepKindV1::ToolCall, shown.to_owned()),
         };
@@ -175,6 +189,23 @@ impl AgentEventProjector {
                 .summary("agent_type", json!(application.agent_type))
                 .summary("tool_name", json!(active.name))
                 .summary("model", json!(application.model_name));
+            if let Some(evidence) = application.guards.delegation() {
+                for (key, value) in evidence.summary() {
+                    step = step.summary(key, value);
+                }
+            }
+        }
+        if let Some(delegation) = subagent_delegation {
+            if delegation.contains_key("code") {
+                step = step.summary("delegation_refusal", Value::Object(delegation));
+            } else {
+                for key in ["depth", "effective_grant_digest"] {
+                    if let Some(value) = delegation.get(key) {
+                        let key = if key == "depth" { "delegation_depth" } else { key };
+                        step = step.summary(key, value.clone());
+                    }
+                }
+            }
         }
         if let Some(toolkit) = active.toolkit.as_ref() {
             step = step

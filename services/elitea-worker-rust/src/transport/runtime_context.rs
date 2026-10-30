@@ -969,6 +969,9 @@ pub(crate) struct RuntimeApplicationVersion {
     version_id: u64,
     saved_agent_fingerprint: Option<SavedAgentFingerprint>,
     version_details: Map<String, Value>,
+    /// The application's declared data classes (its agent registry row,
+    /// ADR-0044 decision 3); empty when it declares none.
+    data_classes: std::collections::BTreeSet<String>,
 }
 
 /// Main's pre-redemption definition identity from one claim-bound response.
@@ -1017,6 +1020,17 @@ impl RuntimeApplicationVersion {
 
     pub(crate) fn into_version_details(self) -> Map<String, Value> {
         self.version_details
+    }
+
+    /// The declared data classes and the frozen version, for delegation
+    /// narrowing (ADR-0044 decision 3).
+    pub(crate) fn into_parts(self) -> (Map<String, Value>, std::collections::BTreeSet<String>) {
+        (self.version_details, self.data_classes)
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn data_classes(&self) -> &std::collections::BTreeSet<String> {
+        &self.data_classes
     }
 }
 
@@ -1386,6 +1400,12 @@ fn load_application_response(
             }
         }),
         version_details: decoded.version_details,
+        data_classes: elitea_agent_runtime::delegation::data_classes(decoded.data_classes)
+            .map_err(|_| {
+                RuntimeContextError::InvalidResponse(
+                    "the nested application data classes are malformed",
+                )
+            })?,
     })
 }
 
@@ -1728,6 +1748,9 @@ struct ApplicationVersionResponse {
     #[serde(default)]
     frozen_definition_sha256: OptionalFrozenDefinitionDigest,
     version_details: Map<String, Value>,
+    /// ADR-0044 decision 3: the declared data classes. Omitted when none.
+    #[serde(default)]
+    data_classes: Vec<String>,
 }
 
 /// Omission supports legacy responses. Present null is not an omission.

@@ -80,6 +80,12 @@ message WorkerCommandV1 {
   // commands are unchanged byte for byte.
   WorkerEgressPolicyV1 egress_policy = 66;
 
+  // The delegation policy of an agent run (ADR-0044 decision 3, #1501).
+  // Absent means the defaults: a maximum delegation depth of 4, narrowing
+  // enforced, and no root data classes. Main omits it while every value is
+  // the default, so commands are unchanged byte for byte.
+  WorkerDelegationPolicyV1 delegation_policy = 67;
+
   reserved 15, 26 to 31;
   reserved "grant_template_id";
   reserved 37 to 63;
@@ -115,4 +121,31 @@ message WorkerEgressPolicyV1 {
   // fails the command closed.
   repeated string allow = 2;
   reserved 3 to 10;
+}
+
+// How grant narrowing treats a callee that needs a grant its caller lacks.
+enum WorkerDelegationModeV1 {
+  // The same as ENFORCE.
+  WORKER_DELEGATION_MODE_V1_UNSPECIFIED = 0;
+  // The delegation is refused with DELEGATION_GRANT_MISSING.
+  WORKER_DELEGATION_MODE_V1_ENFORCE = 1;
+  // The missing grant is recorded on the delegation step and the callee
+  // runs. The depth cap is enforced in both modes.
+  WORKER_DELEGATION_MODE_V1_REPORT = 2;
+}
+
+// A run's delegation policy (ADR-0044 decision 3). When an agent calls a
+// saved agent or pipeline, a pipeline node runs one, or an agent starts a
+// sub-agent, the callee runs with the intersection of its own grants and its
+// caller's. The depth counts every kind of delegation together; the root is
+// depth 0.
+message WorkerDelegationPolicyV1 {
+  // 1 to 16; 0 means the default (4).
+  uint32 max_depth = 1;
+  WorkerDelegationModeV1 mode = 2;
+  // The root agent's declared data classes (its agent registry row), in the
+  // registry's grammar (^[a-z0-9][a-z0-9_.-]{0,63}$), at most 32. Empty
+  // imposes no data class constraint.
+  repeated string root_data_classes = 3;
+  reserved 4 to 10;
 }

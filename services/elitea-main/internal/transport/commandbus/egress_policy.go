@@ -11,6 +11,13 @@ func (p *AgentExecutionProducer) WithEgressPolicy(resolver EgressPolicyResolver)
 	return p
 }
 
+// WithDelegationPolicy makes the agent execution commands carry their
+// delegation policy (ADR-0044 decision 3).
+func (p *AgentExecutionProducer) WithDelegationPolicy(resolver DelegationPolicyResolver) *AgentExecutionProducer {
+	p.producer.WithDelegationPolicy(resolver)
+	return p
+}
+
 // WithEgressPolicy makes the index ingest commands carry their policy.
 func (p *IndexIngestProducer) WithEgressPolicy(resolver EgressPolicyResolver) *IndexIngestProducer {
 	p.producer.WithEgressPolicy(resolver)

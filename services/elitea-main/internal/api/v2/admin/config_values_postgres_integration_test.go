@@ -757,6 +757,10 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 	//	run_caps          → platformconfig.LoadRunCaps through a cached reader:
 	//	                    the control plane's lease renewal cancels an agent
 	//	                    run past max_wall_seconds (ADR-0041 decision 3)
+	//	delegation        → platformconfig.LoadDelegationSettings through a
+	//	                    cached reader: every agent execution command's
+	//	                    preparation (workerdelegation.Resolver) puts it in
+	//	                    the signed command (ADR-0044 decision 3, #1501)
 	//	entitlement_export → platformconfig.LoadEntitlementExportSettings, read
 	//	                    by the SCIM entitlement tree's client gate on every
 	//	                    request to /api/v2/scim/v2/entitlements (ADR-0044
@@ -792,6 +796,9 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		"session_policy": true,
 		// ADR-0041 decision 3 (#1496, #1498): every agent lease renewal.
 		"run_caps": true,
+		// ADR-0044 decision 3 (#1501): every agent execution command's
+		// preparation (workerdelegation.Resolver).
+		"delegation": true,
 		// ADR-0040 decisions 3 and 5 (#1497): publish, change requests and
 		// the recertification routine.
 		"agent_lifecycle": true,

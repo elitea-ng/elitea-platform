@@ -10,6 +10,7 @@ use super::{
     invalid_configuration, resource_exhausted,
 };
 use crate::agents::pipeline::composition::MAX_PIPELINE_COMPOSITION_DEPTH;
+use elitea_agent_runtime::delegation::DelegationScope;
 
 pub(in crate::agents) const MAX_MATERIALIZATION_VERSION_BYTES: usize = 4 * 1024 * 1024;
 
@@ -98,6 +99,10 @@ pub(in crate::agents) struct ApplicationMaterializationPath {
     /// An ordinary saved Agent lies on this path: a pipeline below it runs as
     /// that Agent's tool, not as a node of the root graph (FU-249).
     under_agent: bool,
+    /// The caller's place in the run's delegation chain (ADR-0044 decision
+    /// 3): its effective grants and its combined depth. A saved agent or
+    /// pipeline built on this path is narrowed against it.
+    delegation: DelegationScope,
 }
 
 impl Default for ApplicationMaterializationPath {
@@ -119,7 +124,21 @@ impl ApplicationMaterializationPath {
             graph_agent_scopes: 0,
             native_graph_root: false,
             under_agent: false,
+            delegation: DelegationScope::default(),
         }
+    }
+
+    /// This path under `scope`: the root's own grants and policy, or a
+    /// callee's narrowed grants once its delegation was admitted.
+    #[must_use]
+    pub(in crate::agents) fn with_delegation(mut self, scope: DelegationScope) -> Self {
+        self.delegation = scope;
+        self
+    }
+
+    /// The caller's delegation scope on this path.
+    pub(in crate::agents) const fn delegation(&self) -> &DelegationScope {
+        &self.delegation
     }
 
     pub(in crate::agents) fn native_graph(continuation: ApplicationContinuation) -> Self {

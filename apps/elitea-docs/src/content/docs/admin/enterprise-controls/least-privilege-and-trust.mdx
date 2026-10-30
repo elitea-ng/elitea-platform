@@ -1,9 +1,9 @@
 ---
 title: "Least privilege and trust"
-description: "Controls that limit what an agent can reach, and the evidence for reviewing it: connector approval, the worker egress allowlist, the credential inventory, the permission trimming report and the entitlement export."
+description: "Controls that limit what an agent can reach, and the evidence for reviewing it: connector approval, the worker egress allowlist, delegation narrowing, the credential inventory, the permission trimming report and the entitlement export."
 ---
 
-Least-privilege controls limit what an agent can reach and act on, and give reviewers the evidence to keep it that way. This page describes the controls of ADR-0044 that are available now. Delegation narrowing between agents and signed assertions for remote agents are planned in [issue 1501](https://github.com/elitea-ng/elitea-platform/issues/1501).
+Least-privilege controls limit what an agent can reach and act on, and give reviewers the evidence to keep it that way. This page describes the controls of ADR-0044 that are available now. Signed assertions for remote agents are planned in [issue 1501](https://github.com/elitea-ng/elitea-platform/issues/1501).
 
 ## Connector approval
 
@@ -181,6 +181,92 @@ To find the same data with the API, call `GET /api/v2/admin/worker_egress/hosts`
 - Seed the allowlist from the observed hosts before you switch to `allowlist`, and watch the refused hosts after the switch.
 - Keep network egress control at your perimeter as well. This allowlist is enforced inside the worker; a firewall or egress gateway is your independent second layer.
 - Keep the list of hosts that the operator configured for the worker (web-search providers, model endpoints) under your change process, because this policy does not judge them.
+
+## Delegation narrowing
+
+### The risk
+
+An agent can delegate work: it calls a saved agent or a saved pipeline as a tool, a pipeline node runs a saved agent or pipeline, or the agent starts a sub-agent. Without a limit, the delegated agent (the callee) uses its own grants. A caller that cannot reach a toolkit, a credential or a host can then reach it through a callee that holds it. A chain of delegations can also grow deeper than any reviewer expects.
+
+### What is enforced
+
+- **The callee runs with the intersection of grants.** Its effective grants are the grants that both the callee and its caller hold. The worker computes this when it assembles the callee, before the callee runs. Five kinds of grant are compared:
+  - **Toolkits.** A toolkit is one configured toolkit, by its id. A built-in toolkit with no configuration is identified by its type.
+  - **Tools.** When the callee selects all tools of a toolkit and the caller selects only some, the callee gets only the caller's tools. When the callee selects a specific tool that the caller does not hold, the delegation is refused.
+  - **Credentials.** A callee toolkit that uses a credential reference (ADR-0039) can use it only when the caller holds the same reference. The governed credential checks still apply to each use.
+  - **Data classes.** The callee can declare only the data classes that its caller declares. A callee that declares no data classes gets the caller's data classes.
+  - **Egress hosts.** Each host that a callee toolkit is configured to reach must be on the run's [worker egress allowlist](#worker-egress-allowlist). The refusal names the host.
+- **A missing grant refuses the delegation.** The callee does not run. The call returns a tool result with the code `DELEGATION_GRANT_MISSING`, the kind of grant (`toolkit`, `tool`, `credential`, `data_class` or `egress_host`) and its name. The model reads the result and can tell the user. The run does not fail.
+- **The depth is limited.** The root agent is depth 0. Each delegation adds 1. Saved agents, saved pipelines, pipeline nodes and sub-agents count together. A delegation deeper than the maximum is refused with `DELEGATION_DEPTH_EXCEEDED`. The existing limits on agent nesting and on the number of pipeline participants still apply.
+- **The first saved agent sets the limit.** The root grants are the toolkits, tools and credentials of the agent or pipeline that the run starts with, the data classes of its [registry record](/admin/enterprise-controls/agent-lifecycle#registry-and-risk-tiers), and the run's egress allowlist. A root agent with no registry record, or with no data classes, imposes no data class limit.
+
+A nested pipeline is checked before its parent runs. When any agent or pipeline inside it is refused, the whole pipeline is refused, and the refusal names the grant.
+
+Example of a refused call, as the model reads it:
+
+```json
+{
+  "error": "DELEGATION_GRANT_MISSING: the delegated agent needs the toolkit 'jira-prod', and its caller does not hold it. ...",
+  "failure": {
+    "code": "DELEGATION_GRANT_MISSING",
+    "recoverable": false,
+    "retryable": false,
+    "recovery_action": "ask_administrator"
+  },
+  "delegation_refusal": { "code": "DELEGATION_GRANT_MISSING", "kind": "toolkit", "name": "jira-prod" }
+}
+```
+
+A depth refusal carries `{"code": "DELEGATION_DEPTH_EXCEEDED", "depth": 5, "max_depth": 4}`.
+
+### Configure and use
+
+Open **Configuration › Delegation** in the admin console (permission `configuration.governance`).
+
+| Setting | Values | Default | Effect |
+| --- | --- | --- | --- |
+| **Maximum Delegation Depth** (`max_depth`) | 1 to 16 | 4 | The deepest delegation a run can make. |
+| **Mode** (`mode`) | `enforce`, `report` | `enforce` | `enforce` refuses a delegation that needs a missing grant. `report` records the missing grant on the delegation step and lets the callee run. The depth limit applies in both modes. Runs under the governed credential profile always use `enforce`. |
+
+Each replica of the main service reads the section again after at most 15 seconds. The setting applies to runs that start after that. A run keeps the policy that it started with.
+
+To find compositions that enforcement would refuse, set **Mode** to `report` for a period, and look for delegation steps with `delegation_enforced: false`. For each one, give the grant to the calling agent, or remove it from the callee. Then set **Mode** to `enforce`.
+
+### Evidence
+
+Each delegation is a `delegation` [run step](/admin/enterprise-controls/audit-evidence-and-retention#run-step-records). This includes a sub-agent start (step name `spawn_agent`). The step summary adds these fields:
+
+- `delegation_depth`: the depth of the callee.
+- `effective_grant_digest`: the SHA-256 of the callee's effective grants, in a canonical sorted form (schema `elitea.delegation.grants.v1`). Two delegations with the same digest had the same grants.
+- `delegation_refusal`: only on a refused or reported delegation. It has the code, and the kind and name of the missing grant, or the depth and maximum.
+- `delegation_enforced`: only with `delegation_refusal` on a saved agent or pipeline. `true` when the delegation was refused, `false` when it was reported in `report` mode and the callee ran.
+
+Example summary of a permitted delegation:
+
+```json
+{
+  "tool_call_id": "call_7",
+  "status": "ok",
+  "agent_type": "pipeline",
+  "tool_name": "invoice_review",
+  "model": "gpt-5.1",
+  "delegation_depth": 2,
+  "effective_grant_digest": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
+}
+```
+
+### What is not enforced
+
+- **Data classes are declared metadata.** They are the labels that the agent owners set in the registry. They are not the output of a classifier, and the platform does not examine the data that an agent reads. The check makes sure that a callee declares no class that its caller does not declare.
+- **An ad hoc conversation has no root limit.** A conversation without a saved agent imposes no toolkit grants, because the user selected its participants. Narrowing starts at the first saved agent or pipeline.
+- **Agent and pipeline references are not grants.** A caller does not need to hold the callee itself. The callee's own toolkits are compared.
+- **Hosts are read from the toolkit settings.** The host check uses the URL settings of the callee's toolkits that have an explicit scheme (`https://…`). Hosts in an OpenAPI specification are not read at assembly. The worker egress allowlist still checks every call at run time.
+
+### Customer responsibility
+
+- Decide the delegation depth that your agents need, and keep it as low as possible.
+- Keep the data classes in the agent registry correct. The check is only as good as the labels.
+- Review the refused and reported delegation steps, and fix the agent definitions.
 
 ## Credential inventory
 

@@ -18,6 +18,14 @@
       "maxLength": 64,
       "pattern": "^[0-9a-f]{64}$",
       "description": "Main's opaque digest of the exact frozen pre-redemption definition. Omission preserves the legacy response. Null is invalid."
+    },
+    "data_classes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+      "description": "The application's declared data classes from its agent registry row (ADR-0044 decision 3). The worker narrows a delegation to them. Omitted when it declares none. Declared metadata, not classifier output."
     }
   }
 }
