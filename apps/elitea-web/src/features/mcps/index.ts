@@ -8,7 +8,11 @@
  * a sideways `features/` import (R-L1).
  *
  * Deliberately NOT re-exported here (available inside the slice, not part
- * of the curated surface, to stay under budget): `useMcpAuthModal`/
+ * of the curated surface, to stay under budget): the props types of
+ * `McpLogoutModal`, `McpAuthStatusBadge`, `McpLogInButton` and
+ * `McpLogoutButton` and `useMcpLogin`'s `McpLoginAuthConfig` (no importer
+ * outside this slice; callers infer them from the component or hook),
+ * `useMcpAuthModal`/
  * `useConfigOAuthModal` (lower-level than `useMcpLogin`, which every
  * current UI export already composes), `McpAuthStatusBadgeValues`/
  * `McpTokenChangeOptions`/`McpTokenChangeResult` (structurally inferable
@@ -21,18 +25,13 @@
 export { McpAuthModal } from './ui/McpAuthModal';
 export type { McpAuthModalProps } from './ui/McpAuthModal';
 export { McpLogoutModal } from './ui/McpLogoutModal';
-export type { McpLogoutModalProps } from './ui/McpLogoutModal';
 export { McpAuthStatusBadge } from './ui/McpAuthStatusBadge';
-export type { McpAuthStatusBadgeProps } from './ui/McpAuthStatusBadge';
 export { McpLogInButton } from './ui/McpLogInButton';
-export type { McpLogInButtonProps } from './ui/McpLogInButton';
 export { McpLogInLink } from './ui/McpLogInLink';
 export { McpLogoutButton } from './ui/McpLogoutButton';
-export type { McpLogoutButtonProps } from './ui/McpLogoutButton';
 
 // model — the one hook a caller composing its own MCP-login affordance needs.
 export { useMcpLogin } from './model/useMcpLogin';
-export type { McpLoginAuthConfig } from './model/useMcpLogin';
 export { useMcpTokenChange } from './model/useMcpTokenChange';
 
 /**
@@ -51,7 +50,8 @@ export { useMcpTokenChange } from './model/useMcpTokenChange';
  * this slice — verified by grep across all of `src/` — and both stay exported
  * from `model/useMcpLogin.ts` for in-slice use, so nothing is deleted, only
  * de-published. This is the same trade `features/toolkits/index.ts` records in
- * its own budget note. Back to 20/20 — re-check before adding more.
+ * its own budget note. `McpConnectorApprovalRequired` (issue 1501) came in
+ * with the five unused props types above going out: 16/20.
  *
  * NOT IN `shared/api/endpoints.manifest.json`, and that is deliberate. The
  * route this hook calls — `POST /elitea_core/mcp_sync_tools/prompt_lib/{id}` —
