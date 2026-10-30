@@ -48,6 +48,9 @@ const PIPELINE_APPLICATION_HITL_MESSAGE: &str =
 pub(super) const APPLICATION_TASK_STATE_KEY: &str = "__elitea_application_task_v1";
 pub(super) const APPLICATION_MESSAGES_STATE_KEY: &str = "__elitea_application_messages_v1";
 pub(super) const APPLICATION_RESULT_STATE_KEY: &str = "__elitea_application_result_v1";
+/// The visit of a saved child pipeline (FU-248): hex of the Agent node's open
+/// activation digest. A child's node journals are scoped to it.
+pub(crate) const APPLICATION_VISIT_STATE_KEY: &str = "__elitea_application_visit_v1";
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -378,6 +381,17 @@ pub(crate) trait PipelineApplicationResolver: Send + Sync {
         Err(ApplicationExecutionError::Unavailable)
     }
 
+    /// The same frozen resolver whose saved pipelines journal their effectful
+    /// direct nodes through one fixed Parallel branch's own family (FU-248):
+    /// a member's child threads belong to the branch, not the run root.
+    /// `None` keeps this resolver.
+    fn for_branch_journals(
+        &self,
+        _journals: Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>,
+    ) -> Option<Arc<dyn PipelineApplicationResolver>> {
+        None
+    }
+
     /// Rebind the existing frozen resolver to one exact branch event sender.
     fn for_parallel_events(
         &self,
@@ -452,9 +466,6 @@ pub(super) struct ApplicationNode {
     activation_checkpointer: Option<Arc<ApplicationActivationCheckpointer>>,
     graph_call_owner: Option<Arc<crate::agents::pipeline::scoped_runtime::PipelineGraphCallOwner>>,
     parallel_inputs: bool,
-    /// The saved child pipeline holds a fixed Parallel (FU-249): a wake
-    /// re-enters it at its parked frontier.
-    child_fanout: bool,
     /// The run's node failure channel, so a typed child refusal keeps its reason.
     failure_events: Option<PipelineNodeEventSender>,
 }
@@ -526,7 +537,6 @@ impl ApplicationNode {
         let child_checkpointer: Arc<dyn Checkpointer> = activation_checkpointer
             .as_ref()
             .map_or_else(|| checkpointer.clone(), |owner| owner.clone());
-        let child_fanout = fanout.is_some();
         let participant = match fanout {
             None => resolver.resolve_node(
                 definition.id(),
@@ -588,7 +598,6 @@ impl ApplicationNode {
             activation_checkpointer,
             graph_call_owner,
             parallel_inputs: false,
-            child_fanout,
         })
     }
 
@@ -634,6 +643,7 @@ impl ApplicationNode {
             super::static_pause::STATIC_AFTER_CHECKPOINTS_STATE_KEY,
             super::static_pause::STATIC_TEXT_RESUME_STATE_KEY,
             PIPELINE_NODE_EVENT_SCOPE_STATE_KEY,
+            APPLICATION_VISIT_STATE_KEY,
         ] {
             if node.graph().schema().channels.contains_key(channel) {
                 node = node.with_input(channel, channel);
@@ -705,7 +715,7 @@ impl ApplicationNode {
                 .ok_or_else(|| node_failure(self.name()))?;
             activation_inputs.insert(key.clone(), value);
         }
-        let _activation = self
+        let activation = self
             .activation_checkpointer
             .as_ref()
             .map(|owner| {
@@ -718,6 +728,14 @@ impl ApplicationNode {
                 )
             })
             .transpose()?;
+        // FU-248: the child's node journals are scoped to this visit. Its
+        // thread and steps are reused by every visit; the activation is not.
+        if let Some(activation) = &activation {
+            state.insert(
+                APPLICATION_VISIT_STATE_KEY.to_owned(),
+                json!(hex(&activation.visit_digest()?)),
+            );
+        }
         let parent_scope = PipelineNodeEventScope::from_state(
             context.state.get(PIPELINE_NODE_EVENT_SCOPE_STATE_KEY),
         )
@@ -755,14 +773,16 @@ impl ApplicationNode {
             .get(super::static_pause::STATIC_TEXT_RESUME_STATE_KEY)
             .and_then(|value| value.get(&checkpoint_thread_id))
             .and_then(Value::as_str);
-        // FU-249: a child holding a Parallel re-entered at its own unfinished
-        // frontier (a wake) already holds its input. The subgraph merges the
-        // input through the channel reducers again, so the task message would
-        // be appended twice and the parked occurrence would no longer match.
-        // A text resume is a new message and is still sent.
-        let resumes_frontier = self.child_fanout
-            && text_resume.is_none()
-            && self.child_resumes_frontier(&checkpoint_thread_id).await?;
+        // FU-249, FU-248: a child re-entered at its own unfinished frontier
+        // (a wake, or a reclaim after the Worker was lost inside it) already
+        // holds its input. The subgraph merges the input through the channel
+        // reducers again, so the task message would be appended twice: a
+        // parked occurrence would no longer match, and a journaled call's
+        // input would no longer be the one its journal recorded. The overlay
+        // shows only this visit's frontier. A text resume is a new message
+        // and is still sent.
+        let resumes_frontier =
+            text_resume.is_none() && self.child_resumes_frontier(&checkpoint_thread_id).await?;
         let task = text_resume.unwrap_or(task).to_owned();
         state.insert(APPLICATION_TASK_STATE_KEY.to_owned(), json!(task));
         if resumes_frontier {

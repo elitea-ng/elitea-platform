@@ -53,6 +53,7 @@ impl ParallelChildCheckpointerFactory for PostgresCheckpointer {
             admitted_threads: std::collections::BTreeSet::from([thread_id.clone()]),
             thread_id,
             checkpointer,
+            node_recovery: None,
         })
     }
 
@@ -93,6 +94,7 @@ impl ParallelChildCheckpointerFactory for PostgresCheckpointer {
                         admitted_threads: std::collections::BTreeSet::from([thread_id.clone()]),
                         thread_id,
                         checkpointer,
+                        node_recovery: None,
                     },
                     latest,
                 }

@@ -300,7 +300,7 @@ impl<R: Ed25519PublicKeyResolver + 'static> SandboxSupervisorService for Supervi
         Response<crate::protocol::elitea::runtime::v1::PublishRustCompiledSnapshotResponseV1>,
         Status,
     > {
-        self.publish_snapshot(request).await
+        Box::pin(self.publish_snapshot(request)).await
     }
 
     async fn lookup_sandbox_dependencies(

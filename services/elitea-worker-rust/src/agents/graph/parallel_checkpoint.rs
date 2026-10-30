@@ -515,6 +515,9 @@ pub(crate) struct ParallelBranchExecution {
     parent_event_scope: Option<serde_json::Value>,
     /// Authored `after` pauses this run continues (thread → checkpoint).
     static_after_checkpoints: std::collections::BTreeMap<String, String>,
+    /// The branch family's node journals (FU-248).
+    node_recovery:
+        Option<Arc<dyn crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory>>,
 }
 
 impl ParallelBranchExecution {
@@ -537,6 +540,7 @@ impl ParallelBranchExecution {
             admitted_threads,
             parent_event_scope,
             static_after_checkpoints: std::collections::BTreeMap::new(),
+            node_recovery: None,
         }
     }
 
@@ -547,6 +551,24 @@ impl ParallelBranchExecution {
     ) -> Self {
         self.static_after_checkpoints = checkpoints;
         self
+    }
+
+    /// The branch family's node journals, lent to the saved pipelines its
+    /// Agent member runs (FU-248).
+    pub(super) fn with_node_recovery(
+        mut self,
+        node_recovery: Option<
+            Arc<dyn crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory>,
+        >,
+    ) -> Self {
+        self.node_recovery = node_recovery;
+        self
+    }
+
+    pub(crate) fn node_recovery(
+        &self,
+    ) -> Option<Arc<dyn crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory>> {
+        self.node_recovery.clone()
     }
 
     pub(crate) fn static_after_checkpoints(&self) -> &std::collections::BTreeMap<String, String> {

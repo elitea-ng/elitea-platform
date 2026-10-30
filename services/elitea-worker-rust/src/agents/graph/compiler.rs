@@ -31,8 +31,8 @@ use thiserror::Error;
 use super::aggregate::{AggregateNode, AggregateNodeDefinition};
 use super::application::{
     APPLICATION_MESSAGES_STATE_KEY, APPLICATION_RESULT_STATE_KEY, APPLICATION_TASK_STATE_KEY,
-    ApplicationConfigurationError, ApplicationNode, ApplicationNodeDefinition,
-    PipelineApplicationResolver, PipelineApplicationSelection,
+    APPLICATION_VISIT_STATE_KEY, ApplicationConfigurationError, ApplicationNode,
+    ApplicationNodeDefinition, PipelineApplicationResolver, PipelineApplicationSelection,
 };
 use super::decision::{DecisionConfigurationError, DecisionNode, DecisionNodeDefinition};
 use super::direct_tool::{
@@ -293,6 +293,9 @@ pub(crate) struct PipelineNodeRuntimes {
     application: Option<Arc<dyn PipelineApplicationResolver>>,
     code: Option<Arc<dyn CodeSandboxRuntime>>,
     node_recovery: Option<Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>>,
+    /// The run's journals lent to a saved child for its direct tool nodes only
+    /// (FU-248). Its Code nodes keep their own recovery rules.
+    direct_tool_recovery: Option<Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>>,
     saved_child_scope_provider: Option<
         Arc<dyn crate::agents::pipeline::saved_child_scope_provider::SavedChildScopeProvider>,
     >,
@@ -404,6 +407,21 @@ impl PipelineNodeRuntimes {
         self
     }
 
+    /// Whether this saved child's direct tool nodes were lent the run's journals.
+    pub(crate) const fn has_direct_tool_recovery(&self) -> bool {
+        self.direct_tool_recovery.is_some()
+    }
+
+    /// A saved child's direct tool nodes journal through the run's fenced
+    /// writer, scoped to the child's visit (FU-248).
+    pub(crate) fn with_direct_tool_recovery(
+        mut self,
+        authority: Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>,
+    ) -> Self {
+        self.direct_tool_recovery = Some(authority);
+        self
+    }
+
     pub(in crate::agents) fn with_code(mut self, runtime: Arc<dyn CodeSandboxRuntime>) -> Self {
         self.code = Some(runtime);
         self
@@ -426,6 +444,7 @@ impl PipelineNodeRuntimes {
             events: None,
             code: None,
             node_recovery: None,
+            direct_tool_recovery: None,
             saved_child_scope_provider: None,
             checkpoint_catalog: None,
             composition_definitions: None,
@@ -1029,6 +1048,24 @@ impl PipelineDefinition {
                 .any(|node| node.id() == id && matches!(node, PipelineNodeDefinition::Parallel(_)))
     }
 
+    /// Whether `id` is a direct toolkit/MCP node no fan-out owns: the leaf a
+    /// recovery walk may stop at when a saved child was lost inside that
+    /// node's journaled call (FU-248).
+    pub(crate) fn is_unowned_direct_tool(&self, id: &str) -> bool {
+        !self.parallel_owned_nodes.contains(id)
+            && !self.map_owned_nodes.contains(id)
+            && self.nodes.iter().any(|node| {
+                node.id() == id && matches!(node, PipelineNodeDefinition::DirectTool(_))
+            })
+    }
+
+    /// Whether the graph starts at an unowned direct toolkit/MCP node: a child
+    /// lost inside that first call has saved no row yet, and its visit-scoped
+    /// journal still decides the call (FU-248).
+    pub(crate) fn starts_at_direct_tool(&self) -> bool {
+        self.is_unowned_direct_tool(&self.entry_point)
+    }
+
     /// The configuration digest Agent node `id` stamps on its child rows
     /// (PM-2 recovery walk).
     pub(crate) fn application_config_digest(&self, id: &str) -> Option<[u8; 32]> {
@@ -1580,6 +1617,7 @@ impl PipelineDefinition {
             APPLICATION_TASK_STATE_KEY.to_owned(),
             APPLICATION_MESSAGES_STATE_KEY.to_owned(),
             APPLICATION_RESULT_STATE_KEY.to_owned(),
+            APPLICATION_VISIT_STATE_KEY.to_owned(),
             HITL_RESUME_STATE_KEY.to_owned(),
             DIRECT_TOOL_RESUME_STATE_KEY.to_owned(),
             LLM_TOOL_RESUME_STATE_KEY.to_owned(),
@@ -1641,7 +1679,11 @@ impl PipelineDefinition {
                 let node_id = node.id().to_owned();
                 let mut direct = DirectToolNode::new(node.clone(), self.state.clone(), resolver)
                     .with_events(runtimes.events.clone());
-                if let Some(authority) = runtimes.node_recovery.clone() {
+                if let Some(authority) = runtimes
+                    .node_recovery
+                    .clone()
+                    .or_else(|| runtimes.direct_tool_recovery.clone())
+                {
                     direct = direct.with_node_recovery(authority);
                 }
                 let mut next = builder.node(direct);
@@ -3079,6 +3121,7 @@ pub(super) fn reserved_user_state_key(key: &str) -> bool {
             APPLICATION_TASK_STATE_KEY
                 | APPLICATION_MESSAGES_STATE_KEY
                 | APPLICATION_RESULT_STATE_KEY
+                | APPLICATION_VISIT_STATE_KEY
                 | SUBGRAPH_RESULT_NODE
                 | SUBGRAPH_ENTRY_NODE
                 | FINISHED_TURN_NODE

@@ -171,6 +171,9 @@ pub(crate) struct ParallelChildCheckpoint {
     pub(crate) thread_id: String,
     pub(crate) checkpointer: Arc<dyn Checkpointer>,
     pub(crate) admitted_threads: BTreeSet<String>,
+    /// The branch family's own fenced node journals, for the effectful direct
+    /// nodes of the saved pipelines its Agent member runs (FU-248).
+    pub(crate) node_recovery: Option<Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>>,
 }
 
 #[async_trait]
@@ -465,6 +468,7 @@ pub(crate) struct PreparedParallelBranch {
     store: Arc<dyn Checkpointer>,
     thread_id: String,
     admitted_threads: BTreeSet<String>,
+    node_recovery: Option<Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>>,
     /// What the branch's own checkpoint already proves; `None` must run.
     replay: Option<ParallelBranchOutcome>,
 }
@@ -479,6 +483,7 @@ impl PreparedParallelBranch {
             store: Arc::clone(&self.store),
             thread_id: self.thread_id.clone(),
             admitted_threads: self.admitted_threads.clone(),
+            node_recovery: self.node_recovery.clone(),
             replay: None,
         }
     }
@@ -837,6 +842,7 @@ impl AdkParallelBranchRuntime {
                 store: child.checkpointer,
                 thread_id: child.thread_id,
                 admitted_threads: child.admitted_threads,
+                node_recovery: child.node_recovery,
                 replay,
             });
         }
@@ -864,6 +870,7 @@ impl AdkParallelBranchRuntime {
                     .get(super::node_events::PIPELINE_NODE_EVENT_SCOPE_STATE_KEY)
                     .cloned(),
             )
+            .with_node_recovery(branch.node_recovery.clone())
             .with_static_after_checkpoints(
                 branch
                     .input

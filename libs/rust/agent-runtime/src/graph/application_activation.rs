@@ -30,6 +30,26 @@ impl ApplicationActivation {
     fn child_thread(&self) -> String {
         format!("{}/{}", self.parent_thread, self.node_name)
     }
+
+    /// One visit of the child: everything the stamp records, hashed with a
+    /// domain of its own.
+    fn visit_digest(&self) -> Option<[u8; 32]> {
+        let mut context = digest::Context::new(&digest::SHA256);
+        context.update(b"elitea.pipeline.application-visit.v1\0");
+        for field in [
+            self.parent_thread.as_bytes(),
+            self.node_name.as_bytes(),
+            &u64::try_from(self.parent_step).ok()?.to_be_bytes(),
+            &self.definition_digest,
+            &self.input_digest,
+        ] {
+            context.update(&u64::try_from(field.len()).ok()?.to_be_bytes());
+            context.update(field);
+        }
+        let mut visit = [0; 32];
+        visit.copy_from_slice(context.finish().as_ref());
+        Some(visit)
+    }
 }
 
 /// The Agent node definition digest the activation stamp on a row of `thread`
@@ -48,6 +68,28 @@ pub fn stamped_definition_digest<S: std::hash::BuildHasher>(
     let recorded: ApplicationActivation = serde_json::from_value(entry).ok()?;
     (recorded.schema == ACTIVATION_SCHEMA && recorded.child_thread() == thread)
         .then_some(recorded.definition_digest)
+}
+
+/// The identity of the visit that wrote a row of `thread`: a digest of the
+/// whole activation stamp recorded for exactly that thread (parent thread,
+/// node, parent step, definition and input digests), `None` unless the stamp
+/// is well formed. A saved child thread is reused across visits and its steps
+/// restart, so this is what tells two visits of one child apart (FU-248).
+#[must_use]
+pub fn stamped_visit_digest<S: std::hash::BuildHasher>(
+    metadata: &HashMap<String, Value, S>,
+    thread: &str,
+) -> Option<[u8; 32]> {
+    let entry = metadata
+        .get(ACTIVATION_METADATA_KEY)?
+        .as_object()?
+        .get(thread)?
+        .clone();
+    let recorded: ApplicationActivation = serde_json::from_value(entry).ok()?;
+    if recorded.schema != ACTIVATION_SCHEMA || recorded.child_thread() != thread {
+        return None;
+    }
+    recorded.visit_digest()
 }
 
 /// Every node owns its own overlay. The inner adapter retains authority and fencing.
@@ -222,6 +264,19 @@ fn input_digest(inputs: &Value) -> Result<[u8; 32], GraphError> {
 
 pub struct ApplicationActivationGuard {
     active: Arc<Mutex<Option<ApplicationActivation>>>,
+}
+
+impl ApplicationActivationGuard {
+    /// This open visit's identity: the digest [`stamped_visit_digest`] reads
+    /// back from every row the visit stamps (FU-248).
+    pub fn visit_digest(&self) -> Result<[u8; 32], GraphError> {
+        self.active
+            .lock()
+            .map_err(|_| activation_error())?
+            .as_ref()
+            .and_then(ApplicationActivation::visit_digest)
+            .ok_or_else(activation_error)
+    }
 }
 
 impl Drop for ApplicationActivationGuard {

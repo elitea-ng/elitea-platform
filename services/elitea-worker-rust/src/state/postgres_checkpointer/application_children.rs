@@ -300,12 +300,13 @@ impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
             .activate_parallel_branch(activation, branch, ordinal, input_digest, origin)
             .await?;
         let thread_id = child.scope.authority.thread_id.clone();
-        let child = child.with_application_paths(paths).await?;
+        let child = Arc::new(child.with_application_paths(paths).await?);
         let admitted_threads = child.threads.keys().cloned().collect();
         Ok(ParallelChildCheckpoint {
             thread_id,
-            checkpointer: Arc::new(child),
+            checkpointer: child.clone(),
             admitted_threads,
+            node_recovery: Some(child),
         })
     }
 
@@ -361,13 +362,14 @@ impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
                     .first()
                     .map(|root| root.scope.authority.thread_id.clone())
                     .unwrap_or_default();
-                let child = ApplicationCheckpointers::assemble(family, catalog);
+                let child = Arc::new(ApplicationCheckpointers::assemble(family, catalog));
                 let admitted_threads = child.threads.keys().cloned().collect();
                 PreparedChildCheckpoint {
                     child: ParallelChildCheckpoint {
                         thread_id,
-                        checkpointer: Arc::new(child),
+                        checkpointer: child.clone(),
                         admitted_threads,
+                        node_recovery: Some(child),
                     },
                     latest,
                 }

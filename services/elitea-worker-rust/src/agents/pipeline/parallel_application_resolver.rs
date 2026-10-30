@@ -48,6 +48,48 @@ impl NativePipelineApplicationResolver {
         })
     }
 
+    /// The same participants, their saved pipelines journaling through one
+    /// fixed Parallel branch's family (FU-248). Only participants the run
+    /// lent journals to are rebound.
+    pub(super) fn rebind_branch_journals(
+        &self,
+        journals: &Arc<dyn crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory>,
+    ) -> Self {
+        let rebind = |participant: &NativePipelineApplicationParticipant| match participant {
+            NativePipelineApplicationParticipant::Pipeline {
+                definition,
+                runtimes,
+                events,
+                display_name,
+            } if runtimes.has_direct_tool_recovery() => {
+                NativePipelineApplicationParticipant::Pipeline {
+                    definition: definition.clone(),
+                    runtimes: runtimes
+                        .clone()
+                        .with_direct_tool_recovery(Arc::clone(journals)),
+                    events: events.clone(),
+                    display_name: display_name.clone(),
+                }
+            }
+            other => other.clone(),
+        };
+        Self {
+            call_owners: self.call_owners.clone(),
+            nodes: self
+                .nodes
+                .iter()
+                .map(|(node, (alias, participant))| {
+                    (node.clone(), (alias.clone(), rebind(participant)))
+                })
+                .collect(),
+            participants: self
+                .participants
+                .iter()
+                .map(|(alias, participant)| (alias.clone(), rebind(participant)))
+                .collect(),
+        }
+    }
+
     pub(super) fn parallel_participant_digest(
         &self,
         node: &str,

@@ -26,35 +26,15 @@ impl NodeRecoveryFactory for PostgresCheckpointer {
         self.state_writer_lease
             .ensure_current()
             .map_err(|_| recovery_error("pipeline.node_recovery.writer_not_current"))?;
-        let authority = &self.scope.authority;
-        let mut hash = digest::Context::new(&digest::SHA256);
-        hash.update(b"elitea.pipeline.node-attempt-journal.v1\0");
-        let encoded_policy = serde_json::to_vec(policy)
-            .map_err(|_| recovery_error("pipeline.node_recovery.invalid_policy"))?;
-        for field in [
-            authority.tenant_id.as_bytes(),
-            &authority.resource_project_id.to_be_bytes(),
-            &authority.projection_project_id.to_be_bytes(),
-            authority.capability_id.as_bytes(),
-            &authority.definition_digest,
-            authority.execution_id.as_bytes(),
-            &authority.generation.to_be_bytes(),
-            activation.root_thread_id.as_bytes(),
-            activation.node_id.as_bytes(),
-            &activation.step.to_be_bytes(),
-            &activation.node_digest,
-            &activation.input_digest,
-            &encoded_policy,
-        ] {
-            hash.update(
-                &u64::try_from(field.len())
-                    .map_err(|_| recovery_error("pipeline.node_recovery.invalid_scope"))?
-                    .to_be_bytes(),
-            );
-            hash.update(field);
+        // FU-248: a saved child's thread and steps are reused by every visit,
+        // so its journal is scoped to the visit; there is no unscoped fallback.
+        // The run root has no visit and keeps its original journal identity.
+        let in_child = activation.root_thread_id != self.run_root_thread_id;
+        if in_child != activation.visit.is_some() {
+            return Err(recovery_error("pipeline.node_recovery.unscoped_child"));
         }
-        let mut activation_id = [0; 32];
-        activation_id.copy_from_slice(hash.finish().as_ref());
+        let authority = &self.scope.authority;
+        let activation_id = journal_activation_id(authority, activation, policy)?;
         let thread_id = format!("n1:{}", URL_SAFE_NO_PAD.encode(activation_id));
         // A journal may start an effect, so it opens only while this claim still owns the run.
         let child = Self::activate_under_root(
@@ -74,4 +54,47 @@ impl NodeRecoveryFactory for PostgresCheckpointer {
             policy.clone(),
         ))
     }
+}
+
+/// The journal identity of one node activation. A run root's is exactly what
+/// it was before saved children got journals (pinned by a test); a saved
+/// child's also binds its visit (FU-248).
+pub(in crate::state) fn journal_activation_id(
+    authority: &super::CheckpointWriterAuthority,
+    activation: &NodeAttemptActivation,
+    policy: &NodeRecoveryPolicy,
+) -> Result<[u8; 32], adk_rust::graph::GraphError> {
+    let mut hash = digest::Context::new(&digest::SHA256);
+    hash.update(b"elitea.pipeline.node-attempt-journal.v1\0");
+    let encoded_policy = serde_json::to_vec(policy)
+        .map_err(|_| recovery_error("pipeline.node_recovery.invalid_policy"))?;
+    for field in [
+        authority.tenant_id.as_bytes(),
+        &authority.resource_project_id.to_be_bytes(),
+        &authority.projection_project_id.to_be_bytes(),
+        authority.capability_id.as_bytes(),
+        &authority.definition_digest,
+        authority.execution_id.as_bytes(),
+        &authority.generation.to_be_bytes(),
+        activation.root_thread_id.as_bytes(),
+        activation.node_id.as_bytes(),
+        &activation.step.to_be_bytes(),
+        &activation.node_digest,
+        &activation.input_digest,
+        &encoded_policy,
+    ] {
+        hash.update(
+            &u64::try_from(field.len())
+                .map_err(|_| recovery_error("pipeline.node_recovery.invalid_scope"))?
+                .to_be_bytes(),
+        );
+        hash.update(field);
+    }
+    if let Some(visit) = &activation.visit {
+        hash.update(b"\0visit\0");
+        hash.update(visit);
+    }
+    let mut activation_id = [0; 32];
+    activation_id.copy_from_slice(hash.finish().as_ref());
+    Ok(activation_id)
 }
