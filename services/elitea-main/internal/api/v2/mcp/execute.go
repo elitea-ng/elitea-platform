@@ -267,6 +267,14 @@ func toolkitResult(toolName string, result json.RawMessage) map[string]any {
 type agentResultObserver func(context.Context, string, int64, int64, agentexecutionapp.CurrentApplicationStartOutcome, Tool) map[string]any
 
 func (h *Handler) runAgentToolWithObserver(ctx context.Context, schema string, projectID, actorUserID int64, tool Tool, task string, observer agentResultObserver) map[string]any {
+	// The inbound remote agent policy (ADR-0044 decision 4): refuse a bare
+	// PAT in the governed profile, bound the run by a verified assertion,
+	// frame an unverified OAuth client's task as untrusted.
+	invocation := h.admitAgentInvocation(ctx, projectID, tool, task)
+	if invocation.refusal != nil {
+		return invocation.refusal
+	}
+	task = invocation.task
 	conversationUUID, participantID, err := h.prepareRunConversation(
 		ctx, schema, projectID, actorUserID, tool,
 	)
@@ -289,6 +297,7 @@ func (h *Handler) runAgentToolWithObserver(ctx context.Context, schema string, p
 		// An MCP client is a programmatic caller. It is still a person's
 		// action, so the analytics active-user reads count it (shared 0140).
 		TriggerOrigin: executiondomain.TriggerOriginAPI,
+		AssertedScope: invocation.scope,
 	})
 	if err != nil {
 		// The turn was never admitted, so the conversation created a moment ago
@@ -307,6 +316,9 @@ func (h *Handler) runAgentToolWithObserver(ctx context.Context, schema string, p
 			"err", err,
 		)
 		if refused, ok := suspendedResult(tool.Name, err); ok {
+			return refused
+		}
+		if refused, ok := h.scopeRefusal(ctx, projectID, tool, err); ok {
 			return refused
 		}
 		if errors.Is(err, agentexecutionapp.ErrInvalidCurrentAgentStart) ||

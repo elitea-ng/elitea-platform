@@ -196,6 +196,9 @@ type Handler struct {
 	// Runtime-disabled deployments retain the explicit open-object fallback.
 	toolkitArgumentSchemas ToolkitArgumentSchemaSource
 	toolkitDiscovery       discovery.UseCase
+	// remoteAgents is the inbound remote agent policy (ADR-0044 decision
+	// 4, remote_agent_inbound.go); nil changes nothing.
+	remoteAgents *RemoteAgentInbound
 	// permissions authorizes an EXECUTION, and only an execution.
 	//
 	// The endpoint as a whole is gated at the MEMBERSHIP tier

@@ -231,6 +231,10 @@ type Dependencies struct {
 	// live-update plane) publishes none; the list rows still carry the
 	// state.
 	ConversationActivity *conversationactivity.Notifier
+	// DelegationAssertions mints the delegation assertions of remote MCP
+	// calls (ADR-0044 decision 4, #1501). nil answers
+	// UNSUPPORTED_CAPABILITY to MintDelegationAssertion.
+	DelegationAssertions control.DelegationAssertions
 }
 
 func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtime, error) {
@@ -2361,6 +2365,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, err
 		}
 		controlServer.WithRunSteps(runSteps)
+	}
+	if dependencies.DelegationAssertions != nil {
+		controlServer.WithDelegationAssertions(dependencies.DelegationAssertions)
 	}
 	privateServers, err := runtimegrpc.NewPrivateServerSet(runtimegrpc.PrivateServerConfig{
 		ControlAddress:                  config.ControlAddress,

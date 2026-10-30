@@ -8,10 +8,13 @@
 //
 // The signing key ring is dedicated to this purpose: it signs nothing else,
 // and boot refuses a ring that reuses another purpose's key id or key
-// material. The private key never leaves its KeySigner. Only the Provider
-// signs, and only agentidentity.Broker reaches the Provider; no HTTP route
-// signs on request. The JWKS and the issuer metadata are public and carry no
-// tenant data.
+// material. The private key never leaves its KeySigner. Two signers use the
+// ring, both in this package: the Provider (federation assertions, reached
+// only through agentidentity.Broker) and the DelegationSigner (delegation
+// assertions for calls to remote agents, ADR-0044 decision 4, reached only
+// through the runtime control RPC MintDelegationAssertion under a live claim,
+// gRPC over mTLS). No HTTP route signs on request. The JWKS and the issuer
+// metadata are public and carry no tenant data.
 package eliteanative
 
 import (
@@ -158,9 +161,10 @@ func (c Config) Issuer() string { return c.Origin + IssuerPath }
 func (c Config) JWKSURI() string { return c.Origin + JWKSPath }
 
 // retention is how long a superseded key stays in the JWKS: the longest
-// assertion any relying party accepts, plus skew.
+// assertion the ring signs (a relying party's max_ttl, or a delegation
+// assertion), plus skew.
 func (c Config) retention() time.Duration {
-	longest := time.Duration(0)
+	longest := DelegationMaxTTL
 	for _, rp := range c.RelyingParties {
 		longest = max(longest, rp.MaxTTL)
 	}
@@ -294,8 +298,10 @@ func (c *Config) Validate() error {
 	if !validOverlap(c.RotationOverlap) {
 		return invalid("rotation_overlap must be more than the JWKS cache max-age (%s) and at most %s", CacheMaxAge, maxRotationOverlap)
 	}
-	if len(c.RelyingParties) == 0 || len(c.RelyingParties) > maxRelyingParties {
-		return invalid("1..%d relying_parties are required", maxRelyingParties)
+	// Zero relying parties is a ring that signs delegation assertions only
+	// (ADR-0044 decision 4): no federation audience is configured.
+	if len(c.RelyingParties) > maxRelyingParties {
+		return invalid("at most %d relying_parties are allowed", maxRelyingParties)
 	}
 	if len(c.Keys) == 0 || len(c.Keys) > maxKeys {
 		return invalid("1..%d keys are required", maxKeys)

@@ -339,6 +339,14 @@ impl RuntimeControlService for FakeControl {
             "not part of the Code attempt fixture",
         ))
     }
+    async fn mint_delegation_assertion(
+        &self,
+        _: Request<pb::MintDelegationAssertionRequestV1>,
+    ) -> Result<Response<pb::MintDelegationAssertionResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
+    }
     async fn remove_index(
         &self,
         _: Request<pb::RemoveIndexRequestV1>,

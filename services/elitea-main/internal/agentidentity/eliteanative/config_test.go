@@ -47,7 +47,6 @@ func TestParseConfigRefusesWhatTheIssueForbids(t *testing.T) {
 		"http origin":              replace(`https://elitea.example.com`, `http://elitea.example.com`),
 		"origin with a path":       replace(`https://elitea.example.com`, `https://elitea.example.com/x`),
 		"no origin":                replace(`"origin": "https://elitea.example.com",`, ""),
-		"no relying party":         replace(`[{"id": "aws-prod", "audience": "sts.amazonaws.com", "claims_profile": "aws"}]`, `[]`),
 		"duplicate audience": replace(`"claims_profile": "aws"}]`,
 			`"claims_profile": "aws"}, {"id": "aws-2", "audience": "sts.amazonaws.com", "claims_profile": "aws"}]`),
 		"two sources": replace(`"file": "/etc/elitea/agent-assertion/es.pem"`,
@@ -74,6 +73,12 @@ func TestParseConfigRefusesWhatTheIssueForbids(t *testing.T) {
 		if _, err := eliteanative.ParseConfig([]byte(doc), ""); (err == nil) != ok {
 			t.Errorf("rotation_overlap %s: err = %v, want accepted = %v", overlap, err, ok)
 		}
+	}
+	// No relying party: a ring that signs delegation assertions only
+	// (ADR-0044 decision 4).
+	delegationOnly := replace(`[{"id": "aws-prod", "audience": "sts.amazonaws.com", "claims_profile": "aws"}]`, `[]`)
+	if _, err := eliteanative.ParseConfig([]byte(delegationOnly), ""); err != nil {
+		t.Fatalf("a delegation-only ring: %v", err)
 	}
 	// A rotation: a second key with not_before is accepted.
 	rotation := replace(`"file": "/etc/elitea/agent-assertion/es.pem"}`,

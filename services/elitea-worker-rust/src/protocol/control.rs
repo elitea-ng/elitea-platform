@@ -47,14 +47,16 @@ use super::elitea::runtime::v1::{
     AuthorizeInvocationResponseV1, BeginExecutionDispositionV1, BeginExecutionRequestV1,
     BeginExecutionResponseV1, ClaimCommandRequestV1, ClaimCommandResponseV1, ClaimDispositionV1,
     ClaimReceiptV1, ClaimSteeringMessagesRequestV1, ClaimSteeringMessagesResponseV1,
-    DesiredExecutionStateV1, DigestAlgorithmV1, DigestV1, EgressHostReachedV1, EgressHostRefusedV1,
-    ExecutionFenceV1, ExecutionIdentityV1, ExecutionInputBundleReferenceV1, ExecutionInputBundleV1,
-    ExecutionInputEntryV1, ExecutionOutcomeV1, ExecutionOutputFrameV1, NodeEventV1,
-    ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
-    PrepareSettlementResponseV1, RemoveIndexDispositionV1, RemoveIndexRequestV1,
-    RemoveIndexResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1, ReportEgressSummaryRequestV1,
-    ReportRunStepsRequestV1, RuntimeErrorCodeV1, RuntimeErrorV1, ScopedContentReferenceV1,
-    SettlementProposalV1, SettlementRecoveryV1, worker_command_v1,
+    DelegationAssertionDispositionV1, DesiredExecutionStateV1, DigestAlgorithmV1, DigestV1,
+    EgressHostReachedV1, EgressHostRefusedV1, ExecutionFenceV1, ExecutionIdentityV1,
+    ExecutionInputBundleReferenceV1, ExecutionInputBundleV1, ExecutionInputEntryV1,
+    ExecutionOutcomeV1, ExecutionOutputFrameV1, MintDelegationAssertionRequestV1,
+    MintDelegationAssertionResponseV1, NodeEventV1, ObserveDesiredStateRequestV1,
+    ObserveDesiredStateResponseV1, PrepareSettlementRequestV1, PrepareSettlementResponseV1,
+    RemoveIndexDispositionV1, RemoveIndexRequestV1, RemoveIndexResponseV1, RenewLeaseRequestV1,
+    RenewLeaseResponseV1, ReportEgressSummaryRequestV1, ReportRunStepsRequestV1,
+    RuntimeErrorCodeV1, RuntimeErrorV1, ScopedContentReferenceV1, SettlementProposalV1,
+    SettlementRecoveryV1, worker_command_v1,
 };
 use super::output::{
     AgentTerminalOutput, RuntimeFailureKind, ToolkitExecuteReadTerminalOutput,
@@ -2031,6 +2033,14 @@ impl ClaimLeaseHandle {
         }
     }
 
+    fn delegation_request(&self, audience: String) -> MintDelegationAssertionRequestV1 {
+        MintDelegationAssertionRequestV1 {
+            identity: Some(self.identity.clone()),
+            fence: Some(self.fence.clone()),
+            audience,
+        }
+    }
+
     fn steering_request(
         &self,
         acknowledged: Vec<String>,
@@ -2702,6 +2712,24 @@ impl<R: ControlRpc> AgentControlClient<R> {
             .claim_steering_messages(lease.steering_request(acknowledged, acknowledge_only))
             .await?;
         parse_claim_steering_response(response).map_err(Into::into)
+    }
+
+    /// Mint one delegation assertion (ADR-0044 decision 4) for `audience`
+    /// under one unchanged accepted claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed transport, runtime rejection, or response-shape failure.
+    pub(crate) async fn mint_delegation_assertion(
+        &self,
+        lease: &ClaimLeaseHandle,
+        audience: String,
+    ) -> Result<elitea_agent_runtime::delegation::MintedAssertion, AgentControlError> {
+        let response = self
+            .control
+            .mint_delegation_assertion(lease.delegation_request(audience))
+            .await?;
+        parse_mint_delegation_assertion_response(response).map_err(Into::into)
     }
 
     /// Prepare settlement only from a consumed, durably acknowledged terminal proof.
@@ -3879,6 +3907,42 @@ fn parse_claim_steering_response(
             }
         })
         .collect()
+}
+
+/// One `MintDelegationAssertion` answer: an issued assertion with its
+/// expiry, disabled, or Main's rejection.
+fn parse_mint_delegation_assertion_response(
+    response: MintDelegationAssertionResponseV1,
+) -> Result<elitea_agent_runtime::delegation::MintedAssertion, ControlSemanticError> {
+    use elitea_agent_runtime::delegation::MintedAssertion;
+    let disposition = DelegationAssertionDispositionV1::try_from(response.disposition)
+        .unwrap_or(DelegationAssertionDispositionV1::Unspecified);
+    if let Some(rejection) = response.rejection.as_ref() {
+        if disposition != DelegationAssertionDispositionV1::Unspecified
+            || !response.assertion.is_empty()
+        {
+            return Err(ControlSemanticError::InvalidInput(
+                "the delegation assertion response is ambiguous",
+            ));
+        }
+        return Err(runtime_rejection(rejection));
+    }
+    match disposition {
+        DelegationAssertionDispositionV1::Issued
+            if !response.assertion.is_empty() && response.expires_at_unix_millis > 0 =>
+        {
+            Ok(MintedAssertion::Issued {
+                token: response.assertion,
+                expires_at_unix_millis: response.expires_at_unix_millis,
+            })
+        }
+        DelegationAssertionDispositionV1::Disabled if response.assertion.is_empty() => {
+            Ok(MintedAssertion::Disabled)
+        }
+        _ => Err(ControlSemanticError::InvalidInput(
+            "the delegation assertion response is malformed",
+        )),
+    }
 }
 
 /// Validate one outcome-bound settlement receipt.

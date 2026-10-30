@@ -183,6 +183,10 @@ type CurrentApplicationStartRequest struct {
 	// withdrawn. Zero runs the participant's version, which is the
 	// application's published release when that version is published.
 	ReleaseID int64
+	// AssertedScope is the scope of the caller's verified delegation
+	// assertion (ADR-0044 decision 4); nil without one. See
+	// SubmitRequest.AssertedScope.
+	AssertedScope *AssertedScope
 	// projectSkills is ProjectSkillIDs, read and frozen by the service for
 	// this one turn. Unexported so no caller can hand the service skill
 	// content of its own.
@@ -383,6 +387,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		SIOEvent:        "chat_predict",
 		Input:           input,
 		TriggerOrigin:   request.TriggerOrigin,
+		AssertedScope:   request.AssertedScope,
 		Release:         target.Release.Clone(),
 		CurrentTurn: &CurrentApplicationTurn{
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,

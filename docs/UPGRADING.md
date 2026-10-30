@@ -4,6 +4,47 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Signed delegation assertions for remote agents (#1501)
+
+ADR-0044 decision 4. Shared migration **0210_remote_agent_assertions** adds
+`elitea_identity.remote_agent_assertion_replays` (the one-time record of
+inbound assertions, bound to the credential that first presented each one;
+rows are deleted after they expire). No permission and no data.
+
+- **Upgrade order: Main first, then the worker.** The runtime control
+  service has a new RPC, `MintDelegationAssertion`. A new worker asks Main for
+  an assertion before each remote MCP call. An older Main answers
+  `UNIMPLEMENTED`: a governed run then refuses its remote MCP calls
+  (`agent_assertion_unavailable`), and any other run calls without an
+  assertion. An older worker never asks, so its calls carry no assertion.
+  No `WorkerCommandV1` field was added.
+- **Signing key.** Assertions are signed with the agent assertion key ring of
+  `ELITEA_AGENT_ASSERTION_CONFIG`. Main now loads that ring whenever the
+  variable is set, also with no relying parties (it still does not in a
+  governed deployment whose revision does not list `elitea_native`), and then
+  serves `/.well-known/elitea-agent-jwks.json`. Without the variable, nothing
+  changes: no assertion is signed.
+- **Setting.** Configuration › Remote Agents (`remote_agents` section, gated
+  on `configuration.governance`): `outbound_assertions` = `on` (default) or
+  `off`; a governed run always sends one. `trusted_issuers`: entries
+  `<issuer>` or `<issuer> <jwks_url>`, https only, at most 32, empty by
+  default. Helm bootstrap: `main.env.ELITEA_REMOTE_AGENT_TRUSTED_ISSUERS`
+  (comma or new line separated, added to the stored list; a malformed entry
+  refuses boot).
+- **Outbound.** Remote MCP calls carry `Elitea-Agent-Assertion: <jwt>`
+  (5-minute lifetime, cached per endpoint). A remote server that refuses
+  unknown headers can be served by setting `outbound_assertions` to `off`.
+- **Inbound.** The MCP endpoint verifies the header when it is present (401
+  `agent_assertion_refused` with a code, 503 when the check cannot be done)
+  and limits the invoked agent to the asserted toolkits. **Governed
+  profile:** invoking an agent through MCP with a personal access token or a
+  browser session alone is now refused
+  (`agent_invocation_requires_agent_credential`); give agent callers an OAuth
+  client. An OAuth caller without an assertion gets its task framed as
+  untrusted data.
+- **Audit.** New security event type
+  `ai.elitea.security.v1.remote_agent.assertion`.
+
 ## Default-deny connector catalogue and connector approval (#1501, off by default)
 
 ADR-0044 decision 1. Shared migration **0207_connector_approval** adds

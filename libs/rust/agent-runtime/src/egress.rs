@@ -177,9 +177,13 @@ impl Ledger {
 }
 
 /// One execution's public egress policy and what it reached and refused.
+///
+/// It also carries the run's delegation assertions (ADR-0044 decision 4):
+/// the outbound context every remote MCP call of the run reads.
 pub struct RunEgress {
     policy: PublicPolicy,
     ledger: Mutex<Ledger>,
+    delegation: OnceLock<Arc<crate::delegation::DelegationAssertions>>,
 }
 
 impl fmt::Debug for RunEgress {
@@ -197,7 +201,22 @@ impl RunEgress {
         Arc::new(Self {
             policy,
             ledger: Mutex::new(Ledger::default()),
+            delegation: OnceLock::new(),
         })
+    }
+
+    /// Bind the run's delegation assertions, once. A second bind is
+    /// ignored: the first one holds the run's cache. The host binds them
+    /// before it materializes the run's toolkits.
+    pub fn bind_delegation(&self, assertions: Arc<crate::delegation::DelegationAssertions>) {
+        let _ = self.delegation.set(assertions);
+    }
+
+    /// The run's delegation assertions; `None` when the host bound none
+    /// (remote calls then carry no assertion).
+    #[must_use]
+    pub fn delegation(&self) -> Option<Arc<crate::delegation::DelegationAssertions>> {
+        self.delegation.get().cloned()
     }
 
     /// An open run: every public host, today's behaviour.

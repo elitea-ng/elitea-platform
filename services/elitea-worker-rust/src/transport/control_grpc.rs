@@ -20,11 +20,12 @@ use crate::protocol::elitea::runtime::v1::{
     AuthorizeRustCompiledSnapshotRequestV1, AuthorizeRustCompiledSnapshotResponseV1,
     AuthorizeSandboxJobRequestV1, AuthorizeSandboxJobResponseV1, BeginExecutionRequestV1,
     BeginExecutionResponseV1, ClaimCommandRequestV1, ClaimCommandResponseV1,
-    ClaimSteeringMessagesRequestV1, ClaimSteeringMessagesResponseV1, ObserveDesiredStateRequestV1,
-    ObserveDesiredStateResponseV1, PrepareSettlementRequestV1, PrepareSettlementResponseV1,
-    RemoveIndexRequestV1, RemoveIndexResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1,
-    ReportEgressSummaryRequestV1, ReportEgressSummaryResponseV1, ReportRunStepsRequestV1,
-    ReportRunStepsResponseV1, RustCompiledSnapshotPurposeV1,
+    ClaimSteeringMessagesRequestV1, ClaimSteeringMessagesResponseV1,
+    MintDelegationAssertionRequestV1, MintDelegationAssertionResponseV1,
+    ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
+    PrepareSettlementResponseV1, RemoveIndexRequestV1, RemoveIndexResponseV1, RenewLeaseRequestV1,
+    RenewLeaseResponseV1, ReportEgressSummaryRequestV1, ReportEgressSummaryResponseV1,
+    ReportRunStepsRequestV1, ReportRunStepsResponseV1, RustCompiledSnapshotPurposeV1,
     runtime_control_service_client::RuntimeControlServiceClient,
 };
 
@@ -41,6 +42,9 @@ const EGRESS_SUMMARY_DEADLINE: Duration = Duration::from_secs(5);
 /// (`protocol::run_steps::MAX_REPORT_BYTES`; every bounded step fits).
 const MAX_RUN_STEPS_REQUEST_BYTES: usize = crate::protocol::run_steps::MAX_REPORT_BYTES;
 const RUN_STEPS_DEADLINE: Duration = Duration::from_secs(10);
+/// A delegation assertion is minted before a remote MCP call: it never waits
+/// long.
+const DELEGATION_ASSERTION_DEADLINE: Duration = Duration::from_secs(5);
 const MAX_METADATA_BYTES: usize = 256;
 
 /// Immutable transport identity and deadline for every control call.
@@ -175,6 +179,19 @@ pub trait ControlRpc: Send + Sync {
         Err(Status::unimplemented("run step records are unavailable"))
     }
 
+    /// `MintDelegationAssertion` (ADR-0044 decision 4, #1501): a short-lived
+    /// assertion for one remote MCP endpoint of a live claim. A transport
+    /// that does not serve it answers `Unimplemented`; a governed run then
+    /// refuses the remote call.
+    async fn mint_delegation_assertion(
+        &self,
+        _request: Request<MintDelegationAssertionRequestV1>,
+    ) -> Result<Response<MintDelegationAssertionResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "delegation assertions are unavailable",
+        ))
+    }
+
     async fn renew_lease(
         &self,
         request: Request<RenewLeaseRequestV1>,
@@ -283,6 +300,13 @@ impl ControlRpc for TonicControlRpc {
         request: Request<ReportRunStepsRequestV1>,
     ) -> Result<Response<ReportRunStepsResponseV1>, Status> {
         self.client.clone().report_run_steps(request).await
+    }
+
+    async fn mint_delegation_assertion(
+        &self,
+        request: Request<MintDelegationAssertionRequestV1>,
+    ) -> Result<Response<MintDelegationAssertionResponseV1>, Status> {
+        self.client.clone().mint_delegation_assertion(request).await
     }
 
     async fn renew_lease(
@@ -656,6 +680,34 @@ impl<R: ControlRpc> ControlGrpcClient<R> {
             .map_err(|status| match status.code() {
                 tonic::Code::Unimplemented => ControlGrpcError::InvalidConfiguration(
                     "Main does not serve run step records on its control plane",
+                ),
+                _ => unavailable(),
+            })?
+            .into_inner();
+        validate_response(&response)?;
+        Ok(response)
+    }
+
+    /// Mint one delegation assertion (ADR-0044 decision 4), once, with a
+    /// short deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable size, configuration, or availability error; a
+    /// transport that does not serve the RPC is an `InvalidConfiguration`.
+    pub async fn mint_delegation_assertion(
+        &self,
+        message: MintDelegationAssertionRequestV1,
+    ) -> Result<MintDelegationAssertionResponseV1, ControlGrpcError> {
+        let deadline = self.config.deadline.min(DELEGATION_ASSERTION_DEADLINE);
+        let mut request = self.request(message)?;
+        request.set_timeout(deadline);
+        let response = timeout(deadline, self.rpc.mint_delegation_assertion(request))
+            .await
+            .map_err(|_| unavailable())?
+            .map_err(|status| match status.code() {
+                tonic::Code::Unimplemented => ControlGrpcError::InvalidConfiguration(
+                    "Main does not serve delegation assertions on its control plane",
                 ),
                 _ => unavailable(),
             })?

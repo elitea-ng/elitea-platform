@@ -47,6 +47,49 @@ type SubmitRequest struct {
 	// any other run. It is not part of the request digest: the release's
 	// definition is already in Input.
 	Release *ReleaseRun
+	// AssertedScope bounds the run to the toolkit types a verified
+	// delegation assertion names (ADR-0044 decision 4): a remote agent
+	// cannot make the invoked agent do more than its own run may. nil for
+	// every caller without an assertion. Not part of the request digest:
+	// it describes the caller, not the work.
+	AssertedScope *AssertedScope
+}
+
+// AssertedScope is the toolkit scope of a verified delegation assertion.
+type AssertedScope struct {
+	// ToolkitTypes are canonical toolkit types (guardrails.CanonicalKey).
+	ToolkitTypes []string
+}
+
+// ErrAssertedScopeExceeded refuses a run that would use a toolkit the
+// caller's delegation assertion does not name.
+var ErrAssertedScopeExceeded = errors.New("the invoked agent uses a toolkit outside the caller's asserted scope")
+
+// AssertedScopeError names the first toolkit type outside the scope.
+type AssertedScopeError struct{ ToolkitType string }
+
+func (e *AssertedScopeError) Error() string {
+	return ErrAssertedScopeExceeded.Error() + ": " + e.ToolkitType
+}
+
+func (e *AssertedScopeError) Unwrap() error { return ErrAssertedScopeExceeded }
+
+// checkAssertedScope intersects the run's toolkit types with the asserted
+// scope; every type of the run must be in it.
+func checkAssertedScope(scope *AssertedScope, toolkitTypes []string) error {
+	if scope == nil {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(scope.ToolkitTypes))
+	for _, t := range scope.ToolkitTypes {
+		allowed[t] = struct{}{}
+	}
+	for _, t := range toolkitTypes {
+		if _, ok := allowed[t]; !ok {
+			return &AssertedScopeError{ToolkitType: t}
+		}
+	}
+	return nil
 }
 
 type Admission struct {
@@ -219,6 +262,9 @@ func (s *AdmissionService) Submit(
 
 	memoryToolkits, toolkitTypes, err := s.runToolkitSet(ctx, request)
 	if err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
+	if err := checkAssertedScope(request.AssertedScope, toolkitTypes); err != nil {
 		return executionapp.AdmissionOutcome{}, err
 	}
 	outcome, err := s.store.AdmitAgentExecution(ctx, Admission{
@@ -476,6 +522,13 @@ func FrozenToolkitTypes(capabilityID string, input *runtimev1.AgentExecutionInpu
 		return nil, err
 	}
 	return finishToolkitTypes(toolkitTypeEntries(raw)), nil
+}
+
+// FrozenTools is the run's OWN frozen `tools` list, as the worker
+// materializes it. The delegation assertion mint reads the MCP endpoints
+// admitted in a run from it (ADR-0044 decision 4).
+func FrozenTools(capabilityID string, input *runtimev1.AgentExecutionInputV1) (json.RawMessage, error) {
+	return frozenToolkitsRaw(capabilityID, input)
 }
 
 // toolkitTypeEntries is the canonical `type` of each top-level entry of one

@@ -3,10 +3,13 @@ package main
 // The Elitea-native agent identity provider (ADR-0039 decision 12, #1153):
 // its relying parties, its dedicated key ring and its public documents.
 //
-// Built only for a governed process whose active revision allows
-// `elitea_native` and whose ELITEA_AGENT_ASSERTION_CONFIG names at least one
-// relying party. Otherwise nothing is read beyond that variable, no key is
-// loaded, and the JWKS and issuer metadata routes are not mounted (404).
+// The provider is built only for a governed process whose active revision
+// allows `elitea_native` and whose ELITEA_AGENT_ASSERTION_CONFIG names at
+// least one relying party. The delegation signer (ADR-0044 decision 4,
+// #1501) is built whenever that variable is set, except in a governed
+// process whose revision does not allow `elitea_native`. With the variable
+// unset nothing else is read, no key is loaded, and the JWKS and issuer
+// metadata routes are not mounted (404).
 
 import (
 	"context"
@@ -42,6 +45,9 @@ type eliteaNativeAgentIdentity struct {
 	Provider *eliteanative.Provider
 	// WellKnown serves the JWKS and the issuer metadata (public keys only).
 	WellKnown *eliteanative.WellKnown
+	// Delegation signs the delegation assertions of remote calls (ADR-0044
+	// decision 4). Only the runtime control mint reaches it.
+	Delegation *eliteanative.DelegationSigner
 }
 
 // The key ring's reads through the SecretStore seam carry this context. The
@@ -65,9 +71,6 @@ func eliteaNativeAgentIdentityAtBoot(
 	publicProjectID int,
 	logger *slog.Logger,
 ) (eliteaNativeAgentIdentity, error) {
-	if !admission.Governed() {
-		return eliteaNativeAgentIdentity{}, nil
-	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -75,7 +78,8 @@ func eliteaNativeAgentIdentityAtBoot(
 	if strings.TrimSpace(raw) == "" {
 		return eliteaNativeAgentIdentity{}, nil
 	}
-	if !revision.Document.AllowsIdentityMode(agentidentity.IdentityModeEliteaNative) {
+	governed := admission.Governed()
+	if governed && !revision.Document.AllowsIdentityMode(agentidentity.IdentityModeEliteaNative) {
 		// Gate D2: the mode is used only when the revision lists it. No key
 		// is loaded and no route is mounted.
 		logger.Warn("Elitea-native agent assertions are configured but the active policy revision does not allow elitea_native; not enabled",
@@ -123,13 +127,23 @@ func eliteaNativeAgentIdentityAtBoot(
 	if err != nil {
 		return eliteaNativeAgentIdentity{}, fmt.Errorf("agent assertion key ring: %w", err)
 	}
-	audit, err := securityaudit.NewPostgresAppender("elitea-main")
+	delegation, err := eliteanative.NewDelegationSigner(cfg, ring)
 	if err != nil {
-		return eliteaNativeAgentIdentity{}, fmt.Errorf("construct agent assertion audit appender: %w", err)
+		return eliteaNativeAgentIdentity{}, fmt.Errorf("agent assertion key ring: %w", err)
 	}
-	provider, err := eliteanative.New(cfg, ring, repos.NewExternalAgentIdentities(pool, audit))
-	if err != nil {
-		return eliteaNativeAgentIdentity{}, err
+	built := eliteaNativeAgentIdentity{WellKnown: delegation.WellKnown(), Delegation: delegation}
+	// The provider joins the registry only in a governed process, and only
+	// with a relying party to sign for.
+	if governed && len(cfg.RelyingParties) > 0 {
+		audit, err := securityaudit.NewPostgresAppender("elitea-main")
+		if err != nil {
+			return eliteaNativeAgentIdentity{}, fmt.Errorf("construct agent assertion audit appender: %w", err)
+		}
+		provider, err := eliteanative.New(cfg, ring, repos.NewExternalAgentIdentities(pool, audit))
+		if err != nil {
+			return eliteaNativeAgentIdentity{}, err
+		}
+		built.Provider = provider
 	}
 	kids := make([]string, 0, len(cfg.Keys))
 	for _, k := range cfg.Keys {
@@ -140,8 +154,9 @@ func eliteaNativeAgentIdentityAtBoot(
 		parties = append(parties, rp.ID)
 	}
 	logger.Info("Elitea-native agent assertions enabled", "issuer", cfg.Issuer(), "jwks_uri", cfg.JWKSURI(),
-		"relying_parties", parties, "key_ids", kids, "rotation_overlap", cfg.RotationOverlap.String())
-	return eliteaNativeAgentIdentity{Provider: provider, WellKnown: provider.WellKnown()}, nil
+		"relying_parties", parties, "key_ids", kids, "rotation_overlap", cfg.RotationOverlap.String(),
+		"agent_identity_provider", built.Provider != nil, "delegation_assertions", true)
+	return built, nil
 }
 
 // foreignSigningKeys lists the keys of every other signing purpose this

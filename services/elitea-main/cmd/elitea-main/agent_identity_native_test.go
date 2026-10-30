@@ -57,13 +57,43 @@ func agentAssertionEnv(t *testing.T) (map[string]string, string, *ecdsa.PrivateK
 	}, dir, key
 }
 
-// Flag off: nothing is read, not even the configuration variable, and no
-// route is mounted.
+// Flag off and no configuration: only the configuration variable is read,
+// and no route is mounted.
 func TestEliteaNativeIsNotBuiltWithTheFlagOff(t *testing.T) {
 	got, err := eliteaNativeAgentIdentityAtBoot(context.Background(), profile.LegacyAdmission(false), profile.PolicyRevision{},
-		func(name string) (string, bool) { t.Fatalf("flag off read %s", name); return "", false }, nil, 1, nil)
-	if err != nil || got.Provider != nil || got.WellKnown != nil {
+		func(name string) (string, bool) {
+			if name != eliteanative.EnvConfig {
+				t.Fatalf("flag off read %s", name)
+			}
+			return "", false
+		}, nil, 1, nil)
+	if err != nil || got.Provider != nil || got.WellKnown != nil || got.Delegation != nil {
 		t.Fatalf("flag off built %+v, %v", got, err)
+	}
+}
+
+// Flag off with a configured ring: the delegation signer and the JWKS only
+// (ADR-0044 decision 4); the provider does not join the registry.
+func TestEliteaNativeFlagOffBuildsTheDelegationSignerOnly(t *testing.T) {
+	env, _, _ := agentAssertionEnv(t)
+	got, err := eliteaNativeAgentIdentityAtBoot(context.Background(), profile.LegacyAdmission(false), profile.PolicyRevision{}, lookupOf(env), nil, 1, nil)
+	if err != nil || got.Provider != nil || got.WellKnown == nil || got.Delegation == nil {
+		t.Fatalf("flag off with a ring: %+v, %v", got, err)
+	}
+	if got.Delegation.Issuer() != "https://elitea.example.com/agent-issuer" {
+		t.Fatalf("issuer = %q", got.Delegation.Issuer())
+	}
+}
+
+// Governed with a ring and no relying party: delegation only.
+func TestEliteaNativeDelegationOnlyRingBuildsNoProvider(t *testing.T) {
+	revision := agentAssertionRevision(agentidentity.IdentityModeEliteaNative)
+	env, _, _ := agentAssertionEnv(t)
+	env[eliteanative.EnvConfig] = strings.Replace(env[eliteanative.EnvConfig],
+		`[{"id":"aws","audience":"sts.amazonaws.com","claims_profile":"aws"}]`, `[]`, 1)
+	got, err := eliteaNativeAgentIdentityAtBoot(context.Background(), profile.GovernedAdmission(revision), revision, lookupOf(env), nil, 1, nil)
+	if err != nil || got.Provider != nil || got.WellKnown == nil || got.Delegation == nil {
+		t.Fatalf("delegation-only ring: %+v, %v", got, err)
 	}
 }
 
@@ -81,7 +111,7 @@ func TestEliteaNativeIsNotBuiltWithoutConfigurationOrPolicy(t *testing.T) {
 	env[eliteanative.EnvConfig] = strings.Replace(env[eliteanative.EnvConfig], "agent.pem", "missing.pem", 1)
 	denied := agentAssertionRevision(agentidentity.IdentityModeDedicatedAgent)
 	got, err = eliteaNativeAgentIdentityAtBoot(context.Background(), profile.GovernedAdmission(denied), denied, lookupOf(env), nil, 1, nil)
-	if err != nil || got.Provider != nil || got.WellKnown != nil {
+	if err != nil || got.Provider != nil || got.WellKnown != nil || got.Delegation != nil {
 		t.Fatalf("a revision without elitea_native built %+v, %v", got, err)
 	}
 }

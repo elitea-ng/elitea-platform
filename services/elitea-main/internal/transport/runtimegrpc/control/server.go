@@ -125,6 +125,10 @@ type Server struct {
 	// runSteps stores the worker's step records (ADR-0042, #1499); nil
 	// answers ReportRunSteps UNSUPPORTED_CAPABILITY.
 	runSteps RunSteps
+	// delegationAssertions mints the delegation assertions of a run's calls
+	// to remote agents (ADR-0044 decision 4); nil answers
+	// MintDelegationAssertion UNSUPPORTED_CAPABILITY.
+	delegationAssertions DelegationAssertions
 }
 
 // AdmissionPinReader reads the credential profile an execution was admitted

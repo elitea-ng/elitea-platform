@@ -80,6 +80,14 @@ const (
 	// by the staleness routine (credential.revoked), or an unused grant
 	// removed from the permission trimming report (permission.trimmed).
 	TypeCredentialReview EventType = "ai.elitea.security.v1.credential.review"
+	// TypeRemoteAgent is a delegation assertion decision (ADR-0044
+	// decision 4, #1501): an outbound assertion minted or refused
+	// (remote_agent.assertion.minted, .mint_refused), and an inbound one
+	// accepted or refused at the MCP endpoint (remote_agent.assertion.accepted,
+	// .refused), or an agent invocation refused for its caller or its scope
+	// (remote_agent.invocation.refused). The reasons carry the refusal code.
+	// No event holds the assertion itself.
+	TypeRemoteAgent EventType = "ai.elitea.security.v1.remote_agent.assertion"
 )
 
 // OCSF class and category uids (https://schema.ocsf.io).
@@ -111,6 +119,7 @@ var ocsfClasses = map[EventType]int{
 	TypeRunStepsAnchored:        OCSFClassAPIActivity,
 	TypeConnectorApproval:       OCSFClassEntityManagement,
 	TypeCredentialReview:        OCSFClassUserAccessManagement,
+	TypeRemoteAgent:             OCSFClassAuthorizeSession,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.
