@@ -137,6 +137,10 @@
           "maxLength": 16384,
           "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
         },
+        "argument_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
         "policy_message": {
           "type": "string",
           "minLength": 1,
@@ -162,7 +166,7 @@
           "pattern": "^https://[^\\x00-\\x20\\x7f]+$"
         }
       },
-      "maxProperties": 13
+      "maxProperties": 14
     },
     "parent_agent_name": {
       "$ref": "elitea.pipeline.fanout-hierarchy.v1#/properties/parent_agent_name"

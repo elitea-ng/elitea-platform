@@ -210,3 +210,98 @@ WHERE execution_id = $1 AND interrupt_id = $2`, h.executions[response], staticLe
 	}
 	assertApprovalAudit(t, h.pool, 1, rows)
 }
+
+// An unattended static pause with notify_and_wait that nobody continues
+// expires as a HITL pause does: the timed_out row, the typed error, and the
+// static proof removed so the pause cannot be continued.
+func TestApprovalLedgerStaticPauseUnattendedWaitTimesOut(t *testing.T) {
+	h := newInterruptHarness(t)
+	response := h.newResponse()
+	h.makeUnattended(response, "schedule")
+	h.setRunPolicy("notify_and_wait")
+	if outcome := h.pauseStaticResponse(response); outcome != rootPauseWaits {
+		t.Fatalf("outcome = %v", outcome)
+	}
+	h.exec(`UPDATE elitea_runtime.unattended_approval_actions SET expires_at = clock_timestamp() - interval '1 second'
+WHERE execution_id = $1`, h.executions[response])
+	store, err := NewUnattendedApprovalsRepository(h.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired, err := store.ExpireUnattendedWaits(t.Context(), 16); err != nil || expired != 1 {
+		t.Fatalf("expired=%d err=%v", expired, err)
+	}
+	rows := readApprovalLedger(t, h.pool, h.executions[response])
+	if got := ledgerOutcomes(rows); !slices.Equal(got,
+		[]string{"pause:paused", "notice:unattended_waiting", "decision:timed_out"}) {
+		t.Fatalf("ledger = %v", got)
+	}
+	if rows[2].ActorKind != "system" || rows[2].Reason != ApprovalTimedOutCode || rows[2].InterruptID != staticLedgerPauseID {
+		t.Fatalf("timed_out row = %+v", rows[2])
+	}
+	meta := h.responseMeta(response)
+	if meta["error_code"] != ApprovalTimedOutCode || meta["is_error"] != true || meta["pipeline_static_v1"] != nil {
+		t.Fatalf("meta = %v", meta)
+	}
+	// The owner's late continue finds no pause: the response no longer holds
+	// one, so the guarded resume refuses it, and the ledger refuses a second
+	// decision of the wait.
+	tx, err := h.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := tenant.BindProject(t.Context(), tx, tenant.Project{ID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	turn := agentexecutionapp.CurrentContinueTurn{
+		ProjectID: 1, ActorUserID: 8, ConversationUUID: h.conversationUUID(), ResponseMessageID: response,
+	}
+	if err := recordStaticApprovalDecisions(t.Context(), pgxExecutor{queryer: tx}, turn, h.executions[response],
+		[]string{staticLedgerPauseID}); !errors.Is(err, agentexecutionapp.ErrCurrentAgentHITLAlreadyResolved) {
+		t.Fatalf("late continue err = %v", err)
+	}
+	if again, err := store.ExpireUnattendedWaits(t.Context(), 16); err != nil || again != 0 {
+		t.Fatalf("second pass expired=%d err=%v", again, err)
+	}
+	assertApprovalAudit(t, h.pool, 1, rows)
+}
+
+// A 0157 card carries the worker's digest of the unmasked arguments in
+// display.argument_digest: the pause and decision rows record it. A card
+// from an earlier worker has none, and its rows record none.
+func TestApprovalLedgerCardRecordsTheWorkerDigest(t *testing.T) {
+	h := newInterruptHarness(t)
+	digest := "sha256:" + strings.Repeat("3", 64)
+	response := h.newResponse()
+	key, raw := h.card("fanout-interrupt-card-v1.json", func(card map[string]any) {
+		card["display"].(map[string]any)["argument_digest"] = digest
+	})
+	input := h.raiseInput(response, raw)
+	tx, err := h.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	executor := pgxExecutor{queryer: tx}
+	if _, err := raiseExecutionInterrupt(t.Context(), executor, input); err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	if err := projectInterruptApprovalRaise(t.Context(), executor, input, h.conversationUUID()); err != nil {
+		t.Fatalf("project raise: %v", err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.decide(interruptOwner, response, key, "approve", "approve", ""); err != nil {
+		t.Fatal(err)
+	}
+	rows := readApprovalLedger(t, h.pool, h.executions[response])
+	if got := ledgerOutcomes(rows); !slices.Equal(got, []string{"pause:paused", "decision:approved"}) {
+		t.Fatalf("ledger = %v", got)
+	}
+	if rows[0].Digest != digest || rows[1].Digest != digest {
+		t.Fatalf("card digests = %q, %q", rows[0].Digest, rows[1].Digest)
+	}
+	assertApprovalAudit(t, h.pool, 1, rows)
+}

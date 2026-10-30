@@ -5171,6 +5171,7 @@ pub(crate) fn fanout_card_parts(
             guardrail_type: "sensitive_tool",
             message: data.message.clone(),
             node_name: Some(data.node_name.clone()),
+            argument_digest: Some(data.argument_digest.clone()),
             policy_message: Some(data.policy_message.clone()).filter(|text| !text.is_empty()),
             tool_args_json: Some(args_json(&data.tool_args)?),
             tool_call_id: Some(data.tool_call_id.clone()),
@@ -5197,6 +5198,7 @@ pub(crate) fn fanout_card_parts(
             "definition_digest": data.definition_digest, "argument_digest": data.argument_digest,
         });
         let display = CardDisplay {
+            argument_digest: Some(data.argument_digest.clone()),
             guardrail_type: "clarifying_question",
             message: data.message.clone(),
             node_name: Some(data.node_name.clone()),
@@ -6018,6 +6020,16 @@ fn valid_pipeline_state_key(value: &str) -> bool {
 
 fn valid_graph_checkpoint_identity(value: &str) -> bool {
     !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control)
+}
+
+/// The card schema's `display.argument_digest`: `sha256:` and 64 lower-case
+/// hex digits.
+fn card_argument_digest(value: &str) -> bool {
+    value.len() == 71
+        && value.starts_with("sha256:")
+        && value[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn valid_sha256_label(value: &str) -> bool {
@@ -7302,6 +7314,7 @@ pub(crate) fn fanout_member_card(
                 .filter(|value| value.matches_arguments(&request.args))
                 .ok_or_else(AgentEventProjectionError::invalid_state)?;
             let tool_args = questions.arguments_value();
+            let argument_digest = unmasked_argument_digest(&request.args)?;
             let pending = json!({
                 "type": "hitl", "interrupt_id": interrupt_id, "call_digest": call_digest,
                 "guardrail_type": ASK_USER_GUARDRAIL_TYPE, "node_name": ASK_USER_TOOL_NAME,
@@ -7312,6 +7325,7 @@ pub(crate) fn fanout_member_card(
                 "tool_args": tool_args,
             });
             let display = json!({
+                "argument_digest": argument_digest,
                 "guardrail_type": ASK_USER_GUARDRAIL_TYPE,
                 "message": questions.message(),
                 "node_name": ASK_USER_TOOL_NAME,
@@ -7325,6 +7339,9 @@ pub(crate) fn fanout_member_card(
             let policy = sensitive
                 .policy_for(&request.tool_name)
                 .ok_or_else(AgentEventProjectionError::invalid_state)?;
+            // The card shows the masked arguments; its digest covers the
+            // arguments before masking.
+            let argument_digest = unmasked_argument_digest(&request.args)?;
             let tool_args = mask_sensitive_arguments(&request.args, 0)?;
             let actions = vec!["approve", "reject", "block_with_comment"];
             let pending = json!({
@@ -7339,6 +7356,7 @@ pub(crate) fn fanout_member_card(
             });
             let display = json!({
                 "action_label": policy.action_name(),
+                "argument_digest": argument_digest,
                 "guardrail_type": "sensitive_tool",
                 "message": policy.policy_message(),
                 "node_name": "sensitive_tool_guard",
@@ -7403,6 +7421,8 @@ pub(crate) fn fanout_member_card_parts(
     };
     let display = CardDisplay {
         action_label: text(display, "action_label"),
+        argument_digest: text(display, "argument_digest")
+            .filter(|value| card_argument_digest(value)),
         guardrail_type,
         message: text(display, "message")?,
         node_name: text(display, "node_name"),

@@ -5625,10 +5625,12 @@ components:
     ExecutionInterruptCardDisplay:
       type: object
       additionalProperties: false
-      maxProperties: 13
+      maxProperties: 14
       description: >-
         Only fields today's card shows. Headers, tokens, resource metadata and
-        checkpoint ids are never in a card.
+        checkpoint ids are never in a card. argument_digest is the worker's
+        digest of the call's arguments before masking (the approval ledger
+        evidence); a card from an earlier worker has none.
       required: [message, guardrail_type]
       properties:
         message: {type: string, minLength: 1, maxLength: 8192}
@@ -5643,6 +5645,7 @@ components:
         action_label: {type: string, minLength: 1, maxLength: 512}
         tool_call_id: {type: string, minLength: 1, maxLength: 512}
         tool_args_json: {type: string, minLength: 1, maxLength: 16384}
+        argument_digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
         policy_message: {type: string, minLength: 1, maxLength: 2048}
         interaction_type: {type: string, minLength: 1, maxLength: 64}
         edit_state_key: {type: string, minLength: 1, maxLength: 128}

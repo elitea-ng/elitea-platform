@@ -503,3 +503,34 @@ fn a_clarifying_question_pause_carries_its_argument_digest() {
         "{detail}"
     );
 }
+
+/// A fan-out member card (0157) carries `display.argument_digest`, the
+/// digest of the arguments before masking, and it survives the read back
+/// into the card parts the worker raises.
+#[test]
+fn a_member_pause_card_carries_the_unmasked_argument_digest() {
+    use super::events::{fanout_member_card, fanout_member_card_parts, unmasked_argument_digest};
+    let catalog = sensitive_catalog();
+    let args = json!({"token": "s3cr3t-value", "branch": "release/1.2"});
+    let card = fanout_member_card(&confirmation_event("delete_branch", &args), &catalog)
+        .expect("a sensitive-tool card");
+    let expected = unmasked_argument_digest(&args).expect("digest");
+    assert_eq!(card["display"]["argument_digest"], expected, "{card}");
+    assert!(
+        card["display"]["tool_args_json"]
+            .as_str()
+            .is_some_and(|text| text.contains("***") && !text.contains("s3cr3t-value"))
+    );
+    let (_, _, _, parts) = fanout_member_card_parts(&card).expect("the card reads back");
+    assert_eq!(
+        parts.display.argument_digest.as_deref(),
+        Some(expected.as_str())
+    );
+    let serialized = serde_json::to_value(&parts.display).expect("display JSON");
+    assert_eq!(serialized["argument_digest"], expected);
+    // A malformed digest never reaches the card.
+    let mut tampered = card.clone();
+    tampered["display"]["argument_digest"] = json!("sha256:ABC");
+    let (_, _, _, parts) = fanout_member_card_parts(&tampered).expect("the card reads back");
+    assert_eq!(parts.display.argument_digest, None);
+}

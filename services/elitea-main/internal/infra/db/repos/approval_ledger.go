@@ -322,8 +322,8 @@ func approvalCallOf(pause map[string]any) approvalCall {
 	// The `tool_args` (or `tool_args_json`) of a pause are the arguments the
 	// person sees, with sensitive values masked and long values cut, so a
 	// digest of them is not evidence of the call. Without the worker's
-	// digest (a worker from an earlier release, or a 0157 card, whose
-	// contract has no digest field) the row records no digest (NULL).
+	// digest (a worker from an earlier release) the row records no digest
+	// (NULL). A 0157 card carries it as display.argument_digest.
 	if digest := text("argument_digest"); argumentDigestShape.MatchString(digest) {
 		call.ArgumentDigest = digest
 	}

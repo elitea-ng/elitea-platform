@@ -32,10 +32,26 @@ before the upgrade have no `pause` row, and a decision on them is recorded.
   person to approve steps, set `notify_and_wait` on them, or change the
   platform default under Configuration › Approvals
   (`configuration.governance`).
+  This also applies to a static pipeline pause (`interrupt_before` or
+  `interrupt_after`). A static pause has no refusal, so `skip` on it uses
+  `fail`. When a `notify_and_wait` wait on a static pause expires, the run
+  ends with `approval_timed_out` and the pause cannot be continued.
+- **Argument digest.** The worker sends `argument_digest`, the SHA-256 of the
+  arguments before masking, with each root pause and in
+  `display.argument_digest` of each fan-out card (0157). The card schema
+  (`fanout-interrupt-card.v1`) and `ExecutionInterruptCardDisplay` gain this
+  optional field. Main no longer digests the masked arguments: a pause from an
+  earlier worker records no digest.
 - **API.** `PipelineSchedule`, `PipelineScheduleUpdate`,
   `PipelineInboundTrigger` and `PipelineInboundTriggerModeRequest` gain the
   optional field `on_approval_required`. No operation was added.
-- **Upgrade order.** Main only; the workers are unchanged.
+- **Upgrade order.** Upgrade Main first, then the workers. The chart's Argo CD
+  sync waves do this: Main is wave 0, the workers are wave 1. A new worker
+  puts `argument_digest` in a fan-out card, and Main of an earlier release
+  refuses that card, because the card's `display` is closed. A new Main
+  accepts cards from an earlier worker (no digest). If you do not use the
+  chart's Argo CD application, upgrade Main and wait until it is ready before
+  you upgrade the workers.
 
 ## Approval policy by risk tier and tool category (#1498, off until saved)
 

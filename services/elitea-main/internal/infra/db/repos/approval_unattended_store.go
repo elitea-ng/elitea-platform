@@ -146,11 +146,14 @@ type pausedResponse struct {
 }
 
 // lockPausedResponse locks the response row (the ledger's lock order: the
-// response, then the ledger rows).
+// response, then the ledger rows). A response is pending while it holds a
+// HITL pause or a static pipeline pause (pipeline_static_v1 or
+// pipeline_static_tools_v1) of the execution.
 func lockPausedResponse(ctx context.Context, tx sqlExecutor, responseMessageID, executionID string) (pausedResponse, error) {
 	var locked pausedResponse
 	err := tx.QueryRow(ctx, `
-SELECT id, (COALESCE(task_id, '') = $2 AND (meta ? 'hitl_interrupts' OR meta ? 'hitl_interrupt'))
+SELECT id, (COALESCE(task_id, '') = $2 AND (meta ? 'hitl_interrupts' OR meta ? 'hitl_interrupt'
+        OR meta ? 'pipeline_static_v1' OR meta ? 'pipeline_static_tools_v1'))
 FROM chat_message_group WHERE uuid = $1::uuid FOR UPDATE`, responseMessageID, executionID).
 		Scan(&locked.groupID, &locked.pending)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -176,7 +179,8 @@ func endRootPauseForApproval(ctx context.Context, tx sqlExecutor, pause pausedRe
 	if _, err := tx.Exec(ctx, `
 UPDATE chat_message_group
 SET is_streaming = FALSE,
-    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts' - 'authorization_requests')
+    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts' - 'authorization_requests'
+                 - 'pipeline_static_v1' - 'pipeline_static_tools_v1')
         || jsonb_build_object('is_error', TRUE, 'error', $2::text, 'error_code', $3::text),
     updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
 WHERE id = $1`, pause.groupID, approvalMessageOf(code), code); err != nil {

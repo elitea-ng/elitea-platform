@@ -150,7 +150,8 @@ fields and `fanout_v1`.
 
 `display` is closed and holds only fields the current card shows: `message` (≤8 KiB), `guardrail_type`, `node_name`,
 `tool_name`, `toolkit_name`, `toolkit_type`, `action_label`, `tool_call_id`, `tool_args_json` (≤16 KiB, the canonical
-JSON text the card shows), `policy_message`, `interaction_type`, `edit_state_key`, and `server_url` (https only) for
+JSON text the card shows), `argument_digest` (optional, `sha256:` and 64 lower-case hex digits: the Worker's digest of
+the call's arguments before masking, which the approval ledger records), `policy_message`, `interaction_type`, `edit_state_key`, and `server_url` (https only) for
 auth. Headers such as `www_authenticate`, tokens, resource metadata and checkpoint ids are never in a card. The
 canonical card is at most 32 KiB; Main enforces bytes.
 
