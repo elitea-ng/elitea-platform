@@ -5155,7 +5155,7 @@ pub(crate) fn fanout_card_parts(
     }
     if let Ok(binding) = pipeline_tool_event_binding(event, root_agent_name, thread_id) {
         let data = &binding.data;
-        let pending = json!({
+        let mut pending = json!({
             "type": "hitl", "interrupt_id": binding.interrupt_id,
             "call_digest": binding.call_digest, "guardrail_type": "sensitive_tool",
             "node_name": data.node_name, "message": data.message,
@@ -5164,8 +5164,14 @@ pub(crate) fn fanout_card_parts(
             "toolkit_type": data.toolkit_type, "action_label": data.action_label,
             "tool_args": data.tool_args, "policy_message": data.policy_message,
             "definition_digest": data.definition_digest, "argument_digest": data.argument_digest,
-            "approval_rule": pipeline_approval_rule(data.approval_rule.as_ref()),
         });
+        // FU-268: the card's bytes (its payload digest) carry the approval
+        // rule only when the stored pause recorded one, as the pause itself
+        // does (`llm::with_policy_approval_rule`). A card an earlier Worker
+        // raised is then raised again byte-identical after an upgrade.
+        if let (Some(rule), Value::Object(object)) = (&data.approval_rule, &mut pending) {
+            object.insert("approval_rule".to_owned(), rule.clone());
+        }
         let display = CardDisplay {
             action_label: Some(data.action_label.clone()).filter(|label| !label.is_empty()),
             guardrail_type: "sensitive_tool",
