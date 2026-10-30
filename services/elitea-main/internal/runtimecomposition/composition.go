@@ -2243,7 +2243,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			if err != nil {
 				return nil, err
 			}
-			toolkitDiscovery = toolkitDiscoveryRuntime.service
+			// Under approved_only an approved custom MCP server's listing
+			// keeps only its pinned tools, as Load Tools does (#1501).
+			toolkitDiscovery = toolkitDiscoveryRuntime.service.WithConnectorGate(connectorGate)
 		}
 		if toolkitDiscoveryRuntime != nil {
 			publisherRoot, err = newPublisherSet(publisherRoot, toolkitDiscoveryRuntime)
