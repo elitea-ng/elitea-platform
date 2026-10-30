@@ -820,6 +820,13 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		// ADR-0044 decision 5 (#1501): the staleness and trimming routines
 		// and the inventory and trimming reads.
 		"credential_review": true,
+		// ADR-0043 decision 3 (#1500): every agent execution command's
+		// preparation (workercontentcontrols.Resolver) and the project
+		// disclosure setting.
+		"ai_disclosure": true,
+		// ADR-0043 decision 3 (#1500): every agent execution command's
+		// preparation, which freezes the preamble revision and its digest.
+		"platform_preamble": true,
 	}
 	for id := range want {
 		if !available[id] {
