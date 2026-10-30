@@ -34,6 +34,7 @@ func (service *CurrentApplicationStartService) WithContextPolicy(source CurrentC
 
 func (service *CurrentApplicationStartService) freezeVersionWithContext(
 	ctx context.Context, request CurrentApplicationVersionFreezeRequest, conversationID string,
+	applicationID int64,
 ) (json.RawMessage, json.RawMessage, error) {
 	settings := json.RawMessage(`{}`)
 	if service.contextPolicy != nil {
@@ -52,7 +53,7 @@ func (service *CurrentApplicationStartService) freezeVersionWithContext(
 		}
 		request.SummaryLLMSettings = summary
 	}
-	frozen, err := service.freezer.FreezeCurrentApplicationVersion(ctx, request)
+	frozen, err := service.freezeAdmitted(ctx, request, applicationID)
 	return frozen, settings, err
 }
 

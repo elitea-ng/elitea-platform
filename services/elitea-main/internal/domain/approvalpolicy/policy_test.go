@@ -189,3 +189,151 @@ nodes:
 		}
 	}
 }
+
+// A static pause is a person's approval (review finding 3): a send node the
+// pipeline's interrupt_before names, or one after a node its interrupt_after
+// names, is gated.
+func TestCheckPipelineHITLStaticPauses(t *testing.T) {
+	t.Parallel()
+	for name, test := range map[string]struct {
+		yaml    string
+		refused bool
+	}{
+		"interrupt_before the send node": {`
+entry_point: a
+interrupt_before: [s]
+nodes:
+  - {id: a, type: llm, transition: s}
+  - {id: s, type: toolkit, toolkit_name: chat, tool: send_message}
+`, false},
+		"interrupt_after a node before the send node": {`
+entry_point: a
+interrupt_after: [a]
+nodes:
+  - {id: a, type: llm, transition: s}
+  - {id: s, type: toolkit, toolkit_name: chat, tool: send_message}
+`, false},
+		"interrupt_after the send node itself runs it first": {`
+entry_point: a
+interrupt_after: [s]
+nodes:
+  - {id: a, type: llm, transition: s}
+  - {id: s, type: toolkit, toolkit_name: chat, tool: send_message}
+`, true},
+		"interrupt_before another node leaves a path open": {`
+entry_point: a
+interrupt_before: [b]
+nodes:
+  - {id: a, type: decision, nodes: [b, s]}
+  - {id: b, type: llm, transition: s}
+  - {id: s, type: toolkit, toolkit_name: chat, tool: send_message}
+`, true},
+	} {
+		err := CheckPipelineHITL(test.yaml, toolkits, agentlifecycle.TierHigh)
+		if (err != nil) != test.refused {
+			t.Errorf("%s: err = %v, want refused %t", name, err, test.refused)
+		}
+	}
+}
+
+const sendsDirectly = `
+entry_point: post
+nodes:
+  - {id: post, type: toolkit, toolkit_name: chat, tool: send_message}
+`
+
+// A saved child pipeline is part of the path that reaches it (review finding
+// 2): a hitl node before the agent node covers the child; otherwise the
+// child's own paths need one. A child no agent node selects is checked from
+// its own entry point.
+func TestCheckPipelineGraphChildren(t *testing.T) {
+	t.Parallel()
+	child := func(instructions string, tier agentlifecycle.Tier) *PipelineGraph {
+		return &PipelineGraph{IsPipeline: true, Instructions: instructions, Toolkits: toolkits, Tier: tier}
+	}
+	runsChild := `
+entry_point: a
+nodes:
+  - {id: a, type: llm, transition: run}
+  - {id: run, type: agent, tool: Sender, transition: END}
+`
+	reviewsThenRunsChild := `
+entry_point: review
+nodes:
+  - {id: review, type: hitl, routes: {approve: run, reject: END}}
+  - {id: run, type: agent, tool: Sender, transition: END}
+`
+	pausesBeforeChild := `
+entry_point: a
+interrupt_before: [run]
+nodes:
+  - {id: a, type: llm, transition: run}
+  - {id: run, type: agent, tool: Sender, transition: END}
+`
+	for name, test := range map[string]struct {
+		graph   *PipelineGraph
+		refused bool
+		names   string
+	}{
+		"an agent node runs a child that sends": {
+			&PipelineGraph{IsPipeline: true, Instructions: runsChild, Tier: agentlifecycle.TierHigh,
+				Children: map[string]*PipelineGraph{"Sender": child(sendsDirectly, agentlifecycle.TierHigh)}},
+			true, `"a" -> "run" -> "post"`,
+		},
+		"a hitl node before the agent node covers the child": {
+			&PipelineGraph{IsPipeline: true, Instructions: reviewsThenRunsChild, Tier: agentlifecycle.TierHigh,
+				Children: map[string]*PipelineGraph{"Sender": child(sendsDirectly, agentlifecycle.TierHigh)}},
+			false, "",
+		},
+		"a static pause before the agent node covers the child": {
+			&PipelineGraph{IsPipeline: true, Instructions: pausesBeforeChild, Tier: agentlifecycle.TierHigh,
+				Children: map[string]*PipelineGraph{"Sender": child(sendsDirectly, agentlifecycle.TierHigh)}},
+			false, "",
+		},
+		"a child with its own hitl node": {
+			&PipelineGraph{IsPipeline: true, Instructions: runsChild, Tier: agentlifecycle.TierHigh,
+				Children: map[string]*PipelineGraph{"Sender": child(passesTheHITL, agentlifecycle.TierHigh)}},
+			false, "",
+		},
+		"a grandchild that sends": {
+			&PipelineGraph{IsPipeline: true, Instructions: runsChild, Tier: agentlifecycle.TierHigh,
+				Children: map[string]*PipelineGraph{"Sender": {
+					IsPipeline: true, Instructions: runsChild, Tier: agentlifecycle.TierHigh, Toolkits: toolkits,
+					Children: map[string]*PipelineGraph{"Sender": child(sendsDirectly, agentlifecycle.TierHigh)},
+				}}},
+			true, `"a" -> "run" -> "a" -> "run" -> "post"`,
+		},
+		"a child the rule does not cover": {
+			&PipelineGraph{IsPipeline: true, Instructions: runsChild,
+				Children: map[string]*PipelineGraph{"Sender": child(sendsDirectly, "")}},
+			false, "",
+		},
+		"a pipeline attached to an agent that is not a pipeline": {
+			&PipelineGraph{Children: map[string]*PipelineGraph{"Sender": child(sendsDirectly, agentlifecycle.TierHigh)}},
+			true, `"Sender" -> "post"`,
+		},
+		"a pipeline attached to a pipeline and no agent node": {
+			&PipelineGraph{IsPipeline: true, Instructions: passesTheHITL, Tier: agentlifecycle.TierHigh, Toolkits: toolkits,
+				Children: map[string]*PipelineGraph{"Other": child(sendsDirectly, agentlifecycle.TierHigh)}},
+			true, `"Other" -> "post"`,
+		},
+	} {
+		err := CheckPipelineGraph(test.graph)
+		if (err != nil) != test.refused {
+			t.Errorf("%s: err = %v, want refused %t", name, err, test.refused)
+			continue
+		}
+		if test.refused {
+			if refusal := Refusal(err); refusal == nil || !strings.Contains(refusal.Message, test.names) {
+				t.Errorf("%s: the refusal %v does not name the path %s", name, err, test.names)
+			}
+		}
+	}
+}
+
+func TestCompositionRefusalIsTyped(t *testing.T) {
+	t.Parallel()
+	if refusal := Refusal(CompositionRefusal("its saved pipelines form a cycle")); refusal == nil || refusal.Status != 422 {
+		t.Fatalf("refusal = %v", refusal)
+	}
+}

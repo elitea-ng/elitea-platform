@@ -300,6 +300,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 				InternalTools:  resolved.InternalTools,
 			},
 			target.ConversationUUID,
+			resolved.ApplicationID,
 		)
 		if err != nil {
 			return nil, nil, "", err
@@ -351,6 +352,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 				VersionDetails: snapshot,
 			},
 			target.ConversationUUID,
+			0,
 		)
 		if err != nil {
 			return nil, nil, "", err

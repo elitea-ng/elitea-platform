@@ -212,17 +212,17 @@ func TestAdmitPipeline(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	err = admission.AdmitPipeline(ctx, 17, 5, frozen(t, "pipeline", skipsTheHITL))
+	err = admission.AdmitPipeline(ctx, 17, 5, frozen(t, "pipeline", skipsTheHITL), nil)
 	if refusal := approvalpolicy.Refusal(err); refusal == nil || refusal.Code != approvalpolicy.CodeHITLRequired {
 		t.Fatalf("a high-tier pipeline that skips the hitl node is admitted: %v", err)
 	}
-	if err := admission.AdmitPipeline(ctx, 17, 5, frozen(t, "pipeline", passesTheHITL)); err != nil {
+	if err := admission.AdmitPipeline(ctx, 17, 5, frozen(t, "pipeline", passesTheHITL), nil); err != nil {
 		t.Fatalf("a pipeline with the hitl node is refused: %v", err)
 	}
-	if err := admission.AdmitPipeline(ctx, 17, 6, frozen(t, "pipeline", skipsTheHITL)); err != nil {
+	if err := admission.AdmitPipeline(ctx, 17, 6, frozen(t, "pipeline", skipsTheHITL), nil); err != nil {
 		t.Fatalf("a low-tier pipeline is refused: %v", err)
 	}
-	if err := admission.AdmitPipeline(ctx, 17, 5, frozen(t, "react", skipsTheHITL)); err != nil {
+	if err := admission.AdmitPipeline(ctx, 17, 5, frozen(t, "react", skipsTheHITL), nil); err != nil {
 		t.Fatalf("an agent that is not a pipeline is refused: %v", err)
 	}
 	// The default policy requires no hitl node, and reads no registry.
@@ -231,7 +231,124 @@ func TestAdmitPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := defaults.AdmitPipeline(ctx, 17, 5, frozen(t, "pipeline", skipsTheHITL)); err != nil || off.reads != 0 {
+	if err := defaults.AdmitPipeline(ctx, 17, 5, frozen(t, "pipeline", skipsTheHITL), nil); err != nil || off.reads != 0 {
 		t.Fatalf("the default policy refused (%v) or read the registry (%d)", err, off.reads)
+	}
+}
+
+// withChild answers a frozen version whose tools attach one saved pipeline
+// (application 40+n, version n) under alias, next to the chat toolkit.
+func withChild(t *testing.T, agentType, instructions, alias string, child int64) json.RawMessage {
+	t.Helper()
+	content, err := json.Marshal(map[string]any{
+		"agent_type":   agentType,
+		"instructions": instructions,
+		"tools": []any{
+			map[string]any{"type": "slack", "toolkit_name": "chat", "name": "chat", "settings": map[string]any{}},
+			map[string]any{
+				"type": "application", "name": alias, "toolkit_name": alias, "agent_type": "pipeline",
+				"settings": map[string]any{"application_id": 40 + child, "application_version_id": child},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
+}
+
+const runsSender = `
+entry_point: draft
+nodes:
+  - {id: draft, type: llm, transition: run}
+  - {id: run, type: agent, tool: Sender, transition: END}
+`
+
+const reviewsThenRunsSender = `
+entry_point: review
+nodes:
+  - {id: review, type: hitl, routes: {approve: run, reject: END}}
+  - {id: run, type: agent, tool: Sender, transition: END}
+`
+
+// Review finding 2: a saved child pipeline an agent node runs, or a pipeline
+// an agent attaches as a tool, is checked; a hitl node before the agent node
+// covers the child; the child's own tier counts; cycles and depth refuse.
+func TestAdmitPipelineChildren(t *testing.T) {
+	t.Parallel()
+	requiring := saved()
+	requiring.Policy.RequireHITL = []agentlifecycle.Tier{agentlifecycle.TierHigh}
+	ctx := context.Background()
+	versions := map[int64]json.RawMessage{
+		1: frozen(t, "pipeline", skipsTheHITL),
+		2: frozen(t, "pipeline", passesTheHITL),
+	}
+	reader := func(reads *int) ChildVersions {
+		return func(_ context.Context, applicationID, versionID int64) (json.RawMessage, error) {
+			*reads++
+			if applicationID != 40+versionID {
+				return nil, errors.New("wrong identity")
+			}
+			if version, ok := versions[versionID]; ok {
+				return version, nil
+			}
+			return nil, errors.New("not found")
+		}
+	}
+	tiers := &tierStub{tiers: map[[2]int64]string{{17, 5}: "high", {17, 6}: "low", {17, 41}: "high"}}
+	admission, err := NewPipelineAdmission(settingsStub{settings: requiring}, tiers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, test := range map[string]struct {
+		application int64
+		version     json.RawMessage
+		refused     bool
+	}{
+		"an agent node runs a child that skips the hitl node": {5, withChild(t, "pipeline", runsSender, "Sender", 1), true},
+		"a hitl node before the agent node covers the child":  {5, withChild(t, "pipeline", reviewsThenRunsSender, "Sender", 1), false},
+		"a child with its own hitl node":                      {5, withChild(t, "pipeline", runsSender, "Sender", 2), false},
+		"an agent attaches a pipeline that skips the hitl":    {5, withChild(t, "react", "be helpful", "Sender", 1), true},
+		"a low-tier root runs a high-tier child":              {6, withChild(t, "pipeline", runsSender, "Sender", 1), true},
+		"an ad hoc agent attaches a high-tier pipeline":       {0, withChild(t, "react", "be helpful", "Sender", 1), true},
+	} {
+		reads := 0
+		err := admission.AdmitPipeline(ctx, 17, test.application, test.version, reader(&reads))
+		if refused := approvalpolicy.Refusal(err) != nil; refused != test.refused || (!refused && err != nil) {
+			t.Errorf("%s: err = %v, want refused %t", name, err, test.refused)
+		}
+		if reads != 1 {
+			t.Errorf("%s: child reads = %d", name, reads)
+		}
+	}
+
+	// A cycle and a composition deeper than the worker admits are refused.
+	versions[3] = withChild(t, "pipeline", runsSender, "Sender", 3)
+	versions[4] = withChild(t, "pipeline", runsSender, "Sender", 5)
+	versions[5] = withChild(t, "pipeline", runsSender, "Sender", 6)
+	versions[6] = withChild(t, "pipeline", runsSender, "Sender", 7)
+	versions[7] = frozen(t, "pipeline", passesTheHITL)
+	for name, root := range map[string]json.RawMessage{
+		"a cycle":         withChild(t, "pipeline", reviewsThenRunsSender, "Sender", 3),
+		"too many levels": withChild(t, "pipeline", reviewsThenRunsSender, "Sender", 4),
+	} {
+		reads := 0
+		if err := admission.AdmitPipeline(ctx, 17, 5, root, reader(&reads)); approvalpolicy.Refusal(err) == nil {
+			t.Errorf("%s is admitted: %v", name, err)
+		}
+	}
+	// Three levels below the root are admitted.
+	reads := 0
+	if err := admission.AdmitPipeline(ctx, 17, 5, withChild(t, "pipeline", reviewsThenRunsSender, "Sender", 5), reader(&reads)); err != nil {
+		t.Errorf("three levels are refused: %v", err)
+	}
+
+	// A child that cannot be read, and a missing reader, fail the start.
+	reads = 0
+	if err := admission.AdmitPipeline(ctx, 17, 5, withChild(t, "pipeline", runsSender, "Sender", 9), reader(&reads)); err == nil || approvalpolicy.Refusal(err) != nil {
+		t.Errorf("an unreadable child: %v", err)
+	}
+	if err := admission.AdmitPipeline(ctx, 17, 5, withChild(t, "pipeline", runsSender, "Sender", 1), nil); err == nil || approvalpolicy.Refusal(err) != nil {
+		t.Errorf("no reader: %v", err)
 	}
 }

@@ -962,7 +962,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if targetErr != nil {
 			return nil, targetErr
 		}
-		agentStart = agentStart.WithPipelineApproval(pipelineApproval)
+		// The check reads the saved child pipelines a run reaches through the
+		// nested child route's reader, and freezes them with the start's
+		// freezer.
+		agentStart = agentStart.WithPipelineApproval(pipelineApproval,
+			pipelineApprovalChildren{versions: agentNestedVersions})
 		agentStart = agentStart.WithContextPolicy(repos.NewCurrentAgentContextPolicyRepository(dependencies.AdmissionPool))
 		// Project Context injection (#946). Same post-construction setter
 		// idiom, same admission pool. This is what replaced the admission

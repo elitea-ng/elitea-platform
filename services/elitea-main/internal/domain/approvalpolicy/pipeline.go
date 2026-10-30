@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -68,28 +69,108 @@ type graphNode struct {
 	targets  []string
 }
 
+// PipelineGraph is one version of a pipeline composition the check walks:
+// the root a run starts, or a saved pipeline it reaches as a child.
+type PipelineGraph struct {
+	// IsPipeline is false for an agent that is not a pipeline: it has no
+	// graph, and the check reads only its Children.
+	IsPipeline   bool
+	Instructions string
+	Toolkits     []PipelineToolkit
+	// Tier is the tier whose policy requires the rule for this version's
+	// tool nodes. Empty means the rule does not apply to them; the check
+	// still walks the version to reach its children.
+	Tier agentlifecycle.Tier
+	// Children are the saved pipelines the version attaches as tools, by
+	// the alias (`toolkit_name`) an `agent` node selects.
+	Children map[string]*PipelineGraph
+}
+
 // CheckPipelineHITL refuses a pipeline that has a path from its entry point
 // to a direct `toolkit` or `mcp` node whose tool is external_send or payment
 // and that passes no `hitl` node. The refusal names the node, the tool and
 // the path. tier is the tier whose policy requires the rule, for the message.
+// It checks one version with no children; CheckPipelineGraph is the check
+// of a composition.
+func CheckPipelineHITL(instructions string, toolkits []PipelineToolkit, tier agentlifecycle.Tier) error {
+	return CheckPipelineGraph(&PipelineGraph{IsPipeline: true, Instructions: instructions, Toolkits: toolkits, Tier: tier})
+}
+
+// CheckPipelineGraph refuses a composition with a path from the root's
+// entry point to a gated tool node (external_send or payment) that no person
+// approves, in a version whose Tier requires the rule.
 //
 // The graph's edges are every route the worker compiler follows: a node's
 // `transition` and `default_output`, a decision node's `nodes`, a router's
 // `routes`, a parallel node's branch nodes, a map node's `worker` and a
 // recovery route (`recovery.on_failure.route`). A `hitl` node ends a path: a
-// person decides there. A model's tool call inside an `llm` or `agent` node
-// is not a tool node; the run's approval categories cover it at call time.
+// person decides there. A static pause ends a path too: a node the
+// pipeline's `interrupt_before` names, and the successors of a node its
+// `interrupt_after` names. A model's tool call inside an `llm` or `agent`
+// node is not a tool node; the run's approval categories cover it at call
+// time.
+//
+// An `agent` node that selects a saved child pipeline continues the path
+// into the child: the child's paths from its own entry point are checked
+// with the parent's path as their prefix. A child no `agent` node selects
+// (a pipeline attached as a tool a model calls) is checked from its own
+// entry point. The caller bounds the composition: the graph has no cycle.
 //
 // A document that does not parse, has no entry point or names a node that
 // does not exist is not refused here: the compiler refuses it when the run
 // starts. A node whose toolkit is not attached is write (the worker refuses
 // such a node anyway).
-func CheckPipelineHITL(instructions string, toolkits []PipelineToolkit, tier agentlifecycle.Tier) error {
-	if len(instructions) > maxInstructionsBytes {
+func CheckPipelineGraph(graph *PipelineGraph) error {
+	return checkGraph(graph, nil)
+}
+
+// CompositionRefusal refuses a composition the check cannot read in full:
+// saved pipelines in a cycle, nested too deep or too many. The worker
+// refuses such a composition too.
+func CompositionRefusal(reason string) error {
+	return &apierr.APIError{
+		Status: http.StatusUnprocessableEntity,
+		Code:   CodeHITLRequired,
+		Message: "The approval policy requires a hitl node before external_send and payment tools, and it cannot check this " +
+			"pipeline: " + reason + ". Change the pipeline composition.",
+	}
+}
+
+func checkGraph(graph *PipelineGraph, prefix []string) error {
+	if graph == nil {
+		return nil
+	}
+	selected := map[string]bool{}
+	if graph.IsPipeline {
+		if err := walkGraph(graph, prefix, selected); err != nil {
+			return err
+		}
+	}
+	aliases := make([]string, 0, len(graph.Children))
+	for alias := range graph.Children {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	for _, alias := range aliases {
+		if selected[alias] {
+			continue
+		}
+		if err := checkGraph(graph.Children[alias], appendPath(prefix, label(alias))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// walkGraph walks one pipeline version. selected collects every alias an
+// `agent` node of the document selects, reached or not: such a child runs
+// only through its node.
+func walkGraph(graph *PipelineGraph, prefix []string, selected map[string]bool) error {
+	if len(graph.Instructions) > maxInstructionsBytes {
 		return nil
 	}
 	var document yaml.Node
-	if yaml.NewDecoder(strings.NewReader(instructions)).Decode(&document) != nil || len(document.Content) != 1 {
+	if yaml.NewDecoder(strings.NewReader(graph.Instructions)).Decode(&document) != nil || len(document.Content) != 1 {
 		return nil
 	}
 	root := aliased(document.Content[0])
@@ -98,10 +179,15 @@ func CheckPipelineHITL(instructions string, toolkits []PipelineToolkit, tier age
 	}
 	entry := ""
 	var nodes []graphNode
+	before, after := map[string]bool{}, map[string]bool{}
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		switch aliased(root.Content[i]).Value {
 		case "entry_point":
 			entry = scalar(aliased(root.Content[i+1]))
+		case "interrupt_before":
+			readNames(aliased(root.Content[i+1]), before)
+		case "interrupt_after":
+			readNames(aliased(root.Content[i+1]), after)
 		case "nodes":
 			list := aliased(root.Content[i+1])
 			if list.Kind != yaml.SequenceNode {
@@ -111,6 +197,13 @@ func CheckPipelineHITL(instructions string, toolkits []PipelineToolkit, tier age
 				if node, ok := readNode(aliased(item)); ok {
 					nodes = append(nodes, node)
 				}
+			}
+		}
+	}
+	for _, node := range nodes {
+		if node.nodeType == "agent" && node.tool != "" {
+			if _, ok := graph.Children[node.tool]; ok {
+				selected[node.tool] = true
 			}
 		}
 	}
@@ -150,11 +243,26 @@ func CheckPipelineHITL(instructions string, toolkits []PipelineToolkit, tier age
 		current := queue[0]
 		queue = queue[1:]
 		node := nodes[current]
-		if node.nodeType == "hitl" {
+		// A person decides before a hitl node's routes and before a node
+		// the static pause names: the path ends there.
+		if node.nodeType == "hitl" || before[node.id] {
 			continue
 		}
-		if category, gated := gatedTool(node, toolkits); gated {
-			return refusal(nodes, parent, current, category, tier)
+		if graph.Tier != "" {
+			if category, gated := gatedTool(node, graph.Toolkits); gated {
+				return refusal(nodes, parent, current, prefix, category, graph.Tier)
+			}
+		}
+		if node.nodeType == "agent" {
+			if child, ok := graph.Children[node.tool]; ok {
+				if err := checkGraph(child, pathTo(nodes, parent, current, prefix)); err != nil {
+					return err
+				}
+			}
+		}
+		// The node runs, then the run pauses: its successors are gated.
+		if after[node.id] {
+			continue
 		}
 		for _, target := range node.targets {
 			next, ok := resolve(target)
@@ -166,6 +274,19 @@ func CheckPipelineHITL(instructions string, toolkits []PipelineToolkit, tier age
 		}
 	}
 	return nil
+}
+
+// readNames reads a static pause list: the exact stored node ids, as the
+// compiler reads them.
+func readNames(list *yaml.Node, into map[string]bool) {
+	if list == nil || list.Kind != yaml.SequenceNode {
+		return
+	}
+	for _, item := range list.Content {
+		if name := scalar(aliased(item)); name != "" {
+			into[name] = true
+		}
+	}
 }
 
 // gatedTool answers the gated category of a direct tool node, if it has one.
@@ -205,15 +326,31 @@ func attached(name string, toolkits []PipelineToolkit) (PipelineToolkit, bool) {
 	return PipelineToolkit{}, false
 }
 
-func refusal(nodes []graphNode, parent []int, at int, category toolcategory.Category, tier agentlifecycle.Tier) error {
+// maxPathLabels bounds the path a refusal prints.
+const maxPathLabels = 32
+
+func appendPath(prefix []string, labels ...string) []string {
+	path := append(append([]string{}, prefix...), labels...)
+	if len(path) > maxPathLabels {
+		path = append([]string{"..."}, path[len(path)-maxPathLabels+1:]...)
+	}
+	return path
+}
+
+// pathTo answers the labels of the path to node at, after prefix.
+func pathTo(nodes []graphNode, parent []int, at int, prefix []string) []string {
 	var path []string
 	for index := at; index >= 0; index = parent[index] {
 		path = append([]string{label(nodes[index].id)}, path...)
-		if len(path) > 32 {
-			path = append([]string{"..."}, path[len(path)-31:]...)
+		if len(path) > maxPathLabels {
 			break
 		}
 	}
+	return appendPath(prefix, path...)
+}
+
+func refusal(nodes []graphNode, parent []int, at int, prefix []string, category toolcategory.Category, tier agentlifecycle.Tier) error {
+	path := pathTo(nodes, parent, at, prefix)
 	node := nodes[at]
 	return &apierr.APIError{
 		Status: http.StatusUnprocessableEntity,

@@ -157,6 +157,7 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 			VersionDetails: snapshot,
 		},
 		request.ConversationUUID,
+		0,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("freeze current ad-hoc snapshot: %w", err)

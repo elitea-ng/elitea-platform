@@ -772,7 +772,7 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 			resolved.ApplicationVersionID = int64(originalSource.Reference.VersionID)
 			resolved.VersionDetails = originalSource.RuntimeVersionDetails
 		}
-		frozen, err := service.freezer.FreezeCurrentApplicationVersion(
+		frozen, err := service.freezeAdmitted(
 			ctx,
 			CurrentApplicationVersionFreezeRequest{
 				ProjectID: projectID, ActorUserID: actorUserID,
@@ -780,6 +780,7 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 				InternalTools:     resolved.InternalTools,
 				ContinuationScope: ContinuationScope(request.ConversationUUID, request.ResponseMessageID),
 			},
+			resolved.ApplicationID,
 		)
 		if err != nil {
 			return nil, nil, "", err
@@ -844,13 +845,14 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		if originalSource != nil {
 			snapshot = originalSource.RuntimeVersionDetails
 		}
-		frozen, err := service.freezer.FreezeCurrentApplicationVersion(
+		frozen, err := service.freezeAdmitted(
 			ctx,
 			CurrentApplicationVersionFreezeRequest{
 				ProjectID: projectID, ActorUserID: actorUserID,
 				VersionDetails:    snapshot,
 				ContinuationScope: ContinuationScope(request.ConversationUUID, request.ResponseMessageID),
 			},
+			0,
 		)
 		if err != nil {
 			return nil, nil, "", err

@@ -374,20 +374,31 @@ A pipeline can call a tool from a toolkit node without a model. If the path to a
 
 **Configuration › Approval Policy › Tiers That Require a HITL Node in Pipelines** names the tiers where the rule applies. Under the rule, every path from the pipeline's entry point to a toolkit or MCP node that calls an `external_send` or `payment` tool must go through a `hitl` node. The check follows every edge: transitions, default outputs, decision and router routes, HITL routes, parallel branches, map workers and recovery routes.
 
+A static pause also counts as approval. The run stops before each node that the pipeline's `interrupt_before` list names, and after each node that its `interrupt_after` list names. A person resumes the run. Thus a tool node in `interrupt_before` is approved, and so is each node after a node in `interrupt_after`. A tool node in `interrupt_after` runs before the pause, so it is not approved.
+
+The check also covers saved child pipelines:
+
+- An `agent` node that runs a saved child pipeline continues the path into the child. A `hitl` node before the `agent` node approves the whole child. If there is no such node, each path in the child must go through a `hitl` node.
+- A pipeline that an agent attaches as a tool is checked from its own entry point.
+- The check goes down three levels of saved pipelines, as the worker does. A deeper composition, or one with a cycle, does not start.
+- Each child is checked at the tier of its parent if that tier requires the rule. If not, the child is checked at its own tier.
+
 A pipeline that breaks the rule does not start. The start request returns HTTP 422 with the code `PIPELINE_HITL_REQUIRED` and a message that names the node, the tool, its category and the path that has no `hitl` node, for example:
 
 ```text
 Node "post" calls "send_message", which is a tool in the external_send category. The approval policy requires a hitl node on every path to such a tool for high-tier agents, and the path "draft" -> "route" -> "post" has none. Add a hitl node before "post".
 ```
 
-The check runs at every start of a pipeline: chat turns, schedules and triggers. Pipelines cannot be published (publish refuses them with `pipeline_not_publishable`), so the run start is where the rule applies.
+The check runs each time the platform admits a run: a chat turn, an ad hoc chat turn, a schedule, a trigger, a regenerate and a resume after a pause. All of these freeze the agent version through one step, and the check is part of that step. Pipelines cannot be published (publish refuses them with `pipeline_not_publishable`), so the run admission is where the rule applies.
 
 The default is off: no tier requires the node.
 
 #### Limits
 
 - The check reads the pipeline's toolkit and MCP nodes. A model node (`llm` or `agent`) that can call an `external_send` tool is covered by the policy rule at call time, not by this check.
-- The check uses the tier of the pipeline's own registry record.
+- The check uses the tier of the pipeline's registry record, and of the registry record of each child pipeline. An ad hoc chat has no record and is `low`.
+- The check does not read the tools of a child agent that is not a pipeline. A pipeline that such an agent attaches as a tool is not checked when the run starts.
+- If the check cannot read a child pipeline, the run does not start.
 
 ### Configure
 
