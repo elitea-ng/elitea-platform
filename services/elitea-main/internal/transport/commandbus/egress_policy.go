@@ -32,6 +32,13 @@ func (p *AgentExecutionProducer) WithRunCaps(resolver RunCapsResolver) *AgentExe
 	return p
 }
 
+// WithOutputContracts makes the agent execution commands whose definition
+// holds an output contract carry field 70 (ADR-0043 decision 2).
+func (p *AgentExecutionProducer) WithOutputContracts(resolver OutputContractsResolver) *AgentExecutionProducer {
+	p.producer.WithOutputContracts(resolver)
+	return p
+}
+
 // WithEgressPolicy makes the index ingest commands carry their policy.
 func (p *IndexIngestProducer) WithEgressPolicy(resolver EgressPolicyResolver) *IndexIngestProducer {
 	p.producer.WithEgressPolicy(resolver)

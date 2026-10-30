@@ -1,7 +1,8 @@
 import { ThemeProvider } from '@mui/material/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -154,6 +155,34 @@ describe('AgentEditor', () => {
         expect.objectContaining({ id: '42', name: 'My Agent', participantType: 'application' }),
       ),
     );
+  });
+
+  it('offers the output contract field in create mode and sends the contract on create (#1500)', async () => {
+    let sentMeta: unknown;
+    server.use(
+      http.post('*/elitea_core/applications/prompt_lib/:projectId', async ({ request }) => {
+        const body = (await request.json()) as { versions?: { meta?: unknown }[] };
+        sentMeta = body.versions?.[0]?.meta;
+        return HttpResponse.json(
+          { id: '43', name: 'Contract Agent', description: 'desc', type: 'interface', icon: '', owner_id: 'u1', created_at: '2026-01-01T00:00:00Z' },
+          { status: 201 },
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    renderEditor({ isCreateMode: true, onAgentCreated: vi.fn() });
+
+    const field = await screen.findByTestId('agent-output-contract');
+    await user.click(within(field).getAllByRole('combobox')[0] as HTMLElement);
+    await user.click(screen.getByRole('option', { name: 'Format' }));
+
+    fireEvent.change(screen.getByTestId('agent-name-input'), { target: { value: 'Contract Agent' } });
+    fireEvent.blur(screen.getByTestId('agent-name-input'));
+    fireEvent.change(screen.getByTestId('agent-description-input'), { target: { value: 'desc' } });
+    await waitFor(() => expect(screen.getByTestId('agent-save-button')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('agent-save-button'));
+
+    await waitFor(() => expect(sentMeta).toMatchObject({ output_contract: { type: 'format', format: 'json' } }));
   });
 
   it('edit-mode Save is disabled without an injected onSaveVersion', async () => {

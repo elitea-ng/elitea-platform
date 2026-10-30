@@ -102,6 +102,7 @@ impl ModelFacade {
         Ok(BoundModelFacade {
             primary,
             summary: None,
+            output_contract: None,
         })
     }
 
@@ -154,6 +155,10 @@ impl ModelFacade {
 pub(crate) struct BoundModelFacade {
     primary: BoundProviderModel,
     summary: Option<Arc<dyn adk_rust::Llm>>,
+    /// The provider model behind the output contract (ADR-0043 decision 2),
+    /// when the agent or node declares one. Built once, so its one retry is
+    /// spent once per binding.
+    output_contract: Option<Arc<dyn adk_rust::Llm>>,
 }
 
 enum BoundProviderModel {
@@ -162,6 +167,34 @@ enum BoundProviderModel {
 }
 
 impl BoundModelFacade {
+    /// Enforce `contract` on every final answer of this binding (ADR-0043
+    /// decision 2). `None` leaves the binding as it is.
+    #[must_use]
+    pub(crate) fn with_output_contract(
+        mut self,
+        contract: Option<Arc<elitea_agent_runtime::output_contract::OutputContract>>,
+        scope: crate::agents::output_contract_model::ContractStepScope,
+    ) -> Self {
+        self.output_contract = contract.map(|contract| {
+            Arc::new(
+                crate::agents::output_contract_model::OutputContractModel::new(
+                    self.primary_model(),
+                    contract,
+                    BoundOrdinaryAgentModel::durable_completion(&self),
+                    scope,
+                ),
+            ) as Arc<dyn adk_rust::Llm>
+        });
+        self
+    }
+
+    fn primary_model(&self) -> Arc<dyn adk_rust::Llm> {
+        match &self.primary {
+            BoundProviderModel::OpenAiCompatible(model) => model.adk_model(),
+            BoundProviderModel::Anthropic(model) => model.adk_model(),
+        }
+    }
+
     /// The model with the generation config its facade admits: what a caller
     /// that builds its own request (`model_text::stream_text`) sends.
     pub(crate) fn admitted_chat(&self) -> super::model_text::AdmittedChat {
@@ -196,10 +229,9 @@ impl BoundOrdinaryAgentModel for BoundModelFacade {
     }
 
     fn adk_model(&self) -> Arc<dyn adk_rust::Llm> {
-        match &self.primary {
-            BoundProviderModel::OpenAiCompatible(model) => model.adk_model(),
-            BoundProviderModel::Anthropic(model) => model.adk_model(),
-        }
+        self.output_contract
+            .clone()
+            .unwrap_or_else(|| self.primary_model())
     }
 
     fn take_completed_text(self) -> Result<String, NativeAgentAssemblyError> {

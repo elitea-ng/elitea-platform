@@ -39,6 +39,7 @@ import (
 	workerapprovalpolicyapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerapprovalpolicy"
 	workerdelegationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerdelegation"
 	workeregressapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workeregress"
+	workeroutputcontractapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workeroutputcontract"
 	workerruncapsapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerruncaps"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
@@ -788,6 +789,14 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, err
 		}
 		agentProducer.WithRunCaps(runCaps)
+		// Field 70 (ADR-0043 decision 2): only a command whose frozen
+		// definition holds an output contract carries it, so a worker that
+		// cannot enforce contracts refuses exactly those commands.
+		outputContracts, err := workeroutputcontractapp.NewResolver(egressSources)
+		if err != nil {
+			return nil, err
+		}
+		agentProducer.WithOutputContracts(outputContracts)
 		// The catalogue project is the SAME id the freezer resolves shared
 		// models against, taken from the same place, so the one project a turn
 		// may borrow a published agent from and the one project it may borrow a

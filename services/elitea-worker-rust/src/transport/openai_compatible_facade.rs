@@ -803,7 +803,7 @@ fn encode_request_body(
             "response_format".to_owned(),
             serde_json::json!({
                 "type": "json_schema",
-                "json_schema": {"name": "continuation_summary", "strict": true, "schema": schema}
+                "json_schema": response_format_schema(schema)
             }),
         );
     }
@@ -855,6 +855,19 @@ fn encode_request_body(
         }
     }
     Ok(encoded)
+}
+
+/// The `json_schema` of a `response_format`. A schema that meets the strict
+/// rules (the compaction summary, a structured pipeline node, a strict output
+/// contract) keeps `strict: true`. An author's output contract that does not
+/// (ADR-0043 decision 2) is sent without `strict`; the worker validates the
+/// answer against it either way.
+fn response_format_schema(schema: &serde_json::Value) -> serde_json::Value {
+    if elitea_agent_runtime::output_contract::is_strict_compatible(schema) {
+        serde_json::json!({"name": "continuation_summary", "strict": true, "schema": schema})
+    } else {
+        serde_json::json!({"name": "output_contract", "strict": false, "schema": schema})
+    }
 }
 
 pub(super) fn validate_llm_request<'a>(

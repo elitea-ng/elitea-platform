@@ -899,6 +899,20 @@ impl RunStepRegistry {
         })
     }
 
+    /// The recorder of the newest generation of `execution_id` this process
+    /// runs, for a step recorded below the projector (an output contract
+    /// check, ADR-0043 decision 2) where only the execution is known.
+    #[must_use]
+    pub(crate) fn find_execution(&self, execution_id: &str) -> Option<Arc<RunStepRecorder>> {
+        self.with_tracked(|tracked| {
+            tracked
+                .iter()
+                .filter(|(key, _)| key.execution_id == execution_id)
+                .max_by_key(|(key, _)| key.generation)
+                .map(|(_, entry)| Arc::clone(&entry.recorder))
+        })
+    }
+
     /// Stop tracking a settled command; anything still buffered is dropped
     /// (logged and counted).
     pub(crate) fn forget(&self, identity: &ExecutionIdentityV1) {

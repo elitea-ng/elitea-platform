@@ -138,7 +138,12 @@ export function CommonInterruptSettings(props: CommonInterruptSettingsProps): Re
   const onChangeStructuredOutput = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
       if (!setYamlJsonObject) return;
-      FlowEditorHelpers.updateYamlNode(id, 'structured_output', event.target.checked, yamlJsonObject, setYamlJsonObject);
+      // #1500 — the server refuses an output contract on a structured-output
+      // node (OUTPUT_CONTRACT_INVALID, reason structured_output), so turning
+      // structured output on removes the contract in the same write.
+      const checked = event.target.checked;
+      const update = checked ? { structured_output: true, output_contract: undefined } : { structured_output: false };
+      FlowEditorHelpers.batchUpdateYamlNode(id, update, yamlJsonObject, setYamlJsonObject);
     },
     [yamlJsonObject, setYamlJsonObject, id],
   );

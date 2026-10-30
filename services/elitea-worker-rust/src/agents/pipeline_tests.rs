@@ -56,6 +56,8 @@ mod effect_pg_tests;
 mod fanout_effect_pg_tests;
 #[path = "pipeline_scope_tests.rs"]
 mod model_scope_tests;
+#[path = "pipeline_output_contract_tests.rs"]
+mod output_contract_tests;
 #[path = "pipeline_restart_pg_tests.rs"]
 pub(super) mod restart_pg_tests;
 #[path = "pipeline_scoped_pg_tests.rs"]

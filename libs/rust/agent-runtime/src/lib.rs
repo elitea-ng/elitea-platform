@@ -75,6 +75,7 @@ pub mod image_result;
 pub mod instruction_authority;
 pub mod lazy_tools;
 pub mod memory_tools;
+pub mod output_contract;
 pub mod planner;
 pub mod platform;
 pub mod remote_assertion;

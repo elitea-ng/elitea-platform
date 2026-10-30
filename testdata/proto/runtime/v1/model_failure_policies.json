@@ -42,6 +42,12 @@
     "retryable": true
   },
   {
+    "code": "MODEL_RESPONSE_INVALID",
+    "public_code": "OUTPUT_CONTRACT_VIOLATION",
+    "message": "The answer did not have the format that the agent or pipeline node requires, and one retry did not correct it. Later nodes did not run. Change the instructions or the output contract, or select a different model.",
+    "retryable": false
+  },
+  {
     "code": "CONTEXT_BUDGET_EXCEEDED",
     "message": "The model input exceeds the available context budget. Enable compaction, reduce attached content, or select a model with a larger context window.",
     "retryable": false

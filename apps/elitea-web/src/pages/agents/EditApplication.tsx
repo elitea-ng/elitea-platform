@@ -13,6 +13,7 @@ import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
 import { disarmUnsavedChangesNavBlocker, useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
 
 import { contentSx, pageSx, tabBarSx } from './EditApplication.styles';
+import { agentSaveErrorMessage } from './lib/agentSaveErrorMessage';
 import { applicationDetailDisplayName, toVersionSummaries } from './lib/editApplicationMappers';
 import { isPublicAgentsProject } from './lib/isPublicAgentsProject';
 import { useCorrectUserNameInUrl } from './lib/useCorrectUserNameInUrl';
@@ -345,7 +346,7 @@ export function EditApplication(): ReactNode {
               role="alert"
               variant="bodyMedium"
             >
-              {t('pages.agents.editApplication.saveError', 'Failed to save your changes.')}
+              {agentSaveErrorMessage(saveError, t('pages.agents.editApplication.saveError', 'Failed to save your changes.'))}
             </Typography>
           )}
           {/*

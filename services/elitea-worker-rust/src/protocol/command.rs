@@ -473,6 +473,7 @@ fn scan_agent_worker_command(raw: &[u8]) -> Result<(), ProtocolError> {
     scan_delegation_policy(&fields)?;
     scan_approval_policy(&fields)?;
     scan_run_caps(&fields)?;
+    scan_output_contracts(&fields)?;
     let input_reference = fields.length_field(16, "the input bundle reference is missing")?;
     let input_fields = scan_message(input_reference, Schema::InputBundleReference)?;
     let input_digest = input_fields.length_field(3, "the input bundle digest is missing")?;
@@ -587,6 +588,23 @@ fn scan_run_caps(fields: &ScannedFields<'_>) -> Result<(), ProtocolError> {
     Ok(())
 }
 
+/// Field 70 (ADR-0043 decision 2, #1500): the output contracts admit no
+/// unknown field. Only an agent execution whose frozen definition holds an
+/// output contract carries them.
+fn scan_output_contracts(fields: &ScannedFields<'_>) -> Result<(), ProtocolError> {
+    if fields.contains(70) {
+        scan_message(
+            fields.length_field(70, "the worker output contracts are missing")?,
+            Schema::WorkerOutputContracts,
+        )?;
+    }
+    Ok(())
+}
+
+/// The output contract grammar revision this worker enforces (`json_schema`,
+/// regex and the json, markdown and csv formats).
+pub(crate) const OUTPUT_CONTRACTS_REVISION: u32 = 1;
+
 fn validate_agent_command(command: &WorkerCommandV1) -> Result<AgentExecutionKind, ProtocolError> {
     if command.protocol_revision != PROTOCOL_REVISION || command.limits_revision != LIMITS_REVISION
     {
@@ -612,6 +630,17 @@ fn validate_agent_command(command: &WorkerCommandV1) -> Result<AgentExecutionKin
     super::egress::policy_from_command(command)?;
     super::delegation::policy_from_command(command)?;
     super::approval_policy::policy_from_command(command)?;
+    // A revision this worker does not know names a contract it cannot
+    // enforce: refused, never ignored.
+    if command
+        .output_contracts
+        .as_ref()
+        .is_some_and(|contracts| contracts.revision != OUTPUT_CONTRACTS_REVISION)
+    {
+        return Err(ProtocolError::IncompatibleVersion(
+            "the output contract revision is not supported",
+        ));
+    }
     Ok(kind)
 }
 

@@ -24,6 +24,7 @@ mod model_scope;
 pub(crate) mod native_runtime;
 pub(crate) mod node_recovery_checkpoint;
 pub(crate) mod ordinary;
+pub(crate) mod output_contract_model;
 pub(crate) mod pipeline;
 pub mod protocol;
 mod replay_history;

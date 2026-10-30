@@ -477,10 +477,13 @@ fn encode_anthropic_body(
     params.temperature = generation.temperature;
     params.thinking = generation.thinking;
     params.output_config = generation.output_config;
+    // An output contract schema that does not meet the strict rules
+    // (ADR-0043 decision 2) is not sent: the worker validates the answer.
     if let Some(schema) = request
         .config
         .as_ref()
         .and_then(|config| config.response_schema.as_ref())
+        .filter(|schema| elitea_agent_runtime::output_contract::is_strict_compatible(schema))
     {
         let config = params.output_config.get_or_insert(OutputConfig {
             effort: None,

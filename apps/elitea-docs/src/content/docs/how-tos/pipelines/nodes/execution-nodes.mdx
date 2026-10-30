@@ -17,6 +17,7 @@ Calls a model directly with a system message and a task, without wrapping it in 
 | Input / Output | Which state variables feed in, and which are populated from the response |
 | Toolkits | Toolkits or MCPs the model can call as tools during this step |
 | Structured output | When enabled, the response is parsed into your named output variables instead of dropped into `messages` as free text |
+| Output contract | A rule for the answer: a JSON Schema, a regular expression, or a named format (`json`, `markdown`, `csv`). The worker validates the answer and asks the model one more time if it is not valid. If the second answer is not valid, the node stops with `output_contract_violation` and the next node does not run. Not available when structured output is on. See [Output contracts](/admin/enterprise-controls/content-controls#output-contracts) |
 
 ## Agent
 

@@ -103,6 +103,16 @@ message WorkerCommandV1 {
   // from an earlier release run.
   WorkerRunCapsV1 run_caps = 69;
 
+  // Set when the run's frozen definition holds an output contract (ADR-0043
+  // decision 2, #1500): the agent version's meta.output_contract, a nested
+  // agent's, or the output_contract of a pipeline LLM node. The contract
+  // itself stays in the frozen definition. This field only makes a worker
+  // that cannot enforce contracts refuse the command (an unknown field is
+  // INCOMPATIBLE_VERSION), so a contract is never silently ignored during a
+  // Main-first rollout. Absent on every other command, so those commands
+  // are unchanged byte for byte.
+  WorkerOutputContractsV1 output_contracts = 70;
+
   reserved 15, 26 to 31;
   reserved "grant_template_id";
   reserved 37 to 63;
@@ -193,4 +203,12 @@ message WorkerRunCapsV1 {
   // results, rows, issues). Undeclared tools count 0.
   uint64 max_records_read = 3;
   reserved 4 to 10;
+}
+
+// The output contract support a run needs (ADR-0043 decision 2).
+message WorkerOutputContractsV1 {
+  // The contract grammar revision: 1 is json_schema, regex and format
+  // (json, markdown, csv). A worker refuses a revision it does not know.
+  uint32 revision = 1;
+  reserved 2 to 10;
 }

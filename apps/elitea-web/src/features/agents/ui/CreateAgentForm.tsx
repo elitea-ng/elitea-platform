@@ -219,14 +219,11 @@ export interface CreateAgentFormProps {
   readonly showInstructions?: boolean | undefined;
   readonly entityType?: 'application' | 'pipeline' | undefined;
   /**
-   * Rendered as `BasicAccordion`'s `summaryAction` — that summary row is
-   * ITSELF a native `<button>` (`StyledAccordionSummary` wraps MUI's
-   * `ButtonBase`; see that component's own doc comment). This slot's
-   * content must therefore not be (or contain) a literal `<button>` —
-   * nested `<button>`s are invalid HTML and React warns on them at
-   * runtime (confirmed by this file's own test suite). The real
-   * `GenerateAgentButton` (A1d) must render as a non-button interactive
-   * element (an MUI `Chip`, a `role="button"` `Box`, etc) when used here.
+   * Rendered as `BasicAccordion`'s `summaryAction` — that summary row is ITSELF a
+   * native `<button>` (`StyledAccordionSummary` wraps MUI's `ButtonBase`). This slot
+   * must not be (or contain) a `<button>`: nested buttons are invalid HTML and React
+   * warns (this file's own test suite confirms it). `GenerateAgentButton` (A1d) renders
+   * as a non-button interactive element (an MUI `Chip`, a `role="button"` `Box`).
    */
   readonly generateAgentButtonSlot?: ReactNode | undefined;
   readonly iconSlot?: ReactNode | undefined;
@@ -249,6 +246,7 @@ export interface CreateAgentFormProps {
    * serves the feature.
    */
   readonly instructionsAiEditSlot?: ReactNode | undefined;
+  readonly showOutputContract?: boolean | undefined;
   readonly sx?: SxProps<Theme> | undefined;
 }
 
@@ -284,6 +282,7 @@ export function CreateAgentForm({
   tagsSlot,
   modelSettingsSlot,
   instructionsAiEditSlot,
+  showOutputContract,
   sx,
 }: CreateAgentFormProps): ReactNode {
   const versionDetails = values.version_details;
@@ -391,6 +390,9 @@ export function CreateAgentForm({
           stepLimit={versionDetails?.meta?.step_limit}
           onStepLimitChange={state.onStepLimitChange}
           modelSettingsSlot={modelSettingsSlot}
+          outputContract={state.outputContract}
+          onOutputContractChange={state.onOutputContractChange}
+          showOutputContract={showOutputContract}
         />
       </Box>
     </Box>

@@ -49,6 +49,10 @@ Type `/` in Instructions to mention a toolkit, MCP, agent, or pipeline already a
 
 A free-text **Editor Notes** field records internal context about the current version — it is never sent to the model or used during execution.
 
+### Output contract
+
+In **Advanced**, **Output contract** sets a rule for the agent's final answer: a JSON Schema, a regular expression, or a named format (`json`, `markdown` or `csv`). The worker validates each final answer. If an answer is not valid, the worker asks the model one more time, with the validation error. If the second answer is also not valid, the run stops with `OUTPUT_CONTRACT_VIOLATION`. An agent with a contract shows its answer only after the answer is validated. Select **None** to remove the contract. See [Output contracts](/admin/enterprise-controls/content-controls#output-contracts).
+
 ## Test the agent
 
 The embedded chat panel on the right lets you send messages, pick a model and its settings (Reasoning for reasoning models, Creativity for standard ones, Max Completion Tokens), and iterate without leaving the page. When context management is on for the project, a Context Budget widget appears above the panel after the first message.

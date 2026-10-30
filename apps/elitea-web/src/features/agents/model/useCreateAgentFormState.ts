@@ -1,6 +1,7 @@
 import type { ChangeEvent, FocusEvent } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import type { OutputContract } from '@/shared/api/generated/model';
 import { MAX_NAME_LENGTH } from '@/shared/lib/limits';
 import { PROMPT_PAYLOAD_KEY } from '@/shared/lib/prompt-payload';
 import { contextResolver } from '@/shared/lib/string';
@@ -36,6 +37,10 @@ export interface CreateAgentFormState {
   readonly onInstructionsChange: (value: string) => void;
   readonly onWelcomeMessageChange: (value: string) => void;
   readonly onStepLimitChange: (value: number | undefined) => void;
+  /** #1500 — `meta.output_contract` as stored (opaque; `ApplicationAdvanceSettings` reads it). */
+  readonly outputContract: unknown;
+  /** #1500 — writes `meta.output_contract`; `null` clears it. */
+  readonly onOutputContractChange: (next: OutputContract | null) => void;
   /** #307 — replaces the baseline's `setFieldValue('version_details.conversation_starters', ...)` inside `ConversationStarters.jsx` itself. */
   readonly onConversationStartersChange: (next: readonly string[]) => void;
 }
@@ -85,6 +90,11 @@ function deriveVariablesFromInstructions(
     name,
     value: previous.find((variable) => variable.name === name)?.value ?? '',
   }));
+}
+
+/** Split out of the hook so its optional chain does not count against the hook's complexity budget. */
+function storedOutputContract(values: AgentDraftValues): unknown {
+  return values.version_details?.meta?.['output_contract'];
 }
 
 /**
@@ -187,6 +197,11 @@ export function useCreateAgentFormState(values: AgentDraftValues, onFieldChange:
     [onFieldChange],
   );
 
+  const onOutputContractChange = useCallback(
+    (next: OutputContract | null) => onFieldChange('version_details.meta.output_contract', next),
+    [onFieldChange],
+  );
+
   const onConversationStartersChange = useCallback(
     (next: readonly string[]) => onFieldChange('version_details.conversation_starters', next),
     [onFieldChange],
@@ -209,6 +224,8 @@ export function useCreateAgentFormState(values: AgentDraftValues, onFieldChange:
     onInstructionsChange,
     onWelcomeMessageChange,
     onStepLimitChange,
+    outputContract: storedOutputContract(values),
+    onOutputContractChange,
     onConversationStartersChange,
   };
 }

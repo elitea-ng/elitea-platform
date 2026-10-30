@@ -173,3 +173,91 @@ For an `http` detector, first create the secret in the public project and add th
 
 - The built-in detectors find patterns, terms and known secret formats. Harm categories and personal data need a classifier through the HTTP adapter.
 - Adapters for named classifier services are not available yet. Use the HTTP adapter with a small service that calls them.
+
+## Output contracts
+
+An output contract is a rule for the final answer of an agent or of a pipeline LLM node. The worker validates the answer against the contract before the answer goes to the user or to the next node.
+
+### Contract types
+
+| Type | Stored value | The answer must be |
+|---|---|---|
+| JSON Schema | `{"type": "json_schema", "schema": {...}}` | Only one JSON document that is valid against the schema. Text or a code fence around the document is not permitted. |
+| Regular expression | `{"type": "regex", "pattern": "..."}` | Text that the pattern matches from the start to the end. The pattern uses RE2 syntax: back references and look-around are not available. |
+| Named format | `{"type": "format", "format": "json"}` | `json`: only one JSON document. `markdown`: text that is not empty, with each code fence closed. `csv`: RFC 4180 CSV with the same number of fields on each row. |
+
+### Where to set a contract
+
+- **Agent.** In the agent editor, open **Advanced** and set **Output contract**. The value is stored in the version meta as `meta.output_contract`.
+- **Pipeline LLM node.** In the node settings, set **Output contract**. The value is stored in the node YAML as the `output_contract` field. A pipeline cannot have a contract in its version meta. A node with **Structured output** cannot also have a contract, because its output is already a JSON object.
+
+The contract is part of the version. A run uses the contract of the version that it runs.
+
+### Limits on save
+
+Main validates the contract when you create an agent or save a version. If the contract is not correct, the save fails with HTTP 422 and the code `OUTPUT_CONTRACT_INVALID`. The `reason` field tells which rule failed, and `node_id` tells the pipeline node.
+
+| Limit | Value | `reason` |
+|---|---|---|
+| Shape | Exactly two fields: `type` and the field of that type | `shape` |
+| JSON Schema size | 32 KiB, encoded | `schema_too_large` |
+| JSON Schema nesting | 32 levels | `schema_too_large` |
+| JSON Schema references | Only local references (`#/...`) | `schema_invalid` |
+| Pattern length | 1024 bytes | `pattern_too_long` |
+| Pattern syntax | RE2, not empty | `pattern_invalid` |
+| Format name | `json`, `markdown` or `csv` | `format_unknown` |
+| Structured output | Not on the same LLM node | `structured_output` |
+| Pipeline version meta | Not permitted: set the contract on an LLM node of the pipeline | `pipeline_contract_on_node` |
+
+### What happens in a run
+
+1. If the contract is a JSON Schema and the provider supports a response schema, the worker sends the schema to the provider. For OpenAI-compatible providers, it is the `json_schema` response format. Strict mode is used only when the schema permits it: each object lists all its properties as required and sets `additionalProperties: false`. For Anthropic, the worker sends the schema only when strict mode is possible. In all other cases, the worker only validates the answer.
+2. The worker validates the final answer. A turn that calls a tool is not validated.
+3. If the answer is not valid, the worker does not show it. It asks the model one more time. The second request contains the first answer and the validation error.
+4. If the second answer is also not valid, the agent or the node stops with the error `output_contract_violation`. The run ends with the public code `OUTPUT_CONTRACT_VIOLATION`, and the platform does not retry the run. **In a pipeline, the next node does not run.**
+
+An agent or a node with a contract does not stream its answer. The answer shows after it is validated.
+
+When the provider stops an answer at the output token limit:
+
+- **Pipeline LLM node.** The platform continues the answer as usual. The worker validates the joined answer. If the joined answer is not valid, the node stops with `output_contract_violation`, without a retry.
+- **Agent.** The cut answer counts as an answer that is not valid. The retry asks the model for a shorter answer.
+
+### Evidence
+
+Each validation is a run step record of kind `output` with the name `output_contract_check`. The summary contains the contract type, the attempt (1 or 2), the result and, for a failure, the rule that failed (`keyword`) and the JSON pointer of the value (`path`). The record does not contain the answer: the answer is in the record of the model call, under the usual step content rules. A violation is also an `error` step with the name `output_contract_violation`. See [Audit evidence and retention](/admin/enterprise-controls/audit-evidence-and-retention#run-step-records).
+
+### Upgrade order
+
+Upgrade every worker before you save a contract. A run with a contract tells the worker on the command that it must enforce the contract. A worker of an earlier release refuses that run; it does not run it without the contract. See `docs/UPGRADING.md`.
+
+## Why there is no confidence score
+
+The platform does not give a confidence score for an agent's answer. A language model does not give a probability that its answer is correct. Token probabilities tell how likely a word is, not how likely a fact is. A score that the platform makes from them, or from a second model, looks precise but it is not calibrated for your task. People then trust it more than they should.
+
+If your process needs a confidence value, make it part of the agent's output contract. Then the agent must give the value, and you define what it means. You can also make the model give its reasons and sources, so that a person can examine them. Calibrate the value against your own evaluation data before you use it to route work.
+
+Example: a JSON Schema contract that makes the agent give a confidence level, the reason and the sources.
+
+```json
+{
+  "type": "json_schema",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "answer": { "type": "string", "maxLength": 4000 },
+      "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+      "reason": { "type": "string", "maxLength": 1000 },
+      "sources": {
+        "type": "array",
+        "items": { "type": "string", "maxLength": 500 },
+        "maxItems": 10
+      }
+    },
+    "required": ["answer", "confidence", "reason", "sources"],
+    "additionalProperties": false
+  }
+}
+```
+
+Tell the agent in its instructions what each level means. For example: "high" when each statement has a source in the retrieved documents, "low" when no source supports the answer. A pipeline can then send `low` answers to a HITL node for review.

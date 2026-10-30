@@ -257,6 +257,7 @@ function AgentEditorBody({ state, onAttachmentToolChange, onAssociationWarning, 
           values={create.values}
           onFieldChange={create.onFieldChange}
           disabled={create.isCreating}
+          showOutputContract
           generateAgentButtonSlot={
             <GenerateAgentButton
               onAgentCreated={handleAgentCreated}

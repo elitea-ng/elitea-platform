@@ -1002,7 +1002,8 @@ impl OrdinaryNativeAgentAssembler {
         tracing::Span::current().record("model_adapter", adapter_name);
         tracing::Span::current().record("model_project_id", profile.model_project_id());
         tracing::Span::current().record("stage", "model_binding");
-        self.model_facade
+        let bound = self
+            .model_facade
             .bind_with_summary(
                 adapter,
                 context,
@@ -1010,7 +1011,20 @@ impl OrdinaryNativeAgentAssembler {
                 invocation,
                 profile.summary_model(),
             )
-            .map_err(model_binding_error)
+            .map_err(model_binding_error)?;
+        // A continuation call appends text to an answer that is not complete,
+        // so the contract does not validate it.
+        let contract = profile
+            .output_contract()
+            .filter(|_| !output_continuation)
+            .cloned();
+        Ok(bound.with_output_contract(
+            contract,
+            super::output_contract_model::ContractStepScope {
+                execution_id: context.execution_id().to_owned(),
+                node_id: String::new(),
+            },
+        ))
     }
 }
 
@@ -1022,7 +1036,16 @@ fn model_invocation(
     run_caps: &Arc<elitea_agent_runtime::run_caps::RunCapsMeter>,
 ) -> ModelInvocation {
     ModelInvocation {
-        response_schema: None,
+        // A JSON Schema contract is the provider's response format where the
+        // provider supports one (ADR-0043 decision 2). A continuation call
+        // appends text to an answer, so it sends no schema.
+        response_schema: if output_continuation {
+            None
+        } else {
+            profile
+                .output_contract()
+                .and_then(|contract| contract.response_schema().cloned())
+        },
         allow_text_continuation: false,
         context_budget: profile.context_budget(),
         model_name: profile.model_name().to_owned(),
