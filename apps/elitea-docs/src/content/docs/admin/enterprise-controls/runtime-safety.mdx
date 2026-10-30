@@ -1,6 +1,6 @@
 ---
 title: "Runtime safety"
-description: "Controls that stop, limit or require approval for agent execution while it runs: the suspension and kill switch, the whole-run time cap, approval evidence, unattended runs, tool categories, the approval policy and required approval in pipelines."
+description: "Controls that stop, limit or require approval for agent execution while it runs: the suspension and kill switch, run caps, approval evidence, unattended runs, tool categories, the approval policy and required approval in pipelines."
 ---
 
 Runtime safety controls act on agent execution while it runs, not on configuration. This page describes the controls of ADR-0041.
@@ -128,35 +128,116 @@ The self-test writes a `schedule` event with the action `safety.kill_switch.self
 - Keep the [emergency stop runbook](/deployment/emergency-stop-runbook) in your incident procedure, and practise it.
 - After you resume, start again the runs that were cancelled, if they are still necessary.
 
-## Whole-run time cap
+## Run caps
 
 ### The risk
 
-The worker limits the time of each turn of a run, but a long autonomous run can continue for many turns. Without a limit on the whole run, a looping agent can keep running and spending for days.
+The worker limits each turn of a run, but a long autonomous run can continue for many turns. Without limits on the whole run, a looping agent can keep running, calling tools, reading records and spending for days.
 
 ### What is enforced
 
-Under **Configuration › Run Caps**, a platform administrator (permission `configuration.governance`) sets **Maximum Run Time (seconds)**: 0 (off, the default), or 60 to 604800 (7 days). It applies to agent runs.
+A run cap is the most that one agent run can use. There are five caps:
 
-The time counts from the run's original start. A resumed run keeps that start, so time spent waiting for a human approval counts too. The main service checks the cap whenever the worker renews the run's lease or reads its desired state. A run past the cap is cancelled with the reason `cap_reached`, and the worker stops it on the same call. When the cap is off, the check adds no database query.
+| Cap | Counts | Enforced by | Default |
+| --- | --- | --- | --- |
+| `max_wall_seconds` | Time from the run's original start | Main, at each lease renewal | 0 (off) |
+| `max_tool_calls` | Calls of toolkit tools, MCP tools included | Worker, before each call | 200 |
+| `max_model_turns` | Model calls | Worker, before each call | 0 (off) |
+| `max_spend` | Model and metered tool spend, in USD | Main, every 30 seconds | 0 (off) |
+| `max_records_read` | Records that the counting tools return | Worker, after each call | 0 (off) |
 
-The run ends with the state `cancelled`. Its event and the agent's answer carry a typed error:
+`max_wall_seconds` is one platform-wide value. The other four have a value for each risk tier (`low`, `medium`, `high`, `critical`). The tier is the root agent's tier from its [registry record](/admin/enterprise-controls/agent-lifecycle). An agent without a record, and an ad hoc chat, use the `low` tier. A nested agent or a pipeline node uses the caps of the root run, and its calls count against them.
+
+**Author caps.** An agent author can set lower caps for one agent in the version's `meta.run_caps`, for example `{"max_tool_calls": 50, "max_spend": 0.5}`. The lower value of the tier cap and the author cap applies. An author cannot raise a cap: a save with a value above the tier cap fails with HTTP 422:
 
 ```json
-{ "code": "CAP_REACHED", "cap": "max_wall_seconds", "retryable": false }
+{ "code": "RUN_CAP_ABOVE_TIER", "cap": "max_tool_calls", "tier": "high", "tier_cap": 80, "requested": 100,
+  "error": "meta.run_caps.max_tool_calls is 100, above the platform cap 80 for high tier agents: an agent can lower a run cap, never raise it" }
 ```
 
-The answer is marked as an error, so the user sees why the run stopped. The metric `elitea.runtime.run_caps.reached` with the label `cap=max_wall_seconds` counts the runs stopped by the cap.
+A value that is not a positive number in the cap's range fails with `RUN_CAP_INVALID`.
+
+**Step limit.** An agent's `step_limit` still limits each agent loop. With `max_model_turns`, the lower of the two stops the run first.
+
+**What is counted.**
+
+- Tool calls: every call of a toolkit tool or an MCP tool, in every agent and pipeline node of the run. Platform tools that are not toolkit tools (the planner, attachments, an agent called as a tool) are not counted. The toolkit calls that such an agent makes are counted.
+- Model turns: every model call of the run's agents. Summary and compaction calls are not counted.
+- Records read: only these tools report a count. Other tools count 0.
+
+  | Toolkit type | Tool | Counted items |
+  | --- | --- | --- |
+  | `jira` | `search_using_jql` | Issues returned |
+  | `github` | `search_issues` | Issues and pull requests returned |
+  | `sql` | `execute_sql` | Rows returned |
+  | `confluence` | `search_pages`, `search_by_title` | Pages returned |
+  | Every index toolkit | `search_index` | Documents returned |
+
+- Spend: the run's rows in the gateway request log. A model call costs its tokens at the price catalogue rate. A metered tool costs its recorded cost.
+
+**When a run reaches a cap.** The run stops and ends with a typed error. A worker cap ends the run as failed. A Main cap (`max_wall_seconds`, `max_spend`) cancels the run with the reason `cap_reached`. The run's event and the agent's answer carry:
+
+```json
+{ "code": "CAP_REACHED", "cap": "max_tool_calls", "retryable": false }
+```
+
+The answer shows a message that names the cap, for example "The run stopped because it reached the maximum number of tool calls an administrator set. The task may be incomplete. Check what it completed before you continue."
+
+**Override.** A user with the permission `safety.override_cap` can let the conversation continue past the cap one time. The platform administrators and the project `admin` role have this permission. The user selects **Allow the next run past this cap** on the stopped answer (or calls `POST /api/v2/elitea_core/run_cap_overrides/prompt_lib/{project_id}` with `message_id`). The next agent run of that conversation gets twice the cap that stopped the answer. The other caps do not change. One override is permitted for each stopped answer, and one unused override for each conversation. An unused override expires after one hour. A worker cap cannot be overridden until an administrator saves the per-tier caps (HTTP 422 `tier_caps_not_saved`).
 
 #### Limits
 
-- The cap is one platform-wide value. Caps per agent or per project, and caps on tool calls, spend and records read, are planned ([issue 1498](https://github.com/elitea-ng/elitea-platform/issues/1498)).
-- The cap takes effect at the next lease renewal, so a run can pass it by up to one renewal interval.
+- `max_wall_seconds` takes effect at the next lease renewal, so a run can pass it by up to one renewal interval.
+- `max_spend` is checked every 30 seconds after the gateway records each call. A run can pass the cap by what it spends in that interval, plus the time to its next lease renewal. A single model call that is in progress is not stopped part way.
+- Spend is in USD, the currency of the price catalogue. A model without a price costs 0.
+- Records read counts only the tools in the table above.
+- Counters are per execution. A run that continues after an approval pause is a new execution, and its tool calls, model turns, records and spend start at zero. Its wall time counts from the original start.
+- Each new message in a conversation starts a new run with its own caps.
+- When a cap trips, a cancel that arrives later still ends the run with `CAP_REACHED`.
+
+### Configure
+
+Under **Configuration › Run Caps**, a platform administrator (permission `configuration.governance`) sets:
+
+- **Maximum Run Time (seconds)**: 0 (off, the default), or 60 to 604800 (7 days).
+- For each tier: **Maximum Tool Calls**, **Maximum Model Turns**, **Maximum Spend (USD)** and **Maximum Records Read**. 0 is no cap. Counts are whole numbers. Spend has at most four decimals.
+
+Until an administrator saves a per-tier value, the worker applies its defaults (200 tool calls, no other worker cap), and Main does not send caps to the worker. **Save the per-tier caps only after every worker runs this release.** A worker of an earlier release refuses commands that carry caps.
+
+### Evidence
+
+- `elitea_runtime.execution_jobs.run_caps` records the effective caps of each run, and `override` names the cap that an override raised. `cancel_cap` names the Main cap that cancelled a run.
+- `elitea_runtime.run_cap_overrides` records each override: the answer, the cap, who granted it, when, and the run that used it.
+- Each override is a security audit event, in the same transaction as the override (excerpt):
+
+```json
+{
+  "type": "ai.elitea.security.v1.agent.cap.override",
+  "data": {
+    "action": "agent.cap.override.granted",
+    "effect": "allow",
+    "tenant_project_id": 12,
+    "principal_ref": "user:7",
+    "execution_id": "0f6c…",
+    "resource_type": "chat_message",
+    "resource_id": "0190f2a6-7d1c-7cc1-9a35-3f4b4d2a1b11",
+    "decision_id": "41",
+    "reasons": ["cap:max_tool_calls", "raise:double", "ttl_seconds:3600"]
+  }
+}
+```
+
+- The request's admin audit record has the action `safety.run_cap_override.granted`.
+- The metric `elitea.runtime.run_caps.reached` with the label `cap` counts the runs that Main stopped (`max_wall_seconds`, `max_spend`). The worker logs `agent_run_cap_reached` with the cap, the count and the limit for a worker cap.
+- The run's step record has the `CAP_REACHED` error and its cap.
 
 ### Customer responsibility
 
-- Choose a cap that is longer than your longest legitimate run, including the time that people take to approve steps.
-- Alert on `elitea.runtime.run_caps.reached` if a stopped run needs attention.
+- Choose caps above your longest legitimate run at each tier, including the time that people take to approve steps. Lower the caps for the high and critical tiers.
+- Give `safety.override_cap` only to the people who can decide that a run may use more. Review the `agent.cap.override` events.
+- Alert on `elitea.runtime.run_caps.reached` and on the worker's `agent_run_cap_reached` log event if a stopped run needs attention.
+- Keep the price catalogue current, so that `max_spend` uses correct prices.
+- Use [project budgets](/admin/budgets-and-governance) for spend across runs. A run cap limits one run only.
 
 ## Approval evidence and unattended runs
 
