@@ -159,7 +159,7 @@ function TrimmingRow({ item, showAgent, removingKey, onRemove, href }: TrimmingR
         {itemLabel(item)}
         <UnusedScopes item={item} />
       </TableCell>
-      <TableCell>{usage(item)}</TableCell>
+      <TableCell data-testid="permission-trimming-usage">{usage(item)}</TableCell>
       <TableCell align="right">
         <RowAction item={item} removingKey={removingKey} onRemove={onRemove} />
       </TableCell>
