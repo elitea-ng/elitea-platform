@@ -39,7 +39,37 @@ func newWorld(ctx context.Context, t *testing.T, phase string) *world {
 		t.Fatal("the admin and the approver are the same account; every two-person step would be refused")
 	}
 	w.markSensitiveTools(ctx, t)
+	w.approveJiraConnector(ctx, t)
 	return w
+}
+
+// approveJiraConnector makes the jira toolkit type usable in the fixture
+// project. The governed profile forces the approved_only catalogue mode
+// (ADR-0044 decision 1, #1501), so a toolkit type is usable only after an
+// approved connector request names the project. The admin requests and the
+// approver approves: the two must differ. An approved request stays, so a
+// later phase finds it and does not request again.
+func (w *world) approveJiraConnector(ctx context.Context, t *testing.T) {
+	t.Helper()
+	requests := "/api/v2/elitea_core/connector_requests/prompt_lib/" + w.p()
+	var approved struct {
+		Rows []struct {
+			Target string `json:"target"`
+		} `json:"rows"`
+	}
+	w.admin.do(ctx, t, http.MethodGet, requests+"?state=approved", nil, http.StatusOK).JSON(t, &approved)
+	for _, row := range approved.Rows {
+		if row.Target == "jira" {
+			return
+		}
+	}
+	request := w.admin.do(ctx, t, http.MethodPost, requests, map[string]any{
+		"target_kind": "toolkit_type", "target": "jira",
+		"justification": "governed conformance Jira toolkit", "submit": true,
+	}, http.StatusCreated).Object(t)
+	w.approver.do(ctx, t, http.MethodPost,
+		"/api/v2/admin/connector_requests/"+strconv.FormatInt(idOf(t, request, "id"), 10)+"/approve",
+		nil, http.StatusOK)
 }
 
 // markSensitiveTools makes Jira's add_comments a sensitive tool, so every
