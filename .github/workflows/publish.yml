@@ -1217,7 +1217,7 @@ jobs:
 
       - name: Set up oras
         if: steps.artifacthub.outputs.push == 'true'
-        uses: oras-project/setup-oras@v2.0.2
+        uses: oras-project/setup-oras@v2.0.3
         with:
           version: 1.3.1
 

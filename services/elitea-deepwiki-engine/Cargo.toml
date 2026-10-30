@@ -33,7 +33,7 @@ elitea-pg-migrate = { path = "../../libs/rust/pg-migrate" }
 elitea-vector-index = { path = "../../libs/rust/vector-index", default-features = false, features = ["tls-aws-lc"] }
 # elitea-vector's status codes (`storage::dense`); the sidecar tests read
 # the refusals' codes too. Already in the tree through the gRPC clients.
-tonic = { version = "=0.14.6", default-features = false }
+tonic = { version = "=0.14.7", default-features = false }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 # The Mermaid sanitizer is ~150 transcribed Python regular expressions,
 # several with look-around, which `regex` lacks. A backtracking engine
@@ -58,7 +58,7 @@ reqwest = { version = "=0.13.5", default-features = false, features = ["rustls",
 # signal when the parent goes away. Safe wrappers, so the crate keeps
 # `unsafe_code = "forbid"`. Already in the tree (gix, tempfile); the exact
 # pin the worker crate uses.
-rustix = { version = "=1.1.5", default-features = false, features = ["std", "process"] }
+rustix = { version = "=1.1.6", default-features = false, features = ["std", "process"] }
 # The migration ledger checksum (`migrate.py`: SHA-256 hex). Already in
 # the tree through sqlx-postgres.
 sha2 = "=0.11.1"
