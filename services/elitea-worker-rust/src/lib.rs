@@ -30,6 +30,8 @@ pub mod spool;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod state;
 #[cfg(test)]
+pub(crate) mod test_content;
+#[cfg(test)]
 pub(crate) mod test_pg;
 mod toolkits;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

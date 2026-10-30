@@ -1270,7 +1270,11 @@ async fn comment_on_issue_takes_the_number_as_a_string() {
         says,
         "Comment added successfully! URL: https://github.example.test/EliteaAI/elitea-platform/issues/42#issuecomment-1"
     );
-    assert_eq!(body_of(&script.writes()[0]), &json!({"body": "Looks good"}));
+    // The AI disclosure marker (ADR-0043 decision 3).
+    assert_eq!(
+        body_of(&script.writes()[0]),
+        &json!({"body": "Looks good\n\nGenerated with Elitea AI"})
+    );
     let says = rig
         .says(
             "comment_on_issue",

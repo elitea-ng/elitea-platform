@@ -89,6 +89,13 @@ impl std::error::Error for ToolAdmissionPolicyError {}
 /// decision 5): a tool whose category the policy names for the run's tier is
 /// sensitive like a tool the platform's sensitive tools name. None unless the
 /// host lends one.
+///
+/// It also carries the run's content controls ([`ContentControls`], ADR-0043
+/// decisions 3 and 4): every outbound tool it admits writes the disclosure
+/// marker, every result it returns counts as an untrusted read, and a
+/// `delete`, `external_send` or `payment` tool is a conditional approval
+/// candidate under the "read untrusted, then act" rule. The worker defaults
+/// unless the host lends the run's.
 #[derive(Clone)]
 pub struct ToolAdmissionPolicy {
     blocked_toolkits: HashSet<Box<str>>,

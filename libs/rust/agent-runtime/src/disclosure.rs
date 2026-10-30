@@ -270,12 +270,19 @@ impl DisclosurePolicy {
         for path in &tool.paths {
             match path {
                 TextPath::Field(field) => {
-                    applied += usize::from(append_marker(arguments.get_mut(&**field), &marker));
+                    applied += usize::from(
+                        arguments
+                            .get_mut(&**field)
+                            .is_some_and(|value| append_marker(value, &marker)),
+                    );
                 }
                 TextPath::ListField(list, field) => {
                     if let Some(Value::Array(items)) = arguments.get_mut(&**list) {
                         for item in items.iter_mut().filter_map(Value::as_object_mut) {
-                            applied += usize::from(append_marker(item.get_mut(&**field), &marker));
+                            applied += usize::from(
+                                item.get_mut(&**field)
+                                    .is_some_and(|value| append_marker(value, &marker)),
+                            );
                         }
                     }
                 }
@@ -288,8 +295,8 @@ impl DisclosurePolicy {
 /// The separator between the text and the marker.
 const SEPARATOR: &str = "\n\n";
 
-fn append_marker(value: Option<&mut Value>, marker: &str) -> bool {
-    let Some(Value::String(text)) = value else {
+fn append_marker(value: &mut Value, marker: &str) -> bool {
+    let Value::String(text) = value else {
         return false;
     };
     if text.trim().is_empty() || text.trim_end().ends_with(marker) {

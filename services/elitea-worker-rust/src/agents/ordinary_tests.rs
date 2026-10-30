@@ -995,7 +995,7 @@ fn assert_nested_agent_model_requests(captured: &[CapturedModelRequest]) {
         serde_json::from_slice(&captured[1].body).expect("child model request");
     assert_eq!(child["model"], "child-model");
     assert_eq!(
-        child["messages"][0]["content"],
+        crate::test_content::without_preamble(child["messages"][0]["content"].as_str().unwrap()),
         "Answer only the delegated task."
     );
     assert_eq!(child["messages"][1]["content"], "Summarize release risk");
@@ -1154,7 +1154,7 @@ async fn application_and_adhoc_share_authorized_redemption_model_session_and_pro
         assert_eq!(body["messages"][2]["content"], "earlier answer");
         assert_eq!(body["messages"][3]["content"], "current");
         assert_eq!(
-            body["messages"][0]["content"],
+            crate::test_content::without_preamble(body["messages"][0]["content"].as_str().unwrap()),
             match kind {
                 AgentExecutionKind::Application => "review carefully",
                 AgentExecutionKind::Adhoc => "be concise",
@@ -1671,7 +1671,7 @@ async fn application_and_adhoc_execute_materialized_tools_in_the_direct_adk_loop
         assert_eq!(second["messages"][3]["role"], "tool");
         assert_eq!(second["messages"][3]["tool_call_id"], "call_branch");
         assert_eq!(
-            second["messages"][3]["content"],
+            crate::test_content::untrusted_body(second["messages"][3]["content"].as_str().unwrap()),
             "\"Active branch set to release/1.2\""
         );
     }
@@ -1749,7 +1749,7 @@ async fn application_and_adhoc_execute_adk_mcp_tools_in_the_direct_llm_loop() {
         assert_eq!(second["messages"][3]["tool_call_id"], "call_mcp");
         assert_eq!(
             second["messages"][3]["content"],
-            r#"{"release":"1.2","risk":"low"}"#
+            "<untrusted source=\"lookup_release\">\n{\"release\":\"1.2\",\"risk\":\"low\"}\n</untrusted>"
         );
     }
 }
@@ -2098,8 +2098,10 @@ async fn run_delegated_authorization_resume(
         .find(|message| message["role"] == "tool" && message["tool_call_id"] == "call_mcp")
         .expect("same original call result");
     if authorize {
-        let result: serde_json::Value =
-            serde_json::from_str(tool_message["content"].as_str().unwrap()).unwrap();
+        let result: serde_json::Value = serde_json::from_str(crate::test_content::untrusted_body(
+            tool_message["content"].as_str().unwrap(),
+        ))
+        .unwrap();
         assert_eq!(result["status"], "authorized");
         assert!(
             resumed["tools"]
@@ -2116,12 +2118,13 @@ async fn run_delegated_authorization_resume(
                 .any(|tool| tool["function"]["name"] == "lookup_release")
         );
     } else {
-        let declined: serde_json::Value = serde_json::from_str(
-            tool_message["content"]
-                .as_str()
-                .expect("structured declined result"),
-        )
-        .expect("declined result JSON");
+        let declined: serde_json::Value =
+            serde_json::from_str(crate::test_content::untrusted_body(
+                tool_message["content"]
+                    .as_str()
+                    .expect("structured declined result"),
+            ))
+            .expect("declined result JSON");
         assert_eq!(declined["type"], "mcp_auth_decision");
         assert_eq!(declined["status"], "declined");
         assert_eq!(declined["scope"], "current_run");
@@ -2438,8 +2441,10 @@ async fn child_model_failure_returns_typed_report_and_parent_completes() {
             .iter()
             .find(|m| m["role"] == "tool")
             .unwrap();
-        let report: serde_json::Value =
-            serde_json::from_str(tool["content"].as_str().unwrap()).unwrap();
+        let report: serde_json::Value = serde_json::from_str(crate::test_content::untrusted_body(
+            tool["content"].as_str().unwrap(),
+        ))
+        .unwrap();
         assert_eq!(report["failure"]["code"], code);
         assert_eq!(report["failure"]["retryable"], retryable);
         assert!(!report.to_string().contains("SECRET_PROVIDER_BODY"));
@@ -2880,9 +2885,9 @@ async fn parallel_nested_ask_user_resume_proof(with_variables: bool, reverse: bo
         .flat_map(|request| request["messages"].as_array().cloned().unwrap_or_default())
         .filter(|message| message["role"] == "tool" && message["tool_call_id"] == "call_ask_user")
         .filter_map(|message| {
-            message["content"]
-                .as_str()
-                .and_then(|content| serde_json::from_str::<String>(content).ok())
+            message["content"].as_str().and_then(|content| {
+                serde_json::from_str::<String>(crate::test_content::untrusted_body(content)).ok()
+            })
         })
         .collect::<HashSet<_>>();
     assert_eq!(
@@ -3435,7 +3440,10 @@ async fn run_parallel_nested_authorization_resume(authorize: bool) {
         .iter()
         .filter(|message| message["role"] == "tool")
         .map(|message| {
-            serde_json::from_str::<serde_json::Value>(message["content"].as_str().unwrap()).unwrap()
+            serde_json::from_str::<serde_json::Value>(crate::test_content::untrusted_body(
+                message["content"].as_str().unwrap(),
+            ))
+            .unwrap()
         })
         .collect::<Vec<_>>();
     assert_eq!(
@@ -5184,6 +5192,7 @@ mod internal_tools_graph {
             .iter()
             .filter(|message| message["role"] == "system")
             .filter_map(|message| message["content"].as_str())
+            .map(crate::test_content::without_preamble)
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -5195,6 +5204,7 @@ mod internal_tools_graph {
             .iter()
             .filter(|message| message["role"] == "tool")
             .filter_map(|message| message["content"].as_str())
+            .map(crate::test_content::untrusted_body)
             // The shared model facade encodes a tool's JSON value once: a text
             // answer arrives as a JSON string, an object as its JSON text.
             .map(

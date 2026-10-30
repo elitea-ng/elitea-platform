@@ -555,33 +555,26 @@ pub(crate) async fn sensitive_tools_for_kind(
             return Err(resource_exhausted());
         }
         for tool in tools {
-            let (sensitive, conditional) = match policy.sensitive_tool_in(
+            let sensitive = policy.sensitive_tool_in(
+                reference.tool_type(),
+                reference.toolkit_name(),
+                reference.settings(),
+                tool.name(),
+            );
+            let (sensitive, conditional) = if let Some(sensitive) = sensitive {
+                (sensitive, false)
+            } else if let Some(candidate) = policy.untrusted_act_tool_in(
                 reference.tool_type(),
                 reference.toolkit_name(),
                 reference.settings(),
                 tool.name(),
             ) {
-                Some(sensitive) => (sensitive, false),
                 // ADR-0043 decision 4: asks only after an untrusted read.
-                None => match policy.untrusted_act_tool_in(
-                    reference.tool_type(),
-                    reference.toolkit_name(),
-                    reference.settings(),
-                    tool.name(),
-                ) {
-                    Some(candidate) => {
-                        catalog.untrusted = Some(Arc::clone(policy.content_controls().untrusted()));
-                        (candidate, true)
-                    }
-                    None => {
-                        catalog.insert_other(
-                            reference.toolkit_name(),
-                            tool.name(),
-                            tool.is_read_only(),
-                        )?;
-                        continue;
-                    }
-                },
+                catalog.untrusted = Some(Arc::clone(policy.content_controls().untrusted()));
+                (candidate, true)
+            } else {
+                catalog.insert_other(reference.toolkit_name(), tool.name(), tool.is_read_only())?;
+                continue;
             };
             catalog.insert_scoped(
                 reference.toolkit_name(),

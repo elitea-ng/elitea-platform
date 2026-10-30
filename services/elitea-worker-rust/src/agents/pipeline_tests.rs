@@ -3588,11 +3588,11 @@ async fn pipeline_instruction_pause_proof(instructions: bool) {
         .iter()
         .find(|message| message["role"] == "tool" && message["tool_call_id"] == "call_ask_user")
         .expect("same-call ask_user result");
-    let decoded_result: String = serde_json::from_str(
+    let decoded_result: String = serde_json::from_str(crate::test_content::untrusted_body(
         result["content"]
             .as_str()
             .expect("serialized ask_user tool content"),
-    )
+    ))
     .expect("ask_user string result");
     assert_eq!(
         decoded_result,
@@ -3723,11 +3723,11 @@ async fn llm_node_delegated_authorization_skip_closes_original_call_without_disp
         .iter()
         .find(|message| message["role"] == "tool" && message["tool_call_id"] == "call_mcp")
         .expect("decline result closes original call");
-    let declined: Value = serde_json::from_str(
+    let declined: Value = serde_json::from_str(crate::test_content::untrusted_body(
         tool_message["content"]
             .as_str()
             .expect("structured decline result"),
-    )
+    ))
     .expect("decline result JSON");
     assert_eq!(declined["type"], "mcp_auth_decision");
     assert_eq!(declined["status"], "declined");
@@ -4123,11 +4123,11 @@ fn assert_llm_blocked_continuation(captured: &CapturedModelRequests, expected_re
         .iter()
         .find(|message| message["role"] == "tool" && message["tool_call_id"] == "call_mcp")
         .expect("same-call tool response delivered to model");
-    let blocked: Value = serde_json::from_str(
+    let blocked: Value = serde_json::from_str(crate::test_content::untrusted_body(
         tool_message["content"]
             .as_str()
             .expect("structured tool response JSON"),
-    )
+    ))
     .expect("structured blocked result");
     assert_eq!(blocked["type"], "sensitive_tool_blocked");
     assert_eq!(blocked["blocked_tool_name"], "lookup_release");
