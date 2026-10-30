@@ -17,6 +17,7 @@ import {
 } from './api/adminGovernanceApi';
 import { describeScope } from './GovernanceTable';
 import {
+  draftFieldErrors,
   draftToData,
   EMPTY_DRAFT,
   rowToDraft,
@@ -294,9 +295,9 @@ describe('egress_allowlist rows', () => {
 describe('rate-limit throttles (ADR-0041 decision 4)', () => {
   it('writes agent and user ids as integer lists on a rate limit', () => {
     const data = draftToData(
-      draft({ type: 'rate_limit', scopeProjectIds: '7', scopeAgentIds: '3, 4', scopeUserIds: '11\nx', requestsPerMin: '5' }),
+      draft({ type: 'rate_limit', scopeProjectIds: '7', scopeAgentIds: '3, 4', scopeUserIds: '11\n12', requestsPerMin: '5' }),
     );
-    expect(data.scope).toEqual({ project_ids: [7], agent_ids: [3, 4], user_ids: [11] });
+    expect(data.scope).toEqual({ project_ids: [7], agent_ids: [3, 4], user_ids: [11, 12] });
   });
 
   it('never writes throttle ids on another type, whatever the draft carries', () => {
@@ -328,5 +329,41 @@ describe('rate-limit throttles (ADR-0041 decision 4)', () => {
     });
     expect(text).toContain('agents 3');
     expect(text).toContain('users 11');
+  });
+});
+
+describe('draftFieldErrors', () => {
+  it('accepts a list of positive integers and sends every entry', () => {
+    const valid = draft({ type: 'rate_limit', scopeProjectIds: '7', scopeAgentIds: '3, 4', scopeUserIds: '11' });
+    expect(draftFieldErrors(valid)).toEqual({});
+    expect(draftToData(valid).scope).toEqual({ project_ids: [7], agent_ids: [3, 4], user_ids: [11] });
+  });
+
+  it('refuses a throttle list with an entry that is not an integer, rather than dropping it', () => {
+    // Dropping "x" would save "Throttled agents" as empty, and the row would
+    // then limit the whole project.
+    const errors = draftFieldErrors(draft({ type: 'rate_limit', scopeProjectIds: '7', scopeAgentIds: 'x' }));
+    expect(errors.scopeAgentIds).toContain('x');
+    expect(errors.scopeProjectIds).toBeUndefined();
+  });
+
+  it('refuses a decimal rather than truncating it', () => {
+    const errors = draftFieldErrors(draft({ type: 'rate_limit', scopeUserIds: '11, 3.5' }));
+    expect(errors.scopeUserIds).toContain('3.5');
+    expect(errors.scopeUserIds).not.toContain('11');
+  });
+
+  it.each(['0', '-1', '7x', '1e3', '0x10', '07'])('refuses %j', (entry) => {
+    expect(draftFieldErrors(draft({ type: 'rate_limit', scopeAgentIds: entry })).scopeAgentIds).toBeDefined();
+  });
+
+  it('checks the project list on every scoped type', () => {
+    expect(draftFieldErrors(draft({ type: 'budget', scopeProjectIds: '7, seven' })).scopeProjectIds).toContain(
+      'seven',
+    );
+  });
+
+  it('ignores the throttle fields on a type that does not send them', () => {
+    expect(draftFieldErrors(draft({ type: 'budget', scopeAgentIds: 'x', scopeUserIds: 'y' }))).toEqual({});
   });
 });

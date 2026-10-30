@@ -31,6 +31,9 @@ import {
   type GovernanceRow,
   type GovernanceType,
 } from './api/adminGovernanceApi';
+import { draftFieldErrors, splitIntList, splitList } from './governanceIdLists';
+
+export { draftFieldErrors, type IdListField } from './governanceIdLists';
 
 /** One weighted routing target as the dialog edits it: all strings. */
 export interface RoutingTargetDraft {
@@ -110,21 +113,6 @@ export const EMPTY_DRAFT: GovernanceDraft = {
   priority: '0',
   targets: [{ provider: '', model: '', weight: '1' }],
 };
-
-/** Splits a comma or newline separated list into trimmed, non-empty entries. */
-function splitList(raw: string): string[] {
-  return raw
-    .split(/[\n,]/)
-    .map((part) => part.trim())
-    .filter((part) => part !== '');
-}
-
-/** Parses a list of integers, dropping anything that is not one. */
-function splitIntList(raw: string): number[] {
-  return splitList(raw)
-    .map((part) => Number.parseInt(part, 10))
-    .filter((value) => Number.isFinite(value));
-}
 
 /** Joins a stored list back into the comma-separated form the field shows. */
 function joinList(value: unknown): string {
@@ -354,6 +342,9 @@ export function useGatewayGovernancePage(): GatewayGovernancePageState {
 
   const onSave = useCallback(() => {
     if (draft === undefined) return;
+    // The dialog disables Save on a field error; this guard keeps the rule
+    // true for any other caller of onSave.
+    if (Object.keys(draftFieldErrors(draft)).length > 0) return;
     const payload = {
       id: draft.id,
       type: draft.type,

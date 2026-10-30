@@ -364,12 +364,23 @@ func egressAllowlistEntries(data map[string]any) ([]string, error) {
 	return out, nil
 }
 
+// governanceScope returns the scope of a row the way the LLM gateway reads it
+// (elitea-llm-gateway internal/policy parseScope): the `scope` object, or the
+// top level of `data` when `scope` is absent, not an object, or empty. A
+// hand-written row can carry `agent_ids` or `project_ids` at the top level,
+// and the gateway applies them. Every scope check here reads through this
+// function, so a key cannot skip a check by moving out of `scope`.
+func governanceScope(data map[string]any) map[string]any {
+	scope, _ := data["scope"].(map[string]any)
+	if len(scope) == 0 {
+		return data
+	}
+	return scope
+}
+
 // requireGlobalScope refuses any scope dimension on a row that is global.
 func requireGlobalScope(data map[string]any) error {
-	scope, ok := data["scope"].(map[string]any)
-	if !ok {
-		return nil
-	}
+	scope := governanceScope(data)
 	for _, key := range []string{"project_ids", "providers", "models", "team_ids", "agent_ids", "user_ids"} {
 		if list, ok := scope[key].([]any); ok && len(list) > 0 {
 			return errors.New("an egress_allowlist entry is global and carries no scope: the private-network " +
@@ -392,11 +403,7 @@ func requireGlobalScope(data map[string]any) error {
 // paths the schema does not: the REST API, a database restore, and any older
 // client still sending it.
 func validateGovernanceScope(data map[string]any) error {
-	scope, ok := data["scope"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	teams, ok := scope["team_ids"].([]any)
+	teams, ok := governanceScope(data)["team_ids"].([]any)
 	if !ok || len(teams) == 0 {
 		return nil
 	}

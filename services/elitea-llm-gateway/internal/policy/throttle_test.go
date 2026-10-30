@@ -324,3 +324,112 @@ func TestAgentResolverCachesAndFailsOpen(t *testing.T) {
 		t.Fatal("an expired entry was served while the lookup fails")
 	}
 }
+
+// requestsIn returns the request count of def's bucket for sub in the test
+// window.
+func requestsIn(c *fakeCounter, def RateLimitDef, sub Subject) int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.totals[testSubject(kindRequests, BucketKey(def, sub), windowStart(testNow))]
+}
+
+func defNamed(t *testing.T, defs []RateLimitDef, name string) RateLimitDef {
+	t.Helper()
+	for _, d := range defs {
+		if d.Name == name {
+			return d
+		}
+	}
+	t.Fatalf("no limit named %q in %+v", name, defs)
+	return RateLimitDef{}
+}
+
+// A throttled agent that retries after its 429 must not spend the project's
+// allowance: the narrow throttle is checked first and refuses before the
+// project bucket is touched.
+func TestThrottledAgentRetriesDoNotConsumeTheProjectAllowance(t *testing.T) {
+	t.Parallel()
+	c := newFakeCounter()
+	l := newTestLimiter(c, testNow)
+	snap := Compile([]Row{
+		throttleRow("project", map[string]any{"project_ids": []any{7.0}}, 5),
+		throttleRow("agent", map[string]any{"project_ids": []any{7.0}, "agent_ids": []any{3.0}}, 1),
+	}, testNow)
+	ctx := context.Background()
+
+	agent := Subject{ProjectID: 7, Agent: AgentRef{ProjectID: 7, ApplicationID: 3}}
+	defs := snap.RateLimits(agent)
+	if dec := l.AdmitAll(ctx, defs, agent, true); !dec.Allowed {
+		t.Fatalf("the agent's first call was refused: %+v", dec)
+	}
+	for i := 0; i < 10; i++ {
+		if dec := l.AdmitAll(ctx, defs, agent, true); dec.Allowed || dec.Class != RateClassAgent {
+			t.Fatalf("retry %d = %+v, want a refusal by the agent throttle", i+1, dec)
+		}
+	}
+	if got := requestsIn(c, defNamed(t, defs, "project"), agent); got != 1 {
+		t.Fatalf("project bucket = %d after 1 admitted call and 10 refused retries, want 1", got)
+	}
+
+	// The rest of the project still has 4 of its 5 calls.
+	other := Subject{ProjectID: 7, Agent: AgentRef{ProjectID: 7, ApplicationID: 4}}
+	for i := 0; i < 4; i++ {
+		if dec := l.AdmitAll(ctx, snap.RateLimits(other), other, true); !dec.Allowed {
+			t.Fatalf("another agent's call %d was refused: %+v; the throttled agent ate the project allowance", i+1, dec)
+		}
+	}
+	if dec := l.AdmitAll(ctx, snap.RateLimits(other), other, true); dec.Allowed || dec.Class != RateClassProject {
+		t.Fatalf("the 6th project call = %+v, want a refusal by the project limit", dec)
+	}
+}
+
+// When the project limit refuses after a throttle admitted, the throttle's
+// slot is given back.
+func TestProjectRefusalGivesBackTheThrottleSlot(t *testing.T) {
+	t.Parallel()
+	c := newFakeCounter()
+	l := newTestLimiter(c, testNow)
+	snap := Compile([]Row{
+		throttleRow("project", map[string]any{"project_ids": []any{7.0}}, 1),
+		throttleRow("user", map[string]any{"user_ids": []any{11.0}}, 10),
+	}, testNow)
+	ctx := context.Background()
+	sub := Subject{ProjectID: 7, UserID: 11}
+	defs := snap.RateLimits(sub)
+
+	if dec := l.AdmitAll(ctx, defs, sub, true); !dec.Allowed {
+		t.Fatalf("the first call was refused: %+v", dec)
+	}
+	for i := 0; i < 3; i++ {
+		if dec := l.AdmitAll(ctx, defs, sub, true); dec.Allowed || dec.Class != RateClassProject {
+			t.Fatalf("call %d = %+v, want a refusal by the project limit", i+2, dec)
+		}
+	}
+	if got := requestsIn(c, defNamed(t, defs, "user"), sub); got != 1 {
+		t.Fatalf("user bucket = %d, want 1: the project refusals must give back the user slot", got)
+	}
+	if l.Degraded() != 0 {
+		t.Fatalf("Degraded = %d, want 0", l.Degraded())
+	}
+}
+
+// A compensation that fails is counted and logged; the refusal stands.
+func TestFailedCompensationIsCounted(t *testing.T) {
+	t.Parallel()
+	c := newFakeCounter()
+	c.failDecr = errors.New("nats down")
+	l := newTestLimiter(c, testNow)
+	snap := Compile([]Row{
+		throttleRow("project", map[string]any{"project_ids": []any{7.0}}, 1),
+		throttleRow("user", map[string]any{"user_ids": []any{11.0}}, 10),
+	}, testNow)
+	sub := Subject{ProjectID: 7, UserID: 11}
+	defs := snap.RateLimits(sub)
+	l.AdmitAll(context.Background(), defs, sub, true)
+	if dec := l.AdmitAll(context.Background(), defs, sub, true); dec.Allowed {
+		t.Fatal("the second call was admitted over the project limit")
+	}
+	if l.Degraded() != 1 {
+		t.Fatalf("Degraded = %d, want 1 for the failed give-back", l.Degraded())
+	}
+}

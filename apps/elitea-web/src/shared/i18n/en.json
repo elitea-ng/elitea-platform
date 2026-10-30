@@ -5491,6 +5491,7 @@
   "features.agentLifecycle.trimming.tooNew": "Too new to judge: granted for less than the window",
   "pages.admin.governance.field.agentIds": "Throttled agents",
   "pages.admin.governance.field.agentIdsHelp": "Comma-separated agent ids of the ONE project in Projects. Each agent gets its own counter. At most 100.",
+  "pages.admin.governance.field.idListError": "Use positive whole numbers only. Not valid: {{entries}}",
   "pages.admin.governance.field.userIds": "Throttled users",
   "pages.admin.governance.field.userIdsHelp": "Comma-separated user ids. Each user gets its own counter across the selected projects. At most 100.",
   "pages.admin.governance.scope.agents": "agents",

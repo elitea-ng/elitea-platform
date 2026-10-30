@@ -603,6 +603,8 @@ A rate limit entry under **LLM Governance** can name agents (`scope.agent_ids`) 
 
 A throttle adds to the project rate limit. It does not replace it. A call must pass the project rate limit, the agent throttle and the user throttle that apply to it. In each of these three groups, the narrowest entry applies.
 
+The gateway checks the agent throttle first, then the user throttle, then the project rate limit. A call that one of them refuses does not use a call of the others. Thus an agent that retries after its `429` does not use the calls of the project. When the project rate limit refuses a call after a throttle counted it, the gateway gives the call back to the throttle. For a very short time between the count and the give-back, a different call to that throttle can see one call too many and get a `429`. The gateway never admits a call above a ceiling because of this.
+
 When a counter gets to its ceiling, the gateway refuses the call with HTTP `429`, `rate_limit_error` and `rate_limit_exceeded`, and the `Retry-After` header gives the seconds until the minute ends. The message names the agent, user or project limit. A throttle refuses calls only. It does not suspend the agent or the user, and the next minute starts with a new counter.
 
 The gateway knows the agent from the signed execution id of the call. It reads the agent of the run from the run's admission record. The gateway knows the user from the signed user id of the call. A caller cannot set either value.
@@ -617,7 +619,7 @@ The gateway knows the agent from the signed execution id of the call. It reads t
 
 ### Configuration
 
-Under **LLM Governance**, a platform administrator (permission `configuration.governance`) creates a **Rate limit** entry. Set **Requests per minute** or **Tokens per minute**, and then fill **Throttled agents** (with one project in **Projects**) or **Throttled users**. The main service refuses an entry that names an agent that is not in that project, or a user that does not exist. See [Budgets and LLM governance](/admin/budgets-and-governance#throttles-per-agent-and-per-user).
+Under **LLM Governance**, a platform administrator (permission `configuration.governance`) creates a **Rate limit** entry. Set **Requests per minute** or **Tokens per minute**, and then fill **Throttled agents** (with one project in **Projects**) or **Throttled users**. Each id must be a positive whole number. The form shows an error and does not save a list with a different value. The main service refuses an entry that names an agent that is not in that project, or a user that does not exist. It applies the same checks to `agent_ids` and `user_ids` at the top level of `data`, because the gateway reads them there when the entry has no `scope` object or an empty one. See [Budgets and LLM governance](/admin/budgets-and-governance#throttles-per-agent-and-per-user).
 
 ### Evidence
 

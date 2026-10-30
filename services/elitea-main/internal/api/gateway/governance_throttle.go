@@ -7,7 +7,9 @@ package gateway
 // gateway then counts the entry per agent or per user and refuses with 429
 // when the ceiling is reached (elitea-llm-gateway internal/policy). The
 // gateway rejects a malformed entry at load; this file refuses it on write, so
-// the operator sees the reason at once:
+// the operator sees the reason at once. Like the gateway, it reads the keys
+// from `scope`, or from the top level of `data` when `scope` is absent or
+// empty (governanceScope):
 //
 //   - The fields are lists of positive whole-number ids, at most
 //     maxThrottleScopeIDs long. The gateway uses the same bound.
@@ -44,12 +46,11 @@ type throttleScope struct {
 }
 
 // parseThrottleScope reads the throttle dimensions of data's scope. It returns
-// the zero value when the scope names none.
+// the zero value when the scope names none. It reads the scope the way the
+// gateway does (governanceScope), so `agent_ids` and `user_ids` at the top
+// level of data get the same checks as inside `scope`.
 func parseThrottleScope(data map[string]any) (throttleScope, error) {
-	scope, _ := data["scope"].(map[string]any)
-	if scope == nil {
-		return throttleScope{}, nil
-	}
+	scope := governanceScope(data)
 	agents, err := throttleIDList(scope, "agent_ids")
 	if err != nil {
 		return throttleScope{}, err

@@ -22,7 +22,8 @@ import { t } from '@/shared/i18n';
 
 import { BUDGET_PERIODS, NATS_FAIL_MODES, RATE_POLICIES } from './api/adminGovernanceApi';
 import { RoutingFields } from './GovernanceRoutingFields';
-import type { GovernanceDraft } from './useGatewayGovernancePage';
+import { ThrottleScopeFields } from './GovernanceThrottleFields';
+import { draftFieldErrors, type GovernanceDraft } from './useGatewayGovernancePage';
 
 export interface GovernanceDialogProps {
   readonly draft: GovernanceDraft;
@@ -106,14 +107,16 @@ export function ScopeFields({
   readonly onChange: (patch: Partial<GovernanceDraft>) => void;
 }) {
   const isAllowlist = draft.type === 'model_config';
+  const errors = draftFieldErrors(draft);
   return (
     <>
       <TextField
         label={t('pages.admin.governance.field.projectIds', 'Projects')}
-        helperText={t(
-          'pages.admin.governance.field.projectIdsHelp',
-          'Comma-separated project ids. Empty means every project.',
-        )}
+        error={errors.scopeProjectIds !== undefined}
+        helperText={
+          errors.scopeProjectIds ??
+          t('pages.admin.governance.field.projectIdsHelp', 'Comma-separated project ids. Empty means every project.')
+        }
         value={draft.scopeProjectIds}
         onChange={(event) => onChange({ scopeProjectIds: event.target.value })}
         size="small"
@@ -166,45 +169,9 @@ export function ScopeFields({
         fullWidth
         slotProps={{ htmlInput: { 'data-testid': 'governance-scope-models' } }}
       />
-      {draft.type === 'rate_limit' ? <ThrottleScopeFields draft={draft} onChange={onChange} /> : null}
-    </>
-  );
-}
-
-/** The throttle dimensions of a rate limit (ADR-0041 decision 4). */
-function ThrottleScopeFields({
-  draft,
-  onChange,
-}: {
-  readonly draft: GovernanceDraft;
-  readonly onChange: (patch: Partial<GovernanceDraft>) => void;
-}) {
-  return (
-    <>
-      <TextField
-        label={t('pages.admin.governance.field.agentIds', 'Throttled agents')}
-        helperText={t(
-          'pages.admin.governance.field.agentIdsHelp',
-          'Comma-separated agent ids of the ONE project in Projects. Each agent gets its own counter. At most 100.',
-        )}
-        value={draft.scopeAgentIds}
-        onChange={(event) => onChange({ scopeAgentIds: event.target.value })}
-        size="small"
-        fullWidth
-        slotProps={{ htmlInput: { 'data-testid': 'governance-scope-agents' } }}
-      />
-      <TextField
-        label={t('pages.admin.governance.field.userIds', 'Throttled users')}
-        helperText={t(
-          'pages.admin.governance.field.userIdsHelp',
-          'Comma-separated user ids. Each user gets its own counter across the selected projects. At most 100.',
-        )}
-        value={draft.scopeUserIds}
-        onChange={(event) => onChange({ scopeUserIds: event.target.value })}
-        size="small"
-        fullWidth
-        slotProps={{ htmlInput: { 'data-testid': 'governance-scope-users' } }}
-      />
+      {draft.type === 'rate_limit' ? (
+        <ThrottleScopeFields draft={draft} errors={errors} onChange={onChange} />
+      ) : null}
     </>
   );
 }
