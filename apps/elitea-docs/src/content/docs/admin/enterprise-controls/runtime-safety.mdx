@@ -1,6 +1,6 @@
 ---
 title: "Runtime safety"
-description: "Controls that stop, limit or require approval for agent execution while it runs: the suspension and kill switch, the whole-run time cap, approval evidence, unattended runs, tool categories, the approval policy and required approval in pipelines."
+description: "Controls that stop, limit or require approval for agent execution while it runs: the suspension and kill switch, the agent circuit breaker, the whole-run time cap, approval evidence, unattended runs, tool categories, the approval policy and required approval in pipelines."
 ---
 
 Runtime safety controls act on agent execution while it runs, not on configuration. This page describes the controls of ADR-0041.
@@ -92,7 +92,7 @@ Each suspension has a **resume rule**:
 | --- | --- |
 | `any_admin` (default) | Any caller with `safety.suspend` on a surface that can see the suspension |
 | `governance_role` | A platform administrator only |
-| `two_person` | A platform administrator who is not the person who created the suspension. The database also enforces this rule. |
+| `two_person` | A platform administrator who is not the person who created the suspension. The database also enforces this rule. For a suspension that the platform created (the [circuit breaker](#agent-circuit-breaker)), two different platform administrators: the first records an approval, the second resumes. |
 
 A project admin can resume only an `any_admin` suspension of their own project. A suspension made by a platform administrator for a project is visible on the project routes, but its rule can keep the project admin from resuming it.
 
@@ -127,6 +127,132 @@ The self-test writes a `schedule` event with the action `safety.kill_switch.self
 - Monitor `elitea_kill_switch_selftest_last_success_timestamp` and the `safety.kill_switch.selftest` audit events.
 - Keep the [emergency stop runbook](/deployment/emergency-stop-runbook) in your incident procedure, and practise it.
 - After you resume, start again the runs that were cancelled, if they are still necessary.
+
+## Agent circuit breaker
+
+### The risk
+
+An agent can fail again and again without a person who sees it. For example, a tool starts to refuse every call, the model loops on the same failing tool, or the agent spends much more than usual. Each run fails, but new runs continue to start, and each run uses the budget and calls external systems. A person who reads a dashboard sees the problem too late. The platform must stop such an agent by rule, and keep it stopped until a person examines it.
+
+### What is enforced
+
+The routine `main.agent_breaker` runs every minute. It reads the agent runs that ended since the last pass and checks each agent against four rules:
+
+| Rule | Trips when | Default |
+| --- | --- | --- |
+| `error_rate` | More than this percentage of the agent's latest ended runs failed. The window is the latest 20 runs. | On: more than 50 % of 20 runs |
+| `tool_failure_streak` | One tool failed this many times in a row inside one run. A call of a different tool between two failures does not stop the count. A success of the same tool does. | On: 5 failures |
+| `spend_per_hour` | The agent's model and metered tool spend in the last hour is more than this amount (USD) | Off |
+| `runs_per_hour` | More runs of the agent than this ended in the last hour | Off |
+
+When a rule trips, the breaker writes a **suspension** of the source `breaker` at the `agent` scope. This is the same suspension that the [kill switch](#suspension-and-kill-switch) uses:
+
+- admission refuses new runs of the agent with HTTP 409 `execution_suspended`, and the message `The agent circuit breaker stopped this agent. An administrator must resume it.`;
+- the runs of the agent that are in flight are cancelled in the same transaction;
+- the suspension records the rule, the observed value, the limit and the agent's risk tier.
+
+The breaker does not trip an agent that is already suspended, by any source. After a resume, the window starts again: runs admitted before the resume do not count. Its first pass after the upgrade reads only the runs that ended in the 10 minutes before. Older runs are not judged.
+
+An agent with fewer ended runs than the window since its last resume is not judged on `error_rate`. A cancelled run does not count as a failure or as a run in the window.
+
+**Who can resume** depends on the agent's risk tier:
+
+| Tier | `resume_requires` | Who can resume |
+| --- | --- | --- |
+| `low`, `medium` | `any_admin` | A project admin of the project, or a platform administrator |
+| `high` | `governance_role` | A platform administrator |
+| `critical` | `two_person` | Two different platform administrators. The first **Resume** records an approval and answers HTTP 202; the suspension stays active. A second platform administrator selects **Resume** to end it. The same administrator cannot do both steps (HTTP 403 `second_person_required`). The database also enforces this rule. |
+
+**Many agents at the same time.** When a model provider or a shared tool is down, many agents fail together. Stopping all of them would turn a short outage into a long one, because each agent then needs a person to resume it. If more agents than the **storm limit** (default 5) would trip on `error_rate` or `tool_failure_streak` in one pass, the breaker stops none of them on those rules. It raises the `EliteaAgentBreakerStorm` alert instead. The `spend_per_hour` and `runs_per_hour` rules still trip.
+
+#### Limits
+
+- The breaker acts once a minute, on runs that ended. It does not stop a run in the middle of its first failures. Use the [whole-run time cap](#whole-run-time-cap) and project budgets for limits inside one run.
+- `tool_failure_streak` reads the run step records. A run whose worker records no tool steps is not checked on that rule.
+- `spend_per_hour` reads the gateway request log. Spend that the gateway does not attribute to a run is not counted.
+- An agent's limits apply to the agent in all its runs. The breaker has no limit per user.
+
+### Configuration
+
+Open **Configuration › Circuit Breaker** (permission `configuration.governance`). The section has:
+
+- **Circuit Breaker On**: on by default. Turn it off to stop all passes.
+- **Error Rate Window (runs)**: the number of latest ended runs the error rate reads (5 to 200, default 20).
+- **Storm Limit (agents per pass)**: default 5. 0 turns the storm limit off.
+- For each risk tier: **Error Rate (%)**, **Spend per Hour (USD)**, **Same Tool Failing in a Row**, **Runs per Hour** and **Who Can Resume**. 0 turns a rule off.
+
+The routine reads the section at each pass, so a change applies within one minute. Change the routine's schedule, or turn it off, in **Admin › Schedules & Tasks**. It does not run while maintenance mode is on.
+
+**One agent.** The agent's registry record can set tighter limits than its tier. It cannot set looser limits. Use the registry API with the field `circuit_breaker`:
+
+```bash
+curl -sS -X PUT "$ELITEA/api/v2/elitea_core/agent_registry/prompt_lib/12/31" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"circuit_breaker":{"error_rate_percent":30,"spend_per_hour_usd":5}}'
+```
+
+A value looser than the tier default is refused with HTTP 422 `circuit_breaker_override_loosens`, and `fields` names the looser limits. A smaller `error_rate_window_runs` is tighter. `{}` clears the override. Each change writes the security audit action `agent.registry.breaker_override_changed`.
+
+### Evidence
+
+Each trip writes, in the same transaction as the suspension:
+
+- the suspension row in `elitea_runtime.execution_suspensions`, with `source = breaker`, `actor_id = 0` and the rule in `detail`;
+- one security audit event of the type `ai.elitea.security.v1.agent.breaker`, in the hash-chained security audit log. The audit export sends it to your SIEM.
+
+Example event:
+
+```json
+{
+  "type": "ai.elitea.security.v1.agent.breaker",
+  "subject": "agent/31",
+  "time": "2026-10-30T15:30:11.187Z",
+  "data": {
+    "action": "agent.breaker.tripped",
+    "principal_ref": "system:agent_breaker",
+    "tenant_project_id": 12,
+    "resource_type": "agent",
+    "resource_id": "31",
+    "reasons": [
+      "rule:error_rate", "observed:55", "threshold:50", "unit:percent",
+      "tier:high", "resume_requires:governance_role", "suspension:41",
+      "window_runs:20", "failed_runs:11"
+    ]
+  }
+}
+```
+
+The agent's owners and the project admins get a notification with the rule and the observed value. **Admin › Kill switch** shows each breaker suspension with the label **Circuit breaker**, the rule, the observed value and the limit. The agent's page shows **Stopped by circuit breaker**. The suspension API returns the same values in the field `breaker`.
+
+The resume is written to the audit trail with the action `safety.suspension.resumed`. The first approval of a `two_person` resume is written with the action `safety.suspension.resume_approved`.
+
+**Metrics and alerts.** elitea-main serves these Prometheus metrics on its metrics port (`ELITEA_AUDIT_EXPORT_METRICS_ADDR`, port 9464), also when the audit export is off. No series has a project or an agent label.
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `elitea_safety_suspensions_active{scope,source}` | gauge | Active suspensions. Every replica reports the same count. |
+| `elitea_breaker_trips_total{rule}` | counter | Agents the breaker stopped, by rule |
+| `elitea_breaker_storms_total` | counter | Passes that stopped no agent because of the storm limit |
+| `elitea_breaker_pass_failures_total` | counter | Breaker passes that failed |
+
+The Helm chart ships these alerts in a PrometheusRule wherever the Prometheus Operator API is available (`main.safetyAlerts`, on by default):
+
+| Alert | Severity | Fires when |
+| --- | --- | --- |
+| `EliteaPlatformExecutionSuspended` | critical | A platform suspension is active for 1 minute. The scheduled self-test is not included. |
+| `EliteaAgentBreakerStorm` | critical | A pass hit the storm limit |
+| `EliteaAgentBreakerTripped` | warning | The breaker stopped an agent in the last 10 minutes (label `rule`) |
+| `EliteaExecutionSuspensionsActive` | warning | An agent, project or toolkit type suspension stays active for `main.safetyAlerts.prometheusRule.activeFor` (default 30 minutes) |
+| `EliteaAgentBreakerPassFailing` | warning | 5 or more passes failed in 15 minutes |
+
+### Customer responsibility
+
+- **Paging and on-call stay with you.** Elitea stops the agent and raises the alert. Route the alerts to your incident-management tool, and decide who is on call for agents. Elitea does not page a person.
+- Set the limits to match your agents. A low error-rate limit stops agents during short provider outages; a high one lets a broken agent run longer.
+- Set spend and runs limits for agents that can spend money or send messages, because they are off by default.
+- Decide who examines a stopped agent and who resumes it. For `critical` agents, keep two platform administrators available.
+- Before you resume, find the cause: read the run step records of the failed runs, and correct the agent, the tool or the credential.
+- Keep the Prometheus Operator, or scrape port 9464 with your own monitoring, so that the alerts can fire.
 
 ## Whole-run time cap
 

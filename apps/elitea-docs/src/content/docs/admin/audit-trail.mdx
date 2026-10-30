@@ -33,7 +33,7 @@ From the Users page's row menu, the activity drawer filters this same audit data
 
 Audit Trail is the place to look; it is not where evidence should be kept. The hash chain on security audit events makes tampering detectable, but immutability and long retention belong to your SIEM or WORM store. Elitea sends two streams there, in one versioned envelope, [`elitea.audit.v1`](/reference/audit-event-schema):
 
-- **Security audit events** from the security audit outbox (credential decisions, grant, binding, mandate and delegation changes). These exist when enterprise credential governance is on. Approval events (`ai.elitea.security.v1.agent.approval`) are written for every run, with or without governance: one event for each pause, decision, timeout and unattended outcome of a sensitive tool or review node. Each event carries its position in the tamper-evident chain.
+- **Security audit events** from the security audit outbox (credential decisions, grant, binding, mandate and delegation changes). These exist when enterprise credential governance is on. Approval events (`ai.elitea.security.v1.agent.approval`) are written for every run, with or without governance: one event for each pause, decision, timeout and unattended outcome of a sensitive tool or review node. Each stop by the [agent circuit breaker](/admin/enterprise-controls/runtime-safety#agent-circuit-breaker) writes one `ai.elitea.security.v1.agent.breaker` event (action `agent.breaker.tripped`) with the rule, the observed value and the limit. Each event carries its position in the tamper-evident chain.
 - **The audit trail on this page** (`centry.audit_events`): one event per completed request, scheduled job or admin task.
 
 Two transports are built in, and you can use either or both:
@@ -67,7 +67,7 @@ Each approval event names the actor (`principal_ref`, `user:<id>` or `system:eli
 
 ### Watch it
 
-elitea-main serves Prometheus metrics for the export on port 9464 (`ELITEA_AUDIT_EXPORT_METRICS_ADDR`): `elitea_audit_export_lag_seconds`, `elitea_audit_export_backlog`, and the `delivered`, `failed` and `dead_lettered` counters. The chart ships a PodMonitor and three alerts, `EliteaAuditExportLag`, `EliteaAuditExportBacklog` and `EliteaAuditExportDeadLettered`, wherever the Prometheus Operator API is served.
+elitea-main serves Prometheus metrics for the export on port 9464 (`ELITEA_AUDIT_EXPORT_METRICS_ADDR`): `elitea_audit_export_lag_seconds`, `elitea_audit_export_backlog`, and the `delivered`, `failed` and `dead_lettered` counters. The chart ships a PodMonitor and three alerts, `EliteaAuditExportLag`, `EliteaAuditExportBacklog` and `EliteaAuditExportDeadLettered`, wherever the Prometheus Operator API is served. The same port serves the runtime safety metrics and has their alerts (see [Agent circuit breaker](/admin/enterprise-controls/runtime-safety#agent-circuit-breaker)).
 
 <Note>
 This page has no write path of any kind. An audit trail the product could edit would not be one.

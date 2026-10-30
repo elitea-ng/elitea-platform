@@ -22,6 +22,8 @@ All of them need the permission `safety.suspend`. The resume rule is chosen when
 
 For a platform stop, use `two_person` unless only one administrator is available.
 
+The [agent circuit breaker](/admin/enterprise-controls/runtime-safety#agent-circuit-breaker) also stops agents by itself. Its suspensions have the source `breaker`, and the agent's risk tier sets their resume rule. A `two_person` stop that the breaker made needs two different platform administrators: the first **Resume** records an approval (HTTP 202) and the suspension stays active; a second administrator resumes it.
+
 ## Choose the scope
 
 Use the narrowest scope that stops the damage:
@@ -81,7 +83,7 @@ curl -sS -X POST "$ELITEA/api/v2/admin/execution_suspensions/12:resume" \
   -d '{"reason":"INC-42 closed: agent prompt fixed"}'
 ```
 
-A 403 `resume_forbidden` means the resume rule does not let you resume it. For `two_person`, ask a second platform administrator.
+A 403 `resume_forbidden` means the resume rule does not let you resume it. For `two_person`, ask a second platform administrator. A 202 means that you recorded the first approval of a breaker stop; a different platform administrator must now resume it. A 403 `second_person_required` means that you already approved it.
 </Step>
 <Step title="Restart what is necessary">
 Resuming does not restart the runs that were cancelled. Start them again if they are still necessary. Scheduled pipeline runs that were refused during the suspension are recorded as `failed`; they run again at their next scheduled time.
