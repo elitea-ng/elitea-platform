@@ -36,30 +36,32 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (22)">
 
-| Tool |
-|---|
-| Add pull request comment |
-| Close pull request |
-| Create branch |
-| Create file |
-| Create pull request |
-| Delete branch |
-| Get pull request |
-| Get pull requests changes |
-| Get pull requests commits |
-| Grep file |
-| Index data |
-| List branches in repo |
-| List files |
-| List indexes |
-| Read file |
-| Read multiple files |
-| Remove index |
-| Search index |
-| Set active branch |
-| Stepback search index |
-| Stepback summary index |
-| Update file |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Add pull request comment | `external_send` |
+| Close pull request | `write` |
+| Create branch | `write` |
+| Create file | `write` |
+| Create pull request | `write` |
+| Delete branch | `delete` |
+| Get pull request | `read` |
+| Get pull requests changes | `read` |
+| Get pull requests commits | `read` |
+| Grep file | `read` |
+| Index data | `write` |
+| List branches in repo | `read` |
+| List files | `read` |
+| List indexes | `read` |
+| Read file | `read` |
+| Read multiple files | `read` |
+| Remove index | `delete` |
+| Search index | `read` |
+| Set active branch | `write` |
+| Stepback search index | `read` |
+| Stepback summary index | `read` |
+| Update file | `write` |
 
 </Accordion>
 

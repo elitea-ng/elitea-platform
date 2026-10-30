@@ -31,14 +31,16 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (6)">
 
-| Tool |
-|---|
-| Create case |
-| Create lead |
-| Execute generic rq |
-| Search salesforce |
-| Update case |
-| Update lead |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Create case | `write` |
+| Create lead | `write` |
+| Execute generic rq | `write` |
+| Search salesforce | `read` |
+| Update case | `write` |
+| Update lead | `write` |
 
 </Accordion>
 

@@ -982,6 +982,32 @@ func governanceSection() map[string]any {
 				"default":     []any{},
 				"enum_source": "projects",
 			},
+			// --- Throttles per agent and per user (ADR-0041 decision 4) ---
+			//
+			// Read by rate_limit entries only. The governance CRUD refuses them
+			// on every other type, refuses an agent list without exactly one
+			// scoped project (application ids are per project), and refuses an
+			// id that does not exist.
+			{
+				"key":         "scope_agent_ids",
+				"type":        "array",
+				"items":       map[string]any{"type": "integer"},
+				"title":       "Throttled Agents",
+				"description": "Rate limits only. Agent (application) ids of the ONE project in Scoped Projects. Each agent gets its own per-minute counter, in addition to the project rate limit. Maximum 100.",
+				"path":        "scope.agent_ids",
+				"section":     "governance",
+				"default":     []any{},
+			},
+			{
+				"key":         "scope_user_ids",
+				"type":        "array",
+				"items":       map[string]any{"type": "integer"},
+				"title":       "Throttled Users",
+				"description": "Rate limits only. User ids. Each user gets its own per-minute counter across the scoped projects, in addition to the project rate limit. Maximum 100.",
+				"path":        "scope.user_ids",
+				"section":     "governance",
+				"default":     []any{},
+			},
 			// --- MCP allowlist ---
 			{
 				"key":         "mcp_allowlist",

@@ -66,7 +66,7 @@ export function typeHelp(type: string): string {
     case 'rate_limit':
       return t(
         'pages.admin.governance.help.rateLimit',
-        'Requests and tokens per minute, counted per project. The token ceiling is applied to the request after the one that crossed it, because a request’s token cost is unknown until the provider answers.',
+        'Requests and tokens per minute, counted per project. Name agents or users to make it a throttle: each agent or user then gets its own counter, in addition to the project limit. The token ceiling is applied to the request after the one that crossed it, because a request’s token cost is unknown until the provider answers.',
       );
     case 'model_config':
       return t(
@@ -165,6 +165,45 @@ export function ScopeFields({
         size="small"
         fullWidth
         slotProps={{ htmlInput: { 'data-testid': 'governance-scope-models' } }}
+      />
+      {draft.type === 'rate_limit' ? <ThrottleScopeFields draft={draft} onChange={onChange} /> : null}
+    </>
+  );
+}
+
+/** The throttle dimensions of a rate limit (ADR-0041 decision 4). */
+function ThrottleScopeFields({
+  draft,
+  onChange,
+}: {
+  readonly draft: GovernanceDraft;
+  readonly onChange: (patch: Partial<GovernanceDraft>) => void;
+}) {
+  return (
+    <>
+      <TextField
+        label={t('pages.admin.governance.field.agentIds', 'Throttled agents')}
+        helperText={t(
+          'pages.admin.governance.field.agentIdsHelp',
+          'Comma-separated agent ids of the ONE project in Projects. Each agent gets its own counter. At most 100.',
+        )}
+        value={draft.scopeAgentIds}
+        onChange={(event) => onChange({ scopeAgentIds: event.target.value })}
+        size="small"
+        fullWidth
+        slotProps={{ htmlInput: { 'data-testid': 'governance-scope-agents' } }}
+      />
+      <TextField
+        label={t('pages.admin.governance.field.userIds', 'Throttled users')}
+        helperText={t(
+          'pages.admin.governance.field.userIdsHelp',
+          'Comma-separated user ids. Each user gets its own counter across the selected projects. At most 100.',
+        )}
+        value={draft.scopeUserIds}
+        onChange={(event) => onChange({ scopeUserIds: event.target.value })}
+        size="small"
+        fullWidth
+        slotProps={{ htmlInput: { 'data-testid': 'governance-scope-users' } }}
       />
     </>
   );

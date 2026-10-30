@@ -506,6 +506,51 @@ The `source` is `platform` for the platform rule, `policy` for the policy rule, 
 - Decide which categories need approval at each tier. Add `code_execution` at `high` and `critical` if the model's code or queries can reach production data.
 - Keep the platform's sensitive action tools for single tools that need approval at every tier.
 
+## Throttles per agent and per user
+
+### The risk
+
+A rate limit at the LLM gateway counts the calls of a whole project. One agent that loops, or one user who runs many agents, can use all of the project's calls. The other agents and users of the project then get `429` refusals.
+
+### What is enforced
+
+A rate limit entry under **LLM Governance** can name agents (`scope.agent_ids`) or users (`scope.user_ids`). Such an entry is a throttle:
+
+- An agent throttle counts the calls of each named agent in its own counter. It applies to every model call that a run of that agent makes, also when the run starts from another project.
+- A user throttle counts the calls of each named user in its own counter. The counter is shared across the projects that the entry selects.
+- An entry that names agents and users counts each pair of agent and user.
+
+A throttle adds to the project rate limit. It does not replace it. A call must pass the project rate limit, the agent throttle and the user throttle that apply to it. In each of these three groups, the narrowest entry applies.
+
+When a counter gets to its ceiling, the gateway refuses the call with HTTP `429`, `rate_limit_error` and `rate_limit_exceeded`, and the `Retry-After` header gives the seconds until the minute ends. The message names the agent, user or project limit. A throttle refuses calls only. It does not suspend the agent or the user, and the next minute starts with a new counter.
+
+The gateway knows the agent from the signed execution id of the call. It reads the agent of the run from the run's admission record. The gateway knows the user from the signed user id of the call. A caller cannot set either value.
+
+#### Limits
+
+- An agent id is an application id of one project. An entry that names agents must name exactly one project in `scope.project_ids`.
+- An entry can name at most 100 agents and 100 users.
+- A call that does not come from an agent run (for example, a chat without an agent) does not match an agent throttle. A call without a user does not match a user throttle.
+- **The throttles fail open, as the project rate limits do.** When the shared NATS counter is not available, or the gateway cannot read the agent of a run, the gateway admits the call and does not apply the throttle. It counts each such call.
+- The token ceiling applies to the call after the call that crossed it, as for every rate limit.
+
+### Configuration
+
+Under **LLM Governance**, a platform administrator (permission `configuration.governance`) creates a **Rate limit** entry. Set **Requests per minute** or **Tokens per minute**, and then fill **Throttled agents** (with one project in **Projects**) or **Throttled users**. The main service refuses an entry that names an agent that is not in that project, or a user that does not exist. See [Budgets and LLM governance](/admin/budgets-and-governance#throttles-per-agent-and-per-user).
+
+### Evidence
+
+- Each refusal writes a gateway log line `governance: authored rate limit refused the request` with the rule, the class (`project`, `agent` or `user`), the agent, the user and the counts.
+- The refused call is in the gateway request log with the status `429`.
+- `GET /governance/status` on the gateway gives `rate_limiter.refused` and `rate_limiter.degraded`. `degraded` counts the calls that were admitted without a limit because the counter or the agent lookup failed.
+
+### Customer responsibility
+
+- Set throttles that are larger than the normal load of each agent and user, and smaller than the project rate limit.
+- Make sure that the agents and users that you throttle can retry after `Retry-After`.
+- Alert on a growing `rate_limiter.degraded` count. While it grows, no rate limit or throttle is in force.
+- To stop an agent, use the [suspension](#suspension-and-kill-switch), not a throttle.
+
 ## Required approval in pipelines
 
 ### The risk

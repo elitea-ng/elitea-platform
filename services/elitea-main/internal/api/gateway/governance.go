@@ -133,6 +133,9 @@ func (h *GovernanceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if !h.checkThrottleIDsExist(ctx, w, body.Data) {
+		return
+	}
 
 	dataBytes, _ := json.Marshal(body.Data)
 	const q = `INSERT INTO gateway.governance_config (type, section, name, data, enabled)
@@ -162,6 +165,9 @@ func (h *GovernanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateGovernanceRow(body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !h.checkThrottleIDsExist(ctx, w, body.Data) {
 		return
 	}
 
@@ -278,6 +284,9 @@ func validateGovernanceRow(row GovernanceRow) error {
 	if err := validateGovernanceScope(row.Data); err != nil {
 		return err
 	}
+	if err := validateThrottleScope(row.Type, row.Data); err != nil {
+		return err
+	}
 	switch row.Type {
 	case "routing_rule":
 		return validateRoutingRule(row.Data)
@@ -361,7 +370,7 @@ func requireGlobalScope(data map[string]any) error {
 	if !ok {
 		return nil
 	}
-	for _, key := range []string{"project_ids", "providers", "models", "team_ids"} {
+	for _, key := range []string{"project_ids", "providers", "models", "team_ids", "agent_ids", "user_ids"} {
 		if list, ok := scope[key].([]any); ok && len(list) > 0 {
 			return errors.New("an egress_allowlist entry is global and carries no scope: the private-network " +
 				"half of the decision is made without a project, so a scoped entry would apply to every " +

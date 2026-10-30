@@ -37,27 +37,29 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (19)">
 
-| Tool |
-|---|
-| Attach file to work item |
-| Create work item |
-| Delete work item |
-| Get comments |
-| Get image by url |
-| Get relation types |
-| Get work item |
-| Get work item type fields |
-| Index data |
-| Link work items |
-| Link work items to wiki page |
-| List indexes |
-| Remove index |
-| Search index |
-| Search work items |
-| Stepback search index |
-| Stepback summary index |
-| Unlink work items from wiki page |
-| Update work item |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Attach file to work item | `write` |
+| Create work item | `write` |
+| Delete work item | `delete` |
+| Get comments | `read` |
+| Get image by url | `read` |
+| Get relation types | `read` |
+| Get work item | `read` |
+| Get work item type fields | `read` |
+| Index data | `write` |
+| Link work items | `write` |
+| Link work items to wiki page | `write` |
+| List indexes | `read` |
+| Remove index | `delete` |
+| Search index | `read` |
+| Search work items | `read` |
+| Stepback search index | `read` |
+| Stepback summary index | `read` |
+| Unlink work items from wiki page | `write` |
+| Update work item | `write` |
 
 </Accordion>
 

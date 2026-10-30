@@ -31,41 +31,43 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (33)">
 
-| Tool |
-|---|
-| Add comment |
-| Attach file |
-| Copy record |
-| Create record |
-| Create record link |
-| Delete record |
-| Field options metadata |
-| Fields metadata |
-| Find project |
-| Get epic |
-| Get feature |
-| Get feature gql |
-| Get idea |
-| Get initiative |
-| Get page |
-| Get product |
-| Get release |
-| Get requirement |
-| Get requirement gql |
-| List comments |
-| List epics |
-| List features |
-| List ideas |
-| List initiatives |
-| List products |
-| List releases |
-| List requirements |
-| Manage record |
-| Read records |
-| Search |
-| Search documents |
-| Search records |
-| Update record |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Add comment | `external_send` |
+| Attach file | `write` |
+| Copy record | `write` |
+| Create record | `write` |
+| Create record link | `write` |
+| Delete record | `delete` |
+| Field options metadata | `read` |
+| Fields metadata | `read` |
+| Find project | `read` |
+| Get epic | `read` |
+| Get feature | `read` |
+| Get feature gql | `read` |
+| Get idea | `read` |
+| Get initiative | `read` |
+| Get page | `read` |
+| Get product | `read` |
+| Get release | `read` |
+| Get requirement | `read` |
+| Get requirement gql | `read` |
+| List comments | `read` |
+| List epics | `read` |
+| List features | `read` |
+| List ideas | `read` |
+| List initiatives | `read` |
+| List products | `read` |
+| List releases | `read` |
+| List requirements | `read` |
+| Manage record | `write` |
+| Read records | `read` |
+| Search | `read` |
+| Search documents | `read` |
+| Search records | `read` |
+| Update record | `write` |
 
 </Accordion>
 

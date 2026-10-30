@@ -383,6 +383,9 @@ func main() {
 		policyLimiter = policy.NewLimiter(policy.LimiterConfig{
 			Subject: nats.RateLimitSubject,
 			Logger:  logger,
+			// The agent throttles (ADR-0041 decision 4) read the run's agent
+			// from elitea_runtime.agent_execution_jobs on this same pool.
+			Agents: policy.NewPostgresAgentLookup(pool),
 		})
 		if rc, ok := nc.(policy.RateCounter); ok && nc != nil {
 			policyLimiter.Bind(rc)

@@ -73,6 +73,9 @@ type Limiter struct {
 	subject SubjectBuilder
 	log     *slog.Logger
 	now     func() time.Time
+	// agents resolves a request's agent for the agent throttles. nil resolves
+	// nothing, and then no agent-scoped row matches.
+	agents *AgentResolver
 
 	// degraded counts admissions that skipped the limit because the counter was
 	// unreachable. It is a gauge of how much enforcement was actually lost.
@@ -174,6 +177,10 @@ type LimiterConfig struct {
 	Subject SubjectBuilder
 	Logger  *slog.Logger
 	Now     func() time.Time
+	// Agents reads the agent of a runtime execution, for the agent throttles
+	// (ADR-0041 decision 4). Production passes NewPostgresAgentLookup. nil
+	// disables agent throttles only.
+	Agents AgentLookup
 }
 
 // NewLimiter builds a Limiter. A nil Counter or Subject builds a limiter that
@@ -189,6 +196,9 @@ func NewLimiter(cfg LimiterConfig) *Limiter {
 		nowFn = time.Now
 	}
 	l := &Limiter{subject: cfg.Subject, log: log, now: nowFn}
+	if cfg.Agents != nil {
+		l.agents = NewAgentResolver(cfg.Agents, log, nowFn)
+	}
 	if cfg.Counter != nil {
 		// Configured counters start unprobed (degraded) and do not read at
 		// construction; the monitor's first Probe promotes them to enforced.
@@ -204,12 +214,23 @@ func (l *Limiter) Enabled() bool {
 }
 
 // Degraded returns how many admissions skipped enforcement because the counter
-// was unreachable.
+// was unreachable, or because the agent of the run could not be read for an
+// agent throttle.
 func (l *Limiter) Degraded() int64 {
 	if l == nil {
 		return 0
 	}
-	return l.degraded.Load()
+	return l.degraded.Load() + l.agents.Failures()
+}
+
+// Agent returns the agent of a runtime execution, or the zero AgentRef when
+// the request has none, or when it cannot be read (agent throttles then fail
+// open, and Degraded counts it).
+func (l *Limiter) Agent(ctx context.Context, executionID string) AgentRef {
+	if l == nil {
+		return AgentRef{}
+	}
+	return l.agents.Resolve(ctx, executionID)
 }
 
 // Refused returns how many admissions the limiter blocked.
@@ -226,6 +247,8 @@ type RateDecision struct {
 	Allowed bool
 	// Rule names the authored row that refused, for the log and the message.
 	Rule string
+	// Class is what the refusing row limits: a project, an agent or a user.
+	Class RateClass
 	// Bucket is "requests" or "tokens".
 	Bucket string
 	// Limit and Observed describe the refusal in the operator's own units.
@@ -260,7 +283,7 @@ func (l *Limiter) Admit(ctx context.Context, def RateLimitDef, sub Subject, coun
 	}
 	now := l.now()
 	window := windowStart(now)
-	key := RateLimitKey(def.Name, sub.ProjectID)
+	key := BucketKey(def, sub)
 	retry := windowRemaining(now)
 
 	// The token bucket is checked FIRST, and by reading rather than
@@ -275,7 +298,7 @@ func (l *Limiter) Admit(ctx context.Context, def RateLimitDef, sub Subject, coun
 		if total >= def.TokensPerMin {
 			l.refused.Add(1)
 			return RateDecision{
-				Rule: def.Name, Bucket: "tokens",
+				Rule: def.Name, Class: def.Class, Bucket: "tokens",
 				Limit: def.TokensPerMin, Observed: total, RetryAfter: retry,
 			}
 		}
@@ -291,7 +314,7 @@ func (l *Limiter) Admit(ctx context.Context, def RateLimitDef, sub Subject, coun
 			if total > def.RequestsPerMin {
 				l.refused.Add(1)
 				return RateDecision{
-					Rule: def.Name, Bucket: "requests",
+					Rule: def.Name, Class: def.Class, Bucket: "requests",
 					Limit: def.RequestsPerMin, Observed: total, RetryAfter: retry,
 				}
 			}
@@ -305,7 +328,7 @@ func (l *Limiter) Admit(ctx context.Context, def RateLimitDef, sub Subject, coun
 		if total > def.RequestsPerMin {
 			l.refused.Add(1)
 			return RateDecision{
-				Rule: def.Name, Bucket: "requests",
+				Rule: def.Name, Class: def.Class, Bucket: "requests",
 				Limit: def.RequestsPerMin, Observed: total, RetryAfter: retry,
 			}
 		}
@@ -327,11 +350,11 @@ func (l *Limiter) RecordTokens(ctx context.Context, def RateLimitDef, sub Subjec
 	if !l.Enabled() || def.TokensPerMin <= 0 || tokens <= 0 {
 		return
 	}
-	key := RateLimitKey(def.Name, sub.ProjectID)
+	key := BucketKey(def, sub)
 	if _, err := l.incr(ctx, kindTokens, key, windowStart(admittedAt), tokens); err != nil {
 		l.degraded.Add(1)
 		l.log.Warn("policy: rate limit token usage was NOT recorded; the token ceiling is under-counting",
-			"rule", def.Name, "project_id", sub.ProjectID, "tokens", tokens, "err", err)
+			"rule", def.Name, "class", def.Class.String(), "project_id", sub.ProjectID, "tokens", tokens, "err", err)
 	}
 }
 
@@ -350,7 +373,7 @@ func (l *Limiter) incr(ctx context.Context, kind, key string, window, delta int6
 func (l *Limiter) failOpen(bucket string, def RateLimitDef, sub Subject, err error) {
 	l.degraded.Add(1)
 	l.log.Warn("policy: rate-limit counter unavailable; ADMITTING the request without enforcing the limit",
-		"bucket", bucket, "rule", def.Name, "project_id", sub.ProjectID, "err", err)
+		"bucket", bucket, "rule", def.Name, "class", def.Class.String(), "project_id", sub.ProjectID, "err", err)
 }
 
 // RateLimitKey builds the bucket identity for a rule and a project.
@@ -363,6 +386,33 @@ func (l *Limiter) failOpen(bucket string, def RateLimitDef, sub Subject, err err
 // today, and that gap is better than silently picking the surprising reading.
 func RateLimitKey(rule string, projectID int) string {
 	return sanitiseToken(rule) + "-" + fmt.Sprint(projectID)
+}
+
+// BucketKey builds the counter identity for a rule and the request it governs.
+//
+// A project rate limit counts per project (RateLimitKey). A throttle counts per
+// principal (ADR-0041 decision 4):
+//
+//   - an agent throttle counts per agent, keyed on the agent's own project and
+//     application id, so two agents of one project never share a counter. When
+//     the row also names users, it counts per agent and user.
+//   - a user throttle counts per user, across every project the row selects.
+//     It is a limit on the person, not on one of their projects.
+//
+// The class letter ("a", "u") keeps the three key families apart: a project
+// key ends in "-<project>", which no throttle key does.
+func BucketKey(def RateLimitDef, sub Subject) string {
+	switch def.Class {
+	case RateClassAgent:
+		key := fmt.Sprintf("%s-a%d_%d", sanitiseToken(def.Name), sub.Agent.ProjectID, sub.Agent.ApplicationID)
+		if len(def.Scope.UserIDs) > 0 {
+			key += fmt.Sprintf("-u%d", sub.UserID)
+		}
+		return key
+	case RateClassUser:
+		return fmt.Sprintf("%s-u%d", sanitiseToken(def.Name), sub.UserID)
+	}
+	return RateLimitKey(def.Name, sub.ProjectID)
 }
 
 // sanitiseToken maps an operator-authored rule name onto the NATS token

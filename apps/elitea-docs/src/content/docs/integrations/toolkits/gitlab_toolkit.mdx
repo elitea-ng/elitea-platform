@@ -36,35 +36,37 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (27)">
 
-| Tool |
-|---|
-| Append file |
-| Comment on issue |
-| Comment on pr |
-| Create branch |
-| Create file |
-| Create pr change comment |
-| Create pull request |
-| Delete branch |
-| Delete file |
-| Get commits |
-| Get issue |
-| Get issues |
-| Get pr changes |
-| Grep file |
-| Index data |
-| List branches in repo |
-| List files |
-| List folders |
-| List indexes |
-| Read file |
-| Read multiple files |
-| Remove index |
-| Search index |
-| Set active branch |
-| Stepback search index |
-| Stepback summary index |
-| Update file |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Append file | `write` |
+| Comment on issue | `external_send` |
+| Comment on pr | `external_send` |
+| Create branch | `write` |
+| Create file | `write` |
+| Create pr change comment | `external_send` |
+| Create pull request | `write` |
+| Delete branch | `delete` |
+| Delete file | `delete` |
+| Get commits | `read` |
+| Get issue | `read` |
+| Get issues | `read` |
+| Get pr changes | `read` |
+| Grep file | `read` |
+| Index data | `write` |
+| List branches in repo | `read` |
+| List files | `read` |
+| List folders | `read` |
+| List indexes | `read` |
+| Read file | `read` |
+| Read multiple files | `read` |
+| Remove index | `delete` |
+| Search index | `read` |
+| Set active branch | `write` |
+| Stepback search index | `read` |
+| Stepback summary index | `read` |
+| Update file | `write` |
 
 </Accordion>
 
