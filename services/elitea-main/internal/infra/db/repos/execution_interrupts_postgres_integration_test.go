@@ -1119,8 +1119,12 @@ func TestDecideSingleTransaction(t *testing.T) {
 		t.Fatalf("decision used begins=%d commits=%d: %v", begins, commits, statements)
 	}
 	work := len(statements) - begins - commits
-	if work > 13 {
-		t.Fatalf("decision used %d statements, budget 13: %v", work, statements)
+	// 13 for the decision itself, plus 5 for its approval-ledger row and
+	// chained security-audit event (ADR-0041 decision 5): the card read,
+	// the ledger insert, the audit chain head, the audit insert and the
+	// unattended-intent close.
+	if work > 18 {
+		t.Fatalf("decision used %d statements, budget 18: %v", work, statements)
 	}
 	t.Logf("decision statements: %d work + BEGIN/COMMIT: %v", work, statements)
 	var writes int

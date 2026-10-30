@@ -424,6 +424,12 @@ SELECT decided.revision, bumped.decision_revision, bumped.parked_execution_id, b
 			return err
 		}
 		result.State = domain.StateDecided
+		// The approval ledger (ADR-0041 decision 5): one decision row, in
+		// the transaction of the compare-and-set that won.
+		if err := recordInterruptApprovalDecision(ctx, tx, selector.ProjectID, selector.ResponseMessageID,
+			input.InterruptKey, string(decision.Action), selector.ActorUserID); err != nil {
+			return err
+		}
 		// Same transaction (contract §6, §8): other tabs drop the card, and a
 		// parked response gets exactly one wake.
 		action := decision.Action
@@ -752,6 +758,18 @@ WHERE root_response_id = $1::uuid AND state = 'QUEUED'`, rootResponseID, wakeClo
 	}
 	notice, err := emitInterruptResolved(ctx, tx, projectID, rootResponseID, closed)
 	if err != nil {
+		return nil, resolvedNotice{}, err
+	}
+	// The approval ledger (ADR-0041 decision 5): every pause of the
+	// response that had no decision ends here.
+	outcome, reason := ApprovalOutcomeCancelled, ""
+	if pendingTo == domain.StateSuperseded {
+		outcome = ApprovalOutcomeSuperseded
+	}
+	if by.ActorUserID <= 0 {
+		reason = approvalRunEndedReason
+	}
+	if err := closeApprovalPausesOn(ctx, tx, rootResponseID, approvalPathInterrupt, outcome, by.ActorUserID, reason); err != nil {
 		return nil, resolvedNotice{}, err
 	}
 	return closed, notice, nil

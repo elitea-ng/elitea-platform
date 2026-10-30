@@ -86,6 +86,10 @@ type scriptedExecutor struct {
 	execCalls   []queryCall
 }
 
+// approvalLedgerless: a scripted executor carries no approval ledger
+// (ADR-0041 decision 5); the PG integration tests cover the ledger.
+func (*scriptedExecutor) approvalLedgerless() {}
+
 func (e *scriptedExecutor) QueryRow(_ context.Context, sql string, args ...any) sqlRow {
 	e.rowCalls = append(e.rowCalls, queryCall{sql: sql, args: append([]any(nil), args...)})
 	if len(e.rowResults) == 0 {

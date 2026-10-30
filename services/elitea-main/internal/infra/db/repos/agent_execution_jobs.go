@@ -717,6 +717,12 @@ WHERE execution_id = $1 AND generation = $2`,
 		if err != nil {
 			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("supersede open interrupt cards: %w", err)
 		}
+		// The reset removed the root pause of the response: it ends in the
+		// approval ledger as superseded (ADR-0041 decision 5).
+		if err := closeApprovalPauses(ctx, pgxExecutor{queryer: tx}, regenerate.ResponseMessageID,
+			ApprovalOutcomeSuperseded, regenerate.ActorUserID, ""); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, err
+		}
 		notices = append(notices, notice)
 	} else if admission.CurrentFanoutWakeTurn != nil {
 		notice, err := admitCurrentFanoutWake(ctx, pgxExecutor{queryer: tx}, admission.Record.Job.ID,
@@ -740,7 +746,8 @@ WHERE execution_id = $1 AND generation = $2`,
 		case agentexecutionapp.CurrentContinuationAuthorization:
 			resumeErr = resumeCurrentAgentAuthorization(ctx, txQueries, admission.Record.Job.ID, turn)
 		default:
-			resumeErr = resumeCurrentAgentHITL(ctx, txQueries, admission.Record.Job.ID, turn)
+			resumeErr = resumeCurrentAgentHITLWithLedger(ctx, tx, txQueries, admission.Record.Job.ID, turn,
+				admission.Record.Job.TriggerOrigin.Stored())
 		}
 		if resumeErr != nil {
 			return executionapp.AdmissionOutcome{}, nil, resumeErr
@@ -956,10 +963,41 @@ func resumeCurrentAgentHITL(
 	executionID string,
 	turn agentexecutionapp.CurrentContinueTurn,
 ) error {
+	_, err := resumeCurrentAgentHITLRow(ctx, queries, executionID, turn)
+	return err
+}
+
+// resumeCurrentAgentHITLWithLedger consumes the pending set and, in the same
+// admission transaction, writes one approval ledger decision row per
+// decision (ADR-0041 decision 5).
+func resumeCurrentAgentHITLWithLedger(
+	ctx context.Context,
+	tx pgx.Tx,
+	queries *sqlcgen.Queries,
+	executionID string,
+	turn agentexecutionapp.CurrentContinueTurn,
+	triggerOrigin string,
+) error {
+	row, err := resumeCurrentAgentHITLRow(ctx, queries, executionID, turn)
+	if err != nil {
+		return err
+	}
+	return recordRootApprovalDecisions(ctx, pgxExecutor{queryer: tx}, turn, row, triggerOrigin)
+}
+
+func resumeCurrentAgentHITLRow(
+	ctx context.Context,
+	queries *sqlcgen.Queries,
+	executionID string,
+	turn agentexecutionapp.CurrentContinueTurn,
+) (sqlcgen.ResumeCurrentAgentHITLRow, error) {
+	fail := func(err error) (sqlcgen.ResumeCurrentAgentHITLRow, error) {
+		return sqlcgen.ResumeCurrentAgentHITLRow{}, err
+	}
 	projectID, projectIDValid := currentAgentDatabaseID(turn.ProjectID)
 	targetParticipantID, targetParticipantIDValid := currentAgentDatabaseID(turn.TargetParticipantID)
 	if !projectIDValid || !targetParticipantIDValid {
-		return executionapp.ErrInvalidAdmission
+		return fail(executionapp.ErrInvalidAdmission)
 	}
 	var applicationID, applicationVersionID int32
 	if turn.Kind == agentexecutionapp.CurrentRegenerationApplication {
@@ -967,20 +1005,20 @@ func resumeCurrentAgentHITL(
 		applicationID, applicationIDValid = currentAgentDatabaseID(turn.ApplicationID)
 		applicationVersionID, applicationVersionIDValid = currentAgentDatabaseID(turn.ApplicationVersionID)
 		if !applicationIDValid || !applicationVersionIDValid {
-			return executionapp.ErrInvalidAdmission
+			return fail(executionapp.ErrInvalidAdmission)
 		}
 	}
 	conversationUUID, err := currentPGUUID(turn.ConversationUUID)
 	if err != nil {
-		return executionapp.ErrInvalidAdmission
+		return fail(executionapp.ErrInvalidAdmission)
 	}
 	questionID, err := currentPGUUID(turn.QuestionID)
 	if err != nil {
-		return executionapp.ErrInvalidAdmission
+		return fail(executionapp.ErrInvalidAdmission)
 	}
 	responseMessageID, err := currentPGUUID(turn.ResponseMessageID)
 	if err != nil {
-		return executionapp.ErrInvalidAdmission
+		return fail(executionapp.ErrInvalidAdmission)
 	}
 	row, err := queries.ResumeCurrentAgentHITL(
 		ctx,
@@ -995,15 +1033,18 @@ func resumeCurrentAgentHITL(
 		},
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return agentexecutionapp.ErrCurrentAgentHITLAlreadyResolved
+		return fail(agentexecutionapp.ErrCurrentAgentHITLAlreadyResolved)
 	}
 	if err != nil {
-		return fmt.Errorf("resume current agent HITL: %w", err)
+		return fail(fmt.Errorf("resume current agent HITL: %w", err))
 	}
 	if row.ResponseMessageGroupID <= 0 || row.ResponseMessageID != responseMessageID {
-		return errors.New("current agent continuation returned an invalid response binding")
+		return fail(errors.New("current agent continuation returned an invalid response binding"))
 	}
-	return segmentCurrentPipelineHITL(ctx, queries, executionID, turn, row)
+	if err := segmentCurrentPipelineHITL(ctx, queries, executionID, turn, row); err != nil {
+		return fail(err)
+	}
+	return row, nil
 }
 
 func resumeCurrentAgentOutputLimit(

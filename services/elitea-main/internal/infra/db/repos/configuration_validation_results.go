@@ -401,6 +401,19 @@ func (r *RuntimeFailureResultsRepository) ProjectRuntimeFailure(ctx context.Cont
 				}
 			}
 		}
+		// A run Main stopped for a missing approver shows its typed
+		// approval error (approval_unattended.go, ADR-0041 decision 5).
+		approvalCode := ""
+		if projection.Frame.Failure.Code == "CANCELLED" && agentExecutionCapability(projection.CapabilityID) && !capReached {
+			if approvalCode, err = approvalCancelReason(ctx, tx, record.ExecutionID, record.Generation); err != nil {
+				return err
+			}
+			if approvalCode != "" {
+				if browserData, err = approvalCancelBrowserData(approvalCode); err != nil {
+					return err
+				}
+			}
+		}
 		cursor, err := appendReplayEvent(ctx, tx, record, replayEventRuntimeFailure, browserData)
 		if err != nil {
 			return err
@@ -428,6 +441,13 @@ func (r *RuntimeFailureResultsRepository) ProjectRuntimeFailure(ctx context.Cont
 			projection.Frame.Failure.SafeMessage,
 		); err != nil {
 			return err
+		}
+		// After the runtime terminal, so the typed approval error is what
+		// the response shows.
+		if approvalCode != "" {
+			if err := presentApprovalCancelledAgentResponse(ctx, tx, record, approvalCode); err != nil {
+				return err
+			}
 		}
 		if err := markOutputProjected(ctx, tx, record.EventID); err != nil {
 			return err
@@ -756,6 +776,20 @@ func materializeCanonicalCancellation(
 		}
 		if err := presentCapReachedAgentResponse(ctx, tx, cancelled); err != nil {
 			return err
+		}
+	} else if agentRun {
+		// A run Main stopped for a missing approver (ADR-0041 decision 5).
+		approvalCode, err := approvalCancelReason(ctx, tx, cancelled.ExecutionID, cancelled.Generation)
+		if err != nil {
+			return err
+		}
+		if approvalCode != "" {
+			if browserData, err = approvalCancelBrowserData(approvalCode); err != nil {
+				return err
+			}
+			if err := presentApprovalCancelledAgentResponse(ctx, tx, cancelled, approvalCode); err != nil {
+				return err
+			}
 		}
 	}
 	if _, err := appendReplayEvent(ctx, tx, cancelled, replayEventRuntimeFailure, browserData); err != nil {

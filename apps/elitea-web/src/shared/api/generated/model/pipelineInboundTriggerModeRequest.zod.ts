@@ -87,6 +87,12 @@ export const PipelineInboundTriggerModeRequest = zod
       .describe(
         "Let the inbound body's `variables` re-value the agent's declared variables. Without this field a rotation keeps the stored value, and a new trigger is off.\n",
       ),
+    on_approval_required: zod
+      .enum(["fail", "skip", "notify_and_wait"])
+      .optional()
+      .describe(
+        "What a run does at a step that needs a person's approval, when no person is there. Any other value is refused with 400. Without this field the stored value stays.\n",
+      ),
   })
   .describe(
     "What a create/rotate may ask for. Every field is optional, and a call with no body at all mints the bearer trigger this route has always minted.\n",

@@ -100,6 +100,12 @@ export const PipelineSchedule = zod
       .describe(
         "COMPUTED, not stored, and computed with the parser that will fire the row — so the preview cannot disagree with the behaviour. Absent when the stored expression cannot be parsed.\n",
       ),
+    on_approval_required: zod
+      .enum(["fail", "skip", "notify_and_wait"])
+      .optional()
+      .describe(
+        "What a run does at a step that needs a person's approval (a sensitive tool or a review node), when no person is there. `fail` ends the run with `approval_required_unattended`. `skip` refuses the step, and the model reads that it was skipped. `notify_and_wait` pauses the run, notifies its owner, and ends it with `approval_timed_out` when nobody answers in time. A run never approves on its own. The value shown is the schedule's own value, else the platform default `approvals.unattended_default` (default `fail`). Each run keeps the value it started with.\n",
+      ),
   })
   .describe(
     "One pipeline version's cron schedule (schedules.go scheduleView). `configured: false` is the answer for a pipeline with no schedule.\n",

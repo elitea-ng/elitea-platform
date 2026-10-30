@@ -717,6 +717,16 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 		if err != nil {
 			return outputapp.ErrAgentExecutionResultMismatch
 		}
+		// The approval ledger (ADR-0041 decision 5): the pause rows commit
+		// with the projection, and an unattended run takes its action.
+		approval, err := projectRootApprovalPause(ctx, tx, expected, pause.Interrupts, true)
+		if err != nil {
+			return err
+		}
+		if approval == rootPauseFailed {
+			return finalizeUnattendedApprovalFailure(ctx, tx, int64(messageGroupID), pause.ThreadID, skills,
+				terminal.SkippedCapabilities)
+		}
 		rows, err := writer.FinalizeCurrentAgentMixedPause(ctx, sqlcgen.FinalizeCurrentAgentMixedPauseParams{
 			ThreadID: pause.ThreadID, HitlInterrupt: []byte(pause.Interrupt), HitlInterrupts: []byte(pause.Interrupts),
 			AuthorizationRequests: []byte(authorization.Requests), InvokedSkills: []byte(skills), MessageGroupID: int64(messageGroupID),
@@ -732,6 +742,16 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 		invokedSkills, err := mergeCurrentAgentInvokedSkills([]byte(existingSkills), pause.InvokedSkills)
 		if err != nil {
 			return outputapp.ErrAgentExecutionResultMismatch
+		}
+		// The approval ledger (ADR-0041 decision 5): the pause rows commit
+		// with the projection, and an unattended run takes its action.
+		approval, err := projectRootApprovalPause(ctx, tx, expected, pause.Interrupts, false)
+		if err != nil {
+			return err
+		}
+		if approval == rootPauseFailed {
+			return finalizeUnattendedApprovalFailure(ctx, tx, int64(messageGroupID), pause.ThreadID, invokedSkills,
+				terminal.SkippedCapabilities)
 		}
 		rows, err := writer.FinalizeCurrentAgentHITLPause(
 			ctx,

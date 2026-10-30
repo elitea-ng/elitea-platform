@@ -1130,6 +1130,23 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 				return nil, fmt.Errorf("compose fanout wake admitter: %w", err)
 			}
 		}
+		// ADR-0041 decision 5 (#1491): an unattended run's skip is answered
+		// and its expired wait is closed, always with the agent runtime.
+		if agentStart != nil {
+			unattendedStore, storeErr := repos.NewUnattendedApprovalsRepository(dependencies.AdmissionPool)
+			if storeErr != nil {
+				return nil, fmt.Errorf("construct unattended approvals store: %w", storeErr)
+			}
+			unattendedApprovals, workerErr := agentexecutionapp.NewUnattendedApprovalWorker(unattendedStore, agentStart,
+				dependencies.Logger)
+			if workerErr != nil {
+				return nil, fmt.Errorf("construct unattended approval worker: %w", workerErr)
+			}
+			publisherRoot, err = newPublisherSet(publisherRoot, unattendedApprovals)
+			if err != nil {
+				return nil, fmt.Errorf("compose unattended approval worker: %w", err)
+			}
+		}
 	}
 	var replayMaintenance *executionReplayRetentionJanitor
 	var nodeEvents *repos.NodeEventsRepository

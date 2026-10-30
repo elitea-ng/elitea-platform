@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -626,6 +627,15 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, creat
 	if err != nil || first != localturn.ConfirmationInterruptID(call, 0) {
 		t.Fatalf("first interrupt = %q, %v", first, err)
 	}
+	// The 409 confirmation_required is the pause row of the approval
+	// ledger (ADR-0041 decision 5); a repeat is a no-op.
+	ledgerCall := localturn.ConfirmationLedgerCall{ToolName: "delete_file", ToolkitName: "files",
+		ToolkitType: "filesystem", ArgumentsSHA256: strings.Repeat("a", 64)}
+	for range 2 {
+		if err := repo.RecordConfirmationPause(ctx, execution, first, ledgerCall); err != nil {
+			t.Fatal(err)
+		}
+	}
 	consume := func(digest, interrupt, key string) localturn.ConfirmationOutcome {
 		t.Helper()
 		outcome, err := repo.ConsumeConfirmation(ctx, localturn.ConfirmationClaim{
@@ -677,4 +687,22 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, creat
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.local_turn_confirmations WHERE execution_id = $1`, execution).Scan(&rows); err != nil || rows != 2 {
 		t.Fatalf("consumed rows = %d (%v), want 2", rows, err)
 	}
+	// Each consumed confirmation is one approved decision row of the
+	// desktop path, by the turn's user, with the arguments' digest only (the
+	// first answers the recorded pause and takes its call).
+	ledger := readApprovalLedger(t, pool, execution)
+	if got := ledgerOutcomes(ledger); !slices.Equal(got, []string{"pause:paused", "decision:approved", "decision:approved"}) {
+		t.Fatalf("ledger = %v", got)
+	}
+	for _, row := range ledger[:2] {
+		if row.Path != "desktop" || row.ToolName != "delete_file" || row.Digest != "sha256:"+strings.Repeat("a", 64) {
+			t.Fatalf("ledger row = %+v", row)
+		}
+	}
+	for _, row := range ledger[1:] {
+		if row.Path != "desktop" || row.ActorUserID == nil || *row.ActorUserID != user {
+			t.Fatalf("decision actor = %+v", row)
+		}
+	}
+	assertApprovalAudit(t, pool, 1, ledger)
 }

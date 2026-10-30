@@ -6747,6 +6747,10 @@ export const getGetPipelineInboundTriggerResponseMock = (
     faker.datatype.boolean(),
     undefined,
   ]),
+  on_approval_required: faker.helpers.arrayElement([
+    faker.helpers.arrayElement(["fail", "skip", "notify_and_wait"] as const),
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -6816,6 +6820,10 @@ export const getRotatePipelineInboundTriggerResponseMock = (
   ]),
   allow_variable_overrides: faker.helpers.arrayElement([
     faker.datatype.boolean(),
+    undefined,
+  ]),
+  on_approval_required: faker.helpers.arrayElement([
+    faker.helpers.arrayElement(["fail", "skip", "notify_and_wait"] as const),
     undefined,
   ]),
   ...overrideResponse,
@@ -6889,6 +6897,10 @@ export const getRevokePipelineInboundTriggerResponseMock = (
     faker.datatype.boolean(),
     undefined,
   ]),
+  on_approval_required: faker.helpers.arrayElement([
+    faker.helpers.arrayElement(["fail", "skip", "notify_and_wait"] as const),
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -6960,6 +6972,10 @@ export const getRevealPipelineInboundTriggerResponseMock = (
     faker.datatype.boolean(),
     undefined,
   ]),
+  on_approval_required: faker.helpers.arrayElement([
+    faker.helpers.arrayElement(["fail", "skip", "notify_and_wait"] as const),
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -7016,6 +7032,10 @@ export const getGetPipelineScheduleResponseMock = (
   ]),
   next_run: faker.helpers.arrayElement([
     faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  on_approval_required: faker.helpers.arrayElement([
+    faker.helpers.arrayElement(["fail", "skip", "notify_and_wait"] as const),
     undefined,
   ]),
   ...overrideResponse,
@@ -7076,6 +7096,10 @@ export const getSavePipelineScheduleResponseMock = (
     faker.date.past().toISOString().slice(0, 19) + "Z",
     undefined,
   ]),
+  on_approval_required: faker.helpers.arrayElement([
+    faker.helpers.arrayElement(["fail", "skip", "notify_and_wait"] as const),
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -7132,6 +7156,10 @@ export const getDeletePipelineScheduleResponseMock = (
   ]),
   next_run: faker.helpers.arrayElement([
     faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  on_approval_required: faker.helpers.arrayElement([
+    faker.helpers.arrayElement(["fail", "skip", "notify_and_wait"] as const),
     undefined,
   ]),
   ...overrideResponse,

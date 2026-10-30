@@ -26,6 +26,7 @@ package pipelinetriggers
 // query cache and in any HAR anyone ever exports.
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -76,6 +77,10 @@ type triggerView struct {
 	RotatedAt              *time.Time `json:"rotated_at,omitempty"`
 	RevokedAt              *time.Time `json:"revoked_at,omitempty"`
 	LastUsedAt             *time.Time `json:"last_used_at,omitempty"`
+	// OnApprovalRequired is what a run of this trigger does at a step that
+	// needs an approval (#1491): the trigger's own value, else the platform
+	// default.
+	OnApprovalRequired string `json:"on_approval_required,omitempty"`
 }
 
 // triggerURL is the inbound path, plus the provider SUFFIX for a preset that
@@ -114,6 +119,13 @@ func viewOf(projectID int64, trigger triggerRow) triggerView {
 	return view
 }
 
+// triggerViewOf is viewOf with the trigger's on_approval_required (#1491).
+func (h *Handler) triggerViewOf(ctx context.Context, projectID, versionID int64, trigger triggerRow) triggerView {
+	view := viewOf(projectID, trigger)
+	view.OnApprovalRequired = h.viewOnApprovalRequired(ctx, projectID, approvalTargetTrigger, versionID)
+	return view
+}
+
 // withSecret adds the credential-bearing fields. `secret_url` is the complete
 // thing a person copies; `secret` is the same credential on its own, for the
 // header form the tab also shows.
@@ -149,7 +161,7 @@ func (h *Handler) GetTrigger(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "the trigger could not be read")
 		return
 	}
-	writeJSON(w, http.StatusOK, viewOf(projectID, trigger))
+	writeJSON(w, http.StatusOK, h.triggerViewOf(r.Context(), projectID, versionID, trigger))
 }
 
 // RevealTrigger returns the live credential. WRITE-gated; see the file header.
@@ -183,7 +195,7 @@ func (h *Handler) RevealTrigger(w http.ResponseWriter, r *http.Request) {
 			"the stored credential for this trigger could not be read; rotate the trigger to issue a new one")
 		return
 	}
-	writeJSON(w, http.StatusOK, withSecret(viewOf(projectID, trigger), secret))
+	writeJSON(w, http.StatusOK, withSecret(h.triggerViewOf(r.Context(), projectID, versionID, trigger), secret))
 }
 
 // CreateOrRotateTrigger mints a credential.
@@ -233,6 +245,11 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest,
 			"`events` must be a non-empty list of provider event names, or [\"*\"] for every event, "+
 				"and `allow_variable_overrides` must be true or false")
+		return
+	}
+	onApproval, err := parseOnApprovalRequired(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, onApprovalRequiredMessage)
 		return
 	}
 	target, err := h.resolveRunTarget(r.Context(), schema, versionID, pipelinesAndAgents)
@@ -288,6 +305,11 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "the trigger could not be saved")
 		return
 	}
+	if err := h.saveOnApprovalRequired(r.Context(), projectID, approvalTargetTrigger, versionID, actorID, onApproval); err != nil {
+		h.log().Error("pipelinetriggers: write trigger approval action", "err", err)
+		writeError(w, http.StatusInternalServerError, "the trigger could not be saved")
+		return
+	}
 	// The superseded secret is removed only AFTER the new row is committed. A
 	// delete before the commit would leave a window in which the old secret is
 	// gone and the new row is not there — every holder refused, with nothing to
@@ -298,7 +320,7 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	h.annotate(r, controls.TargetKind, versionID, target.Name, projectID)
-	writeJSON(w, http.StatusOK, withSecret(viewOf(projectID, trigger), secret))
+	writeJSON(w, http.StatusOK, withSecret(h.triggerViewOf(r.Context(), projectID, versionID, trigger), secret))
 }
 
 // RevokeTrigger makes the credential unusable and keeps the row.
@@ -332,7 +354,7 @@ func (h *Handler) RevokeTrigger(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.annotate(r, trigger.TargetKind, versionID, "", projectID)
-	writeJSON(w, http.StatusOK, viewOf(projectID, trigger))
+	writeJSON(w, http.StatusOK, h.triggerViewOf(r.Context(), projectID, versionID, trigger))
 }
 
 // routeTarget resolves and validates the two path segments every settings route

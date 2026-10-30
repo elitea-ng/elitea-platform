@@ -4,6 +4,39 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Approval ledger and unattended approvals (#1491, on by default)
+
+ADR-0041 decision 5. Shared migration **0211** adds
+`elitea_runtime.approval_ledger` (append-only), `unattended_run_policies`,
+`unattended_approval_settings` and `unattended_approval_actions`, and adds
+`approval_required_unattended` and `approval_timed_out` to the allowed
+`execution_jobs.cancel_reason` values. No backfill: pauses that started
+before the upgrade have no `pause` row, and a decision on them is recorded.
+
+- **Flag.** The per-interrupt ledger is always on. The environment variable
+  `ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED` was already deleted and is
+  not read; remove it from your values if you still set it. No chart value
+  changes.
+- **Evidence.** Each pause, decision, timeout and unattended outcome writes one
+  ledger row and one `ai.elitea.security.v1.agent.approval` event to the
+  security audit outbox, in the decision's transaction, for every run (not
+  only governed runs). Expect more security audit events in the audit
+  export. A decision that cannot be recorded is refused.
+- **Behaviour change: unattended runs.** A run that a schedule or a webhook
+  trigger started and that gets to a sensitive tool or a review node used to
+  wait for a person indefinitely. It now takes the run's
+  `on_approval_required`: `fail` (the default: the run ends with
+  `approval_required_unattended`), `skip` or `notify_and_wait` (the owner is
+  notified; the run ends with `approval_timed_out` after
+  `approvals.unattended_wait_hours`, default 24). If your schedules need a
+  person to approve steps, set `notify_and_wait` on them, or change the
+  platform default under Configuration › Approvals
+  (`configuration.governance`).
+- **API.** `PipelineSchedule`, `PipelineScheduleUpdate`,
+  `PipelineInboundTrigger` and `PipelineInboundTriggerModeRequest` gain the
+  optional field `on_approval_required`. No operation was added.
+- **Upgrade order.** Main only; the workers are unchanged.
+
 ## Delegation narrowing and depth cap (#1501, on by default)
 
 ADR-0044 decision 3. No migration. When an agent calls a saved agent or

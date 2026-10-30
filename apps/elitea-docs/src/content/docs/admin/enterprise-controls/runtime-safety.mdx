@@ -157,3 +157,134 @@ The answer is marked as an error, so the user sees why the run stopped. The metr
 
 - Choose a cap that is longer than your longest legitimate run, including the time that people take to approve steps.
 - Alert on `elitea.runtime.run_caps.reached` if a stopped run needs attention.
+
+## Approval evidence and unattended runs
+
+### The risk
+
+A sensitive tool or a pipeline review node pauses a run until a person approves the step. An auditor must be able to prove who approved each step, what the step was, and when. A record that only the chat window shows changes with the conversation, and it is not tamper-evident. A run that a schedule or a webhook starts has no person to approve a step. If such a run approves a step on its own, the approval control does not apply to automated runs.
+
+### What is enforced
+
+**Every approval is a ledger row.** The table `elitea_runtime.approval_ledger` (migration 0211) records each event of each approval:
+
+| Phase | Outcomes |
+| --- | --- |
+| `pause` | `paused`: the run stopped at the step |
+| `notice` | `unattended_waiting`: an unattended run waits, and the platform notified its owner |
+| `decision` | `approved`, `rejected`, `edited`, `answered`, `other`, `timed_out`, `cancelled`, `superseded`, `unattended_failed`, `unattended_skipped` |
+
+Each row records the actor (a user, or the platform), the tool, the toolkit, the digest of the tool arguments, the decision and the time. The digest is `sha256:` followed by the SHA-256 of the canonical JSON of the arguments. The arguments themselves are not recorded. Rows cannot be changed: a database trigger refuses an update.
+
+The platform writes a row on every path that pauses or decides a step:
+
+- a decision in the chat window, or with the continue API (a pause of the agent itself);
+- a decision on one card of a parallel or fan-out run, with the per-interrupt decisions API;
+- a confirmation of a sensitive tool from the desktop app;
+- a Stop, a regenerate or a new message that ends a pause (`cancelled` or `superseded`);
+- the end of a run that leaves a card open (`cancelled`, reason `run_ended`);
+- the expiry of an unattended wait (`timed_out`).
+
+The row is written in the same database transaction as the decision. If the row cannot be written, the decision is refused.
+
+**One winner.** A step has one decision. When two people decide the same step at the same time, the platform applies one decision, and the other person gets HTTP 409. A person who answers after the step was decided, timed out or skipped also gets HTTP 409.
+
+**Every row is an audit event.** In the same transaction, each row is written to the security audit outbox as one `ai.elitea.security.v1.agent.approval` event, at the next position of the hash chain of the project. These events are written for every run. They do not need the credential governance profile.
+
+**The chat window shows the ledger.** The pending steps in the message metadata (`hitl_interrupts`) are a view for the UI. The ledger is the record. Each pending step in the chat window has a `pause` row, and each decided step has a `decision` row.
+
+**Unattended runs never approve.** When a run that a schedule or a webhook trigger started gets to a step that needs approval, the platform does one of three things, set by `on_approval_required`:
+
+| Value | What happens | Ledger outcome |
+| --- | --- | --- |
+| `fail` (default) | The run ends with the error `approval_required_unattended`. | `unattended_failed` |
+| `skip` | The platform refuses the step. The model receives a tool result that says the step was skipped because the run has no approver, and continues without the step. | `unattended_skipped` |
+| `notify_and_wait` | The run pauses, and the run's owner gets a notification. The owner can approve or reject the step in the conversation. If nobody answers in time, the run ends with the error `approval_timed_out`. | `unattended_waiting`, then the decision or `timed_out` |
+
+No value approves a step. A `skip` of a step that has no refusal action, and an unattended pause that also waits for a credential authorization, use `fail`.
+
+### Configuration
+
+**Platform default.** Open **Configuration › Approvals** (permission `configuration.governance`):
+
+| Field | Values | Default |
+| --- | --- | --- |
+| **Unattended Default** (`approvals.unattended_default`) | `fail`, `skip`, `notify_and_wait` | `fail` |
+| **Unattended Wait (hours)** (`approvals.unattended_wait_hours`) | 1 to 720 | 24 |
+
+**Per schedule and per trigger.** Set `on_approval_required` on the schedule or on the trigger of a pipeline version. If you do not set it, the platform default applies. The settings read shows the value that applies.
+
+| Method and path | Field |
+| --- | --- |
+| `PUT /api/v2/pipeline_schedules/prompt_lib/{project_id}/{version_id}` | `on_approval_required` in the body |
+| `POST /api/v2/pipeline_triggers/prompt_lib/{project_id}/{version_id}` (create or rotate) | `on_approval_required` in the body |
+
+A save or a rotation without the field keeps the stored value. Any other value is refused with HTTP 400.
+
+Each run keeps the value that applied when it started (table `elitea_runtime.unattended_run_policies`). A later change does not change a run that is in flight.
+
+### Evidence
+
+Read the ledger of a run:
+
+```sql
+SELECT created_at, path, phase, outcome, action, actor_kind, actor_user_id,
+       tool_name, toolkit_name, argument_digest, reason, audit_event_id
+FROM elitea_runtime.approval_ledger
+WHERE execution_id = '<execution id>'
+ORDER BY id;
+```
+
+`audit_event_id` is the `id` of the audit event of the row. This is an example event of an approval:
+
+```json
+{
+  "specversion": "1.0",
+  "id": "01a18ca9-bedb-75cc-a7a3-fa1b173dfca0",
+  "source": "elitea-main",
+  "type": "ai.elitea.security.v1.agent.approval",
+  "subject": "chat_message/6f1d2c3e-8a4b-4c5d-9e6f-7a8b9c0d1e2f",
+  "time": "2026-10-30T09:15:02.418Z",
+  "datacontenttype": "application/json",
+  "dataschema": "urn:elitea:security-audit:v1",
+  "partitionkey": "7",
+  "sequence": "00000000000000000412",
+  "ocsfclassuid": 6003,
+  "ocsfcategoryuid": 6,
+  "data": {
+    "tenant_project_id": 7,
+    "action": "agent.approval.approved",
+    "effect": "allow",
+    "reasons": ["path:root", "origin:manual", "guardrail:sensitive_tool", "action:approve"],
+    "principal_ref": "user:4",
+    "actor_chain": [],
+    "actor_fidelity": "attributed",
+    "execution_id": "4b7c2d1e9f0a4b3c8d7e6f5a4b3c2d1e",
+    "invocation_id": "interrupt-root-1",
+    "decision_id": "1873",
+    "resource_type": "chat_message",
+    "resource_id": "6f1d2c3e-8a4b-4c5d-9e6f-7a8b9c0d1e2f",
+    "authorization_epoch": 0,
+    "revocation_epoch": 0,
+    "tool_name": "create_issue",
+    "toolkit_name": "jira",
+    "arguments_digest": "sha256:9c1f0e5b2d7a4c3e8f6b1a0d9e2c7b4a5f3e1d0c9b8a7f6e5d4c3b2a1f0e9d8c"
+  }
+}
+```
+
+An event of the platform has the `principal_ref` `system:elitea-main`. An unattended outcome has the reason `approval_required_unattended`, `approval_skipped_unattended` or `approval_timed_out`. To verify the chain, use the security audit verifier (see the [evidence guide](/admin/enterprise-controls/evidence-guide)). To send the events to your SIEM, use the [audit export](/admin/audit-trail#export-to-your-siem).
+
+### What is not enforced
+
+- A rejection in the desktop app occurs on the user's computer and sends nothing to the server. The ledger has the `pause` row of the step, and no `decision` row.
+- A credential authorization pause (a toolkit that needs the user to sign in) is not an approval. It is not in the ledger, and `on_approval_required` does not apply to it.
+- When a parallel or fan-out run fails for a missing approver, the members that are already running continue until the worker sees the cancellation at its next lease renewal.
+- On a `skip` of a card of a parallel or fan-out run, the card names the run's owner as the person who decided. The ledger row names the platform (`actor_kind` `system`).
+- Pauses that started before migration 0211 have no `pause` row. A decision on such a pause is recorded.
+
+### Customer responsibility
+
+- Keep `approvals.unattended_default` at `fail`, unless a reviewed process needs `skip` or `notify_and_wait`.
+- Use `notify_and_wait` only when the owner of the schedule or trigger can answer before the wait expires.
+- Send the `agent.approval` events to your SIEM, and alert on `unattended_failed` and `timed_out`.
