@@ -161,14 +161,66 @@ All against real PostgreSQL, except the pinned-identity test, which is a unit te
 | Worker × the same, lost before Started (including a child that saved no row) | I (runs once) | `session.rs:1660`, journal Ready | `…_before_it_started_runs_once` |
 | Worker × read-only direct call in a saved child, lost mid-call | I (reruns) | `session.rs:1710` | walk acceptance; no journal |
 | Worker × a child re-entered at its own unfinished frontier (reclaim, wake) | R (input preserved, task not appended twice) | `application.rs:784` | all recovery tests reopen the same journal thread |
+| Worker × an approved child direct call, lost before the continuation's first root save | F− (never repeated; ends with the generic Internal failure, not yet the registered terminal) | `session.rs:1747-1758`, `checkpoint_recovery.rs:146-160` | browser: fanpar chat 44 kill; FU-265 |
 | Worker × sensitive child direct call in a fan-out member | R (card, decision, one call) | `parallel_compiler.rs:1025`, branch family journals | `…_pauses_then_runs_once_or_never` |
 
 ## Browser evidence (fanpar)
 
-To be completed after the images are deployed.
+- **Stack.** fanpar, project 118, Claude in Chrome, local mock-OIDC test identity.
+  - Main and Worker images are `pm-68fb160ef`.
+  - Binary check: the Worker binary contains `__elitea_application_visit_v1` and `child_effect_unknown`.
+  - verify-profile: 49 passed, 1 failed. The failure is "shared migrations at the worktree head (ledger=210
+    worktree=204)": the ledger is at the deployed image's head, and the profile compares it with an older worktree.
+- **Call counting.** Calls are counted with `jsonrpc tools/call` lines in the mock MCP server's log; `echo` and
+  `reverse` both count.
+- **Stack preparation, stated honestly.**
+  - The merged shared migration 0206 (#1536) fails on this database, which was restored from a current-platform dump:
+    its `centry.audit_events` lacks the token columns. On this stack only, I added the five columns with Main's
+    `001_initial` types, then migrated. This is not part of this change; the orchestrator raises it.
+  - **Workaround for #1501 delegation narrowing.** A pipeline root's grants are only the toolkits its own nodes use, so
+    a root that only delegates to "FP direct reverse" is refused `DELEGATION_GRANT_MISSING`. Each fixture root
+    therefore ends with an `echo` node on the same toolkit, so it holds the grant legitimately. Delegation mode stays
+    `enforce`.
+- **Fixtures, created in the UI.**
+  - App 16 "FP child direct": an Agent node runs "FP direct reverse" (a sensitive MCP `reverse` node), then `echo`.
+  - App 17 "FP parallel child direct": a fixed Parallel with two members running "FP direct reverse", `on_error:
+    continue`, then `echo`.
+- **Agent node (chat 44).**
+  - The card "Sensitive Action Authorization Required — fpmockmcp.reverse" shows under "FP direct reverse". Before
+    this change, binding refused the node.
+  - The card survives a reload, and no call is made while paused.
+  - Authorize: 3 → 5 calls (`reverse` once, `echo` once). The run completes, and the result survives a reload. Each
+    direct call has its own `n1:` journal, and the child rows carry the visit stamp.
+  - Block: 5 → 6 calls (`echo` only); `reverse` never ran.
+- **Parallel members (chat 45).**
+  - Two member cards, "FP direct reverse (1)" and "(2)", replace the former failed join entry. Both survive a reload,
+    and no call is made while parked.
+  - Authorize (1): 6 → 7 calls. Block (2): the run completes, 7 → 8 calls (`echo`).
+  - Ledger: two `tool_guard` cards, both CONSUMED (approve, reject).
+- **Worker kill inside an approved child call (chat 44, execution `d44a3a3a8a5ec5ba70391556760c1412`).**
+  - The Worker was killed at the approved call's tool start and restarted. Claim 1 expired (LEASE_EXPIRED), and claim 2
+    settled 40 ms later.
+  - Calls: 8 → 9. The call ran once and was never repeated.
+  - The terminal is the generic Internal failure, "The runtime operation failed.", not the registered
+    `RECOVERY_REFUSED`. Cause: the approval's continuation re-enters the paused execution's root row. Lost before its
+    own first root save, recovery refuses that writer (`src/agents/session.rs:1747-1758`) before assembly
+    (`src/execution/checkpoint_recovery.rs:146-160`).
+  - This falls short of the F readability bar and is registered as FU-265 (see the recovery rows and follow-ups).
+  - The two-process tests above crash in the first execution, where the writer is the execution itself, so they do
+    not cover a decided continuation.
+- **Root control.** Running "FP direct reverse" directly as a root pipeline (chat 46) did not exercise the kill: a root
+  direct node emits no `agent_tool_start` progress, so the kill trigger never fired, and the run completed with one call.
 
 ## Follow-ups
 
+- **FU-265 (next item).** A decided continuation lost before its first root save, for a root pipeline direct node
+  and a saved child.
+  - Main sends the paused execution and generation in the continuation, bound to its authorization.
+  - The Worker accepts that writer for that continuation only, under the fence.
+  - Real-PostgreSQL two-process tests crash inside the continuation.
+  - The outcome is R or C, or at minimum the registered terminal.
+- **Raised by the orchestrator, not this change:** migration 0206's upgrade from a current-platform database, and #1501
+  counting only node-used toolkits as a pipeline root's grants.
 - **FU-264:** an effectful direct node in a saved child two levels below a fan-out member. The inner child's threads
   belong to the member branch family, and the lent root journals refuse them typed, so the call never runs twice but
   does not run yet.
