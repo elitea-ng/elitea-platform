@@ -22,7 +22,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -74,7 +73,7 @@ var reasonMessages = map[string]string{
 	ReasonSchemaTooLarge:         fmt.Sprintf("The output contract JSON Schema exceeds %d KiB or %d levels of nesting. Make it smaller.", MaxSchemaBytes/1024, MaxSchemaDepth),
 	ReasonSchemaInvalid:          "The output contract JSON Schema is not a valid JSON Schema, or it refers to a schema outside itself. Use only local references (#/...).",
 	ReasonPatternTooLong:         fmt.Sprintf("The output contract regex exceeds %d bytes. Make it shorter.", MaxPatternBytes),
-	ReasonPatternInvalid:         "The output contract regex is empty or is not a valid RE2 expression. Back references and look-around are not supported.",
+	ReasonPatternInvalid:         "The output contract regex is empty, is not a valid RE2 expression, uses syntax that the worker does not support, or is too large. Back references, look-around, \\Q...\\E, octal escapes, a literal { (write \\{), nested classes and a range that starts at a class are not supported. Unicode classes such as \\w and \\pL are large: repeat them less.",
 	ReasonFormatUnknown:          "The output contract format must be json, markdown or csv.",
 	ReasonStructuredOutput:       "An LLM node with structured output cannot also have an output contract. Turn off structured output or remove the contract.",
 	ReasonPipelineContractOnNode: "A pipeline cannot have an output contract in its version meta. Set the contract on an LLM node of the pipeline.",
@@ -193,8 +192,9 @@ func checkPattern(pattern string) error {
 	if len(pattern) > MaxPatternBytes {
 		return &Error{Reason: ReasonPatternTooLong}
 	}
-	// The worker matches the whole answer: ^(?:pattern)$.
-	if _, err := regexp.Compile("^(?:" + pattern + ")$"); err != nil {
+	// The worker matches the whole answer, ^(?:pattern)$, with the Rust
+	// regex crate: refuse what it refuses (regex.go).
+	if !checkRegex(pattern) {
 		return &Error{Reason: ReasonPatternInvalid}
 	}
 	return nil

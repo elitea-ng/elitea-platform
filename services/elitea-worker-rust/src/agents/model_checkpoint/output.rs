@@ -23,22 +23,6 @@ const EMPTY_CONTINUATION_PROMPT: &str =
 /// The start of the prompt of a continuation after a part of an answer.
 const TEXT_CONTINUATION_PROMPT: &str = "The previous answer reached its output allowance.";
 
-/// Whether a model request is an output continuation call: its last content
-/// is the continuation prompt. An output contract does not validate the
-/// fragment such a call returns (ADR-0043 decision 2); it validates the
-/// joined answer.
-pub(in crate::agents) fn is_continuation_request(request: &LlmRequest) -> bool {
-    request.contents.last().is_some_and(|content| {
-        content.role == "user"
-            && content.parts.iter().any(|part| {
-                part.text().is_some_and(|text| {
-                    text.starts_with(EMPTY_CONTINUATION_PROMPT)
-                        || text.starts_with(TEXT_CONTINUATION_PROMPT)
-                })
-            })
-    })
-}
-
 impl OutputContinuation {
     pub(in crate::agents) fn validate(&self) -> adk_rust::Result<()> {
         if (self.repair_used && self.round < 2)

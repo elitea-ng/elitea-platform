@@ -157,8 +157,8 @@ pub(crate) struct BoundModelFacade {
     primary: BoundProviderModel,
     summary: Option<Arc<dyn adk_rust::Llm>>,
     /// The provider model behind the output contract (ADR-0043 decision 2),
-    /// when the agent or node declares one. Built once, so its one retry is
-    /// spent once per binding.
+    /// when the agent or node declares one. Built once per binding; each
+    /// final answer gets its own retry.
     output_contract: Option<Arc<dyn adk_rust::Llm>>,
 }
 

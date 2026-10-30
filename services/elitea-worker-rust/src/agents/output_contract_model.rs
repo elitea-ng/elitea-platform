@@ -6,8 +6,13 @@
 //! the turn is complete:
 //!
 //! * a turn that calls a tool passes through;
-//! * an output continuation call passes through: a pipeline LLM node checks
-//!   the joined answer itself (`graph::llm`);
+//! * an output continuation call of a pipeline node passes through: the node
+//!   checks the joined answer itself (`graph::llm`). Only the code that issues
+//!   the continuation (`model_scope_output`) marks a call as a continuation,
+//!   with [`continuation_call`]. The text of the request never marks it, so an
+//!   end user cannot skip the contract with the continuation prompt. An agent
+//!   never has a continuation call (see the next item), so a marked call of an
+//!   agent is validated as a full answer;
 //! * a turn that the provider stopped at its output token limit passes
 //!   through for a pipeline node (the output continuation owns that text).
 //!   For an agent it is an invalid answer (`output_limit`): an agent's
@@ -18,7 +23,8 @@
 //!   is asked once more, with the answer and the validation error as
 //!   feedback. A second invalid answer ends the agent or node with
 //!   [`elitea_agent_runtime::output_contract::VIOLATION_CODE`], so a pipeline
-//!   never invokes the next node.
+//!   never invokes the next node. Each final answer gets its own retry: after
+//!   the binding accepts an answer, the next final answer is attempt 1 again.
 //!
 //! An agent or node with a contract therefore does not stream its answer:
 //! the answer reaches the caller only after it was validated.
@@ -43,13 +49,29 @@ use elitea_agent_runtime::output_contract::{
 };
 use serde_json::{Value, json};
 
-use super::model_checkpoint::output::is_continuation_request;
 use super::session::DurableModelCompletion;
 use crate::protocol::elitea::runtime::v1::RunStepKindV1;
 use crate::protocol::run_steps::{RunStepRegistry, StepDraft, now_unix_ms};
 
 /// The name of a contract validation step.
 pub(crate) const CHECK_STEP_NAME: &str = "output_contract_check";
+
+tokio::task_local! {
+    /// Set only while `model_scope_output` dispatches an output continuation
+    /// call. A task-local value is internal state: request text cannot set it.
+    static CONTINUATION_CALL: ();
+}
+
+/// Dispatch `call` as an output continuation call. Only the code that issues
+/// the continuation (`model_scope_output`) calls this function.
+pub(crate) async fn continuation_call<F: std::future::Future>(call: F) -> F::Output {
+    CONTINUATION_CALL.scope((), call).await
+}
+
+/// Whether the current model call is an output continuation call.
+pub(crate) fn is_continuation_call() -> bool {
+    CONTINUATION_CALL.try_with(|()| ()).is_ok()
+}
 
 /// Where the validation steps of one binding go.
 #[derive(Clone, Debug, Default)]
@@ -67,8 +89,10 @@ pub(crate) struct OutputContractModel {
     contract: Arc<OutputContract>,
     completion: Option<Arc<dyn DurableModelCompletion>>,
     scope: ContractStepScope,
-    /// One retry per binding: after one invalid answer, the next invalid
-    /// final answer ends the run.
+    /// One retry per final answer: set after an invalid answer, cleared
+    /// when the binding accepts a final answer. While it is set, the next
+    /// invalid final answer ends the run. The retry can call a tool first, so
+    /// the flag lives across calls.
     retried: AtomicBool,
 }
 
@@ -133,7 +157,7 @@ impl Llm for OutputContractModel {
         request: LlmRequest,
         stream_response: bool,
     ) -> adk_rust::Result<LlmResponseStream> {
-        if is_continuation_request(&request) {
+        if is_continuation_call() && !self.scope.node_id.is_empty() {
             return self.inner.generate_content(request, stream_response).await;
         }
         let mut request = request;
@@ -166,12 +190,15 @@ impl Llm for OutputContractModel {
         let violation = match outcome {
             Ok(()) => {
                 self.record(attempt, Ok(()));
+                // The next final answer gets its own retry.
+                self.retried.store(false, Ordering::Release);
                 return Ok(replay(first));
             }
             Err(violation) => violation,
         };
         self.record(attempt, Err(&violation));
         if self.retried.swap(true, Ordering::AcqRel) {
+            self.retried.store(false, Ordering::Release);
             return Err(violation_error());
         }
         // The rejected answer was never accepted: the bound facade must take
@@ -192,6 +219,8 @@ impl Llm for OutputContractModel {
             // and its next final answer is the last attempt.
             return Ok(replay(second));
         };
+        // The retry gave a final answer: this answer's retry is spent.
+        self.retried.store(false, Ordering::Release);
         match answer.and_then(|answer| self.contract.validate(&answer)) {
             Ok(()) => {
                 self.record(MAX_ATTEMPTS, Ok(()));

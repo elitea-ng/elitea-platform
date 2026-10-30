@@ -7,7 +7,7 @@
 //! | `type` | Other field | The final answer must be |
 //! | --- | --- | --- |
 //! | `json_schema` | `schema` | a JSON document valid against the schema |
-//! | `regex` | `pattern` | text that the RE2 pattern matches as a whole |
+//! | `regex` | `pattern` | text that the pattern matches as a whole (Rust `regex` syntax; Main admits only patterns that compile here, see `libs/proto/contracts/output-contract-regex-v1.json`) |
 //! | `format` | `format` | `json` (any JSON document), `markdown` (non-empty, every code fence closed) or `csv` (RFC 4180, the same column count on every row) |
 //!
 //! Main checks a contract when the version is saved (the same bounds, see
@@ -668,6 +668,42 @@ mod tests {
                 .unwrap_err(),
             ContractError::PatternTooLong
         );
+    }
+
+    /// The patterns of `libs/proto/contracts/output-contract-regex-v1.json`.
+    /// Main's test (`services/elitea-main/internal/domain/outputcontract`)
+    /// reads the same file: a pattern that Main accepts on save compiles
+    /// here.
+    #[test]
+    fn regex_contracts_match_the_shared_fixture() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../proto/contracts/output-contract-regex-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["schema"], "elitea.output-contract-regex.v1");
+        let cases = fixture["cases"].as_array().unwrap();
+        assert_ne!(cases.len(), 0);
+        for case in cases {
+            let pattern = case["pattern"].as_str().unwrap();
+            let worker = case["worker"].as_bool().unwrap();
+            let main = case["main"].as_bool().unwrap();
+            assert!(
+                worker || !main,
+                "Main must not accept {pattern:?}: the worker refuses it"
+            );
+            let compiled =
+                OutputContract::from_value(Some(&json!({"type": "regex", "pattern": pattern})));
+            assert_eq!(
+                compiled.is_ok(),
+                worker,
+                "{pattern:?} ({}): {:?}",
+                case["note"],
+                compiled.as_ref().err()
+            );
+            if let Err(error) = compiled {
+                assert_eq!(error, ContractError::PatternInvalid, "{pattern:?}");
+            }
+        }
     }
 
     #[test]

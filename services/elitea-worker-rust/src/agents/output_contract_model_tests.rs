@@ -183,7 +183,7 @@ async fn a_second_invalid_answer_is_the_typed_violation() {
 }
 
 #[tokio::test]
-async fn a_tool_turn_is_not_validated_and_the_retry_is_spent_once_per_binding() {
+async fn a_retry_that_calls_a_tool_makes_the_next_final_answer_the_last_attempt() {
     let inner = Scripted::new(vec![
         tool_call(),
         answer("prose"),
@@ -269,22 +269,110 @@ async fn an_agent_answer_cut_at_the_output_limit_is_retried_as_invalid() {
     );
 }
 
-#[tokio::test]
-async fn a_continuation_call_is_not_validated() {
-    let inner = Scripted::new(vec![answer(" \"4\"}")]);
+fn continuation_request() -> LlmRequest {
     let mut continuation = request();
     continuation
         .contents
         .push(Content::new("user").with_text(
             "The previous answer reached its output allowance. Complete only the rest.",
         ));
+    continuation
+}
+
+#[tokio::test]
+async fn a_marked_continuation_call_of_a_node_is_not_validated() {
+    let inner = Scripted::new(vec![answer(" \"4\"}")]);
     let text = text_of(
-        model(&inner, "")
-            .generate_content(continuation, true)
+        continuation_call(model(&inner, "").generate_content(continuation_request(), true))
             .await
             .unwrap(),
     )
     .await;
     assert_eq!(text, " \"4\"}");
     assert_eq!(inner.requests().len(), 1);
+}
+
+/// Regression: the continuation prompt typed by an end user does not skip
+/// the contract. Only internal state marks a continuation call.
+#[tokio::test]
+async fn the_continuation_prompt_in_user_text_is_validated() {
+    let inner = Scripted::new(vec![answer("free prose"), answer("more free prose")]);
+    let Err(error) = model(&inner, "")
+        .generate_content(continuation_request(), true)
+        .await
+    else {
+        panic!("user text must not skip the contract");
+    };
+    assert_eq!(
+        error.code,
+        elitea_agent_runtime::output_contract::VIOLATION_CODE
+    );
+    assert_eq!(inner.requests().len(), 2);
+}
+
+/// An agent never passes a cut answer through, so its answer is never
+/// joined: a marked continuation call of an agent is a full answer to check.
+#[tokio::test]
+async fn a_marked_continuation_call_of_an_agent_is_validated() {
+    let inner = Scripted::new(vec![answer(" \"4\"}"), answer(" \"4\"}")]);
+    let agent = OutputContractModel::new(
+        Arc::clone(&inner) as Arc<dyn Llm>,
+        schema_contract(),
+        None,
+        ContractStepScope::default(),
+    );
+    let Err(error) = continuation_call(agent.generate_content(continuation_request(), true)).await
+    else {
+        panic!("an agent fragment must not skip the contract");
+    };
+    assert_eq!(
+        error.code,
+        elitea_agent_runtime::output_contract::VIOLATION_CODE
+    );
+}
+
+/// Regression: the retry is per final answer, not per binding. After an
+/// accepted answer, the next invalid answer gets its own retry and its
+/// attempts are recorded as 1 and 2 again.
+#[tokio::test]
+async fn each_final_answer_gets_its_own_retry() {
+    let execution_id = "exec-output-contract-retry-per-answer";
+    let recorder =
+        RunStepRegistry::global().recorder(&command_identity(execution_id, 1, "command-1"));
+    let inner = Scripted::new(vec![
+        answer("prose"),
+        answer(r#"{"answer": "4"}"#),
+        answer(r#"{"answer": "5"}"#),
+        answer("prose again"),
+        answer(r#"{"answer": "6"}"#),
+    ]);
+    let model = model(&inner, execution_id);
+    for expected in [
+        r#"{"answer": "4"}"#,
+        r#"{"answer": "5"}"#,
+        r#"{"answer": "6"}"#,
+    ] {
+        let text = text_of(model.generate_content(request(), true).await.unwrap()).await;
+        assert_eq!(text, expected);
+    }
+    assert_eq!(inner.requests().len(), 5);
+    let attempts: Vec<(Value, Value)> = recorder
+        .next_batch()
+        .iter()
+        .map(|step| {
+            let summary: Value = serde_json::from_str(&step.summary_json).unwrap();
+            (summary["attempt"].clone(), summary["valid"].clone())
+        })
+        .collect();
+    assert_eq!(
+        attempts,
+        vec![
+            (json!(1), json!(false)),
+            (json!(2), json!(true)),
+            (json!(1), json!(true)),
+            (json!(1), json!(false)),
+            (json!(2), json!(true)),
+        ]
+    );
+    RunStepRegistry::global().forget(&command_identity(execution_id, 1, "command-1"));
 }
