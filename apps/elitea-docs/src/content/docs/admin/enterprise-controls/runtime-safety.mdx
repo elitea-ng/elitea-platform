@@ -157,3 +157,9 @@ The answer is marked as an error, so the user sees why the run stopped. The metr
 
 - Choose a cap that is longer than your longest legitimate run, including the time that people take to approve steps.
 - Alert on `elitea.runtime.run_caps.reached` if a stopped run needs attention.
+
+### Nested pauses
+
+A human approval can pause a run inside a nested composition. Examples are an agent that calls an agent or a pipeline, and a pipeline that runs a saved pipeline. Each pause shows one approval card with the path of its callers. The worker keeps a checkpoint at each level. After an approval or a rejection, the paused level continues one time. Then each caller continues. When a person rejects, the tool is not called, and the caller reads the rejection result.
+
+A pause can have a maximum of 3 delegations above it. The delegation depth limit under **Configuration › Delegation** also applies. The worker does not offer an attached pipeline that can pause in a position that it cannot resume. The worker writes a log entry with the reason `pipeline.child_pause_unsupported` and a detail code that names the pause kind. The [HITL node page](/how-tos/pipelines/nodes/interaction-nodes#hitl-nodes-in-nested-agents-and-pipelines) lists the pause kinds. To find the pipelines that the worker did not offer, search the worker logs for this reason.

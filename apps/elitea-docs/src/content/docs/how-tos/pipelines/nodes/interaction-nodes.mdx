@@ -17,6 +17,29 @@ A HITL node pauses the pipeline and waits for a person to respond with one of th
 
 Connect each action to whichever node should run next; an action with no route configured has nowhere to go. A HITL node is how you build an explicit approval step into a pipeline's own logic — distinct from the guardrail confirmation prompt that can appear in chat before a sensitive tool call, which is triggered by admin configuration rather than a node you place yourself. See [Require confirmation for sensitive actions](/how-tos/chat-conversations/sensitive-action-authorization-guardrail) for that related flow.
 
+### HITL nodes in nested agents and pipelines
+
+A HITL node can pause a pipeline that an agent or another pipeline calls. For example, an agent calls a pipeline as a tool, and that pipeline runs a saved pipeline that has the HITL node.
+
+- Each pause shows one approval card. The card shows the path of agents and pipelines above the HITL node.
+- Each level keeps its own checkpoint. The run can continue after a worker restarts.
+- When you approve or reject, the paused pipeline continues one time, at the level that paused. Then each caller continues.
+- When you reject, the pipeline takes its **Reject** route. The tool after the HITL node does not run, and the caller reads the result of the **Reject** route.
+
+**Supported depth.** A HITL node can have a maximum of 3 delegations above it. One delegation is an agent that calls another agent or a pipeline, or a pipeline node that runs a saved agent or pipeline. For example, an agent that calls an agent that calls an agent that calls the pipeline is supported. The delegation depth limit in **Configuration › Delegation** (default 4) also applies.
+
+**Not supported.** The worker does not offer these pipelines to the agent. The agent answers without the pipeline, and the log names the pipeline and a reason code (`pipeline.child_pause_unsupported`):
+
+| Reason | The pipeline can pause for |
+|---|---|
+| `pause_past_owner_path_tiers` | A HITL node with more than 3 delegations above it |
+| `hitl_gate_under_graph_root` | A HITL node, in a pipeline that an agent node of another pipeline calls as a tool |
+| `sensitive_tool_approval` | A sensitive tool confirmation, in a pipeline that an agent calls as a tool |
+| `clarifying_questions` | A clarifying question, in a pipeline that an agent calls as a tool |
+| `mcp_authorization` | An MCP sign-in, in a pipeline that an agent calls as a tool |
+| `unscoped_agent_node` | A pause in an agent node that the worker cannot resume at that position |
+| `static_pause_under_graph_root` | A static tool pause, in a pipeline that an agent node of another pipeline calls as a tool. The worker refuses the whole run, not only the pipeline |
+
 ## Printer
 
 A Printer node formats a final message and writes it to the pipeline's output — typically the last node before `END` in a path that should show something back to the user. It takes the content you want printed (which can reference earlier state) and stores it in the reserved `printer_output` state key.

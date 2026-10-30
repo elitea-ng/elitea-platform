@@ -1414,3 +1414,161 @@ async fn a_static_pause_of_a_sub_agents_pipeline_completes_and_continues_once() 
     );
     assert_eq!(model_calls(&replaced_calls), 2, "{resumed:?}");
 }
+
+pub(super) const GATE_GRAPH: &str = "state: {input: str, messages: list, answer: str}\nentry_point: review\nnodes:\n  - id: review\n    type: hitl\n    input: [input]\n    user_message:\n      type: fixed\n      value: Approve?\n    routes:\n      approve: approved\n      reject: rejected\n  - id: approved\n    type: state_modifier\n    template: 'APPROVED {{ input }}'\n    input: [input]\n    output: [answer]\n    transition: END\n  - id: rejected\n    type: state_modifier\n    template: 'REJECTED {{ input }}'\n    input: [input]\n    output: [answer]\n    transition: END\n";
+
+/// ADR-0041 decision 5, the one `hitl` placement that stays unsupported: a
+/// pipeline tool of a saved Agent beneath a graph root. The graph root owns
+/// the checkpoint thread the gate would have to name (as for a static pause,
+/// FU-244), so the tool is skipped and named before any model call, and the
+/// Agent node still answers without it.
+#[tokio::test(flavor = "current_thread")]
+async fn a_gate_pipeline_tool_under_a_graph_root_is_skipped_and_the_agent_answers() {
+    let (sessions, checkpointer) = state();
+    let versions = BTreeMap::from([
+        (
+            (5, 6),
+            plain_agent(vec![reference((7, 8), "pipeline", "gate")]),
+        ),
+        (
+            (7, 8),
+            saved_version("pipeline", GATE_GRAPH, &json!({}), Vec::new()),
+        ),
+    ]);
+    let (assembler, captured, _) = process(
+        &sessions,
+        &checkpointer,
+        &versions,
+        vec![text("worker without the gate")],
+    );
+    let request = root_request(
+        &root_yaml("worker"),
+        vec![reference((5, 6), "agent", "worker")],
+    );
+    let invocation = assembler
+        .assemble(authorized(&request))
+        .await
+        .expect("the graph root runs without the unsupported tool");
+    let browser = collect_pipeline_completion(invocation).await;
+    assert!(
+        !offered_tools(&captured, 0).contains(&"elitea_agent_7_v_8".to_owned()),
+        "the gate pipeline is not offered: {:?}",
+        offered_tools(&captured, 0)
+    );
+    assert!(
+        browser
+            .iter()
+            .any(|event| event["content"] == "worker without the gate"),
+        "{browser:?}"
+    );
+    assert!(
+        browser
+            .iter()
+            .all(|event| event["type"] != "agent_hitl_interrupt"),
+        "{browser:?}"
+    );
+}
+
+/// ADR-0041 decision 5 under a graph root: root → saved pipeline → saved
+/// pipeline → `hitl`. One card names both pipeline hops, each level keeps its
+/// own checkpoint, and the answer resumes the gate once and both parents.
+async fn graph_root_three_level_gate(action: &str, expected: &str) {
+    let (sessions, checkpointer) = state();
+    let versions = BTreeMap::from([
+        (
+            (5, 6),
+            saved_version(
+                "pipeline",
+                &child_pipeline_yaml("inner"),
+                &json!({}),
+                vec![reference((7, 8), "pipeline", "inner")],
+            ),
+        ),
+        (
+            (7, 8),
+            saved_version("pipeline", GATE_GRAPH, &json!({}), Vec::new()),
+        ),
+    ]);
+    let make_request = || {
+        root_request(
+            &root_yaml("outer"),
+            vec![reference((5, 6), "pipeline", "outer")],
+        )
+    };
+    let thread = private_pipeline_session_id(&make_request());
+    let (assembler, _, _) = process(&sessions, &checkpointer, &versions, Vec::new());
+    let invocation = assembler
+        .assemble(authorized(&make_request()))
+        .await
+        .expect("a three-level graph assembles");
+    let (browser, _) = collect_pipeline_pause_events(invocation).await;
+    let cards = browser
+        .iter()
+        .filter(|event| event["type"] == "agent_hitl_interrupt")
+        .collect::<Vec<_>>();
+    assert_eq!(cards.len(), 1, "{browser:?}");
+    let path = cards[0]["response_metadata"]["parent_agent_path"]
+        .as_array()
+        .cloned()
+        .expect("owner path");
+    assert_eq!(
+        path.iter()
+            .map(|tier| tier["name"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!("outer"), json!("inner")],
+        "{path:?}"
+    );
+    for level in [
+        thread.clone(),
+        format!("{thread}/delegate"),
+        format!("{thread}/delegate/delegate"),
+    ] {
+        assert!(
+            checkpointer
+                .load(&level)
+                .await
+                .expect("checkpoint lookup")
+                .is_some(),
+            "every level keeps its checkpoint: {level}"
+        );
+    }
+    let card = first_card(&browser);
+    let (replacement, calls, _) = process(&sessions, &checkpointer, &versions, Vec::new());
+    let mut resume = approve(make_request(), &card["interrupt_id"], 43);
+    resume.payload.hitl_action = Some(action.to_owned());
+    resume.payload.hitl_decisions[0]["action"] = json!(action);
+    let invocation = replacement
+        .assemble(authorized(&resume))
+        .await
+        .expect("the gate decision resumes the innermost pipeline");
+    let resumed = collect_pipeline_completion(invocation).await;
+    assert!(
+        resumed.iter().any(|event| event["content"] == expected),
+        "{resumed:?}"
+    );
+    assert!(
+        resumed
+            .iter()
+            .all(|event| event["type"] != "agent_hitl_interrupt"),
+        "{resumed:?}"
+    );
+    assert_eq!(model_calls(&calls), 0);
+    let (again, _, _) = process(&sessions, &checkpointer, &versions, Vec::new());
+    let mut replay = approve(make_request(), &card["interrupt_id"], 44);
+    replay.payload.hitl_action = Some(action.to_owned());
+    replay.payload.hitl_decisions[0]["action"] = json!(action);
+    assert!(
+        again.assemble(authorized(&replay)).await.is_err(),
+        "an answered gate resumes exactly once"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_three_level_graph_gate_approves_once_and_continues_both_parents() {
+    graph_root_three_level_gate("approve", "APPROVED Summarize the release").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_three_level_graph_gate_rejects_and_the_parents_read_the_rejection() {
+    graph_root_three_level_gate("reject", "REJECTED Summarize the release").await;
+}
