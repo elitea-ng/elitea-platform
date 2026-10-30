@@ -15,6 +15,11 @@
 - **Now.** The reclaim ends with the registered `RECOVERY_FRONTIER_UNSUPPORTED` terminal: "This run stopped at a point
   where it cannot be safely continued. Nothing was repeated." It never ends Internal, with or without a paused-writer
   marker. Nothing is repeated.
+- **Wider scope (REVIEW-1544 D1).** The typed refusal is the `else` branch of `inspect_checkpoint`
+  (`session.rs:1874-1882`), which `pipeline.rs:1380` calls on any recovery start. So every reclaim whose latest root
+  row was written by another execution now ends with `RECOVERY_FRONTIER_UNSUPPORTED` (`root_writer_mismatch`) instead
+  of Internal. That includes a fresh turn, a regeneration or a plain restore lost before its first root save, not only
+  continuations. Re-running such a fresh turn from its input (class I) is registered as FU-270.
 - **Not yet.** Re-running the continuation, so that the call's journal decides R / C / I, is **FU-269**. It needs an
   owner-proven session suffix, which every continuation's anti-stale guard currently refuses.
 - **Rollout.**
@@ -117,6 +122,7 @@
 | Component × phase | Class | Enforcing code | Proof |
 |---|---|---|---|
 | Worker × a decided continuation (approved call in a saved child) lost before its first root save | F (typed `RECOVERY_FRONTIER_UNSUPPORTED`, never repeated). Known gap: R/C/I is possible and scheduled as FU-269. | `session.rs:1859-1882`, `prove_continuation_row` `:1784` | the two two-process tests above |
+| Worker × a non-continuation run (fresh turn, regeneration, plain restore) lost before its first root save | F typed `RECOVERY_FRONTIER_UNSUPPORTED` (`root_writer_mismatch`); was Internal | `session.rs:1874-1882` (the `inspect_checkpoint` writer `else`), reached from `pipeline.rs:1380` on any recovery start | by construction: the same branch the no-marker two-process test exercises. Known gap: a fresh turn could re-run from its input (I), FU-270. |
 
 ## Follow-ups
 
