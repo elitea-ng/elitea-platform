@@ -19,7 +19,8 @@
   - a committed result is replayed without calling again;
   - a call that started and may have reached its tool ends with the registered "may have started, not repeated" stop;
   - a call that never started runs once.
-- **Read-only calls.** A read-only direct node in a child reruns on recovery (class I).
+- **Read-only calls.** A read-only direct node in a child is accepted by the walk and is expected to rerun on recovery
+  (class I). This is not yet proven by a test (FU-266).
 - **Not ported from the current platform:** its "lost, run again from scratch" behaviour for a crashed child.
 
 ## What was found on the way
@@ -29,8 +30,15 @@
   fixed this only for a child holding a Parallel.
   - The doubled message changes a journaled call's input digest, so a reclaim looked for a different journal. For a call
     that had started, that could have dispatched it a second time.
-  - The rule now applies to every child (`agents/graph/application.rs:784`). The overlay shows only this visit's
-    frontier, so a completed earlier visit still starts fresh.
+  - The rule now applies to every child that has an activation overlay, and to a Parallel's wake as before
+    (`agents/graph/application.rs:797`). The overlay shows only this visit's frontier, so a completed earlier visit
+    still starts fresh. Without an overlay (pipeline-as-agent-tool, the legacy unscoped path) the task is re-sent as
+    before.
+  - On re-entry nothing the child already holds is re-sent: the task message, its mapped variables and the appending
+    `hitl_decisions` channel stay as restored (`:800-807`, REVIEW-1541 R1). A nested pipeline cannot declare typed
+    reducers at all (`compiler.rs` `compile_subgraph_with_runtime`, pinned by
+    `nested_child_pipelines_refuse_typed_reducers_in_v1`), so a mapped variable cannot be reduced twice today; dropping
+    it keeps the input exactly the journaled one regardless.
 - **Fan-out branch families.** A fan-out member's child threads belong to the branch's own checkpoint family, not the run
   root's. The member's saved pipeline therefore journals through that branch family.
 - **Code nodes.** Lending the run's journals to all node kinds would also have enabled Code nodes in saved children. Their
@@ -53,9 +61,10 @@
   - `src/agents/pipeline/parallel_application_resolver.rs:54`: `rebind_branch_journals`.
   - `PipelineApplicationResolver::for_branch_journals`.
 - **Visit scope.**
-  - `libs/rust/agent-runtime/src/graph/application_activation.rs`: `visit_digest` `:36`, `stamped_visit_digest` `:79`,
-    `ApplicationActivationGuard::visit_digest` `:272`.
-  - `src/agents/graph/application.rs`: `APPLICATION_VISIT_STATE_KEY` `:53`, injected at `:731`. It is a runtime channel in
+  - `libs/rust/agent-runtime/src/graph/application_activation.rs`: `visit_digest` `:36`,
+    `ApplicationActivationGuard::visit_digest`.
+  - `src/agents/graph/application.rs`: `APPLICATION_VISIT_STATE_KEY` `:53`, injected at `:741`; an Agent node without an activation passes
+    `null`, never its parent's visit, so an effectful journal below it is refused (REVIEW-1541 R4). It is a runtime channel in
     every pipeline, Agent-member branch and Map worker schema (`compiler.rs`, `parallel_compiler.rs`, `map_compiler.rs`).
   - `src/agents/graph/node_recovery_runtime.rs:68`: `visit_from_state`.
   - `src/state/postgres_checkpointer/node_attempts.rs`: a child requires a visit and the root has none (`:32`);
@@ -67,18 +76,19 @@
   - `src/agents/graph/node_recovery_runtime.rs`: a child visit's reconcile becomes `CHILD_EFFECT_UNKNOWN_CODE` (`:967`,
     `:1198`).
   - `src/agents/graph/direct_tool.rs:837`: that code becomes the registered may-have-started stop (`approved_call_stop`).
-- **Double append:** `src/agents/graph/application.rs:784`.
+- **Double append:** `src/agents/graph/application.rs:797-807`.
 - **Other:** `src/sandbox/service.rs` boxes one future (`clippy::large_futures`, grown by the new fields).
 
 ## Tests
 
 All against real PostgreSQL, except the pinned-identity test, which is a unit test. Runs were at 8 to 16 test threads.
 
-- **`fanout_effect_pg_tests`:** 47 passed, 0 failed, 0 skipped, 2 of 2 runs. Full Worker suite
-  (`--all-targets --all-features`): 4,316 passed, 0 failed, 105 ignored. The agent-runtime crate tests pass. Clippy
+- **`fanout_effect_pg_tests`:** 50 passed, 0 failed, 0 skipped (after REVIEW-1541). Full Worker suite
+  (`--all-targets --all-features`, 13 test binaries): 2,888 passed, 0 failed, 105 ignored. agent-runtime crate: 1,627
+  passed, 0 failed, 1 ignored. (An earlier "4,316" in this line was a summing error.) Clippy
   `-D warnings` is clean on both workspaces.
-- **Two-process recovery** (`postgres_child_direct_effect_process` `:3770`, driver `child_direct_scenario` `:3874`, cases
-  at `:3969` to `:3989`):
+- **Two-process recovery** (`postgres_child_direct_effect_process` `:3809`, driver `child_direct_scenario` `:3919`, cases
+  at `:4019` to `:4062`):
   - a crash process dies inside the child's call, once its Started record is durable;
   - a reclaim of the same execution then runs in a second process;
   - the database states are set as follows:
@@ -90,22 +100,37 @@ All against real PostgreSQL, except the pinned-identity test, which is a unit te
     `agent.recovery_refused` terminal, a single run); and that the reclaim used, or recreated, exactly the journal thread
     the lost call opened.
   - Cases: depth 1 for all three; depth 2 for committed and started.
+  - Mapped variables (REVIEW-1541 R1): the child also declares `items` and `count`, fed by the Agent node's mapped
+    variables; depth 1 committed and started, depth 2 committed. Same assertions: 0 calls, the same journal thread.
 - **Visit identity.**
   - `a_root_node_journal_keeps_its_identity_and_a_child_visit_changes_it` (unit): pins main's root journal id
     `0e7d4375…917d`.
   - `node_journals_are_visit_scoped_in_a_child_and_unscoped_on_the_root`: a child thread without a visit and the root
     with one are both refused `unscoped_child`.
-  - `postgres_two_visits_of_one_child_in_one_execution_each_run_their_call` (`:4002`): two calls, two journals. It does
+  - `postgres_two_visits_of_one_child_in_one_execution_each_run_their_call` (`:4071`): two calls, two journals. It does
     not by itself prove the scope (see Durability).
+- **Lent factory scope (REVIEW-1541 R2):** `lent_journal_factories_open_only_their_own_admitted_threads_under_the_claim`
+  (`state/postgres_checkpointer_tests/run_root_fencing.rs:205`), through `Arc<dyn NodeRecoveryFactory>` as lent:
+  - the root family refuses an unadmitted thread and a branch's thread;
+  - a Parallel branch family refuses a root-family thread and an unadmitted branch thread;
+  - no refused open writes a journal row;
+  - each opens its own admitted thread;
+  - after a newer claim takes the root, both refuse with `writer_not_current`.
+- **Visit uniqueness (REVIEW-1541 R7):** `a_visit_digest_is_stable_for_its_stamp_and_unique_per_visit`
+  (`libs/rust/agent-runtime/src/graph/application_activation.rs:347`): equal for an equal stamp; different for the
+  parent step, parent thread, node, definition or inputs.
+- **Child resume keeps one task message (REVIEW-1541 R5):** `pipeline_scoped_tests.rs:364`, in
+  `an_ordinary_agent_in_a_saved_child_pipeline_asks_and_resumes_once_after_process_replacement`. It fails with the
+  pre-FU-248 rule (the task appears twice).
 - **Fan-out.**
   - `postgres_a_member_whose_child_calls_an_effectful_direct_tool_runs_it_once` (`:1710`): one call under `continue` and
     `stop`; all three branches succeed.
-  - `postgres_a_member_child_sensitive_direct_call_pauses_then_runs_once_or_never` (`:4052`): a `tool_guard` card for
+  - `postgres_a_member_child_sensitive_direct_call_pauses_then_runs_once_or_never` (`:4121`): a `tool_guard` card for
     the member and a park; approve runs once, reject runs 0, with a journal only for the approved call.
 
 ## Performance
 
-- One extra primary-key load is gone: the visit comes from state, not from a row.
+- The visit adds no read: the Agent node derives it from its own activation and passes it in the child's state.
 - A child's effectful call opens the same journal the root's does: one writer activation plus the journal rows.
 - Recovery measured per case, process start included: depth 1 started 186 ms, committed 240 ms, undispatched 225 ms;
   depth 2 started 198 ms, committed 358 ms. All are well inside the 20 s per-node budget.
@@ -130,8 +155,9 @@ All against real PostgreSQL, except the pinned-identity test, which is a unit te
 - A child thread without a visit, or the root with one, is refused (`pipeline.node_recovery.unscoped_child`). There is no
   unscoped fallback.
 - Every walk refusal stays typed: anything other than the accepted leaves becomes `RECOVERY_FRONTIER_UNSUPPORTED`.
-- A started call in a child ends with the registered `agent.recovery_refused` (`RECOVERY_REFUSED`). In a fan-out member
-  it is the typed branch failure `graph.fanout.may_have_started`.
+- A started call in a child ends with the registered `agent.recovery_refused` (`RECOVERY_REFUSED`), proven at depths 1
+  and 2. In a fan-out member's child the path leads to the typed branch failure `graph.fanout.may_have_started`; no
+  test loses a Worker there yet (FU-267).
 
 ## Security
 
@@ -146,7 +172,7 @@ All against real PostgreSQL, except the pinned-identity test, which is a unit te
   effectful tools are decided by their journal (R / C → F / I).
 - **Journals.** They open only under the run root's writer fence and lease (`ensure_current`).
   - The lent factory routes only admitted threads: the root family's application paths, or the branch family's own
-    threads. Any other thread is refused.
+    threads. Any other thread is refused (`lent_journal_factories_open_only_their_own_admitted_threads_under_the_claim`).
   - The visit is derived from the Worker's own activation, never from user input. A malformed value is refused.
 - **Unchanged.** No new route, RPC, SQL, egress or credential path. Ungoverned credentials in children are still refused
   (`refuse_ungoverned_credentials`).
@@ -159,8 +185,9 @@ All against real PostgreSQL, except the pinned-identity test, which is a unit te
 | Worker × effectful direct call in a saved child, lost after its journal committed | R (replay, 0 calls) | `node_recovery_runtime.rs` Completed branch; `session.rs:1710` | depth 1 and 2 `…_after_its_commit_…` tests |
 | Worker × the same, lost after Started | C → F (registered may-have-started stop, never repeated) | `node_recovery_runtime.rs:967`, `direct_tool.rs:837` | depth 1 and 2 `…_after_it_started_…` tests |
 | Worker × the same, lost before Started (including a child that saved no row) | I (runs once) | `session.rs:1660`, journal Ready | `…_before_it_started_runs_once` |
-| Worker × read-only direct call in a saved child, lost mid-call | I (reruns) | `session.rs:1710` | walk acceptance; no journal |
-| Worker × a child re-entered at its own unfinished frontier (reclaim, wake) | R (input preserved, task not appended twice) | `application.rs:784` | all recovery tests reopen the same journal thread |
+| Worker × read-only direct call in a saved child, lost mid-call | I (reruns), unproven | `session.rs:1710` | none yet: FU-266 |
+| Worker × started call in a fan-out member's child, Worker lost | C → F (`graph.fanout.may_have_started`), unproven | `direct_tool.rs:837`, `node_events.rs:247-261`, `scoped_runtime.rs:398-405` | none yet: FU-267 |
+| Worker × a child re-entered at its own unfinished frontier (reclaim, wake) | R (input preserved, task not appended twice) | `application.rs:797-807` | all recovery tests reopen the same journal thread, including the mapped-variable cases; the child resume pin |
 | Worker × an approved child direct call, lost before the continuation's first root save | F− (never repeated; ends with the generic Internal failure, not yet the registered terminal) | `session.rs:1747-1758`, `checkpoint_recovery.rs:146-160` | browser: fanpar chat 44 kill; FU-265 |
 | Worker × sensitive child direct call in a fan-out member | R (card, decision, one call) | `parallel_compiler.rs:1025`, branch family journals | `…_pauses_then_runs_once_or_never` |
 

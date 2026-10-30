@@ -193,3 +193,113 @@ async fn node_journals_are_visit_scoped_in_a_child_and_unscoped_on_the_root() {
         .await
         .expect("a root journal opens without one");
 }
+
+/// REVIEW-1541 R2: the journal factories lent to saved children, called as
+/// they are lent (`Arc<dyn NodeRecoveryFactory>`), open journals only for
+/// their own admitted threads, and only while the claim owns the run: the run
+/// root's family refuses an unadmitted thread and a branch's thread, a fixed
+/// Parallel branch family refuses the root family's threads, and both refuse
+/// once the claim is superseded. No refused open writes a journal row.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn lent_journal_factories_open_only_their_own_admitted_threads_under_the_claim() {
+    let database = database().await;
+    let family = Arc::new(
+        root(database.pool.clone(), 1)
+            .await
+            .with_application_children(["delegate", "fetch_short"].into_iter())
+            .await
+            .expect("activate the admitted child threads"),
+    );
+    let parallel = ParallelNodeDefinition::from_yaml(
+        r"
+id: gather
+type: parallel
+branches:
+  - id: short
+    node: fetch_short
+  - id: long
+    node: fetch_long
+max_concurrency: 2
+wait: all
+error_policy: fail_after_drain
+output: [gathered]
+transition: END
+        ",
+    )
+    .expect("parallel fixture");
+    let parallel_activation = ParallelActivation {
+        root_thread_id: "thread-1".to_owned(),
+        node_id: parallel.id().to_owned(),
+        step: 4,
+        config_digest: parallel.config_digest(),
+    };
+    let origin = family
+        .child_origin(&parallel_activation)
+        .expect("parallel child origin");
+    let branch = family
+        .for_branch(
+            &parallel_activation,
+            &parallel.branches()[0],
+            0,
+            &[0x42; 32],
+            &origin,
+        )
+        .await
+        .expect("activate the branch family");
+    let branch_child = format!("{}/fetch_short", branch.thread_id);
+    assert!(
+        branch.admitted_threads.contains(&branch_child),
+        "{branch_child}"
+    );
+    let root_lent: Arc<dyn NodeRecoveryFactory> = family.clone();
+    let branch_lent = branch
+        .node_recovery
+        .clone()
+        .expect("the branch family is lent");
+    let activation = |thread: &str| NodeAttemptActivation {
+        root_thread_id: thread.to_owned(),
+        node_id: "lookup".to_owned(),
+        step: 2,
+        node_digest: [0x07; 32],
+        input_digest: [0x09; 32],
+        visit: Some([0x0b; 32]),
+    };
+    let policy = NodeRecoveryPolicy::default();
+    for (lent, thread) in [
+        (&root_lent, "thread-1/unadmitted".to_owned()),
+        (&root_lent, branch_child.clone()),
+        (&branch_lent, "thread-1/delegate".to_owned()),
+        (&branch_lent, format!("{}/unadmitted", branch.thread_id)),
+    ] {
+        assert!(
+            lent.open(&activation(&thread), &policy).await.is_err(),
+            "a lent factory opened a journal for {thread}"
+        );
+    }
+    assert_eq!(writers(&database.pool, "n1:%").await, 0);
+    // Each opens its own admitted thread.
+    root_lent
+        .open(&activation("thread-1/delegate"), &policy)
+        .await
+        .expect("the root family opens its child's journal");
+    branch_lent
+        .open(&activation(&branch_child), &policy)
+        .await
+        .expect("the branch family opens its member child's journal");
+    assert_eq!(writers(&database.pool, "n1:%").await, 2);
+
+    // A newer claim takes the run root: neither lent factory opens again.
+    let _claim_2 = root(database.pool.clone(), 2).await;
+    let mut other = activation("thread-1/delegate");
+    other.step = 3;
+    let mut branch_other = activation(&branch_child);
+    branch_other.step = 3;
+    for (lent, activation) in [(&root_lent, other), (&branch_lent, branch_other)] {
+        let Err(error) = lent.open(&activation, &policy).await else {
+            panic!("a lent factory of a superseded claim opened a journal");
+        };
+        assert!(error.to_string().contains("writer_not_current"), "{error}");
+    }
+    assert_eq!(writers(&database.pool, "n1:%").await, 2);
+}

@@ -3628,36 +3628,70 @@ const CHILD_DIRECT_TEST: &str =
 /// `1`: root → Agent node → saved pipeline with the direct node.
 /// `2`: root → Agent node → saved pipeline → Agent node → saved pipeline with it.
 const DEPTH_ENV: &str = "ELITEA_CHILD_DIRECT_PG_DEPTH";
+/// `1`: the child also declares keys the Agent node above it feeds from mapped
+/// variables (REVIEW-1541 R1). A nested pipeline may declare only overwrite
+/// channels (`compile_subgraph_with_runtime` refuses typed reducers), so a
+/// re-entry that re-sent them would reduce nothing twice; it no longer sends
+/// them, and the journal must stay the one the lost call opened.
+const VARS_ENV: &str = "ELITEA_CHILD_DIRECT_PG_VARS";
+/// The child state keys fed by mapped variables.
+const CHILD_MAPPED_STATE: &str = "  items: list\n  count: int\n";
+/// The Agent-node variables that feed them.
+const CHILD_MAPPED_MAPPING: &str =
+    "      items: {type: fixed, value: [seed]}\n      count: {type: fixed, value: 1}\n";
+
+/// `yaml` with the mapped child keys declared (`state`) or mapped (`task`).
+fn with_mapped_variables(yaml: &str, vars: bool, after: &str, insert: &str) -> String {
+    if !vars {
+        return yaml.to_owned();
+    }
+    let at = yaml.find(after).expect("anchor") + after.len();
+    let end = at + yaml[at..].find('\n').expect("line end") + 1;
+    format!("{}{insert}{}", &yaml[..end], &yaml[end..])
+}
 
 /// The saved child that runs the effectful MCP call, then, for `committed`,
 /// an LLM step the crash process dies in (so the call's journal committed).
-fn child_direct_pipeline(then_llm: bool) -> Value {
+fn child_direct_pipeline(then_llm: bool, vars: bool) -> Value {
     let mut pipeline = direct_effect_pipeline();
     if then_llm {
         pipeline["instructions"] = json!(
             "state:\n  input: str\n  messages: list\n  answer: dict\n  summary: str\nentry_point: rev\nnodes:\n  - id: rev\n    type: mcp\n    toolkit_name: release intelligence\n    tool: lookup_release\n    input_mapping: {}\n    output: [answer]\n    transition: after\n  - id: after\n    type: llm\n    input_mapping:\n      task: {type: fixed, value: 'Summarize the lookup'}\n    output: [summary]\n    transition: END\n"
         );
     }
+    let yaml = pipeline["instructions"].as_str().expect("yaml").to_owned();
+    pipeline["instructions"] = json!(with_mapped_variables(
+        &yaml,
+        vars,
+        "  messages: list",
+        CHILD_MAPPED_STATE
+    ));
     pipeline
 }
 
 /// Root → `delegate` → the saved pipeline (app 3, version 4); the child's
 /// `answer` is the MCP call's object.
-fn child_direct_request() -> super::super::request::AgentExecutionRequest {
+fn child_direct_request(vars: bool) -> super::super::request::AgentExecutionRequest {
     let mut request = child_parallel_request();
-    request.payload.application["version_details"]["instructions"] = json!(
-        "state:\n  answer: dict\n  messages: list\nentry_point: delegate\nnodes:\n  - id: delegate\n    type: agent\n    tool: \"release-agent\"\n    input_mapping:\n      task: {type: fixed, value: 'Summarize the release'}\n    output: [answer]\n    transition: END\n"
-    );
+    request.payload.application["version_details"]["instructions"] = json!(with_mapped_variables(
+        "state:\n  answer: dict\n  messages: list\nentry_point: delegate\nnodes:\n  - id: delegate\n    type: agent\n    tool: \"release-agent\"\n    input_mapping:\n      task: {type: fixed, value: 'Summarize the release'}\n    output: [answer]\n    transition: END\n",
+        vars,
+        "      task:",
+        CHILD_MAPPED_MAPPING,
+    ));
     request
 }
 
 /// The middle saved pipeline (depth 2): its `inner` Agent node runs the
 /// saved pipeline with the direct node (app 5, version 6).
-fn child_direct_middle() -> Value {
+fn child_direct_middle(vars: bool) -> Value {
     let mut middle = middle_pipeline();
-    middle["instructions"] = json!(
-        "state:\n  input: str\n  messages: list\n  answer: dict\nentry_point: inner\nnodes:\n  - id: inner\n    type: agent\n    tool: inner-flow\n    input_mapping:\n      task: {type: fixed, value: 'Look the release up'}\n    output: [answer]\n    transition: END\n"
-    );
+    middle["instructions"] = json!(with_mapped_variables(
+        "state:\n  input: str\n  messages: list\n  answer: dict\nentry_point: inner\nnodes:\n  - id: inner\n    type: agent\n    tool: inner-flow\n    input_mapping:\n      task: {type: fixed, value: 'Look the release up'}\n    output: [answer]\n    transition: END\n",
+        vars,
+        "      task:",
+        CHILD_MAPPED_MAPPING,
+    ));
     middle
 }
 
@@ -3669,10 +3703,15 @@ fn child_direct_assembler(
     then_llm: bool,
     connector: Arc<dyn McpConnector>,
 ) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
+    // At depth 2 the mapped keys are fed by the inner Agent node.
+    let vars = std::env::var(VARS_ENV).is_ok_and(|vars| vars == "1");
     let (details, second) = if depth == "2" {
-        (child_direct_middle(), Some(child_direct_pipeline(then_llm)))
+        (
+            child_direct_middle(vars),
+            Some(child_direct_pipeline(then_llm, vars)),
+        )
     } else {
-        (child_direct_pipeline(then_llm), None)
+        (child_direct_pipeline(then_llm, vars), None)
     };
     assembler_on(
         pool,
@@ -3780,7 +3819,8 @@ async fn postgres_child_direct_effect_process() {
     let depth = std::env::var(DEPTH_ENV).expect("depth");
     let mode = std::env::var(MODE_ENV).expect("mode");
     let pool = connect(&database).await;
-    let request = child_direct_request();
+    let vars = std::env::var(VARS_ENV).is_ok_and(|vars| vars == "1");
+    let request = child_direct_request(vars && depth == "1");
     let committed = mode == "committed";
     if std::env::var(PHASE_ENV).expect("phase") == "crash" {
         // `committed`: the call returns and its journal commits; the process
@@ -3871,7 +3911,7 @@ async fn postgres_child_direct_effect_process() {
 ///
 /// The reclaim must find the same visit-scoped journal identity, and recover
 /// inside the per-node budget.
-async fn child_direct_scenario(url: &str, depth: &str, mode: &str) {
+async fn child_direct_scenario(url: &str, depth: &str, mode: &str, vars: bool) {
     let db = IsolatedPostgres::create(url).await;
     install_schema(&db.pool).await;
     sqlx::raw_sql(CHECKPOINT_MIGRATION)
@@ -3890,6 +3930,7 @@ async fn child_direct_scenario(url: &str, depth: &str, mode: &str) {
             .env(DATABASE_ENV, &db.database_name)
             .env(DEPTH_ENV, depth)
             .env(MODE_ENV, mode)
+            .env(VARS_ENV, if vars { "1" } else { "0" })
             .env(PHASE_ENV, phase);
         command
     };
@@ -3953,6 +3994,9 @@ async fn child_direct_scenario(url: &str, depth: &str, mode: &str) {
 
 macro_rules! child_direct_case {
     ($name:ident, $depth:literal, $mode:literal) => {
+        child_direct_case!($name, $depth, $mode, false);
+    };
+    ($name:ident, $depth:literal, $mode:literal, $vars:literal) => {
         #[tokio::test(flavor = "current_thread")]
         async fn $name() {
             let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
@@ -3961,7 +4005,7 @@ macro_rules! child_direct_case {
                 );
                 return;
             };
-            child_direct_scenario(&url, $depth, $mode).await;
+            child_direct_scenario(&url, $depth, $mode, $vars).await;
         }
     };
 }
@@ -3990,6 +4034,26 @@ child_direct_case!(
     postgres_two_levels_down_a_child_direct_call_lost_after_it_started_ends_typed,
     "2",
     "started"
+);
+// REVIEW-1541 R1: the child's keys are fed by mapped Agent-node variables; a
+// re-entry at the child's frontier keeps the input its journal recorded.
+child_direct_case!(
+    postgres_a_child_with_mapped_variables_lost_after_its_commit_replays_without_calling_again,
+    "1",
+    "committed",
+    true
+);
+child_direct_case!(
+    postgres_a_child_with_mapped_variables_lost_after_it_started_is_not_repeated,
+    "1",
+    "started",
+    true
+);
+child_direct_case!(
+    postgres_two_levels_down_a_child_with_mapped_variables_lost_after_its_commit_replays,
+    "2",
+    "committed",
+    true
 );
 
 /// FU-248: one execution visits the same saved child twice with identical

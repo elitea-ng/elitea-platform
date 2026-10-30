@@ -466,6 +466,9 @@ pub(super) struct ApplicationNode {
     activation_checkpointer: Option<Arc<ApplicationActivationCheckpointer>>,
     graph_call_owner: Option<Arc<crate::agents::pipeline::scoped_runtime::PipelineGraphCallOwner>>,
     parallel_inputs: bool,
+    /// The saved child pipeline holds a fixed Parallel (FU-249): a wake
+    /// re-enters it at its parked frontier.
+    child_fanout: bool,
     /// The run's node failure channel, so a typed child refusal keeps its reason.
     failure_events: Option<PipelineNodeEventSender>,
 }
@@ -537,6 +540,7 @@ impl ApplicationNode {
         let child_checkpointer: Arc<dyn Checkpointer> = activation_checkpointer
             .as_ref()
             .map_or_else(|| checkpointer.clone(), |owner| owner.clone());
+        let child_fanout = fanout.is_some();
         let participant = match fanout {
             None => resolver.resolve_node(
                 definition.id(),
@@ -598,6 +602,7 @@ impl ApplicationNode {
             activation_checkpointer,
             graph_call_owner,
             parallel_inputs: false,
+            child_fanout,
         })
     }
 
@@ -730,12 +735,15 @@ impl ApplicationNode {
             .transpose()?;
         // FU-248: the child's node journals are scoped to this visit. Its
         // thread and steps are reused by every visit; the activation is not.
-        if let Some(activation) = &activation {
-            state.insert(
-                APPLICATION_VISIT_STATE_KEY.to_owned(),
-                json!(hex(&activation.visit_digest()?)),
-            );
-        }
+        // Without an activation the child gets no visit (never its parent's),
+        // so an effectful journal in it is refused rather than mis-scoped.
+        state.insert(
+            APPLICATION_VISIT_STATE_KEY.to_owned(),
+            match &activation {
+                Some(activation) => json!(hex(&activation.visit_digest()?)),
+                None => Value::Null,
+            },
+        );
         let parent_scope = PipelineNodeEventScope::from_state(
             context.state.get(PIPELINE_NODE_EVENT_SCOPE_STATE_KEY),
         )
@@ -778,15 +786,25 @@ impl ApplicationNode {
         // holds its input. The subgraph merges the input through the channel
         // reducers again, so the task message would be appended twice: a
         // parked occurrence would no longer match, and a journaled call's
-        // input would no longer be the one its journal recorded. The overlay
-        // shows only this visit's frontier. A text resume is a new message
-        // and is still sent.
-        let resumes_frontier =
-            text_resume.is_none() && self.child_resumes_frontier(&checkpoint_thread_id).await?;
+        // input would no longer be the one its journal recorded. Nothing the
+        // child already holds is re-sent: its mapped variables (overwrite
+        // channels; a nested pipeline cannot declare typed reducers) and the
+        // appending `hitl_decisions` channel stay as restored. Only the
+        // activation overlay shows exactly this visit's frontier, so the rule
+        // holds where there is one (or for a Parallel's wake, as before). The
+        // activation input digest proves the mapped variables are this
+        // visit's. A text resume is a new message and is still sent.
+        let resumes_frontier = (self.child_fanout || self.activation_checkpointer.is_some())
+            && text_resume.is_none()
+            && self.child_resumes_frontier(&checkpoint_thread_id).await?;
         let task = text_resume.unwrap_or(task).to_owned();
         state.insert(APPLICATION_TASK_STATE_KEY.to_owned(), json!(task));
         if resumes_frontier {
             state.remove(APPLICATION_MESSAGES_STATE_KEY);
+            state.remove("hitl_decisions");
+            for key in self.definition.variables.keys() {
+                state.remove(&self.definition.variable_channel(key));
+            }
         } else {
             state.insert(
                 APPLICATION_MESSAGES_STATE_KEY.to_owned(),

@@ -70,28 +70,6 @@ pub fn stamped_definition_digest<S: std::hash::BuildHasher>(
         .then_some(recorded.definition_digest)
 }
 
-/// The identity of the visit that wrote a row of `thread`: a digest of the
-/// whole activation stamp recorded for exactly that thread (parent thread,
-/// node, parent step, definition and input digests), `None` unless the stamp
-/// is well formed. A saved child thread is reused across visits and its steps
-/// restart, so this is what tells two visits of one child apart (FU-248).
-#[must_use]
-pub fn stamped_visit_digest<S: std::hash::BuildHasher>(
-    metadata: &HashMap<String, Value, S>,
-    thread: &str,
-) -> Option<[u8; 32]> {
-    let entry = metadata
-        .get(ACTIVATION_METADATA_KEY)?
-        .as_object()?
-        .get(thread)?
-        .clone();
-    let recorded: ApplicationActivation = serde_json::from_value(entry).ok()?;
-    if recorded.schema != ACTIVATION_SCHEMA || recorded.child_thread() != thread {
-        return None;
-    }
-    recorded.visit_digest()
-}
-
 /// Every node owns its own overlay. The inner adapter retains authority and fencing.
 pub struct ApplicationActivationCheckpointer {
     inner: Arc<dyn Checkpointer>,
@@ -267,8 +245,10 @@ pub struct ApplicationActivationGuard {
 }
 
 impl ApplicationActivationGuard {
-    /// This open visit's identity: the digest [`stamped_visit_digest`] reads
-    /// back from every row the visit stamps (FU-248).
+    /// This open visit's identity (FU-248): a digest of everything the
+    /// activation stamp records (parent thread, node, parent step, definition
+    /// and input digests). A saved child thread and its steps are reused by
+    /// every visit; this is what scopes its node journals to one visit.
     pub fn visit_digest(&self) -> Result<[u8; 32], GraphError> {
         self.active
             .lock()
@@ -358,6 +338,32 @@ mod tests {
             hex,
             "a016bd2a1351e57ffa58603da9809e476392dbd1a3300828b141f6ebe724d5c5"
         );
+    }
+
+    /// REVIEW-1541 R7: the visit identity is equal for an equal stamp (a
+    /// reclaim re-enters the same visit) and differs with the parent step, the
+    /// parent thread, the node, the definition and the inputs.
+    #[test]
+    fn a_visit_digest_is_stable_for_its_stamp_and_unique_per_visit() {
+        let visit = |thread: &str, node: &str, step: usize, definition: u8, task: &str| {
+            let overlay =
+                ApplicationActivationCheckpointer::new(Arc::new(MemoryCheckpointer::new()));
+            let guard = overlay
+                .enter(thread, node, step, [definition; 32], &json!({"task": task}))
+                .expect("enter");
+            guard.visit_digest().expect("visit")
+        };
+        let base = visit("root", "delegate", 3, 1, "one");
+        assert_eq!(base, visit("root", "delegate", 3, 1, "one"));
+        for other in [
+            visit("root", "delegate", 4, 1, "one"),
+            visit("root/branch", "delegate", 3, 1, "one"),
+            visit("root", "summarize", 3, 1, "one"),
+            visit("root", "delegate", 3, 2, "one"),
+            visit("root", "delegate", 3, 1, "two"),
+        ] {
+            assert_ne!(base, other);
+        }
     }
 
     #[tokio::test]
