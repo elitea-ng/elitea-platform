@@ -31,8 +31,9 @@ import {
   type AdminTrimmingFilters,
 } from './api/adminCredentialReviewApi';
 
+/** The agent in the main app; the `/:projectId/` prefix switches to its project first (ROUTE-070). */
 function agentHref(item: PermissionTrimmingItem): string | undefined {
-  return item.application_id > 0 ? `/agents/all/${item.application_id}?project_id=${item.project_id}` : undefined;
+  return item.application_id > 0 ? `/${item.project_id}/agents/all/${item.application_id}` : undefined;
 }
 
 export function AdminPermissionTrimming(): ReactNode {
