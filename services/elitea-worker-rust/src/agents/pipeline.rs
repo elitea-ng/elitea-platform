@@ -266,9 +266,10 @@ impl PipelineExecutionProfile {
                 {
                     return Err(unsupported_pipeline_tool_scope());
                 }
-                if let Some(sensitive) = policy.sensitive_tool(
+                if let Some(sensitive) = policy.sensitive_tool_in(
                     reference.tool_type(),
                     reference.toolkit_name(),
+                    reference.settings(),
                     tool_name,
                 ) {
                     self.sensitive_llm_tools.insert(
@@ -312,9 +313,10 @@ impl PipelineExecutionProfile {
             {
                 return Err(unsupported_direct_tool_scope());
             }
-            if let Some(sensitive) = policy.sensitive_tool(
+            if let Some(sensitive) = policy.sensitive_tool_in(
                 reference.tool_type(),
                 reference.toolkit_name(),
+                reference.settings(),
                 selection.tool(),
             ) {
                 self.sensitive_direct_tools.insert(
@@ -1160,6 +1162,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             request.payload.toolkit_guardrails.as_ref(),
             &self.tool_policy,
             command.egress(),
+            command.approval_policy(),
         )?;
         let (profile, plan, _, _) = super::runtime::admit_pipeline_plan(
             request,
@@ -1193,6 +1196,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             request.payload.toolkit_guardrails.as_ref(),
             &self.tool_policy,
             command.egress(),
+            command.approval_policy(),
         )?;
         let (profile, plan, toolsets, start) = super::runtime::admit_pipeline_plan(
             request,
@@ -1286,6 +1290,7 @@ impl PipelineNativeAgentAssembler {
                 assembly.request().payload.toolkit_guardrails.as_ref(),
                 &self.tool_policy,
                 assembly.egress(),
+                assembly.approval_policy(),
             )?;
             // #606, the pipeline twin of the ordinary path's read. `platform`
             // is optional here only because the injected-state test constructor

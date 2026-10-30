@@ -64,7 +64,26 @@ type Producer struct {
 	// delegation answers an agent execution command's delegation policy
 	// (ADR-0044 decision 3); nil leaves the field absent (the defaults).
 	delegation DelegationPolicyResolver
-	refusals   DispatchRefusalRecorder
+	// approval answers an agent execution command's approval policy
+	// (ADR-0041 decision 5); nil leaves the field absent (no category rule).
+	approval ApprovalPolicyResolver
+	refusals DispatchRefusalRecorder
+}
+
+// ApprovalPolicyResolver answers the approval policy an agent execution
+// command carries (ADR-0041 decision 5; workerapprovalpolicy.Resolver). Nil
+// leaves the field absent. An error refuses the command: it is never signed
+// without the policy it should carry, and the dispatch is retried within the
+// run's deadline.
+type ApprovalPolicyResolver interface {
+	WorkerApprovalPolicy(ctx context.Context, command *runtimev1.WorkerCommandV1) (*runtimev1.WorkerApprovalPolicyV1, error)
+}
+
+// WithApprovalPolicy makes every agent execution command this producer
+// prepares carry its approval policy.
+func (p *Producer) WithApprovalPolicy(resolver ApprovalPolicyResolver) *Producer {
+	p.approval = resolver
+	return p
 }
 
 // DelegationPolicyResolver answers the delegation policy an agent execution
@@ -187,6 +206,13 @@ func (p *Producer) prepareCommand(ctx context.Context, command *runtimev1.Worker
 			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker delegation policy: %w", err)
 		}
 		command.DelegationPolicy = policy
+	}
+	if p.approval != nil && command.GetAgentExecution() != nil {
+		policy, err := p.approval.WorkerApprovalPolicy(ctx, command)
+		if err != nil {
+			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker approval policy: %w", err)
+		}
+		command.ApprovalPolicy = policy
 	}
 	if err := validateBoundedStrings(command, p.config.Limits.MaxStringBytes); err != nil {
 		return executionapp.PreparedCommandEnvelope{}, err

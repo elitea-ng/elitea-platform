@@ -58,6 +58,25 @@ const LLM_TOOL_REPLAY_SCHEMA: &str = "elitea.graph.llm-tool-replay.v1";
 const LLM_INPUT_DIGEST_DOMAIN: &[u8] = b"elitea.graph.llm.input.v1\0";
 const LLM_REPLAY_STATE_DIGEST_DOMAIN: &[u8] = b"elitea.graph.llm.replay-state.v1\0";
 pub(crate) const LLM_TOOL_RESUME_STATE_KEY: &str = "__elitea_llm_tool_resume_v1";
+
+/// A pipeline sensitive tool pause's data with the approval policy rule
+/// (ADR-0041 decision 5). Only a policy rule is written: a worker from an
+/// earlier release reads the data strictly, and a policy rule only exists
+/// once an administrator saved the section after the workers run this
+/// release. The projection reads an absent rule as the platform rule.
+pub(super) fn with_policy_approval_rule(
+    mut data: Value,
+    rule: elitea_agent_runtime::approval_policy::ApprovalRule,
+) -> Value {
+    if matches!(
+        rule,
+        elitea_agent_runtime::approval_policy::ApprovalRule::Policy { .. }
+    ) && let Value::Object(object) = &mut data
+    {
+        object.insert("approval_rule".to_owned(), rule.to_json());
+    }
+    data
+}
 /// A fixed Parallel LLM branch's input mapping, evaluated once against the
 /// parent state when the branch is frozen (the branch never re-reads it).
 pub(crate) const PARALLEL_LLM_INPUTS_STATE_KEY: &str = "__elitea_parallel_llm_inputs_v1";
@@ -1296,6 +1315,7 @@ impl LlmNode {
             "policy_message": policy.policy_message(),
             "llm_replay": replay,
         });
+        let data = with_policy_approval_rule(data, policy.rule());
         Ok(NodeOutput::interrupt_with_data(
             policy.policy_message(),
             data,

@@ -13,6 +13,7 @@ import (
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/approvalpolicy"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
@@ -251,6 +252,10 @@ type CurrentApplicationStartService struct {
 	// without it answers a refused governed continuation and leaves the
 	// pause open.
 	governedRefusals GovernedRefusalSettler
+	// pipelineApproval is optional — attached via WithPipelineApproval
+	// (pipeline_approval.go, ADR-0041 decision 5). A service without it
+	// does not check the pipeline hitl rule.
+	pipelineApproval PipelineApprovalAdmission
 }
 
 // WithAttachmentImages attaches the reader that lets an attached IMAGE reach
@@ -326,6 +331,12 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		return CurrentApplicationStartOutcome{}, err
 	}
 	target.VersionDetails = frozenVersion
+	if err = service.admitPipelineApproval(ctx, request.ProjectID, target.ApplicationID, frozenVersion); err != nil {
+		if approvalpolicy.Refusal(err) != nil {
+			return CurrentApplicationStartOutcome{}, unsupportedStartBecause("pipeline refused by the approval policy", err)
+		}
+		return CurrentApplicationStartOutcome{}, err
+	}
 	questionItemID := currentTurnUUID(request.QuestionID, "question-item")
 	responseMessageID := currentTurnUUID(request.QuestionID, "response-message")
 	questionMeta := currentQuestionMeta(request.InteractionUUID, request.MentionedUserIDs, request.MentionsEveryone)

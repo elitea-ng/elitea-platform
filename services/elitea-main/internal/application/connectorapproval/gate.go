@@ -15,6 +15,11 @@ import (
 type PinnedTool struct {
 	Name   string `json:"name"`
 	Digest string `json:"digest"`
+	// Category is the ADR-0041 category the approved request declared for
+	// the tool. The worker's approval policy reads it (a tool with no
+	// category is write). A worker from an earlier release reads only the
+	// name and the digest of a pin.
+	Category ToolCategory `json:"category,omitempty"`
 }
 
 // PinnedToolsSetting is the frozen settings key the agent freeze writes on a
@@ -55,7 +60,7 @@ func BuildGrants(approved []ApprovedConnector) Grants {
 			}
 			for _, tool := range connector.Tools {
 				if tool.Digest != "" {
-					pinned[connector.Target][PinnedTool{Name: tool.Name, Digest: tool.Digest}] = true
+					pinned[connector.Target][PinnedTool{Name: tool.Name, Digest: tool.Digest, Category: tool.Category}] = true
 				}
 			}
 		}
@@ -69,7 +74,10 @@ func BuildGrants(approved []ApprovedConnector) Grants {
 			if pins[i].Name != pins[j].Name {
 				return pins[i].Name < pins[j].Name
 			}
-			return pins[i].Digest < pins[j].Digest
+			if pins[i].Digest != pins[j].Digest {
+				return pins[i].Digest < pins[j].Digest
+			}
+			return pins[i].Category < pins[j].Category
 		})
 		grants.CustomMCP[target] = pins
 	}
@@ -278,7 +286,11 @@ func PinNames(pins []PinnedTool) map[string]bool {
 func PinsSetting(pins []PinnedTool) []any {
 	out := make([]any, 0, len(pins))
 	for _, pin := range pins {
-		out = append(out, map[string]any{"name": pin.Name, "digest": pin.Digest})
+		entry := map[string]any{"name": pin.Name, "digest": pin.Digest}
+		if pin.Category != "" {
+			entry["category"] = string(pin.Category)
+		}
+		out = append(out, entry)
 	}
 	return out
 }

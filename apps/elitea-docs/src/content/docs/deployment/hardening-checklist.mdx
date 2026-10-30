@@ -37,6 +37,7 @@ A default install favours getting started. A deployment that will be assessed ag
 - [ ] Keep the kill-switch self-test enabled, and alert on its last-success metric. See the [emergency stop runbook](/deployment/emergency-stop-runbook).
 - [ ] Keep **Configuration › Approvals › Unattended Default** at `fail`, so a scheduled or triggered run that needs an approval stops instead of continuing. Set `skip` or `notify_and_wait` only on the schedules and triggers that need it. See [Approval evidence and unattended runs](/admin/enterprise-controls/runtime-safety#approval-evidence-and-unattended-runs).
 - [ ] Set project budgets. A reached budget refuses further model calls. See [Budgets and LLM governance](/admin/budgets-and-governance).
+- [ ] After every worker runs the release, review and save **Configuration › Approval Policy**, so tools in the `delete`, `external_send` and `payment` categories pause for approval at the high and critical tiers. Select `high` and `critical` under **Tiers That Require a HITL Node in Pipelines**. See [Tool categories and approval policy](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
 
 ## Change control
 

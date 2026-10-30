@@ -325,3 +325,124 @@ fn suspended_toolkit_types_use_the_blocked_toolkit_matching_and_win_over_it() {
         ToolAdmissionPolicy::from_runtime_config(malformed.as_object().expect("object")).is_err()
     );
 }
+
+// ADR-0041 decision 5: under the approval policy, a tool whose category the
+// policy names for the run's tier is sensitive and the rule names the tier
+// and the category; other tools are not; without a policy only the platform
+// rule applies.
+#[test]
+fn the_approval_policy_makes_named_categories_sensitive() {
+    use crate::approval_policy::{ApprovalPolicy, ApprovalRule, RiskTier};
+    use crate::tool_category::ToolCategory;
+    use std::sync::Arc;
+
+    let without = policy(&[], &[]);
+    assert!(
+        without
+            .sensitive_tool("slack", "chat", "send_message")
+            .is_none()
+    );
+
+    let high = policy(&[], &[])
+        .with_approval_policy(Arc::new(ApprovalPolicy::adr_default(RiskTier::High)));
+    let sensitive = high
+        .sensitive_tool("slack", "chat", "send_message")
+        .expect("an external_send tool asks at high");
+    assert_eq!(
+        sensitive.rule(),
+        ApprovalRule::Policy {
+            tier: RiskTier::High,
+            category: ToolCategory::ExternalSend
+        }
+    );
+    assert_eq!(sensitive.action_name(), "chat.send_message");
+    assert!(
+        high.sensitive_tool("github", "repo", "delete_branch")
+            .is_some()
+    );
+    assert!(
+        high.sensitive_tool("github", "repo", "get_issue").is_none(),
+        "read"
+    );
+    assert!(
+        high.sensitive_tool("github", "repo", "create_issue")
+            .is_none(),
+        "write"
+    );
+    assert!(
+        high.sensitive_tool("sql", "db", "execute_sql").is_none(),
+        "code_execution"
+    );
+
+    let low =
+        policy(&[], &[]).with_approval_policy(Arc::new(ApprovalPolicy::adr_default(RiskTier::Low)));
+    assert!(
+        low.sensitive_tool("slack", "chat", "send_message")
+            .is_none()
+    );
+
+    // An administrator matrix that names write makes an undeclared tool ask.
+    let strict = policy(&[], &[]).with_approval_policy(Arc::new(ApprovalPolicy::new(
+        RiskTier::Medium,
+        [ToolCategory::Write],
+    )));
+    assert!(
+        strict
+            .sensitive_tool("unknown_kit", "kit", "anything")
+            .is_some()
+    );
+}
+
+// The platform rule and the policy only add approvals; the platform rule is
+// the one named when both apply, and an author-controlled setting cannot
+// move a declared tool out of a category the policy names.
+#[test]
+fn an_author_setting_cannot_weaken_the_approval_policy() {
+    use crate::approval_policy::{ApprovalPolicy, ApprovalRule, RiskTier};
+    use crate::tool_category::ToolCategory;
+    use std::sync::Arc;
+
+    let runtime = json!({"toolkit_security": {"sensitive_tools": {"github": ["get_issue", "delete_branch"]}}});
+    let policy = ToolAdmissionPolicy::from_runtime_config(runtime.as_object().expect("object"))
+        .expect("policy")
+        .with_approval_policy(Arc::new(ApprovalPolicy::adr_default(RiskTier::Critical)));
+    // The platform rule keeps a read tool sensitive at any tier.
+    assert_eq!(
+        policy
+            .sensitive_tool("github", "repo", "get_issue")
+            .map(|tool| tool.rule()),
+        Some(ApprovalRule::Platform)
+    );
+    assert_eq!(
+        policy
+            .sensitive_tool("github", "repo", "delete_branch")
+            .map(|tool| tool.rule()),
+        Some(ApprovalRule::Platform)
+    );
+    // A toolkit setting that claims a declared send tool is read changes nothing.
+    let settings = json!({
+        "pinned_tools": [{"name": "send_message", "digest": "0".repeat(64), "category": "read"}],
+        "approval": "none",
+    });
+    assert_eq!(
+        policy
+            .sensitive_tool_in("slack", "chat", settings.as_object(), "send_message")
+            .map(|tool| tool.rule()),
+        Some(ApprovalRule::Policy {
+            tier: RiskTier::Critical,
+            category: ToolCategory::ExternalSend
+        })
+    );
+    // An approved MCP server's pin gives an undeclared tool its category.
+    let pins = json!({"pinned_tools": [{"name": "charge", "digest": "1".repeat(64), "category": "payment"}]});
+    assert!(
+        policy
+            .sensitive_tool_in("mcp", "vendor", pins.as_object(), "charge")
+            .is_some()
+    );
+    assert!(
+        policy
+            .sensitive_tool_in("mcp", "vendor", None, "charge")
+            .is_none()
+    );
+}

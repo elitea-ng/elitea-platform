@@ -26,6 +26,9 @@ on:
       - "libs/proto/elitea/llm/**"
       - "libs/proto/elitea/runtime/v1/artifact_object.proto"
       - "libs/proto/elitea/runtime/v1/internal_tool.proto"
+      # The agent runtime compiles in the tool category contract (ADR-0041
+      # decision 5).
+      - "libs/proto/contracts/**"
       # What the workspace's tests read from outside it: the /llm caller
       # contract, the agent runtime's SDK schema gate, and the office
       # extraction fixtures.

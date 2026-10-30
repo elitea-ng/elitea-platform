@@ -23,6 +23,9 @@ type runSafety struct {
 	// delegation is the delegation policy (ADR-0044 decision 3) every
 	// agent execution command carries.
 	delegation *platformconfig.CachedSection[platformconfig.DelegationSettings]
+	// approvalPolicy is the approval policy (ADR-0041 decision 5): the
+	// agent execution commands carry it and pipeline starts check it.
+	approvalPolicy *platformconfig.CachedSection[platformconfig.ApprovalPolicySettings]
 }
 
 func newRunSafety(pool *pgxpool.Pool) runSafety {
@@ -35,6 +38,9 @@ func newRunSafety(pool *pgxpool.Pool) runSafety {
 		}, 0),
 		delegation: platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.DelegationSettings, error) {
 			return platformconfig.LoadDelegationSettings(ctx, pool)
+		}, 0),
+		approvalPolicy: platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.ApprovalPolicySettings, error) {
+			return platformconfig.LoadApprovalPolicySettings(ctx, pool)
 		}, 0),
 	}
 }

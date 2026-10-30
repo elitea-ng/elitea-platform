@@ -177,6 +177,9 @@
       "edit_state_key": null,
       "hitl_interrupt": {
         "action_label": "Fixture Tools.delete_branch",
+        "approval_rule": {
+          "source": "platform"
+        },
         "available_actions": [
           "approve",
           "reject",
@@ -201,6 +204,9 @@
       "hitl_interrupts": [
         {
           "action_label": "Fixture Tools.delete_branch",
+          "approval_rule": {
+            "source": "platform"
+          },
           "available_actions": [
             "approve",
             "reject",

@@ -332,6 +332,14 @@ impl<'a> AuthorizedNativeAssembly<'a> {
         self.command.egress()
     }
 
+    /// The execution's approval policy (ADR-0041 decision 5).
+    #[must_use]
+    pub(crate) const fn approval_policy(
+        &self,
+    ) -> &Arc<elitea_agent_runtime::approval_policy::ApprovalPolicy> {
+        self.command.approval_policy()
+    }
+
     /// Validate the first production assembly profile before credential
     /// redemption becomes reachable.
     pub(crate) fn admit_llm_agent(
