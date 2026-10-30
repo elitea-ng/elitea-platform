@@ -1857,13 +1857,20 @@ impl PipelineStateServices {
             // wrote, which it re-enters. Any other writer is refused.
             RecoveryFrontier::WakePark
         } else if let Some(paused) = plan.paused_writer.as_ref() {
-            // FU-265: a continuation lost before its first root save: the
-            // latest root row is still the paused execution's, which Main
-            // named inside the admission that authorized the decision. The
-            // same proof as the continuation's first attempt decides it.
+            // FU-265: a continuation lost before its first root save. Its row
+            // is proven exactly as on the first attempt, but re-running the
+            // continuation is FU-269: until then it ends typed, nothing runs.
             self.prove_continuation_row(plan, paused, &checkpoint)
                 .await?;
-            RecoveryFrontier::ContinuationPause
+            tracing::warn!(
+                event = "pipeline_recovery_frontier_refused",
+                cause = CONTINUATION_RERUN_UNSUPPORTED,
+                execution_id = %plan.execution_id,
+                generation = plan.generation,
+                expected_execution_id = paused.execution_id(),
+                expected_generation = paused.generation(),
+            );
+            return Err(child_refused(CONTINUATION_RERUN_UNSUPPORTED));
         } else {
             tracing::warn!(
                 event = "pipeline_recovery_frontier_refused",
@@ -1978,6 +1985,9 @@ const CHILD_NOT_PARKED: &str = "pipeline.recovery.child_not_parked";
 const ROOT_WRITER_MISMATCH: &str = "pipeline.recovery.root_writer_mismatch";
 /// FU-265: the named paused row is not this continuation's pause.
 const CONTINUATION_PAUSE_UNBOUND: &str = "pipeline.recovery.continuation_pause_unbound";
+/// FU-265: the continuation's paused row is proven, but a continuation is not
+/// re-run before FU-269 (owner-proven suffix); it ends typed.
+const CONTINUATION_RERUN_UNSUPPORTED: &str = "pipeline.recovery.continuation_rerun_unsupported";
 
 fn child_refused(cause: &'static str) -> NativeAgentAssemblyError {
     invalid_configuration().with_cause(cause, None)
@@ -1993,6 +2003,7 @@ pub(crate) fn is_recovery_frontier_cause(code: &str) -> bool {
         CHILD_NOT_PARKED,
         ROOT_WRITER_MISMATCH,
         CONTINUATION_PAUSE_UNBOUND,
+        CONTINUATION_RERUN_UNSUPPORTED,
     ]
     .contains(&code)
 }
@@ -2014,10 +2025,6 @@ pub(super) enum RecoveryFrontier {
     /// runs again as the wake from the park it was admitted against (class I:
     /// the decision ledger and the children's receipts deduplicate it).
     WakePark,
-    /// FU-265: a continuation whose process was lost before its first root
-    /// save: it runs again as the continuation from the paused row Main
-    /// named; its journal and dispatch records decide every call (R, C, I).
-    ContinuationPause,
 }
 
 /// One bound provider invocation that remains paired with its completion.

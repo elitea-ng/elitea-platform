@@ -4322,41 +4322,79 @@ async fn postgres_continuation_effect_process() {
             let outcome = run_to_end(invocation).await;
             panic!("crash: the process outlived its crash point: {outcome:?}");
         }
-        "recover" => {
-            let pending: Value =
-                serde_json::from_str(&std::env::var(PENDING_ENV).expect("pending")).expect("json");
-            let request = approval(&pending, marker);
-            let assembler = continuation_assembler(&pool, counting);
-            match recovered(&assembler, &request, CONTINUING_EXECUTION, 2).await {
-                Ok(invocation) => {
-                    assert!(marker, "recover: an older Main's reclaim is refused");
-                    let error = run_to_end(invocation)
-                        .await
-                        .expect_err("recover: a call that may have run ends the run");
-                    assert!(
-                        error.contains(crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE),
-                        "recover: the registered may-have-started reason: {error}"
-                    );
-                }
-                Err(error) => {
-                    assert!(
-                        !marker,
-                        "recover: the named paused row is accepted: {error}"
-                    );
-                    assert!(
-                        error.contains("pipeline.recovery.root_writer_mismatch"),
-                        "recover: typed, never Internal: {error}"
-                    );
-                }
-            }
-            assert_eq!(
-                tool_calls.load(Ordering::Acquire),
-                0,
-                "recover: not repeated"
-            );
-        }
+        "recover" => recover_continuation(&pool, marker, counting, &tool_calls).await,
         other => panic!("unknown phase {other}"),
     }
+}
+
+/// The reclaim phase of a [`continuation_scenario`]: B ends typed, nothing
+/// runs again, and the refusal log carries ids and generations only (C4).
+async fn recover_continuation(
+    pool: &sqlx::PgPool,
+    marker: bool,
+    counting: Arc<PipelineMcpConnector>,
+    tool_calls: &AtomicUsize,
+) {
+    let pending: Value =
+        serde_json::from_str(&std::env::var(PENDING_ENV).expect("pending")).expect("json");
+    let request = approval(&pending, marker);
+    let assembler = continuation_assembler(pool, counting);
+    // Both end typed (RECOVERY_FRONTIER_UNSUPPORTED), never Internal:
+    // with the paused writer the row is proven and the re-run is
+    // FU-269; without it the writer does not match.
+    let cause = if marker {
+        "pipeline.recovery.continuation_rerun_unsupported"
+    } else {
+        "pipeline.recovery.root_writer_mismatch"
+    };
+    // This phase runs in its own process, so a global subscriber
+    // captures exactly its logs.
+    let capture = crate::agents::assembly_tests::CapturedOutput::default();
+    tracing::subscriber::set_global_default(
+        tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(capture.clone())
+            .finish(),
+    )
+    .expect("the phase process's subscriber");
+    let Err(error) = recovered(&assembler, &request, CONTINUING_EXECUTION, 2).await else {
+        panic!("recover: a continuation is not re-run before FU-269");
+    };
+    assert!(error.contains(cause), "recover: typed {cause}: {error}");
+    // C4: the refusal is logged with ids and generations only.
+    let logged = capture.text();
+    let refusal = logged
+        .lines()
+        .find(|line| line.contains("pipeline_recovery_frontier_refused"))
+        .unwrap_or_else(|| panic!("recover: the refusal is logged: {logged}"));
+    assert!(
+        refusal.contains(cause) && refusal.contains(CONTINUING_EXECUTION),
+        "{refusal}"
+    );
+    if marker {
+        assert!(
+            refusal.contains(EXECUTION),
+            "the expected writer: {refusal}"
+        );
+    }
+    for private in [
+        pending["interrupt_id"].as_str().expect("interrupt id"),
+        pending["tool_call_id"].as_str().expect("tool call"),
+        "approve",
+        "lookup_release",
+        "requires approval",
+    ] {
+        assert!(
+            !refusal.contains(private),
+            "the refusal logs {private}: {refusal}"
+        );
+    }
+    assert_eq!(
+        tool_calls.load(Ordering::Acquire),
+        0,
+        "recover: not repeated"
+    );
 }
 
 /// FU-265 two-process proof: A pauses, B's approval dies inside the call,

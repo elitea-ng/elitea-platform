@@ -1390,14 +1390,7 @@ impl PipelineNativeAgentAssembler {
                         },
                     )
                     .await?;
-                // A lost wake, or a continuation lost before its first root
-                // save (FU-265), runs its own start again from the row it was
-                // admitted against.
-                wake_rerun = matches!(
-                    frontier,
-                    super::session::RecoveryFrontier::WakePark
-                        | super::session::RecoveryFrontier::ContinuationPause
-                );
+                wake_rerun = frontier == super::session::RecoveryFrontier::WakePark;
                 // A lost wake's answered child may have stopped mid model call
                 // under this execution: it resumes that step (R). A model step of
                 // another execution is never restored.

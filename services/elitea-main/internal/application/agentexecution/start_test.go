@@ -92,17 +92,8 @@ func (stub *currentApplicationResolverStub) ResolveCurrentContinuation(
 	request CurrentContinuationResolveRequest,
 ) (CurrentContinuationTarget, error) {
 	stub.continuationRequests = append(stub.continuationRequests, request)
-	target := stub.continuationTarget
-	// The repository names the paused writer for every continuation that
-	// re-enters a pause (FU-265); a stubbed target gets a fixed one.
-	if target.PausedExecutionID == "" && request.Kind != CurrentContinuationOutputLimit {
-		target.PausedExecutionID, target.PausedGeneration = testPausedExecutionID, 1
-	}
-	return target, stub.err
+	return stub.continuationTarget, stub.err
 }
-
-// testPausedExecutionID is the paused writer stubbed continuation targets name.
-const testPausedExecutionID = "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
 
 type currentApplicationAdmissionStub struct {
 	requests []SubmitRequest

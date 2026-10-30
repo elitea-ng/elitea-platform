@@ -30,14 +30,18 @@ impl PausedWriter {
     pub(crate) fn from_meta<'a>(
         mut lookup: impl FnMut(&str) -> Option<&'a Value>,
     ) -> Result<Option<Self>, PausedWriterError> {
-        let Some(marker) = lookup(PAUSED_WRITER_META_KEY) else {
-            return Ok(None);
-        };
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Raw {
             execution_id: String,
             generation: u64,
+        }
+        let Some(marker) = lookup(PAUSED_WRITER_META_KEY) else {
+            return Ok(None);
+        };
+        // An object only: serde would also read a struct from an array.
+        if !marker.is_object() {
+            return Err(PausedWriterError);
         }
         let raw: Raw = serde_json::from_value(marker.clone()).map_err(|_| PausedWriterError)?;
         if raw.generation == 0 || !valid_execution_id(&raw.execution_id) {
@@ -80,6 +84,22 @@ mod tests {
 
     fn parse(meta: &BTreeMap<String, Value>) -> Result<Option<PausedWriter>, PausedWriterError> {
         PausedWriter::from_meta(|key| meta.get(key))
+    }
+
+    /// The typed refusals map to the registered `RECOVERY_FRONTIER_UNSUPPORTED`
+    /// terminal (`assembly_failure`), never Internal.
+    #[test]
+    fn continuation_refusals_are_recovery_frontier_causes() {
+        for cause in [
+            "pipeline.recovery.root_writer_mismatch",
+            "pipeline.recovery.continuation_pause_unbound",
+            "pipeline.recovery.continuation_rerun_unsupported",
+        ] {
+            assert!(
+                crate::agents::session::is_recovery_frontier_cause(cause),
+                "{cause}"
+            );
+        }
     }
 
     #[test]

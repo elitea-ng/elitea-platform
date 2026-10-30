@@ -733,11 +733,6 @@ WHERE execution_id = $1 AND generation = $2`,
 		notices = append(notices, notice)
 	} else if admission.CurrentContinueTurn != nil {
 		turn := *admission.CurrentContinueTurn
-		// FU-265: the paused writer the command names is the one this
-		// admission transaction reads under the response lock.
-		if err := verifyPausedWriter(ctx, tx, turn); err != nil {
-			return executionapp.AdmissionOutcome{}, nil, err
-		}
 		var resumeErr error
 		switch turn.ContinuationKind {
 		case agentexecutionapp.CurrentContinuationStatic:

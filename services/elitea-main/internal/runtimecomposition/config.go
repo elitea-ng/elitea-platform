@@ -147,11 +147,6 @@ type Config struct {
 	SSEStreamLimits executionapi.SSEStreamLimits
 
 	IndexIngestDispatchEnabled bool
-	// ContinuationPausedWriterEnabled is ELITEA_RUNTIME_CONTINUATION_PAUSED_WRITER_ENABLED
-	// (FU-265): a continuation names the paused writer it re-enters. A Worker
-	// from an earlier release refuses that command, so it is turned on only
-	// after every Worker runs this release (UPGRADING.md).
-	ContinuationPausedWriterEnabled bool
 	// MemoryEmbeddingModel is ELITEA_MEMORY_EMBEDDING_MODEL; empty means the
 	// operator configured none and the Rust worker serves no memory toolkit.
 	MemoryEmbeddingModel          string
@@ -343,13 +338,6 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		}
 	default:
 		return Config{}, errors.New("ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED must be true or false")
-	}
-	switch pausedWriter, _ := lookup("ELITEA_RUNTIME_CONTINUATION_PAUSED_WRITER_ENABLED"); pausedWriter {
-	case "", "false":
-	case "true":
-		config.ContinuationPausedWriterEnabled = true
-	default:
-		return Config{}, errors.New("ELITEA_RUNTIME_CONTINUATION_PAUSED_WRITER_ENABLED must be true or false")
 	}
 	discoveryEnabled, _ := lookup("ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED")
 	switch discoveryEnabled {

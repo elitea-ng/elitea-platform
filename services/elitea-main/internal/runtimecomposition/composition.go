@@ -994,9 +994,6 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		agentStart = agentStart.WithPipelineApproval(pipelineApproval,
 			pipelineApprovalChildren{versions: agentNestedVersions})
 		agentStart = agentStart.WithContextPolicy(repos.NewCurrentAgentContextPolicyRepository(dependencies.AdmissionPool))
-		// FU-265: continuations name the paused writer only once every Worker
-		// runs a release that accepts it (UPGRADING.md).
-		agentStart = agentStart.WithContinuationPausedWriter(config.ContinuationPausedWriterEnabled)
 		// Project Context injection (#946). Same post-construction setter
 		// idiom, same admission pool. This is what replaced the admission
 		// gate that used to 422 every turn in a project whose Settings >

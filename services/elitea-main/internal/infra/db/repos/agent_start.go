@@ -970,7 +970,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentContinuation(
 		ctx,
 		request.ProjectID,
 		pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
-		withPausedWriter(ctx, &target, responseMessageID, request.Kind, func(tx sqlExecutor) error {
+		func(tx sqlExecutor) error {
 			if _, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID, repository.cloudExecutor); err != nil {
 				return err
 			}
@@ -1196,7 +1196,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentContinuation(
 				return agentexecutionapp.ErrUnsupportedCurrentAgentStart
 			}
 			return nil
-		}),
+		},
 	)
 	if err != nil {
 		return agentexecutionapp.CurrentContinuationTarget{}, err
