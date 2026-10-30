@@ -260,7 +260,8 @@ monitoring_case "elitea: Operator defaults scrape and alert together" yes yes
 # scheduler's scrape path alone.
 OTHER_MONITORS=(--set llmGateway.metrics.podMonitor.enabled=false
                 --set deepwiki.metrics.podMonitor.enabled=false
-                --set inventory.metrics.podMonitor.enabled=false)
+                --set inventory.metrics.podMonitor.enabled=false
+                --set main.safetyAlerts.podMonitor.enabled=false)
 monitoring_case "elitea: no scrape path, no rule" no no --set scheduler.metrics.podMonitor.enabled=false "${OTHER_MONITORS[@]}"
 monitoring_case "elitea: annotations alone carry the rule" yes yes --set scheduler.metrics.podMonitor.enabled=false --set scheduler.metrics.scrapeAnnotations=true
 refuse "elitea: plaintext unacknowledged"     "allowPlaintext"               "${EL[@]}" --set nats.enabled=false --set natsClient.tls.enabled=false
