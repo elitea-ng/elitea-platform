@@ -110,6 +110,28 @@ impl<T> Drop for DrivenTask<T> {
     }
 }
 
+/// Run a store operation that opens a database transaction so the
+/// transaction reaches its commit or rollback even when the caller stops
+/// polling (#1534): a caller parked at a stream yield must not leave a row
+/// lock idle in transaction while the same process waits for that row.
+/// Dropping the call still aborts the work (and rolls back). Work that
+/// panics fails as a crashed database worker (`sqlx::Error::WorkerCrashed`).
+///
+/// The work is boxed here, before the returned future is first polled, so
+/// callers' futures do not grow by its size.
+pub(crate) fn to_completion<T, E, W>(work: W) -> impl Future<Output = Result<T, E>> + Send
+where
+    T: Send + 'static,
+    E: From<sqlx::Error> + Send + 'static,
+    W: Future<Output = Result<T, E>> + Send + 'static,
+{
+    let task = DrivenTask::new(work);
+    async move {
+        task.await
+            .unwrap_or_else(|_| Err(E::from(sqlx::Error::WorkerCrashed)))
+    }
+}
+
 type Pull = (EventStream, Option<adk_rust::Result<Event>>);
 
 /// An agent [`EventStream`] whose pending pulls finish on an owned task.

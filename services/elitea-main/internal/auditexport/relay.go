@@ -37,6 +37,9 @@ const (
 	StreamAdminAudit = "admin_audit"
 	// StreamSecurityAudit names the security audit outbox in metrics.
 	StreamSecurityAudit = "security_audit"
+	// StreamRunSteps is the cursor stream of elitea_runtime.run_steps
+	// (ADR-0042 decision 1, #1499).
+	StreamRunSteps = "run_steps"
 )
 
 // ErrCursorMoved reports that a sink's position changed under the relay
@@ -96,8 +99,9 @@ type AuditEventsConfig struct {
 // replica's advance (its rows were delivered twice, which at-least-once
 // allows).
 type AuditEventsRelay struct {
-	db  DB
-	cfg AuditEventsConfig
+	db   DB
+	cfg  AuditEventsConfig
+	spec streamSpec
 
 	// pass serialises Drain within the process; the advisory lock does so
 	// across replicas.
@@ -106,8 +110,48 @@ type AuditEventsRelay struct {
 	lockConn *pgx.Conn
 }
 
-// NewAuditEventsRelay validates the configuration.
+// streamSpec is what differs between the tables a relay tails: the stream
+// name of its cursors and metrics, and the statements that read it in
+// (export_txid, id) order.
+type streamSpec struct {
+	stream string
+	// newestSQL selects the newest (export_txid, id) of the table, for a
+	// new sink's start position.
+	newestSQL string
+	// legacySQL reads rows from before the table had export_txid ($1 id,
+	// $2 limit); empty when every row has one.
+	legacySQL string
+	// rowsSQL reads rows after a position whose transaction ended ($1 txid,
+	// $2 id, $3 limit).
+	rowsSQL string
+	scan    func(pgx.Rows) ([]Event, []position, error)
+}
+
+var adminAuditSpec = streamSpec{
+	stream: StreamAdminAudit,
+	newestSQL: `SELECT export_txid, id FROM centry.audit_events
+     WHERE export_txid <> 0
+     ORDER BY export_txid DESC, id DESC
+     LIMIT 1`,
+	legacySQL: selectLegacyRowsSQL,
+	rowsSQL:   selectRowsSQL,
+	scan:      scanAuditRows,
+}
+
+// NewAuditEventsRelay validates the configuration and tails
+// centry.audit_events.
 func NewAuditEventsRelay(db DB, cfg AuditEventsConfig) (*AuditEventsRelay, error) {
+	return newTableRelay(db, cfg, adminAuditSpec)
+}
+
+// NewRunStepsRelay is the same relay over elitea_runtime.run_steps: each
+// step record goes to every sink as a run_step event, with its own position
+// per sink (stream run_steps), in commit-safe order.
+func NewRunStepsRelay(db DB, cfg AuditEventsConfig) (*AuditEventsRelay, error) {
+	return newTableRelay(db, cfg, runStepsSpec)
+}
+
+func newTableRelay(db DB, cfg AuditEventsConfig, spec streamSpec) (*AuditEventsRelay, error) {
 	if db == nil {
 		return nil, errors.New("audit events relay needs a database")
 	}
@@ -143,7 +187,7 @@ func NewAuditEventsRelay(db DB, cfg AuditEventsConfig) (*AuditEventsRelay, error
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	return &AuditEventsRelay{db: db, cfg: cfg}, nil
+	return &AuditEventsRelay{db: db, cfg: cfg, spec: spec}, nil
 }
 
 // Run relays until ctx ends. A failure is logged and retried on the next tick.
@@ -153,7 +197,7 @@ func (r *AuditEventsRelay) Run(ctx context.Context) {
 	defer r.Close()
 	for {
 		if _, err := r.Drain(ctx); err != nil && ctx.Err() == nil {
-			r.cfg.Logger.Warn("auditexport: audit events relay pass failed; rows stay pending", "err", err)
+			r.cfg.Logger.Warn("auditexport: audit events relay pass failed; rows stay pending", "stream", r.spec.stream, "err", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -177,7 +221,7 @@ func (r *AuditEventsRelay) dropLockLocked() {
 		// once the server has noticed the backend exit, so a replica asking
 		// right after would still find it held. Best effort; the close below
 		// is the backstop.
-		_, _ = r.lockConn.Exec(closeCtx, `SELECT pg_advisory_unlock($1)`, lockKey(StreamAdminAudit))
+		_, _ = r.lockConn.Exec(closeCtx, `SELECT pg_advisory_unlock($1)`, lockKey(r.spec.stream))
 		_ = r.lockConn.Close(closeCtx) // ends the session, which releases the lock
 		cancel()
 		r.lockConn = nil
@@ -204,7 +248,7 @@ func (r *AuditEventsRelay) holdLock(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("audit events export: acquire lock connection: %w", err)
 	}
 	var ok bool
-	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, lockKey(StreamAdminAudit)).Scan(&ok); err != nil {
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, lockKey(r.spec.stream)).Scan(&ok); err != nil {
 		conn.Release()
 		return false, fmt.Errorf("audit events export: advisory lock: %w", err)
 	}
@@ -228,14 +272,12 @@ type position struct{ txid, id int64 }
 // already committed, and those rows would then be replayed as new. A row
 // still in flight at this instant whose transaction is older than the newest
 // visible row counts as history and is not exported.
-const ensureCursorsSQL = `
+func ensureCursorsSQL(newest string) string {
+	return `
 WITH bound AS (
     SELECT pg_snapshot_xmin(pg_current_snapshot())::text::bigint AS xmin
 ), newest AS (
-    SELECT export_txid, id FROM centry.audit_events
-     WHERE export_txid <> 0
-     ORDER BY export_txid DESC, id DESC
-     LIMIT 1
+    ` + newest + `
 ), start AS (
     SELECT CASE WHEN n.export_txid >= b.xmin THEN n.export_txid ELSE b.xmin END AS txid,
            CASE WHEN n.export_txid >= b.xmin THEN n.id ELSE 0 END AS id
@@ -247,6 +289,7 @@ SELECT $1::text, s,
        CASE WHEN $3::boolean THEN 0::bigint ELSE start.id END
   FROM unnest($2::text[]) AS s CROSS JOIN start
 ON CONFLICT (stream, sink) DO NOTHING`
+}
 
 // pruneCursorsSQL drops the positions of sinks no longer configured, so a
 // removed sink does not hold the retention sweep back forever.
@@ -259,13 +302,15 @@ SELECT last_txid, last_id FROM elitea_runtime.audit_export_cursors WHERE stream 
 
 const auditColumns = `e.id, e.timestamp, e.user_id, e.user_email, e.project_id, e.event_type, e.action,
        e.http_method, e.http_route, e.status_code, e.duration_ms, e.is_error,
-       e.entity_type, e.entity_id, e.entity_name, e.trace_id, e.span_id, e.parent_span_id`
+       e.entity_type, e.entity_id, e.entity_name, e.trace_id, e.span_id, e.parent_span_id,
+       c.partition_key, c.partition_seq, c.prev_hash, c.hash`
 
 // selectLegacyRowsSQL reads rows inserted before 0196 (export_txid 0). That
 // set is closed: the migration's lock waited for every inserting transaction.
 const selectLegacyRowsSQL = `
 SELECT e.export_txid, ` + auditColumns + `
   FROM centry.audit_events e
+  LEFT JOIN elitea_runtime.audit_events_chain c ON c.audit_id = e.id
  WHERE e.export_txid = 0 AND e.id > $1
  ORDER BY e.id
  LIMIT $2`
@@ -276,6 +321,7 @@ SELECT e.export_txid, ` + auditColumns + `
 const selectRowsSQL = `
 SELECT e.export_txid, ` + auditColumns + `
   FROM centry.audit_events e
+  LEFT JOIN elitea_runtime.audit_events_chain c ON c.audit_id = e.id
  WHERE e.export_txid <> 0
    AND (e.export_txid, e.id) > ($1::bigint, $2::bigint)
    AND e.export_txid < pg_snapshot_xmin(pg_current_snapshot())::text::bigint
@@ -303,10 +349,10 @@ func (r *AuditEventsRelay) Drain(ctx context.Context) (int, error) {
 	for i, sink := range r.cfg.Sinks {
 		names[i] = sink.Name()
 	}
-	if _, err := r.db.Exec(ctx, ensureCursorsSQL, StreamAdminAudit, names, r.cfg.FromBeginning); err != nil {
+	if _, err := r.db.Exec(ctx, ensureCursorsSQL(r.spec.newestSQL), r.spec.stream, names, r.cfg.FromBeginning); err != nil {
 		return 0, fmt.Errorf("audit events export: ensure cursors: %w", err)
 	}
-	if tag, err := r.db.Exec(ctx, pruneCursorsSQL, StreamAdminAudit, names); err != nil {
+	if tag, err := r.db.Exec(ctx, pruneCursorsSQL, r.spec.stream, names); err != nil {
 		return 0, fmt.Errorf("audit events export: prune cursors: %w", err)
 	} else if tag.RowsAffected() > 0 {
 		r.cfg.Logger.Info("auditexport: dropped the positions of sinks no longer configured", "rows", tag.RowsAffected())
@@ -333,7 +379,7 @@ func (r *AuditEventsRelay) Drain(ctx context.Context) (int, error) {
 // reports a whole batch was read and settled, so more may follow.
 func (r *AuditEventsRelay) exportSinkBatch(ctx context.Context, sink Sink) (int, bool, error) {
 	var from position
-	if err := r.db.QueryRow(ctx, readPositionSQL, StreamAdminAudit, sink.Name()).Scan(&from.txid, &from.id); err != nil {
+	if err := r.db.QueryRow(ctx, readPositionSQL, r.spec.stream, sink.Name()).Scan(&from.txid, &from.id); err != nil {
 		return 0, false, fmt.Errorf("read position: %w", err)
 	}
 	events, positions, err := r.readAfter(ctx, from)
@@ -349,7 +395,7 @@ func (r *AuditEventsRelay) exportSinkBatch(ctx context.Context, sink Sink) (int,
 	settled := settledCount(sendErr, len(events))
 	if settled > 0 {
 		to := positions[settled-1]
-		tag, err := r.db.Exec(ctx, advanceCursorSQL, StreamAdminAudit, sink.Name(), to.txid, to.id, from.txid, from.id)
+		tag, err := r.db.Exec(ctx, advanceCursorSQL, r.spec.stream, sink.Name(), to.txid, to.id, from.txid, from.id)
 		if err != nil {
 			return 0, false, errors.Join(sendErr, fmt.Errorf("advance position: %w", err))
 		}
@@ -363,24 +409,25 @@ func (r *AuditEventsRelay) exportSinkBatch(ctx context.Context, sink Sink) (int,
 	return settled, len(events) == r.cfg.BatchSize, nil
 }
 
-// readAfter reads the next batch after a position: rows from before 0196
-// first, then rows whose inserting transaction has ended.
+// readAfter reads the next batch after a position: rows from before
+// export_txid existed first (centry.audit_events before 0196), then rows
+// whose inserting transaction has ended.
 func (r *AuditEventsRelay) readAfter(ctx context.Context, from position) ([]Event, []position, error) {
-	if from.txid == 0 {
-		rows, err := r.db.Query(ctx, selectLegacyRowsSQL, from.id, r.cfg.BatchSize)
+	if from.txid == 0 && r.spec.legacySQL != "" {
+		rows, err := r.db.Query(ctx, r.spec.legacySQL, from.id, r.cfg.BatchSize)
 		if err != nil {
 			return nil, nil, fmt.Errorf("read rows: %w", err)
 		}
-		events, positions, err := scanAuditRows(rows)
+		events, positions, err := r.spec.scan(rows)
 		if err != nil || len(events) > 0 {
 			return events, positions, err
 		}
 	}
-	rows, err := r.db.Query(ctx, selectRowsSQL, from.txid, from.id, r.cfg.BatchSize)
+	rows, err := r.db.Query(ctx, r.spec.rowsSQL, from.txid, from.id, r.cfg.BatchSize)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read rows: %w", err)
 	}
-	return scanAuditRows(rows)
+	return r.spec.scan(rows)
 }
 
 func scanAuditRows(rows pgx.Rows) ([]Event, []position, error) {
@@ -400,7 +447,8 @@ func scanAuditRows(rows pgx.Rows) ([]Event, []position, error) {
 		)
 		if err := rows.Scan(&txid, &row.ID, &row.Timestamp, &userID, &userEmail, &projectID, &row.EventType, &row.Action,
 			&method, &route, &statusCode, &row.DurationMS, &row.IsError,
-			&entityType, &entityID, &entityName, &traceID, &spanID, &parentSpanID); err != nil {
+			&entityType, &entityID, &entityName, &traceID, &spanID, &parentSpanID,
+			&row.PartitionKey, &row.PartitionSeq, &row.PrevHash, &row.Hash); err != nil {
 			return nil, nil, err
 		}
 		row.UserID, row.ProjectID, row.EntityID = widen(userID), widen(projectID), widen(entityID)
@@ -470,8 +518,8 @@ type Monitor struct {
 	Logger  *slog.Logger
 	// Interval defaults to 15s.
 	Interval time.Duration
-	// Security reports the security audit stream too. Off with the
-	// governance flag, when the outbox stays empty.
+	// Security reports the security audit stream too. elitea-main sets it
+	// on every install: the relay runs whatever the governance flag (#1499).
 	Security bool
 }
 
@@ -517,6 +565,11 @@ func (m Monitor) Observe(ctx context.Context) error {
 	} else {
 		m.Metrics.SetStream(StreamAdminAudit, n, lag)
 	}
+	if n, lag, err := m.runStepsBacklog(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("run steps backlog: %w", err))
+	} else {
+		m.Metrics.SetStream(StreamRunSteps, n, lag)
+	}
 	return errors.Join(errs...)
 }
 
@@ -558,6 +611,36 @@ func (m Monitor) auditBacklog(ctx context.Context) (int64, float64, error) {
 		lag = max(0, time.Since(*oldest).Seconds())
 	}
 	return total, lag, nil
+}
+
+const runStepsBacklogSQL = `
+SELECT count(*), min(s.recorded_at)
+  FROM elitea_runtime.run_steps s
+ WHERE (s.export_txid, s.id) > ($1::bigint, $2::bigint)`
+
+// runStepsBacklog counts the step records the slowest run_steps sink has
+// not passed. No position yet means nothing is counted.
+func (m Monitor) runStepsBacklog(ctx context.Context) (int64, float64, error) {
+	var at position
+	err := m.DB.QueryRow(ctx, slowestPositionSQL, StreamRunSteps).Scan(&at.txid, &at.id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	var (
+		n      int64
+		oldest *time.Time
+	)
+	if err := m.DB.QueryRow(ctx, runStepsBacklogSQL, at.txid, at.id).Scan(&n, &oldest); err != nil {
+		return 0, 0, err
+	}
+	lag := 0.0
+	if oldest != nil {
+		lag = max(0, time.Since(*oldest).Seconds())
+	}
+	return n, lag, nil
 }
 
 // Run observes until ctx ends.

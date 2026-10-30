@@ -20,6 +20,30 @@ type StrictProtoCodec struct {
 	maxReceiveMessageBytes       int
 	maxSendMessageBytes          int
 	compiledSnapshotReceiveBytes int
+	// reportReceiveBytes enlarges the bound of the worker's evidence reports
+	// (WithWorkerReportRequestLimits) by request type.
+	reportReceiveBytes map[protoreflect.FullName]int
+}
+
+// Worker report request bounds. A run step report carries at most 64 steps
+// and the worker splits a batch at RunStepReportMaxRequestBytes encoded
+// (ADR-0042, #1499); any single bounded step (two 256 KiB content sides, an
+// 8 KiB summary, 100 documents) fits one. An egress summary carries two host
+// lists of at most 256 entries (ADR-0044 decision 2).
+const (
+	RunStepReportMaxRequestBytes       = 1024 * 1024
+	EgressSummaryReportMaxRequestBytes = 256 * 1024
+)
+
+// WithWorkerReportRequestLimits enlarges only ReportRunStepsRequestV1 (to
+// RunStepReportMaxRequestBytes) and ReportEgressSummaryRequestV1 (to
+// EgressSummaryReportMaxRequestBytes). Every other control method keeps the
+// listener's bound.
+func (c *StrictProtoCodec) WithWorkerReportRequestLimits() {
+	c.reportReceiveBytes = map[protoreflect.FullName]int{
+		"elitea.runtime.v1.ReportRunStepsRequestV1":      RunStepReportMaxRequestBytes,
+		"elitea.runtime.v1.ReportEgressSummaryRequestV1": EgressSummaryReportMaxRequestBytes,
+	}
 }
 
 func NewStrictProtoCodec(maxMessageBytes int) (*StrictProtoCodec, error) {
@@ -47,10 +71,24 @@ func (c *StrictProtoCodec) WithCompiledSnapshotRequestLimit(limit int) error {
 	return nil
 }
 func (c *StrictProtoCodec) receiveLimit(message proto.Message) int {
-	if c.compiledSnapshotReceiveBytes > 0 && message.ProtoReflect().Descriptor().FullName() == "elitea.runtime.v1.AuthorizeRustCompiledSnapshotRequestV1" {
+	name := message.ProtoReflect().Descriptor().FullName()
+	if c.compiledSnapshotReceiveBytes > 0 && name == "elitea.runtime.v1.AuthorizeRustCompiledSnapshotRequestV1" {
 		return c.compiledSnapshotReceiveBytes
 	}
+	if limit, ok := c.reportReceiveBytes[name]; ok && limit > c.maxReceiveMessageBytes {
+		return limit
+	}
 	return c.maxReceiveMessageBytes
+}
+
+// largestReceive is the transport's frame bound: the largest per-message
+// bound, which the codec then narrows by request type.
+func (c *StrictProtoCodec) largestReceive() int {
+	largest := max(c.maxReceiveMessageBytes, c.compiledSnapshotReceiveBytes)
+	for _, limit := range c.reportReceiveBytes {
+		largest = max(largest, limit)
+	}
+	return largest
 }
 func (c *StrictProtoCodec) Name() string { return "proto" }
 
@@ -88,7 +126,7 @@ func (c *StrictProtoCodec) Unmarshal(encoded []byte, value any) error {
 
 func StrictServerOptions(codec *StrictProtoCodec) []grpc.ServerOption {
 	return []grpc.ServerOption{
-		grpc.MaxRecvMsgSize(max(codec.maxReceiveMessageBytes, codec.compiledSnapshotReceiveBytes)),
+		grpc.MaxRecvMsgSize(codec.largestReceive()),
 		grpc.MaxSendMsgSize(codec.maxSendMessageBytes),
 		grpc.ForceServerCodec(codec),
 	}

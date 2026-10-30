@@ -38,6 +38,8 @@ type recordingStore struct {
 	export      *ExportHold
 	exportNoRow bool
 	queryErr    error
+	// chained reports shared migration 0206's chain head table.
+	chained bool
 }
 
 type fakeRow struct {
@@ -65,6 +67,9 @@ func (r fakeRow) Scan(dest ...any) error {
 func (s *recordingStore) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	if s.queryErr != nil {
 		return fakeRow{err: s.queryErr}
+	}
+	if sql == chainHeadTableSQL {
+		return fakeRow{values: []any{s.chained}}
 	}
 	if sql == exportCursorTableSQL {
 		return fakeRow{values: []any{s.export != nil || s.exportNoRow}}
@@ -170,6 +175,50 @@ func TestTheStatementDeletesOnlyOlderRows(t *testing.T) {
 		if strings.Contains(deleteBatchSQL, forbidden) {
 			t.Errorf("the sweeper writes as well as deletes: %q appears in the statement", forbidden)
 		}
+	}
+}
+
+// TestTheChainedStatementPrunesAPrefixAndMovesTheAnchor pins the shape of
+// the statement used once migration 0206 chains the table; its behaviour is
+// asserted against PostgreSQL in sweeper_postgres_integration_test.go.
+func TestTheChainedStatementPrunesAPrefixAndMovesTheAnchor(t *testing.T) {
+	t.Parallel()
+
+	for _, statement := range []string{deleteChainedBatchSQL, deleteChainedBatchHeldSQL} {
+		for _, fragment := range []string{
+			"FOR UPDATE",
+			"NOT EXISTS (SELECT 1 FROM elitea_runtime.audit_events_chain",
+			"l.partition_seq > head.pruned_seq",
+			"DELETE FROM elitea_runtime.audit_events_chain",
+			"bool_and(expired) OVER (ORDER BY partition_seq)",
+			"SET pruned_seq = tip.partition_seq, pruned_hash = tip.hash",
+			"LIMIT $2",
+		} {
+			if !strings.Contains(statement, fragment) {
+				t.Errorf("the chained statement no longer contains %q:\n%s", fragment, statement)
+			}
+		}
+		for _, forbidden := range []string{"INSERT", "UPDATE centry", "TRUNCATE"} {
+			if strings.Contains(statement, forbidden) {
+				t.Errorf("the sweeper writes audit rows: %q appears in the chained statement", forbidden)
+			}
+		}
+	}
+	if !strings.Contains(deleteChainedBatchHeldSQL, "(e.export_txid, e.id) <= ($3::bigint, $4::bigint)") {
+		t.Error("the held chained statement does not stop at the export position")
+	}
+}
+
+func TestAChainedDatabaseGetsTheChainedStatement(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingStore{removals: []int64{1}, chained: true}
+	sweeper := newTestSweeper(t, store, openGate, Config{RetentionDays: 30, BatchSize: 10}, time.Now())
+	if _, err := sweeper.Sweep(context.Background()); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if len(store.calls) != 1 || store.calls[0].sql != deleteChainedBatchSQL {
+		t.Fatalf("a chained database was swept with %d statement(s), want the chained one", len(store.calls))
 	}
 }
 

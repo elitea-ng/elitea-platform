@@ -253,6 +253,11 @@ func (h *Handler) refuseUnresolvableToolkitSettings(
 	if h.refuseMalformedMemorySettings(w, r, save, toolkitType, settings) {
 		return true
 	}
+	// The step-record minimisation list (ADR-0042, #1499), any toolkit type:
+	// unconditional like the memory rules.
+	if h.refuseMalformedEvidenceFields(w, r, save, toolkitType, settings) {
+		return true
+	}
 	// The bucket the file-store toolkits keep their files in, which their
 	// schema declares required and nothing else enforces on save: like the
 	// memory rules, unconditional.
@@ -565,6 +570,69 @@ func (h *Handler) refuseMalformedMemorySettings(
 		save.logAttrs(toolkitType, "problems", len(problems))...)
 	writeJSON(w, http.StatusBadRequest, map[string]any{
 		"error":           "the memory toolkit's settings are not valid",
+		"valid":           false,
+		"settings_errors": problems,
+	})
+	return true
+}
+
+// Bounds of a toolkit's `evidence_fields` setting.
+const (
+	evidenceFieldsMax         = 64
+	evidenceFieldNameMaxBytes = 128
+)
+
+// evidenceFieldsProblems lists what is wrong with a toolkit's
+// `evidence_fields`: the top-level keys of a JSON tool result its step
+// records keep (ADR-0042 decision 2). Absent or null keeps the whole result.
+// The store fails closed on a malformed stored value (nothing kept); this
+// refuses one at save so the owner sees why.
+func evidenceFieldsProblems(settings map[string]any) []map[string]any {
+	value, present := settings["evidence_fields"]
+	if !present || value == nil {
+		return nil
+	}
+	problem := func(message string) []map[string]any {
+		return []map[string]any{{
+			"loc":  []string{"settings", "evidence_fields"},
+			"msg":  message,
+			"type": "value_error",
+			"code": "invalid_evidence_fields",
+		}}
+	}
+	list, isList := value.([]any)
+	if !isList {
+		return problem("Evidence fields must be a list of field names.")
+	}
+	if len(list) > evidenceFieldsMax {
+		return problem("Evidence fields name at most 64 fields.")
+	}
+	for _, item := range list {
+		name, isText := item.(string)
+		if !isText || name == "" || len(name) > evidenceFieldNameMaxBytes || strings.ContainsFunc(name, unicode.IsControl) {
+			return problem("Each evidence field must be a field name of 1 to 128 bytes without control characters.")
+		}
+	}
+	return nil
+}
+
+// refuseMalformedEvidenceFields answers 400 for a malformed
+// `evidence_fields`. It reports whether it wrote a response.
+func (h *Handler) refuseMalformedEvidenceFields(
+	w http.ResponseWriter,
+	r *http.Request,
+	save toolkitSave,
+	toolkitType string,
+	settings map[string]any,
+) bool {
+	problems := evidenceFieldsProblems(settings)
+	if len(problems) == 0 {
+		return false
+	}
+	slog.WarnContext(r.Context(), "toolkit save refused: evidence_fields is not valid",
+		save.logAttrs(toolkitType, "problems", len(problems))...)
+	writeJSON(w, http.StatusBadRequest, map[string]any{
+		"error":           "the toolkit's evidence_fields setting is not valid",
 		"valid":           false,
 		"settings_errors": problems,
 	})

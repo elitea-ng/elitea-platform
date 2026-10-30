@@ -140,6 +140,11 @@ where
         let clock = Arc::clone(&self.clock);
         let max_output_sessions = self.max_output_sessions;
         let terminal_recovery = self.terminal_recovery;
+        // A checkpoint or node-recovery attempt resumes another claim's run:
+        // mark the possible step gap first (ADR-0042, #1499).
+        if let Some((identity, fence)) = run.recovered_claim() {
+            control.begin_recovered_run_steps(identity, fence, clock.now_unix_millis());
+        }
         // Box the generated state machine before adding instrumentation. The
         // lifecycle deliberately crosses several ownership-heavy async phases;
         // keeping the poll frame behind this allocation prevents its stack size
@@ -489,6 +494,12 @@ where
 {
     let (mut run, mut native, mut projector, mut completion_selector) = started.into_parts();
 
+    // ADR-0042 (#1499): this command's step records. The decisions a
+    // continuation carries come first; the projector records the turn's
+    // model, tool and output steps from here on.
+    let steps = RunSteps::bind(&control, &run, clock.as_ref());
+    projector.attach_run_steps(Arc::clone(&steps.recorder));
+
     let mut probe = run.lease_state_probe();
     let mut pauses = AgentPauseAccumulator::default();
     let wrap_up = completion_selector.wrap_up();
@@ -501,6 +512,7 @@ where
         &mut probe,
         wrap_up,
         clock.as_ref(),
+        &steps,
     ))
     .await;
     tracing::info!(
@@ -539,6 +551,13 @@ where
             let occurred_at_unix_millis = clock.now_unix_millis();
             if occurred_at_unix_millis <= 0 {
                 return Box::pin(run.close_no_ack("agent_lifecycle.invalid_clock", false)).await;
+            }
+            for step in super::run_step_events::approval_request_steps(
+                &pause.event,
+                &steps.command_id,
+                occurred_at_unix_millis,
+            ) {
+                steps.recorder.record(step);
             }
             // ADR-0034 decision 7: a cloud-executor turn publishes its work
             // so far before the pause is reported; a failed publish fails the
@@ -695,6 +714,53 @@ where
     .await
 }
 
+/// One run's step recorder and where it reports (ADR-0042, #1499).
+struct RunSteps<R> {
+    recorder: Arc<crate::protocol::run_steps::RunStepRecorder>,
+    /// The command the steps belong to: the seed of replay-stable step ids.
+    command_id: String,
+    control: Arc<AgentControlClient<R>>,
+}
+
+impl<R: ControlRpc + 'static> RunSteps<R> {
+    fn bind<C, K>(
+        control: &Arc<AgentControlClient<R>>,
+        run: &CursorBoundAuthorizedAgentRun<C>,
+        clock: &K,
+    ) -> Self
+    where
+        C: AgentProgressConnector,
+        K: UnixMillisClock,
+    {
+        let recorder = control.run_steps(
+            run.trace_execution_id(),
+            run.trace_generation(),
+            run.trace_command_id(),
+        );
+        let payload = run.step_payload();
+        if super::run_step_events::is_continuation(payload) {
+            recorder.mark_resumed();
+        }
+        let command_id = run.trace_command_id().to_owned();
+        for step in super::run_step_events::approval_decision_steps(
+            payload,
+            &command_id,
+            clock.now_unix_millis(),
+        ) {
+            recorder.record(step);
+        }
+        Self {
+            recorder,
+            command_id,
+            control: Arc::clone(control),
+        }
+    }
+
+    async fn flush_early(&self) {
+        self.control.flush_run_steps_early(&self.recorder).await;
+    }
+}
+
 enum NativeStreamOutcome {
     Eos,
     Paused,
@@ -719,7 +785,8 @@ const fn stream_disposition(outcome: &NativeStreamOutcome) -> &'static str {
     clippy::too_many_lines,
     reason = "Keep ordered authority checks and durable phases in one owner operation."
 )]
-async fn drive_native_stream<C, K>(
+#[allow(clippy::too_many_arguments)] // Each owner is borrowed for the stream's whole life.
+async fn drive_native_stream<C, K, R>(
     run: &mut CursorBoundAuthorizedAgentRun<C>,
     native: &mut NativeAgentRun,
     projector: &mut AgentEventProjector,
@@ -727,10 +794,12 @@ async fn drive_native_stream<C, K>(
     probe: &mut ClaimLeaseStateProbe,
     wrap_up: Option<std::sync::Arc<crate::workspace_run::wrap_up::WrapUp>>,
     clock: &K,
+    steps: &RunSteps<R>,
 ) -> NativeStreamOutcome
 where
     C: AgentProgressConnector,
     K: UnixMillisClock,
+    R: ControlRpc + 'static,
 {
     let mut failure = None;
     // ADR-0034 take back: the lease poll's `workspace_wrap_up` asks the turn
@@ -862,6 +931,9 @@ where
                 };
                 match Box::pin(publish_batch(run, batch, pauses, clock)).await {
                     BatchPublication::Acknowledged => {
+                        // A full batch of step records goes out under the
+                        // live claim now rather than waiting for settlement.
+                        Box::pin(steps.flush_early()).await;
                         if projector.is_node_recovery_paused() {
                             let _requested=native.request_stop();
                             return NativeStreamOutcome::NodeRecoverySuspended;
@@ -1355,6 +1427,18 @@ where
         && occurred_at_unix_millis >= run.deadline_unix_millis()
     {
         failure = Some(RuntimeFailureKind::DeadlineExceeded);
+    }
+    if let Some(kind) = failure {
+        let recorder = control.run_steps(
+            run.trace_execution_id(),
+            run.trace_generation(),
+            run.trace_command_id(),
+        );
+        recorder.record(super::run_step_events::terminal_failure_step(
+            kind,
+            occurred_at_unix_millis,
+            run.deadline_unix_millis(),
+        ));
     }
     let selection = failure.map_or(successful_terminal, FreshAgentTerminalSelection::Failure);
     let completion = Box::pin(run.finish_terminal(

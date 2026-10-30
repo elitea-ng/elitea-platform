@@ -3049,6 +3049,11 @@ main:
     # "now" (default) starts at the newest audit_events row; "beginning"
     # replays the whole table on the first run.
     ELITEA_AUDIT_EXPORT_AUDIT_EVENTS_FROM: "now"
+    # "true" | "false": also export the step records of agent and pipeline
+    # runs (elitea_runtime.run_steps, ADR-0042, default true): digests and
+    # references, never the content. "now" (default) | "beginning" as above.
+    ELITEA_AUDIT_EXPORT_RUN_STEPS: "true"
+    ELITEA_AUDIT_EXPORT_RUN_STEPS_FROM: "now"
     ELITEA_AUDIT_EXPORT_BATCH_SIZE: "200"
     ELITEA_AUDIT_EXPORT_INTERVAL: "5s"
     # A batch the receiver refuses as malformed (400, 413, 422) this many times
@@ -4070,6 +4075,23 @@ main:
         lagSeconds: 900
         # EliteaAuditExportBacklog: more undelivered events than this.
         backlogEvents: 10000
+
+  # Grafana dashboard "Elitea / Agent runs, errors, tool calls and spend"
+  # (ADR-0042, #1499): a ConfigMap labelled grafana_dashboard: "1" for a
+  # Grafana dashboard sidecar (kube-prometheus-stack's, for example), with the
+  # JSON from files/dashboards/agent-runs.json. Off by default. It charts only
+  # metrics the services export: the audit export's (main.auditExport.metrics),
+  # the LLM gateway's (llmGateway.metrics) and the scheduler's
+  # (scheduler.metrics). No series carries an agent label, so every panel is
+  # platform-wide; there is no tool-call or spend-amount metric, and the
+  # dashboard says so rather than charting a stand-in.
+  grafanaDashboard:
+    enabled: false
+    # Extra labels, e.g. one your sidecar's label selector needs.
+    labels: {}
+    # Annotations, e.g. grafana_folder: Elitea for a sidecar with
+    # folderAnnotation set.
+    annotations: {}
 
   # Kubernetes execution path for the versioned migration corpus
   # (services/elitea-main/migrations/{shared,tenant}, applied by the separate

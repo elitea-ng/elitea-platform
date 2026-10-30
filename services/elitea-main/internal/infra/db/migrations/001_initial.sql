@@ -1186,7 +1186,11 @@ JOIN (VALUES
     -- get the grant from
     -- migrations/shared/0204_agent_lifecycle_governance.sql.
     ('super_admin', 'models.applications.governance'),
-    ('admin', 'models.applications.governance')
+    ('admin', 'models.applications.governance'),
+    -- Issue 1499, run step evidence (ADR-0042). Existing databases get the
+    -- grant from migrations/shared/0205_run_steps.sql.
+    ('super_admin', 'runs.evidence.read'),
+    ('admin', 'runs.evidence.read')
 ) AS grant_row(role_name, permission) ON grant_row.role_name = role.name
 WHERE role.mode = 'administration'
 ON CONFLICT (role_id, permission) DO NOTHING;
@@ -1203,6 +1207,15 @@ CROSS JOIN (VALUES
     ('lifecycle.attestations.write'),
     ('lifecycle.registry.mark_due')
 ) AS grant_row(permission)
+WHERE role.mode = 'default' AND role.name = 'admin'
+ON CONFLICT (role_id, permission) DO NOTHING;
+
+-- Issue 1499: the project admin reads a run's step records, verifies their
+-- chain and reads their stored content. Existing databases get the grant
+-- from migrations/shared/0205_run_steps.sql.
+INSERT INTO auth_core__role_permission (role_id, permission)
+SELECT role.id, 'runs.evidence.read'
+FROM auth_core__role AS role
 WHERE role.mode = 'default' AND role.name = 'admin'
 ON CONFLICT (role_id, permission) DO NOTHING;
 

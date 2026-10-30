@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+package elitea.runtime.v1;
+
+import "elitea/runtime/v1/common.proto";
+import "elitea/runtime/v1/errors.proto";
+
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+
+// RunStepKindV1 is the kind of one step record (ADR-0042 decision 1).
+enum RunStepKindV1 {
+  RUN_STEP_KIND_V1_UNSPECIFIED = 0;
+  RUN_STEP_KIND_V1_MODEL_CALL = 1;
+  RUN_STEP_KIND_V1_TOOL_CALL = 2;
+  RUN_STEP_KIND_V1_RETRIEVAL = 3;
+  RUN_STEP_KIND_V1_APPROVAL = 4;
+  RUN_STEP_KIND_V1_DELEGATION = 5;
+  RUN_STEP_KIND_V1_CAP = 6;
+  RUN_STEP_KIND_V1_ERROR = 7;
+  RUN_STEP_KIND_V1_OUTPUT = 8;
+}
+
+// RunStepContentV1 is one side (inputs or outputs) of a step. Main stores it
+// in object storage and keeps only its digest and reference in the step row.
+message RunStepContentV1 {
+  // UTF-8 JSON or text. At most 256 KiB; the worker cuts longer content and
+  // sets truncated.
+  bytes content = 1;
+  // "application/json" or "text/plain".
+  string media_type = 2;
+  bool truncated = 3;
+  // Size before truncation.
+  int64 original_size_bytes = 4;
+  reserved 5 to 10;
+}
+
+// RetrievedDocumentV1 is one hit a retrieval returned.
+message RetrievedDocumentV1 {
+  string document_id = 1;
+  // Source path, URL or title, when the index records one.
+  string source = 2;
+  double score = 3;
+  // 1-based position in the returned list.
+  uint32 rank = 4;
+  reserved 5 to 10;
+}
+
+// RetrievalSummaryV1 is what a retrieval step searched and what it got back.
+message RetrievalSummaryV1 {
+  string index_name = 1;
+  string query = 2;
+  // The filters as a JSON object; empty when none.
+  string filters_json = 3;
+  uint32 top_k = 4;
+  // At most 100 documents.
+  repeated RetrievedDocumentV1 documents = 5;
+  reserved 6 to 15;
+}
+
+// RunStepV1 is one step record as the worker reports it. Main assigns the
+// step's seq and chain hash on persist, in the order steps arrive for the
+// run; the worker reports them in the order they happened.
+message RunStepV1 {
+  // Worker-generated UUID. The idempotency key: a step_id main already
+  // stored for the run is skipped, so a retried report never duplicates.
+  string step_id = 1;
+  RunStepKindV1 kind = 2;
+  int64 started_at_unix_ms = 3;
+  int64 ended_at_unix_ms = 4;
+  // Pipeline node id; empty for an agent turn.
+  string node_id = 5;
+  // Tool name, model name, approval or delegation target, cap name or error
+  // code, by kind.
+  string name = 6;
+  // The toolkit the tool belongs to, for tool_call and retrieval; main
+  // applies that toolkit's evidence_fields to the stored content.
+  string toolkit_id = 7;
+  // Small structured fields per kind as a JSON object, at most 8 KiB: for
+  // example model, token counts, decision, cap value, error code.
+  string summary_json = 8;
+  // Set for retrieval steps.
+  RetrievalSummaryV1 retrieval = 9;
+  RunStepContentV1 inputs = 10;
+  RunStepContentV1 outputs = 11;
+  // For output steps: the retrieval steps whose documents the output cites,
+  // and the cited document ids.
+  repeated string cited_step_ids = 12;
+  repeated string cited_document_ids = 13;
+  reserved 14 to 25;
+}
+
+// ReportRunStepsRequestV1 carries the step records of one claimed execution
+// (ADR-0042 decision 1, #1499). It is sent under the live claim; the worker
+// flushes every buffered step before PrepareSettlement. A rejected or failed
+// report is retried; a step is never dropped silently.
+message ReportRunStepsRequestV1 {
+  ExecutionIdentityV1 identity = 1;
+  ExecutionFenceV1 fence = 2;
+  // At most 64 steps, in the order they happened.
+  repeated RunStepV1 steps = 3;
+  reserved 4 to 15;
+}
+
+message ReportRunStepsResponseV1 {
+  RuntimeErrorV1 rejection = 1;
+  // Steps stored by this call; duplicates of stored step_ids are not counted.
+  uint32 accepted = 2;
+  reserved 3 to 10;
+}

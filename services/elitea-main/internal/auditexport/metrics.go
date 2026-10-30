@@ -51,7 +51,7 @@ func NewMetrics() *Metrics {
 func (m *Metrics) Register(sink string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, source := range []Source{SourceSecurityAudit, SourceAdminAudit} {
+	for _, source := range []Source{SourceSecurityAudit, SourceAdminAudit, SourceRunStep} {
 		m.delivered[[2]string{sink, string(source)}] += 0
 		m.deadLettered[[2]string{sink, string(source)}] += 0
 	}

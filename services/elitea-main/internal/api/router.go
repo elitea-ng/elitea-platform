@@ -68,6 +68,7 @@ import (
 	v2promptcontextreads "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
 	v2releasegates "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/releasegates"
 	v2retention "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/retention"
+	v2runevidence "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/runevidence"
 	v2safety "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/safety"
 	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
@@ -90,6 +91,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/patexpiry"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runevidence"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
 	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
@@ -2097,6 +2099,23 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			lifecycleGate = releasegate.LifecycleGate{Gate: cfg.ReleaseGate}
 		}
 		agentLifecycle, _ = dbrepos.ComposeAgentLifecycle(cfg.Pool, lifecycleGate, cfg.SuspensionChanged)
+	}
+	// Run step records (ADR-0042, #1499): without a pool the store stays
+	// nil and the routes answer 503; without an object store the stored
+	// content of a step answers 503 while its record still reads.
+	var runEvidence *v2runevidence.Handler
+	{
+		var steps *dbrepos.RunSteps
+		if cfg.Pool != nil {
+			steps, _ = dbrepos.ComposeRunSteps(cfg.Pool)
+		}
+		var content runevidence.ContentStore
+		if cfg.ObjectStore != nil {
+			if objects, err := storage.NewRunEvidenceContent(cfg.ObjectStore); err == nil {
+				content = objects
+			}
+		}
+		runEvidence = v2runevidence.NewHandler(steps, content)
 	}
 	coreHandler := v2core.NewHandler(
 		cfg.Pool,
@@ -4483,6 +4502,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(projectPermission(agentlifecycle.AttestationsWritePermission)).
 						Post(v2agentlifecycle.RevokeAttestPath, lifecycle.RevokeAttestation)
 				}
+				// Run step records (ADR-0042 decisions 1 and 2): every read,
+				// the content's included, takes runs.evidence.read; a content
+				// read is recorded in audit_events before it is answered.
+				{
+					readEvidence := projectPermission(v2runevidence.Permission)
+					r.With(readEvidence).Get(v2runevidence.StepsPath, runEvidence.ListSteps)
+					r.With(readEvidence).Get(v2runevidence.VerifyPath, runEvidence.Verify)
+					r.With(readEvidence).Get(v2runevidence.ContentPath, runEvidence.GetContent)
+					r.With(readEvidence).Get(v2runevidence.ConversationRunsPath, runEvidence.ListConversationRuns)
+				}
 				r.With(requirePublish).
 					Get("/publish_validate/prompt_lib/{projectID}/{versionID}", coreHandler.PublishValidate)
 				r.With(requirePublish).
@@ -5088,6 +5117,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireAuditTrail).Get("/audit_heatmap/{mode}", coreHandler.AuditHeatmap)
 				r.With(requireAuditTrail).Get("/audit_traces/{mode}", coreHandler.AuditTraces)
 				r.With(requireAuditTrail).Get("/audit_trace_heatmap/{mode}", coreHandler.AuditTraceHeatmap)
+				// The audit_events hash chain's verification (ADR-0042, issue
+				// 1499; shared 0206). A read of the same table, so the same
+				// gate; no new permission, no grant migration.
+				r.With(requireAuditTrail).Get("/audit_chain_verify/administration", coreHandler.AuditChainVerify)
 
 				// Per-user event counts for ONE project — the admin Projects
 				// page's activity drawer (unit A14). Same table and therefore

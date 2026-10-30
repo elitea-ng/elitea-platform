@@ -1,0 +1,32 @@
+{{- if and .Values.main.enabled (dig "grafanaDashboard" "enabled" false .Values.main) }}
+{{- /* The agent runs, errors, tool calls and spend dashboard (ADR-0042, #1499)
+       as a ConfigMap a Grafana dashboard sidecar picks up by its
+       grafana_dashboard label. Off by default. The JSON comes from
+       files/dashboards/ through .Files.Get, so Helm never templates it and the
+       Grafana's double-brace legend syntax reaches it intact. It needs no Prometheus
+       Operator API: a panel over a series nothing scrapes is empty, not a
+       broken object. */ -}}
+{{- $dash := .Values.main.grafanaDashboard }}
+{{- $json := .Files.Get "files/dashboards/agent-runs.json" }}
+{{- if not $json }}
+{{- fail "main.grafanaDashboard.enabled=true, but files/dashboards/agent-runs.json is missing from the chart" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "elitea-main.fullname" . }}-grafana-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "elitea-main.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+    {{- with $dash.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $dash.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  elitea-agent-runs.json: |-
+    {{- $json | nindent 4 }}
+{{- end }}

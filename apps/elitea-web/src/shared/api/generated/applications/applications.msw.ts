@@ -68,6 +68,7 @@ import type {
   ApplicationVersionDetail,
   ApplicationVersionDetailExpanded,
   AuthorDetail,
+  ConversationRunList,
   DefaultIcon,
   DocumentLoadersResponse,
   EvalDataset,
@@ -105,6 +106,9 @@ import type {
   ReleaseGateSuite,
   ReleaseGateSuiteList,
   ResolvedApplicationVersion,
+  RunStepContent,
+  RunStepsPage,
+  RunStepsVerification,
   TrendingAuthor,
   UnpublishResponse,
   UploadedIconsList,
@@ -1638,6 +1642,200 @@ export const getRevokeAgentAttestationResponseMock = (): AgentAttestation => ({
   revoked_by: null,
   revoke_reason: "",
   valid: true,
+});
+
+export const getListRunStepsResponseMock = (
+  overrideResponse: Partial<Extract<RunStepsPage, object>> = {},
+): RunStepsPage => ({
+  run: {
+    run_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    project_id: faker.number.int(),
+    application_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    conversation_uuid: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    message_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    steps: faker.number.int(),
+    head_hash: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    anchored_seq: faker.number.int(),
+    anchored_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  },
+  steps: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    seq: faker.number.int(),
+    step_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    generation: faker.number.int(),
+    kind: faker.helpers.arrayElement([
+      "model_call",
+      "tool_call",
+      "retrieval",
+      "approval",
+      "delegation",
+      "cap",
+      "error",
+      "output",
+    ] as const),
+    actor: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    release_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    definition_digest: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    node_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    toolkit_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    started_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    ended_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    summary: {},
+    retrieval: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([null]),
+      null,
+    ]),
+    cited_step_ids: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    cited_document_ids: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    inputs: {
+      status: faker.helpers.arrayElement([
+        "stored",
+        "expired",
+        "empty",
+        "not_stored",
+      ] as const),
+      digest: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      size: faker.number.int(),
+      original_size: faker.number.int(),
+      truncated: faker.datatype.boolean(),
+      filtered: faker.datatype.boolean(),
+      media_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    },
+    outputs: {
+      status: faker.helpers.arrayElement([
+        "stored",
+        "expired",
+        "empty",
+        "not_stored",
+      ] as const),
+      digest: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      size: faker.number.int(),
+      original_size: faker.number.int(),
+      truncated: faker.datatype.boolean(),
+      filtered: faker.datatype.boolean(),
+      media_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    },
+    prev_hash: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    hash: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    recorded_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    content_expired_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    content_expired_policy: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+  })),
+  next_after_seq: faker.helpers.arrayElement([faker.number.int(), null]),
+  ...overrideResponse,
+});
+
+export const getVerifyRunStepsResponseMock = (
+  overrideResponse: Partial<Extract<RunStepsVerification, object>> = {},
+): RunStepsVerification => ({
+  run_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ok: faker.datatype.boolean(),
+  steps: faker.number.int(),
+  verified: faker.number.int(),
+  head_hash: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  anchored_seq: faker.number.int(),
+  break: faker.helpers.arrayElement([
+    {
+      seq: faker.number.int(),
+      reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    },
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetRunStepContentResponseMock = (
+  overrideResponse: Partial<Extract<RunStepContent, object>> = {},
+): RunStepContent => ({
+  run_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  step_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  side: faker.helpers.arrayElement(["inputs", "outputs"] as const),
+  status: faker.helpers.arrayElement([
+    "stored",
+    "expired",
+    "empty",
+    "not_stored",
+  ] as const),
+  digest: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  media_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  truncated: faker.datatype.boolean(),
+  filtered: faker.datatype.boolean(),
+  encoding: faker.helpers.arrayElement([
+    faker.helpers.arrayElement(["utf-8", "base64"] as const),
+    null,
+  ]),
+  content: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  expired_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  policy: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getListConversationRunsResponseMock = (
+  overrideResponse: Partial<Extract<ConversationRunList, object>> = {},
+): ConversationRunList => ({
+  conversation_uuid: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  runs: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    run_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    message_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    steps: faker.number.int(),
+    anchored: faker.datatype.boolean(),
+    started_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  ...overrideResponse,
 });
 
 export const getListVersionRevisionsResponseMock = (
@@ -7615,6 +7813,110 @@ export const getRevokeAgentAttestationMockHandler = (
   );
 };
 
+export const getListRunStepsMockHandler = (
+  overrideResponse?:
+    | RunStepsPage
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<RunStepsPage> | RunStepsPage),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/run_steps/prompt_lib/:projectId/:runId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListRunStepsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getVerifyRunStepsMockHandler = (
+  overrideResponse?:
+    | RunStepsVerification
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<RunStepsVerification> | RunStepsVerification),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/run_steps/prompt_lib/:projectId/:runId/verify",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getVerifyRunStepsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetRunStepContentMockHandler = (
+  overrideResponse?:
+    | RunStepContent
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<RunStepContent> | RunStepContent),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/run_steps/prompt_lib/:projectId/:runId/:stepId/:side",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetRunStepContentResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListConversationRunsMockHandler = (
+  overrideResponse?:
+    | ConversationRunList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ConversationRunList> | ConversationRunList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/conversation_runs/prompt_lib/:projectId/:conversationUuid",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListConversationRunsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListVersionRevisionsMockHandler = (
   overrideResponse?:
     | VersionRevisionList
@@ -9495,6 +9797,10 @@ export const getApplicationsMock = () => [
   getListAgentAttestationsMockHandler(),
   getRecordAgentAttestationMockHandler(),
   getRevokeAgentAttestationMockHandler(),
+  getListRunStepsMockHandler(),
+  getVerifyRunStepsMockHandler(),
+  getGetRunStepContentMockHandler(),
+  getListConversationRunsMockHandler(),
   getListVersionRevisionsMockHandler(),
   getListReleaseGateSuitesMockHandler(),
   getPutReleaseGateSuiteMockHandler(),

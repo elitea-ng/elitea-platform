@@ -1004,6 +1004,16 @@ pub(crate) struct AgentEventProjector {
     continuation_overlap: Option<ContinuationOverlap>,
     checkpoint_recovery: bool,
     node_recovery_paused: bool,
+    /// Where this run's step records go (ADR-0042, #1499); sub-agent
+    /// projectors share the root's. `None` records nothing.
+    run_steps: Option<RunStepSink>,
+}
+
+/// A projector's step recorder. Only the root records the run's output step.
+#[derive(Clone)]
+struct RunStepSink {
+    recorder: std::sync::Arc<crate::protocol::run_steps::RunStepRecorder>,
+    root: bool,
 }
 
 const MAX_CONTINUATION_OVERLAP_CHARS: usize = 150;
@@ -1148,6 +1158,7 @@ impl AgentEventProjector {
             continuation_overlap,
             checkpoint_recovery: false,
             node_recovery_paused: false,
+            run_steps: None,
         })
     }
 
@@ -1259,6 +1270,9 @@ impl AgentEventProjector {
         if let Some(retained) = super::application_tools::retained_application_events(event)
             .map_err(|_| AgentEventProjectionError::invalid_state())?
         {
+            // Replayed events of an earlier generation: their steps were
+            // reported by that generation.
+            let _replay = self.run_steps.as_ref().map(|sink| sink.recorder.suspend());
             let mut batch = ProjectedAgentEventBatch::new();
             for original in retained {
                 self.restore_retained_authorization(&original)?;
@@ -1682,6 +1696,7 @@ impl AgentEventProjector {
                 application.guards.delegated_authorization.clone(),
                 application.child_tools.clone(),
             )?;
+            projector.run_steps = self.descendant_run_steps();
             let _start = projector.start(event.timestamp)?;
             self.descendants.insert(
                 parent_call_id.to_owned(),
@@ -2876,6 +2891,13 @@ impl AgentEventProjector {
                 }},
             });
             self.project_model_steps(&mut batch, event, &step)?;
+            self.record_model_step(&run_steps::ClosedModelTurn {
+                event,
+                timestamp_start: &next_timestamp_start,
+                timestamp_finish: &timestamp,
+                content: &next_content,
+                output_limited,
+            });
             self.state = ProjectionState::Complete(CompletedModelTurn { output_limited });
             // A reasoning-only continuation cut reasoning-only AGAIN gets no
             // second Continue offer: `finish_after_eos` ends it as
@@ -3251,6 +3273,7 @@ impl AgentEventProjector {
                     &serialized,
                     error.is_some(),
                 )?;
+                self.record_tool_step(id, active, result.response, &timestamp_finish);
                 completed.push(id.to_owned());
                 continue;
             }
@@ -3290,6 +3313,7 @@ impl AgentEventProjector {
                 event.timestamp,
             )?)?;
             batch.push(self.tool_partial_event(id, &entry, event.timestamp)?)?;
+            self.record_tool_step(id, active, result.response, &timestamp_finish);
             completed.push(id.to_owned());
         }
         for id in completed {
@@ -3785,6 +3809,7 @@ impl AgentEventProjector {
                 ProtocolError::InvalidInput("the completed agent content is malformed"),
             ));
         }
+        self.record_output_step(&content, output_limited, occurred_at);
         let mut batch = ProjectedAgentEventBatch::new();
         let (response, result_ref) =
             if content.len() > INLINE_TEXT_CHUNK_BYTES {
@@ -7060,6 +7085,9 @@ mod scoped_static_inventory_tests {
 
 #[path = "events_code_debug.rs"]
 mod code_debug;
+
+#[path = "events_run_steps.rs"]
+mod run_steps;
 
 #[cfg(test)]
 mod fanout_member_tier_tests {

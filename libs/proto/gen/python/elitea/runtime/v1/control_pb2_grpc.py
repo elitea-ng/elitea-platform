@@ -5,6 +5,7 @@ import warnings
 
 from elitea.runtime.v1 import compiled_code_pb2 as elitea_dot_runtime_dot_v1_dot_compiled__code__pb2
 from elitea.runtime.v1 import control_pb2 as elitea_dot_runtime_dot_v1_dot_control__pb2
+from elitea.runtime.v1 import run_step_pb2 as elitea_dot_runtime_dot_v1_dot_run__step__pb2
 from elitea.runtime.v1 import sandbox_pb2 as elitea_dot_runtime_dot_v1_dot_sandbox__pb2
 
 GRPC_GENERATED_VERSION = '1.85.0'
@@ -96,6 +97,11 @@ class RuntimeControlServiceStub:
                 request_serializer=elitea_dot_runtime_dot_v1_dot_control__pb2.ReportEgressSummaryRequestV1.SerializeToString,
                 response_deserializer=elitea_dot_runtime_dot_v1_dot_control__pb2.ReportEgressSummaryResponseV1.FromString,
                 _registered_method=True)
+        self.ReportRunSteps = channel.unary_unary(
+                '/elitea.runtime.v1.RuntimeControlService/ReportRunSteps',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_run__step__pb2.ReportRunStepsRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_run__step__pb2.ReportRunStepsResponseV1.FromString,
+                _registered_method=True)
 
 
 class RuntimeControlServiceServicer:
@@ -173,6 +179,12 @@ class RuntimeControlServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ReportRunSteps(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_RuntimeControlServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -235,6 +247,11 @@ def add_RuntimeControlServiceServicer_to_server(servicer, server):
                     servicer.ReportEgressSummary,
                     request_deserializer=elitea_dot_runtime_dot_v1_dot_control__pb2.ReportEgressSummaryRequestV1.FromString,
                     response_serializer=elitea_dot_runtime_dot_v1_dot_control__pb2.ReportEgressSummaryResponseV1.SerializeToString,
+            ),
+            'ReportRunSteps': grpc.unary_unary_rpc_method_handler(
+                    servicer.ReportRunSteps,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_run__step__pb2.ReportRunStepsRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_run__step__pb2.ReportRunStepsResponseV1.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -561,6 +578,33 @@ class RuntimeControlService:
             '/elitea.runtime.v1.RuntimeControlService/ReportEgressSummary',
             elitea_dot_runtime_dot_v1_dot_control__pb2.ReportEgressSummaryRequestV1.SerializeToString,
             elitea_dot_runtime_dot_v1_dot_control__pb2.ReportEgressSummaryResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReportRunSteps(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.RuntimeControlService/ReportRunSteps',
+            elitea_dot_runtime_dot_v1_dot_run__step__pb2.ReportRunStepsRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_run__step__pb2.ReportRunStepsResponseV1.FromString,
             options,
             channel_credentials,
             insecure,

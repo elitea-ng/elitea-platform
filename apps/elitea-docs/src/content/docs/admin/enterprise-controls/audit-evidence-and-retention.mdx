@@ -1,7 +1,129 @@
 ---
 title: "Audit evidence and retention"
-description: "How long Elitea keeps conversations, attachments, gateway request logs and audit records, how a platform administrator sets those limits, and how a legal hold stops deletion."
+description: "The step record Elitea keeps for every agent run, how the run and admin audit chains are verified, how long each kind of data is kept, and how a legal hold stops deletion."
 ---
+
+## Run step records
+
+### The risk this control addresses
+
+An investigator, an auditor or a model validator must be able to answer: what did this agent do, in what order, with what inputs, which sources did it read, what did it answer, and which definition was running. The answer must be tamper-evident and kept for as long as your policy says.
+
+Every agent run now produces a **step record** for each thing it did, in order. The records of a run are hash-chained, the chain is anchored in the tamper-evident security audit log within about a minute of the run ending, and the records are exported to your SIEM in the same schema as the rest of the audit evidence.
+
+### What is recorded
+
+| Kind | One record per | Summary fields |
+| --- | --- | --- |
+| `model_call` | Model call | Model, finish reason, input, output and total tokens, number of tool calls requested |
+| `tool_call` | Tool call | Tool, toolkit, `status` (`ok` or `error`) and the error |
+| `retrieval` | Index or attachment search | Index, query, filters, top-k, and each returned document's id, source, score and rank |
+| `delegation` | Saved agent or pipeline called as a tool | Called agent, its type and model |
+| `approval` | Approval requested when a run pauses, and the decision a resumed run carries | Decision |
+| `cap` | Limit hit: output tokens, deadline, budget, context window, rate or size limit | The limit |
+| `error` | The failure a run ends on | Error code |
+| `output` | Final answer | Size, and the retrieval steps and document ids the answer cites |
+
+Every record also carries the run id, its position (`seq`), the agent and its **release** and **definition digest** (see [Agent lifecycle](/admin/enterprise-controls/agent-lifecycle)), the actor (`user:<id>`, or `agent:<binding>` for a governed agent), the pipeline node, and the start and end times.
+
+**Citations.** An output step cites a retrieval step when the answer contains one of that retrieval's document ids or sources verbatim (four characters or more). This is a textual match: it shows which retrieved sources the answer names, not which ones the model relied on.
+
+### Content is referenced, not stored in the record
+
+Prompts, tool arguments, tool results and answers can be large and sensitive. A step record holds only a SHA-256 digest, the size and a reference for each side (inputs and outputs). The content itself is stored in the object store bucket `run-evidence`, under the run's project and run id, with its own retention class, `step_content`.
+
+- Each side is capped at 256 KiB. Longer content is cut, and the record says `truncated` with the original size.
+- **Minimise tool results with `evidence_fields`.** A toolkit's `evidence_fields` setting lists the top-level fields of a JSON tool result to keep (at most 64 names). Every other field is dropped before the result is stored, and the record says `filtered`. Without the setting the whole result is kept. A malformed value is refused when the toolkit is saved.
+- When retention deletes the content, the chain still verifies, because it covers the digests and not the content. A reader then sees `expired`, the date and the policy, not a gap.
+
+### The chain and its anchor
+
+Within a run, each record's `hash` is SHA-256 over the previous record's hash and the record's canonical form, including the content digests. The database refuses any change to a stored record except marking its content expired. Within about a minute of the run ending, the run's last hash and its step count are appended to the tenant's security audit chain as an `ai.elitea.security.v1.run.steps.anchored` event, by the elitea-main routine `main.run_step_anchor` (every minute, listed under **Administration → Schedules**, paused in maintenance). Anchoring works on every install, whether or not the governed agent profile is on; a run whose anchor was missed is anchored by `main.step_record_retention`'s hourly pass.
+
+Rewriting a run's records therefore breaks either the run's chain or its anchor in the security audit chain, which the SIEM copy also holds.
+
+### Read and verify a run
+
+You need the `runs.evidence.read` permission. The `super_admin` and `admin` roles and the project `admin` role have it. There is no screen for step records yet; use the API. The steps are in [Reconstruct an agent run](/admin/enterprise-controls/reconstruct-a-run).
+
+| Request | Returns |
+| --- | --- |
+| `GET /api/v2/elitea_core/conversation_runs/prompt_lib/{project_id}/{conversation_uuid}` | The runs of a conversation, with the answer message id and step count of each |
+| `GET /api/v2/elitea_core/run_steps/prompt_lib/{project_id}/{run_id}` | The run's head and its step records in order, with digests, never content. Pages with `after_seq` and `limit` (up to 1000). |
+| `GET /api/v2/elitea_core/run_steps/prompt_lib/{project_id}/{run_id}/verify` | `ok`, or the first `seq` that does not verify and why |
+| `GET /api/v2/elitea_core/run_steps/prompt_lib/{project_id}/{run_id}/{step_id}/{inputs\|outputs}` | One side's content, checked against its digest, or its expiry date and policy |
+
+Reading content is itself audited: each content read writes an audit trail row naming the reader, the run and the step before the content is returned. If that row cannot be written, the read is refused with 503. A token with no owning user cannot read content.
+
+### Configure step records
+
+Step records are always on. What you choose:
+
+- **Retention.** Set `step_content` and `step_record` on the **Data retention** page (see [Data classes](#data-classes)). Both keep forever by default.
+- **Minimisation.** Set `evidence_fields` on toolkits whose results carry data you must not keep.
+- **Export.** When the [audit export](/admin/audit-trail) is configured, step records are exported as the `run_steps` stream, from the moment of the upgrade. Set `ELITEA_AUDIT_EXPORT_RUN_STEPS=false` to leave them out, or `ELITEA_AUDIT_EXPORT_RUN_STEPS_FROM=beginning` to also send records written before the export was turned on. The shipped lag, backlog and dead-letter alerts cover the stream.
+- **Dashboard.** The Helm chart ships a Grafana dashboard with runs, tool calls, errors and spend per agent, read from the step records. See [Operations](/deployment/operations#agent-runs-dashboard).
+
+### Evidence
+
+A step record as the audit export sends it (`details` abridged):
+
+```json
+{
+  "schema": "elitea.audit.v1",
+  "source": "run_step",
+  "event_type": "run_step.retrieval",
+  "time": "2026-10-29T09:14:02.117Z",
+  "tenant": { "project_id": 31 },
+  "actor": { "type": "user", "id": "1187" },
+  "action": "retrieval",
+  "target": { "type": "retrieval", "id": "412", "name": "search_index" },
+  "correlation": { "correlation_id": "exec-7f3c…" },
+  "chain": { "partition": "run:exec-7f3c…", "sequence": 4, "prev_hash": "9b1e…", "hash": "c07a…" },
+  "details": {
+    "run_id": "exec-7f3c…",
+    "seq": 4,
+    "kind": "retrieval",
+    "application_id": 905,
+    "release_id": 12,
+    "definition_digest": "5d2f…",
+    "retrieval": {
+      "index_name": "policies",
+      "query": "travel expense limit",
+      "top_k": 5,
+      "documents": [{ "document_id": "travel-policy.pdf#3", "source": "travel-policy.pdf", "score": 0.82, "rank": 1 }]
+    },
+    "inputs": { "digest": "e3b0…", "size": 212, "ref": "run-evidence/31/runs/exec-7f3c…/…/inputs" },
+    "outputs": { "digest": "41aa…", "size": 6120, "ref": "run-evidence/31/runs/exec-7f3c…/…/outputs" }
+  }
+}
+```
+
+The full schema is in [Audit event schema](/reference/audit-event-schema).
+
+### Limits
+
+- **A worker crash can lose recent steps.** The worker sends records during the run (every 64 steps, or when the oldest unsent one is two seconds old) and the rest before the run settles. Records still in a worker's memory when its process dies are lost, and the worker that takes the run over records a `steps_possibly_lost` error step. See [Reconstruct an agent run](/admin/enterprise-controls/reconstruct-a-run#gaps) for how such a gap shows.
+- **Direct toolkit runs** (running a tool from the toolkit page) are not agent runs and produce no step records.
+- **A summarising index search** (`stepback_summary_index`) returns a model answer rather than documents, so its retrieval step lists no documents.
+- **Verification does not cross-check the anchor.** The verify request checks the run's own chain and reports how far it is anchored; to check the anchor itself, compare the run's head hash with the `run.steps.anchored` event in your SIEM or with the security audit verifier.
+- **No redaction pass yet.** Identifiers in stored content are not masked automatically; use `evidence_fields` and the `step_content` retention to limit what is kept.
+
+### Customer responsibility
+
+- **The immutable copy.** The chain makes changes detectable, not impossible. Export the `run_steps` stream to a store with object lock (WORM) and keep the copy of record there.
+- **Who may read content.** Grant `runs.evidence.read` only to the roles your policy allows to see prompts and tool results, and review the content-read rows in the audit trail.
+- **Minimisation choices.** Decide which toolkits need `evidence_fields`, and the `step_content` maximum, from your data-protection assessment.
+
+## Admin audit trail chain
+
+Every row written to the admin audit trail (`centry.audit_events`) since the upgrade is hash-chained in one platform-wide chain. A database trigger chains each row as it is inserted, so no writer can skip it, and a second trigger refuses any change to what a chained row's hash covers. Rows written before the upgrade are not chained; verification counts them as `unchained`.
+
+Retention still deletes old rows, but only from the start of the chain, and it records the last position and hash it deleted. Verification starts from that point, so a pruned chain still verifies.
+
+To verify, call `GET /api/v2/elitea_core/audit_chain_verify/administration` with the `models.admin.audit_trail.view` permission. The answer has `ok`, how many rows were `checked`, the chain head, `pruned_through`, and the first `break` (its position, row id and reason) if any. Page a long chain with `from` and `limit` (default 100000). Exported admin audit events carry the same chain fields.
+
+Chaining serialises audit inserts: one transaction writes an audit row at a time. Admin and security requests arrive at a low rate, so this costs little.
 
 ## Retention and legal hold
 
@@ -14,16 +136,15 @@ This control gives a platform administrator a retention policy per data class, e
 What is enforced:
 
 - A maximum age per data class. Data older than the maximum is deleted in bounded batches.
-- Platform bounds. A project may set its own maximum for conversations only, and only inside the platform bounds.
-- Legal hold on a project, an agent or a user. While a hold is active, the retention sweep skips every conversation it covers. A user's change that would remove or overwrite content of such a conversation is refused with HTTP 409: deleting the conversation, clearing its messages, deleting a message, deleting its attachments, moving message text into a canvas, and regenerating or editing a message.
+- Platform bounds. A project may set its own maximum for conversations, step content and step records only, and only inside the platform bounds.
+- Legal hold on a project, an agent or a user. While a hold is active, the retention sweeps skip every conversation, and every run's step records and content, it covers, including the content expiry a conversation delete would cause. A user's change that would remove or overwrite content of such a conversation is refused with HTTP 409: deleting the conversation, clearing its messages, deleting a message, deleting its attachments, moving message text into a canvas, and regenerating or editing a message.
 - Stopping a run is never refused because of a hold: stop is a safety control. Without a hold, a run stopped before it wrote any answer is removed together with its question. On a held conversation the stop keeps the question and records the turn with an empty, stopped answer, so the record still shows what was asked.
 
 What is not enforced:
 
 - A **minimum** age does not stop a user from deleting their own conversation. It only bounds the shortest maximum a project may choose. Use a legal hold to stop a deletion.
-- A legal hold covers conversations. It does not block deleting a whole project or a user account.
+- A legal hold covers conversations and step records. It does not block deleting a whole project or a user account.
 - Attachments have no separate maximum. They are deleted with their conversation.
-- The reserved classes `step_content` and `step_record` have no data yet and cannot be set.
 
 ### Data classes
 
@@ -36,7 +157,9 @@ The defaults keep today's behaviour. An upgrade deletes nothing that was not alr
 | `conversation` | Keep forever | 1 to 36500 days | Yes, inside the platform bounds | elitea-main routine `main.conversation_retention`, hourly | The conversation, its participants, messages, message items, attachment rows and pin, through the same statements as a user's delete. Stored attachment bytes and their object records are deleted next by a journal drain, with retries. |
 | `attachment` | Keep forever | Keep forever only | No | Deleted with the conversation | The stored object and its `elitea_storage.objects` record. |
 | `gateway_request_log` | 92 days | 1 to 36500 days; keep forever is refused | No | LLM gateway, hourly prune | Rows of `gateway.llm_request_logs`. The gateway uses 92 days when it cannot read the policy. |
-| `admin_audit` | 365 days | 7 to 36500 days, or keep forever | No | elitea-scheduler `scheduler.audit_retention` | Rows of `centry.audit_events`. |
+| `admin_audit` | 365 days | 7 to 36500 days, or keep forever | No | elitea-scheduler `scheduler.audit_retention` | Rows of `centry.audit_events`, oldest first, and only as an unbroken prefix of the chain (see [Admin audit trail chain](#admin-audit-trail-chain)). |
+| `step_content` | Keep forever | 1 to 36500 days, or keep forever | Yes, inside the platform bounds | elitea-main routine `main.step_content_retention`, hourly | The stored inputs and outputs of step records. The record keeps its digests and says when and under which policy the content expired. Deleting a conversation also expires its runs' content (policy `conversation_deleted`). The same routine deletes content that was stored for a step whose record never landed, an hour after it was written. |
+| `step_record` | Keep forever | 7 to 36500 days, or keep forever | Yes, inside the platform bounds | elitea-main routine `main.step_record_retention`, hourly | Whole runs whose last step is older than the maximum, once every export that currently sends run steps has delivered them. A receiver you removed, or a `run_steps` export you switched off, does not hold runs back. |
 | `security_audit` | Keep forever | 1 to 36500 days, or keep forever | No | elitea-scheduler `scheduler.security_audit_outbox_retention` | Exported rows of the security audit outbox that the durable store already holds. The durable store is append-only and is never deleted from. |
 
 A conversation's age is the time of its **last message** (its creation time when it has no messages). A conversation in use is not old because it was created long ago.
@@ -52,8 +175,8 @@ For `admin_audit` and `security_audit`, the deployment settings `AUDIT_RETENTION
   <Step title="Set the platform bounds">
     For each data class, set the minimum and maximum age in days. Leave the maximum empty to keep forever. Save the row. The sweep applies the new value on its next pass.
   </Step>
-  <Step title="Allow project overrides (conversations only)">
-    Turn on **Allow project override** for `conversation`. A project override must be at least the platform minimum and at most the platform maximum. A value outside the bounds is refused.
+  <Step title="Allow project overrides">
+    Turn on **Allow project override** for `conversation`, `step_content` or `step_record`. A project override must be at least the platform minimum and at most the platform maximum. A value outside the bounds is refused.
   </Step>
   <Step title="Watch the sweep">
     Open **Schedules & Tasks** to see `main.conversation_retention` and the scheduler sweepers, their last run and outcome. You can pause a sweep there.

@@ -295,6 +295,16 @@ jobs:
       - name: The agent assertion key Secret mounts on Main only
         run: bash deploy/helm/tests/render-agent-assertion.sh
 
+      # ADR-0042 (#1499): the agent runs/errors/tool calls/spend Grafana
+      # dashboard is off by default and, on, one grafana_dashboard ConfigMap
+      # whose panels query only metrics a service exposes; the audit export
+      # lag/backlog alerts work per `stream` (run-step evidence is a stream).
+      - name: The agent Grafana dashboard renders, and the audit export alerts are per stream
+        run: |
+          python3 -c "import yaml" 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-agent-dashboard.sh
+
       # Four suites that passed and that no job ran (the deploy/ audit of the
       # one-chart PR found them): the default-deny NetworkPolicies, the
       # elitea-main platform listener, the sandbox image references, and the

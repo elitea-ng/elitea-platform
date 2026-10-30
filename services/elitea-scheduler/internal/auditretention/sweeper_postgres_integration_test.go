@@ -415,3 +415,116 @@ UPDATE elitea_runtime.audit_export_cursors c SET last_txid = e.export_txid, last
 		t.Fatalf("after catch-up: stats=%+v err=%v", stats, err)
 	}
 }
+
+// auditChainMigrationPath is elitea-main's migration that chains the table
+// (ADR-0042, issue #1499), applied for real for the same reason as
+// bootstrapDDLPath.
+const auditChainMigrationPath = "../../../elitea-main/migrations/shared/0206_audit_events_chain.sql"
+
+func applyMainMigration(t *testing.T, pool *pgxpool.Pool, path string) {
+	t.Helper()
+	migration, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), string(migration)); err != nil {
+		t.Fatalf("apply %s: %v", filepath.Base(path), err)
+	}
+}
+
+// assertChainVerifies re-walks the chain from the head's prune anchor:
+// consecutive positions, each prev_hash the previous row's hash (the anchor's
+// for the first), each hash sha256(prev_hash || canonical), and the last row
+// at the head. elitea-main's audit.VerifyChain is the product verifier; it is
+// internal to that module, so this is the same rule in SQL.
+func assertChainVerifies(t *testing.T, pool *pgxpool.Pool) (pruned, last int64) {
+	t.Helper()
+	var broken, highest int64
+	err := pool.QueryRow(context.Background(), `
+WITH head AS (
+    SELECT last_seq, pruned_seq, pruned_hash
+      FROM elitea_runtime.audit_events_chain_heads WHERE partition_key = '0'
+), walked AS (
+    SELECT l.partition_seq, l.prev_hash, l.hash,
+           CASE WHEN e.id IS NOT NULL THEN
+               sha256(l.prev_hash || convert_to(centry.audit_event_canonical(e, l.partition_key, l.partition_seq), 'UTF8'))
+           END AS recomputed,
+           lag(l.hash) OVER w AS prior_hash, lag(l.partition_seq) OVER w AS prior_seq
+      FROM elitea_runtime.audit_events_chain AS l
+      LEFT JOIN centry.audit_events AS e ON e.id = l.audit_id
+    WINDOW w AS (ORDER BY l.partition_seq)
+)
+SELECT (SELECT count(*) FROM walked, head
+         WHERE walked.recomputed IS NULL
+            OR walked.hash <> walked.recomputed
+            OR walked.prev_hash <> COALESCE(walked.prior_hash, head.pruned_hash)
+            OR walked.partition_seq <> COALESCE(walked.prior_seq + 1, head.pruned_seq + 1)),
+       COALESCE((SELECT max(partition_seq) FROM walked), (SELECT pruned_seq FROM head)),
+       (SELECT pruned_seq FROM head), (SELECT last_seq FROM head)`).Scan(&broken, &highest, &pruned, &last)
+	if err != nil {
+		t.Fatalf("walk the chain: %v", err)
+	}
+	if broken != 0 {
+		t.Fatalf("%d chained row(s) do not verify from the prune anchor (pruned_seq %d)", broken, pruned)
+	}
+	if highest != last {
+		t.Fatalf("the chain ends at partition_seq %d, the head is at %d", highest, last)
+	}
+	return pruned, last
+}
+
+// TestRetentionPrunesTheChainAsAPrefixAndItStillVerifies: once 0206 chains
+// the table, a pass deletes the expired rows from before the chain by time
+// and the chained rows only as a prefix, stopping at the first row still
+// inside the window even with expired rows behind it, and moves the prune
+// anchor so the surviving chain verifies.
+func TestRetentionPrunesTheChainAsAPrefixAndItStillVerifies(t *testing.T) {
+	t.Parallel()
+
+	pool := newAuditPool(t)
+	now := time.Now().UTC()
+	day := 24 * time.Hour
+	insertAuditRow(t, pool, now.Add(-90*day), "before the chain", "chain")
+	applyMainMigration(t, pool, auditExportMigrationPath)
+	applyMainMigration(t, pool, auditChainMigrationPath)
+
+	for _, row := range []struct {
+		action string
+		age    time.Duration
+	}{
+		{"seq 1, expired", 60 * day},
+		{"seq 2, expired", 50 * day},
+		{"seq 3, inside the window", 10 * day},
+		{"seq 4, expired behind seq 3", 40 * day},
+		{"seq 5, recent", time.Hour},
+	} {
+		insertAuditRow(t, pool, now.Add(-row.age), row.action, "chain")
+	}
+	if pruned, last := assertChainVerifies(t, pool); pruned != 0 || last != 5 {
+		t.Fatalf("before the sweep: pruned %d, head %d; want 0 and 5", pruned, last)
+	}
+
+	// Batch 2: the first batch takes the unchained row and seq 1; the second
+	// stops at seq 3.
+	sweeper := newTestSweeper(t, pool, openGate, Config{RetentionDays: 30, BatchSize: 2, MaxBatchesPerPass: 10}, now)
+	stats, err := sweeper.Sweep(context.Background())
+	if err != nil || stats.Deleted != 3 || !stats.Drained {
+		t.Fatalf("first pass: stats=%+v err=%v; want 3 deleted and drained", stats, err)
+	}
+	surviving := survivingActions(t, pool)
+	if len(surviving) != 3 || !surviving["seq 3, inside the window"] || !surviving["seq 4, expired behind seq 3"] {
+		t.Fatalf("after the first pass: surviving = %v", surviving)
+	}
+	if pruned, _ := assertChainVerifies(t, pool); pruned != 2 {
+		t.Fatalf("after the first pass the prune anchor is at %d, want 2", pruned)
+	}
+
+	// 25 days on, seq 3 has expired too; seq 5 has not.
+	later := newTestSweeper(t, pool, openGate, Config{RetentionDays: 30, BatchSize: 100, MaxBatchesPerPass: 10}, now.Add(25*day))
+	if stats, err := later.Sweep(context.Background()); err != nil || stats.Deleted != 2 {
+		t.Fatalf("second pass: stats=%+v err=%v; want seq 3 and 4 deleted", stats, err)
+	}
+	if pruned, last := assertChainVerifies(t, pool); pruned != 4 || last != 5 {
+		t.Fatalf("after the second pass: pruned %d, head %d; want 4 and 5", pruned, last)
+	}
+}

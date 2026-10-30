@@ -44,7 +44,10 @@ A default install favours getting started. A deployment that will be assessed ag
 
 - [ ] Configure the audit export to your SIEM, and keep the copy of record in WORM storage. See [Audit trail](/admin/audit-trail) and [Audit event schema](/reference/audit-event-schema).
 - [ ] Set the maximum retention for each data class to match your records schedule. Know how to place a legal hold before you need one. See [Audit evidence and retention](/admin/enterprise-controls/audit-evidence-and-retention).
-- [ ] Alert on audit-export lag and dead letters (the chart ships the rules).
+- [ ] Alert on audit-export lag and dead letters (the chart ships the rules). The `run_steps` stream is included.
+- [ ] Set the `step_content` and `step_record` maximums, and set `evidence_fields` on toolkits whose results carry data you must not keep. See [Run step records](/admin/enterprise-controls/audit-evidence-and-retention#run-step-records).
+- [ ] Grant `runs.evidence.read` only to the roles allowed to read prompts and tool results, and review the content-read rows in the audit trail.
+- [ ] Verify a sample of run chains and the admin audit trail chain on a schedule, and compare run anchors with your SIEM copy. See [Reconstruct an agent run](/admin/enterprise-controls/reconstruct-a-run).
 
 ## Keep it current
 

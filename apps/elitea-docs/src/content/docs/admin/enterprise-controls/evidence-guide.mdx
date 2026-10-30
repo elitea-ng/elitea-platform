@@ -9,7 +9,8 @@ Use this page to answer an auditor's "show me". Each stream below says what it r
 
 | Stream | Records | Read it | Export | Default retention |
 | --- | --- | --- | --- | --- |
-| Administrative audit trail | State-changing and refused requests on admin and security routes: who, what, when, outcome | [Audit trail](/admin/audit-trail) | Audit export (OpenTelemetry logs or a signed webhook) | Per the `admin_audit` retention class |
+| Run step records | Every model call, tool call, retrieval, approval, delegation, cap, error and output of an agent run, in order, with the agent release, hash-chained per run and anchored in the security audit log | [Reconstruct an agent run](/admin/enterprise-controls/reconstruct-a-run) | Audit export (`run_steps` stream) | Kept (`step_record` class); content per the `step_content` class |
+| Administrative audit trail | State-changing and refused requests on admin and security routes: who, what, when, outcome. Hash-chained since the upgrade that introduced run step records. | [Audit trail](/admin/audit-trail) | Audit export (OpenTelemetry logs or a signed webhook) | Per the `admin_audit` retention class |
 | Security audit log | Agent identity, credential grant, delegation, redemption and decision events, hash-chained per tenant | The `security-audit verify` CLI ([credential governance](/deployment/credential-governance)) | Audit export | Kept (`security_audit` class) |
 | LLM gateway request log | One row per model call: model, tokens, cost, latency, outcome and run id. Prompt and response text are not stored. | [LLM proxy](/admin/llm-proxy) analytics | Database read | 92 days (`gateway_request_log` class) |
 | Conversations and run events | Messages, tool calls shown in chat, and execution events | The conversation itself | — | Per the `conversation` class (kept unless set) |
@@ -20,7 +21,15 @@ The export schema is documented in [Audit event schema](/reference/audit-event-s
 
 ## Verify that nothing was altered
 
-The security audit log is a hash chain. Each event's hash covers its content and the previous event's hash. Run the verification command from the [credential governance](/deployment/credential-governance) page: it re-computes the chain and names the first event that does not match.
+Three streams are hash chains. Each record's hash covers its content and the previous record's hash, so a changed, removed or inserted record breaks the chain at that point.
+
+| Chain | Verify with |
+| --- | --- |
+| Security audit log, one chain per tenant | The verification command on the [credential governance](/deployment/credential-governance) page |
+| Run step records, one chain per run, anchored in the security audit log when the run ends | `GET …/run_steps/prompt_lib/{project_id}/{run_id}/verify` ([Reconstruct an agent run](/admin/enterprise-controls/reconstruct-a-run)) |
+| Admin audit trail, one platform-wide chain | `GET /api/v2/elitea_core/audit_chain_verify/administration` ([Admin audit trail chain](/admin/enterprise-controls/audit-evidence-and-retention#admin-audit-trail-chain)) |
+
+Each answers with the first record that does not match.
 
 In your SIEM or archive, a gap in sequence numbers or a hash that does not chain shows that events were lost or altered on the way.
 
@@ -30,10 +39,6 @@ A hash chain makes tampering **detectable**, not impossible. For records that mu
 
 ## Reconstruct what an agent did
 
-Today, combine three sources:
+Every agent run has a chained step record: each model call, tool call, retrieval, approval, delegation, cap, error and the final answer, in order, tied to the exact agent release, with the content of each step kept by reference. Follow [Reconstruct an agent run](/admin/enterprise-controls/reconstruct-a-run) to go from a chat answer to its steps, read what went in and out, and verify the record.
 
-1. the conversation, which shows the user's message, the tool calls and the answer;
-2. the execution events of the run;
-3. the gateway request log rows for the run id, one per model call.
-
-A single chained per-step record covering every model call, tool call, retrieval and approval, tied to the exact agent release, is planned in [issue 1499](https://github.com/elitea-ng/elitea-platform/issues/1499). This page will describe it when it ships.
+For spend and latency per model call, the gateway request log rows carry the same run id.

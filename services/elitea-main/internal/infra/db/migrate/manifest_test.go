@@ -901,7 +901,24 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// models.applications.governance to super_admin, admin and the project
 	// admin, and lifecycle.attestations.write and lifecycle.registry.mark_due
 	// to the project admin.
-	require.EqualValues(t, 204, Head(shared))
+	//
+	// 205: shared/0205_run_steps.sql, the step records of a run (ADR-0042
+	// decisions 1 and 2, #1499): elitea_runtime.run_step_heads (the per-run
+	// chain head and its anchor) and run_steps (append-only by trigger,
+	// hash-chained per run, content by digest and object key, export_txid
+	// for the audit export). Seeds the step_content and step_record platform
+	// retention rows (keep forever) and grants runs.evidence.read to
+	// super_admin, admin and the project admin.
+	//
+	// 206: shared/0206_audit_events_chain.sql, centry.audit_events chained
+	// from now on (ADR-0042 decision 3, #1499): the side table
+	// elitea_runtime.audit_events_chain (one link per row; no column or index
+	// on the audit table, so no full scan under lock),
+	// elitea_runtime.audit_events_chain_heads (head lock and retention prune
+	// anchor), the canonical-form function, the AFTER INSERT chain trigger
+	// and an append-only UPDATE guard on chained rows. No data apart from the
+	// head row, no permission.
+	require.EqualValues(t, 206, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

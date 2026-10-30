@@ -64,6 +64,15 @@ KEDA's scaler reads `/jsz` on the bundled NATS's headless service, port 8222 (pl
 The agent worker's own replica count stays correct at `>1` — the database enforces one active claim per execution regardless (`execution_claims_active_idx` is unique on `(execution_id, generation)` while a claim is live) — but scaling out is not free capacity by default. Measure the command bus durable's delivery rate before raising it or turning KEDA on; a long `cooldownSeconds` (300s default) is deliberate, because an in-flight agent execution can run for minutes and a short cooldown turns every quiet moment into a round of terminations.
 </Note>
 
+## Agent runs dashboard
+
+The chart ships a Grafana dashboard of agent runs, errors, tool calls and spend. Turn it on with `main.grafanaDashboard.enabled: true`; it is rendered as a ConfigMap labelled `grafana_dashboard: "1"` for the Grafana sidecar (`main.grafanaDashboard.labels` and `.annotations` adjust the labels and folder).
+
+- **Prometheus panels** (`datasource` variable): audit export delivery, backlog, lag and dead letters by stream, concurrent LLM streams, gateway refusals, and budget enforcement health. They are platform-wide: no Elitea metric carries an agent label, because an agent id is unbounded cardinality.
+- **Per-agent panels** (`pgdatasource` variable): runs, model calls, tool calls, retrievals and errors per agent, tool calls per agent and tool, and billed spend per agent. They read the run step records and the billing ledger through a PostgreSQL data source. Give that data source a read-only role with `SELECT` on `elitea_runtime.run_step_heads`, `elitea_runtime.run_steps` and `gateway.llm_usage_events` only.
+
+Spend per agent covers model calls made by agent runs that produced step records; spend outside agent runs is not attributed to an agent.
+
 ## Backups
 
 <AccordionGroup>

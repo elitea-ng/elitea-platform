@@ -65,6 +65,8 @@ func NewHandler(store Store) *Handler { return &Handler{store: store} }
 var enforcedBy = map[retention.DataClass]string{
 	retention.ClassConversation:      "elitea-main conversation retention routine (main.conversation_retention)",
 	retention.ClassAttachment:        "deleted with their conversation; no separate maximum yet",
+	retention.ClassStepContent:       "elitea-main step content retention routine (main.step_content_retention); also expired when its conversation is deleted",
+	retention.ClassStepRecord:        "elitea-main step record retention routine (main.step_record_retention), whole runs by their last step",
 	retention.ClassGatewayRequestLog: "LLM gateway hourly prune",
 	retention.ClassAdminAudit:        "elitea-scheduler audit retention sweeper (after an administrator saves this row; until then AUDIT_RETENTION_DAYS)",
 	retention.ClassSecurityAudit:     "elitea-scheduler security audit outbox sweeper (after an administrator saves this row; until then SECURITY_AUDIT_OUTBOX_RETENTION_DAYS)",

@@ -501,6 +501,59 @@ async fn authorization_carries_the_matching_prepared_request_to_submission() {
     }
 }
 
+/// The real order of a taken-over run (ADR-0042, #1499): authorization binds
+/// the claim (creating the command's recorder), THEN the recovered start
+/// asks whether this process ran an earlier attempt. The bound-but-empty
+/// recorder must not count as one: the marker opens the attempt, once.
+#[tokio::test(flavor = "current_thread")]
+async fn a_recovered_start_after_authorization_still_marks_the_step_gap() {
+    let state = Arc::new(TestControlState::default());
+    let steps = Arc::new(crate::protocol::run_steps::RunStepRegistry::default());
+    let control = Arc::new(
+        AgentControlClient::new(
+            TestControlRpc(Arc::clone(&state)),
+            ControlGrpcConfig {
+                deadline: Duration::from_secs(1),
+                workload_session_id: "workload-1".to_owned(),
+                producer_id: "worker-1".to_owned(),
+            },
+        )
+        .expect("control client")
+        .with_run_step_registry(Arc::clone(&steps)),
+    );
+    let admission = admission(1, Duration::from_secs(1));
+    let prepared = prepared_for_authorization(
+        Arc::clone(&control),
+        state,
+        &admission,
+        AgentExecutionKind::Adhoc,
+    )
+    .await;
+    let (reservation, prepared) = (*prepared).into_supervised_authorization();
+    let InvocationAuthorizationDecision::AuthorizedNow(authorized) = control
+        .authorize_agent_invocation(prepared.into_candidate())
+        .await
+    else {
+        panic!("the fixture must authorize exactly once")
+    };
+    let (identity, fence) = authorized.test_claim_parts();
+    let recorder = steps
+        .find(&identity)
+        .expect("authorization bound the claim");
+    assert_eq!(recorder.claim(), Some((identity.clone(), fence.clone())));
+
+    control.begin_recovered_run_steps(&identity, &fence, 1_000);
+    control.begin_recovered_run_steps(&identity, &fence, 1_001);
+    let batch = recorder.next_batch();
+    assert_eq!(batch.len(), 1, "one marker");
+    assert_eq!(batch[0].name, crate::protocol::control::STEPS_POSSIBLY_LOST);
+    assert_eq!(batch[0].summary_json, r#"{"reason":"worker_restart"}"#);
+
+    let (_request, lease) = authorized.into_test_cleanup();
+    lease.close().await.expect("lease close");
+    drop(reservation);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn invalid_progress_policy_returns_the_complete_unstarted_run_for_cleanup() {
     for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {

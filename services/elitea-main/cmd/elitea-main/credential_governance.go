@@ -123,15 +123,29 @@ func credentialGovernancePrerequisites(lookup func(string) (string, bool), pool 
 	}
 }
 
-// startSecurityAuditRelay runs the security audit relay (#1114) for a
-// governed process. Flag off: no relay goroutine starts. exporter is the SIEM
-// export (#1494), or nil.
-func startSecurityAuditRelay(ctx context.Context, admission profile.Admission, revision profile.PolicyRevision, pool *pgxpool.Pool, logger *slog.Logger, exporter securityaudit.Exporter) error {
-	if !admission.Governed() {
+// defaultSecurityAuditBacklogAlert is the relay's alert threshold when no
+// governed policy revision sets one.
+const defaultSecurityAuditBacklogAlert = 10000
+
+// startSecurityAuditRelay runs the security audit relay (#1114). It runs on
+// every process, whatever the credential governance profile: the outbox is
+// a shared migration (0183), and since #1499 events are appended to it with
+// the profile off too (the run step anchors of ADR-0042, the agent
+// lifecycle events of ADR-0040). Without the relay they would stay in the
+// outbox, never reaching the durable store or the SIEM export. The governed
+// revision's backlog threshold applies when it sets one, else
+// defaultSecurityAuditBacklogAlert. exporter is the SIEM export (#1494), or
+// nil.
+func startSecurityAuditRelay(ctx context.Context, _ profile.Admission, revision profile.PolicyRevision, pool *pgxpool.Pool, logger *slog.Logger, exporter securityaudit.Exporter) error {
+	if pool == nil {
 		return nil
 	}
+	threshold := revision.Document.AuditBacklogAlertThreshold
+	if threshold <= 0 {
+		threshold = defaultSecurityAuditBacklogAlert
+	}
 	relay, err := securityaudit.NewRelay(pool, securityaudit.RelayConfig{
-		BacklogAlertThreshold: revision.Document.AuditBacklogAlertThreshold,
+		BacklogAlertThreshold: threshold,
 		Exporter:              exporter,
 		Logger:                logger,
 	})

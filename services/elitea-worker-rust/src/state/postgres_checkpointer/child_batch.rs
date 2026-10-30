@@ -12,7 +12,7 @@ use adk_rust::graph::Checkpoint;
 
 use super::{
     CHECKPOINT_FAMILY, CheckpointWriterAuthority, PostgresCheckpointError, PostgresCheckpointer,
-    begin_transaction, note_round_trip, persist_scoped, storage_error,
+    begin_transaction, note_round_trip, storage_error,
 };
 
 use elitea_agent_runtime::graph::fanout_budget::{
@@ -31,8 +31,9 @@ impl PostgresCheckpointer {
         &self,
         authorities: Vec<CheckpointWriterAuthority>,
     ) -> Result<Vec<Self>, PostgresCheckpointError> {
-        persist_scoped("activate_children", &self.io, async {
-            self.activate_children_inner(authorities).await
+        let writer = self.owned()?;
+        super::persist_driven("activate_children", Arc::clone(&self.io), async move {
+            writer.activate_children_inner(authorities).await
         })
         .await
     }
@@ -163,8 +164,14 @@ RETURNING thread_id
         &self,
         children: &[&Self],
     ) -> Result<Vec<Option<Checkpoint>>, PostgresCheckpointError> {
-        persist_scoped("load_children", &self.io, async {
-            self.load_children_latest_inner(children).await
+        let writer = self.owned()?;
+        let children = children
+            .iter()
+            .map(|child| child.owned())
+            .collect::<Result<Vec<_>, _>>()?;
+        super::persist_driven("load_children", Arc::clone(&self.io), async move {
+            let children = children.iter().collect::<Vec<_>>();
+            writer.load_children_latest_inner(&children).await
         })
         .await
     }

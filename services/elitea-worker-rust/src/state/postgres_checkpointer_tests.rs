@@ -224,6 +224,70 @@ fn checkpoint(checkpoint_id: &str, created_at: &str, step: usize) -> Checkpoint 
     }
 }
 
+/// #1534: a checkpoint save whose caller stops polling (a graph node or
+/// tool batch parked at a stream yield) must not hold the writer row idle
+/// in transaction. The save commits on its own, and the next save from this
+/// process gets the row at once.
+#[tokio::test(flavor = "current_thread")]
+async fn a_checkpoint_save_its_caller_stops_polling_still_commits_and_releases_the_writer() {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL unpolled checkpoint save test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_test_schema(&database.pool).await;
+    let writer = PostgresCheckpointer::activate(
+        database.pool.clone(),
+        writer("execution-1", "claim-1", 1, 1, [0x44; 32], [0x64; 32]),
+        CheckpointLimits::default(),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("activate checkpoint writer");
+    let parked_checkpoint = checkpoint("checkpoint-parked", "2026-08-13T12:34:56Z", 1);
+    let parked = writer.save(&parked_checkpoint);
+    let mut parked = std::pin::pin!(parked);
+    // One poll starts the save; the caller then never polls it again until
+    // the end, like a stream suspended at a yield.
+    let first =
+        std::future::poll_fn(|context| std::task::Poll::Ready(parked.as_mut().poll(context))).await;
+    assert!(first.is_pending(), "the save is still in flight");
+    let started = std::time::Instant::now();
+    loop {
+        let stored: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints WHERE checkpoint_id = 'checkpoint-parked'",
+        )
+        .fetch_one(&database.pool)
+        .await
+        .expect("count checkpoints");
+        if stored == 1 {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the unpolled save never committed"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let next = std::time::Instant::now();
+    writer
+        .save(&checkpoint("checkpoint-next", "2026-08-13T12:35:56Z", 2))
+        .await
+        .expect("the next save takes the writer row");
+    assert!(
+        next.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        next.elapsed()
+    );
+    parked.await.expect("the parked save committed");
+    let latest = writer
+        .load("thread-1")
+        .await
+        .expect("load")
+        .expect("a checkpoint");
+    assert_eq!(latest.checkpoint_id, "checkpoint-next");
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One component story deliberately preserves lifecycle order.
 async fn postgres_checkpointer_round_trips_scopes_fences_prunes_and_releases_pool() {

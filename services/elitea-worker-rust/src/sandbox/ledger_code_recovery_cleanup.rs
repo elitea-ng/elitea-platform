@@ -71,40 +71,45 @@ impl JobLedger {
         if !(1..=60).contains(&seconds) {
             return Err(LedgerError::Invalid);
         }
-        let mut tx = self.pool.begin().await?;
-        let row = sqlx::query("SELECT code_recovery_binding_json,code_recovery_receipt_json,runtime_id FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND phase='failed' AND failure_code=$6 AND dispatched_at IS NULL AND NOT cancellation_requested AND code_recovery_cleanup_at IS NULL AND runtime_id IS NOT NULL AND (lease_until IS NULL OR lease_until <= clock_timestamp()) FOR UPDATE")
-            .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice()).bind(owner).bind(NO_EFFECT_FAILURE_CODE).fetch_optional(&mut *tx).await?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let binding: String = row.try_get("code_recovery_binding_json")?;
-        let binding: WholeCodeBinding =
-            serde_json::from_str(&binding).map_err(|_| LedgerError::Invalid)?;
-        let receipt: String = row.try_get("code_recovery_receipt_json")?;
-        let receipt = WholeCodeRecoveryReceipt::parse(receipt.as_bytes())
-            .map_err(|_| LedgerError::Invalid)?;
-        if !matches!(receipt, WholeCodeRecoveryReceipt::VerifiedNoEffect { .. })
-            || receipt.binding() != &binding
-            || binding.job_key != super::hex(&scope.key)
-            || binding.request_digest != super::hex(&scope.digest)
-        {
-            return Err(LedgerError::Invalid);
-        }
-        let runtime_id: String = row.try_get("runtime_id")?;
-        let epoch: Option<i64> = sqlx::query_scalar("UPDATE elitea_runtime.sandbox_jobs SET lease_epoch=lease_epoch+1,lease_until=clock_timestamp()+make_interval(secs => $7),updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND phase='failed' AND failure_code=$6 AND dispatched_at IS NULL AND NOT cancellation_requested AND code_recovery_cleanup_at IS NULL AND lease_epoch < 9223372036854775807 AND (lease_until IS NULL OR lease_until <= clock_timestamp()) RETURNING lease_epoch")
-            .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice()).bind(owner).bind(NO_EFFECT_FAILURE_CODE).bind(f64::from(seconds)).fetch_optional(&mut *tx).await?;
-        let Some(epoch) = epoch else {
-            return Ok(None);
-        };
-        let lease = CodeNoEffectCleanupLease {
-            scope: scope.clone(),
-            owner: owner.into(),
-            epoch,
-            runtime_id,
-        };
-        lease.identity()?;
-        tx.commit().await?;
-        Ok(Some(lease))
+        let (pool, scope, owner) = (self.pool.clone(), scope.clone(), owner.to_owned());
+        crate::agents::driven::to_completion::<Option<CodeNoEffectCleanupLease>, LedgerError, _>(async move {
+            let (scope, owner) = (&scope, owner.as_str());
+            let mut tx = pool.begin().await?;
+            let row = sqlx::query("SELECT code_recovery_binding_json,code_recovery_receipt_json,runtime_id FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND phase='failed' AND failure_code=$6 AND dispatched_at IS NULL AND NOT cancellation_requested AND code_recovery_cleanup_at IS NULL AND runtime_id IS NOT NULL AND (lease_until IS NULL OR lease_until <= clock_timestamp()) FOR UPDATE")
+                .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice()).bind(owner).bind(NO_EFFECT_FAILURE_CODE).fetch_optional(&mut *tx).await?;
+            let Some(row) = row else {
+                return Ok(None);
+            };
+            let binding: String = row.try_get("code_recovery_binding_json")?;
+            let binding: WholeCodeBinding =
+                serde_json::from_str(&binding).map_err(|_| LedgerError::Invalid)?;
+            let receipt: String = row.try_get("code_recovery_receipt_json")?;
+            let receipt = WholeCodeRecoveryReceipt::parse(receipt.as_bytes())
+                .map_err(|_| LedgerError::Invalid)?;
+            if !matches!(receipt, WholeCodeRecoveryReceipt::VerifiedNoEffect { .. })
+                || receipt.binding() != &binding
+                || binding.job_key != super::hex(&scope.key)
+                || binding.request_digest != super::hex(&scope.digest)
+            {
+                return Err(LedgerError::Invalid);
+            }
+            let runtime_id: String = row.try_get("runtime_id")?;
+            let epoch: Option<i64> = sqlx::query_scalar("UPDATE elitea_runtime.sandbox_jobs SET lease_epoch=lease_epoch+1,lease_until=clock_timestamp()+make_interval(secs => $7),updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND phase='failed' AND failure_code=$6 AND dispatched_at IS NULL AND NOT cancellation_requested AND code_recovery_cleanup_at IS NULL AND lease_epoch < 9223372036854775807 AND (lease_until IS NULL OR lease_until <= clock_timestamp()) RETURNING lease_epoch")
+                .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice()).bind(owner).bind(NO_EFFECT_FAILURE_CODE).bind(f64::from(seconds)).fetch_optional(&mut *tx).await?;
+            let Some(epoch) = epoch else {
+                return Ok(None);
+            };
+            let lease = CodeNoEffectCleanupLease {
+                scope: scope.clone(),
+                owner: owner.into(),
+                epoch,
+                runtime_id,
+            };
+            lease.identity()?;
+            tx.commit().await?;
+            Ok(Some(lease))
+        })
+        .await
     }
     pub(crate) async fn check_code_no_effect_cleanup(
         &self,

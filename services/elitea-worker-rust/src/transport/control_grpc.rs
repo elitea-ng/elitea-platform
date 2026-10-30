@@ -23,7 +23,8 @@ use crate::protocol::elitea::runtime::v1::{
     ClaimSteeringMessagesRequestV1, ClaimSteeringMessagesResponseV1, ObserveDesiredStateRequestV1,
     ObserveDesiredStateResponseV1, PrepareSettlementRequestV1, PrepareSettlementResponseV1,
     RemoveIndexRequestV1, RemoveIndexResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1,
-    ReportEgressSummaryRequestV1, ReportEgressSummaryResponseV1, RustCompiledSnapshotPurposeV1,
+    ReportEgressSummaryRequestV1, ReportEgressSummaryResponseV1, ReportRunStepsRequestV1,
+    ReportRunStepsResponseV1, RustCompiledSnapshotPurposeV1,
     runtime_control_service_client::RuntimeControlServiceClient,
 };
 
@@ -36,6 +37,10 @@ const MAX_EGRESS_SUMMARY_REQUEST_BYTES: usize = 256 * 1024;
 /// The summary is best effort and sits on the settlement path: it never
 /// waits long.
 const EGRESS_SUMMARY_DEADLINE: Duration = Duration::from_secs(5);
+/// One `ReportRunSteps` request: at most 64 steps and this many encoded bytes
+/// (`protocol::run_steps::MAX_REPORT_BYTES`; every bounded step fits).
+const MAX_RUN_STEPS_REQUEST_BYTES: usize = crate::protocol::run_steps::MAX_REPORT_BYTES;
+const RUN_STEPS_DEADLINE: Duration = Duration::from_secs(10);
 const MAX_METADATA_BYTES: usize = 256;
 
 /// Immutable transport identity and deadline for every control call.
@@ -159,6 +164,17 @@ pub trait ControlRpc: Send + Sync {
         Err(Status::unimplemented("the egress summary is unavailable"))
     }
 
+    /// `ReportRunSteps` (ADR-0042, #1499): up to 64 step records of one
+    /// execution, under the live claim. A transport that does not serve it
+    /// answers `Unimplemented`; the steps are then dropped (logged and
+    /// counted) and the run settles anyway.
+    async fn report_run_steps(
+        &self,
+        _request: Request<ReportRunStepsRequestV1>,
+    ) -> Result<Response<ReportRunStepsResponseV1>, Status> {
+        Err(Status::unimplemented("run step records are unavailable"))
+    }
+
     async fn renew_lease(
         &self,
         request: Request<RenewLeaseRequestV1>,
@@ -260,6 +276,13 @@ impl ControlRpc for TonicControlRpc {
         request: Request<ReportEgressSummaryRequestV1>,
     ) -> Result<Response<ReportEgressSummaryResponseV1>, Status> {
         self.client.clone().report_egress_summary(request).await
+    }
+
+    async fn report_run_steps(
+        &self,
+        request: Request<ReportRunStepsRequestV1>,
+    ) -> Result<Response<ReportRunStepsResponseV1>, Status> {
+        self.client.clone().report_run_steps(request).await
     }
 
     async fn renew_lease(
@@ -604,6 +627,35 @@ impl<R: ControlRpc> ControlGrpcClient<R> {
             .map_err(|status| match status.code() {
                 tonic::Code::Unimplemented => ControlGrpcError::InvalidConfiguration(
                     "Main does not serve the egress summary on its control plane",
+                ),
+                _ => unavailable(),
+            })?
+            .into_inner();
+        validate_response(&response)?;
+        Ok(response)
+    }
+
+    /// Send one batch of step records (ADR-0042, #1499), once. The caller
+    /// retries an `Unavailable` error and a retryable rejection; any other
+    /// failure is final for the batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable size, configuration, or availability error; a
+    /// transport that does not serve the RPC is an `InvalidConfiguration`.
+    pub async fn report_run_steps(
+        &self,
+        message: ReportRunStepsRequestV1,
+    ) -> Result<ReportRunStepsResponseV1, ControlGrpcError> {
+        let deadline = self.config.deadline.min(RUN_STEPS_DEADLINE);
+        let mut request = self.request_with_limit(message, MAX_RUN_STEPS_REQUEST_BYTES)?;
+        request.set_timeout(deadline);
+        let response = timeout(deadline, self.rpc.report_run_steps(request))
+            .await
+            .map_err(|_| unavailable())?
+            .map_err(|status| match status.code() {
+                tonic::Code::Unimplemented => ControlGrpcError::InvalidConfiguration(
+                    "Main does not serve run step records on its control plane",
                 ),
                 _ => unavailable(),
             })?

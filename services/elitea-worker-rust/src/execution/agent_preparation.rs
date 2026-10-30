@@ -648,6 +648,19 @@ impl AuthorizedAgentRun {
     }
 
     #[must_use]
+    /// The claim of a run that resumes another attempt's work (model
+    /// checkpoint or node recovery): `None` for a fresh run.
+    pub(super) fn recovered_claim(
+        &self,
+    ) -> Option<(
+        &crate::protocol::elitea::runtime::v1::ExecutionIdentityV1,
+        &crate::protocol::elitea::runtime::v1::ExecutionFenceV1,
+    )> {
+        self.checkpoint
+            .as_ref()
+            .map(|_| self.output_authority.claim_parts())
+    }
+
     pub(super) fn trace_tenant_id(&self) -> &str {
         &self.verified.command().tenant_id
     }
@@ -961,6 +974,16 @@ where
 impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
     pub(super) fn trace_execution_id(&self) -> &str {
         &self.verified.command().execution_id
+    }
+
+    pub(super) fn trace_command_id(&self) -> &str {
+        &self.verified.command().command_id
+    }
+
+    /// The authorized request payload the run's step records describe
+    /// (ADR-0042, #1499): its HITL decisions and continuation flags.
+    pub(super) const fn step_payload(&self) -> &crate::agents::AgentExecutionPayload {
+        &self.request.payload
     }
 
     pub(super) const fn trace_generation(&self) -> u64 {
@@ -1392,6 +1415,17 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
 
 #[cfg(test)]
 impl AuthorizedAgentRun {
+    /// The claim a recovered start of this run would report under.
+    pub(crate) fn test_claim_parts(
+        &self,
+    ) -> (
+        crate::protocol::elitea::runtime::v1::ExecutionIdentityV1,
+        crate::protocol::elitea::runtime::v1::ExecutionFenceV1,
+    ) {
+        let (identity, fence) = self.output_authority.claim_parts();
+        (identity.clone(), fence.clone())
+    }
+
     pub(crate) fn into_test_cleanup(self) -> (AgentExecutionRequest, ClaimLeaseMonitor) {
         (self.request, self.lease)
     }
