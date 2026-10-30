@@ -49,8 +49,8 @@ var (
 
 // OverrideRequest asks to let a stopped response's conversation continue.
 type OverrideRequest struct {
-	ProjectID        int64
-	ActorUserID      int64
+	ProjectID   int64
+	ActorUserID int64
 	// ConversationUUID, when set, must be the response's conversation;
 	// empty takes the response's own.
 	ConversationUUID string
