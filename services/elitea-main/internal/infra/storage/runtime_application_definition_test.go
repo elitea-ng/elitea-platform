@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -214,6 +215,48 @@ func TestRuntimeApplicationDefinitionSchemaRejectsMalformedIdentity(t *testing.T
 			}
 			err := schema.Validate(envelope)
 			if test.valid {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+// ADR-0044 decision 3: the optional declared data classes.
+func TestRuntimeApplicationDefinitionSchemaBoundsDataClasses(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join("..", "..", "..", "..", "..", "libs", "jsonschema", "runtime", "v1", "application-version.schema.json")
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var schemaDocument any
+	require.NoError(t, json.Unmarshal(raw, &schemaDocument))
+	compiler := jsonschema.NewCompiler()
+	const schemaID = "https://schemas.elitea.ai/runtime/v1/application-version.schema.json"
+	require.NoError(t, compiler.AddResource(schemaID, schemaDocument))
+	schema, err := compiler.Compile(schemaID)
+	require.NoError(t, err)
+	tooMany := make([]any, 33)
+	for i := range tooMany {
+		tooMany[i] = "c" + strconv.Itoa(i)
+	}
+	for _, test := range []struct {
+		name    string
+		classes any
+		valid   bool
+	}{
+		{"declared", []any{"pii", "finance.restricted"}, true},
+		{"empty", []any{}, false},
+		{"uppercase", []any{"PII"}, false},
+		{"duplicate", []any{"pii", "pii"}, false},
+		{"too many", tooMany, false},
+		{"null", nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			envelope := map[string]any{"schema_version": RuntimeApplicationVersionSchemaVersion, "project_id": float64(17),
+				"application_id": float64(31), "version_id": float64(41), "version_details": map[string]any{"tools": []any{}},
+				"data_classes": test.classes}
+			if err := schema.Validate(envelope); test.valid {
 				require.NoError(t, err)
 			} else {
 				require.Error(t, err)

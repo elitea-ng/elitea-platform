@@ -36,6 +36,7 @@ import (
 	toolkitcallapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	workerdelegationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerdelegation"
 	workeregressapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workeregress"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
@@ -121,6 +122,10 @@ type Dependencies struct {
 	// control plane cancels a run past it at lease renewal with
 	// cancel_reason cap_reached. Nil: no cap (tests).
 	MaxRunWall func(ctx context.Context) (time.Duration, error)
+	// DelegationSettings reads the platform's delegation section (ADR-0044
+	// decision 3) for every agent execution command: the cache the admin
+	// save drops. Nil: a cache of its own, refreshed by its TTL only.
+	DelegationSettings workerdelegationapp.SettingsReader
 	// IndexScheduleMandates and IndexScheduleMandateGate make every index
 	// schedule occurrence mandate-bound (#1122): built at the composition
 	// root only with credential governance on. Nil: the executor keeps the
@@ -231,6 +236,10 @@ type Dependencies struct {
 	// live-update plane) publishes none; the list rows still carry the
 	// state.
 	ConversationActivity *conversationactivity.Notifier
+	// DelegationAssertions mints the delegation assertions of remote MCP
+	// calls (ADR-0044 decision 4, #1501). nil answers
+	// UNSUPPORTED_CAPABILITY to MintDelegationAssertion.
+	DelegationAssertions control.DelegationAssertions
 }
 
 func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtime, error) {
@@ -365,6 +374,18 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	egressSources, err := repos.NewWorkerEgressSources(dependencies.AdmissionPool)
 	if err != nil {
 		return nil, fmt.Errorf("construct worker egress sources: %w", err)
+	}
+	// The platform's delegation section (ADR-0044 decision 3). Main sends the
+	// policy and a child's data classes only once an administrator saved it.
+	delegationSettings := dependencies.DelegationSettings
+	if delegationSettings == nil {
+		delegationSettings = platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.DelegationSettings, error) {
+			return platformconfig.LoadDelegationSettings(ctx, dependencies.AdmissionPool)
+		}, 0)
+	}
+	delegationDataClasses, err := workerdelegationapp.NewSavedSectionDataClasses(delegationSettings, egressSources)
+	if err != nil {
+		return nil, err
 	}
 	// The platform section is read at most once per PlatformSettingsTTL (5s)
 	// per replica: an administrator's save reaches new commands within it.
@@ -712,6 +733,14 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct agent execution producer: %w", err)
 		}
 		agentProducer.WithEgressPolicy(commandPolicy).WithDispatchRefusals(dispatchRefusals)
+		// Every agent execution command carries its delegation policy
+		// (ADR-0044 decision 3) once the section was saved; before that the
+		// command is unchanged byte for byte, so an older worker accepts it.
+		delegationPolicy, err := workerdelegationapp.NewResolver(delegationSettings, egressSources, egressSources)
+		if err != nil {
+			return nil, err
+		}
+		agentProducer.WithDelegationPolicy(delegationPolicy)
 		// The catalogue project is the SAME id the freezer resolves shared
 		// models against, taken from the same place, so the one project a turn
 		// may borrow a published agent from and the one project it may borrow a
@@ -1765,6 +1794,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if nestedApplicationVersions != nil && codeSources != nil {
 		nestedApplicationVersions.WithFrozenSavedChildVersionCapture(codeSources)
 	}
+	// A served child carries its declared data classes (ADR-0044 decision 3),
+	// read from the same agent registry as the root's, once the delegation
+	// section was saved.
+	nestedApplicationVersions.WithDataClasses(delegationDataClasses)
 	// attachmentObjects is what lets an attached DOCUMENT reach the model as
 	// text rather than as a filename. The native runtime has no other channel
 	// to object storage (no vault, no `artifact` toolkit family, and an egress
@@ -2361,6 +2394,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, err
 		}
 		controlServer.WithRunSteps(runSteps)
+	}
+	if dependencies.DelegationAssertions != nil {
+		controlServer.WithDelegationAssertions(dependencies.DelegationAssertions)
 	}
 	privateServers, err := runtimegrpc.NewPrivateServerSet(runtimegrpc.PrivateServerConfig{
 		ControlAddress:                  config.ControlAddress,

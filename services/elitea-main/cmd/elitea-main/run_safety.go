@@ -20,6 +20,9 @@ import (
 type runSafety struct {
 	sessionPolicy *platformconfig.CachedSection[platformconfig.SessionPolicy]
 	runCaps       *platformconfig.CachedSection[platformconfig.RunCaps]
+	// delegation is the delegation policy (ADR-0044 decision 3) every
+	// agent execution command carries.
+	delegation *platformconfig.CachedSection[platformconfig.DelegationSettings]
 }
 
 func newRunSafety(pool *pgxpool.Pool) runSafety {
@@ -29,6 +32,9 @@ func newRunSafety(pool *pgxpool.Pool) runSafety {
 		}, 0),
 		runCaps: platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.RunCaps, error) {
 			return platformconfig.LoadRunCaps(ctx, pool)
+		}, 0),
+		delegation: platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.DelegationSettings, error) {
+			return platformconfig.LoadDelegationSettings(ctx, pool)
 		}, 0),
 	}
 }

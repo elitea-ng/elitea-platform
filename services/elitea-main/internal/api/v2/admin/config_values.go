@@ -244,6 +244,14 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		}
 	}
 
+	// The remote agent policy (ADR-0044 decision 4).
+	if section.id == platformconfig.SectionRemoteAgents {
+		if reason := validateRemoteAgentsValues(body.Values); reason != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+			return
+		}
+	}
+
 	// The connector catalogue mode (ADR-0044 decision 1).
 	if section.id == platformconfig.SectionCatalogue {
 		if reason := validateCatalogueValues(body.Values); reason != "" {
@@ -271,6 +279,11 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
 		return
 	}
+	// The delegation policy's depth range and mode (ADR-0044 decision 3).
+	if reason := validateDelegationValues(section.id, body.Values); reason != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+		return
+	}
 	// The credential review policy's ranges (ADR-0044 decision 5).
 	if reason := validateCredentialReviewValues(section.id, body.Values); reason != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
@@ -293,6 +306,7 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		h.invalidateNativeClientPolicy()
 	}
 	h.invalidateRunSafety(section.id)
+	h.invalidateDelegation(section.id)
 	if section.id == platformconfig.SectionBranding {
 		h.invalidateBranding()
 		if stored, err := h.loadSectionValues(r, section.id); err == nil {

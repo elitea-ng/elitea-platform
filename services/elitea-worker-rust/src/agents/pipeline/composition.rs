@@ -44,6 +44,9 @@ pub(super) struct AdmittedSavedPipeline {
     pub(super) profile: PipelineExecutionProfile,
     pub(super) children: BTreeMap<String, Arc<AdmittedSavedPipeline>>,
     pub(super) revision: PipelineCheckpointRevision,
+    /// The pipeline's declared data classes (its agent registry row; ADR-0044
+    /// decision 3). Empty declares none.
+    pub(super) data_classes: BTreeSet<String>,
 }
 
 pub(super) struct AdmittedPipelineComposition {
@@ -51,13 +54,16 @@ pub(super) struct AdmittedPipelineComposition {
     pub(super) checkpoint_paths: Vec<String>,
 }
 
+/// One loaded frozen version and its declared data classes.
+type LoadedVersion = (Map<String, Value>, BTreeSet<String>);
+
 struct CompositionAdmission<'a> {
     platform: &'a PlatformClient,
     authority: &'a ClaimBoundRuntimeContextAuthority,
     project_id: u64,
     policy: &'a ToolAdmissionPolicy,
     resolving: BTreeSet<(u64, u64)>,
-    versions: BTreeMap<(u64, u64), Map<String, Value>>,
+    versions: BTreeMap<(u64, u64), LoadedVersion>,
     hops: usize,
     version_bytes: usize,
 }
@@ -102,15 +108,15 @@ impl CompositionAdmission<'_> {
                 ));
             }
             let result = async {
-                let version = if let Some(version) = self.versions.get(&identity) {
-                    version.clone()
+                let (version, data_classes) = if let Some(loaded) = self.versions.get(&identity) {
+                    loaded.clone()
                 } else {
-                    let version = self
+                    let (version, data_classes) = self
                         .platform
                         .resolve_application_version(self.authority, identity.0, identity.1)
                         .await
                         .map_err(NativeAgentAssemblyError::from)?
-                        .into_version_details();
+                        .into_parts();
                     self.version_bytes = self
                         .version_bytes
                         .checked_add(
@@ -122,8 +128,9 @@ impl CompositionAdmission<'_> {
                     if self.version_bytes > MAX_COMPOSITION_VERSION_BYTES {
                         return Err(composition_size());
                     }
-                    self.versions.insert(identity, version.clone());
-                    version
+                    self.versions
+                        .insert(identity, (version.clone(), data_classes.clone()));
+                    (version, data_classes)
                 };
                 let mut profile =
                     PipelineExecutionProfile::from_nested_version(&version, fallback)?;
@@ -142,6 +149,7 @@ impl CompositionAdmission<'_> {
                     profile,
                     children,
                     revision,
+                    data_classes,
                 }))
             }
             .await;
@@ -534,6 +542,7 @@ mod tests {
                     .expect("child profile"),
                 version,
                 children: BTreeMap::new(),
+                data_classes: BTreeSet::new(),
                 revision: PipelineCheckpointRevision {
                     application_id: 5,
                     version_id: 6,

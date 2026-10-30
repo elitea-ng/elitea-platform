@@ -757,6 +757,10 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 	//	run_caps          → platformconfig.LoadRunCaps through a cached reader:
 	//	                    the control plane's lease renewal cancels an agent
 	//	                    run past max_wall_seconds (ADR-0041 decision 3)
+	//	delegation        → platformconfig.LoadDelegationSettings through a
+	//	                    cached reader: every agent execution command's
+	//	                    preparation (workerdelegation.Resolver) puts it in
+	//	                    the signed command (ADR-0044 decision 3, #1501)
 	//	entitlement_export → platformconfig.LoadEntitlementExportSettings, read
 	//	                    by the SCIM entitlement tree's client gate on every
 	//	                    request to /api/v2/scim/v2/entitlements (ADR-0044
@@ -792,6 +796,12 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		"session_policy": true,
 		// ADR-0041 decision 3 (#1496, #1498): every agent lease renewal.
 		"run_caps": true,
+		// ADR-0044 decision 3 (#1501): every agent execution command's
+		// preparation (workerdelegation.Resolver).
+		"delegation": true,
+		// ADR-0044 decision 4 (#1501): the delegation assertion mint and the
+		// MCP endpoint's inbound assertion check.
+		"remote_agents": true,
 		// ADR-0040 decisions 3 and 5 (#1497): publish, change requests and
 		// the recertification routine.
 		"agent_lifecycle": true,
@@ -1080,6 +1090,36 @@ func TestEntitlementExportSCIMClientsRoundTrip(t *testing.T) {
 	settings, err = platformconfig.LoadEntitlementExportSettings(context.Background(), pool)
 	if err != nil || !settings.AllowsSCIMClient(3) || !settings.AllowsSCIMClient(11) || settings.AllowsSCIMClient(4) {
 		t.Fatalf("stored = %v, %v; want [3 11]", settings, err)
+	}
+}
+
+// TestDelegationSectionIsStoredOnlyOnceSaved: Main sends the delegation
+// policy (WorkerCommandV1 field 67) and a child's data classes only once an
+// administrator saved the section (ADR-0044 decision 3). The chart rolls Main
+// out before the workers, and an older worker rejects both. A save of the
+// default values still counts as saved.
+func TestDelegationSectionIsStoredOnlyOnceSaved(t *testing.T) {
+	pool := newConfigPool(t)
+	principal := auth.User{ID: "7", Email: "operator@example.com"}
+	const target = "/admin/plugin_config_values/administration/delegation"
+	router := configRouter(admin.NewHandler(pool, admin.WithPermissionResolver(
+		grantingResolver("configuration.governance"))), &principal)
+
+	settings, err := platformconfig.LoadDelegationSettings(context.Background(), pool)
+	if err != nil || settings.Stored || settings != platformconfig.DefaultDelegationSettings() {
+		t.Fatalf("never saved = %+v, %v; want the unstored defaults", settings, err)
+	}
+	if recorder := configDo(t, router, http.MethodPut, target,
+		map[string]any{"values": map[string]any{"max_depth": 17}}); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("PUT of depth 17 = %d, want 400 (body %s)", recorder.Code, recorder.Body.String())
+	}
+	if recorder := configDo(t, router, http.MethodPut, target,
+		map[string]any{"values": map[string]any{"max_depth": 4, "mode": "enforce"}}); recorder.Code != http.StatusOK {
+		t.Fatalf("PUT = %d, want 200 (body %s)", recorder.Code, recorder.Body.String())
+	}
+	settings, err = platformconfig.LoadDelegationSettings(context.Background(), pool)
+	if err != nil || !settings.Stored || settings.MaxDepth != 4 || settings.Mode != platformconfig.DelegationEnforce {
+		t.Fatalf("saved defaults = %+v, %v; want stored enforce at depth 4", settings, err)
 	}
 }
 

@@ -3076,6 +3076,14 @@ main:
     # command signing, code-sandbox grants or the egress token key.
     # Read in cmd/elitea-main/agent_identity_native.go.
     ELITEA_AGENT_ASSERTION_CONFIG: ""
+    # Remote agents (ADR-0044 decision 4, #1501): the issuers whose
+    # delegation assertions the MCP endpoint accepts, added to the entries of
+    # Configuration › Remote Agents. Each entry is "<issuer>" (an Elitea
+    # deployment: keys at its /.well-known/elitea-agent-jwks.json) or
+    # "<issuer> <jwks_url>", separated by a comma or a new line. https only.
+    # A malformed entry refuses boot. Empty: no bootstrap issuer.
+    # Read in cmd/elitea-main/remote_agents.go.
+    ELITEA_REMOTE_AGENT_TRUSTED_ISSUERS: ""
     # Provider OAuth consent (#1121): one OAuth application per provider
     # (JIRA, CONFLUENCE, AHA). Read ONLY with the flag above on. An empty
     # CLIENT_ID leaves the provider unconfigured. REDIRECT_URI is exact:

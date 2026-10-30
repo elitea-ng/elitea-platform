@@ -248,6 +248,13 @@ struct SteeringClaim {
     reply: oneshot::Sender<Option<Vec<(String, String)>>>,
 }
 
+/// One delegation assertion mint (ADR-0044 decision 4): the audience and the
+/// reply. The reply is `None` when Main refused or did not answer.
+struct AssertionClaim {
+    audience: String,
+    reply: oneshot::Sender<Option<elitea_agent_runtime::remote_assertion::MintedAssertion>>,
+}
+
 /// What one claim's turn did with its steering messages. Shared by every
 /// probe of the monitor.
 #[derive(Default)]
@@ -302,6 +309,7 @@ pub enum ClaimLeaseActivation {
 pub struct ClaimLeaseMonitor {
     commands: mpsc::Sender<MonitorCommand>,
     steering: mpsc::Sender<SteeringClaim>,
+    assertions: mpsc::Sender<AssertionClaim>,
     steering_ledger: Arc<std::sync::Mutex<SteeringLedger>>,
     state: watch::Receiver<MonitorState>,
     /// ADR-0034 take back: latched true once a renewal says
@@ -333,6 +341,7 @@ pub(crate) struct ClaimLeaseStateProbe {
     supervision_live: Arc<AtomicBool>,
     steering: mpsc::Sender<SteeringClaim>,
     steering_ledger: Arc<std::sync::Mutex<SteeringLedger>>,
+    assertions: mpsc::Sender<AssertionClaim>,
 }
 
 #[allow(dead_code)] // Consumed by the capability-disabled native invocation lifecycle.
@@ -346,6 +355,7 @@ impl Clone for ClaimLeaseStateProbe {
             supervision_live: Arc::clone(&self.supervision_live),
             steering: self.steering.clone(),
             steering_ledger: Arc::clone(&self.steering_ledger),
+            assertions: self.assertions.clone(),
         }
     }
 }
@@ -573,6 +583,37 @@ impl adk_rust::agent::SteeringSource for ClaimLeaseStateProbe {
     }
 }
 
+/// The cloud host's delegation assertions (ADR-0044 decision 4): Main mints
+/// each one under the live claim, through the lease actor, so a mint never
+/// overlaps a renewal. A stopped or lost lease mints nothing.
+#[async_trait::async_trait]
+impl elitea_agent_runtime::remote_assertion::DelegationAssertionSource for ClaimLeaseStateProbe {
+    async fn mint(
+        &self,
+        audience: &str,
+    ) -> Result<
+        elitea_agent_runtime::remote_assertion::MintedAssertion,
+        elitea_agent_runtime::remote_assertion::DelegationAssertionError,
+    > {
+        use elitea_agent_runtime::remote_assertion::DelegationAssertionError;
+        self.ensure_running()
+            .map_err(|_| DelegationAssertionError::Unavailable)?;
+        let (reply, answer) = oneshot::channel();
+        self.assertions
+            .send(AssertionClaim {
+                audience: audience.to_owned(),
+                reply,
+            })
+            .await
+            .map_err(|_| DelegationAssertionError::Unavailable)?;
+        answer
+            .await
+            .ok()
+            .flatten()
+            .ok_or(DelegationAssertionError::Unavailable)
+    }
+}
+
 /// Durable Stop is a cooperative stop; every other lease state is lost
 /// authority, which fails closed.
 const fn execution_end(error: &ClaimLeaseError) -> ExecutionEnd {
@@ -700,6 +741,7 @@ impl ClaimLeaseMonitor {
         let probe_clock: Arc<dyn UnixMillisClock> = clock.clone();
         let (command_sender, command_receiver) = mpsc::channel(1);
         let (steering_sender, steering_receiver) = mpsc::channel(1);
+        let (assertion_sender, assertion_receiver) = mpsc::channel(1);
         let (state_sender, state_receiver) = watch::channel(MonitorState::Running {
             lease_expires_at_unix_millis: initial_expiry,
         });
@@ -714,6 +756,7 @@ impl ClaimLeaseMonitor {
             LeaseActorChannels {
                 commands: command_receiver,
                 steering: steering_receiver,
+                assertions: assertion_receiver,
                 state: state_sender,
                 wrap_up: wrap_up_sender,
                 shutdown: shutdown_receiver,
@@ -723,6 +766,7 @@ impl ClaimLeaseMonitor {
         Self {
             commands: command_sender,
             steering: steering_sender,
+            assertions: assertion_sender,
             steering_ledger: Arc::default(),
             state: state_receiver,
             wrap_up: wrap_up_receiver,
@@ -795,6 +839,7 @@ impl ClaimLeaseMonitor {
             supervision_live: Arc::clone(&self.supervision_live),
             steering: self.steering.clone(),
             steering_ledger: Arc::clone(&self.steering_ledger),
+            assertions: self.assertions.clone(),
         }
     }
 
@@ -932,6 +977,7 @@ impl Drop for LeaseActorLifetime {
 struct LeaseActorChannels {
     commands: mpsc::Receiver<MonitorCommand>,
     steering: mpsc::Receiver<SteeringClaim>,
+    assertions: mpsc::Receiver<AssertionClaim>,
     state: watch::Sender<MonitorState>,
     wrap_up: watch::Sender<bool>,
     shutdown: watch::Receiver<bool>,
@@ -951,6 +997,7 @@ async fn run_lease_actor<R, K>(
     let LeaseActorChannels {
         mut commands,
         mut steering,
+        mut assertions,
         state,
         wrap_up,
         mut shutdown,
@@ -964,6 +1011,10 @@ async fn run_lease_actor<R, K>(
     // A Main without the steering RPC answers the same way every time: stop
     // asking for the rest of this claim.
     let mut steering_served = true;
+    // Mints run beside the actor, so a slow Main never delays a renewal.
+    // Dropped with the actor: an unfinished mint is aborted, and its probe
+    // gets no assertion.
+    let mut mints = tokio::task::JoinSet::new();
 
     loop {
         if *shutdown.borrow() {
@@ -1019,6 +1070,10 @@ async fn run_lease_actor<R, K>(
                 };
                 let _ = call.reply.send(claimed);
             }
+            Some(call) = assertions.recv() => {
+                spawn_mint(&control, &lease, call, &mut mints);
+            }
+            Some(_) = mints.join_next(), if !mints.is_empty() => {}
             _ = ticker.tick() => {
                 let Some(result) = poll_or_shutdown(
                     &control,
@@ -1041,6 +1096,41 @@ async fn run_lease_actor<R, K>(
             }
         }
     }
+}
+
+/// At most this many mints of one claim run at once; another is answered
+/// with no assertion at once (the run's cache backs off and asks again).
+const MAX_PENDING_MINTS: usize = 8;
+
+/// Start one delegation assertion mint (ADR-0044 decision 4) in its own
+/// task. The request is built from the claim now; the task sends it and
+/// answers the probe (`None` when Main refused or did not answer). The
+/// lease actor never awaits it.
+fn spawn_mint<R>(
+    control: &Arc<AgentControlClient<R>>,
+    lease: &ClaimLeaseHandle,
+    call: AssertionClaim,
+    mints: &mut tokio::task::JoinSet<()>,
+) where
+    R: ControlRpc + 'static,
+{
+    let AssertionClaim { audience, reply } = call;
+    if mints.len() >= MAX_PENDING_MINTS {
+        let _ = reply.send(None);
+        return;
+    }
+    let request = lease.delegation_request(audience);
+    let control = Arc::clone(control);
+    mints.spawn(async move {
+        let minted = control
+            .mint_delegation_assertion(request)
+            .await
+            .map_err(|error| {
+                tracing::warn!(error = %error, "the delegation assertion was not minted");
+            })
+            .ok();
+        let _ = reply.send(minted);
+    });
 }
 
 /// The answer of one steering call, or `None`. A refusal never ends the

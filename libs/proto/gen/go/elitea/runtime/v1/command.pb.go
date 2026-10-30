@@ -159,6 +159,60 @@ func (WorkerEgressModeV1) EnumDescriptor() ([]byte, []int) {
 	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{1}
 }
 
+// How grant narrowing treats a callee that needs a grant its caller lacks.
+type WorkerDelegationModeV1 int32
+
+const (
+	// The same as ENFORCE.
+	WorkerDelegationModeV1_WORKER_DELEGATION_MODE_V1_UNSPECIFIED WorkerDelegationModeV1 = 0
+	// The delegation is refused with DELEGATION_GRANT_MISSING.
+	WorkerDelegationModeV1_WORKER_DELEGATION_MODE_V1_ENFORCE WorkerDelegationModeV1 = 1
+	// The missing grant is recorded on the delegation step and the callee
+	// runs. The depth cap is enforced in both modes.
+	WorkerDelegationModeV1_WORKER_DELEGATION_MODE_V1_REPORT WorkerDelegationModeV1 = 2
+)
+
+// Enum value maps for WorkerDelegationModeV1.
+var (
+	WorkerDelegationModeV1_name = map[int32]string{
+		0: "WORKER_DELEGATION_MODE_V1_UNSPECIFIED",
+		1: "WORKER_DELEGATION_MODE_V1_ENFORCE",
+		2: "WORKER_DELEGATION_MODE_V1_REPORT",
+	}
+	WorkerDelegationModeV1_value = map[string]int32{
+		"WORKER_DELEGATION_MODE_V1_UNSPECIFIED": 0,
+		"WORKER_DELEGATION_MODE_V1_ENFORCE":     1,
+		"WORKER_DELEGATION_MODE_V1_REPORT":      2,
+	}
+)
+
+func (x WorkerDelegationModeV1) Enum() *WorkerDelegationModeV1 {
+	p := new(WorkerDelegationModeV1)
+	*p = x
+	return p
+}
+
+func (x WorkerDelegationModeV1) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (WorkerDelegationModeV1) Descriptor() protoreflect.EnumDescriptor {
+	return file_elitea_runtime_v1_command_proto_enumTypes[2].Descriptor()
+}
+
+func (WorkerDelegationModeV1) Type() protoreflect.EnumType {
+	return &file_elitea_runtime_v1_command_proto_enumTypes[2]
+}
+
+func (x WorkerDelegationModeV1) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use WorkerDelegationModeV1.Descriptor instead.
+func (WorkerDelegationModeV1) EnumDescriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{2}
+}
+
 // WorkerCommandV1 is the immutable, reference-only command body allowed on the
 // command bus. It must never contain settings, prompts, files, results,
 // credentials, grant material, exceptions, or other bulk/protected content.
@@ -210,9 +264,14 @@ type WorkerCommandV1 struct {
 	// decision 2, #1490). Absent means open: public hosts are unrestricted.
 	// Main omits it while the platform's worker_egress mode is open, so
 	// commands are unchanged byte for byte.
-	EgressPolicy  *WorkerEgressPolicyV1 `protobuf:"bytes,66,opt,name=egress_policy,json=egressPolicy,proto3" json:"egress_policy,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	EgressPolicy *WorkerEgressPolicyV1 `protobuf:"bytes,66,opt,name=egress_policy,json=egressPolicy,proto3" json:"egress_policy,omitempty"`
+	// The delegation policy of an agent run (ADR-0044 decision 3, #1501).
+	// Absent means the defaults: a maximum delegation depth of 4, narrowing
+	// enforced, and no root data classes. Main omits it while every value is
+	// the default, so commands are unchanged byte for byte.
+	DelegationPolicy *WorkerDelegationPolicyV1 `protobuf:"bytes,67,opt,name=delegation_policy,json=delegationPolicy,proto3" json:"delegation_policy,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *WorkerCommandV1) Reset() {
@@ -488,6 +547,13 @@ func (x *WorkerCommandV1) GetEgressPolicy() *WorkerEgressPolicyV1 {
 	return nil
 }
 
+func (x *WorkerCommandV1) GetDelegationPolicy() *WorkerDelegationPolicyV1 {
+	if x != nil {
+		return x.DelegationPolicy
+	}
+	return nil
+}
+
 type isWorkerCommandV1_CapabilityCommand interface {
 	isWorkerCommandV1_CapabilityCommand()
 }
@@ -587,11 +653,80 @@ func (x *WorkerEgressPolicyV1) GetAllow() []string {
 	return nil
 }
 
+// A run's delegation policy (ADR-0044 decision 3). When an agent calls a
+// saved agent or pipeline, a pipeline node runs one, or an agent starts a
+// sub-agent, the callee runs with the intersection of its own grants and its
+// caller's. The depth counts every kind of delegation together; the root is
+// depth 0.
+type WorkerDelegationPolicyV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 1 to 16; 0 means the default (4).
+	MaxDepth uint32                 `protobuf:"varint,1,opt,name=max_depth,json=maxDepth,proto3" json:"max_depth,omitempty"`
+	Mode     WorkerDelegationModeV1 `protobuf:"varint,2,opt,name=mode,proto3,enum=elitea.runtime.v1.WorkerDelegationModeV1" json:"mode,omitempty"`
+	// The root agent's declared data classes (its agent registry row), in the
+	// registry's grammar (^[a-z0-9][a-z0-9_.-]{0,63}$), at most 32. Empty
+	// imposes no data class constraint.
+	RootDataClasses []string `protobuf:"bytes,3,rep,name=root_data_classes,json=rootDataClasses,proto3" json:"root_data_classes,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *WorkerDelegationPolicyV1) Reset() {
+	*x = WorkerDelegationPolicyV1{}
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkerDelegationPolicyV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkerDelegationPolicyV1) ProtoMessage() {}
+
+func (x *WorkerDelegationPolicyV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkerDelegationPolicyV1.ProtoReflect.Descriptor instead.
+func (*WorkerDelegationPolicyV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *WorkerDelegationPolicyV1) GetMaxDepth() uint32 {
+	if x != nil {
+		return x.MaxDepth
+	}
+	return 0
+}
+
+func (x *WorkerDelegationPolicyV1) GetMode() WorkerDelegationModeV1 {
+	if x != nil {
+		return x.Mode
+	}
+	return WorkerDelegationModeV1_WORKER_DELEGATION_MODE_V1_UNSPECIFIED
+}
+
+func (x *WorkerDelegationPolicyV1) GetRootDataClasses() []string {
+	if x != nil {
+		return x.RootDataClasses
+	}
+	return nil
+}
+
 var File_elitea_runtime_v1_command_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\n" +
-	"\x1felitea/runtime/v1/command.proto\x12\x11elitea.runtime.v1\x1a\x1delitea/runtime/v1/agent.proto\x1a elitea/runtime/v1/indexing.proto\x1a\x1delitea/runtime/v1/input.proto\x1a(elitea/runtime/v1/security_context.proto\x1a\x1felitea/runtime/v1/toolkit.proto\x1a\"elitea/runtime/v1/validation.proto\"\xd8\x0e\n" +
+	"\x1felitea/runtime/v1/command.proto\x12\x11elitea.runtime.v1\x1a\x1delitea/runtime/v1/agent.proto\x1a elitea/runtime/v1/indexing.proto\x1a\x1delitea/runtime/v1/input.proto\x1a(elitea/runtime/v1/security_context.proto\x1a\x1felitea/runtime/v1/toolkit.proto\x1a\"elitea/runtime/v1/validation.proto\"\xb2\x0f\n" +
 	"\x0fWorkerCommandV1\x12+\n" +
 	"\x11protocol_revision\x18\x01 \x01(\tR\x10protocolRevision\x12\x1d\n" +
 	"\n" +
@@ -630,11 +765,16 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\x11toolkit_call_tool\x18$ \x01(\v2+.elitea.runtime.v1.ToolkitCallToolCommandV1H\x00R\x0ftoolkitCallTool\x12b\n" +
 	"\x14toolkit_execute_read\x18@ \x01(\v2..elitea.runtime.v1.ToolkitExecuteReadCommandV1H\x00R\x12toolkitExecuteRead\x12h\n" +
 	"\x14security_context_ref\x18A \x01(\v26.elitea.runtime.v1.ExecutionSecurityContextReferenceV1R\x12securityContextRef\x12L\n" +
-	"\regress_policy\x18B \x01(\v2'.elitea.runtime.v1.WorkerEgressPolicyV1R\fegressPolicyB\x14\n" +
+	"\regress_policy\x18B \x01(\v2'.elitea.runtime.v1.WorkerEgressPolicyV1R\fegressPolicy\x12X\n" +
+	"\x11delegation_policy\x18C \x01(\v2+.elitea.runtime.v1.WorkerDelegationPolicyV1R\x10delegationPolicyB\x14\n" +
 	"\x12capability_commandJ\x04\b\x0f\x10\x10J\x04\b\x1a\x10 J\x04\b%\x10@R\x11grant_template_id\"m\n" +
 	"\x14WorkerEgressPolicyV1\x129\n" +
 	"\x04mode\x18\x01 \x01(\x0e2%.elitea.runtime.v1.WorkerEgressModeV1R\x04mode\x12\x14\n" +
-	"\x05allow\x18\x02 \x03(\tR\x05allowJ\x04\b\x03\x10\v*\x9f\x04\n" +
+	"\x05allow\x18\x02 \x03(\tR\x05allowJ\x04\b\x03\x10\v\"\xa8\x01\n" +
+	"\x18WorkerDelegationPolicyV1\x12\x1b\n" +
+	"\tmax_depth\x18\x01 \x01(\rR\bmaxDepth\x12=\n" +
+	"\x04mode\x18\x02 \x01(\x0e2).elitea.runtime.v1.WorkerDelegationModeV1R\x04mode\x12*\n" +
+	"\x11root_data_classes\x18\x03 \x03(\tR\x0frootDataClassesJ\x04\b\x04\x10\v*\x9f\x04\n" +
 	"\x13WorkerCommandTypeV1\x12&\n" +
 	"\"WORKER_COMMAND_TYPE_V1_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cWORKER_COMMAND_TYPE_V1_START\x10\x01\x12!\n" +
@@ -652,7 +792,11 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\x12WorkerEgressModeV1\x12%\n" +
 	"!WORKER_EGRESS_MODE_V1_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aWORKER_EGRESS_MODE_V1_OPEN\x10\x01\x12#\n" +
-	"\x1fWORKER_EGRESS_MODE_V1_ALLOWLIST\x10\x02BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x1fWORKER_EGRESS_MODE_V1_ALLOWLIST\x10\x02*\x90\x01\n" +
+	"\x16WorkerDelegationModeV1\x12)\n" +
+	"%WORKER_DELEGATION_MODE_V1_UNSPECIFIED\x10\x00\x12%\n" +
+	"!WORKER_DELEGATION_MODE_V1_ENFORCE\x10\x01\x12$\n" +
+	" WORKER_DELEGATION_MODE_V1_REPORT\x10\x02BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_command_proto_rawDescOnce sync.Once
@@ -666,39 +810,43 @@ func file_elitea_runtime_v1_command_proto_rawDescGZIP() []byte {
 	return file_elitea_runtime_v1_command_proto_rawDescData
 }
 
-var file_elitea_runtime_v1_command_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_elitea_runtime_v1_command_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_elitea_runtime_v1_command_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_elitea_runtime_v1_command_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_elitea_runtime_v1_command_proto_goTypes = []any{
 	(WorkerCommandTypeV1)(0),                    // 0: elitea.runtime.v1.WorkerCommandTypeV1
 	(WorkerEgressModeV1)(0),                     // 1: elitea.runtime.v1.WorkerEgressModeV1
-	(*WorkerCommandV1)(nil),                     // 2: elitea.runtime.v1.WorkerCommandV1
-	(*WorkerEgressPolicyV1)(nil),                // 3: elitea.runtime.v1.WorkerEgressPolicyV1
-	(*ExecutionInputBundleReferenceV1)(nil),     // 4: elitea.runtime.v1.ExecutionInputBundleReferenceV1
-	(*ConfigurationValidationCommandV1)(nil),    // 5: elitea.runtime.v1.ConfigurationValidationCommandV1
-	(*ToolkitAvailableToolsCommandV1)(nil),      // 6: elitea.runtime.v1.ToolkitAvailableToolsCommandV1
-	(*IndexIngestCommandV1)(nil),                // 7: elitea.runtime.v1.IndexIngestCommandV1
-	(*AgentExecutionCommandV1)(nil),             // 8: elitea.runtime.v1.AgentExecutionCommandV1
-	(*ToolkitCallToolCommandV1)(nil),            // 9: elitea.runtime.v1.ToolkitCallToolCommandV1
-	(*ToolkitExecuteReadCommandV1)(nil),         // 10: elitea.runtime.v1.ToolkitExecuteReadCommandV1
-	(*ExecutionSecurityContextReferenceV1)(nil), // 11: elitea.runtime.v1.ExecutionSecurityContextReferenceV1
+	(WorkerDelegationModeV1)(0),                 // 2: elitea.runtime.v1.WorkerDelegationModeV1
+	(*WorkerCommandV1)(nil),                     // 3: elitea.runtime.v1.WorkerCommandV1
+	(*WorkerEgressPolicyV1)(nil),                // 4: elitea.runtime.v1.WorkerEgressPolicyV1
+	(*WorkerDelegationPolicyV1)(nil),            // 5: elitea.runtime.v1.WorkerDelegationPolicyV1
+	(*ExecutionInputBundleReferenceV1)(nil),     // 6: elitea.runtime.v1.ExecutionInputBundleReferenceV1
+	(*ConfigurationValidationCommandV1)(nil),    // 7: elitea.runtime.v1.ConfigurationValidationCommandV1
+	(*ToolkitAvailableToolsCommandV1)(nil),      // 8: elitea.runtime.v1.ToolkitAvailableToolsCommandV1
+	(*IndexIngestCommandV1)(nil),                // 9: elitea.runtime.v1.IndexIngestCommandV1
+	(*AgentExecutionCommandV1)(nil),             // 10: elitea.runtime.v1.AgentExecutionCommandV1
+	(*ToolkitCallToolCommandV1)(nil),            // 11: elitea.runtime.v1.ToolkitCallToolCommandV1
+	(*ToolkitExecuteReadCommandV1)(nil),         // 12: elitea.runtime.v1.ToolkitExecuteReadCommandV1
+	(*ExecutionSecurityContextReferenceV1)(nil), // 13: elitea.runtime.v1.ExecutionSecurityContextReferenceV1
 }
 var file_elitea_runtime_v1_command_proto_depIdxs = []int32{
 	0,  // 0: elitea.runtime.v1.WorkerCommandV1.command_type:type_name -> elitea.runtime.v1.WorkerCommandTypeV1
-	4,  // 1: elitea.runtime.v1.WorkerCommandV1.input_bundle_ref:type_name -> elitea.runtime.v1.ExecutionInputBundleReferenceV1
-	5,  // 2: elitea.runtime.v1.WorkerCommandV1.configuration_validation:type_name -> elitea.runtime.v1.ConfigurationValidationCommandV1
-	6,  // 3: elitea.runtime.v1.WorkerCommandV1.toolkit_available_tools:type_name -> elitea.runtime.v1.ToolkitAvailableToolsCommandV1
-	7,  // 4: elitea.runtime.v1.WorkerCommandV1.index_ingest:type_name -> elitea.runtime.v1.IndexIngestCommandV1
-	8,  // 5: elitea.runtime.v1.WorkerCommandV1.agent_execution:type_name -> elitea.runtime.v1.AgentExecutionCommandV1
-	9,  // 6: elitea.runtime.v1.WorkerCommandV1.toolkit_call_tool:type_name -> elitea.runtime.v1.ToolkitCallToolCommandV1
-	10, // 7: elitea.runtime.v1.WorkerCommandV1.toolkit_execute_read:type_name -> elitea.runtime.v1.ToolkitExecuteReadCommandV1
-	11, // 8: elitea.runtime.v1.WorkerCommandV1.security_context_ref:type_name -> elitea.runtime.v1.ExecutionSecurityContextReferenceV1
-	3,  // 9: elitea.runtime.v1.WorkerCommandV1.egress_policy:type_name -> elitea.runtime.v1.WorkerEgressPolicyV1
-	1,  // 10: elitea.runtime.v1.WorkerEgressPolicyV1.mode:type_name -> elitea.runtime.v1.WorkerEgressModeV1
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	6,  // 1: elitea.runtime.v1.WorkerCommandV1.input_bundle_ref:type_name -> elitea.runtime.v1.ExecutionInputBundleReferenceV1
+	7,  // 2: elitea.runtime.v1.WorkerCommandV1.configuration_validation:type_name -> elitea.runtime.v1.ConfigurationValidationCommandV1
+	8,  // 3: elitea.runtime.v1.WorkerCommandV1.toolkit_available_tools:type_name -> elitea.runtime.v1.ToolkitAvailableToolsCommandV1
+	9,  // 4: elitea.runtime.v1.WorkerCommandV1.index_ingest:type_name -> elitea.runtime.v1.IndexIngestCommandV1
+	10, // 5: elitea.runtime.v1.WorkerCommandV1.agent_execution:type_name -> elitea.runtime.v1.AgentExecutionCommandV1
+	11, // 6: elitea.runtime.v1.WorkerCommandV1.toolkit_call_tool:type_name -> elitea.runtime.v1.ToolkitCallToolCommandV1
+	12, // 7: elitea.runtime.v1.WorkerCommandV1.toolkit_execute_read:type_name -> elitea.runtime.v1.ToolkitExecuteReadCommandV1
+	13, // 8: elitea.runtime.v1.WorkerCommandV1.security_context_ref:type_name -> elitea.runtime.v1.ExecutionSecurityContextReferenceV1
+	4,  // 9: elitea.runtime.v1.WorkerCommandV1.egress_policy:type_name -> elitea.runtime.v1.WorkerEgressPolicyV1
+	5,  // 10: elitea.runtime.v1.WorkerCommandV1.delegation_policy:type_name -> elitea.runtime.v1.WorkerDelegationPolicyV1
+	1,  // 11: elitea.runtime.v1.WorkerEgressPolicyV1.mode:type_name -> elitea.runtime.v1.WorkerEgressModeV1
+	2,  // 12: elitea.runtime.v1.WorkerDelegationPolicyV1.mode:type_name -> elitea.runtime.v1.WorkerDelegationModeV1
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_command_proto_init() }
@@ -725,8 +873,8 @@ func file_elitea_runtime_v1_command_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_command_proto_rawDesc), len(file_elitea_runtime_v1_command_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   2,
+			NumEnums:      3,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

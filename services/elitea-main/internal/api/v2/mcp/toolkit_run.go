@@ -61,6 +61,9 @@ func (h *Handler) runToolkitTool(
 	tool Tool,
 	arguments json.RawMessage,
 ) map[string]any {
+	if refused := h.toolScopeRefusal(ctx, projectID, tool); refused != nil {
+		return refused
+	}
 	if len(arguments) == 0 {
 		arguments = json.RawMessage(`{}`)
 	}

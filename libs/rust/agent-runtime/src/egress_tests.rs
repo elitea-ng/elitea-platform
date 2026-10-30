@@ -336,3 +336,93 @@ fn a_client_built_outside_any_run_fails_closed() {
     let closed = RunEgress::closed();
     assert!(closed.check("203.0.113.9", 443).is_err());
 }
+
+/// ADR-0044 decision 3: a delegated agent's egress is its declared hosts
+/// intersected with the run's allowlist. A host the allowlist does not name
+/// refuses the delegation, naming the host.
+#[test]
+fn delegation_narrows_a_callee_to_the_run_allowlist() {
+    use crate::delegation::{DelegationRefusal, DelegationScope, GrantKind, GrantSet};
+    use serde_json::json;
+    use std::collections::BTreeSet;
+
+    let jira = |url: &str| {
+        json!({"id": 7, "type": "jira", "toolkit_name": "Jira",
+            "settings": {"jira_configuration": {"base_url": url}, "limit": 5}})
+    };
+    let caller = DelegationScope::root(
+        Arc::default(),
+        GrantSet::from_tools(&[jira("https://acme.atlassian.net")]),
+    );
+    let policy = PublicPolicy::allowlist(["acme.atlassian.net"]).expect("policy");
+
+    let admitted = caller
+        .delegate(
+            &mut vec![jira("https://acme.atlassian.net")],
+            &BTreeSet::new(),
+            &policy,
+        )
+        .expect("an allowlisted host is delegated");
+    assert_eq!(
+        admitted.scope.grants().canonical()["egress_hosts"],
+        json!(["acme.atlassian.net"])
+    );
+
+    let refused = caller
+        .delegate(
+            &mut vec![jira("https://evil.example/rest")],
+            &BTreeSet::new(),
+            &policy,
+        )
+        .expect_err("a host off the allowlist is refused");
+    assert_eq!(
+        refused.refusal,
+        DelegationRefusal::GrantMissing {
+            kind: GrantKind::EgressHost,
+            name: "evil.example".to_owned(),
+            toolkit: None,
+        }
+    );
+    // An open run checks no host; a bare label (Main may derive a host from
+    // it) is never guessed at.
+    caller
+        .delegate(
+            &mut vec![jira("https://evil.example")],
+            &BTreeSet::new(),
+            &PublicPolicy::Open,
+        )
+        .expect("open");
+    caller
+        .delegate(&mut vec![jira("acme")], &BTreeSet::new(), &policy)
+        .expect("a bare label is not read");
+}
+
+// ADR-0044 decision 4: a RunEgress reused for a new claim of the same
+// command binds that claim's assertions; the released claim's binding is
+// not kept.
+#[test]
+fn a_new_claim_replaces_the_assertion_binding() {
+    use crate::remote_assertion::{
+        DelegationAssertionError, DelegationAssertionSource, DelegationAssertions, MintedAssertion,
+    };
+
+    struct Never;
+
+    #[async_trait]
+    impl DelegationAssertionSource for Never {
+        async fn mint(&self, _: &str) -> Result<MintedAssertion, DelegationAssertionError> {
+            Err(DelegationAssertionError::Unavailable)
+        }
+    }
+
+    let egress = RunEgress::open();
+    assert!(egress.assertions().is_none());
+    let first = DelegationAssertions::new(Arc::new(Never), false);
+    egress.bind_assertions(Arc::clone(&first));
+    let second = DelegationAssertions::new(Arc::new(Never), true);
+    egress.bind_assertions(Arc::clone(&second));
+    let bound = egress.assertions().expect("bound");
+    assert!(Arc::ptr_eq(&bound, &second));
+    assert!(!Arc::ptr_eq(&bound, &first));
+    assert!(bound.required());
+}

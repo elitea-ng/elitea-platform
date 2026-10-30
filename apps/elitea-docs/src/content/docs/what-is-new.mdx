@@ -5,6 +5,14 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Delegation narrowing
+
+When an agent calls a saved agent or pipeline, a pipeline node runs one, or an agent starts a sub-agent, the delegated agent now runs with only the toolkits, tools, credentials, data classes and egress hosts that its caller also holds. A delegation that needs more is refused with `DELEGATION_GRANT_MISSING`, which names the missing grant. The model reads the refusal, and the run does not fail. **Configuration › Delegation** sets the maximum delegation depth (default 4) and a `report` mode that records missing grants without refusing them. Save it after every worker runs this release; data class narrowing starts when it is saved. Each delegation step records its depth and a digest of its grants. **Compositions deeper than 4, and callees that hold toolkits their callers do not hold, are refused after the upgrade.** See [Delegation narrowing](/admin/enterprise-controls/least-privilege-and-trust#delegation-narrowing).
+
+## Signed assertions for remote agents
+
+An agent's calls to a remote MCP server can now carry a short-lived signed assertion of which agent, run and user called, and with which toolkits (header `Elitea-Agent-Assertion`). The receiver verifies it against this deployment's published keys. Nothing is sent by default: administrators choose `allowlist` (named servers only) or `on` under **Configuration › Remote Agents**; governed runs always send one. The platform's MCP endpoint accepts these assertions from the issuers that an administrator lists under **Configuration › Remote Agents**, refuses replays and expired assertions, and limits every agent and tool that the caller calls to the caller's toolkits. In the governed profile, an agent invoked through MCP needs an OAuth token or a verified assertion; a personal access token alone is refused. A2A is not supported. See [Remote agents](/admin/enterprise-controls/least-privilege-and-trust#remote-agents).
+
 ## Connector approval, credential inventory and permission trimming
 
 A new catalogue mode, `approved_only`, makes toolkit types and MCP servers usable only after a connector request is approved by someone other than the requester; approval grants the type and adds its hosts to the egress allowlist, and a custom MCP server's tools are pinned. The default stays `open`, and the governed profile forces `approved_only`. **Admin › Credential inventory** lists every credential an agent can use with its last use, and flags credentials unused for 90 days (revoking stale tokens is opt-in). The **Permission trimming** report compares what each agent is granted with what it used, for one-click audited removal, and notifies owners weekly. See [Least privilege and trust](/admin/enterprise-controls/least-privilege-and-trust).

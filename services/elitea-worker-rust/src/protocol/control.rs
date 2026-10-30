@@ -47,14 +47,16 @@ use super::elitea::runtime::v1::{
     AuthorizeInvocationResponseV1, BeginExecutionDispositionV1, BeginExecutionRequestV1,
     BeginExecutionResponseV1, ClaimCommandRequestV1, ClaimCommandResponseV1, ClaimDispositionV1,
     ClaimReceiptV1, ClaimSteeringMessagesRequestV1, ClaimSteeringMessagesResponseV1,
-    DesiredExecutionStateV1, DigestAlgorithmV1, DigestV1, EgressHostReachedV1, EgressHostRefusedV1,
-    ExecutionFenceV1, ExecutionIdentityV1, ExecutionInputBundleReferenceV1, ExecutionInputBundleV1,
-    ExecutionInputEntryV1, ExecutionOutcomeV1, ExecutionOutputFrameV1, NodeEventV1,
-    ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
-    PrepareSettlementResponseV1, RemoveIndexDispositionV1, RemoveIndexRequestV1,
-    RemoveIndexResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1, ReportEgressSummaryRequestV1,
-    ReportRunStepsRequestV1, RuntimeErrorCodeV1, RuntimeErrorV1, ScopedContentReferenceV1,
-    SettlementProposalV1, SettlementRecoveryV1, worker_command_v1,
+    DelegationAssertionDispositionV1, DesiredExecutionStateV1, DigestAlgorithmV1, DigestV1,
+    EgressHostReachedV1, EgressHostRefusedV1, ExecutionFenceV1, ExecutionIdentityV1,
+    ExecutionInputBundleReferenceV1, ExecutionInputBundleV1, ExecutionInputEntryV1,
+    ExecutionOutcomeV1, ExecutionOutputFrameV1, MintDelegationAssertionRequestV1,
+    MintDelegationAssertionResponseV1, NodeEventV1, ObserveDesiredStateRequestV1,
+    ObserveDesiredStateResponseV1, PrepareSettlementRequestV1, PrepareSettlementResponseV1,
+    RemoveIndexDispositionV1, RemoveIndexRequestV1, RemoveIndexResponseV1, RenewLeaseRequestV1,
+    RenewLeaseResponseV1, ReportEgressSummaryRequestV1, ReportRunStepsRequestV1,
+    RuntimeErrorCodeV1, RuntimeErrorV1, ScopedContentReferenceV1, SettlementProposalV1,
+    SettlementRecoveryV1, worker_command_v1,
 };
 use super::output::{
     AgentTerminalOutput, RuntimeFailureKind, ToolkitExecuteReadTerminalOutput,
@@ -276,6 +278,9 @@ pub struct AcceptedAgentClaim {
     /// The command's field 65 (ADR-0039, #1115) and, once preparation
     /// attached it, the verified context. Empty for a legacy command.
     governed: GovernedContext,
+    /// The command's field 67 (ADR-0044 decision 3, #1501): the run's
+    /// maximum delegation depth, narrowing mode and root data classes.
+    delegation: elitea_agent_runtime::delegation::DelegationPolicy,
 }
 
 impl AcceptedAgentClaim {
@@ -632,6 +637,7 @@ impl AcceptedAgentClaim {
             vector_token: _,
             toolkit_typed_refusals: _,
             governed: _,
+            delegation: _,
         } = self;
         AcceptedTerminalClaimRecovery {
             binding: RecoveryClaimBinding {
@@ -1058,6 +1064,9 @@ pub(crate) struct ClaimBoundRuntimeContextAuthority {
     /// governed command (#1120); `None` for a legacy one. Every
     /// `RedeemCredential` call names it.
     governed_context_digest: Option<[u8; 32]>,
+    /// The run's delegation policy (ADR-0044 decision 3, #1501), from the
+    /// signed command.
+    delegation: std::sync::Arc<elitea_agent_runtime::delegation::DelegationPolicy>,
 }
 
 /// The claim material one `RemoveIndex` call carries: the execution identity,
@@ -1206,7 +1215,28 @@ impl ClaimBoundRuntimeContextAuthority {
                 .reference
                 .as_ref()
                 .map(|reference| *reference.digest()),
+            delegation: std::sync::Arc::new(claim.delegation.clone()),
         }
+    }
+
+    /// The run's delegation policy (ADR-0044 decision 3): the maximum
+    /// delegation depth, the narrowing mode and the root data classes.
+    #[must_use]
+    pub(crate) fn delegation_policy(
+        &self,
+    ) -> &std::sync::Arc<elitea_agent_runtime::delegation::DelegationPolicy> {
+        &self.delegation
+    }
+
+    /// Test-only: the same authority under `policy`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_delegation_policy_for_test(
+        mut self,
+        policy: elitea_agent_runtime::delegation::DelegationPolicy,
+    ) -> Self {
+        self.delegation = std::sync::Arc::new(policy);
+        self
     }
 
     /// The security context digest of a governed command; `None` for a
@@ -1870,6 +1900,7 @@ pub(crate) fn test_lease_monitored_input_execution(
             vector_token: None,
             toolkit_typed_refusals: false,
             governed: GovernedContext::default(),
+            delegation: elitea_agent_runtime::delegation::DelegationPolicy::default(),
             request_entry: ExecutionInputEntryV1 {
                 entry_id: "agent-request".to_owned(),
                 immutable_version: "v/1".to_owned(),
@@ -1892,6 +1923,19 @@ pub(crate) fn test_runtime_context_authority() -> ClaimBoundRuntimeContextAuthor
         vector_token: None,
         index_removal: Box::new(IndexRemovalBinding::fixture()),
         governed_context_digest: None,
+        // The composition fixtures attach children whose toolkits their
+        // parents do not hold, and nest deeper than the default depth: they
+        // run with narrowing reported, at the highest depth. Enforcement is
+        // tested under explicit policies (`with_delegation_policy_for_test`)
+        // and scopes (ADR-0044 decision 3).
+        delegation: std::sync::Arc::new(
+            elitea_agent_runtime::delegation::DelegationPolicy::new(
+                elitea_agent_runtime::delegation::MAX_MAX_DEPTH,
+                elitea_agent_runtime::delegation::NarrowingMode::Report,
+                [],
+            )
+            .expect("the fixture delegation policy"),
+        ),
     }
 }
 
@@ -2028,6 +2072,16 @@ impl ClaimLeaseHandle {
         ObserveDesiredStateRequestV1 {
             identity: Some(self.identity.clone()),
             fence: Some(self.fence.clone()),
+        }
+    }
+
+    /// The mint request of this claim for `audience`: built under the lease
+    /// actor, sent from a separate task (the actor never awaits a mint).
+    pub(crate) fn delegation_request(&self, audience: String) -> MintDelegationAssertionRequestV1 {
+        MintDelegationAssertionRequestV1 {
+            identity: Some(self.identity.clone()),
+            fence: Some(self.fence.clone()),
+            audience,
         }
     }
 
@@ -2702,6 +2756,20 @@ impl<R: ControlRpc> AgentControlClient<R> {
             .claim_steering_messages(lease.steering_request(acknowledged, acknowledge_only))
             .await?;
         parse_claim_steering_response(response).map_err(Into::into)
+    }
+
+    /// Mint one delegation assertion (ADR-0044 decision 4) for `audience`
+    /// under one unchanged accepted claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed transport, runtime rejection, or response-shape failure.
+    pub(crate) async fn mint_delegation_assertion(
+        &self,
+        request: MintDelegationAssertionRequestV1,
+    ) -> Result<elitea_agent_runtime::remote_assertion::MintedAssertion, AgentControlError> {
+        let response = self.control.mint_delegation_assertion(request).await?;
+        parse_mint_delegation_assertion_response(response).map_err(Into::into)
     }
 
     /// Prepare settlement only from a consumed, durably acknowledged terminal proof.
@@ -3649,6 +3717,16 @@ fn parse_input_claim_binding(
         vector_token: VectorClaimToken::from_receipt(receipt.vector_token),
         toolkit_typed_refusals: receipt.toolkit_typed_refusals,
         governed: governed_context(verified.command())?,
+        delegation: delegation_policy(verified.command())?,
+    })
+}
+
+/// The command's delegation policy (ADR-0044 decision 3), as claim state.
+fn delegation_policy(
+    command: &super::elitea::runtime::v1::WorkerCommandV1,
+) -> Result<elitea_agent_runtime::delegation::DelegationPolicy, ControlSemanticError> {
+    super::delegation::policy_from_command(command).map_err(|_| {
+        ControlSemanticError::InvalidInput("the command delegation policy is malformed")
     })
 }
 
@@ -3879,6 +3957,42 @@ fn parse_claim_steering_response(
             }
         })
         .collect()
+}
+
+/// One `MintDelegationAssertion` answer: an issued assertion with its
+/// expiry, disabled, or Main's rejection.
+fn parse_mint_delegation_assertion_response(
+    response: MintDelegationAssertionResponseV1,
+) -> Result<elitea_agent_runtime::remote_assertion::MintedAssertion, ControlSemanticError> {
+    use elitea_agent_runtime::remote_assertion::MintedAssertion;
+    let disposition = DelegationAssertionDispositionV1::try_from(response.disposition)
+        .unwrap_or(DelegationAssertionDispositionV1::Unspecified);
+    if let Some(rejection) = response.rejection.as_ref() {
+        if disposition != DelegationAssertionDispositionV1::Unspecified
+            || !response.assertion.is_empty()
+        {
+            return Err(ControlSemanticError::InvalidInput(
+                "the delegation assertion response is ambiguous",
+            ));
+        }
+        return Err(runtime_rejection(rejection));
+    }
+    match disposition {
+        DelegationAssertionDispositionV1::Issued
+            if !response.assertion.is_empty() && response.expires_at_unix_millis > 0 =>
+        {
+            Ok(MintedAssertion::Issued {
+                token: response.assertion,
+                expires_at_unix_millis: response.expires_at_unix_millis,
+            })
+        }
+        DelegationAssertionDispositionV1::Disabled if response.assertion.is_empty() => {
+            Ok(MintedAssertion::Disabled)
+        }
+        _ => Err(ControlSemanticError::InvalidInput(
+            "the delegation assertion response is malformed",
+        )),
+    }
 }
 
 /// Validate one outcome-bound settlement receipt.

@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 )
 
 const (
@@ -62,6 +63,16 @@ type RuntimeApplicationVersionContext struct {
 	VersionID              int64           `json:"version_id"`
 	VersionDetails         json.RawMessage `json:"version_details"`
 	FrozenDefinitionSHA256 string          `json:"frozen_definition_sha256,omitempty"`
+	// DataClasses are the child's declared data classes (its agent registry
+	// row; ADR-0044 decision 3): the worker narrows a delegation to them.
+	// Omitted when it declares none, so such a response is unchanged.
+	DataClasses []string `json:"data_classes,omitempty"`
+}
+
+// ApplicationDataClassReader reads the declared data classes of one agent's
+// registry row. No row is none.
+type ApplicationDataClassReader interface {
+	AgentDataClasses(ctx context.Context, projectID, applicationID int64) ([]string, error)
 }
 
 // AgentRuntimeContextAuthorizer applies every check RuntimeContextAuthorizer
@@ -99,6 +110,17 @@ type RuntimeApplicationVersionService struct {
 	authorizer        AgentRuntimeContextAuthorizer
 	versions          CurrentApplicationVersionSource
 	freezer           agentexecutionapp.CurrentApplicationVersionFreezer
+	dataClasses       ApplicationDataClassReader
+}
+
+// WithDataClasses makes every served child carry its declared data classes
+// (ADR-0044 decision 3). Without it none is served, and the worker narrows on
+// toolkits, tools, credentials and hosts only.
+func (service *RuntimeApplicationVersionService) WithDataClasses(reader ApplicationDataClassReader) *RuntimeApplicationVersionService {
+	if service != nil {
+		service.dataClasses = reader
+	}
+	return service
 }
 
 func NewRuntimeApplicationVersionService(
@@ -239,6 +261,13 @@ func (service *RuntimeApplicationVersionService) Resolve(
 			runtimeContextStageNestedVersionFreeze,
 		)
 	}
+	dataClasses, err := service.childDataClasses(ctx, authorization.ResourceProjectID, int64(applicationID))
+	if err != nil {
+		if ctx.Err() != nil {
+			return RuntimeApplicationVersionContext{}, ctx.Err()
+		}
+		return RuntimeApplicationVersionContext{}, runtimeContextUnavailable(runtimeContextStageNestedVersionRead)
+	}
 	return RuntimeApplicationVersionContext{
 		SchemaVersion:          RuntimeApplicationVersionSchemaVersion,
 		ProjectID:              authorization.ResourceProjectID,
@@ -246,7 +275,26 @@ func (service *RuntimeApplicationVersionService) Resolve(
 		VersionID:              int64(versionID),
 		VersionDetails:         frozen,
 		FrozenDefinitionSHA256: definitionSHA256,
+		DataClasses:            dataClasses,
 	}, nil
+}
+
+// childDataClasses reads the child's declared data classes. A row the
+// registry did not normalise is an error, never "none": none lifts the
+// constraint.
+func (service *RuntimeApplicationVersionService) childDataClasses(ctx context.Context, projectID, applicationID int64) ([]string, error) {
+	if service.dataClasses == nil {
+		return nil, nil
+	}
+	stored, err := service.dataClasses.AgentDataClasses(ctx, projectID, applicationID)
+	if err != nil {
+		return nil, err
+	}
+	classes, err := agentlifecycle.NormalizeDataClasses(stored)
+	if err != nil || len(classes) == 0 {
+		return nil, err
+	}
+	return classes, nil
 }
 
 // savedApplicationVersionFreezeError tells the two callers of

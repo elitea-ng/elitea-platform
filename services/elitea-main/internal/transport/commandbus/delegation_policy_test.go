@@ -1,0 +1,99 @@
+package commandbus
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"google.golang.org/protobuf/proto"
+
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+)
+
+type delegationResolverStub struct {
+	policy *runtimev1.WorkerDelegationPolicyV1
+	err    error
+	calls  int
+}
+
+func (s *delegationResolverStub) WorkerDelegationPolicy(context.Context, *runtimev1.WorkerCommandV1) (*runtimev1.WorkerDelegationPolicyV1, error) {
+	s.calls++
+	return s.policy, s.err
+}
+
+func preparedAgentCommand(t *testing.T, resolver DelegationPolicyResolver) (*runtimev1.WorkerCommandV1, []byte, error) {
+	t.Helper()
+	signer := &signerStub{}
+	producer, err := NewAgentExecutionProducer(validAgentProducerConfig(), signer, &appenderStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolver != nil {
+		producer.WithDelegationPolicy(resolver)
+	}
+	if _, err := producer.PrepareAgentExecution(context.Background(), validAgentTransportDispatch()); err != nil {
+		return nil, nil, err
+	}
+	command := &runtimev1.WorkerCommandV1{}
+	if err := proto.Unmarshal(signer.exact, command); err != nil {
+		t.Fatal(err)
+	}
+	return command, signer.exact, nil
+}
+
+// ADR-0044 decision 3: the signed agent command carries the delegation
+// policy (field 67); the defaults (nil) leave the command exactly as a
+// producer without a resolver signs it, and a resolver error signs nothing.
+//
+// The commands are compared decoded, not as bytes: proto.Marshal orders map
+// entries at random, and the deadline comes from the wall clock, so two
+// encodings of one command can differ. The deadline is cleared on both.
+func TestProducerSignsTheDelegationPolicy(t *testing.T) {
+	legacy, _, err := preparedAgentCommand(t, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults, raw, err := preparedAgentCommand(t, &delegationResolverStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.DeadlineUnixMillis, defaults.DeadlineUnixMillis = 0, 0
+	if !proto.Equal(legacy, defaults) {
+		t.Fatalf("the default policy changed the command: %v", err)
+	}
+	if defaults.GetDelegationPolicy() != nil || len(defaults.ProtoReflect().GetUnknown()) != 0 || len(raw) == 0 {
+		t.Fatal("the default policy put field 67 on the command an earlier worker reads")
+	}
+	resolver := &delegationResolverStub{policy: &runtimev1.WorkerDelegationPolicyV1{
+		MaxDepth:        2,
+		Mode:            runtimev1.WorkerDelegationModeV1_WORKER_DELEGATION_MODE_V1_REPORT,
+		RootDataClasses: []string{"pii"},
+	}}
+	command, _, err := preparedAgentCommand(t, resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(command.GetDelegationPolicy(), resolver.policy) || resolver.calls != 1 {
+		t.Fatalf("signed policy = %v, calls = %d", command.GetDelegationPolicy(), resolver.calls)
+	}
+	if _, _, err := preparedAgentCommand(t, &delegationResolverStub{err: errors.New("down")}); err == nil {
+		t.Fatal("a command was signed without the policy it should carry")
+	}
+}
+
+// Only agent execution commands carry a delegation policy.
+func TestTheDelegationPolicyIsOnlyAskedForAgentCommands(t *testing.T) {
+	signer := &signerStub{}
+	producer, err := NewProducer(validProducerConfig(), signer, &appenderStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := &delegationResolverStub{policy: &runtimev1.WorkerDelegationPolicyV1{MaxDepth: 2}}
+	producer.WithDelegationPolicy(resolver)
+	if _, err := producer.PrepareValidation(context.Background(), validTransportDispatch()); err != nil {
+		t.Fatal(err)
+	}
+	if resolver.calls != 0 {
+		t.Fatalf("calls = %d", resolver.calls)
+	}
+}

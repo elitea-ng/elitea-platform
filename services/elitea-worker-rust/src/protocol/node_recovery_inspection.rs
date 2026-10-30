@@ -255,6 +255,7 @@ impl NodeRecoveryControlAuthority {
                 .map(super::super::vector_token::VectorClaimToken::duplicate),
             toolkit_typed_refusals: claim.toolkit_typed_refusals,
             governed: claim.governed.clone(),
+            delegation: claim.delegation.clone(),
         }
     }
     /// The ACK reply can only be produced by the authenticated content client.

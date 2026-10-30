@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/foldervisibility"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 )
 
 // Tool is one MCP tool descriptor. The JSON tags are the protocol's, including
@@ -74,6 +75,9 @@ type Tool struct {
 	// admission, so it never reverses a lossy MCP name into an arbitrary row.
 	toolkitID       int64
 	toolkitToolName string
+	// toolkitType is the toolkit's canonical type (guardrails.CanonicalKey):
+	// what a remote agent's asserted scope is checked against.
+	toolkitType string
 	// internalApplicationOperation is populated only for the fixed
 	// elitea_core/applications category. It is never serialized.
 	internalApplicationOperation internalApplicationOperation
@@ -476,6 +480,7 @@ func (p postgresToolSource) toolkitTools(
 				Name:        toolIdentifier(row.name + "_" + tool),
 				Description: fmt.Sprintf("Tool '%s' from toolkit type '%s'. Toolkit description: %s", tool, row.toolkitType, row.description),
 				InputSchema: inputSchema, toolkitID: row.id, toolkitToolName: tool,
+				toolkitType: guardrails.CanonicalKey(row.toolkitType),
 			})
 		}
 	}

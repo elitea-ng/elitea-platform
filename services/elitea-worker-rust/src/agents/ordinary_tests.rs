@@ -6153,6 +6153,17 @@ mod internal_tools_graph {
         assert_eq!(tool_names(&seen[1]), Vec::<String>::new());
         let results = tool_results(&seen[2]);
         assert!(results[0].contains("\"running\""), "{results:?}");
+        // ADR-0044 decision 3: the child is a delegation one level below the
+        // root, and its start names its effective grant digest.
+        let spawned: serde_json::Value =
+            serde_json::from_str(&results[0]).expect("spawn result json");
+        assert_eq!(spawned["delegation"]["depth"], 1, "{spawned}");
+        assert_eq!(
+            spawned["delegation"]["effective_grant_digest"]
+                .as_str()
+                .map(str::len),
+            Some(64)
+        );
         assert!(
             results[1].contains("The answer is 42.") && results[1].contains("\"completed\""),
             "{results:?}"

@@ -364,6 +364,13 @@ impl OrdinaryNativeAgentAssembler {
         } else {
             attachment_library
         };
+        // ADR-0044 decision 3: a sub-agent is a delegation one level below
+        // this run's root.
+        let delegation_root = super::application_tools::root_delegation_scope(
+            &runtime_context,
+            profile.kind(),
+            &tool_snapshot,
+        );
         tracing::Span::current().record("stage", "toolsets");
         let (runtime, fresh_execution_mode) = self
             .materialize_runtime(
@@ -491,6 +498,7 @@ impl OrdinaryNativeAgentAssembler {
                             config: std::sync::OnceLock::new(),
                         },
                         excluded,
+                        delegation_root.clone(),
                     )
                 })
             } else {
@@ -697,7 +705,12 @@ impl OrdinaryNativeAgentAssembler {
             )
             .with_model_scopes(model_scopes)
             .with_conversation_thread(conversation_thread_id)
-            .with_code(code),
+            .with_code(code)
+            .with_delegation(super::application_tools::root_delegation_scope(
+                runtime_context,
+                profile.kind(),
+                tool_snapshot,
+            )),
         )
         .await?;
         // #990 review 4: named whether or not a single child survived — an

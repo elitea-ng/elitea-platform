@@ -290,6 +290,13 @@ func (h *Handler) callToolWithObservers(r *http.Request, schema string, s scope,
 		// is not a plain positive integer before this handler was reached.
 		return newError(message.ID, codeInvalidParams, "invalid project id")
 	}
+	// A verified remote agent may call only tools in its asserted scope;
+	// platform-internal tools have no toolkit type and are never in it.
+	if !target.runnableAgent() && !target.runnableToolkitTool() {
+		if refused := h.toolScopeRefusal(r.Context(), projectID, target); refused != nil {
+			return newResult(message.ID, refused)
+		}
+	}
 	if result, internal := h.callInternalTarget(r, projectID, target, params.Arguments); internal {
 		return newResult(message.ID, result)
 	}

@@ -761,6 +761,64 @@ async fn the_running_cap_and_the_turn_cap_refuse_more() {
     assert_eq!(host.instructions.lock().unwrap()[0], CHILD_PREAMBLE);
 }
 
+/// ADR-0044 decision 3: a sub-agent is one delegation deeper than its
+/// parent. Within the maximum depth the start answers the child's depth and
+/// effective grant digest; at the maximum it is refused with
+/// `DELEGATION_DEPTH_EXCEEDED`, and nothing starts.
+#[tokio::test]
+async fn a_child_counts_toward_the_delegation_depth() {
+    use crate::delegation::{
+        DEPTH_EXCEEDED, DelegationPolicy, DelegationScope, GrantSet, NarrowingMode,
+    };
+    let script = || -> Box<Script> {
+        Box::new(|n, _| match n {
+            0 => vec![spawn_call(0, "hang")],
+            _ => vec![text("done")],
+        })
+    };
+
+    let roomy = DelegationScope::root(Arc::default(), GrantSet::unconstrained());
+    let host = TestHost::new();
+    let children = SubAgents::new(host.clone(), SubAgentConfig::new("").with_delegation(roomy));
+    let responses = run_parent("parent", &children, script()).await;
+    let started = &responses
+        .iter()
+        .find(|(name, _)| name == SPAWN_AGENT)
+        .expect("spawned")
+        .1;
+    assert_eq!(started["status"], "running");
+    assert_eq!(started["delegation"]["depth"], 1);
+    assert_eq!(
+        started["delegation"]["effective_grant_digest"]
+            .as_str()
+            .map(str::len),
+        Some(64)
+    );
+    children.close_all();
+
+    // A parent already at the maximum depth (1 here) cannot go deeper.
+    let policy = DelegationPolicy::new(1, NarrowingMode::Enforce, []).expect("policy");
+    let full = DelegationScope::root(Arc::new(policy), GrantSet::unconstrained())
+        .delegate(
+            &mut Vec::new(),
+            &std::collections::BTreeSet::new(),
+            &crate::egress::PublicPolicy::Open,
+        )
+        .expect("depth 1")
+        .scope;
+    let host = TestHost::new();
+    let children = SubAgents::new(host.clone(), SubAgentConfig::new("").with_delegation(full));
+    let responses = run_parent("parent", &children, script()).await;
+    let refused = &responses
+        .iter()
+        .find(|(name, _)| name == SPAWN_AGENT)
+        .expect("answered")
+        .1;
+    assert_eq!(refused["code"], DEPTH_EXCEEDED);
+    assert_eq!(refused["delegation"]["max_depth"], 1);
+    assert!(children.reports().is_empty(), "no child started");
+}
+
 #[test]
 fn limits_are_capped_to_the_runtimes() {
     let capped = SubAgentLimits {

@@ -859,8 +859,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	// The Elitea-native agent assertion issuer (#1153): its provider for the
-	// registry and its public JWKS and issuer metadata. Empty unless governed
-	// with a relying party configured.
+	// registry and its public JWKS and issuer metadata, and the delegation
+	// signer of remote calls (ADR-0044 decision 4). Empty unless
+	// ELITEA_AGENT_ASSERTION_CONFIG is set.
 	eliteaNative, err := eliteaNativeAgentIdentityAtBoot(ctx, credentialAdmission, credentialRevision,
 		os.LookupEnv, pool, publicProjectID, logger)
 	if err != nil {
@@ -905,6 +906,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// off.
 	governedMCPComposed, err := governedMCPAtBoot(credentialAdmission, os.LookupEnv, pool, vaultMasterKey, publicOrigin,
 		mcpAuthorizationEgressGuard, logger)
+	if err != nil {
+		return err
+	}
+	// Inbound remote agents (ADR-0044 decision 4): delegation assertions
+	// on the MCP endpoint and the governed agent invocation policy.
+	remoteAgentInbound, err := remoteAgentInboundAtBoot(credentialAdmission, os.LookupEnv, pool, publicOrigin, logger)
 	if err != nil {
 		return err
 	}
@@ -2105,13 +2112,22 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if formGraph != nil {
 			runtimeActorTokens, runtimeProjectTokens, runtimeSystemTokens = formGraph, formGraph, formGraph
 		}
+		// The delegation assertions of remote MCP calls (ADR-0044
+		// decision 4): signed with the agent assertion ring when one is
+		// configured.
+		delegationAssertions, mintErr := remoteAgentMint(runtimePools.Admission, pool, eliteaNative.Delegation)
+		if mintErr != nil {
+			return fmt.Errorf("compose the delegation assertion mint: %w", mintErr)
+		}
 		runtimeRoot, err = runtimecomposition.New(ctx, runtimeConfig, runtimecomposition.Dependencies{
+			DelegationAssertions:             delegationAssertions,
 			AdmissionPool:                    runtimePools.Admission,
 			CredentialProfile:                credentialAdmission,
 			CredentialBroker:                 runtimeCredentialBroker,
 			SecurityInvalidations:            securityInvalidations,
 			ExecutionSuspensions:             executionSuspensions.gate,
 			MaxRunWall:                       runSafetySections.maxRunWall,
+			DelegationSettings:               runSafetySections.delegation,
 			IndexScheduleMandates:            governedTriggers.IndexMandates,
 			IndexScheduleMandateGate:         governedTriggers.IndexGate,
 			ControlPool:                      runtimePools.Control,
@@ -2891,6 +2907,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CredentialReferencesAdmin:     credentialReferencesHandler,
 		AgentAssertionWellKnown:       eliteaNative.WellKnown,
 		GovernedMCPInbound:            governedMCPComposed.Inbound,
+		RemoteAgentMCPInbound:         remoteAgentInbound,
 		GovernedMCPOutbound:           governedMCPComposed.Outbound,
 		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,
@@ -2915,6 +2932,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		NativePolicy:                  nativePolicy,
 		SessionPolicyCache:            runSafetySections.sessionPolicy,
 		RunCapsCache:                  runSafetySections.runCaps,
+		DelegationCache:               runSafetySections.delegation,
 		NativeAccess:                  native.validator,
 		NativeSecureCookies:           os.Getenv("COOKIE_SECURE") != "false",
 		Mailer:                        mailComposer,

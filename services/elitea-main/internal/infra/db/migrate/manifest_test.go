@@ -938,7 +938,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 209: shared/0209_entitlement_export.sql, the entitlement export
 	// permission (ADR-0044 decision 5, #1501): grants entitlements.export to
 	// super_admin and admin in the administration mode. No table.
-	require.EqualValues(t, 209, Head(shared))
+	//
+	// 210: shared/0210_remote_agent_assertions.sql, one-time use of inbound
+	// delegation assertions (ADR-0044 decision 4, #1501):
+	// elitea_identity.remote_agent_assertion_replays (issuer, jti, expiry).
+	// No data, no permission.
+	require.EqualValues(t, 210, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

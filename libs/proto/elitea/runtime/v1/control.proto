@@ -350,6 +350,47 @@ message ReportEgressSummaryResponseV1 {
   reserved 2 to 10;
 }
 
+// MintDelegationAssertion asks Main for a short-lived delegation assertion
+// (ADR-0044 decision 4, #1501) that the worker attaches to an outbound call
+// to an agent outside the run: today a remote MCP server, including the MCP
+// endpoint of another Elitea deployment. The worker has no signing key; Main
+// signs with the Elitea-native agent assertion key ring (ADR-0039 P5) and
+// publishes the public keys at /.well-known/elitea-agent-jwks.json.
+//
+// The request is sent under the live claim. Main refuses a released or
+// stale claim, and an audience that is not the endpoint of an MCP toolkit
+// admitted in this run (the origin and path of its URL, without a trailing
+// slash, query or fragment). The assertion expires in 5 minutes or less.
+message MintDelegationAssertionRequestV1 {
+  ExecutionIdentityV1 identity = 1;
+  ExecutionFenceV1 fence = 2;
+  // The remote endpoint, at most 2048 bytes: https://host[:port]/path.
+  string audience = 3;
+  reserved 4 to 15;
+}
+
+enum DelegationAssertionDispositionV1 {
+  DELEGATION_ASSERTION_DISPOSITION_V1_UNSPECIFIED = 0;
+  // `assertion` holds a signed JWT for the audience.
+  DELEGATION_ASSERTION_DISPOSITION_V1_ISSUED = 1;
+  // The platform setting remote_agents.outbound_assertions is off and the
+  // run is not governed: send the call without an assertion.
+  DELEGATION_ASSERTION_DISPOSITION_V1_DISABLED = 2;
+}
+
+message MintDelegationAssertionResponseV1 {
+  DelegationAssertionDispositionV1 disposition = 1;
+  // The compact JWS (typ elitea-agent+jwt), at most 8 KiB. Set only when
+  // ISSUED.
+  string assertion = 2;
+  int64 expires_at_unix_millis = 3;
+  // True when the run is governed: a call without an assertion must be
+  // refused. Set on a rejection too, when Main could read the run.
+  bool required = 4;
+  RuntimeErrorV1 rejection = 5;
+  reserved 6 to 15;
+}
+
 service RuntimeControlService {
   rpc AuthorizeSandboxJob(AuthorizeSandboxJobRequestV1) returns (AuthorizeSandboxJobResponseV1);
   rpc AuthorizeRustCompiledSnapshot(AuthorizeRustCompiledSnapshotRequestV1) returns (AuthorizeRustCompiledSnapshotResponseV1);
@@ -364,4 +405,5 @@ service RuntimeControlService {
   rpc ClaimSteeringMessages(ClaimSteeringMessagesRequestV1) returns (ClaimSteeringMessagesResponseV1);
   rpc ReportEgressSummary(ReportEgressSummaryRequestV1) returns (ReportEgressSummaryResponseV1);
   rpc ReportRunSteps(ReportRunStepsRequestV1) returns (ReportRunStepsResponseV1);
+  rpc MintDelegationAssertion(MintDelegationAssertionRequestV1) returns (MintDelegationAssertionResponseV1);
 }

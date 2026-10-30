@@ -57,7 +57,7 @@ func (w *WellKnown) ServeMetadata(rw http.ResponseWriter, _ *http.Request) {
 		ResponseTypes: []string{"id_token"}, SubjectTypes: []string{"public"},
 		ClaimsSupported: []string{"iss", "sub", "aud", "iat", "nbf", "exp", "jti", "sub_profile", "agent_instance_id",
 			"elitea_tenant", "elitea_project", "elitea_binding", "elitea_version_digest", "elitea_policy_revision",
-			"elitea_epoch", "elitea_user"},
+			"elitea_epoch", "elitea_user", "elitea_purpose", "elitea_run", "elitea_mandate", "elitea_scope"},
 		AssertionTypes: []string{TokenType},
 	})
 	if err != nil {

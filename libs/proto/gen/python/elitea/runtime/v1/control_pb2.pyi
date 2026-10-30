@@ -52,6 +52,12 @@ class RemoveIndexDispositionV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper
     REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN: _ClassVar[RemoveIndexDispositionV1]
     REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN: _ClassVar[RemoveIndexDispositionV1]
     REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED: _ClassVar[RemoveIndexDispositionV1]
+
+class DelegationAssertionDispositionV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    DELEGATION_ASSERTION_DISPOSITION_V1_UNSPECIFIED: _ClassVar[DelegationAssertionDispositionV1]
+    DELEGATION_ASSERTION_DISPOSITION_V1_ISSUED: _ClassVar[DelegationAssertionDispositionV1]
+    DELEGATION_ASSERTION_DISPOSITION_V1_DISABLED: _ClassVar[DelegationAssertionDispositionV1]
 CLAIM_DISPOSITION_V1_UNSPECIFIED: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_ACCEPTED: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_RECOVER_TERMINAL_ACK: ClaimDispositionV1
@@ -77,6 +83,9 @@ REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND: RemoveIndexDispositionV1
 REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN: RemoveIndexDispositionV1
 REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN: RemoveIndexDispositionV1
 REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED: RemoveIndexDispositionV1
+DELEGATION_ASSERTION_DISPOSITION_V1_UNSPECIFIED: DelegationAssertionDispositionV1
+DELEGATION_ASSERTION_DISPOSITION_V1_ISSUED: DelegationAssertionDispositionV1
+DELEGATION_ASSERTION_DISPOSITION_V1_DISABLED: DelegationAssertionDispositionV1
 
 class ClaimCommandRequestV1(_message.Message):
     __slots__ = ("workload_session_id", "producer_id", "signed_command", "agent_model_checkpoint_recovery", "node_recovery", "governed_security_context_v1", "fanout_interrupt_decisions")
@@ -349,3 +358,27 @@ class ReportEgressSummaryResponseV1(_message.Message):
     REJECTION_FIELD_NUMBER: _ClassVar[int]
     rejection: _errors_pb2.RuntimeErrorV1
     def __init__(self, rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+
+class MintDelegationAssertionRequestV1(_message.Message):
+    __slots__ = ("identity", "fence", "audience")
+    IDENTITY_FIELD_NUMBER: _ClassVar[int]
+    FENCE_FIELD_NUMBER: _ClassVar[int]
+    AUDIENCE_FIELD_NUMBER: _ClassVar[int]
+    identity: _common_pb2.ExecutionIdentityV1
+    fence: _common_pb2.ExecutionFenceV1
+    audience: str
+    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., audience: _Optional[str] = ...) -> None: ...
+
+class MintDelegationAssertionResponseV1(_message.Message):
+    __slots__ = ("disposition", "assertion", "expires_at_unix_millis", "required", "rejection")
+    DISPOSITION_FIELD_NUMBER: _ClassVar[int]
+    ASSERTION_FIELD_NUMBER: _ClassVar[int]
+    EXPIRES_AT_UNIX_MILLIS_FIELD_NUMBER: _ClassVar[int]
+    REQUIRED_FIELD_NUMBER: _ClassVar[int]
+    REJECTION_FIELD_NUMBER: _ClassVar[int]
+    disposition: DelegationAssertionDispositionV1
+    assertion: str
+    expires_at_unix_millis: int
+    required: bool
+    rejection: _errors_pb2.RuntimeErrorV1
+    def __init__(self, disposition: _Optional[_Union[DelegationAssertionDispositionV1, str]] = ..., assertion: _Optional[str] = ..., expires_at_unix_millis: _Optional[int] = ..., required: _Optional[bool] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...

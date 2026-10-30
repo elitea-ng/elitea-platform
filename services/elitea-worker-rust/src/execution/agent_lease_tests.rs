@@ -18,10 +18,11 @@ use crate::protocol::control::{
 use crate::protocol::elitea::runtime::v1::{
     AuthorizeInvocationRequestV1, AuthorizeInvocationResponseV1, BeginExecutionRequestV1,
     BeginExecutionResponseV1, ClaimCommandRequestV1, ClaimCommandResponseV1,
-    ClaimSteeringMessagesRequestV1, ClaimSteeringMessagesResponseV1, DesiredExecutionStateV1,
-    ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
-    PrepareSettlementResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1, RuntimeErrorCodeV1,
-    RuntimeErrorV1, SteeringMessageV1,
+    ClaimSteeringMessagesRequestV1, ClaimSteeringMessagesResponseV1,
+    DelegationAssertionDispositionV1, DesiredExecutionStateV1, MintDelegationAssertionRequestV1,
+    MintDelegationAssertionResponseV1, ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1,
+    PrepareSettlementRequestV1, PrepareSettlementResponseV1, RenewLeaseRequestV1,
+    RenewLeaseResponseV1, RuntimeErrorCodeV1, RuntimeErrorV1, SteeringMessageV1,
 };
 use crate::transport::{ControlGrpcConfig, ControlRpc};
 
@@ -41,6 +42,12 @@ struct FakeState {
     steering_requests: Mutex<Vec<ClaimSteeringMessagesRequestV1>>,
     /// The next steering calls that Main refuses (not confirmed).
     steering_failures: AtomicUsize,
+    /// `None`: this Main does not serve `MintDelegationAssertion`.
+    mint: Mutex<Option<MintDelegationAssertionResponseV1>>,
+    mint_requests: Mutex<Vec<MintDelegationAssertionRequestV1>>,
+    /// While set, a mint waits for `mint_release`.
+    stall_mint: AtomicBool,
+    mint_release: Notify,
 }
 
 impl Default for FakeState {
@@ -66,6 +73,10 @@ impl Default for FakeState {
             steering: Mutex::new(None),
             steering_requests: Mutex::new(Vec::new()),
             steering_failures: AtomicUsize::new(0),
+            mint: Mutex::new(None),
+            mint_requests: Mutex::new(Vec::new()),
+            stall_mint: AtomicBool::new(false),
+            mint_release: Notify::new(),
         }
     }
 }
@@ -138,6 +149,28 @@ impl ControlRpc for FakeRpc {
             .clone()
             .map(Response::new)
             .ok_or_else(|| Status::unimplemented("steering"))
+    }
+
+    async fn mint_delegation_assertion(
+        &self,
+        request: Request<MintDelegationAssertionRequestV1>,
+    ) -> Result<Response<MintDelegationAssertionResponseV1>, Status> {
+        self.0.calls.lock().expect("calls").push("mint");
+        self.0
+            .mint_requests
+            .lock()
+            .expect("mint requests")
+            .push(request.into_inner());
+        if self.0.stall_mint.load(Ordering::SeqCst) {
+            self.0.mint_release.notified().await;
+        }
+        self.0
+            .mint
+            .lock()
+            .expect("mint")
+            .clone()
+            .map(Response::new)
+            .ok_or_else(|| Status::unimplemented("mint"))
     }
 
     async fn renew_lease(
@@ -1030,6 +1063,135 @@ async fn a_claim_that_gives_a_held_id_again_does_not_inject_it_again() {
             (vec!["s-1".to_owned()], true),
             (Vec::new(), false),
         ]
+    );
+    monitor.close().await.expect("close");
+}
+
+// ADR-0044 decision 4: the probe mints a delegation assertion through the
+// lease actor, under the claim's identity and fence, for the audience asked.
+#[tokio::test(flavor = "current_thread")]
+async fn state_probe_mints_a_delegation_assertion_under_the_claim() {
+    use elitea_agent_runtime::remote_assertion::{
+        DelegationAssertionError, DelegationAssertionSource as _, MintedAssertion,
+    };
+    let state = Arc::new(FakeState::default());
+    *state.mint.lock().expect("mint") = Some(MintDelegationAssertionResponseV1 {
+        disposition: DelegationAssertionDispositionV1::Issued as i32,
+        assertion: "a.b.c".to_owned(),
+        expires_at_unix_millis: NOW + 300_000,
+        required: true,
+        rejection: None,
+    });
+    let monitor = ClaimLeaseMonitor::start(
+        client(Arc::clone(&state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        config(Duration::from_secs(10)),
+    );
+    let probe = monitor.state_probe();
+    assert_eq!(
+        probe.mint("https://partner.example/mcp").await,
+        Ok(MintedAssertion::Issued {
+            token: "a.b.c".to_owned(),
+            expires_at_unix_millis: NOW + 300_000,
+        })
+    );
+    {
+        let requests = state.mint_requests.lock().expect("mint requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].audience, "https://partner.example/mcp");
+        assert!(requests[0].identity.is_some() && requests[0].fence.is_some());
+    }
+
+    // Main refuses (a dead execution, an audience not admitted): no assertion.
+    *state.mint.lock().expect("mint") = Some(MintDelegationAssertionResponseV1 {
+        rejection: Some(RuntimeErrorV1 {
+            code: RuntimeErrorCodeV1::AuthorizationFailed as i32,
+            retryable: false,
+            ..RuntimeErrorV1::default()
+        }),
+        required: true,
+        ..MintDelegationAssertionResponseV1::default()
+    });
+    assert_eq!(
+        probe.mint("https://evil.example/mcp").await,
+        Err(DelegationAssertionError::Unavailable)
+    );
+    // A malformed answer is no assertion either.
+    *state.mint.lock().expect("mint") = Some(MintDelegationAssertionResponseV1 {
+        disposition: DelegationAssertionDispositionV1::Issued as i32,
+        ..MintDelegationAssertionResponseV1::default()
+    });
+    assert_eq!(
+        probe.mint("https://partner.example/mcp").await,
+        Err(DelegationAssertionError::Unavailable)
+    );
+    // Disabled passes through.
+    *state.mint.lock().expect("mint") = Some(MintDelegationAssertionResponseV1 {
+        disposition: DelegationAssertionDispositionV1::Disabled as i32,
+        ..MintDelegationAssertionResponseV1::default()
+    });
+    assert_eq!(
+        probe.mint("https://partner.example/mcp").await,
+        Ok(MintedAssertion::Disabled)
+    );
+    // A Main without the RPC, then a closed monitor: no assertion.
+    *state.mint.lock().expect("mint") = None;
+    assert_eq!(
+        probe.mint("https://partner.example/mcp").await,
+        Err(DelegationAssertionError::Unavailable)
+    );
+    monitor.close().await.expect("close");
+    assert_eq!(
+        probe.mint("https://partner.example/mcp").await,
+        Err(DelegationAssertionError::Unavailable)
+    );
+}
+
+// ADR-0044 decision 4: a mint runs beside the lease actor. While Main has
+// not answered it, the lease is still renewed on schedule.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn a_pending_mint_never_stalls_lease_renewal() {
+    use elitea_agent_runtime::remote_assertion::{DelegationAssertionSource as _, MintedAssertion};
+    let state = Arc::new(FakeState::default());
+    state.stall_mint.store(true, Ordering::SeqCst);
+    *state.mint.lock().expect("mint") = Some(MintDelegationAssertionResponseV1 {
+        disposition: DelegationAssertionDispositionV1::Disabled as i32,
+        ..MintDelegationAssertionResponseV1::default()
+    });
+    let monitor = ClaimLeaseMonitor::start(
+        client(Arc::clone(&state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        // Two renewals fit inside the client deadline (1 s), so the mint is
+        // still pending, not timed out, when they happen.
+        config(Duration::from_millis(100)),
+    );
+    let probe = monitor.state_probe();
+    let pending = tokio::spawn(async move { probe.mint("https://partner.example/mcp").await });
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(*state.calls.lock().expect("calls"), ["mint"]);
+    assert!(!pending.is_finished());
+
+    for _ in 0..2 {
+        tokio::time::advance(Duration::from_millis(100)).await;
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+    }
+    assert_eq!(
+        state.renew_requests.lock().expect("renew requests").len(),
+        2,
+        "the lease was not renewed while a mint was pending"
+    );
+    assert!(!pending.is_finished());
+
+    state.mint_release.notify_one();
+    assert_eq!(
+        pending.await.expect("mint task"),
+        Ok(MintedAssertion::Disabled)
     );
     monitor.close().await.expect("close");
 }

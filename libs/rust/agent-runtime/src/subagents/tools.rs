@@ -15,6 +15,7 @@ use super::{
     MAX_CHILD_STEPS, MAX_LABEL_CHARS, MAX_TASK_CHARS, MAX_WAIT_IDS, MAX_WAIT_SECONDS, Registry,
     SEND_INPUT, SPAWN_AGENT, WAIT_AGENT,
 };
+use crate::delegation::DelegationEvidence;
 
 #[derive(Clone, Copy)]
 pub(super) enum Action {
@@ -161,6 +162,26 @@ impl SubAgentTool {
         }
     }
 
+    /// ADR-0044 decision 3: a child is one delegation deeper. Its tools are
+    /// a subset of this agent's by construction (the read-only or isolated
+    /// filter), so only the depth can refuse it.
+    fn delegate(&self, isolated: bool) -> Result<Option<DelegationEvidence>, Value> {
+        let Some(scope) = self.registry.delegation.as_ref() else {
+            return Ok(None);
+        };
+        scope
+            .delegate_subagent(
+                if isolated { "isolated" } else { "read_only" },
+                &self.registry.excluded,
+            )
+            .map(Some)
+            .map_err(|refusal| {
+                let mut value = refused(refusal.code(), refusal.message());
+                value["delegation"] = refusal.to_value();
+                value
+            })
+    }
+
     async fn spawn(&self, ctx: &dyn ToolContext, args: &Value) -> Value {
         let task = match bounded_text(args, "task") {
             Ok(task) => task,
@@ -174,6 +195,10 @@ impl SubAgentTool {
             .map(|label| label.chars().take(MAX_LABEL_CHARS).collect::<String>());
         let isolated = match self.isolation(args) {
             Ok(isolated) => isolated,
+            Err(refusal) => return refusal,
+        };
+        let delegation = match self.delegate(isolated) {
+            Ok(evidence) => evidence,
             Err(refusal) => return refusal,
         };
         let limits = self.registry.limits;
@@ -244,7 +269,14 @@ impl SubAgentTool {
                         "The sub-agent could not be started.",
                     );
                 }
-                json!({"agent_id": agent_id, "status": "running"})
+                let mut value = json!({"agent_id": agent_id, "status": "running"});
+                if let Some(evidence) = delegation {
+                    value["delegation"] = json!({
+                        "depth": evidence.depth,
+                        "effective_grant_digest": evidence.effective_grant_digest,
+                    });
+                }
+                value
             }
             Err(code) => refused(code, "The sub-agent could not be started."),
         }

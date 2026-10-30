@@ -23,6 +23,7 @@ use std::sync::{Arc, OnceLock};
 
 use adk_rust::{GenerateContentConfig, Llm, Toolset};
 use async_trait::async_trait;
+use elitea_agent_runtime::delegation::DelegationScope;
 use elitea_agent_runtime::host::{HostError, HostErrorCode};
 use elitea_agent_runtime::subagents::{
     ChildIdentity, MAX_CHILD_STEPS, SubAgentConfig, SubAgentHost, SubAgents,
@@ -109,10 +110,18 @@ impl SubAgentHost for WorkerSubAgents {
 /// The four tools, over `host`; a child is never offered a tool in `excluded`.
 /// A cloud child's prompt is the runtime's preamble alone: its task is the
 /// whole of what it is told.
-pub(crate) fn toolset(host: WorkerSubAgents, excluded: Vec<String>) -> Arc<dyn Toolset> {
+/// Every child counts one level of the run's delegation depth from
+/// `delegation` (ADR-0044 decision 3).
+pub(crate) fn toolset(
+    host: WorkerSubAgents,
+    excluded: Vec<String>,
+    delegation: DelegationScope,
+) -> Arc<dyn Toolset> {
     SubAgents::new(
         Arc::new(host),
-        SubAgentConfig::new("").with_excluded_tools(excluded),
+        SubAgentConfig::new("")
+            .with_excluded_tools(excluded)
+            .with_delegation(delegation),
     )
     .toolset()
 }
