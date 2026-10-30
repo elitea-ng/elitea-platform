@@ -1,7 +1,6 @@
 package commandbus
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -43,16 +42,27 @@ func preparedAgentCommand(t *testing.T, resolver DelegationPolicyResolver) (*run
 }
 
 // ADR-0044 decision 3: the signed agent command carries the delegation
-// policy (field 67); the defaults (nil) leave the bytes exactly as a producer
-// without a resolver signs them, and a resolver error signs nothing.
+// policy (field 67); the defaults (nil) leave the command exactly as a
+// producer without a resolver signs it, and a resolver error signs nothing.
+//
+// The commands are compared decoded, not as bytes: proto.Marshal orders map
+// entries at random, and the deadline comes from the wall clock, so two
+// encodings of one command can differ. The deadline is cleared on both.
 func TestProducerSignsTheDelegationPolicy(t *testing.T) {
-	_, legacy, err := preparedAgentCommand(t, nil)
+	legacy, _, err := preparedAgentCommand(t, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, defaults, err := preparedAgentCommand(t, &delegationResolverStub{})
-	if err != nil || !bytes.Equal(legacy, defaults) {
-		t.Fatalf("the default policy changed the command bytes: %v", err)
+	defaults, raw, err := preparedAgentCommand(t, &delegationResolverStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.DeadlineUnixMillis, defaults.DeadlineUnixMillis = 0, 0
+	if !proto.Equal(legacy, defaults) {
+		t.Fatalf("the default policy changed the command: %v", err)
+	}
+	if defaults.GetDelegationPolicy() != nil || len(defaults.ProtoReflect().GetUnknown()) != 0 || len(raw) == 0 {
+		t.Fatal("the default policy put field 67 on the command an earlier worker reads")
 	}
 	resolver := &delegationResolverStub{policy: &runtimev1.WorkerDelegationPolicyV1{
 		MaxDepth:        2,
