@@ -759,6 +759,11 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 	//	                    change request submit and approval, every direct
 	//	                    publish (does the tier need approval?) and every
 	//	                    recertification pass (ADR-0040 decisions 3 and 5)
+	//	credential_review → platformconfig.LoadCredentialReviewPolicy: the
+	//	                    daily main.credential_staleness routine, the
+	//	                    weekly main.permission_trimming routine and every
+	//	                    inventory and trimming report read (ADR-0044
+	//	                    decision 5)
 	want := map[string]bool{
 		"resources": true, "mcp_configuration": true, "branding": true,
 		"agent_publishing": true, "skill_publishing": true,
@@ -783,6 +788,9 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		"agent_lifecycle": true,
 		// ADR-0044 decision 5 (#1501): every SCIM entitlement tree request.
 		"entitlement_export": true,
+		// ADR-0044 decision 5 (#1501): the staleness and trimming routines
+		// and the inventory and trimming reads.
+		"credential_review": true,
 	}
 	for id := range want {
 		if !available[id] {

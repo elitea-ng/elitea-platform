@@ -6,9 +6,11 @@ import (
 	"errors"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialuse"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
 )
 
@@ -101,7 +103,21 @@ func (u *CurrentVaultUnsecreter) Unsecret(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// The credential inventory's last use of each secret resolved
+	// (ADR-0044 decision 5): coalesced in memory, never a statement here.
+	uses := credentialuse.Default()
+	for name, resolution := range walker.resolved {
+		if resolution.found {
+			uses.Touch(credentialuse.KindToolkitSecret, ToolkitSecretCredentialID(walker.projectID, name), walker.projectID)
+		}
+	}
 	return result, nil
+}
+
+// ToolkitSecretCredentialID is the inventory id of a vault secret a
+// toolkit names: "<project id>:<secret name>".
+func ToolkitSecretCredentialID(projectID int64, name string) string {
+	return strconv.FormatInt(projectID, 10) + ":" + name
 }
 
 type currentSecretResolution struct {

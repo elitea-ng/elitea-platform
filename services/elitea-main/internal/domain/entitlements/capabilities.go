@@ -89,6 +89,15 @@ const (
 	AdministerPlatform Capability = "administer_platform"
 	// ExportEntitlements downloads this export.
 	ExportEntitlements Capability = "export_entitlements"
+	// ReviewCredentials reads the credential inventory and the
+	// cross-project permission trimming report.
+	ReviewCredentials Capability = "review_credentials"
+	// RevokeCredentials revokes an inventoried credential and removes an
+	// unused grant across projects.
+	RevokeCredentials Capability = "revoke_credentials"
+	// TrimAgentPermissions removes an agent's unused tools, toolkits,
+	// credential grants and egress hosts in a project.
+	TrimAgentPermissions Capability = "trim_agent_permissions"
 )
 
 // ExportPermission gates the admin export (administration mode). Shared
@@ -167,7 +176,11 @@ var Capabilities = map[string][]Capability{
 	"legal_hold.manage": {ManageLegalHold},
 
 	// Evidence.
-	"runs.evidence.read":            {ReadRunEvidence},
+	"runs.evidence.read": {ReadRunEvidence},
+	// Credential and access review (ADR-0044 decision 5, shared 0208).
+	"credentials.inventory.read":    {ReviewCredentials},
+	"credentials.inventory.manage":  {RevokeCredentials},
+	"agents.trimming.manage":        {TrimAgentPermissions},
 	"models.admin.audit_trail.view": {ReadAuditTrail},
 
 	// Access.

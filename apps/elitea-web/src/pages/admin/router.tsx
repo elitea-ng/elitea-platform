@@ -96,6 +96,11 @@ const AdminGatewayGovernance = lazyRouteComponent(
   'AdminGatewayGovernance',
 );
 const AdminAgentRegistry = lazyRouteComponent(() => import('./AgentRegistry'), 'AdminAgentRegistry');
+const AdminCredentialInventory = lazyRouteComponent(
+  () => import('./CredentialInventory'),
+  'AdminCredentialInventory',
+);
+const AdminPermissionTrimming = lazyRouteComponent(() => import('./PermissionTrimming'), 'AdminPermissionTrimming');
 const AdminBudgets = lazyRouteComponent(() => import('./Budgets'), 'AdminBudgets');
 const AdminBranding = lazyRouteComponent(() => import('./Branding'), 'AdminBranding');
 const AdminEmail = lazyRouteComponent(() => import('./Email'), 'AdminEmail');
@@ -244,6 +249,19 @@ const agentRegistryRoute = createRoute({
   component: AdminAgentRegistry,
 });
 
+/** Admin › Credential inventory and Permission trimming (ADR-0044 decision 5, #1501). */
+const credentialInventoryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/credential-inventory',
+  component: AdminCredentialInventory,
+});
+
+const permissionTrimmingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/permission-trimming',
+  component: AdminPermissionTrimming,
+});
+
 const budgetsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/budgets',
@@ -294,6 +312,8 @@ const adminRouteTree = rootRoute.addChildren([
   featuresRoute,
   governanceRoute,
   agentRegistryRoute,
+  credentialInventoryRoute,
+  permissionTrimmingRoute,
   budgetsRoute,
 ]);
 

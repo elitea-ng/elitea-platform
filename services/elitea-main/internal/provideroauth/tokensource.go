@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/refresh"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialuse"
 )
 
 // partitionLabel is the refresh partition label of a provider grant.
@@ -138,7 +139,7 @@ func (s *TokenSource) AccessToken(ctx context.Context, key GrantKey) (AccessToke
 	// latest is the snapshot the flight read last; Read and Refresh run in
 	// order on the flight's goroutine.
 	var latest snapshot
-	return refresh.Do(ctx, s.coord, refresh.Flight[AccessToken]{
+	token, err := refresh.Do(ctx, s.coord, refresh.Flight[AccessToken]{
 		Partition: partition,
 		Read: func(ctx context.Context) (refresh.State[AccessToken], error) {
 			snap, err := s.grants.load(ctx, key)
@@ -165,6 +166,11 @@ func (s *TokenSource) AccessToken(ctx context.Context, key GrantKey) (AccessToke
 			return s.refresh(ctx, client, lease, latest)
 		},
 	})
+	if err == nil {
+		// The credential inventory's last use (ADR-0044 decision 5).
+		credentialuse.Default().Touch(credentialuse.KindProviderOAuthGrant, token.GrantID, key.TenantProjectID)
+	}
+	return token, err
 }
 
 func tokenOf(s snapshot) AccessToken {

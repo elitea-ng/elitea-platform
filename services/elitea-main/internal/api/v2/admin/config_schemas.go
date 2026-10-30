@@ -291,6 +291,7 @@ func configSections() []map[string]any {
 		runCapsSection(),
 		sessionPolicySection(),
 		agentLifecycleSection(),
+		credentialReviewSection(),
 		webSearchSection(),
 		resourcesSection(),
 		dedicatedBannerSection(),
