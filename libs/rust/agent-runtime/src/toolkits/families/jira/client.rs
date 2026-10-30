@@ -722,6 +722,8 @@ impl JiraClient {
             .iter()
             .map(|issue| self.parse_issue(issue))
             .collect::<Vec<_>>();
+        // The run caps' record count (ADR-0041 decision 3).
+        crate::run_caps::report_records(parsed.len() as u64);
         text(
             format!(
                 "Found {} Jira issues:\n{}",

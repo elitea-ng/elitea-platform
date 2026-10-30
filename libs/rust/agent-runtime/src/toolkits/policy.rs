@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::approval_policy::{ApprovalPolicy, ApprovalRule};
 use crate::egress::RunEgress;
+use crate::run_caps::RunCapsMeter;
 use crate::tool_category::tool_category;
 
 const MAX_POLICY_IDENTIFIERS: usize = 16_384;
@@ -100,6 +101,7 @@ pub struct ToolAdmissionPolicy {
     sensitive_message_template: Box<str>,
     egress: Arc<RunEgress>,
     approval: Arc<ApprovalPolicy>,
+    run_caps: Arc<RunCapsMeter>,
 }
 
 /// Model/UI-safe presentation for one sensitive concrete tool.
@@ -307,6 +309,7 @@ impl ToolAdmissionPolicy {
                 .into(),
             egress: RunEgress::open(),
             approval: ApprovalPolicy::none(),
+            run_caps: RunCapsMeter::unlimited(),
         })
     }
 
@@ -336,6 +339,21 @@ impl ToolAdmissionPolicy {
     #[must_use]
     pub const fn approval_policy(&self) -> &Arc<ApprovalPolicy> {
         &self.approval
+    }
+
+    /// This generation bound to one run's caps meter (ADR-0041 decision 3):
+    /// every tool call it admits is counted against the run's caps. No cap
+    /// unless the host lends a meter.
+    #[must_use]
+    pub fn with_run_caps(mut self, run_caps: Arc<RunCapsMeter>) -> Self {
+        self.run_caps = run_caps;
+        self
+    }
+
+    /// The run's caps meter.
+    #[must_use]
+    pub const fn run_caps(&self) -> &Arc<RunCapsMeter> {
+        &self.run_caps
     }
 
     #[must_use]

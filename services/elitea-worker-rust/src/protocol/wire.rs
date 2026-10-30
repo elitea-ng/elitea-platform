@@ -64,7 +64,8 @@ mod merge_contract_tests {
             Err(super::ProtocolError::InvalidInput(_))
         ));
         // Field 66 is the egress policy (#1490), 67 the delegation policy
-        // (#1501), 68 the approval policy (#1498); 70 is still unknown.
+        // (#1501), 68 the approval policy (#1498), 69 the run caps (#1498);
+        // 70 is still unknown.
         assert!(
             scan_message(&[0x92, 0x04, 0x00], Schema::WorkerCommand)
                 .unwrap()
@@ -79,6 +80,11 @@ mod merge_contract_tests {
             scan_message(&[0xa2, 0x04, 0x00], Schema::WorkerCommand)
                 .unwrap()
                 .contains(68)
+        );
+        assert!(
+            scan_message(&[0xaa, 0x04, 0x00], Schema::WorkerCommand)
+                .unwrap()
+                .contains(69)
         );
         assert!(matches!(
             scan_message(&[0xb2, 0x04, 0x00], Schema::WorkerCommand),
@@ -175,6 +181,24 @@ mod merge_contract_tests {
     }
 
     #[test]
+    fn the_run_caps_hold_three_varints() {
+        // max_tool_calls 1, max_model_turns 2, max_records_read 3 (varints).
+        let caps =
+            scan_message(&[0x08, 0x05, 0x10, 0x06, 0x18, 0x07], Schema::WorkerRunCaps).unwrap();
+        assert!(caps.contains(1) && caps.contains(2) && caps.contains(3));
+        // A length-delimited field 1 is the wrong wire type.
+        assert!(matches!(
+            scan_message(&[0x0a, 0x00], Schema::WorkerRunCaps),
+            Err(super::ProtocolError::InvalidInput(_))
+        ));
+        // Field 4 is reserved: unknown to this worker.
+        assert!(matches!(
+            scan_message(&[0x20, 0x01], Schema::WorkerRunCaps),
+            Err(super::ProtocolError::IncompatibleVersion(_))
+        ));
+    }
+
+    #[test]
     fn the_egress_policy_holds_a_mode_and_repeated_entries() {
         // mode 1 (varint), allow 2 (repeated string): tags 0x08 and 0x12.
         let policy = scan_message(
@@ -244,6 +268,8 @@ pub(crate) enum Schema {
     WorkerDelegationPolicy,
     /// `WorkerCommandV1.approval_policy` (field 68, ADR-0041 #1498).
     WorkerApprovalPolicy,
+    /// `WorkerCommandV1.run_caps` (field 69, ADR-0041 #1498).
+    WorkerRunCaps,
 }
 
 #[derive(Clone, Copy)]
@@ -418,8 +444,8 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         Schema::WorkerCommand => match field {
             // 65 is the governed security context reference (#1115), 66 the
             // public egress policy (#1490), 67 the delegation policy (#1501),
-            // 68 the approval policy (#1498).
-            1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 | 65..=68 => Some(length()),
+            // 68 the approval policy (#1498), 69 the run caps (#1498).
+            1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 | 65..=69 => Some(length()),
             4 | 6..=7 | 21..=22 => Some(varint()),
             // Preserve the complete language-neutral capability oneof.
             32..=36 | 64 => Some(FieldRule {
@@ -478,6 +504,7 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         Schema::WorkerEgressPolicy => egress_policy_rule(field),
         Schema::WorkerDelegationPolicy => delegation_policy_rule(field),
         Schema::WorkerApprovalPolicy => approval_policy_rule(field),
+        Schema::WorkerRunCaps => run_caps_rule(field),
         Schema::SecurityContextReference
         | Schema::SecurityContext
         | Schema::CallerContext
@@ -523,6 +550,14 @@ const fn approval_policy_rule(field: u32) -> Option<FieldRule> {
             oneof: None,
             repeated: true,
         }),
+        _ => None,
+    }
+}
+
+/// `WorkerRunCapsV1` (#1498): the three varint caps 1-3.
+const fn run_caps_rule(field: u32) -> Option<FieldRule> {
+    match field {
+        1..=3 => Some(varint()),
         _ => None,
     }
 }

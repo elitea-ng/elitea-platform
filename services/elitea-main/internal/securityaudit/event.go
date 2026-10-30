@@ -103,6 +103,12 @@ const (
 	// resume requirement and the suspension id as reason codes. Written on
 	// every install, whatever the credential governance profile.
 	TypeAgentBreaker EventType = "ai.elitea.security.v1.agent.breaker"
+	// TypeAgentCapOverride is a run cap override (ADR-0041 decision 3,
+	// #1498): a holder of safety.override_cap let the conversation of a run
+	// that stopped at a cap continue past that cap once
+	// (agent.cap.override.granted). ResourceID is the stopped response,
+	// ExecutionID its run, and the reasons name the cap.
+	TypeAgentCapOverride EventType = "ai.elitea.security.v1.agent.cap.override"
 )
 
 // OCSF class and category uids (https://schema.ocsf.io).
@@ -137,6 +143,7 @@ var ocsfClasses = map[EventType]int{
 	TypeRemoteAgent:             OCSFClassAuthorizeSession,
 	TypeAgentApproval:           OCSFClassAPIActivity,
 	TypeAgentBreaker:            OCSFClassEntityManagement,
+	TypeAgentCapOverride:        OCSFClassAPIActivity,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.

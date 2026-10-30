@@ -39,6 +39,7 @@ import (
 	workerapprovalpolicyapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerapprovalpolicy"
 	workerdelegationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerdelegation"
 	workeregressapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workeregress"
+	workerruncapsapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerruncaps"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -132,6 +133,10 @@ type Dependencies struct {
 	// start: the cache the admin save drops. Nil: a cache of its own,
 	// refreshed by its TTL only.
 	ApprovalPolicySettings workerapprovalpolicyapp.SettingsReader
+	// RunCapsSettings reads the platform's run_caps section (ADR-0041
+	// decision 3) for every agent execution command: the cache the admin
+	// save drops. Nil: a cache of its own, refreshed by its TTL only.
+	RunCapsSettings workerruncapsapp.SettingsReader
 	// IndexScheduleMandates and IndexScheduleMandateGate make every index
 	// schedule occurrence mandate-bound (#1122): built at the composition
 	// root only with credential governance on. Nil: the executor keeps the
@@ -396,6 +401,15 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if approvalSettings == nil {
 		approvalSettings = platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.ApprovalPolicySettings, error) {
 			return platformconfig.LoadApprovalPolicySettings(ctx, dependencies.AdmissionPool)
+		}, 0)
+	}
+	// The platform's run_caps section (ADR-0041 decision 3). Main sends the
+	// per-tier caps only once an administrator saved one; until then a
+	// command is unchanged byte for byte.
+	runCapsSettings := dependencies.RunCapsSettings
+	if runCapsSettings == nil {
+		runCapsSettings = platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.RunCaps, error) {
+			return platformconfig.LoadRunCaps(ctx, dependencies.AdmissionPool)
 		}, 0)
 	}
 	delegationDataClasses, err := workerdelegationapp.NewSavedSectionDataClasses(delegationSettings, egressSources)
@@ -762,6 +776,18 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, err
 		}
 		agentProducer.WithApprovalPolicy(approvalPolicy)
+		// The run caps (ADR-0041 decision 3), on the same gate. The
+		// repository records each run's effective caps (the evidence and the
+		// spend routine's input) and consumes an open override grant.
+		runCapsStore, err := repos.NewRunCapsRepository(dependencies.AdmissionPool)
+		if err != nil {
+			return nil, fmt.Errorf("construct the run caps store: %w", err)
+		}
+		runCaps, err := workerruncapsapp.NewResolver(runCapsSettings, egressSources, egressSources, runCapsStore)
+		if err != nil {
+			return nil, err
+		}
+		agentProducer.WithRunCaps(runCaps)
 		// The catalogue project is the SAME id the freezer resolves shared
 		// models against, taken from the same place, so the one project a turn
 		// may borrow a published agent from and the one project it may borrow a

@@ -59,7 +59,8 @@ const (
 	MarkRecertificationDue Capability = "mark_recertification_due"
 	// Suspend is the kill switch: suspend and resume execution.
 	Suspend Capability = "suspend"
-	// OverrideCaps changes spend caps and gateway governance limits.
+	// OverrideCaps changes spend caps and gateway governance limits, and lets
+	// a run pass a run cap it reached (safety.override_cap).
 	OverrideCaps Capability = "override_caps"
 	// ApproveConnectors admits a connector (MCP server, service descriptor,
 	// toolkit type) to the platform.
@@ -160,6 +161,9 @@ var Capabilities = map[string][]Capability{
 
 	// Kill switch (ADR-0041, shared 0194).
 	"safety.suspend": {Suspend},
+	// Run cap override (ADR-0041 decision 3, shared 0212): let one run
+	// continue past a cap.
+	"safety.override_cap": {OverrideCaps},
 
 	// Caps and gates.
 	"models.admin.project_budgets.edit": {OverrideCaps},

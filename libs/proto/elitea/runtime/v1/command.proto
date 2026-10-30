@@ -94,6 +94,15 @@ message WorkerCommandV1 {
   // unchanged byte for byte while workers from an earlier release run.
   WorkerApprovalPolicyV1 approval_policy = 68;
 
+  // The run caps of an agent run (ADR-0041 decision 3, #1498): the most
+  // toolkit tool calls, model turns and records read the whole run may
+  // use, the root agent's tier caps lowered by its author's settings.
+  // Absent means the worker's defaults: 200 tool calls, no other cap.
+  // Main omits it until an administrator saves the `run_caps` section with
+  // a per-tier cap, so commands are unchanged byte for byte while workers
+  // from an earlier release run.
+  WorkerRunCapsV1 run_caps = 69;
+
   reserved 15, 26 to 31;
   reserved "grant_template_id";
   reserved 37 to 63;
@@ -169,4 +178,19 @@ message WorkerApprovalPolicyV1 {
   // most once. Empty: no category needs an approval at this tier.
   repeated string approval_categories = 2;
   reserved 3 to 10;
+}
+
+// A run's caps (ADR-0041 decision 3). Each value is the most the whole run
+// may use, nested agents and pipeline nodes included; 0 is no cap. Reaching
+// a cap ends the run with CAP_REACHED and the cap's name.
+message WorkerRunCapsV1 {
+  // Calls of toolkit tools (MCP tools included).
+  uint32 max_tool_calls = 1;
+  // Model calls of the run's agents. An agent's own step_limit still
+  // applies; the lower of the two stops first.
+  uint32 max_model_turns = 2;
+  // Records the toolkits that declare a record count returned (search
+  // results, rows, issues). Undeclared tools count 0.
+  uint64 max_records_read = 3;
+  reserved 4 to 10;
 }

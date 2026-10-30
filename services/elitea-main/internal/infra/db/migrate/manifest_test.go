@@ -954,13 +954,21 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// (execution_interrupts.decided_by_system,
 	// execution_interrupt_audit.system_actor). No data, no permission.
 	//
+	// 212: shared/0212_run_caps.sql, per-run caps and the cap override
+	// (ADR-0041 decision 3, #1498): execution_jobs.run_caps (the run's
+	// effective caps) and cancel_cap (max_wall_seconds or max_spend), and
+	// elitea_runtime.run_cap_overrides (one grant per stopped response,
+	// consumed by the conversation's next run). Grants safety.override_cap to
+	// super_admin and admin in the administration mode and to the project
+	// admin.
+	//
 	// 213: shared/0213_agent_circuit_breaker.sql, the agent circuit breaker
 	// (ADR-0041 decision 2, #1498): elitea_runtime.agent_breaker_runs (the
 	// breaker's window of ended agent runs), the partial index
 	// execution_jobs_agent_settled, execution_suspensions.detail and the
 	// two-person resume approval columns, and
 	// agent_registry.circuit_breaker (the per-agent override). No data, no
-	// permission. (0212 is reserved for the run caps batch.)
+	// permission.
 	require.EqualValues(t, 213, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)

@@ -29,7 +29,7 @@ A default install favours getting started. A deployment that will be assessed ag
 - [ ] Have agent owners act on the **Permission trimming** report, and connect your IGA tool to the [entitlement export](/admin/enterprise-controls/least-privilege-and-trust#entitlement-export-for-access-reviews).
 - [ ] Set a maximum idle timeout and session lifetime under **Configuration › Session Policy**. See [Authentication](/admin/authentication#session-policy).
 - [ ] After every worker runs the release, save **Configuration › Delegation** in `enforce` mode, with **Maximum Delegation Depth** at the lowest value your agents need. Saving the section starts data class narrowing. Set data classes on the registry record of each agent that delegates. See [Delegation narrowing](/admin/enterprise-controls/least-privilege-and-trust#delegation-narrowing).
-- [ ] Set **Maximum Run Time** under **Configuration › Run Caps** above your longest legitimate run. See [Runtime safety](/admin/enterprise-controls/runtime-safety#whole-run-time-cap).
+- [ ] Set **Maximum Run Time** under **Configuration › Run Caps** above your longest legitimate run. After every worker runs the release, set the per-tier tool call, model turn, spend and records read caps, lower for the high and critical tiers, and give `safety.override_cap` only to the people who may let a run use more. See [Run caps](/admin/enterprise-controls/runtime-safety#run-caps).
 
 ## Runtime safety
 

@@ -3818,6 +3818,20 @@ export interface components {
             }[];
             total: number;
         };
+        /** @description The 422 of an agent save whose meta.run_caps raises a platform cap (RUN_CAP_ABOVE_TIER) or is not a valid cap (RUN_CAP_INVALID). */
+        RunCapRefusal: {
+            /** @description The refused key of meta.run_caps. */
+            cap: string;
+            /** @enum {string} */
+            code: "RUN_CAP_ABOVE_TIER" | "RUN_CAP_INVALID";
+            error: string;
+            /** @description The value the save asked for. */
+            requested?: number;
+            /** @description The agent's risk tier, one of low, medium, high, critical (RUN_CAP_ABOVE_TIER only). */
+            tier?: string;
+            /** @description The platform's cap at that tier. */
+            tier_cap?: number;
+        };
         /** @description Opaque selected-tools blob (object or null) — see marker. */
         SelectedTools: unknown;
         /** @description NOTE(W2): `config` is never populated in responses, `is_default` (the boolean property, unrelated to `default_version_id`) is always false, `type` is always the literal "skill", and `updated_at` is always the zero sentinel "0001-01-01T00:00:00Z" — the skills table itself has no updated_at/is_default columns (migrations/001_initial.sql). instructions/tags/versions/ version_details/default_version_id, in contrast, DO round-trip. */
@@ -4175,12 +4189,22 @@ export interface components {
             parent_author_id?: string;
             parent_entity_id?: string;
             parent_project_id?: string;
+            /** @description The author's run caps of this agent (ADR-0041 decision 3). Each key LOWERS the platform's cap for the agent's risk tier (Configuration › Run caps); the lower value applies. A save that sets a value above the tier's cap is refused with 422 RUN_CAP_ABOVE_TIER. Omit a key, or set it to null, to keep the tier's cap. `step_limit` still bounds each agent loop: with `max_model_turns` the lower of the two stops first. */
+            run_caps?: components["schemas"]["VersionRunCaps"] | null;
             source_version_id?: string;
             step_limit?: number | null;
             /** @description Written into meta on create when the request carries variables (applications/handler.go:430, 747-752). */
             variables?: components["schemas"]["VersionVariable"][];
         } & {
             [key: string]: unknown;
+        };
+        /** @description The author's per-agent run caps. Every value is positive; a count is a whole number and max_spend (US dollars) has at most four decimals. */
+        VersionRunCaps: {
+            max_model_turns?: number | null;
+            /** Format: int64 */
+            max_records_read?: number | null;
+            max_spend?: number | null;
+            max_tool_calls?: number | null;
         };
         /** @description NOTE(W2): tag entries emitted by ExportImportGet (eliteacore/handler.go:2650-2655 — name always a scanned string there) and Fork's response echo (:2431-2438), which builds entries from unvalidated client maps: a fork payload tag without a name yields {"name": null, ...}. Hence name is nullable and not required. NOTE(#345): the same shape is now also the WRITE shape — `tags` on VersionWriteRequest refs this schema, matching the legacy runtime's own PromptTagUpdateModel (name, optional data, optional id). */
         VersionTag: {
@@ -4993,6 +5017,15 @@ export interface operations {
             400: components["responses"]["400"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
+            /** @description (RUN_CAP_ABOVE_TIER, RUN_CAP_INVALID) meta.run_caps raises a platform run cap or is not a valid cap */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunCapRefusal"];
+                };
+            };
         };
     };
     uploadConversationAttachment: {

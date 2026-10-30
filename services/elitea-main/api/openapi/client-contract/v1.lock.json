@@ -3554,6 +3554,37 @@
                         "parent_project_id": {
                           "type": "string"
                         },
+                        "run_caps": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "max_model_turns": {
+                              "type": "integer",
+                              "nullable": true,
+                              "minimum": 1,
+                              "maximum": 100000
+                            },
+                            "max_records_read": {
+                              "type": "integer",
+                              "format": "int64",
+                              "nullable": true,
+                              "minimum": 1,
+                              "maximum": 1000000000
+                            },
+                            "max_spend": {
+                              "type": "number",
+                              "nullable": true,
+                              "minimum": 0.0001,
+                              "maximum": 1000000
+                            },
+                            "max_tool_calls": {
+                              "type": "integer",
+                              "nullable": true,
+                              "minimum": 1,
+                              "maximum": 100000
+                            }
+                          }
+                        },
                         "source_version_id": {
                           "type": "string"
                         },
@@ -3729,6 +3760,37 @@
                           },
                           "parent_project_id": {
                             "type": "string"
+                          },
+                          "run_caps": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "max_model_turns": {
+                                "type": "integer",
+                                "nullable": true,
+                                "minimum": 1,
+                                "maximum": 100000
+                              },
+                              "max_records_read": {
+                                "type": "integer",
+                                "format": "int64",
+                                "nullable": true,
+                                "minimum": 1,
+                                "maximum": 1000000000
+                              },
+                              "max_spend": {
+                                "type": "number",
+                                "nullable": true,
+                                "minimum": 0.0001,
+                                "maximum": 1000000
+                              },
+                              "max_tool_calls": {
+                                "type": "integer",
+                                "nullable": true,
+                                "minimum": 1,
+                                "maximum": 100000
+                              }
+                            }
                           },
                           "source_version_id": {
                             "type": "string"
@@ -8040,6 +8102,37 @@
                           },
                           "parent_project_id": {
                             "type": "string"
+                          },
+                          "run_caps": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "max_model_turns": {
+                                "type": "integer",
+                                "nullable": true,
+                                "minimum": 1,
+                                "maximum": 100000
+                              },
+                              "max_records_read": {
+                                "type": "integer",
+                                "format": "int64",
+                                "nullable": true,
+                                "minimum": 1,
+                                "maximum": 1000000000
+                              },
+                              "max_spend": {
+                                "type": "number",
+                                "nullable": true,
+                                "minimum": 0.0001,
+                                "maximum": 1000000
+                              },
+                              "max_tool_calls": {
+                                "type": "integer",
+                                "nullable": true,
+                                "minimum": 1,
+                                "maximum": 100000
+                              }
+                            }
                           },
                           "source_version_id": {
                             "type": "string"

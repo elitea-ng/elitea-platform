@@ -168,6 +168,8 @@ fn summary_invocation(
     invocation.response_schema = Some(crate::agents::context_summary::response_schema());
     invocation.allow_text_continuation = false;
     invocation.max_model_turns = 1;
+    // A summary is not one of the run's model turns (ADR-0041 decision 3).
+    invocation.run_caps = None;
     invocation.reasoning_effort = None;
     invocation.max_tokens = match source.context_budget {
         Some(budget) => {

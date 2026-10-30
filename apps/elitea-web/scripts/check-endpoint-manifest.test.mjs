@@ -874,7 +874,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 458 -> 460 (issue 1501, ADR-0044 decision 1): the on-ramp to
 // approved_only, getConnectorInventory and createConnectorInventoryRequests
 // (admin routes, not in the manifest).
-const GENERATED_OPERATION_COUNT = 460;
+// 460 -> 461 (issue 1498, ADR-0041 decision 3): createRunCapOverride, the
+// run cap override that the chat answer's CapOverrideAction calls.
+const GENERATED_OPERATION_COUNT = 461;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1127,8 +1129,12 @@ const GENERATED_OPERATION_COUNT = 460;
  * queue (listAdminConnectorRequests, getAdminConnectorRequest,
  * approveConnectorRequest, rejectConnectorRequest) is an admin route and
  * stays out of the manifest.
+ *
+ * 311 -> 312 (issue 1498, ADR-0041 decision 3): createRunCapOverride, the
+ * chat answer's "Allow the next run past this cap" action
+ * (features/chat-messages CapOverrideAction). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 311;
+const MANIFEST_ENTRY_COUNT = 312;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

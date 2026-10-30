@@ -1500,6 +1500,8 @@ impl ConfluenceClient {
             }
             start += limit;
         }
+        // The run caps' record count (ADR-0041 decision 3).
+        crate::run_caps::report_records(pages.len() as u64);
         Ok(if pages.is_empty() {
             format!("Unable to find anything using query {cql}. Check space or query.")
         } else {

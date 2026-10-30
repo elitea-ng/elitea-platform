@@ -476,15 +476,17 @@ async fn cloud_search_probes_once_paginates_by_token_and_projects_issues() {
             ok(json!({"issues": [], "isLast": true})),
         ],
     );
-    let output = run(
+    let (output, records) = crate::run_caps::with_record_scope(run(
         &client,
         JiraOperation::SearchUsingJql {
             jql: "project = PROJ ORDER BY created",
             limit: Some(101),
         },
-    )
+    ))
     .await;
     assert!(output.starts_with("Found 101 Jira issues:\n["), "{output}");
+    // The run caps count the issues returned (ADR-0041 decision 3).
+    assert_eq!(records, 101);
     let parsed: Vec<Value> =
         serde_json::from_str(output.split_once('\n').expect("list").1).expect("JSON list");
     let last = &parsed[100];

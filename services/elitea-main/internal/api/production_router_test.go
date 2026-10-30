@@ -2229,6 +2229,8 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		// that lets agents call the provider.
 		"POST /api/v2/elitea_core/register_descriptor/{projectID}/activate",
 		"POST /api/v2/elitea_core/register_descriptor/{projectID}/deactivate",
+		// ADR-0041 decision 3: safety.override_cap lets a capped conversation continue once.
+		"POST /api/v2/elitea_core/run_cap_overrides/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/select_conversation/prompt_lib/{projectID}/{conversationID}",
 		"POST /api/v2/elitea_core/shared_chat_links/prompt_lib/{projectID}/{conversationID}",
 		"POST /api/v2/elitea_core/shared_chat_view_unlock/prompt_lib/{token}/unlock",

@@ -2664,6 +2664,46 @@ export const getCreateApplicationResponseMock = (
               ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
               undefined,
             ]),
+            run_caps: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  max_tool_calls: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 100000 }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                  max_model_turns: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 100000 }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                  max_records_read: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 1000000000 }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                  max_spend: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.float({
+                        min: 0.0001,
+                        max: 1000000,
+                        fractionDigits: 2,
+                      }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
           },
           null,
         ]),
@@ -2899,6 +2939,46 @@ export const getCreateApplicationResponseMock = (
               ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
               undefined,
             ]),
+            run_caps: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  max_tool_calls: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 100000 }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                  max_model_turns: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 100000 }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                  max_records_read: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 1000000000 }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                  max_spend: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.float({
+                        min: 0.0001,
+                        max: 1000000,
+                        fractionDigits: 2,
+                      }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
           },
           null,
         ]),
@@ -3089,6 +3169,46 @@ export const getListPublicApplicationsResponseMock = (
           ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
           undefined,
         ]),
+        run_caps: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              max_tool_calls: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.int({ min: 1, max: 100000 }),
+                  null,
+                ]),
+                undefined,
+              ]),
+              max_model_turns: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.int({ min: 1, max: 100000 }),
+                  null,
+                ]),
+                undefined,
+              ]),
+              max_records_read: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.int({ min: 1, max: 1000000000 }),
+                  null,
+                ]),
+                undefined,
+              ]),
+              max_spend: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.float({
+                    min: 0.0001,
+                    max: 1000000,
+                    fractionDigits: 2,
+                  }),
+                  null,
+                ]),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
       },
       null,
     ]),
@@ -3196,6 +3316,46 @@ export const getGetApplicationResponseMock = (
               { length: faker.number.int({ min: 1, max: 10 }) },
               (_, i) => i + 1,
             ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+            undefined,
+          ]),
+          run_caps: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                max_tool_calls: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    faker.number.int({ min: 1, max: 100000 }),
+                    null,
+                  ]),
+                  undefined,
+                ]),
+                max_model_turns: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    faker.number.int({ min: 1, max: 100000 }),
+                    null,
+                  ]),
+                  undefined,
+                ]),
+                max_records_read: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    faker.number.int({ min: 1, max: 1000000000 }),
+                    null,
+                  ]),
+                  undefined,
+                ]),
+                max_spend: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    faker.number.float({
+                      min: 0.0001,
+                      max: 1000000,
+                      fractionDigits: 2,
+                    }),
+                    null,
+                  ]),
+                  undefined,
+                ]),
+              },
+              null,
+            ]),
             undefined,
           ]),
         },
@@ -3334,6 +3494,46 @@ export const getGetApplicationResponseMock = (
                 { length: faker.number.int({ min: 1, max: 10 }) },
                 (_, i) => i + 1,
               ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+              undefined,
+            ]),
+            run_caps: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  max_tool_calls: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 100000 }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                  max_model_turns: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 100000 }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                  max_records_read: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 1000000000 }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                  max_spend: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.float({
+                        min: 0.0001,
+                        max: 1000000,
+                        fractionDigits: 2,
+                      }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
               undefined,
             ]),
           },
@@ -3580,6 +3780,46 @@ export const getEditApplicationResponseMock = (
               ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
               undefined,
             ]),
+            run_caps: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  max_tool_calls: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 100000 }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                  max_model_turns: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 100000 }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                  max_records_read: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 1000000000 }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                  max_spend: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.float({
+                        min: 0.0001,
+                        max: 1000000,
+                        fractionDigits: 2,
+                      }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
           },
           null,
         ]),
@@ -3815,6 +4055,46 @@ export const getGetPublicApplicationResponseMock = (
               { length: faker.number.int({ min: 1, max: 10 }) },
               (_, i) => i + 1,
             ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+            undefined,
+          ]),
+          run_caps: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                max_tool_calls: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    faker.number.int({ min: 1, max: 100000 }),
+                    null,
+                  ]),
+                  undefined,
+                ]),
+                max_model_turns: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    faker.number.int({ min: 1, max: 100000 }),
+                    null,
+                  ]),
+                  undefined,
+                ]),
+                max_records_read: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    faker.number.int({ min: 1, max: 1000000000 }),
+                    null,
+                  ]),
+                  undefined,
+                ]),
+                max_spend: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    faker.number.float({
+                      min: 0.0001,
+                      max: 1000000,
+                      fractionDigits: 2,
+                    }),
+                    null,
+                  ]),
+                  undefined,
+                ]),
+              },
+              null,
+            ]),
             undefined,
           ]),
         },
@@ -4271,6 +4551,46 @@ export const getGetApplicationVersionDetailResponseMock = (
           ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
           undefined,
         ]),
+        run_caps: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              max_tool_calls: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.int({ min: 1, max: 100000 }),
+                  null,
+                ]),
+                undefined,
+              ]),
+              max_model_turns: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.int({ min: 1, max: 100000 }),
+                  null,
+                ]),
+                undefined,
+              ]),
+              max_records_read: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.int({ min: 1, max: 1000000000 }),
+                  null,
+                ]),
+                undefined,
+              ]),
+              max_spend: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.float({
+                    min: 0.0001,
+                    max: 1000000,
+                    fractionDigits: 2,
+                  }),
+                  null,
+                ]),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
       },
       null,
     ]),
@@ -4493,6 +4813,46 @@ export const getUpdateApplicationVersionResponseMock = (
             { length: faker.number.int({ min: 1, max: 10 }) },
             (_, i) => i + 1,
           ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+          undefined,
+        ]),
+        run_caps: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              max_tool_calls: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.int({ min: 1, max: 100000 }),
+                  null,
+                ]),
+                undefined,
+              ]),
+              max_model_turns: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.int({ min: 1, max: 100000 }),
+                  null,
+                ]),
+                undefined,
+              ]),
+              max_records_read: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.int({ min: 1, max: 1000000000 }),
+                  null,
+                ]),
+                undefined,
+              ]),
+              max_spend: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.float({
+                    min: 0.0001,
+                    max: 1000000,
+                    fractionDigits: 2,
+                  }),
+                  null,
+                ]),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
           undefined,
         ]),
       },
@@ -4720,6 +5080,46 @@ export const getGetApplicationVersionDetailExpandedResponseMock =
                 { length: faker.number.int({ min: 1, max: 10 }) },
                 (_, i) => i + 1,
               ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+              undefined,
+            ]),
+            run_caps: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  max_tool_calls: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 100000 }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                  max_model_turns: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 100000 }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                  max_records_read: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 1000000000 }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                  max_spend: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      faker.number.float({
+                        min: 0.0001,
+                        max: 1000000,
+                        fractionDigits: 2,
+                      }),
+                      null,
+                    ]),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
               undefined,
             ]),
           },
@@ -4969,6 +5369,46 @@ export const getSaveApplicationNewVersionResponseMock = (
             { length: faker.number.int({ min: 1, max: 10 }) },
             (_, i) => i + 1,
           ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+          undefined,
+        ]),
+        run_caps: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              max_tool_calls: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.int({ min: 1, max: 100000 }),
+                  null,
+                ]),
+                undefined,
+              ]),
+              max_model_turns: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.int({ min: 1, max: 100000 }),
+                  null,
+                ]),
+                undefined,
+              ]),
+              max_records_read: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.int({ min: 1, max: 1000000000 }),
+                  null,
+                ]),
+                undefined,
+              ]),
+              max_spend: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  faker.number.float({
+                    min: 0.0001,
+                    max: 1000000,
+                    fractionDigits: 2,
+                  }),
+                  null,
+                ]),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
           undefined,
         ]),
       },
@@ -5324,6 +5764,46 @@ export const getImportWizardResponseMock = (
                       ),
                       undefined,
                     ]),
+                    run_caps: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          max_tool_calls: faker.helpers.arrayElement([
+                            faker.helpers.arrayElement([
+                              faker.number.int({ min: 1, max: 100000 }),
+                              null,
+                            ]),
+                            undefined,
+                          ]),
+                          max_model_turns: faker.helpers.arrayElement([
+                            faker.helpers.arrayElement([
+                              faker.number.int({ min: 1, max: 100000 }),
+                              null,
+                            ]),
+                            undefined,
+                          ]),
+                          max_records_read: faker.helpers.arrayElement([
+                            faker.helpers.arrayElement([
+                              faker.number.int({ min: 1, max: 1000000000 }),
+                              null,
+                            ]),
+                            undefined,
+                          ]),
+                          max_spend: faker.helpers.arrayElement([
+                            faker.helpers.arrayElement([
+                              faker.number.float({
+                                min: 0.0001,
+                                max: 1000000,
+                                fractionDigits: 2,
+                              }),
+                              null,
+                            ]),
+                            undefined,
+                          ]),
+                        },
+                        null,
+                      ]),
+                      undefined,
+                    ]),
                   },
                   null,
                 ]),
@@ -5634,6 +6114,46 @@ export const getImportWizardResponseMock = (
                       ).map(() =>
                         faker.string.alpha({ length: { min: 10, max: 20 } }),
                       ),
+                      undefined,
+                    ]),
+                    run_caps: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          max_tool_calls: faker.helpers.arrayElement([
+                            faker.helpers.arrayElement([
+                              faker.number.int({ min: 1, max: 100000 }),
+                              null,
+                            ]),
+                            undefined,
+                          ]),
+                          max_model_turns: faker.helpers.arrayElement([
+                            faker.helpers.arrayElement([
+                              faker.number.int({ min: 1, max: 100000 }),
+                              null,
+                            ]),
+                            undefined,
+                          ]),
+                          max_records_read: faker.helpers.arrayElement([
+                            faker.helpers.arrayElement([
+                              faker.number.int({ min: 1, max: 1000000000 }),
+                              null,
+                            ]),
+                            undefined,
+                          ]),
+                          max_spend: faker.helpers.arrayElement([
+                            faker.helpers.arrayElement([
+                              faker.number.float({
+                                min: 0.0001,
+                                max: 1000000,
+                                fractionDigits: 2,
+                              }),
+                              null,
+                            ]),
+                            undefined,
+                          ]),
+                        },
+                        null,
+                      ]),
                       undefined,
                     ]),
                   },
@@ -6118,6 +6638,46 @@ export const getForkAgentResponseMock = (
                   ).map(() =>
                     faker.string.alpha({ length: { min: 10, max: 20 } }),
                   ),
+                  undefined,
+                ]),
+                run_caps: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    {
+                      max_tool_calls: faker.helpers.arrayElement([
+                        faker.helpers.arrayElement([
+                          faker.number.int({ min: 1, max: 100000 }),
+                          null,
+                        ]),
+                        undefined,
+                      ]),
+                      max_model_turns: faker.helpers.arrayElement([
+                        faker.helpers.arrayElement([
+                          faker.number.int({ min: 1, max: 100000 }),
+                          null,
+                        ]),
+                        undefined,
+                      ]),
+                      max_records_read: faker.helpers.arrayElement([
+                        faker.helpers.arrayElement([
+                          faker.number.int({ min: 1, max: 1000000000 }),
+                          null,
+                        ]),
+                        undefined,
+                      ]),
+                      max_spend: faker.helpers.arrayElement([
+                        faker.helpers.arrayElement([
+                          faker.number.float({
+                            min: 0.0001,
+                            max: 1000000,
+                            fractionDigits: 2,
+                          }),
+                          null,
+                        ]),
+                        undefined,
+                      ]),
+                    },
+                    null,
+                  ]),
                   undefined,
                 ]),
               },

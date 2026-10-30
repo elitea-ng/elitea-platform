@@ -340,6 +340,12 @@ impl<'a> AuthorizedNativeAssembly<'a> {
         self.command.approval_policy()
     }
 
+    /// The execution's run caps meter (ADR-0041 decision 3).
+    #[must_use]
+    pub(crate) const fn run_caps(&self) -> &Arc<elitea_agent_runtime::run_caps::RunCapsMeter> {
+        self.command.run_caps()
+    }
+
     /// Validate the first production assembly profile before credential
     /// redemption becomes reachable.
     pub(crate) fn admit_llm_agent(

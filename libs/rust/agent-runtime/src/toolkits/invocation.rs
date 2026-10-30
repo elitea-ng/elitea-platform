@@ -249,20 +249,35 @@ impl Tool for PolicyBoundTool {
             // top-level fields before dispatch. Nested values remain untouched.
             arguments.retain(|_, value| !value.is_null());
 
+            // The run's caps (ADR-0041 decision 3): the call past the tool
+            // call cap does not run, and neither does any call after a cap
+            // was reached.
+            let run_caps = self.policy.run_caps();
+            run_caps
+                .charge_tool_call()
+                .map_err(crate::run_caps::cap_error)?;
+
             // The call runs under the run's egress policy (#1490): a host
             // the policy refused fails the call as `egress_host_not_allowed`
             // naming it, whatever error the family mapped the refusal to.
-            let (result, refused) = crate::egress::attributed(
-                Arc::clone(self.policy.egress()),
-                self.inner.execute(context, Value::Object(arguments)),
-            )
-            .await;
-            result.map_err(|error| {
+            let ((result, refused), records) =
+                crate::run_caps::with_record_scope(crate::egress::attributed(
+                    Arc::clone(self.policy.egress()),
+                    self.inner.execute(context, Value::Object(arguments)),
+                ))
+                .await;
+            let value = result.map_err(|error| {
                 refused.map_or_else(
                     || sanitize_tool_error(&error),
                     |refused| refused.tool_error(),
                 )
-            })
+            })?;
+            // Records the tool declared it returned: a result that passes the
+            // records cap does not reach the model.
+            run_caps
+                .charge_records(records)
+                .map_err(crate::run_caps::cap_error)?;
+            Ok(value)
         }
         .instrument(span.clone())
         .await;
