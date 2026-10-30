@@ -393,6 +393,14 @@ func (e SecurityEvent) stringFields() map[string]string {
 	}
 }
 
+// AcceptsString reports whether Validate accepts value in a string field.
+// A producer that copies a value it does not control into an event (a tool
+// name, an interrupt id) uses it to digest or drop the value instead of
+// failing the event. It is checkString itself, so the two cannot drift.
+func AcceptsString(value string) bool {
+	return checkString("value", value) == nil
+}
+
 // checkString bounds one value. It refuses control characters (jsonb cannot
 // hold NUL), invalid UTF-8 (the encoder would rewrite it, so the chain would
 // not verify) and values shaped like a bearer credential.

@@ -318,47 +318,16 @@ func approvalCallOf(pause map[string]any) approvalCall {
 		ToolkitName:   text("toolkit_name"),
 		ToolkitType:   text("toolkit_type"),
 	}
-	// The worker's digest covers the arguments before masking, so it is the
-	// stronger evidence; without it the arguments the card shows are
-	// digested in their canonical form.
+	// Only the worker can digest the arguments: it has them before masking.
+	// The `tool_args` (or `tool_args_json`) of a pause are the arguments the
+	// person sees, with sensitive values masked and long values cut, so a
+	// digest of them is not evidence of the call. Without the worker's
+	// digest (a worker from an earlier release, or a 0157 card, whose
+	// contract has no digest field) the row records no digest (NULL).
 	if digest := text("argument_digest"); argumentDigestShape.MatchString(digest) {
 		call.ArgumentDigest = digest
-		return call
-	}
-	if args, ok := source["tool_args"]; ok && args != nil {
-		call.ArgumentDigest = canonicalArgumentDigest(args)
-	} else if raw := text("tool_args_json"); raw != "" {
-		var decoded any
-		decoder := json.NewDecoder(strings.NewReader(raw))
-		decoder.UseNumber()
-		if decoder.Decode(&decoded) == nil {
-			call.ArgumentDigest = canonicalArgumentDigest(decoded)
-		} else {
-			sum := sha256.Sum256([]byte(raw))
-			call.ArgumentDigest = "sha256:" + hex.EncodeToString(sum[:])
-		}
 	}
 	return call
-}
-
-// canonicalArgumentDigest is "sha256:" and the SHA-256 of the canonical JSON
-// of value: object keys sorted, no insignificant space.
-func canonicalArgumentDigest(value any) string {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return ""
-	}
-	// Re-decode with UseNumber so a number keeps its written form.
-	var normalized any
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
-	decoder.UseNumber()
-	if decoder.Decode(&normalized) == nil {
-		if again, err := json.Marshal(normalized); err == nil {
-			encoded = again
-		}
-	}
-	sum := sha256.Sum256(encoded)
-	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // decodeApprovalPauses reads the pauses of a root pause projection
@@ -491,22 +460,13 @@ func boundedText(value string, limit int) string {
 	return value
 }
 
-// auditText fits value into a security audit string field (256 bytes, no
-// control characters). A longer or unprintable value is its digest.
+// auditText fits value into a security audit string field. A value the
+// audit validator refuses (too long, not UTF-8, a control character, or the
+// shape of a credential such as a JWT or a bearer value) is its digest, so a
+// strange tool or interrupt name can never fail the approval transaction.
+// The check is the validator's own predicate.
 func auditText(value string) string {
-	if value == "" {
-		return ""
-	}
-	clean := len(value) <= 256 && utf8.ValidString(value)
-	if clean {
-		for _, r := range value {
-			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
-				clean = false
-				break
-			}
-		}
-	}
-	if clean && !strings.HasPrefix(strings.ToLower(value), "bearer ") {
+	if value == "" || securityaudit.AcceptsString(value) {
 		return value
 	}
 	sum := sha256.Sum256([]byte(value))
