@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -98,30 +99,77 @@ func sessionPolicySection() map[string]any {
 // configuration.governance), so no migration seeds a new one.
 func runCapsSection() map[string]any {
 	const section = platformconfig.SectionRunCaps
+	fields := []map[string]any{
+		{
+			"key":   platformconfig.KeyRunMaxWallSeconds,
+			"type":  "integer",
+			"title": "Maximum Run Time (seconds)",
+			"description": fmt.Sprintf("Stop an agent run this long after it started. A resumed run counts "+
+				"from the start of the run it continues, so time waiting for an approval counts. 0 is off. "+
+				"From %d to %d.", platformconfig.MinRunMaxWallSeconds, platformconfig.MaxRunMaxWallSeconds),
+			"section": section,
+			"default": 0,
+			"minimum": 0,
+			"maximum": platformconfig.MaxRunMaxWallSeconds,
+		},
+	}
+	defaults := platformconfig.DefaultTierRunCaps()
+	for _, tier := range agentlifecycle.Tiers {
+		for _, name := range platformconfig.RunCapNames {
+			field := map[string]any{
+				"key":     platformconfig.RunCapKey(tier, name),
+				"type":    "integer",
+				"title":   lifecycleTierTitles[tier] + " Tier: " + runCapTitles[name],
+				"section": section,
+				"minimum": 0,
+				"maximum": platformconfig.RunCapLimit(name),
+				"description": runCapDescriptions[name] + " 0 is no cap. An agent author can set a lower " +
+					"value for one agent, never a higher one.",
+			}
+			switch name {
+			case platformconfig.RunCapMaxSpend:
+				field["type"] = "number"
+				field["default"] = defaults.MaxSpend
+			case platformconfig.RunCapMaxToolCalls:
+				field["default"] = defaults.MaxToolCalls
+			default:
+				field["default"] = 0
+			}
+			fields = append(fields, field)
+		}
+	}
 	return map[string]any{
 		"id":    section,
 		"title": "Run Caps",
-		"description": "Limits on one agent run. A run that reaches a cap stops with CAP_REACHED and the " +
-			"conversation shows why.",
+		"description": "Limits on one agent run, by the agent's risk tier. A run that reaches a cap stops with " +
+			"CAP_REACHED and the cap's name, and the conversation shows why. The tier caps apply only after " +
+			"the first save of a tier value: save them after every worker runs this release. Until then, " +
+			"workers of this release stop a run at 200 tool calls.",
 		"order":               6,
 		"icon":                "hourglass_bottom",
 		"always_visible":      true,
 		"required_permission": "configuration.governance",
-		"fields": []map[string]any{
-			{
-				"key":   platformconfig.KeyRunMaxWallSeconds,
-				"type":  "integer",
-				"title": "Maximum Run Time (seconds)",
-				"description": fmt.Sprintf("Stop an agent run this long after it started. A resumed run counts "+
-					"from the start of the run it continues, so time waiting for an approval counts. 0 is off. "+
-					"From %d to %d.", platformconfig.MinRunMaxWallSeconds, platformconfig.MaxRunMaxWallSeconds),
-				"section": section,
-				"default": 0,
-				"minimum": 0,
-				"maximum": platformconfig.MaxRunMaxWallSeconds,
-			},
-		},
+		"fields":              fields,
 	}
+}
+
+var runCapTitles = map[string]string{
+	platformconfig.RunCapMaxToolCalls:   "Maximum Tool Calls",
+	platformconfig.RunCapMaxModelTurns:  "Maximum Model Turns",
+	platformconfig.RunCapMaxSpend:       "Maximum Spend (USD)",
+	platformconfig.RunCapMaxRecordsRead: "Maximum Records Read",
+}
+
+var runCapDescriptions = map[string]string{
+	platformconfig.RunCapMaxToolCalls: "The most toolkit tool calls (MCP tools included) one run may make, " +
+		"nested agents and pipeline nodes included. The default is 200.",
+	platformconfig.RunCapMaxModelTurns: "The most model calls one run may make, nested agents included. An " +
+		"agent's own step limit still applies: the lower of the two stops first.",
+	platformconfig.RunCapMaxSpend: "The most one run may spend on model calls and metered tools, in USD at " +
+		"the price catalogue rate. Checked every 30 seconds against the gateway's request log, so a run can " +
+		"pass it by the spend of that interval.",
+	platformconfig.RunCapMaxRecordsRead: "The most records (search results, rows, issues) one run may read " +
+		"from the toolkits that count records. Other tools count 0.",
 }
 
 // validateRunSafetyValues applies the ranges the schema cannot enforce
@@ -146,6 +194,9 @@ func validateRunSafetyValues(section string, values map[string]any) string {
 			{platformconfig.KeyRunMaxWallSeconds, platformconfig.MinRunMaxWallSeconds,
 				platformconfig.MaxRunMaxWallSeconds},
 		}
+		if message := validateTierRunCaps(values); message != "" {
+			return message
+		}
 	default:
 		return ""
 	}
@@ -156,6 +207,28 @@ func validateRunSafetyValues(section string, values map[string]any) string {
 		}
 		if !platformconfig.ValidBoundSeconds(raw, b.minimum, b.limit) {
 			return fmt.Sprintf("%q must be 0 or a whole number of seconds from %d to %d", b.key, b.minimum, b.limit)
+		}
+	}
+	return ""
+}
+
+// validateTierRunCaps refuses a per-tier cap that is not 0 or within its
+// range: a whole number for a count, at most four decimals for spend.
+func validateTierRunCaps(values map[string]any) string {
+	for _, tier := range agentlifecycle.Tiers {
+		for _, name := range platformconfig.RunCapNames {
+			key := platformconfig.RunCapKey(tier, name)
+			raw, present := values[key]
+			if !present {
+				continue
+			}
+			if !platformconfig.ValidRunCap(name, raw) {
+				if name == platformconfig.RunCapMaxSpend {
+					return fmt.Sprintf("%q must be 0 or an amount in USD up to %d, with at most four decimals",
+						key, platformconfig.MaxRunCapSpend)
+				}
+				return fmt.Sprintf("%q must be 0 or a whole number up to %.0f", key, platformconfig.RunCapLimit(name))
+			}
 		}
 	}
 	return ""

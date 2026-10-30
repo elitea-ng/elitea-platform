@@ -97,6 +97,12 @@ const (
 	// .unattended_skipped, .unattended_waiting). ToolName, ToolkitName and
 	// ArgumentsDigest name the call; the arguments are never in the event.
 	TypeAgentApproval EventType = "ai.elitea.security.v1.agent.approval"
+	// TypeAgentCapOverride is a run cap override (ADR-0041 decision 3,
+	// #1498): a holder of safety.override_cap let the conversation of a run
+	// that stopped at a cap continue past that cap once
+	// (agent.cap.override.granted). ResourceID is the stopped response,
+	// ExecutionID its run, and the reasons name the cap.
+	TypeAgentCapOverride EventType = "ai.elitea.security.v1.agent.cap.override"
 )
 
 // OCSF class and category uids (https://schema.ocsf.io).
@@ -130,6 +136,7 @@ var ocsfClasses = map[EventType]int{
 	TypeCredentialReview:        OCSFClassUserAccessManagement,
 	TypeRemoteAgent:             OCSFClassAuthorizeSession,
 	TypeAgentApproval:           OCSFClassAPIActivity,
+	TypeAgentCapOverride:        OCSFClassAPIActivity,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.

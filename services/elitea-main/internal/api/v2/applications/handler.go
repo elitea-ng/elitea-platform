@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerruncaps"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
@@ -28,6 +29,9 @@ import (
 type Handler struct {
 	repo applications.Repository
 	pool *pgxpool.Pool
+	// runCaps refuses an author's meta.run_caps above the agent's tier caps
+	// (run_caps.go); nil accepts them.
+	runCaps *workerruncaps.Checker
 }
 
 func NewHandler(repo applications.Repository, pool ...*pgxpool.Pool) *Handler {
@@ -562,6 +566,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			// #898 — the same ceiling the save path applies, on create.
 			if _, _, notesErr := validateNotes(vBody); notesErr != nil {
 				apierr.Write(w, notesErr)
+				return
+			}
+			if !h.checkRunCaps(w, r, projectID, "", vBody) {
 				return
 			}
 			req.InitialVersion = versionFromBody(vBody, ownerID)
@@ -1202,6 +1209,9 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, notesErr)
 		return
 	}
+	if !h.checkRunCaps(w, r, projectID, applicationID, body) {
+		return
+	}
 
 	input := versionFromBody(body, ownerID)
 	input.CopySkillsFromVersionID = optionalSkillSourceVersionID(body["copy_skills_from_version_id"])
@@ -1359,6 +1369,9 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	// admits a stored agent on, so an agent could be edited into being
 	// unrunnable by a request that answered 201.
 	if meta, ok := body["meta"].(map[string]any); ok {
+		if !h.checkRunCaps(w, r, projectID, applicationID, body) {
+			return
+		}
 		v.Meta = meta
 	}
 	// #307 — `variables` had NO branch here at all, so the agent editor's

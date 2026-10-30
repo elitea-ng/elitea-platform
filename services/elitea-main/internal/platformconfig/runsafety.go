@@ -8,6 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/singleflight"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 )
 
 // SectionSessionPolicy is the administrator's bound on browser sessions
@@ -68,7 +70,8 @@ func LoadSessionPolicy(ctx context.Context, pool *pgxpool.Pool) (SessionPolicy, 
 }
 
 // SectionRunCaps holds the platform's run-level caps (ADR-0041 decision 3,
-// #1496 and #1498). This release has one: the whole-run wall cap.
+// #1496 and #1498): the whole-run wall cap, and per risk tier the most tool
+// calls, model turns, spend and records read of one run (runcaps.go).
 const SectionRunCaps = "run_caps"
 
 // KeyRunMaxWallSeconds is the whole-run wall cap of an agent run, in
@@ -85,12 +88,36 @@ const (
 // RunCaps is the section. A zero duration is off.
 type RunCaps struct {
 	MaxWall time.Duration
+	// Tiers holds the per-tier caps; a tier never saved has the defaults.
+	Tiers map[agentlifecycle.Tier]TierRunCaps
+	// TierCapsStored reports that an administrator saved at least one
+	// per-tier key. Only then does Main send WorkerCommandV1.run_caps (field
+	// 69) and enforce max_spend: the chart rolls Main out before the
+	// workers, and a worker from an earlier release rejects the field.
+	TierCapsStored bool
+}
+
+// For answers one tier's caps. An unknown tier reads as low, the tier of a
+// new agent.
+func (c RunCaps) For(tier agentlifecycle.Tier) TierRunCaps {
+	if !tier.Valid() {
+		tier = agentlifecycle.TierLow
+	}
+	if caps, ok := c.Tiers[tier]; ok {
+		return caps
+	}
+	return DefaultTierRunCaps()
 }
 
 // RunCapsFromValues is the overlay, with the same clamping rule as
 // SessionPolicyFromValues.
 func RunCapsFromValues(values Values) RunCaps {
-	return RunCaps{MaxWall: boundSeconds(values, KeyRunMaxWallSeconds, MaxRunMaxWallSeconds)}
+	tiers, stored := tierRunCapsFromValues(values)
+	return RunCaps{
+		MaxWall:        boundSeconds(values, KeyRunMaxWallSeconds, MaxRunMaxWallSeconds),
+		Tiers:          tiers,
+		TierCapsStored: stored,
+	}
 }
 
 // LoadRunCaps reads the section. A database without the table never saved
@@ -98,7 +125,7 @@ func RunCapsFromValues(values Values) RunCaps {
 func LoadRunCaps(ctx context.Context, pool *pgxpool.Pool) (RunCaps, error) {
 	values, err := Load(ctx, pool, SectionRunCaps)
 	if UndefinedTable(err) {
-		return RunCaps{}, nil
+		return RunCapsFromValues(Values{}), nil
 	}
 	if err != nil {
 		return RunCaps{}, err

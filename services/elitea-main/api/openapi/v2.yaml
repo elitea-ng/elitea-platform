@@ -9809,6 +9809,67 @@ components:
         additionally honours reasoning_effort. Remaining keys are
         client-owned. Channel-B fixture recommended (M1).
 
+    VersionRunCaps:
+      type: object
+      additionalProperties: false
+      description: >
+        The author's per-agent run caps. Every value is positive; a count is a
+        whole number and max_spend (US dollars) has at most four decimals.
+      properties:
+        max_tool_calls: { type: integer, minimum: 1, maximum: 100000, nullable: true }
+        max_model_turns: { type: integer, minimum: 1, maximum: 100000, nullable: true }
+        max_records_read: { type: integer, format: int64, minimum: 1, maximum: 1000000000, nullable: true }
+        max_spend: { type: number, minimum: 0.0001, maximum: 1000000, nullable: true }
+
+    RunCapRefusal:
+      type: object
+      required: [error, code, cap]
+      description: >
+        The 422 of an agent save whose meta.run_caps raises a platform cap
+        (RUN_CAP_ABOVE_TIER) or is not a valid cap (RUN_CAP_INVALID).
+      properties:
+        error: { type: string, maxLength: 512 }
+        code: { type: string, enum: [RUN_CAP_ABOVE_TIER, RUN_CAP_INVALID] }
+        cap: { type: string, maxLength: 64, description: The refused key of meta.run_caps. }
+        tier: { type: string, maxLength: 16, description: "The agent's risk tier, one of low, medium, high, critical (RUN_CAP_ABOVE_TIER only)." }
+        tier_cap: { type: number, description: The platform's cap at that tier. }
+        requested: { type: number, description: The value the save asked for. }
+
+    RunCapOverrideRequest:
+      type: object
+      additionalProperties: false
+      required: [message_id]
+      properties:
+        conversation_uuid:
+          type: string
+          format: uuid
+          maxLength: 36
+          description: Optional. When set, it must be the conversation of the response.
+        message_id:
+          type: string
+          format: uuid
+          maxLength: 36
+          description: The agent response that ended with CAP_REACHED.
+
+    RunCapOverride:
+      type: object
+      required: [id, cap, granted_at, expires_at]
+      properties:
+        id: { type: integer, format: int64 }
+        cap:
+          type: string
+          maxLength: 64
+          description: >
+            The cap the next run of the conversation gets doubled: one of
+            max_wall_seconds, max_tool_calls, max_model_turns, max_spend,
+            max_records_read.
+        source_execution_id: { type: string, maxLength: 128 }
+        granted_at: { type: string, format: date-time }
+        expires_at:
+          type: string
+          format: date-time
+          description: An unused grant expires one hour after it was granted.
+
     VersionMeta:
       type: object
       properties:
@@ -9865,6 +9926,17 @@ components:
             (applications/handler.go:826-828) — but the legacy UI writes it
             here and the replatformed edit page both reads and writes it, so
             it is modelled rather than left to the passthrough marker below.
+        run_caps:
+          allOf: [{ $ref: '#/components/schemas/VersionRunCaps' }]
+          nullable: true
+          description: >
+            The author's run caps of this agent (ADR-0041 decision 3). Each
+            key LOWERS the platform's cap for the agent's risk tier
+            (Configuration › Run caps); the lower value applies. A save that
+            sets a value above the tier's cap is refused with 422
+            RUN_CAP_ABOVE_TIER. Omit a key, or set it to null, to keep the
+            tier's cap. `step_limit` still bounds each agent loop: with
+            `max_model_turns` the lower of the two stops first.
       additionalProperties: true
       x-elitea-passthrough: >-
         NOTE(W2): DB jsonb column `application_versions.meta` round-trips
@@ -25504,6 +25576,55 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /elitea_core/run_cap_overrides/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: createRunCapOverride
+      summary: Let a conversation continue past the run cap it reached, once
+      description: >
+        ADR-0041 decision 3. The response named by message_id must have ended
+        with CAP_REACHED. The next agent run of its conversation gets that
+        one cap doubled; every other cap keeps its value. One grant per
+        stopped response, one unused grant per conversation; an unused grant
+        expires after one hour. The grant is a security audit event
+        (ai.elitea.security.v1.agent.cap.override). Requires
+        `safety.override_cap` in the project (the project admin and the
+        platform administrators).
+      tags: [settings]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RunCapOverrideRequest' }
+      responses:
+        '201':
+          description: The grant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunCapOverride' }
+        '400':
+          description: A malformed project id or body (code invalid_request)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_capped) No response of this conversation with that id ended with CAP_REACHED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: (code already_granted) The response was already overridden, or (code open_grant) the conversation holds an unused grant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: (code tier_caps_not_saved) The cap is a worker-side cap and no administrator saved the per-tier run caps yet
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
   /elitea_core/application_releases/prompt_lib/{project_id}/{application_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -31352,6 +31473,11 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '422':
+          description: (RUN_CAP_ABOVE_TIER, RUN_CAP_INVALID) meta.run_caps raises a platform run cap or is not a valid cap
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunCapRefusal' }
 
   /elitea_core/admin_published_agents/administration:
     get:
@@ -31953,6 +32079,11 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
+        '422':
+          description: (RUN_CAP_ABOVE_TIER, RUN_CAP_INVALID) meta.run_caps raises a platform run cap or is not a valid cap
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunCapRefusal' }
 
     patch:
       operationId: getApplicationVersionDetailExpanded
@@ -32064,6 +32195,11 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
+        '422':
+          description: (RUN_CAP_ABOVE_TIER, RUN_CAP_INVALID) meta.run_caps raises a platform run cap or is not a valid cap
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunCapRefusal' }
 
   # NOTE(W1, waiver W-009): aligned to the router's real contract —
   # internal/api/router.go:343 registers

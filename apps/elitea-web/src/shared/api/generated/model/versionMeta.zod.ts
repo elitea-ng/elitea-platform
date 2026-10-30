@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { VersionRunCaps } from "./versionRunCaps.zod";
 import { VersionVariable } from "./versionVariable.zod";
 
 export const VersionMeta = zod.object({
@@ -76,6 +77,12 @@ export const VersionMeta = zod.object({
     .optional()
     .describe(
       'Identifiers of the agent\'s enabled internal tools (e.g. "internal_mcp"). Client-owned: elitea-main never inspects the key — UpdateVersion assigns the whole meta map it receives (applications/handler.go:826-828) — but the legacy UI writes it here and the replatformed edit page both reads and writes it, so it is modelled rather than left to the passthrough marker below.\n',
+    ),
+  run_caps: zod
+    .union([VersionRunCaps, zod.null()])
+    .optional()
+    .describe(
+      "The author's run caps of this agent (ADR-0041 decision 3). Each key LOWERS the platform's cap for the agent's risk tier (Configuration › Run caps); the lower value applies. A save that sets a value above the tier's cap is refused with 422 RUN_CAP_ABOVE_TIER. Omit a key, or set it to null, to keep the tier's cap. `step_limit` still bounds each agent loop: with `max_model_turns` the lower of the two stops first.\n",
     ),
 });
 

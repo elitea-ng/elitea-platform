@@ -18,6 +18,9 @@ type RuntimeFailure struct {
 	Code        string
 	SafeMessage string
 	Retryable   bool
+	// Cap names the run cap of a CAP_REACHED failure (ADR-0041 decision 3):
+	// the worker stopped the run at it. Empty for every other code.
+	Cap string
 }
 
 type RuntimeFailureFrame struct {
@@ -220,9 +223,10 @@ func (s *RuntimeFailureService) IngestFailure(ctx context.Context, frame Runtime
 	}
 	browserData, err := json.Marshal(struct {
 		Code        string `json:"code"`
+		Cap         string `json:"cap,omitempty"`
 		SafeMessage string `json:"safe_message"`
 		Retryable   bool   `json:"retryable"`
-	}{Code: frame.Failure.Code, SafeMessage: frame.Failure.SafeMessage, Retryable: frame.Failure.Retryable})
+	}{Code: frame.Failure.Code, Cap: frame.Failure.Cap, SafeMessage: frame.Failure.SafeMessage, Retryable: frame.Failure.Retryable})
 	if err != nil {
 		return ProjectionOutcome{}, err
 	}

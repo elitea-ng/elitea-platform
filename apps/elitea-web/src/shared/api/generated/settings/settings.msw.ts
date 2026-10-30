@@ -52,6 +52,7 @@ import type {
   OkResponse,
   ProjectCloudExecutorSwitch,
   ProjectContextDraft,
+  RunCapOverride,
 } from "../model";
 
 export const getGetProjectCloudExecutorResponseMock = (
@@ -141,6 +142,20 @@ export const getResumeProjectExecutionSuspensionResponseMock =
     resumed_by: null,
     resume_reason: null,
   });
+
+export const getCreateRunCapOverrideResponseMock = (
+  overrideResponse: Partial<Extract<RunCapOverride, object>> = {},
+): RunCapOverride => ({
+  id: faker.number.int(),
+  cap: faker.string.alpha({ length: { min: 10, max: 64 } }),
+  source_execution_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 128 } }),
+    undefined,
+  ]),
+  granted_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  expires_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
 
 export const getGenerateProjectContextDraftResponseMock = (
   overrideResponse: Partial<Extract<ProjectContextDraft, object>> = {},
@@ -332,6 +347,32 @@ export const getResumeProjectExecutionSuspensionMockHandler = (
   );
 };
 
+export const getCreateRunCapOverrideMockHandler = (
+  overrideResponse?:
+    | RunCapOverride
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<RunCapOverride> | RunCapOverride),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/run_cap_overrides/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateRunCapOverrideResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGenerateProjectContextDraftMockHandler = (
   overrideResponse?:
     | ProjectContextDraft
@@ -416,6 +457,7 @@ export const getSettingsMock = () => [
   getListProjectExecutionSuspensionsMockHandler(),
   getCreateProjectExecutionSuspensionMockHandler(),
   getResumeProjectExecutionSuspensionMockHandler(),
+  getCreateRunCapOverrideMockHandler(),
   getGenerateProjectContextDraftMockHandler(),
   getPatchEntitySettingsMockHandler(),
   getReplaceParticipantSettingsMockHandler(),

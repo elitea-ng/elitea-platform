@@ -16,6 +16,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	configurationdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/configurations"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runcaps"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/nodeevent"
 	"google.golang.org/grpc"
@@ -659,6 +660,7 @@ func (s *Server) runtimeFailureFrame(message *runtimev1.ExecutionOutputFrameV1, 
 			Code:        policy.Code,
 			SafeMessage: payload.GetSafeMessage(),
 			Retryable:   payload.GetRetryable(),
+			Cap:         policy.Cap,
 		},
 	}, nil
 }
@@ -1129,6 +1131,8 @@ type runtimeFailurePolicy struct {
 	Code        string
 	SafeMessage string
 	Retryable   bool
+	// Cap is the run cap of a CAP_REACHED failure.
+	Cap string
 }
 
 // A stored pipeline holds a direct node on a toolkit its position cannot serve.
@@ -1199,6 +1203,14 @@ func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFai
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_BUDGET_EXHAUSTED {
 		if policy, ok := budgetScopePolicy(payload.GetSafeMessage()); ok {
 			return policy, true
+		}
+	}
+	// The worker stopped an agent run at a run cap (ADR-0041 decision 3): one
+	// fixed sentence per cap under RESOURCE_EXHAUSTED, so no new error code
+	// reaches a Main of an earlier release.
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED {
+		if cap, ok := runcaps.WorkerCap(payload.GetSafeMessage()); ok {
+			return runtimeFailurePolicy{Code: runcaps.Code, SafeMessage: payload.GetSafeMessage(), Cap: cap}, true
 		}
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT {

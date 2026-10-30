@@ -953,7 +953,15 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// the platform-decider flags of a 0157 card and its audit row
 	// (execution_interrupts.decided_by_system,
 	// execution_interrupt_audit.system_actor). No data, no permission.
-	require.EqualValues(t, 211, Head(shared))
+	//
+	// 212: shared/0212_run_caps.sql, per-run caps and the cap override
+	// (ADR-0041 decision 3, #1498): execution_jobs.run_caps (the run's
+	// effective caps) and cancel_cap (max_wall_seconds or max_spend), and
+	// elitea_runtime.run_cap_overrides (one grant per stopped response,
+	// consumed by the conversation's next run). Grants safety.override_cap to
+	// super_admin and admin in the administration mode and to the project
+	// admin.
+	require.EqualValues(t, 212, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

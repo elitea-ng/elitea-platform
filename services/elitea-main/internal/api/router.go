@@ -73,6 +73,7 @@ import (
 	v2promptcontextreads "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
 	v2releasegates "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/releasegates"
 	v2retention "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/retention"
+	v2runcaps "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/runcaps"
 	v2runevidence "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/runevidence"
 	v2safety "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/safety"
 	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
@@ -3688,8 +3689,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// can clear.
 
 				// Applications
+				// The run caps (ADR-0041 decision 3): an agent save refuses
+				// an author cap above the agent's tier cap, and a holder of
+				// safety.override_cap lets a capped conversation continue.
+				runCaps := newRunCapsServices(cfg.Pool, cfg.RunCapsCache)
+				r.With(projectPermission(overrideCapPermission)).
+					Post(v2runcaps.ProjectPath, runCaps.override.Grant)
 				if cfg.AppsRepo != nil {
-					appHandler := v2apps.NewHandler(cfg.AppsRepo, cfg.Pool)
+					appHandler := v2apps.NewHandler(cfg.AppsRepo, cfg.Pool).WithRunCapsChecker(runCaps.checker)
 					r.With(projectPermission("models.applications.applications.list")).
 						Get("/applications/prompt_lib/{projectID}", appHandler.List)
 					r.With(projectPermission("models.applications.applications.create")).

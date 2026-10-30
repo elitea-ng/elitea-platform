@@ -47,6 +47,7 @@ import { ChatContinue } from '../chat-continue/ChatContinue';
 import { AskUserAnswerSummary } from '../chat-hitl-actions/AskUserAnswerSummary';
 import { ErrorTrace } from '../error-trace/ErrorTrace';
 import { BudgetUsageLink } from '../error-trace/BudgetUsageLink';
+import { CapOverrideAction } from '../error-trace/CapOverrideAction';
 import { FailureReference } from '../error-trace/FailureReference';
 import { ContinuationError } from '../error-trace/ContinuationError';
 
@@ -301,6 +302,7 @@ export function ApplicationAnswer({
               {renderedContent}
               {!!exception && <ErrorTrace error={exception} />}
               {!!exception && <BudgetUsageLink code={answer.failureCode} />}
+              {!!exception && <CapOverrideAction projectId={feedbackProjectId} messageId={messageId} code={answer.failureCode} />}
             </>
           )}
 

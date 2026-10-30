@@ -406,6 +406,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err := startBrowserSessionLifecycle(ctx, pool, runSafetySections, logger); err != nil {
 		return err
 	}
+	if err := startRunSpendCap(ctx, pool, logger); err != nil {
+		return err
+	}
 
 	// The domain-events Publisher — #876's second half. Every producer that
 	// wires it (pipeline run admission, agent version publish/unpublish,
@@ -2129,6 +2132,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			MaxRunWall:                       runSafetySections.maxRunWall,
 			DelegationSettings:               runSafetySections.delegation,
 			ApprovalPolicySettings:           runSafetySections.approvalPolicy,
+			RunCapsSettings:                  runSafetySections.runCaps,
 			IndexScheduleMandates:            governedTriggers.IndexMandates,
 			IndexScheduleMandateGate:         governedTriggers.IndexGate,
 			ControlPool:                      runtimePools.Control,
