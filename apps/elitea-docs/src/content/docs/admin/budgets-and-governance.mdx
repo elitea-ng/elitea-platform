@@ -49,6 +49,22 @@ Open **LLM Governance**. Each row is a scoped rule the gateway reads and enforce
 
 <Screenshot id="admin-governance-table" alt="LLM Governance rule table" />
 
+### Throttles per agent and per user
+
+A **Rate limit** entry has two more scope fields. Use them to limit one agent or one user, in addition to the project rate limit (ADR-0041 decision 4).
+
+| Field | Data path | Rule |
+| --- | --- | --- |
+| **Throttled agents** | `scope.agent_ids` | Agent (application) ids. Set exactly one project in **Projects**: the project that owns the agents. Each agent gets its own counter. |
+| **Throttled users** | `scope.user_ids` | User ids. Each user gets its own counter, shared across the projects that the entry selects. |
+
+- Each list can have at most 100 ids. Each id must exist; the main service refuses an unknown agent or user.
+- Only **Rate limit** entries can have these fields. The main service refuses them on every other type, and the gateway rejects such a row.
+- When a throttle refuses a call, the gateway answers `429` with `Retry-After`. The throttle does not suspend the agent or the user.
+- A throttle fails open, as a rate limit does: when the counter or the agent lookup is not available, the call is admitted.
+
+See [Throttles per agent and per user](/admin/enterprise-controls/runtime-safety#throttles-per-agent-and-per-user).
+
 <Warning>
 A saved rule can still be unenforceable: it may fail to load, or load and match nothing it could ever apply to. The gateway's own status report (surfaced on the [LLM proxy](/admin/llm-proxy) Status tab) names any rule it rejected — a save here is not proof the rule is in force.
 </Warning>

@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Throttles per agent and per user
+
+A **Rate limit** entry under **LLM Governance** can now name agents (`scope.agent_ids`) or users (`scope.user_ids`). Each named agent or user then gets its own per-minute counter at the LLM gateway, in addition to the project rate limit. When the counter is full, the gateway refuses the call with `429` and `Retry-After`; the agent and the user are not suspended. Like the project rate limits, throttles fail open when the shared counter is not available. The toolkit reference pages now also show the category of each tool, generated from the tool category contract. See [Throttles per agent and per user](/admin/enterprise-controls/runtime-safety#throttles-per-agent-and-per-user).
+
 ## Approval ledger and unattended runs
 
 Every pause and every decision of a sensitive tool or a pipeline review node is now a row in an append-only approval ledger, with the actor, the tool, the toolkit, the digest of the arguments and the decision. Each row is also a hash-chained `agent.approval` event in the security audit log, for every run. When two people decide the same step at the same time, one decision applies and the other gets HTTP 409. **Runs that a schedule or a trigger started never approve a step.** By default (`fail`), such a run now ends with `approval_required_unattended` when it gets to a step that needs approval. Set `on_approval_required` on a schedule or a trigger to `skip` (the model is told that the step was skipped) or `notify_and_wait` (the owner is notified and the run waits, 24 hours by default). The platform default is under **Configuration › Approvals**. See [Approval evidence and unattended runs](/admin/enterprise-controls/runtime-safety#approval-evidence-and-unattended-runs).
