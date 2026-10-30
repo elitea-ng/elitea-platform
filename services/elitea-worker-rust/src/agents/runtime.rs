@@ -450,6 +450,23 @@ pub(super) fn admit_pipeline_plan<'a>(
     profile.validate_tool_snapshot(&frozen_toolsets, policy)?;
     let toolsets = frozen_toolsets.apply_policy(policy);
     tracing::Span::current().record("stage", "execution_plan");
+    // FU-265: the paused writer Main names rides only on a continuation that
+    // re-enters a paused root row; on any other start it is refused.
+    let paused_writer = super::graph::continuation_writer::PausedWriter::from_meta(|key| {
+        request.payload.meta.get(key)
+    })
+    .map_err(|_| {
+        NativeAgentAssemblyError::new(
+            NativeAgentAssemblyErrorCode::InvalidInput,
+            "the continuation's paused writer is malformed",
+        )
+    })?;
+    if paused_writer.is_some() && !start.reenters_paused_row() {
+        return Err(NativeAgentAssemblyError::new(
+            NativeAgentAssemblyErrorCode::InvalidInput,
+            "a paused writer is admitted only on a continuation",
+        ));
+    }
     let plan = OrdinaryNativeAgentPlan::from_authorized_pipeline(
         request,
         profile.shell(),
@@ -457,7 +474,8 @@ pub(super) fn admit_pipeline_plan<'a>(
         attachments,
         start.is_resume(),
         start.is_hitl_resume(),
-    )?;
+    )?
+    .with_paused_writer(paused_writer);
     Ok((profile, plan, toolsets, start))
 }
 
@@ -546,6 +564,18 @@ impl PipelineNativeStart {
     #[must_use]
     pub(crate) const fn is_hitl_resume(&self) -> bool {
         matches!(self, Self::Hitl(_))
+    }
+
+    /// A continuation that re-enters the root row its paused execution wrote
+    /// (FU-265): a decision, a text answer, an MCP authorization or a static
+    /// tool selection. A fresh run, a regeneration, a plain checkpoint
+    /// restore and a fan-out wake are not.
+    #[must_use]
+    pub(crate) const fn reenters_paused_row(&self) -> bool {
+        matches!(
+            self,
+            Self::Hitl(_) | Self::McpAuthorization(_) | Self::Text(_) | Self::StaticTools(_)
+        )
     }
 }
 

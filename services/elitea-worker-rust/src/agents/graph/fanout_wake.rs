@@ -14,10 +14,12 @@ use crate::agents::request::{AgentExecutionPayload, UserInput};
 /// `payload.meta` member carrying the wake marker.
 pub(crate) const FANOUT_WAKE_META_KEY: &str = "fanout_wake_v1";
 const FANOUT_WAKE_SCHEMA: &str = "elitea.pipeline.fanout-wake.v1";
-/// Meta keys that select another continuation kind; a wake never carries one.
-const OTHER_CONTINUATION_META_KEYS: [&str; 2] = [
+/// Meta keys that select another continuation kind, or name the paused
+/// writer a continuation re-enters (FU-265); a wake never carries one.
+const OTHER_CONTINUATION_META_KEYS: [&str; 3] = [
     super::static_tool_pause::STATIC_TOOL_RESUME_META_KEY,
     "pipeline_static_resume_v1",
+    super::continuation_writer::PAUSED_WRITER_META_KEY,
 ];
 
 /// A validated wake marker. It names the parked response, the decision
