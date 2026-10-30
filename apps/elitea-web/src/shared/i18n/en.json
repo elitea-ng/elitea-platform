@@ -5352,5 +5352,7 @@
   "pages.admin.agentRegistry.title": "Agent registry",
   "pages.admin.agentRegistry.truncated": "The JSON export stopped at its row limit. Narrow the filters.",
   "pages.admin.nav.agentRegistry": "Agent registry",
-  "features.agentLifecycle.changeRequest.submit": "Submit"
+  "features.agentLifecycle.changeRequest.submit": "Submit",
+  "pages.admin.users.action.exportEntitlements": "Export entitlements",
+  "pages.admin.users.error.exportEntitlements": "Failed to export entitlements."
 }

@@ -64,6 +64,7 @@ import type {
   CredentialReferenceListResponse,
   CredentialUseGrant,
   CredentialUseGrantListResponse,
+  EntitlementGrantList,
   ExecutionSuspension,
   ExecutionSuspensionList,
   ExternalAgentIdentity,
@@ -418,6 +419,43 @@ export const getListAdminAgentRegistryResponseMock = (
         state_changed_at: "2026-10-29T09:00:00Z",
         suspension_id: null,
         updated_at: "2026-10-29T09:00:00Z",
+      })),
+      ...overrideResponse,
+    },
+    faker.word.sample(),
+  ]);
+
+export const getExportEntitlementsResponseMock = (
+  overrideResponse: Partial<
+    Extract<EntitlementGrantList | string, object>
+  > = {},
+): EntitlementGrantList | string =>
+  faker.helpers.arrayElement([
+    {
+      total: faker.number.int(),
+      rows: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        user_id: faker.number.int(),
+        user_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        display_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        user_active: faker.datatype.boolean(),
+        scope_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        scope_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        scope_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        project_id: faker.helpers.arrayElement([faker.number.int(), null]),
+        scope_active: faker.datatype.boolean(),
+        role: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        capability: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        permissions: Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        granted_via: faker.string.alpha({ length: { min: 10, max: 20 } }),
       })),
       ...overrideResponse,
     },
@@ -3233,6 +3271,38 @@ export const getListAdminAgentRegistryMockHandler = (
   );
 };
 
+export const getExportEntitlementsMockHandler = (
+  overrideResponse?:
+    | EntitlementGrantList
+    | string
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        Promise<EntitlementGrantList | string> | EntitlementGrantList | string),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/entitlements",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      const resolvedBody =
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getExportEntitlementsResponseMock();
+      return typeof resolvedBody === "string"
+        ? HttpResponse.text(resolvedBody, {
+            status: 200,
+            headers: { "Content-Type": "text/csv" },
+          })
+        : HttpResponse.json(resolvedBody, { status: 200 });
+    },
+    options,
+  );
+};
+
 export const getListExecutionSuspensionsMockHandler = (
   overrideResponse?:
     | ExecutionSuspensionList
@@ -5242,6 +5312,7 @@ export const getAdminMock = () => [
   getListBackgroundJobsMockHandler(),
   getCancelBackgroundJobMockHandler(),
   getListAdminAgentRegistryMockHandler(),
+  getExportEntitlementsMockHandler(),
   getListExecutionSuspensionsMockHandler(),
   getCreateExecutionSuspensionMockHandler(),
   getResumeExecutionSuspensionMockHandler(),

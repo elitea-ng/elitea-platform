@@ -7650,6 +7650,57 @@ components:
       description: >
         NOTE(W2): internal/api/v2/agentlifecycle/handler.go, Handler.AdminRegistry.
 
+    EntitlementGrant:
+      type: object
+      required: [user_id, user_name, display_name, user_active, scope_type, scope_id, scope_name, project_id,
+                 scope_active, role, capability, permissions, granted_via]
+      properties:
+        user_id: { type: integer, format: int64 }
+        user_name: { type: string, description: The account address. }
+        display_name: { type: string }
+        user_active: { type: boolean, description: False for a suspended account. }
+        scope_type: { type: string, description: platform or project or agent. }
+        scope_id:
+          type: string
+          description: The mode for a platform role, the project id for a project role, the agent id for an agent.
+        scope_name: { type: string }
+        project_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: The project of a project or agent scope; null for platform.
+        scope_active: { type: boolean, description: False when the project is suspended. }
+        role:
+          type: string
+          description: The role name, or business_owner / technical_owner for an agent.
+        capability:
+          type: string
+          nullable: true
+          description: >
+            The governance capability (configure_agents, publish_agents,
+            approve_change_requests, override_release_gates,
+            edit_agent_registry, attest, suspend, override_caps,
+            approve_connectors, manage_retention, manage_legal_hold,
+            read_run_evidence and others); null for a role that carries none.
+        permissions:
+          type: array
+          items: { type: string }
+          description: The permissions that carry the capability; empty for an owner row.
+        granted_via: { type: string, description: role or owner or direct. }
+      description: >
+        NOTE(W2): internal/api/v2/entitlements/handler.go, Grant.
+
+    EntitlementGrantList:
+      type: object
+      required: [total, rows]
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/EntitlementGrant' }
+      description: >
+        NOTE(W2): internal/api/v2/entitlements/handler.go, Handler.Export.
+
     AgentRegistryUpdate:
       type: object
       additionalProperties: false
@@ -18660,6 +18711,75 @@ paths:
               schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+
+  /admin/entitlements:
+    get:
+      operationId: exportEntitlements
+      summary: Export who holds which role and governance capability
+      description: >
+        The entitlement export (ADR-0044 decision 5, issue 1501). One row per
+        (user, scope, role, capability, granted_via): platform roles (scope
+        id is the mode), project roles (scope id is the project id) and agent
+        ownership from the agent registry (scope id is the agent id). A role
+        that carries no governance capability is one row with a null
+        capability. Capabilities are derived from the permissions the role
+        holds. JSON pages of at most 500 rows (limit, offset), or with
+        format=csv an RFC 4180 CSV of every matching row streamed from one
+        snapshot, with the row count in the X-Entitlement-Rows header. Every
+        export writes an audit_events row (caller, format, row count) and is
+        refused with 503 when it cannot. Gated on `entitlements.export` in
+        the administration mode.
+      tags: [admin]
+      parameters:
+        - name: format
+          in: query
+          required: false
+          description: json (the default) or csv.
+          schema: { type: string, default: json }
+        - name: user_id
+          in: query
+          required: false
+          description: Only this account's rows.
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: project_id
+          in: query
+          required: false
+          description: Only the rows of this project and its agents.
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: limit
+          in: query
+          required: false
+          description: JSON only.
+          schema: { type: integer, minimum: 0, maximum: 500, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          description: JSON only.
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: The entitlement rows
+          headers:
+            X-Entitlement-Rows:
+              description: CSV only. The number of data rows the file holds.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EntitlementGrantList' }
+            text/csv:
+              schema: { type: string }
+        '400':
+          description: A filter or format that is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '503':
+          description: The export could not be recorded in the audit trail, or no database
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /admin/execution_suspensions:
     get:

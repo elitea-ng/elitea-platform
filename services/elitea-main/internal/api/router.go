@@ -49,6 +49,7 @@ import (
 	v2discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
 	v2drafts "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/drafts"
 	v2core "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	v2entitlements "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entitlements"
 	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
@@ -103,6 +104,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
+	entitlementsdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/entitlements"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/events"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/governedmcp"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
@@ -2226,6 +2228,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	if cfg.SCIMClientAddresses != nil {
 		scimClientAddresses = cfg.SCIMClientAddresses
 	}
+	// The entitlement export (ADR-0044 decision 5, #1501): the read-only
+	// SCIM tree at /api/v2/scim/v2/entitlements and the admin CSV/JSON at
+	// /api/v2/admin/entitlements read the same store. Interface variables
+	// stay nil without a pool so both answer 503 rather than panic.
+	var (
+		scimEntitlements  scimapi.EntitlementSource
+		adminEntitlements v2entitlements.Store
+	)
+	if cfg.Pool != nil {
+		store := dbrepos.NewEntitlements(cfg.Pool)
+		scimEntitlements, adminEntitlements = store, store
+	}
 	r.Group(func(r chi.Router) {
 		r.Use(apimw.NoStore)
 		r.With(apimw.Audit(successfulOnlyRecorder(auditRecorder))).
@@ -2234,7 +2248,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			scimapi.Authenticate(scimCredentials),
 			apimw.Audit(auditRecorder),
 			scimapi.AnnotateAuditActor,
-		).Mount(scimapi.BasePath, scimapi.NewHandler(scimdirectory.NewStore(cfg.Pool).WithMemoryUserJournal(memoryUserJournal)).Routes())
+		).Mount(scimapi.BasePath, scimapi.NewHandler(scimdirectory.NewStore(cfg.Pool).WithMemoryUserJournal(memoryUserJournal)).
+			WithEntitlements(scimEntitlements).Routes())
 	})
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its
@@ -3105,6 +3120,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Agent Lifecycle section.
 				r.With(central("configuration.governance")).
 					Get(v2agentlifecycle.AdminRegistryPath, v2agentlifecycle.NewHandler(agentLifecycle, nil).AdminRegistry)
+
+				// The entitlement export (ADR-0044 decision 5, #1501): who
+				// holds which role on which project and agent, and which
+				// governance capabilities each carries. CSV (streamed) or
+				// JSON pages, behind entitlements.export (shared 0209).
+				r.With(central(entitlementsdomain.ExportPermission)).
+					Get(v2entitlements.AdminPath, v2entitlements.NewHandler(adminEntitlements).Export)
 
 				// Regular app admin endpoints (with projectID)
 				//

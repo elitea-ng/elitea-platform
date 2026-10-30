@@ -918,7 +918,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// anchor), the canonical-form function, the AFTER INSERT chain trigger
 	// and an append-only UPDATE guard on chained rows. No data apart from the
 	// head row, no permission.
-	require.EqualValues(t, 206, Head(shared))
+	//
+	// 209: shared/0209_entitlement_export.sql, the entitlement export
+	// permission (ADR-0044 decision 5, #1501): grants entitlements.export to
+	// super_admin and admin in the administration mode. No table.
+	require.EqualValues(t, 209, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

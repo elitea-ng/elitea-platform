@@ -83,11 +83,13 @@ import type {
   CredentialUseGrant,
   CredentialUseGrantCreate,
   CredentialUseGrantListResponse,
+  EntitlementGrantList,
   ErrorResponse,
   ExecutionSuspension,
   ExecutionSuspensionCreate,
   ExecutionSuspensionList,
   ExecutionSuspensionResume,
+  ExportEntitlementsParams,
   ExternalAgentIdentity,
   ExternalAgentIdentityCreate,
   ExternalAgentIdentityDriftResponse,
@@ -4732,6 +4734,237 @@ export function useListAdminAgentRegistry<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getListAdminAgentRegistryQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type exportEntitlementsResponse200ApplicationJson = {
+  data: EntitlementGrantList;
+  status: 200;
+};
+
+export type exportEntitlementsResponse200TextCsv = {
+  data: string;
+  status: 200;
+};
+
+export type exportEntitlementsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type exportEntitlementsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type exportEntitlementsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type exportEntitlementsResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type exportEntitlementsResponseSuccess = (
+  | exportEntitlementsResponse200ApplicationJson
+  | exportEntitlementsResponse200TextCsv
+) & {
+  headers: Headers;
+};
+export type exportEntitlementsResponseError = (
+  | exportEntitlementsResponse400
+  | exportEntitlementsResponse401
+  | exportEntitlementsResponse403
+  | exportEntitlementsResponse503
+) & {
+  headers: Headers;
+};
+
+export type exportEntitlementsResponse =
+  exportEntitlementsResponseSuccess | exportEntitlementsResponseError;
+
+export const getExportEntitlementsUrl = (params?: ExportEntitlementsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/entitlements?${stringifiedParams}`
+    : `/admin/entitlements`;
+};
+
+/**
+ * The entitlement export (ADR-0044 decision 5, issue 1501). One row per (user, scope, role, capability, granted_via): platform roles (scope id is the mode), project roles (scope id is the project id) and agent ownership from the agent registry (scope id is the agent id). A role that carries no governance capability is one row with a null capability. Capabilities are derived from the permissions the role holds. JSON pages of at most 500 rows (limit, offset), or with format=csv an RFC 4180 CSV of every matching row streamed from one snapshot, with the row count in the X-Entitlement-Rows header. Every export writes an audit_events row (caller, format, row count) and is refused with 503 when it cannot. Gated on `entitlements.export` in the administration mode.
+ * @summary Export who holds which role and governance capability
+ */
+export const exportEntitlements = async (
+  params?: ExportEntitlementsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<exportEntitlementsResponse> => {
+  return eliteaFetch<exportEntitlementsResponse>(
+    getExportEntitlementsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getExportEntitlementsQueryKey = (
+  params?: ExportEntitlementsParams,
+) => {
+  return [`/admin/entitlements`, ...(params ? [params] : [])] as const;
+};
+
+export const getExportEntitlementsQueryOptions = <
+  TData = Awaited<ReturnType<typeof exportEntitlements>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ExportEntitlementsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exportEntitlements>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getExportEntitlementsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof exportEntitlements>>
+  > = ({ signal }) => exportEntitlements(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof exportEntitlements>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ExportEntitlementsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof exportEntitlements>>
+>;
+export type ExportEntitlementsQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useExportEntitlements<
+  TData = Awaited<ReturnType<typeof exportEntitlements>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params: undefined | ExportEntitlementsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exportEntitlements>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof exportEntitlements>>,
+          TError,
+          Awaited<ReturnType<typeof exportEntitlements>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExportEntitlements<
+  TData = Awaited<ReturnType<typeof exportEntitlements>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ExportEntitlementsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exportEntitlements>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof exportEntitlements>>,
+          TError,
+          Awaited<ReturnType<typeof exportEntitlements>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useExportEntitlements<
+  TData = Awaited<ReturnType<typeof exportEntitlements>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ExportEntitlementsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exportEntitlements>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Export who holds which role and governance capability
+ */
+
+export function useExportEntitlements<
+  TData = Awaited<ReturnType<typeof exportEntitlements>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ExportEntitlementsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof exportEntitlements>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getExportEntitlementsQueryOptions(params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

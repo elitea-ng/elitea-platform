@@ -859,7 +859,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // verifyAuditChain (the centry.audit_events hash chain). No web code calls
 // the first four yet and admin routes are not in the manifest, so the
 // manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 441;
+// 441 -> 442 (issue 1501, ADR-0044 decision 5): exportEntitlements, the admin
+// entitlement export (CSV/JSON). Admin routes are not in the manifest, so the
+// manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 442;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

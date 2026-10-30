@@ -359,3 +359,51 @@ func escapeLike(value string) string {
 	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return replacer.Replace(value)
 }
+
+// entitlementUserAttributes is the closed set the read-only entitlement
+// tree's /Users accepts (internal/api/scim/entitlements.go). It reads the
+// account row as `account`, and has no externalId: the entitlement tree
+// answers who holds what, not what an identity provider pushed.
+var entitlementUserAttributes = map[string]string{
+	"username":    "COALESCE(account.email, '')",
+	"displayname": "COALESCE(account.name, '')",
+	"id":          "account.id::text",
+	"active":      "NOT account.suspended",
+}
+
+// entitlementGroupAttributes is the closed set the entitlement tree's
+// /Groups accepts. It reads the role-as-group row as `grp`.
+var entitlementGroupAttributes = map[string]string{
+	"displayname": "grp.display_name",
+	"id":          "grp.id",
+}
+
+// ParseEntitlementUserFilter reads the `filter` of the entitlement tree's
+// /Users listing.
+func ParseEntitlementUserFilter(expression string) (Filter, error) {
+	return parseFilter(expression, entitlementUserAttributes)
+}
+
+// ParseEntitlementGroupFilter reads the `filter` of the entitlement tree's
+// /Groups listing.
+func ParseEntitlementGroupFilter(expression string) (Filter, error) {
+	return parseFilter(expression, entitlementGroupAttributes)
+}
+
+// Condition renders the filter as one SQL condition (no WHERE) whose bound
+// parameters start at $first, for a query that already binds others. The
+// empty filter renders "TRUE".
+func (f Filter) Condition(first int) (string, []any) {
+	if !f.present {
+		return "TRUE", nil
+	}
+	conditions := make([]string, 0, len(f.terms))
+	arguments := make([]any, 0, len(f.terms))
+	for _, term := range f.terms {
+		position := "$" + strconv.Itoa(first+len(arguments))
+		condition, argument := term.render(f.columns[term.attribute], position)
+		conditions = append(conditions, condition)
+		arguments = append(arguments, argument)
+	}
+	return "(" + strings.Join(conditions, " AND ") + ")", arguments
+}
