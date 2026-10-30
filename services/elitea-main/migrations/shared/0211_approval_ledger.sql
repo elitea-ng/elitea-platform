@@ -53,6 +53,13 @@
 --   approval_timed_out: an unattended fan-out run that Main stops for a
 --   missing approver shows the typed error instead of a quiet stop.
 --
+--   execution_interrupts.decided_by_system and
+--   execution_interrupt_audit.system_actor: Main decides a 0157 card
+--   itself (the unattended skip of a fan-out card). Such a decision names
+--   no person: decided_by and the audit actor_id stay NULL and the flag is
+--   TRUE, so the card, its audit row and the ledger row (actor_kind system)
+--   name the same actor. Every other decision still names its person.
+--
 -- No permission: the ledger is read through the audit trail export, which
 -- has its own grants. No backfill: a pause open at upgrade has no pause row,
 -- and its decision still writes its decision row. Idempotent throughout. No
@@ -189,5 +196,49 @@ BEGIN
         ADD CONSTRAINT execution_jobs_cancel_reason_known
         CHECK (cancel_reason IS NULL OR cancel_reason IN (
             'cap_reached', 'approval_required_unattended', 'approval_timed_out'));
+END
+$$;
+
+-- Main as the decider of a 0157 card (an unattended fan-out skip).
+ALTER TABLE elitea_runtime.execution_interrupts
+    ADD COLUMN IF NOT EXISTS decided_by_system boolean NOT NULL DEFAULT FALSE;
+ALTER TABLE elitea_runtime.execution_interrupt_audit
+    ADD COLUMN IF NOT EXISTS system_actor boolean NOT NULL DEFAULT FALSE;
+
+DO $$
+DECLARE
+    constraint_name text;
+BEGIN
+    ALTER TABLE elitea_runtime.execution_interrupts
+        DROP CONSTRAINT IF EXISTS execution_interrupts_decision_columns;
+    ALTER TABLE elitea_runtime.execution_interrupts
+        ADD CONSTRAINT execution_interrupts_decision_columns CHECK (
+            (request_id IS NULL AND decision_json IS NULL AND decided_by IS NULL AND decided_at IS NULL
+                AND NOT decided_by_system)
+            OR (request_id IS NOT NULL AND decision_json IS NOT NULL AND decided_at IS NOT NULL
+                AND ((decided_by IS NOT NULL) <> decided_by_system)));
+
+    -- 0157 left the two actor checks of the audit table unnamed: drop them
+    -- by their definition, then add the named checks that admit Main.
+    FOR constraint_name IN
+        SELECT con.conname FROM pg_constraint AS con
+        WHERE con.conrelid = 'elitea_runtime.execution_interrupt_audit'::regclass
+          AND con.contype = 'c'
+          AND con.conname NOT IN ('execution_interrupt_audit_actor', 'execution_interrupt_audit_decided_actor')
+          AND pg_get_constraintdef(con.oid) LIKE '%actor_id IS%'
+          AND pg_get_constraintdef(con.oid) NOT LIKE '%actor_id > 0%'
+    LOOP
+        EXECUTE format('ALTER TABLE elitea_runtime.execution_interrupt_audit DROP CONSTRAINT %I', constraint_name);
+    END LOOP;
+    ALTER TABLE elitea_runtime.execution_interrupt_audit
+        DROP CONSTRAINT IF EXISTS execution_interrupt_audit_actor;
+    ALTER TABLE elitea_runtime.execution_interrupt_audit
+        ADD CONSTRAINT execution_interrupt_audit_actor CHECK (
+            (actor_id IS NOT NULL)::int + (claim_id IS NOT NULL)::int + system_actor::int = 1);
+    ALTER TABLE elitea_runtime.execution_interrupt_audit
+        DROP CONSTRAINT IF EXISTS execution_interrupt_audit_decided_actor;
+    ALTER TABLE elitea_runtime.execution_interrupt_audit
+        ADD CONSTRAINT execution_interrupt_audit_decided_actor CHECK (
+            transition <> 'DECIDED' OR actor_id IS NOT NULL OR system_actor);
 END
 $$;

@@ -104,7 +104,7 @@ func ValidDelegationMaxDepth(raw any) bool {
 // never saved it and answers the defaults.
 func LoadDelegationSettings(ctx context.Context, pool *pgxpool.Pool) (DelegationSettings, error) {
 	values, err := Load(ctx, pool, SectionDelegation)
-	if missingTable(err) {
+	if UndefinedTable(err) {
 		return DefaultDelegationSettings(), nil
 	}
 	if err != nil {

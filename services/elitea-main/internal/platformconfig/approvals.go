@@ -106,7 +106,7 @@ func ValidApprovalsWaitHours(raw any) bool {
 // never saved it and answers the defaults.
 func LoadApprovalsSettings(ctx context.Context, pool *pgxpool.Pool) (ApprovalsSettings, error) {
 	values, err := Load(ctx, pool, SectionApprovals)
-	if missingTable(err) {
+	if UndefinedTable(err) {
 		return DefaultApprovalsSettings(), nil
 	}
 	if err != nil {

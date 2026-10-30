@@ -84,32 +84,20 @@ func loadApprovalsSettingsTx(ctx context.Context, tx sqlExecutor) (platformconfi
 	if !present {
 		return platformconfig.DefaultApprovalsSettings(), nil
 	}
-	rows, err := tx.Query(ctx, `SELECT key, value FROM centry.platform_config WHERE section = $1`,
-		platformconfig.SectionApprovals)
+	values, err := platformconfig.LoadVia(ctx,
+		func(ctx context.Context, sql string, args ...any) (platformconfig.Rows, error) {
+			return tx.Query(ctx, sql, args...)
+		}, platformconfig.SectionApprovals)
 	if err != nil {
-		return platformconfig.DefaultApprovalsSettings(), fmt.Errorf("read the approvals section: %w", err)
-	}
-	defer rows.Close()
-	values := platformconfig.Values{}
-	for rows.Next() {
-		var key string
-		var raw []byte
-		if err := rows.Scan(&key, &raw); err != nil {
-			return platformconfig.DefaultApprovalsSettings(), fmt.Errorf("read the approvals section: %w", err)
-		}
-		var decoded any
-		if json.Unmarshal(raw, &decoded) == nil {
-			values[key] = decoded
-		}
-	}
-	if err := rows.Err(); err != nil {
 		return platformconfig.DefaultApprovalsSettings(), fmt.Errorf("read the approvals section: %w", err)
 	}
 	return platformconfig.ApprovalsSettingsFromValues(values), nil
 }
 
 // resolveUnattendedPolicy answers the policy of an execution, and false when
-// a person started it (or the continuation a person sent).
+// a person started it (or the continuation a person sent). The policy's
+// TriggerOrigin is set in both cases (manual when the execution has no job
+// row), so the caller does not read the origin again.
 func resolveUnattendedPolicy(
 	ctx context.Context, tx sqlExecutor, projectID int64, executionID, conversationUUID string,
 ) (unattendedPolicy, bool, error) {
@@ -118,13 +106,13 @@ func resolveUnattendedPolicy(
 SELECT trigger_origin, actor_id FROM elitea_runtime.execution_jobs
 WHERE execution_id = $1 ORDER BY generation DESC LIMIT 1`, executionID).Scan(&origin, &actor)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return unattendedPolicy{}, false, nil
+		return unattendedPolicy{TriggerOrigin: "manual"}, false, nil
 	}
 	if err != nil {
 		return unattendedPolicy{}, false, fmt.Errorf("read the run's trigger origin: %w", err)
 	}
 	if !unattendedOrigin(origin) {
-		return unattendedPolicy{}, false, nil
+		return unattendedPolicy{TriggerOrigin: origin}, false, nil
 	}
 	settings, err := loadApprovalsSettingsTx(ctx, tx)
 	if err != nil {
@@ -190,11 +178,6 @@ func projectRootApprovalPause(
 		return rootPauseWaits, err
 	}
 	origin := policy.TriggerOrigin
-	if !unattended {
-		if origin, err = executionTriggerOriginOf(ctx, tx, expected.ExecutionID); err != nil {
-			return rootPauseWaits, err
-		}
-	}
 	entries := make([]approvalEntry, 0, len(order))
 	for _, id := range order {
 		entry := approvalEntry{
@@ -223,7 +206,10 @@ func projectRootApprovalPause(
 			skipActions[id] = refusal
 		}
 	}
-	if mixed {
+	if mixed || !canKeepUnattendedIntent(entries[0], policy) {
+		// A mixed pause waits for a sign-in only a person can give. A run
+		// without an owner (or without a response to answer) has nobody to
+		// notify and nobody to continue as: it fails.
 		action = platformconfig.OnApprovalRequiredFail
 	}
 	switch action {
@@ -311,11 +297,21 @@ func skipRefusal(actions []string) string {
 	}
 }
 
-// insertUnattendedAction records the intent of a skip or a wait.
+// canKeepUnattendedIntent reports whether a skip or a wait can be kept for
+// the pause: it needs the run's owner (whom a wait notifies and as whom a
+// skip continues), the conversation and the response. Without them the
+// run's action falls back to fail.
+func canKeepUnattendedIntent(entry approvalEntry, policy unattendedPolicy) bool {
+	_, err := uuid.Parse(entry.ConversationUUID)
+	return policy.OwnerUserID > 0 && err == nil && entry.ResponseMessageID != ""
+}
+
+// insertUnattendedAction records the intent of a skip or a wait. The caller
+// checked canKeepUnattendedIntent.
 func insertUnattendedAction(
 	ctx context.Context, tx sqlExecutor, entry approvalEntry, policy unattendedPolicy, action, skipAction string,
 ) error {
-	if _, err := uuid.Parse(entry.ConversationUUID); policy.OwnerUserID <= 0 || err != nil || entry.ResponseMessageID == "" {
+	if !canKeepUnattendedIntent(entry, policy) {
 		return errors.New("unattended approval intent has no owner or response")
 	}
 	state, waitSeconds := "QUEUED", any(nil)
@@ -363,23 +359,17 @@ func notifyApprovalOwner(ctx context.Context, tx sqlExecutor, entry approvalEntr
 	if _, err := tx.Exec(ctx, `
 INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type, created_at, updated_at)
 VALUES ($1::uuid, FALSE, $2, $3, $4::jsonb, $5, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')
-ON CONFLICT (uuid) DO NOTHING`, approvalNotificationUUID(entry.ExecutionID+"\x00"+entry.InterruptID),
+ON CONFLICT (uuid) DO NOTHING`,
+		reviewNotificationUUID(approvalNotificationKeyPrefix+entry.ExecutionID+"\x00"+entry.InterruptID),
 		int32(entry.ProjectID), int32(policy.OwnerUserID), string(meta), ApprovalNotificationEventType); err != nil {
 		return fmt.Errorf("notify the unattended run's owner: %w", err)
 	}
 	return nil
 }
 
-// approvalNotificationUUID derives a UUIDv4-shaped id from key, as
-// reviewNotificationUUID does.
-func approvalNotificationUUID(key string) string {
-	digest := sha256.Sum256([]byte("elitea.approval-notification.v1\x00" + key))
-	value := append([]byte(nil), digest[:16]...)
-	value[6] = (value[6] & 0x0f) | 0x40
-	value[8] = (value[8] & 0x3f) | 0x80
-	encoded := hex.EncodeToString(value)
-	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32]
-}
+// approvalNotificationKeyPrefix keeps the owner notification ids of
+// unattended waits apart from the other ids reviewNotificationUUID derives.
+const approvalNotificationKeyPrefix = "elitea.approval-notification.v1\x00"
 
 // projectInterruptApprovalRaise records the pause of a raised per-interrupt
 // card (shared 0157) and applies the run's unattended action, on the
@@ -399,17 +389,11 @@ func projectInterruptApprovalRaise(
 	if err != nil {
 		return err
 	}
-	origin := policy.TriggerOrigin
-	if !unattended {
-		if origin, err = executionTriggerOriginOf(ctx, tx, input.ExecutionID); err != nil {
-			return err
-		}
-	}
 	entry := approvalEntry{
 		ProjectID: input.ProjectID, ExecutionID: input.ExecutionID, ResponseMessageID: input.RootResponseID,
 		ConversationUUID: conversationUUID, InterruptID: card.InterruptID, InterruptKey: card.InterruptKey,
 		Path: approvalPathInterrupt, Phase: approvalPhasePause, Outcome: ApprovalOutcomePaused,
-		TriggerOrigin: origin, Call: approvalCallOf(decoded),
+		TriggerOrigin: policy.TriggerOrigin, Call: approvalCallOf(decoded),
 	}
 	if _, err := recordApproval(ctx, tx, entry); err != nil || !unattended {
 		return err
@@ -420,7 +404,7 @@ func projectInterruptApprovalRaise(
 	}
 	action := policy.Action
 	refusal := skipRefusal(actions)
-	if action == platformconfig.OnApprovalRequiredSkip && refusal == "" {
+	if (action == platformconfig.OnApprovalRequiredSkip && refusal == "") || !canKeepUnattendedIntent(entry, policy) {
 		action = platformconfig.OnApprovalRequiredFail
 	}
 	switch action {
@@ -435,8 +419,8 @@ func projectInterruptApprovalRaise(
 		}
 		return notifyApprovalOwner(ctx, tx, entry, policy)
 	case platformconfig.OnApprovalRequiredSkip:
-		if err := systemDecideCard(ctx, tx, input.RootResponseID, card.InterruptKey, card.InterruptID, refusal,
-			policy.OwnerUserID); err != nil {
+		if err := systemDecideCard(ctx, tx, input.RootResponseID, card.InterruptKey, card.InterruptID,
+			refusal); err != nil {
 			return err
 		}
 		skipped := entry
@@ -459,13 +443,11 @@ func projectInterruptApprovalRaise(
 }
 
 // systemDecideCard decides a PENDING card with a refusal in the raise
-// transaction (an unattended skip). The 0157 columns name a user, so
-// decided_by is the run's owner, the identity the run executes as; the
-// ledger row names Main (actor_kind system).
-func systemDecideCard(ctx context.Context, tx sqlExecutor, rootResponseID, interruptKey, interruptID, action string, ownerUserID int64) error {
-	if ownerUserID <= 0 {
-		return errors.New("unattended skip has no run owner")
-	}
+// transaction (an unattended skip). Main is the decider: the card has
+// decided_by_system and no decided_by, its audit row has system_actor and no
+// actor_id, and the ledger row has actor_kind system. The run's owner is
+// not the actor of the decision.
+func systemDecideCard(ctx context.Context, tx sqlExecutor, rootResponseID, interruptKey, interruptID, action string) error {
 	value := ""
 	if action == "block_with_comment" {
 		value = approvalSkipMessage
@@ -486,7 +468,7 @@ func systemDecideCard(ctx context.Context, tx sqlExecutor, rootResponseID, inter
 WITH decided AS (
   UPDATE elitea_runtime.execution_interrupts
   SET state = 'DECIDED', revision = revision + 1, request_id = $3, decision_json = $4,
-      decided_by = $5, decided_at = clock_timestamp(), updated_at = clock_timestamp()
+      decided_by = NULL, decided_by_system = TRUE, decided_at = clock_timestamp(), updated_at = clock_timestamp()
   WHERE root_response_id = $1::uuid AND interrupt_key = $2 AND state = 'PENDING' AND revision = 1
   RETURNING root_response_id, interrupt_key, revision
 ), bumped AS (
@@ -495,11 +477,11 @@ WITH decided AS (
   FROM decided WHERE response.root_response_id = decided.root_response_id
   RETURNING response.decision_revision
 ), audited AS (
-  INSERT INTO elitea_runtime.execution_interrupt_audit (root_response_id, interrupt_key, transition, revision, actor_id)
-  SELECT root_response_id, interrupt_key, 'DECIDED', revision, $5 FROM decided
+  INSERT INTO elitea_runtime.execution_interrupt_audit (root_response_id, interrupt_key, transition, revision, system_actor)
+  SELECT root_response_id, interrupt_key, 'DECIDED', revision, TRUE FROM decided
 )
 SELECT decided.revision FROM decided, bumped`,
-		rootResponseID, interruptKey, decision.RequestID, canonical, ownerUserID).Scan(&revision)
+		rootResponseID, interruptKey, decision.RequestID, canonical).Scan(&revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ErrAlreadyResolved
 	}

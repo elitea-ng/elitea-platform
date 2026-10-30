@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
@@ -210,8 +211,10 @@ func (h *Handler) RevealTrigger(w http.ResponseWriter, r *http.Request) {
 // written FIRST and the row second: if the row lands and the vault write then
 // fails, a live trigger exists whose secret nobody can ever be shown, and the
 // only repair is another rotation. With this order a failed row write leaves an
-// orphan vault entry, which is invisible and harmless, and the caller sees an
-// error and retries.
+// orphan vault entry, which is invisible and harmless (and removed at once
+// when it can be), and the caller sees an error and retries. The row and its
+// on_approval_required action are one transaction, so the action cannot fail
+// after the row is committed.
 func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) {
 	schema, projectID, versionID, ok := h.routeTarget(w, r)
 	if !ok {
@@ -298,15 +301,26 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "the trigger credential could not be stored")
 		return
 	}
-	trigger, err := h.upsertTrigger(r.Context(), schema,
-		target.ApplicationID, versionID, actorID, tokenID, hash, secretName, mode, controls)
+	// The trigger row and its approval action are ONE transaction. A failed
+	// action save after a committed row would rotate the secret without
+	// showing it, and lock every sender out; this way a failure changes
+	// nothing in the database, and the caller still holds a working secret.
+	var trigger triggerRow
+	err = pgx.BeginFunc(r.Context(), h.pool, func(tx pgx.Tx) error {
+		var writeErr error
+		trigger, writeErr = upsertTrigger(r.Context(), tx, schema,
+			target.ApplicationID, versionID, actorID, tokenID, hash, secretName, mode, controls)
+		if writeErr != nil {
+			return writeErr
+		}
+		return saveOnApprovalRequired(r.Context(), tx, projectID, approvalTargetTrigger, versionID, actorID, onApproval)
+	})
 	if err != nil {
 		h.log().Error("pipelinetriggers: write trigger", "err", err)
-		writeError(w, http.StatusInternalServerError, "the trigger could not be saved")
-		return
-	}
-	if err := h.saveOnApprovalRequired(r.Context(), projectID, approvalTargetTrigger, versionID, actorID, onApproval); err != nil {
-		h.log().Error("pipelinetriggers: write trigger approval action", "err", err)
+		// Nothing references the new vault entry: remove it.
+		if deleteErr := h.vault.DeleteAdminHiddenSecret(r.Context(), secretName); deleteErr != nil {
+			h.log().Warn("pipelinetriggers: could not remove the unused credential", "err", deleteErr)
+		}
 		writeError(w, http.StatusInternalServerError, "the trigger could not be saved")
 		return
 	}

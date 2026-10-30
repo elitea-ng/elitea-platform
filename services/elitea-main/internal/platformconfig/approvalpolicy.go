@@ -85,7 +85,7 @@ func ApprovalPolicySettingsFromValues(values Values) ApprovalPolicySettings {
 // table never saved it and answers the defaults.
 func LoadApprovalPolicySettings(ctx context.Context, pool *pgxpool.Pool) (ApprovalPolicySettings, error) {
 	values, err := Load(ctx, pool, SectionApprovalPolicy)
-	if missingTable(err) {
+	if UndefinedTable(err) {
 		return DefaultApprovalPolicySettings(), nil
 	}
 	if err != nil {

@@ -40,6 +40,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/robfig/cron/v3"
 )
 
@@ -217,15 +218,20 @@ func (h *Handler) SaveSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	row, err := h.upsertSchedule(r.Context(), schema,
-		target.ApplicationID, versionID, actorID, expression, active, input)
+	// The schedule row and its approval action are one transaction: a
+	// failed action save leaves the schedule as it was.
+	var row scheduleRow
+	err = pgx.BeginFunc(r.Context(), h.pool, func(tx pgx.Tx) error {
+		var writeErr error
+		row, writeErr = upsertSchedule(r.Context(), tx, schema,
+			target.ApplicationID, versionID, actorID, expression, active, input)
+		if writeErr != nil {
+			return writeErr
+		}
+		return saveOnApprovalRequired(r.Context(), tx, projectID, approvalTargetSchedule, versionID, actorID, onApproval)
+	})
 	if err != nil {
 		h.log().Error("pipelinetriggers: write schedule", "err", err)
-		writeError(w, http.StatusInternalServerError, "the schedule could not be saved")
-		return
-	}
-	if err := h.saveOnApprovalRequired(r.Context(), projectID, approvalTargetSchedule, versionID, actorID, onApproval); err != nil {
-		h.log().Error("pipelinetriggers: write schedule approval action", "err", err)
 		writeError(w, http.StatusInternalServerError, "the schedule could not be saved")
 		return
 	}

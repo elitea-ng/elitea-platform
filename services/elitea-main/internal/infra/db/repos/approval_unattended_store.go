@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -219,17 +220,50 @@ func (r *UnattendedApprovalsRepository) ExpireUnattendedWaits(ctx context.Contex
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("find expired unattended waits: %w", err)
 	}
+	// A wait that cannot be expired does not stop the others: it ends
+	// FAILED (expiry_failed), so the next pass does not read it again ahead
+	// of the later waits, and the pass goes on. The failures come back
+	// joined, for the worker to log.
 	expired := 0
+	var failures []error
 	for _, item := range waits {
 		err := r.projects.WithinProjectTx(ctx, item.projectID, interruptWriteTx, func(tx sqlExecutor) error {
 			return expireUnattendedWait(ctx, tx, item.responseID, item.executionID, item.path)
 		})
-		if err != nil {
-			return expired, fmt.Errorf("expire the unattended wait: %w", err)
+		if err == nil {
+			expired++
+			continue
 		}
-		expired++
+		if ctx.Err() != nil {
+			// A stopping worker is not a failing wait.
+			return expired, errors.Join(append(failures, ctx.Err())...)
+		}
+		failure := fmt.Errorf("expire the unattended wait of execution %s: %w", item.executionID, err)
+		slog.WarnContext(ctx, "unattended approvals: a wait could not be expired; it ends FAILED",
+			"execution_id", item.executionID, "project_id", item.projectID, "err", err)
+		if markErr := r.failUnattendedWait(ctx, item.executionID); markErr != nil {
+			failure = errors.Join(failure, markErr)
+		}
+		failures = append(failures, failure)
 	}
-	return expired, nil
+	return expired, errors.Join(failures...)
+}
+
+// unattendedExpiryFailedCode is the failure_code of a wait the sweep could
+// not expire.
+const unattendedExpiryFailedCode = "expiry_failed"
+
+// failUnattendedWait ends the expired WAITING intents of one execution
+// FAILED, outside the expiry transaction that failed.
+func (r *UnattendedApprovalsRepository) failUnattendedWait(ctx context.Context, executionID string) error {
+	if _, err := r.pool.Exec(ctx, `
+UPDATE elitea_runtime.unattended_approval_actions
+SET state = 'FAILED', failure_code = $2, updated_at = clock_timestamp()
+WHERE execution_id = $1 AND state = 'WAITING' AND expires_at <= clock_timestamp()`,
+		executionID, unattendedExpiryFailedCode); err != nil {
+		return fmt.Errorf("end the unattended wait of execution %s failed: %w", executionID, err)
+	}
+	return nil
 }
 
 // expireUnattendedWait closes one run's expired wait: the intents end

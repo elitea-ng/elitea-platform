@@ -2,12 +2,10 @@ package platformconfig
 
 import (
 	"context"
-	"errors"
 	"math"
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/singleflight"
 )
@@ -60,7 +58,7 @@ func SessionPolicyFromValues(values Values) SessionPolicy {
 // saved it and answers no maximum.
 func LoadSessionPolicy(ctx context.Context, pool *pgxpool.Pool) (SessionPolicy, error) {
 	values, err := Load(ctx, pool, SectionSessionPolicy)
-	if missingTable(err) {
+	if UndefinedTable(err) {
 		return SessionPolicy{}, nil
 	}
 	if err != nil {
@@ -99,7 +97,7 @@ func RunCapsFromValues(values Values) RunCaps {
 // it and answers off.
 func LoadRunCaps(ctx context.Context, pool *pgxpool.Pool) (RunCaps, error) {
 	values, err := Load(ctx, pool, SectionRunCaps)
-	if missingTable(err) {
+	if UndefinedTable(err) {
 		return RunCaps{}, nil
 	}
 	if err != nil {
@@ -141,11 +139,6 @@ func boundSeconds(values Values, key string, limit int64) time.Duration {
 		seconds = limit
 	}
 	return time.Duration(seconds) * time.Second
-}
-
-func missingTable(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "42P01"
 }
 
 // CachedSection is a per-replica copy of one section, read at most once per
