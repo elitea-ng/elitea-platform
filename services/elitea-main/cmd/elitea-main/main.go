@@ -2640,6 +2640,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return err
 		}
 	}
+	// Credential and access review (ADR-0044 decision 5, #1501): the
+	// inventory and trimming stores, the coalesced last-use recorder every
+	// credential use path touches, and the daily staleness and weekly
+	// trimming routines.
+	credentialReviewStores, err := composeCredentialReview(ctx, pool, securityInvalidations, logger)
+	if err != nil {
+		return err
+	}
+	startCredentialReviewRoutines(ctx, pool, credentialReviewStores, logger)
 
 	// The admin LLM Proxy section reads the gateway's own enforcement status.
 	// It uses the shared gateway client; the GovernanceStatus call carries no
@@ -3039,11 +3048,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// for the reason above. The orchestrator is started below, after the
 		// config is built, so that a nil pool leaves all three fields nil
 		// together and the thirteen routes are simply not registered.
-		EvalDatasetsRepo:  evalDatasetsRepository(pool),
-		EvalRunsRepo:      evalRunsRepo,
-		EvalOrchestrator:  evalOrchestrator,
-		ReleaseGate:       releaseGate,
-		SuspensionChanged: executionSuspensions.gate.Notify,
+		EvalDatasetsRepo:   evalDatasetsRepository(pool),
+		EvalRunsRepo:       evalRunsRepo,
+		EvalOrchestrator:   evalOrchestrator,
+		ReleaseGate:        releaseGate,
+		SuspensionChanged:  executionSuspensions.gate.Notify,
+		CredentialReview:   credentialReviewStores.review,
+		PermissionTrimming: credentialReviewStores.trimming,
 		// WebhookRepo is the sixth instance of the same defect, and it hid one
 		// step deeper than the other five. Its gate mounts a subrouter —
 		// `r.Mount("/webhooks/prompt_lib/{projectID}", webhook.NewHandler(...).Routes())`

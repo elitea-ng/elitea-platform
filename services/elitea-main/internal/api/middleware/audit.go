@@ -164,6 +164,10 @@ var auditedSurfaces = []string{
 	// gate suite changes what a release must pass
 	// (agent.gate_suite.updated). The reads under it are GETs.
 	"/api/v2/elitea_core/release_gate_suites/",
+	// The permission trimming report's one-click removals (ADR-0044
+	// decision 5): each removes a tool, a toolkit, a credential use grant
+	// or an egress allowlist entry. The report read is a GET.
+	"/api/v2/elitea_core/permission_trimming/",
 }
 
 // AuditedSurfaces returns a copy of the prefix list, so a router-level test can
