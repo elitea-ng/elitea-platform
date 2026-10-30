@@ -384,13 +384,23 @@ func main() {
 		// (rate_limit_monitor.go) when NATS comes up, so limits recover without
 		// a restart. Bind probes immediately, so the limiter only reports
 		// enforced after a successful counter read.
+		// One agent resolver serves the agent throttles (ADR-0041 decision 4)
+		// and the agent-scoped guardrails (ADR-0043 decision 1). It reads the
+		// run's agent from elitea_runtime.agent_execution_jobs on this same
+		// pool and needs no NATS, so agent-scoped guardrails apply on a
+		// gateway without NATS.
+		agentResolver := policy.NewAgentResolver(policy.NewPostgresAgentLookup(pool), logger, nil)
 		policyLimiter = policy.NewLimiter(policy.LimiterConfig{
-			Subject: nats.RateLimitSubject,
-			Logger:  logger,
-			// The agent throttles (ADR-0041 decision 4) read the run's agent
-			// from elitea_runtime.agent_execution_jobs on this same pool.
-			Agents: policy.NewPostgresAgentLookup(pool),
+			Subject:  nats.RateLimitSubject,
+			Logger:   logger,
+			Resolver: agentResolver,
 		})
+		budgetOpts = append(budgetOpts, llmproxy.WithAgentResolver(agentResolver))
+		if policyStore.Current().HasAgentGuardrails() {
+			logger.Info("GUARDRAIL AGENT SCOPE ENABLED: agent-scoped guardrail rows resolve the run's agent from " +
+				"the database, with or without NATS. A failed lookup applies the row's fail mode. " +
+				"GET /governance/status reports guardrail_agent_scope")
+		}
 		if rc, ok := nc.(policy.RateCounter); ok && nc != nil {
 			policyLimiter.Bind(rc)
 			logger.Info("GOVERNANCE ENFORCEMENT ENABLED: authored definitions are read from "+
@@ -1173,6 +1183,20 @@ func gatewayMetrics(extra ...gatewayMetric) []gatewayMetric {
 			v:    expvar.Get(name),
 		})
 	}
+	// ADR-0043: the guardrail verdicts that a failed INSERT dropped. The
+	// request log rows of the same batch are written, so the request log
+	// counters do not show this loss.
+	metrics = append(metrics, gatewayMetric{
+		name: llmproxy.MetricGuardrailAgentUnresolved,
+		kind: "counter",
+		help: "Count of agent-scoped guardrail rows that could not be evaluated because the agent of the run could not be read. A closed row refused the request; an open row was skipped.",
+		v:    expvar.Get(llmproxy.MetricGuardrailAgentUnresolved),
+	}, gatewayMetric{
+		name: requestlog.MetricGuardrailVerdictWriteFailures,
+		kind: "counter",
+		help: "Count of guardrail verdicts dropped because their INSERT failed. The request log rows of the batch are written.",
+		v:    expvar.Get(requestlog.MetricGuardrailVerdictWriteFailures),
+	})
 	// Issue #323: the audio money-path controls. An audio provider may sell by
 	// the second or by the character, not by the token. The gateway prices all
 	// three, but only from the catalog, so a model with no catalog audio rate is

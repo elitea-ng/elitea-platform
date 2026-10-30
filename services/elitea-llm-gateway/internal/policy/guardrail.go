@@ -57,6 +57,32 @@ func (s *Snapshot) Guardrails(sub Subject, stage, traffic string) []*guardrail.R
 	return out
 }
 
+// UnresolvedAgentGuardrails returns the agent-scoped rows of stage that
+// could select sub when its agent cannot be read: every dimension except the
+// agent (and the agent's project) selects sub. The gateway applies the fail
+// mode of these rows when the agent lookup fails, instead of skipping them.
+func (s *Snapshot) UnresolvedAgentGuardrails(sub Subject, stage, traffic string) []*guardrail.Row {
+	if s == nil {
+		return nil
+	}
+	var out []*guardrail.Row
+	for _, d := range s.guardrails {
+		if len(d.Scope.AgentIDs) == 0 || d.Row.Stage != stage || !d.Scope.evaluable() {
+			continue
+		}
+		if traffic == TrafficEmbedding && (stage != guardrail.StageInput || !d.Row.ApplyToEmbeddings) {
+			continue
+		}
+		rest := d.Scope
+		rest.AgentIDs, rest.ProjectIDs = nil, nil
+		if !rest.selects(sub) {
+			continue
+		}
+		out = append(out, d.Row)
+	}
+	return out
+}
+
 // HasGuardrails reports whether any guardrail row is loaded, so a request
 // skips the selection when none is.
 func (s *Snapshot) HasGuardrails() bool { return s != nil && len(s.guardrails) > 0 }

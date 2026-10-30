@@ -24,6 +24,22 @@ package guardrail
 // start. A match that crosses the release cut moves the cut back to the start
 // of the match, so the match is released only as a whole, masked. The test
 // TestStreamNeverReleasesRawMaskMatch splits secrets at every byte.
+//
+// # A match longer than the hold
+//
+// A PEM private key is one match from its BEGIN line through its END line
+// (or through the end of the text when END has not arrived yet). Such a match
+// can be longer than the window and spans many chunks. The filter holds it
+// until it is resolved: until the END line arrives and a window of text
+// follows it. The hold is bounded: when the filter holds forceReleaseFactor
+// windows, it releases the held part of the match masked, and the match stays
+// OPEN. While a match is open, the look-behind context starts at the start of
+// the match (not at the last window), so the next evaluation matches the
+// whole block again and masks the new text up to the END line. The
+// continuation writes no second marker. An open look-behind longer than
+// maxOpenContextBytes cannot be kept: the filter then masks all the rest of
+// the channel. It releases no byte of the block raw in any case
+// (TestStreamMasksAWholePEMBlock).
 
 import (
 	"context"
@@ -39,6 +55,11 @@ const maxFlagBytes = 1 << 20
 // holds this many windows.
 const forceReleaseFactor = 16
 
+// maxOpenContextBytes bounds the look-behind context of an open match (see
+// "A match longer than the hold"). Past it, the filter masks the rest of the
+// channel.
+const maxOpenContextBytes = 64 << 10
+
 // StreamFilter is the output stage for one streamed text channel (one choice
 // of a chat completion, one content part of a Responses answer).
 type StreamFilter struct {
@@ -49,6 +70,17 @@ type StreamFilter struct {
 
 	tail    string
 	pending string
+	// open is set while a mask match that reached the end of the evaluated
+	// text was released masked. tail then starts at the start of the match,
+	// and the next release writes no second marker for it.
+	open bool
+	// maskRest is the label that masks all the rest of the channel, after an
+	// open match outgrew maxOpenContextBytes.
+	maskRest string
+	// nextEval is the held length at which the next evaluation runs after an
+	// evaluation that released nothing. A held match so costs one detector
+	// run (one adapter call) per window of new text, not one per delta.
+	nextEval int
 
 	full          strings.Builder
 	fullTruncated bool
@@ -106,7 +138,7 @@ func (f *StreamFilter) Push(ctx context.Context, delta string) (string, *Verdict
 		return delta, nil
 	}
 	f.pending += delta
-	if len(f.pending) < 2*f.window {
+	if len(f.pending) < 2*f.window || len(f.pending) < f.nextEval {
 		return "", nil
 	}
 	return f.evaluate(ctx, false)
@@ -148,8 +180,17 @@ func (f *StreamFilter) evaluate(ctx context.Context, final bool) (string, *Verdi
 		f.pending = ""
 		return "", res.blocked
 	}
+	if f.maskRest != "" {
+		res.spans = append(res.spans, span{start: base, end: len(text), label: f.maskRest})
+	}
 	spans := make([]span, 0, len(res.spans))
+	// openStart is the start, in text, of a match that runs to the end of
+	// the text: it can still grow with the next delta.
+	openStart := -1
 	for _, s := range res.spans {
+		if s.end >= len(text) && s.end > base && (openStart < 0 || s.start < openStart) {
+			openStart = s.start
+		}
 		s.start -= base
 		s.end -= base
 		if s.end <= 0 {
@@ -182,9 +223,11 @@ func (f *StreamFilter) evaluate(ctx context.Context, final bool) (string, *Verdi
 			}
 		}
 		if cut <= 0 {
+			f.nextEval = len(f.pending) + f.window
 			return "", nil
 		}
 	}
+	f.nextEval = 0
 
 	var inCut []span
 	for _, s := range spans {
@@ -196,15 +239,28 @@ func (f *StreamFilter) evaluate(ctx context.Context, final bool) (string, *Verdi
 		}
 	}
 	releasedOriginal := f.pending[:cut]
-	out := applyMasks(releasedOriginal, inCut)
+	out := applyMasksFrom(releasedOriginal, inCut, f.open)
 	f.released.WriteString(out)
 
 	ctxText := f.tail + releasedOriginal
-	if len(ctxText) > f.window {
-		ctxText = ctxText[runeCeil(ctxText, len(ctxText)-f.window):]
+	f.pending = f.pending[cut:]
+	// The match is still open when the whole held text was released and the
+	// match reached its end: the next delta can continue it.
+	f.open = !final && openStart >= 0 && f.pending == ""
+	switch {
+	case f.open && len(ctxText)-openStart <= maxOpenContextBytes:
+		ctxText = ctxText[openStart:]
+	case f.open:
+		// The open match is too long to keep in the context. Mask the rest
+		// of the channel: no later byte of it is released raw.
+		f.maskRest = inCut[len(inCut)-1].label
+		fallthrough
+	default:
+		if len(ctxText) > f.window {
+			ctxText = ctxText[runeCeil(ctxText, len(ctxText)-f.window):]
+		}
 	}
 	f.tail = ctxText
-	f.pending = f.pending[cut:]
 	return out, nil
 }
 
