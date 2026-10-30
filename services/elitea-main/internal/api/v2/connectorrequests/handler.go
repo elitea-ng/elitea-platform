@@ -11,6 +11,8 @@
 //	     the requester's moves (models.applications.tools.create)
 //	GET  /admin/connector_requests[/{requestID}]   every request (connector.approve)
 //	POST /admin/connector_requests/{requestID}/{approve|reject}            (connector.approve)
+//	GET  /admin/connector_inventory           connectors in use without approval (connector.approve)
+//	POST /admin/connector_inventory/requests  requests for them               (connector.approve)
 //
 // The router applies the route permissions. A handler with no store answers
 // 503.
@@ -37,16 +39,18 @@ import (
 // The route patterns: the first five relative to /api/v2/elitea_core, the
 // admin ones to /api/v2/admin.
 const (
-	CataloguePath     = "/connector_catalogue/prompt_lib/{projectID}"
-	RequestsPath      = "/connector_requests/prompt_lib/{projectID}"
-	RequestPath       = "/connector_requests/prompt_lib/{projectID}/{requestID}"
-	SubmitPath        = RequestPath + "/submit"
-	WithdrawPath      = RequestPath + "/withdraw"
-	AdminRequestsPath = "/connector_requests"
-	AdminRequestPath  = "/connector_requests/{requestID}"
-	AdminApprovePath  = AdminRequestPath + "/approve"
-	AdminRejectPath   = AdminRequestPath + "/reject"
-	maxBody           = 512 << 10
+	CataloguePath              = "/connector_catalogue/prompt_lib/{projectID}"
+	RequestsPath               = "/connector_requests/prompt_lib/{projectID}"
+	RequestPath                = "/connector_requests/prompt_lib/{projectID}/{requestID}"
+	SubmitPath                 = RequestPath + "/submit"
+	WithdrawPath               = RequestPath + "/withdraw"
+	AdminRequestsPath          = "/connector_requests"
+	AdminRequestPath           = "/connector_requests/{requestID}"
+	AdminApprovePath           = AdminRequestPath + "/approve"
+	AdminRejectPath            = AdminRequestPath + "/reject"
+	AdminInventoryPath         = "/connector_inventory"
+	AdminInventoryRequestsPath = AdminInventoryPath + "/requests"
+	maxBody                    = 512 << 10
 )
 
 // Store is *repos.ConnectorRequests.
@@ -59,6 +63,8 @@ type Store interface {
 	Approve(ctx context.Context, id, approverID int64, reason string) (repos.ConnectorApprovalOutcome, error)
 	Reject(ctx context.Context, id, approverID int64, reason string) (connectorapproval.Request, error)
 	UserNames(ctx context.Context, ids []int64) (map[int64]repos.ConnectorRequestUser, error)
+	Inventory(ctx context.Context) (repos.ConnectorInventory, error)
+	CreateInventoryRequests(ctx context.Context, adminID int64) (repos.InventoryOutcome, error)
 }
 
 var _ Store = (*repos.ConnectorRequests)(nil)
@@ -101,7 +107,9 @@ type ConnectorRequest struct {
 	DataClasses    []string       `json:"data_classes"`
 	Justification  string         `json:"justification"`
 	State          string         `json:"state"`
-	RequestedBy    int64          `json:"requested_by"`
+	Origin         string         `json:"origin"`
+	RequestedBy    *int64         `json:"requested_by"`
+	CreatedBy      *int64         `json:"created_by"`
 	RequesterName  *string        `json:"requester_name"`
 	RequesterEmail *string        `json:"requester_email"`
 	DecidedBy      *int64         `json:"decided_by"`
@@ -130,12 +138,13 @@ func response(request connectorapproval.Request, users map[int64]repos.Connector
 		ID: request.ID, ProjectID: request.ProjectID, TargetKind: string(request.TargetKind), Target: request.Target,
 		ToolkitType: request.ToolkitType, PlatformWide: request.PlatformWide, ProjectIDs: request.ProjectIDs,
 		Tools: tools, EgressHosts: request.EgressHosts, DataClasses: request.DataClasses,
-		Justification: request.Justification, State: string(request.State), RequestedBy: request.RequestedBy,
+		Justification: request.Justification, State: string(request.State), Origin: string(request.Origin),
+		RequestedBy: positive(request.RequestedBy), CreatedBy: positive(request.CreatedBy),
 		DecidedBy: positive(request.DecidedBy), DecisionReason: request.DecisionReason,
 		AttestationID: positive(request.AttestationID), CreatedAt: request.CreatedAt, UpdatedAt: request.UpdatedAt,
 		SubmittedAt: request.SubmittedAt, DecidedAt: request.DecidedAt,
 	}
-	if user, ok := users[request.RequestedBy]; ok {
+	if user, ok := users[request.Originator()]; ok {
 		if user.Name != "" {
 			out.RequesterName = &user.Name
 		}
@@ -149,7 +158,7 @@ func response(request connectorapproval.Request, users map[int64]repos.Connector
 func (h *Handler) responses(ctx context.Context, requests []connectorapproval.Request) []ConnectorRequest {
 	ids := make([]int64, 0, len(requests))
 	for _, request := range requests {
-		ids = append(ids, request.RequestedBy)
+		ids = append(ids, request.Originator())
 	}
 	users, err := h.store.UserNames(ctx, ids)
 	if err != nil {
@@ -448,6 +457,60 @@ func (h *Handler) Reject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, h.responses(r.Context(), []connectorapproval.Request{request})[0])
+}
+
+// InventoryConnector is one connector in use that no approved request
+// covers.
+type InventoryConnector struct {
+	TargetKind  string  `json:"target_kind"`
+	Target      string  `json:"target"`
+	ToolkitType string  `json:"toolkit_type"`
+	ProjectIDs  []int64 `json:"project_ids"`
+}
+
+// AdminInventory answers how many connectors are in use and how many of them
+// no approved request covers: what switching to approved_only would refuse.
+func (h *Handler) AdminInventory(w http.ResponseWriter, r *http.Request) {
+	if !h.ready(w) {
+		return
+	}
+	inventory, err := h.store.Inventory(r.Context())
+	if err != nil {
+		writeError(r.Context(), w, err)
+		return
+	}
+	connectors := make([]InventoryConnector, 0, len(inventory.WithoutApproval))
+	for _, use := range inventory.WithoutApproval {
+		connectors = append(connectors, InventoryConnector{TargetKind: string(use.Kind), Target: use.Target,
+			ToolkitType: use.ToolkitType, ProjectIDs: use.Projects})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"in_use":           len(inventory.InUse),
+		"without_approval": len(inventory.WithoutApproval),
+		"connectors":       connectors,
+	})
+}
+
+// CreateInventoryRequests creates a submitted request for every connector in
+// use that has no open or approved request.
+func (h *Handler) CreateInventoryRequests(w http.ResponseWriter, r *http.Request) {
+	if !h.ready(w) {
+		return
+	}
+	actor, ok := signedIn(w, r)
+	if !ok {
+		return
+	}
+	outcome, err := h.store.CreateInventoryRequests(r.Context(), actor)
+	if err != nil {
+		writeError(r.Context(), w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"created":  len(outcome.Created),
+		"skipped":  outcome.Skipped,
+		"requests": h.responses(r.Context(), outcome.Created),
+	})
 }
 
 func (h *Handler) ready(w http.ResponseWriter) bool {

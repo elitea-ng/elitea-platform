@@ -32,7 +32,7 @@ A connector request records the requester, the target (toolkit type, prebuilt MC
 
 <Steps>
   <Step title="Seed requests for what is in use">
-    Before switching modes, open **Admin › Connector requests** and select **Create requests for connectors in use**. It files a submitted request for every connector configured in any project, with the tools and hosts in use. Review and approve them. The administrator who created them cannot approve them.
+    Before switching modes, open **Admin › Connector requests** and select **Create requests for connectors in use**. It files a submitted request for every connector configured in any project, with the projects using it, the tools their toolkits select (a custom MCP server's tools as its last **Load tools** stored them, so they can be pinned) and the hosts of their URL settings. A connector that already has an open or approved request is skipped, so running it again is safe. Tool categories are not known from a toolkit's settings, so every tool starts as `write`. Review and approve them. The administrator who created them cannot approve them.
   </Step>
   <Step title="Switch the mode">
     Open **Configuration › Connector Catalogue** and set **Mode** to `approved_only`. The page warns you how many connectors in use still have no approved request; each of them stops working at once.

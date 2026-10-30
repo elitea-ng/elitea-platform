@@ -1,7 +1,9 @@
 /**
  * Admin › Connector requests (ADR-0044 decision 1, #1501): the queue shows
  * what an approver judges, approve sends an optional reason, reject needs
- * one, and the server's refusal (self-approval) is shown in its words.
+ * one, and the server's refusal (self-approval) is shown in its words. The
+ * on-ramp to approved_only shows the connectors in use without approval and
+ * creates requests for them.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
@@ -28,7 +30,9 @@ const ROW: ConnectorRequest = {
   data_classes: ['internal'],
   justification: 'Support triage',
   state: 'submitted',
+  origin: 'user',
   requested_by: 11,
+  created_by: null,
   requester_name: 'Alice',
   requester_email: 'alice@example.com',
   decided_by: null,
@@ -42,12 +46,29 @@ const ROW: ConnectorRequest = {
 
 let decisions: { path: string; body: unknown }[];
 let queries: string[];
+let inventoryPosts: number;
 
 beforeEach(() => {
   decisions = [];
   queries = [];
+  inventoryPosts = 0;
   configureGeneratedClient({ baseUrl: '/api/v2' });
   server.use(
+    http.get('*/admin/connector_inventory', () =>
+      HttpResponse.json({
+        in_use: 3,
+        without_approval: inventoryPosts === 0 ? 2 : 0,
+        connectors: [],
+      }),
+    ),
+    http.post('*/admin/connector_inventory/requests', () => {
+      inventoryPosts += 1;
+      return HttpResponse.json({
+        created: 2,
+        skipped: 1,
+        requests: [{ ...ROW, id: 9, origin: 'inventory', requested_by: null, created_by: 12 }],
+      });
+    }),
     http.get('*/admin/connector_requests', ({ request }) => {
       queries.push(new URL(request.url).searchParams.get('state') ?? '');
       return HttpResponse.json({ total: 1, rows: [ROW] });
@@ -78,6 +99,31 @@ describe('AdminConnectorRequests', () => {
     expect(row).toHaveTextContent('jira.example.com');
     expect(row).toHaveTextContent('internal');
     expect(queries[0]).toBe('submitted');
+  });
+
+  it('counts the connectors in use without approval and creates requests for them', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminConnectorRequests />);
+    expect(await screen.findByTestId('connector-inventory-count')).toHaveTextContent(
+      '2 of 3 connectors in use have no approved request.',
+    );
+    await user.click(screen.getByTestId('connector-inventory-create'));
+    expect(await screen.findByTestId('connector-inventory-created')).toHaveTextContent('Created 2 request(s); 1 connector(s)');
+    expect(inventoryPosts).toBe(1);
+    await waitFor(() => expect(screen.getByTestId('connector-inventory-create')).toBeDisabled());
+  });
+
+  it('shows an inventory request as created from the connectors in use', async () => {
+    server.use(
+      http.get('*/admin/connector_requests', () =>
+        HttpResponse.json({
+          total: 1,
+          rows: [{ ...ROW, origin: 'inventory', requested_by: null, created_by: 12, requester_name: 'Bob' }],
+        }),
+      ),
+    );
+    renderAdminRoute(<AdminConnectorRequests />);
+    expect(await screen.findByTestId('connector-request-row-5')).toHaveTextContent('Connectors in use (created by Bob)');
   });
 
   it('approves with an optional reason', async () => {

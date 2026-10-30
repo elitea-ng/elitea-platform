@@ -3163,6 +3163,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(approve).Get(v2connectorrequests.AdminRequestPath, connectors.AdminGet)
 					r.With(approve).Post(v2connectorrequests.AdminApprovePath, connectors.Approve)
 					r.With(approve).Post(v2connectorrequests.AdminRejectPath, connectors.Reject)
+					// The on-ramp to approved_only: the connectors in use
+					// that no approved request covers, and requests for them.
+					r.With(approve).Get(v2connectorrequests.AdminInventoryPath, connectors.AdminInventory)
+					r.With(approve).Post(v2connectorrequests.AdminInventoryRequestsPath, connectors.CreateInventoryRequests)
 				}
 
 				// The entitlement export (ADR-0044 decision 5, #1501): who

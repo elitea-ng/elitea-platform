@@ -73,6 +73,8 @@ import type {
   CompleteCredentialConsentParams,
   ConnectorApprovalOutcome,
   ConnectorDecisionReason,
+  ConnectorInventory,
+  ConnectorInventoryOutcome,
   ConnectorRefusal,
   ConnectorRequest,
   ConnectorRequestList,
@@ -7697,6 +7699,399 @@ export function useRejectConnectorRequest<
     connectorDecisionReason,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getConnectorInventoryResponse200 = {
+  data: ConnectorInventory;
+  status: 200;
+};
+
+export type getConnectorInventoryResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getConnectorInventoryResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getConnectorInventoryResponse503 = {
+  data: ConnectorRefusal;
+  status: 503;
+};
+
+export type getConnectorInventoryResponseSuccess =
+  getConnectorInventoryResponse200 & {
+    headers: Headers;
+  };
+export type getConnectorInventoryResponseError = (
+  | getConnectorInventoryResponse401
+  | getConnectorInventoryResponse403
+  | getConnectorInventoryResponse503
+) & {
+  headers: Headers;
+};
+
+export type getConnectorInventoryResponse =
+  getConnectorInventoryResponseSuccess | getConnectorInventoryResponseError;
+
+export const getGetConnectorInventoryUrl = () => {
+  return `/admin/connector_inventory`;
+};
+
+/**
+ * The on-ramp to the approved_only catalogue mode (ADR-0044 decision 1). Scans every project's toolkits for the toolkit types, pre-built MCP servers and custom MCP server URLs they use, and answers how many no approved request covers for every project using them. The Configuration page warns with this count before saving approved_only. Gated on `connector.approve` in the administration mode.
+ * @summary Count the connectors in use without an approved request
+ */
+export const getConnectorInventory = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getConnectorInventoryResponse> => {
+  return eliteaFetch<getConnectorInventoryResponse>(
+    getGetConnectorInventoryUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetConnectorInventoryQueryKey = () => {
+  return [`/admin/connector_inventory`] as const;
+};
+
+export const getGetConnectorInventoryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getConnectorInventory>>,
+  TError = N401Response | N403Response | ConnectorRefusal,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof getConnectorInventory>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetConnectorInventoryQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getConnectorInventory>>
+  > = ({ signal }) => getConnectorInventory({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getConnectorInventory>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetConnectorInventoryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getConnectorInventory>>
+>;
+export type GetConnectorInventoryQueryError =
+  N401Response | N403Response | ConnectorRefusal;
+
+export function useGetConnectorInventory<
+  TData = Awaited<ReturnType<typeof getConnectorInventory>>,
+  TError = N401Response | N403Response | ConnectorRefusal,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConnectorInventory>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getConnectorInventory>>,
+          TError,
+          Awaited<ReturnType<typeof getConnectorInventory>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetConnectorInventory<
+  TData = Awaited<ReturnType<typeof getConnectorInventory>>,
+  TError = N401Response | N403Response | ConnectorRefusal,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConnectorInventory>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getConnectorInventory>>,
+          TError,
+          Awaited<ReturnType<typeof getConnectorInventory>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetConnectorInventory<
+  TData = Awaited<ReturnType<typeof getConnectorInventory>>,
+  TError = N401Response | N403Response | ConnectorRefusal,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConnectorInventory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Count the connectors in use without an approved request
+ */
+
+export function useGetConnectorInventory<
+  TData = Awaited<ReturnType<typeof getConnectorInventory>>,
+  TError = N401Response | N403Response | ConnectorRefusal,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getConnectorInventory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetConnectorInventoryQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createConnectorInventoryRequestsResponse200 = {
+  data: ConnectorInventoryOutcome;
+  status: 200;
+};
+
+export type createConnectorInventoryRequestsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createConnectorInventoryRequestsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createConnectorInventoryRequestsResponse503 = {
+  data: ConnectorRefusal;
+  status: 503;
+};
+
+export type createConnectorInventoryRequestsResponseSuccess =
+  createConnectorInventoryRequestsResponse200 & {
+    headers: Headers;
+  };
+export type createConnectorInventoryRequestsResponseError = (
+  | createConnectorInventoryRequestsResponse401
+  | createConnectorInventoryRequestsResponse403
+  | createConnectorInventoryRequestsResponse503
+) & {
+  headers: Headers;
+};
+
+export type createConnectorInventoryRequestsResponse =
+  | createConnectorInventoryRequestsResponseSuccess
+  | createConnectorInventoryRequestsResponseError;
+
+export const getCreateConnectorInventoryRequestsUrl = () => {
+  return `/admin/connector_inventory/requests`;
+};
+
+/**
+ * Creates one submitted connector request (origin inventory, no requester, created_by the caller) for every connector in use that has no open or approved request. Each names the projects using the connector (the whole platform when more than 64 do), the tools their toolkits select (a custom MCP server's with the description and input schema its last Load Tools stored) and the hosts of their URL settings. Idempotent. Each request is written to the security audit outbox as connector.request.created and connector.request.submitted. The caller cannot decide the requests it created. Gated on `connector.approve` in the administration mode.
+ * @summary Create requests for the connectors in use
+ */
+export const createConnectorInventoryRequests = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createConnectorInventoryRequestsResponse> => {
+  return eliteaFetch<createConnectorInventoryRequestsResponse>(
+    getCreateConnectorInventoryRequestsUrl(),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getCreateConnectorInventoryRequestsQueryKey = () => {
+  return ["POST", `/admin/connector_inventory/requests`] as const;
+};
+
+export const getCreateConnectorInventoryRequestsQueryOptions = <
+  TData = Awaited<ReturnType<typeof createConnectorInventoryRequests>>,
+  TError = N401Response | N403Response | ConnectorRefusal,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof createConnectorInventoryRequests>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getCreateConnectorInventoryRequestsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createConnectorInventoryRequests>>
+  > = ({ signal }) =>
+    createConnectorInventoryRequests({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof createConnectorInventoryRequests>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateConnectorInventoryRequestsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createConnectorInventoryRequests>>
+>;
+export type CreateConnectorInventoryRequestsQueryError =
+  N401Response | N403Response | ConnectorRefusal;
+
+export function useCreateConnectorInventoryRequests<
+  TData = Awaited<ReturnType<typeof createConnectorInventoryRequests>>,
+  TError = N401Response | N403Response | ConnectorRefusal,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConnectorInventoryRequests>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createConnectorInventoryRequests>>,
+          TError,
+          Awaited<ReturnType<typeof createConnectorInventoryRequests>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateConnectorInventoryRequests<
+  TData = Awaited<ReturnType<typeof createConnectorInventoryRequests>>,
+  TError = N401Response | N403Response | ConnectorRefusal,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConnectorInventoryRequests>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createConnectorInventoryRequests>>,
+          TError,
+          Awaited<ReturnType<typeof createConnectorInventoryRequests>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateConnectorInventoryRequests<
+  TData = Awaited<ReturnType<typeof createConnectorInventoryRequests>>,
+  TError = N401Response | N403Response | ConnectorRefusal,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConnectorInventoryRequests>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Create requests for the connectors in use
+ */
+
+export function useCreateConnectorInventoryRequests<
+  TData = Awaited<ReturnType<typeof createConnectorInventoryRequests>>,
+  TError = N401Response | N403Response | ConnectorRefusal,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createConnectorInventoryRequests>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateConnectorInventoryRequestsQueryOptions(options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

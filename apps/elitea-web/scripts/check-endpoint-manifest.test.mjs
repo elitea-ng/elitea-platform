@@ -871,7 +871,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // removeAdminPermissionTrimmingItem (admin routes, not in the manifest), and
 // listProjectPermissionTrimming and removeProjectPermissionTrimmingItem.
 // The two changes merged together: 441 + 10 + 7 = 458.
-const GENERATED_OPERATION_COUNT = 458;
+// 458 -> 460 (issue 1501, ADR-0044 decision 1): the on-ramp to
+// approved_only, getConnectorInventory and createConnectorInventoryRequests
+// (admin routes, not in the manifest).
+const GENERATED_OPERATION_COUNT = 460;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

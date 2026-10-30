@@ -7,6 +7,10 @@
  * grants and the worker egress allowlist entries in one transaction; reject
  * needs a reason. The requester can never decide their own request (the
  * server refuses it). Behind `connector.approve`, like the server routes.
+ *
+ * "Create requests for connectors in use" is the on-ramp to approved_only:
+ * one submitted request per toolkit type or MCP server already configured in
+ * a project, for ANOTHER approver to decide (the creator cannot).
  */
 import { useState, type ReactNode } from 'react';
 
@@ -33,7 +37,13 @@ import type { ConnectorRequest, ConnectorRequestState } from '@/shared/api/gener
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
-import { describeDecisionError, useAdminConnectorRequests, useDecideConnectorRequest } from './api/adminConnectorRequestsApi';
+import {
+  describeDecisionError,
+  useAdminConnectorRequests,
+  useConnectorInventory,
+  useCreateInventoryRequests,
+  useDecideConnectorRequest,
+} from './api/adminConnectorRequestsApi';
 
 const STATES: readonly (ConnectorRequestState | '')[] = ['submitted', 'approved', 'rejected', 'withdrawn', 'draft', ''];
 
@@ -42,7 +52,10 @@ function stateLabel(state: ConnectorRequestState | ''): string {
 }
 
 function requester(row: ConnectorRequest): string {
-  return row.requester_name ?? row.requester_email ?? `#${row.requested_by}`;
+  const who = row.requester_name ?? row.requester_email ?? `#${row.requested_by ?? row.created_by ?? ''}`;
+  return row.origin === 'inventory'
+    ? t('pages.admin.connectorRequests.inventoryOrigin', 'Connectors in use (created by {{who}})', { who })
+    : who;
 }
 
 function scope(row: ConnectorRequest): string {
@@ -73,6 +86,8 @@ export function AdminConnectorRequests(): ReactNode {
           'With the connector catalogue set to approved only, a toolkit type or MCP server is usable once a request for it is approved here. Approving grants the type and adds the egress hosts.',
         )}
       </Typography>
+
+      <InventoryAction />
 
       <TextField
         select
@@ -120,6 +135,52 @@ export function AdminConnectorRequests(): ReactNode {
 
       {pending !== undefined && <DecisionDialog pending={pending} onClose={() => setPending(undefined)} />}
     </DrawerPage>
+  );
+}
+
+/**
+ * The on-ramp to approved_only: how many connectors in use no approved
+ * request covers, and the button that creates a submitted request for each
+ * one without an open or approved request.
+ */
+function InventoryAction(): ReactNode {
+  const inventory = useConnectorInventory();
+  const create = useCreateInventoryRequests();
+  const missing = inventory.data?.without_approval;
+
+  return (
+    <Box sx={inventorySx} data-testid="connector-inventory">
+      <Box sx={inventoryRowSx}>
+        <Button
+          size="small"
+          variant="contained"
+          disabled={create.isPending || missing === 0}
+          onClick={() => create.mutate()}
+          data-testid="connector-inventory-create"
+        >
+          {t('pages.admin.connectorRequests.inventory.create', 'Create requests for connectors in use')}
+        </Button>
+        {missing !== undefined && (
+          <Typography variant="bodySmall" color="text.secondary" data-testid="connector-inventory-count">
+            {t(
+              'pages.admin.connectorRequests.inventory.count',
+              '{{missing}} of {{inUse}} connectors in use have no approved request.',
+              { missing, inUse: inventory.data?.in_use ?? 0 },
+            )}
+          </Typography>
+        )}
+      </Box>
+      {create.isSuccess && (
+        <Alert severity="success" onClose={() => create.reset()} data-testid="connector-inventory-created">
+          {t(
+            'pages.admin.connectorRequests.inventory.created',
+            'Created {{created}} request(s); {{skipped}} connector(s) already had an open or approved request. Another connector approver must decide them.',
+            { created: create.data.created, skipped: create.data.skipped },
+          )}
+        </Alert>
+      )}
+      {create.isError && <Alert severity="error">{describeDecisionError(create.error)}</Alert>}
+    </Box>
   );
 }
 
@@ -220,3 +281,5 @@ const rowSx: SxProps<Theme> = { verticalAlign: 'top' };
 const wrapSx: SxProps<Theme> = { overflowWrap: 'anywhere' };
 const chipsSx: SxProps<Theme> = { display: 'flex', flexWrap: 'wrap', gap: '0.25rem' };
 const actionsSx: SxProps<Theme> = { display: 'flex', gap: '0.5rem' };
+const inventorySx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' };
+const inventoryRowSx: SxProps<Theme> = { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem' };

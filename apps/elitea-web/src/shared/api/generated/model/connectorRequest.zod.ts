@@ -62,8 +62,27 @@ export const ConnectorRequest = zod.object({
   data_classes: zod.array(zod.string()),
   justification: zod.string(),
   state: ConnectorRequestState,
-  requested_by: zod.int(),
-  requester_name: zod.string().nullable(),
+  origin: zod
+    .enum(["user", "inventory"])
+    .describe(
+      "user is a project member's request. inventory was created by an administrator from the connectors in use before switching the catalogue mode to approved_only.",
+    ),
+  requested_by: zod
+    .int()
+    .nullable()
+    .describe("The requesting member; null for an inventory request."),
+  created_by: zod
+    .int()
+    .nullable()
+    .describe(
+      "The administrator who created an inventory request; null for a member's request.",
+    ),
+  requester_name: zod
+    .string()
+    .nullable()
+    .describe(
+      "The name of the requester (of the creator for an inventory request).",
+    ),
   requester_email: zod.string().nullable(),
   decided_by: zod.int().nullable(),
   decision_reason: zod.string(),

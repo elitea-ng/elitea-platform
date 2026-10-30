@@ -5461,5 +5461,13 @@
   "pages.admin.connectorRequests.state.all": "All",
   "pages.admin.connectorRequests.subtitle": "With the connector catalogue set to approved only, a toolkit type or MCP server is usable once a request for it is approved here. Approving grants the type and adds the egress hosts.",
   "pages.admin.connectorRequests.title": "Connector requests",
-  "pages.admin.nav.connectorRequests": "Connector requests"
+  "pages.admin.nav.connectorRequests": "Connector requests",
+  "pages.admin.configuration.catalogue.confirmSave": "Save anyway",
+  "pages.admin.configuration.catalogue.confirmTitle": "Switch to approved only?",
+  "pages.admin.configuration.catalogue.createRequests": "Use \"Create requests for connectors in use\" under Connector Requests, and have another approver decide them, before switching.",
+  "pages.admin.configuration.catalogue.unapprovedWarning": "{{count}} connector(s) in use have no approved request. Approved only refuses them, including toolkits already configured, until a request for each is approved.",
+  "pages.admin.connectorRequests.inventory.count": "{{missing}} of {{inUse}} connectors in use have no approved request.",
+  "pages.admin.connectorRequests.inventory.create": "Create requests for connectors in use",
+  "pages.admin.connectorRequests.inventory.created": "Created {{created}} request(s); {{skipped}} connector(s) already had an open or approved request. Another connector approver must decide them.",
+  "pages.admin.connectorRequests.inventoryOrigin": "Connectors in use (created by {{who}})"
 }

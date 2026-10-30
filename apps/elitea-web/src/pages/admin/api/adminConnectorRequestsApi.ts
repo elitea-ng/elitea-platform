@@ -9,15 +9,24 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
   approveConnectorRequest,
+  createConnectorInventoryRequests,
+  getConnectorInventory,
   listAdminConnectorRequests,
   rejectConnectorRequest,
 } from '@/shared/api/generated/admin/admin';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
-import type { ConnectorApprovalOutcome, ConnectorRequest, ConnectorRequestState } from '@/shared/api/generated/model';
+import type {
+  ConnectorApprovalOutcome,
+  ConnectorInventory,
+  ConnectorInventoryOutcome,
+  ConnectorRequest,
+  ConnectorRequestState,
+} from '@/shared/api/generated/model';
 import { unwrapBody } from '@/shared/api/unwrap';
 import { t } from '@/shared/i18n';
 
 const KEY = ['admin', 'connector-requests'] as const;
+const INVENTORY_KEY = ['admin', 'connector-inventory'] as const;
 
 function requestRows(response: unknown): ConnectorRequest[] {
   const body = unwrapBody(response);
@@ -53,6 +62,34 @@ export function useDecideConnectorRequest() {
       return unwrapBody(await rejectConnectorRequest(id, { reason })) as ConnectorRequest;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: KEY }),
+  });
+}
+
+/**
+ * The connectors in use that no approved request covers: what switching the
+ * catalogue mode to approved_only would refuse. `enabled` lets a caller that
+ * only needs it in one state (the Configuration page, while approved_only is
+ * being chosen) skip the scan otherwise.
+ */
+export function useConnectorInventory(enabled = true) {
+  return useQuery({
+    queryKey: INVENTORY_KEY,
+    enabled,
+    retry: false,
+    queryFn: async () => unwrapBody(await getConnectorInventory()) as ConnectorInventory,
+  });
+}
+
+/** Creates a submitted request for every connector in use without an open or approved one. */
+export function useCreateInventoryRequests() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<ConnectorInventoryOutcome> =>
+      unwrapBody(await createConnectorInventoryRequests()) as ConnectorInventoryOutcome,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: KEY });
+      await queryClient.invalidateQueries({ queryKey: INVENTORY_KEY });
+    },
   });
 }
 

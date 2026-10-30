@@ -59,22 +59,29 @@ func ComposeConnectorRequests(pool *pgxpool.Pool) (*ConnectorRequests, error) {
 }
 
 const connectorRequestColumns = `id, project_id, target_kind, target, toolkit_type, platform_wide, project_ids,
-declared_tools, egress_hosts, data_classes, justification, state, requested_by, decided_by,
+declared_tools, egress_hosts, data_classes, justification, state, origin, requested_by, created_by, decided_by,
 decision_reason, attestation_id, created_at, updated_at, submitted_at, decided_at`
 
 func scanConnectorRequest(row pgx.Row) (connectorapproval.Request, error) {
 	var request connectorapproval.Request
-	var kind, state string
+	var kind, state, origin string
 	var tools []byte
-	var decidedBy, attestationID *int64
+	var requestedBy, createdBy, decidedBy, attestationID *int64
 	if err := row.Scan(&request.ID, &request.ProjectID, &kind, &request.Target, &request.ToolkitType,
 		&request.PlatformWide, &request.ProjectIDs, &tools, &request.EgressHosts, &request.DataClasses,
-		&request.Justification, &state, &request.RequestedBy, &decidedBy, &request.DecisionReason,
+		&request.Justification, &state, &origin, &requestedBy, &createdBy, &decidedBy, &request.DecisionReason,
 		&attestationID, &request.CreatedAt, &request.UpdatedAt, &request.SubmittedAt, &request.DecidedAt); err != nil {
 		return connectorapproval.Request{}, err
 	}
 	request.TargetKind = connectorapproval.TargetKind(kind)
 	request.State = connectorapproval.State(state)
+	request.Origin = connectorapproval.Origin(origin)
+	if requestedBy != nil {
+		request.RequestedBy = *requestedBy
+	}
+	if createdBy != nil {
+		request.CreatedBy = *createdBy
+	}
 	if decidedBy != nil {
 		request.DecidedBy = *decidedBy
 	}
@@ -386,7 +393,11 @@ func decidable(request connectorapproval.Request, approverID int64) error {
 	if approverID <= 0 {
 		return connectorapproval.Refuse(connectorapproval.InvalidCode, "A decision needs a signed-in approver.")
 	}
-	if request.RequestedBy == approverID {
+	if request.Originator() == approverID {
+		if request.Origin == connectorapproval.OriginInventory {
+			return connectorapproval.Refuse(connectorapproval.SelfApprovalCode,
+				"You created this request from the connectors in use: another connector approver must decide it.")
+		}
 		return connectorapproval.Refuse(connectorapproval.SelfApprovalCode,
 			"The requester cannot decide their own connector request: another connector approver must.")
 	}

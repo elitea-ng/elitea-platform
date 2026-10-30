@@ -19,6 +19,12 @@
 --       project's worker_egress setting, 0197's ADR) in the same
 --       transaction. A custom MCP server's approved tools are pinned: a tool
 --       whose name or digest no approved request names stays hidden.
+--       origin: 'user' (a project member asked; requested_by is set) or
+--       'inventory' (an administrator's "Create requests for connectors in
+--       use" before switching to approved_only; requested_by is NULL and
+--       created_by is that administrator). The four-eyes CHECK compares the
+--       decider with the requester, or with the creator of an inventory
+--       request.
 --
 --   elitea_runtime.command_outbox.refusal_code
 --       Admits CONNECTOR_NOT_APPROVED beside EGRESS_POLICY_INVALID: a worker
@@ -57,7 +63,9 @@ CREATE TABLE IF NOT EXISTS centry.connector_requests (
     justification   text NOT NULL DEFAULT '' CHECK (length(justification) <= 4000),
     state           text NOT NULL DEFAULT 'draft'
                     CHECK (state IN ('draft', 'submitted', 'approved', 'rejected', 'withdrawn')),
-    requested_by    bigint NOT NULL CHECK (requested_by > 0),
+    origin          text NOT NULL DEFAULT 'user' CHECK (origin IN ('user', 'inventory')),
+    requested_by    bigint CHECK (requested_by IS NULL OR requested_by > 0),
+    created_by      bigint CHECK (created_by IS NULL OR created_by > 0),
     decided_by      bigint CHECK (decided_by IS NULL OR decided_by > 0),
     decision_reason text NOT NULL DEFAULT '' CHECK (length(decision_reason) <= 1000),
     attestation_id  bigint CHECK (attestation_id IS NULL OR attestation_id > 0),
@@ -67,8 +75,11 @@ CREATE TABLE IF NOT EXISTS centry.connector_requests (
     decided_at      timestamptz,
     CONSTRAINT connector_requests_scope
         CHECK (platform_wide = (cardinality(project_ids) = 0)),
+    CONSTRAINT connector_requests_origin_actor
+        CHECK ((origin = 'user' AND requested_by IS NOT NULL)
+            OR (origin = 'inventory' AND created_by IS NOT NULL)),
     CONSTRAINT connector_requests_decider_not_requester
-        CHECK (decided_by IS NULL OR decided_by <> requested_by),
+        CHECK (decided_by IS NULL OR decided_by <> COALESCE(requested_by, created_by)),
     CONSTRAINT connector_requests_decision_complete
         CHECK ((state IN ('approved', 'rejected')) = (decided_by IS NOT NULL AND decided_at IS NOT NULL)),
     CONSTRAINT connector_requests_submitted_stamped
@@ -84,6 +95,12 @@ CREATE INDEX IF NOT EXISTS connector_requests_state
 CREATE INDEX IF NOT EXISTS connector_requests_approved_target
     ON centry.connector_requests (target_kind, target)
     WHERE state = 'approved';
+
+-- The inventory action skips a connector that already has an open or an
+-- approved request.
+CREATE INDEX IF NOT EXISTS connector_requests_live_target
+    ON centry.connector_requests (target_kind, target)
+    WHERE state IN ('draft', 'submitted', 'approved');
 
 DO $$
 BEGIN

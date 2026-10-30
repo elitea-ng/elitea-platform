@@ -99,6 +99,18 @@ func (s State) Valid() bool {
 	return false
 }
 
+// Origin is how a request came to exist.
+type Origin string
+
+const (
+	// OriginUser is a project member's request (RequestedBy is set).
+	OriginUser Origin = "user"
+	// OriginInventory is an administrator's "Create requests for connectors
+	// in use": the on-ramp to approved_only. RequestedBy is zero and
+	// CreatedBy is the administrator.
+	OriginInventory Origin = "inventory"
+)
+
 // ToolCategory is an ADR-0041 tool category.
 type ToolCategory string
 
@@ -134,19 +146,23 @@ type DeclaredTool struct {
 
 // Request is one connector request.
 type Request struct {
-	ID             int64
-	ProjectID      int64
-	TargetKind     TargetKind
-	Target         string
-	ToolkitType    string
-	PlatformWide   bool
-	ProjectIDs     []int64
-	Tools          []DeclaredTool
-	EgressHosts    []string
-	DataClasses    []string
-	Justification  string
-	State          State
-	RequestedBy    int64
+	ID            int64
+	ProjectID     int64
+	TargetKind    TargetKind
+	Target        string
+	ToolkitType   string
+	PlatformWide  bool
+	ProjectIDs    []int64
+	Tools         []DeclaredTool
+	EgressHosts   []string
+	DataClasses   []string
+	Justification string
+	State         State
+	Origin        Origin
+	// RequestedBy is the requesting member; zero for an inventory request.
+	RequestedBy int64
+	// CreatedBy is the administrator who created an inventory request.
+	CreatedBy      int64
 	DecidedBy      int64
 	DecisionReason string
 	AttestationID  int64
@@ -311,6 +327,30 @@ func HostOfTarget(kind TargetKind, target string) (string, bool) {
 // hosts in the egresslib grammar, data classes as short identifiers. The
 // projects are not checked for existence here (the store does that).
 func NormalizeDraft(draft Draft) (Draft, string, error) {
+	return normalizeDraft(draft, false)
+}
+
+// NormalizeInventoryDraft is NormalizeDraft for an inventory request: a
+// custom MCP server whose tools were never loaded may declare none (an
+// approval then pins none, so the server is admitted with every tool hidden
+// until a member requests its tools).
+func NormalizeInventoryDraft(draft Draft) (Draft, string, error) {
+	return normalizeDraft(draft, true)
+}
+
+// ValidToolName reports whether name is a tool name a request may declare.
+func ValidToolName(name string) bool { return toolNamePattern.MatchString(name) }
+
+// Originator is who may not decide a request: the requester, or the creator of
+// an inventory request.
+func (r Request) Originator() int64 {
+	if r.RequestedBy > 0 {
+		return r.RequestedBy
+	}
+	return r.CreatedBy
+}
+
+func normalizeDraft(draft Draft, inventory bool) (Draft, string, error) {
 	if !draft.TargetKind.Valid() {
 		return Draft{}, "", invalid("target_kind must be toolkit_type, prebuilt_mcp or custom_mcp")
 	}
@@ -385,7 +425,7 @@ func NormalizeDraft(draft Draft) (Draft, string, error) {
 		}
 		tools = append(tools, tool)
 	}
-	if draft.TargetKind == TargetCustomMCP && len(tools) == 0 {
+	if draft.TargetKind == TargetCustomMCP && len(tools) == 0 && !inventory {
 		return Draft{}, "", invalid("a custom MCP server request declares the tools to pin (load the server's tools first)")
 	}
 	draft.Tools = tools
