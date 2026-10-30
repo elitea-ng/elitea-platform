@@ -183,7 +183,7 @@ An output contract is a rule for the final answer of an agent or of a pipeline L
 | Type | Stored value | The answer must be |
 |---|---|---|
 | JSON Schema | `{"type": "json_schema", "schema": {...}}` | Only one JSON document that is valid against the schema. Text or a code fence around the document is not permitted. |
-| Regular expression | `{"type": "regex", "pattern": "..."}` | Text that the pattern matches from the start to the end. The pattern uses RE2 syntax: back references and look-around are not available. |
+| Regular expression | `{"type": "regex", "pattern": "..."}` | Text that the pattern matches from the start to the end. The pattern uses RE2 syntax: back references and look-around are not available. See [Regular expression rules](#regular-expression-rules). |
 | Named format | `{"type": "format", "format": "json"}` | `json`: only one JSON document. `markdown`: text that is not empty, with each code fence closed. `csv`: RFC 4180 CSV with the same number of fields on each row. |
 
 ### Where to set a contract
@@ -204,16 +204,33 @@ Main validates the contract when you create an agent or save a version. If the c
 | JSON Schema nesting | 32 levels | `schema_too_large` |
 | JSON Schema references | Only local references (`#/...`) | `schema_invalid` |
 | Pattern length | 1024 bytes | `pattern_too_long` |
-| Pattern syntax | RE2, not empty | `pattern_invalid` |
+| Pattern syntax | RE2, not empty, and only the syntax that the worker supports. See [Regular expression rules](#regular-expression-rules). | `pattern_invalid` |
+| Pattern size | Estimated compiled size 768 KiB, and 100 levels of nesting | `pattern_invalid` |
 | Format name | `json`, `markdown` or `csv` | `format_unknown` |
 | Structured output | Not on the same LLM node | `structured_output` |
 | Pipeline version meta | Not permitted: set the contract on an LLM node of the pipeline | `pipeline_contract_on_node` |
+
+### Regular expression rules
+
+The worker compiles the pattern with the Rust `regex` crate, with a compiled size limit of 1 MiB. Main refuses a pattern on save if the worker cannot compile it, or if the pattern has a different meaning in the worker. Main refuses these constructs:
+
+- `\Q...\E` quoted text. Escape each special character, for example `a\.b`.
+- Octal escapes and `\0`, for example `\012`. Use `\x0A` or `\x{0A}`.
+- A `{` that does not start a counted repetition (`{n}`, `{n,}` or `{n,m}`, with no spaces). To match the character `{`, write `\{`.
+- A capture group name that starts with a digit, for example `(?P<1st>...)`, and the same name on two groups.
+- `\p{^...}`, the surrogate category `\p{Cs}` (`\p{Surrogate}`) and surrogate code points (`\x{D800}` to `\x{DFFF}`).
+- `\<`, `\>` and `\b{...}`. The worker reads them as word boundaries. To match `<` or `>`, write the character without a backslash.
+- In a class: a nested `[` (except `[:alpha:]` and the other ASCII classes), `&&`, `~~`, `--`, and a range that starts at a class, for example `[\d-z]`. To match `-`, put it first or last in the class.
+- A pattern with more than 100 levels of nesting.
+- A pattern with an estimated compiled size of more than 768 KiB. Main estimates the size, with a margin, from the UTF-8 form of each character class and each repetition.
+
+In the worker, `\d`, `\s`, `\w` and `\b` are Unicode classes, and a Unicode class is large: `\w` is approximately 50 KiB when compiled, and Main counts approximately 130 KiB for it. A repetition multiplies the size. For example, `\w{10}` is refused, but `\w+` and `[A-Za-z0-9_]{10}` are accepted. Use an ASCII class, such as `[0-9]` or `[A-Za-z0-9_]`, when the answer is ASCII.
 
 ### What happens in a run
 
 1. If the contract is a JSON Schema and the provider supports a response schema, the worker sends the schema to the provider. For OpenAI-compatible providers, it is the `json_schema` response format. Strict mode is used only when the schema permits it: each object lists all its properties as required and sets `additionalProperties: false`. For Anthropic, the worker sends the schema only when strict mode is possible. In all other cases, the worker only validates the answer.
 2. The worker validates the final answer. A turn that calls a tool is not validated.
-3. If the answer is not valid, the worker does not show it. It asks the model one more time. The second request contains the first answer and the validation error.
+3. If the answer is not valid, the worker does not show it. It asks the model one more time. The second request contains the first answer and the validation error. Each final answer gets one retry: after the worker accepts an answer, the next answer gets a new retry. If the retry calls a tool, the next final answer is the second attempt.
 4. If the second answer is also not valid, the agent or the node stops with the error `output_contract_violation`. The run ends with the public code `OUTPUT_CONTRACT_VIOLATION`, and the platform does not retry the run. **In a pipeline, the next node does not run.**
 
 An agent or a node with a contract does not stream its answer. The answer shows after it is validated.

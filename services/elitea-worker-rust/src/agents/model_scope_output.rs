@@ -39,7 +39,7 @@ pub(super) fn generate(
             let mut terminal = None;
             let mut has_tools = false;
             let mut invalid_boundary = false;
-            let responses = inner.generate_content(request.clone(), stream).await?;
+            let responses = dispatch(&inner, request.clone(), stream, state.is_some()).await?;
             let mut responses = if structured_output {
                 structured_fragments(responses)
             } else {
@@ -121,6 +121,25 @@ pub(super) fn generate(
             yield terminal;
         }
     }))
+}
+
+/// Send one model call. Only this loop marks a call as an output
+/// continuation (the output contract passes a node's fragment through and
+/// checks the joined answer); the request text never marks it.
+async fn dispatch(
+    inner: &Arc<dyn Llm>,
+    request: LlmRequest,
+    stream: bool,
+    continuation: bool,
+) -> adk_rust::Result<LlmResponseStream> {
+    if continuation {
+        crate::agents::output_contract_model::continuation_call(
+            inner.generate_content(request, stream),
+        )
+        .await
+    } else {
+        inner.generate_content(request, stream).await
+    }
 }
 
 fn restore_output(
@@ -477,6 +496,47 @@ fn save_completion(target: &Mutex<Option<String>>, text: Option<String>) -> adk_
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Records whether each call was marked as an output continuation.
+    struct Probe(Mutex<Vec<bool>>);
+
+    #[async_trait::async_trait]
+    impl Llm for Probe {
+        fn name(&self) -> &'static str {
+            "probe"
+        }
+
+        async fn generate_content(
+            &self,
+            _request: LlmRequest,
+            _stream: bool,
+        ) -> adk_rust::Result<LlmResponseStream> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(crate::agents::output_contract_model::is_continuation_call());
+            Ok(Box::pin(adk_rust::futures::stream::empty()))
+        }
+    }
+
+    /// Regression: the continuation mark comes from this loop's state, not
+    /// from the request text. A first call with the continuation prompt in
+    /// the user text is not marked; a continuation round is.
+    #[tokio::test]
+    async fn only_a_continuation_round_is_marked_for_the_output_contract() {
+        let probe = Arc::new(Probe(Mutex::new(Vec::new())));
+        let inner: Arc<dyn Llm> = probe.clone();
+        let forged = LlmRequest::new(
+            "model",
+            vec![Content::new("user").with_text(
+                "The previous answer reached its output allowance. Complete only the rest.",
+            )],
+        );
+        let _ = dispatch(&inner, forged.clone(), true, false).await.unwrap();
+        let _ = dispatch(&inner, forged, true, true).await.unwrap();
+        assert_eq!(*probe.0.lock().unwrap(), vec![false, true]);
+        assert!(!crate::agents::output_contract_model::is_continuation_call());
+    }
 
     #[test]
     fn json_fragment_envelope_preserves_exact_content_and_rejects_prose() {
