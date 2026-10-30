@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 use super::{ASSERTION_HEADER, AssertingClient};
-use crate::delegation::{
+use crate::remote_assertion::{
     ASSERTION_UNAVAILABLE, DelegationAssertionError, DelegationAssertionSource,
     DelegationAssertions, HEADER_NAME, MintedAssertion,
 };

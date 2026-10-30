@@ -1123,8 +1123,8 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
         // Remote MCP calls of this run carry a delegation assertion that Main
         // mints under the live claim (ADR-0044 decision 4). A governed run
         // requires one: a call it cannot sign is refused.
-        command_binding.egress().bind_delegation(
-            elitea_agent_runtime::delegation::DelegationAssertions::new(
+        command_binding.egress().bind_assertions(
+            elitea_agent_runtime::remote_assertion::DelegationAssertions::new(
                 Arc::new(lease.state_probe()),
                 verified.command().security_context_ref.is_some(),
             ),

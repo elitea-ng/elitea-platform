@@ -33,7 +33,7 @@ use elitea_platform_rpc::internal_tools::InternalToolClient;
 use serde_json::{Map, Value, json};
 use zeroize::Zeroizing;
 
-use crate::delegation::DelegationAssertions;
+use crate::remote_assertion::DelegationAssertions;
 
 use super::delegated_auth::{
     DelegatedAuthorizationCatalog, DelegatedAuthorizationRequirement, delegated_authorization_error,
@@ -107,7 +107,7 @@ pub struct McpMaterializationError {
     authorization: Option<Box<DelegatedAuthorizationRequirement>>,
     /// The delegation assertion this call requires could not be had
     /// (ADR-0044 decision 4). The code is then `UnsupportedAuthority`.
-    assertion: Option<crate::delegation::DelegationAssertionError>,
+    assertion: Option<crate::remote_assertion::DelegationAssertionError>,
 }
 
 impl McpMaterializationError {
@@ -121,9 +121,9 @@ impl McpMaterializationError {
     }
 
     /// The refused delegation assertion, when that is why the connection
-    /// was refused (reason code [`crate::delegation::ASSERTION_UNAVAILABLE`]).
+    /// was refused (reason code [`crate::remote_assertion::ASSERTION_UNAVAILABLE`]).
     #[must_use]
-    pub const fn assertion_refusal(&self) -> Option<crate::delegation::DelegationAssertionError> {
+    pub const fn assertion_refusal(&self) -> Option<crate::remote_assertion::DelegationAssertionError> {
         self.assertion
     }
 }
@@ -248,7 +248,7 @@ pub struct RemoteMcpConfig {
     pinned_tools: Option<HashSet<super::mcp_pin::PinnedTool>>,
     /// The run's delegation assertions (ADR-0044 decision 4): every request
     /// to the server carries one. `None` sends none.
-    delegation: Option<Arc<DelegationAssertions>>,
+    assertions: Option<Arc<DelegationAssertions>>,
 }
 
 impl RemoteMcpConfig {
@@ -343,18 +343,18 @@ impl RemoteMcpConfig {
             internal_builder: reference.is_internal_builder(),
             pinned_tools: super::mcp_pin::parse_pinned_tools(settings)
                 .map_err(|()| invalid_configuration())?,
-            delegation: None,
+            assertions: None,
         })
     }
 
     /// Carry the run's delegation assertions on every request to the
     /// server (an internal category never carries one).
     #[must_use]
-    pub(crate) fn with_delegation(mut self, delegation: Option<Arc<DelegationAssertions>>) -> Self {
-        self.delegation = if self.served_internally() {
+    pub(crate) fn with_assertions(mut self, assertions: Option<Arc<DelegationAssertions>>) -> Self {
+        self.assertions = if self.served_internally() {
             None
         } else {
-            delegation
+            assertions
         };
         self
     }
@@ -515,7 +515,7 @@ impl RemoteMcpConfig {
 
     #[cfg(test)]
     pub(crate) const fn carries_delegation_for_test(&self) -> bool {
-        self.delegation.is_some()
+        self.assertions.is_some()
     }
 
     #[cfg(test)]
@@ -682,7 +682,7 @@ async fn asserting_client(
     config: &RemoteMcpConfig,
     client: reqwest_mcp::Client,
 ) -> Result<super::mcp_assertion::AssertingClient, McpMaterializationError> {
-    let Some(delegation) = config.delegation.clone() else {
+    let Some(delegation) = config.assertions.clone() else {
         return Ok(super::mcp_assertion::AssertingClient::plain(client));
     };
     delegation
@@ -697,7 +697,7 @@ async fn asserting_client(
 }
 
 const fn assertion_refused(
-    error: crate::delegation::DelegationAssertionError,
+    error: crate::remote_assertion::DelegationAssertionError,
 ) -> McpMaterializationError {
     McpMaterializationError {
         code: McpMaterializationErrorCode::UnsupportedAuthority,
@@ -842,7 +842,7 @@ pub async fn materialize_mcp_toolsets_with_tokens_and_authorization(
     let mut authorization = DelegatedAuthorizationCatalog::default();
     for reference in references {
         let config = RemoteMcpConfig::parse(reference, mcp_tokens)?
-            .with_delegation(policy.egress().delegation());
+            .with_assertions(policy.egress().assertions());
         // A remote server outside the run's egress policy is never contacted
         // (#1490); internal categories go to Main over gRPC, not a public host.
         let endpoint = public_endpoint(&config);

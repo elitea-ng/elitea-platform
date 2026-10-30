@@ -317,5 +317,5 @@ pub fn normalize_audience(endpoint: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "delegation_tests.rs"]
+#[path = "remote_assertion_tests.rs"]
 mod tests;

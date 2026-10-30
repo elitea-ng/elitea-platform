@@ -252,7 +252,7 @@ struct SteeringClaim {
 /// reply. The reply is `None` when Main refused or did not answer.
 struct AssertionClaim {
     audience: String,
-    reply: oneshot::Sender<Option<elitea_agent_runtime::delegation::MintedAssertion>>,
+    reply: oneshot::Sender<Option<elitea_agent_runtime::remote_assertion::MintedAssertion>>,
 }
 
 /// What one claim's turn did with its steering messages. Shared by every
@@ -587,15 +587,15 @@ impl adk_rust::agent::SteeringSource for ClaimLeaseStateProbe {
 /// each one under the live claim, through the lease actor, so a mint never
 /// overlaps a renewal. A stopped or lost lease mints nothing.
 #[async_trait::async_trait]
-impl elitea_agent_runtime::delegation::DelegationAssertionSource for ClaimLeaseStateProbe {
+impl elitea_agent_runtime::remote_assertion::DelegationAssertionSource for ClaimLeaseStateProbe {
     async fn mint(
         &self,
         audience: &str,
     ) -> Result<
-        elitea_agent_runtime::delegation::MintedAssertion,
-        elitea_agent_runtime::delegation::DelegationAssertionError,
+        elitea_agent_runtime::remote_assertion::MintedAssertion,
+        elitea_agent_runtime::remote_assertion::DelegationAssertionError,
     > {
-        use elitea_agent_runtime::delegation::DelegationAssertionError;
+        use elitea_agent_runtime::remote_assertion::DelegationAssertionError;
         self.ensure_running()
             .map_err(|_| DelegationAssertionError::Unavailable)?;
         let (reply, answer) = oneshot::channel();

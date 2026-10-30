@@ -17,9 +17,9 @@ use adk_tool::mcp::rmcp::transport::streamable_http_client::{
 };
 use http::{HeaderName, HeaderValue};
 
-use crate::delegation::DelegationAssertions;
+use crate::remote_assertion::DelegationAssertions;
 #[cfg(doc)]
-use crate::delegation::HEADER_NAME;
+use crate::remote_assertion::HEADER_NAME;
 
 type ClientError = StreamableHttpError<reqwest_mcp::Error>;
 
@@ -78,7 +78,7 @@ impl AssertingClient {
 pub(crate) const ASSERTION_HEADER: HeaderName = HeaderName::from_static("elitea-agent-assertion");
 
 fn unavailable() -> ClientError {
-    StreamableHttpError::UnexpectedServerResponse(crate::delegation::ASSERTION_UNAVAILABLE.into())
+    StreamableHttpError::UnexpectedServerResponse(crate::remote_assertion::ASSERTION_UNAVAILABLE.into())
 }
 
 impl StreamableHttpClient for AssertingClient {

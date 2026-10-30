@@ -2724,7 +2724,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
         &self,
         lease: &ClaimLeaseHandle,
         audience: String,
-    ) -> Result<elitea_agent_runtime::delegation::MintedAssertion, AgentControlError> {
+    ) -> Result<elitea_agent_runtime::remote_assertion::MintedAssertion, AgentControlError> {
         let response = self
             .control
             .mint_delegation_assertion(lease.delegation_request(audience))
@@ -3913,8 +3913,8 @@ fn parse_claim_steering_response(
 /// expiry, disabled, or Main's rejection.
 fn parse_mint_delegation_assertion_response(
     response: MintDelegationAssertionResponseV1,
-) -> Result<elitea_agent_runtime::delegation::MintedAssertion, ControlSemanticError> {
-    use elitea_agent_runtime::delegation::MintedAssertion;
+) -> Result<elitea_agent_runtime::remote_assertion::MintedAssertion, ControlSemanticError> {
+    use elitea_agent_runtime::remote_assertion::MintedAssertion;
     let disposition = DelegationAssertionDispositionV1::try_from(response.disposition)
         .unwrap_or(DelegationAssertionDispositionV1::Unspecified);
     if let Some(rejection) = response.rejection.as_ref() {

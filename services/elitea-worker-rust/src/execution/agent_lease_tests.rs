@@ -1063,7 +1063,7 @@ async fn a_claim_that_gives_a_held_id_again_does_not_inject_it_again() {
 // lease actor, under the claim's identity and fence, for the audience asked.
 #[tokio::test(flavor = "current_thread")]
 async fn state_probe_mints_a_delegation_assertion_under_the_claim() {
-    use elitea_agent_runtime::delegation::{
+    use elitea_agent_runtime::remote_assertion::{
         DelegationAssertionError, DelegationAssertionSource as _, MintedAssertion,
     };
     let state = Arc::new(FakeState::default());

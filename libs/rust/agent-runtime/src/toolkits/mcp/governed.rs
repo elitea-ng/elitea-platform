@@ -197,7 +197,7 @@ impl GovernedServer {
         }
         let settings = reference.settings().ok_or_else(invalid_configuration)?;
         let config = RemoteMcpConfig::parse(reference, &Map::new())?
-            .with_delegation(policy.egress().delegation());
+            .with_assertions(policy.egress().assertions());
         // A credential in the toolkit's own headers is a claim-time credential;
         // the internal tool service is the platform's authority, not a grant.
         if config.served_internally() || !config.static_headers.is_empty() {
@@ -259,7 +259,7 @@ impl GovernedServer {
             tool_list_ttl: None,
             internal_builder: false,
             pinned_tools: base.pinned_tools.clone(),
-            delegation: base.delegation.clone(),
+            assertions: base.assertions.clone(),
         }
     }
 
@@ -318,7 +318,7 @@ async fn list(
         }
         // The run must sign the call and cannot (ADR-0044 decision 4).
         Err(error) if error.assertion_refusal().is_some() => {
-            return Ok(Listing::Refused(crate::delegation::ASSERTION_UNAVAILABLE));
+            return Ok(Listing::Refused(crate::remote_assertion::ASSERTION_UNAVAILABLE));
         }
         // The server refused the redeemed token (never a fallback to the
         // browser flow on a governed run) or did not answer.
@@ -522,7 +522,7 @@ fn session_error(error: &McpMaterializationError) -> AdkError {
         return AdkError::new(
             ErrorComponent::Tool,
             ErrorCategory::Forbidden,
-            crate::delegation::ASSERTION_UNAVAILABLE,
+            crate::remote_assertion::ASSERTION_UNAVAILABLE,
             "the MCP call needs a signed agent assertion and none could be minted",
         );
     }
