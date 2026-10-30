@@ -4199,3 +4199,244 @@ async fn postgres_a_member_child_sensitive_direct_call_pauses_then_runs_once_or_
         db.pool.close().await;
     }
 }
+
+// ---------------------------------------------------------------------------
+// FU-265: a continuation lost before its first root save. Execution A pauses
+// on a saved child's sensitive direct call; continuation B (Main names A as
+// the paused writer) approves it and dies inside the journaled call; the
+// reclaim of B re-enters A's row and the journal decides.
+// ---------------------------------------------------------------------------
+
+const CONTINUATION_TEST: &str =
+    "agents::pipeline_tests::fanout_effect_pg_tests::postgres_continuation_effect_process";
+/// The execution the approval continues (its generation is [`GENERATION`]).
+const CONTINUING_EXECUTION: &str = "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b";
+/// `1`: Main names the paused writer; `0`: an older Main without it.
+const MARKER_ENV: &str = "ELITEA_CONTINUATION_PG_MARKER";
+/// The paused card, handed from the pause phase to the later ones.
+const PENDING_ENV: &str = "ELITEA_CONTINUATION_PG_PENDING";
+const PENDING_LINE: &str = "FU265_PENDING ";
+
+fn claim_for<'a>(
+    request: &'a super::super::request::AgentExecutionRequest,
+    execution: &str,
+    attempt: u8,
+) -> AuthorizedNativeAssembly<'a> {
+    AuthorizedNativeAssembly::from_authorized(
+        request,
+        test_runtime_context_authority(),
+        test_session_authority_for_reclaim(execution, GENERATION, attempt),
+        Arc::new(TestStateWriterLease::current()),
+        AuthorizedNativeCommandBinding::fixture_for_execution(execution),
+    )
+}
+
+/// The root → Agent node → saved child (a sensitive direct call) assembler.
+fn continuation_assembler(
+    pool: &sqlx::PgPool,
+    connector: Arc<dyn McpConnector>,
+) -> PipelineNativeAgentAssembler {
+    let (platform, model_facade, _) =
+        saved_runtime_with(Vec::new(), child_direct_pipeline(false, false), None);
+    PipelineNativeAgentAssembler::postgres(
+        pool.clone(),
+        SessionLimits::default(),
+        CheckpointLimits::default(),
+        sensitive_pipeline_mcp_policy(),
+        platform,
+        model_facade,
+    )
+    .with_mcp_connector(connector)
+    .with_fixed_parallel_for_tests()
+}
+
+/// The approval of `pending`, as Main admits it; with `marker`, naming A.
+fn approval(pending: &Value, marker: bool) -> super::super::request::AgentExecutionRequest {
+    let mut request = child_direct_request(false);
+    request.binding.request_content_digest = [29; 32];
+    request.payload.should_continue = true;
+    request.payload.hitl_resume = true;
+    request.payload.hitl_action = Some("approve".to_owned());
+    request.payload.hitl_value = Some(String::new());
+    request.payload.hitl_decisions = vec![json!({
+        "interrupt_id": pending["interrupt_id"],
+        "tool_call_id": pending["tool_call_id"],
+        "action": "approve", "value": ""
+    })];
+    if marker {
+        request.payload.meta.insert(
+            crate::agents::graph::continuation_writer::PAUSED_WRITER_META_KEY.to_owned(),
+            json!({"execution_id": EXECUTION, "generation": GENERATION}),
+        );
+    }
+    request
+}
+
+/// One phase of a [`continuation_scenario`], in its own process.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_continuation_effect_process() {
+    let Ok(database) = std::env::var(DATABASE_ENV) else {
+        return;
+    };
+    assert!(
+        database.starts_with("elitea_rust_session_")
+            && database
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    );
+    let pool = connect(&database).await;
+    let marker = std::env::var(MARKER_ENV).is_ok_and(|marker| marker == "1");
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let counting = Arc::new(PipelineMcpConnector {
+        connections: Arc::new(AtomicUsize::new(0)),
+        tool_calls: Arc::clone(&tool_calls),
+        read_only: false,
+    });
+    match std::env::var(PHASE_ENV).expect("phase").as_str() {
+        "pause" => {
+            let request = child_direct_request(false);
+            let invocation = continuation_assembler(&pool, counting)
+                .assemble(claim_for(&request, EXECUTION, 1))
+                .await
+                .unwrap_or_else(|error| panic!("pause: assemble: {error}"));
+            let (browser, _) = collect_pipeline_pause_events(invocation).await;
+            let card = browser
+                .iter()
+                .find(|event| event["type"] == "agent_hitl_interrupt")
+                .unwrap_or_else(|| panic!("pause: a sensitive card: {browser:?}"));
+            let pending = &card["response_metadata"]["hitl_interrupts"][0];
+            assert_eq!(tool_calls.load(Ordering::Acquire), 0, "pause: nothing ran");
+            println!("{PENDING_LINE}{pending}");
+        }
+        "crash" => {
+            let pending: Value =
+                serde_json::from_str(&std::env::var(PENDING_ENV).expect("pending")).expect("json");
+            let request = approval(&pending, marker);
+            let invocation = continuation_assembler(
+                &pool,
+                Arc::new(JournalCrashingConnector { pool: pool.clone() }),
+            )
+            .assemble(claim_for(&request, CONTINUING_EXECUTION, 1))
+            .await
+            .unwrap_or_else(|error| panic!("crash: assemble the continuation: {error}"));
+            let outcome = run_to_end(invocation).await;
+            panic!("crash: the process outlived its crash point: {outcome:?}");
+        }
+        "recover" => {
+            let pending: Value =
+                serde_json::from_str(&std::env::var(PENDING_ENV).expect("pending")).expect("json");
+            let request = approval(&pending, marker);
+            let assembler = continuation_assembler(&pool, counting);
+            match recovered(&assembler, &request, CONTINUING_EXECUTION, 2).await {
+                Ok(invocation) => {
+                    assert!(marker, "recover: an older Main's reclaim is refused");
+                    let error = run_to_end(invocation)
+                        .await
+                        .expect_err("recover: a call that may have run ends the run");
+                    assert!(
+                        error.contains(crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE),
+                        "recover: the registered may-have-started reason: {error}"
+                    );
+                }
+                Err(error) => {
+                    assert!(
+                        !marker,
+                        "recover: the named paused row is accepted: {error}"
+                    );
+                    assert!(
+                        error.contains("pipeline.recovery.root_writer_mismatch"),
+                        "recover: typed, never Internal: {error}"
+                    );
+                }
+            }
+            assert_eq!(
+                tool_calls.load(Ordering::Acquire),
+                0,
+                "recover: not repeated"
+            );
+        }
+        other => panic!("unknown phase {other}"),
+    }
+}
+
+/// FU-265 two-process proof: A pauses, B's approval dies inside the call,
+/// B is reclaimed; `marker` says whether Main named A as the paused writer.
+async fn continuation_scenario(url: &str, marker: bool) {
+    let db = IsolatedPostgres::create(url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let phase = |phase: &'static str, pending: &str| {
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
+            .args([
+                "--exact",
+                CONTINUATION_TEST,
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(DATABASE_ENV, &db.database_name)
+            .env(MARKER_ENV, if marker { "1" } else { "0" })
+            .env(PENDING_ENV, pending)
+            .env(PHASE_ENV, phase);
+        command
+    };
+    let output = run_phase("pause", phase("pause", ""));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "pause: {stdout} {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let pending = stdout
+        .lines()
+        .find_map(|line| line.split_once(PENDING_LINE).map(|(_, card)| card))
+        .unwrap_or_else(|| panic!("the pause phase printed its card: {stdout}"))
+        .to_owned();
+    let output = run_phase("crash", phase("crash", &pending));
+    assert_eq!(
+        output.status.code(),
+        Some(CRASH_EXIT_CODE),
+        "crash: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let journals = journal_threads(&db.pool).await;
+    assert_eq!(
+        journals.len(),
+        1,
+        "one journal for the one call: {journals:?}"
+    );
+    let output = run_phase("recover", phase("recover", &pending));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "recover: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(journal_threads(&db.pool).await, journals, "no new journal");
+    db.pool.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_an_approved_child_call_lost_before_the_continuation_saves_ends_typed_and_is_not_repeated()
+ {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-265 PostgreSQL proof");
+        return;
+    };
+    continuation_scenario(&url, true).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_continuation_without_its_paused_writer_is_refused_typed_on_reclaim() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-265 PostgreSQL proof");
+        return;
+    };
+    continuation_scenario(&url, false).await;
+}

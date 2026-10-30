@@ -1779,8 +1779,7 @@ impl PipelineStateServices {
     /// this continuation re-enters. One proof for the first attempt and the
     /// reclaim: the row is this execution's own (it saved already), or it was
     /// written by exactly the paused writer Main named, is a pause frontier on
-    /// this run's root thread, and the root session's pause event (the last
-    /// event, or followed by this execution's own `continuing` record) names
+    /// this run's root thread, and the root session's latest pause event names
     /// exactly that row. The refusal logs ids and generations only.
     pub(super) async fn prove_continuation_row(
         &self,
@@ -1815,30 +1814,18 @@ impl PipelineStateServices {
         }
         let session = restore_pipeline_session(self, plan).await?;
         let events = session.events().all();
-        let owner =
-            super::dispatch_journal::DispatchOwner::new(plan.execution_id.clone(), plan.generation);
-        let bound = super::dispatch_journal::continuation_pause(
-            &events,
-            |event| {
-                event
-                    .provider_metadata
-                    .contains_key(adk_rust::graph::interrupt::INTERRUPT_METADATA_KEY)
-            },
-            &owner,
-            |pause| {
-                super::graph::resume::pause_interrupt_ids(
-                    pause,
-                    ROOT_AGENT_NAME,
-                    plan.session_id.as_ref(),
-                )
-            },
-            super::application_tools::pipeline_continuation_suffix(),
-        )
-        .and_then(adk_rust::graph::interrupt::GraphInterruptPayload::from_event)
-        .is_some_and(|pause| {
-            pause.thread_id == plan.session_id.as_str()
-                && pause.checkpoint_id == checkpoint.checkpoint_id
-        });
+        // The latest pause event names exactly this row: the paused execution's
+        // frontier. Events after it are this continuation's own (its input and
+        // records); the continuation's resolver binds the decision to the pause
+        // again when it runs.
+        let bound = events
+            .iter()
+            .rev()
+            .find_map(adk_rust::graph::interrupt::GraphInterruptPayload::from_event)
+            .is_some_and(|pause| {
+                pause.thread_id == plan.session_id.as_str()
+                    && pause.checkpoint_id == checkpoint.checkpoint_id
+            });
         if bound {
             Ok(())
         } else {
