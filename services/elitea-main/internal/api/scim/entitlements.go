@@ -24,15 +24,21 @@ package scim
 // here, with ids (`project-role-<id>`, `platform-role-<id>`) no binding id
 // can collide with.
 //
-// # Authentication and audit
+// # Authentication, opt-in and audit
 //
 // The same SCIM client credential as the provisioning tree (auth.go): the
-// tree is mounted inside it. SCIM clients carry no scope, so any client can
-// read it; it reveals no secret, and it lists only what an administrator's
-// Users and Roles pages already show. Every Users and Groups answer writes an
-// audit_events row (actor `scim:<client>`, format scim, resource count)
-// before the body is sent, and is refused with 503 when the row cannot be
-// written.
+// tree is mounted inside it. SCIM clients carry no scope, so the tree is an
+// explicit opt-in: the `entitlement_export` platform section's
+// `scim_client_ids` lists the clients that may read it, and every other
+// client — every client, until an administrator lists one — is answered 403
+// with a SCIM error on every path of the tree, discovery included. A
+// provisioning credential therefore reveals nothing more after the upgrade
+// than before. The list is read on every request (a removed client loses
+// access at once); a failed read is 503. Every Users and Groups answer
+// writes an audit_events row (actor `scim:<client>`, format scim, resource
+// count) before the body is sent, and is refused with 503 when the row
+// cannot be written; a refusal is recorded by the audit middleware like
+// every 403 under /api/v2/scim/.
 
 import (
 	"context"
@@ -80,7 +86,46 @@ func (h *Handler) WithEntitlements(source EntitlementSource) *Handler {
 	return h
 }
 
+// EntitlementClientAllowlist answers the SCIM client ids allowed to read the
+// tree (platformconfig.LoadEntitlementExportSettings).
+type EntitlementClientAllowlist func(ctx context.Context) ([]int64, error)
+
+// WithEntitlementClients attaches the allowlist reader. Without one no client
+// may read the tree.
+func (h *Handler) WithEntitlementClients(allowlist EntitlementClientAllowlist) *Handler {
+	h.entitlementClients = allowlist
+	return h
+}
+
+// requireListedClient refuses a SCIM client the allowlist does not name.
+func (h *Handler) requireListedClient(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := PrincipalFromContext(r.Context())
+		if !ok || h.entitlementClients == nil {
+			writeError(w, http.StatusForbidden, "", entitlementClientRefusal)
+			return
+		}
+		allowed, err := h.entitlementClients(r.Context())
+		if err != nil {
+			slog.ErrorContext(r.Context(), "SCIM entitlements: client allowlist unreadable, refusing", "error", err)
+			writeError(w, http.StatusServiceUnavailable, "", "the entitlement export settings could not be read; retry later")
+			return
+		}
+		for _, id := range allowed {
+			if id == principal.ID {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		writeError(w, http.StatusForbidden, "", entitlementClientRefusal)
+	})
+}
+
+const entitlementClientRefusal = "this SCIM client may not read the entitlement export; an administrator lists it " +
+	"under Configuration › Entitlement Export"
+
 func (h *Handler) entitlementRoutes(router chi.Router) {
+	router.Use(h.requireListedClient)
 	router.Get("/ServiceProviderConfig", h.EntitlementServiceProviderConfig)
 	router.Get("/ResourceTypes", h.EntitlementResourceTypes)
 	router.Get("/Schemas", h.EntitlementSchemas)

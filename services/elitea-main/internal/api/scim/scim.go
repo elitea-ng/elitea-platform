@@ -145,6 +145,8 @@ type Handler struct {
 	directory Directory
 	// entitlements serves the read-only entitlement tree (entitlements.go).
 	entitlements EntitlementSource
+	// entitlementClients lists the SCIM clients allowed to read that tree.
+	entitlementClients EntitlementClientAllowlist
 }
 
 func NewHandler(directory Directory) *Handler {

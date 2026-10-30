@@ -28,8 +28,21 @@ newest entry is first.
   `/Groups/{id}` and the discovery documents. `startIndex`/`count` paging,
   `filter` on `userName`, `displayName`, `id` and `active` (Users) and
   `displayName`, `id` (Groups). It takes the same SCIM client credential as
-  provisioning (Admin › Configuration › Authentication); SCIM clients have
-  no scopes, so every existing client can read it. Write verbs answer 405.
+  provisioning (Admin › Configuration › Authentication). Write verbs answer
+  405.
+* **The SCIM tree is opt-in per client; nobody can read it after the
+  upgrade.** SCIM clients carry no scopes, so a new platform-config section,
+  `entitlement_export` (Admin › Configuration › **Entitlement Export**,
+  behind `entitlements.export`), lists the SCIM client ids allowed to read
+  it in `scim_client_ids`. The default is empty: every client — every
+  existing provisioning credential included — gets 403 with a SCIM error
+  body on every path of the tree, discovery included, until an
+  administrator lists it. Provisioning (`/api/v2/scim/v2/Users`, `/Groups`)
+  is unchanged. To connect an identity governance tool, create a SCIM client
+  for it (or reuse one) and add its id to the list; the change is audited
+  like every other configuration save, and the list is read on every
+  request, so removing an id cuts access at once. The CSV/JSON admin export
+  is not affected by this list.
 * **Every export is audited** in `centry.audit_events` (`entity_type
   entitlements`, `entity_name` csv, json or scim, the row count in
   `action`, the administrator or `scim:<client>` as actor), written before

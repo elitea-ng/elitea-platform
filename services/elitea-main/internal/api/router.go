@@ -2233,12 +2233,20 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// /api/v2/admin/entitlements read the same store. Interface variables
 	// stay nil without a pool so both answer 503 rather than panic.
 	var (
-		scimEntitlements  scimapi.EntitlementSource
-		adminEntitlements v2entitlements.Store
+		scimEntitlements   scimapi.EntitlementSource
+		adminEntitlements  v2entitlements.Store
+		entitlementClients scimapi.EntitlementClientAllowlist
 	)
 	if cfg.Pool != nil {
 		store := dbrepos.NewEntitlements(cfg.Pool)
 		scimEntitlements, adminEntitlements = store, store
+		// The SCIM tree is opt-in per client: the `entitlement_export`
+		// section lists who may read it, read on every request.
+		pool := cfg.Pool
+		entitlementClients = func(ctx context.Context) ([]int64, error) {
+			settings, err := platformconfig.LoadEntitlementExportSettings(ctx, pool)
+			return settings.SCIMClientIDs, err
+		}
 	}
 	r.Group(func(r chi.Router) {
 		r.Use(apimw.NoStore)
@@ -2249,7 +2257,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			apimw.Audit(auditRecorder),
 			scimapi.AnnotateAuditActor,
 		).Mount(scimapi.BasePath, scimapi.NewHandler(scimdirectory.NewStore(cfg.Pool).WithMemoryUserJournal(memoryUserJournal)).
-			WithEntitlements(scimEntitlements).Routes())
+			WithEntitlements(scimEntitlements).WithEntitlementClients(entitlementClients).Routes())
 	})
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its

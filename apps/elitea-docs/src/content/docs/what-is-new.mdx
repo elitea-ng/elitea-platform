@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Entitlement export for access reviews
+
+Administrators can download who holds which role on the platform, on each project and on each agent, with what each role allows (configure agents, approve change requests, attest, approve connectors and more), as CSV from the admin console's **Users** page. Identity governance tools can read the same data over a read-only SCIM tree at `/api/v2/scim/v2/entitlements`; no SCIM client can read it until an administrator lists it under **Configuration › Entitlement Export**. Every export is audited. See [Least privilege and trust](/admin/enterprise-controls/least-privilege-and-trust#entitlement-export-for-access-reviews).
+
 ## Enterprise controls documentation
 
 A new [Enterprise controls](/admin/enterprise-controls/overview) section lists every agent-risk control the platform provides. For each control it says whether the control is available, partial or planned, where to configure it, what evidence it produces and what stays with your organisation's own systems. The section also includes a [shared responsibility](/admin/enterprise-controls/shared-responsibility) page, an [evidence guide for auditors](/admin/enterprise-controls/evidence-guide) and a [hardening checklist](/deployment/hardening-checklist).

@@ -243,6 +243,14 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		}
 	}
 
+	// The entitlement export SCIM allowlist (ADR-0044 decision 5).
+	if section.id == platformconfig.SectionEntitlementExport {
+		if reason := validateEntitlementExportValues(body.Values); reason != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+			return
+		}
+	}
+
 	// The run-safety sections' ranges (ADR-0041 decision 3, ADR-0042
 	// decision 5).
 	if reason := validateRunSafetyValues(section.id, body.Values); reason != "" {

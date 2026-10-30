@@ -48,6 +48,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 /* ── harness ───────────────────────────────────────────────────────────── */
@@ -750,6 +751,10 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 	//	run_caps          → platformconfig.LoadRunCaps through a cached reader:
 	//	                    the control plane's lease renewal cancels an agent
 	//	                    run past max_wall_seconds (ADR-0041 decision 3)
+	//	entitlement_export → platformconfig.LoadEntitlementExportSettings, read
+	//	                    by the SCIM entitlement tree's client gate on every
+	//	                    request to /api/v2/scim/v2/entitlements (ADR-0044
+	//	                    decision 5, #1501)
 	//	agent_lifecycle   → platformconfig.LoadAgentLifecyclePolicy: every
 	//	                    change request submit and approval, every direct
 	//	                    publish (does the tier need approval?) and every
@@ -776,6 +781,8 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		// ADR-0040 decisions 3 and 5 (#1497): publish, change requests and
 		// the recertification routine.
 		"agent_lifecycle": true,
+		// ADR-0044 decision 5 (#1501): every SCIM entitlement tree request.
+		"entitlement_export": true,
 	}
 	for id := range want {
 		if !available[id] {
@@ -1022,4 +1029,39 @@ func newConfigPool(t *testing.T) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	return pool
+}
+
+// TestEntitlementExportSCIMClientsRoundTrip: the list an administrator saves
+// is the list the SCIM entitlement tree's gate reads, a malformed id is
+// refused rather than stored, and the section needs `entitlements.export`.
+func TestEntitlementExportSCIMClientsRoundTrip(t *testing.T) {
+	pool := newConfigPool(t)
+	principal := auth.User{ID: "7", Email: "operator@example.com"}
+	const target = "/admin/plugin_config_values/administration/entitlement_export"
+
+	denied := configRouter(admin.NewHandler(pool, admin.WithPermissionResolver(
+		grantingResolver("configuration.governance"))), &principal)
+	if recorder := configDo(t, denied, http.MethodPut, target,
+		map[string]any{"values": map[string]any{"scim_client_ids": []any{3}}}); recorder.Code != http.StatusForbidden {
+		t.Fatalf("PUT without entitlements.export = %d, want 403 (body %s)", recorder.Code, recorder.Body.String())
+	}
+
+	router := configRouter(admin.NewHandler(pool, admin.WithPermissionResolver(
+		grantingResolver("entitlements.export"))), &principal)
+	settings, err := platformconfig.LoadEntitlementExportSettings(context.Background(), pool)
+	if err != nil || len(settings.SCIMClientIDs) != 0 {
+		t.Fatalf("default = %v, %v; want no client", settings, err)
+	}
+	if recorder := configDo(t, router, http.MethodPut, target,
+		map[string]any{"values": map[string]any{"scim_client_ids": []any{"3"}}}); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("PUT of a string id = %d, want 400 (body %s)", recorder.Code, recorder.Body.String())
+	}
+	if recorder := configDo(t, router, http.MethodPut, target,
+		map[string]any{"values": map[string]any{"scim_client_ids": []any{3, 11}}}); recorder.Code != http.StatusOK {
+		t.Fatalf("PUT = %d, want 200 (body %s)", recorder.Code, recorder.Body.String())
+	}
+	settings, err = platformconfig.LoadEntitlementExportSettings(context.Background(), pool)
+	if err != nil || !settings.AllowsSCIMClient(3) || !settings.AllowsSCIMClient(11) || settings.AllowsSCIMClient(4) {
+		t.Fatalf("stored = %v, %v; want [3 11]", settings, err)
+	}
 }

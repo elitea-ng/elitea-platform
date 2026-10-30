@@ -11,6 +11,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/entitlements"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimclient"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
 
@@ -86,11 +87,78 @@ func entitlementFixture() *fakeEntitlements {
 	}
 }
 
+// listedClient is the SCIM client the tests read the tree as; serveEntitlements
+// lists it, so every other test is about the tree, not the opt-in.
+var listedClient = scimclient.Principal{ID: 7, Name: "sailpoint", Method: "bearer"}
+
 func serveEntitlements(source EntitlementSource, method, target string) *httptest.ResponseRecorder {
+	return serveEntitlementsAs(source, listedClient, allowClients(listedClient.ID), method, target)
+}
+
+func allowClients(ids ...int64) EntitlementClientAllowlist {
+	return func(context.Context) ([]int64, error) { return ids, nil }
+}
+
+func serveEntitlementsAs(source EntitlementSource, principal scimclient.Principal, allowlist EntitlementClientAllowlist,
+	method, target string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, target, nil)
+	request = request.WithContext(context.WithValue(request.Context(), principalKey{}, principal))
 	recorder := httptest.NewRecorder()
-	NewHandler(newRecordingDirectory()).WithEntitlements(source).Routes().ServeHTTP(recorder, request)
+	NewHandler(newRecordingDirectory()).WithEntitlements(source).WithEntitlementClients(allowlist).
+		Routes().ServeHTTP(recorder, request)
 	return recorder
+}
+
+// TestEntitlementTreeIsOptInPerClient: SCIM clients carry no scope, so the
+// `entitlement_export` section's list is the only thing between an existing
+// provisioning credential and the entitlement tree.
+func TestEntitlementTreeIsOptInPerClient(t *testing.T) {
+	paths := []string{
+		"/entitlements/Users", "/entitlements/Users/101", "/entitlements/Groups",
+		"/entitlements/Groups/project-role-15", "/entitlements/ServiceProviderConfig",
+		"/entitlements/ResourceTypes", "/entitlements/Schemas",
+	}
+	unlisted := scimclient.Principal{ID: 8, Name: "okta", Method: "bearer"}
+	refusals := map[string]struct {
+		principal scimclient.Principal
+		allowlist EntitlementClientAllowlist
+	}{
+		"empty default":       {listedClient, allowClients()},
+		"no allowlist reader": {listedClient, nil},
+		"unlisted client":     {unlisted, allowClients(listedClient.ID)},
+	}
+	for name, refusal := range refusals {
+		for _, path := range paths {
+			source := entitlementFixture()
+			recorder := serveEntitlementsAs(source, refusal.principal, refusal.allowlist, http.MethodGet, path)
+			require.Equal(t, http.StatusForbidden, recorder.Code, "%s %s", name, path)
+			require.Equal(t, contentType, recorder.Header().Get("Content-Type"))
+			body := decodeBody(t, recorder)
+			require.Equal(t, []any{schemaError}, body["schemas"], "%s %s", name, path)
+			require.Equal(t, "403", body["status"])
+			require.Empty(t, source.audits, "a refused read reached the store: %s %s", name, path)
+			require.Empty(t, source.starts)
+		}
+	}
+
+	for _, path := range paths {
+		recorder := serveEntitlementsAs(entitlementFixture(), unlisted, allowClients(listedClient.ID, unlisted.ID),
+			http.MethodGet, path)
+		require.Equal(t, http.StatusOK, recorder.Code, "listed client %s: %s", path, recorder.Body.String())
+	}
+
+	// The provisioning tree does not consult the list.
+	recorder := serveEntitlementsAs(entitlementFixture(), unlisted, allowClients(), http.MethodGet, "/ServiceProviderConfig")
+	require.Equal(t, http.StatusOK, recorder.Code)
+}
+
+func TestEntitlementTreeRefusesWhenTheAllowlistIsUnreadable(t *testing.T) {
+	failing := func(context.Context) ([]int64, error) { return nil, errors.New("database down") }
+	source := entitlementFixture()
+	recorder := serveEntitlementsAs(source, listedClient, failing, http.MethodGet, "/entitlements/Users")
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	require.Equal(t, []any{schemaError}, decodeBody(t, recorder)["schemas"])
+	require.Empty(t, source.starts)
 }
 
 func TestEntitlementUsersCarryGroupsRolesAndEntitlements(t *testing.T) {
