@@ -94,16 +94,20 @@ impl GovernedOperationClient {
         let target = adapter.configured_target(spec.settings)?;
         let settings = spec.settings.clone();
         let declaration = declaration_envelope(adapter.as_ref(), &target)?;
-        let declarations = adapter.build_client(
-            &GovernedBuild::new(
-                spec.toolkit_name,
-                &settings,
-                spec.policy,
-                spec.attachments,
-                spec.office,
-            ),
-            &declaration,
-        )?;
+        // The declaration client only lists tools; it is still bound to the
+        // run's egress policy, so no path builds a client outside it.
+        let declarations = crate::egress::scope_sync(Arc::clone(spec.policy.egress()), || {
+            adapter.build_client(
+                &GovernedBuild::new(
+                    spec.toolkit_name,
+                    &settings,
+                    spec.policy,
+                    spec.attachments,
+                    spec.office,
+                ),
+                &declaration,
+            )
+        })?;
         drop(declaration);
         let toolkit = Arc::new(GovernedToolkit {
             adapter,
@@ -202,9 +206,13 @@ impl GovernedOperationClient {
             Err(error) => return Err(error.into_adk_error()),
         };
         // 4. A fresh client from this envelope alone; the envelope is dropped
-        //    as soon as the client holds its copy.
-        let client = adapter
-            .build_client(
+        //    as soon as the client holds its copy. The client is built at
+        //    call time, after materialization's egress scope has ended, and
+        //    this tool is not wrapped by the policy's call scope: bind it to
+        //    the run's egress policy here (#1490), or it is built unscoped
+        //    and reaches no public host at all.
+        let client = crate::egress::scope_sync(Arc::clone(toolkit.policy.egress()), || {
+            adapter.build_client(
                 &GovernedBuild::new(
                     &toolkit.name,
                     &toolkit.settings,
@@ -214,15 +222,16 @@ impl GovernedOperationClient {
                 ),
                 &envelope,
             )
-            .map_err(GovernedError::into_adk_error)?;
+        })
+        .map_err(GovernedError::into_adk_error)?;
         drop(envelope);
         let readonly: Arc<dyn ReadonlyContext> = ctx.clone();
-        let tool = client
-            .tools(readonly)
-            .await?
-            .into_iter()
-            .find(|tool| tool.name() == tool_name)
-            .ok_or_else(|| GovernedError::ToolNotServed.into_adk_error())?;
+        let tool =
+            crate::egress::scope(Arc::clone(toolkit.policy.egress()), client.tools(readonly))
+                .await?
+                .into_iter()
+                .find(|tool| tool.name() == tool_name)
+                .ok_or_else(|| GovernedError::ToolNotServed.into_adk_error())?;
         // 5. The call; the client and its material drop with this frame.
         let result = tool.execute(ctx, args).await;
         drop(tool);
