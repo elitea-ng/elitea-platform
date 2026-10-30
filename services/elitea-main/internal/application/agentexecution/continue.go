@@ -102,6 +102,11 @@ type CurrentContinuationTarget struct {
 	AuthorizationRequests []CurrentAuthorizationRequest
 	TruncatedContent      string
 	OutputLimitSequence   int64
+	// PausedExecutionID and PausedGeneration name the execution whose root
+	// checkpoint row the continuation re-enters (FU-265): the response's
+	// paused execution and the generation its paused terminal settled under.
+	PausedExecutionID string
+	PausedGeneration  int64
 }
 
 // CurrentPipelineHITLReview identifies a direct pipeline review from persisted state.
@@ -466,6 +471,10 @@ type CurrentContinueTurn struct {
 	PipelineStaticPause  *CurrentPipelineStaticPause
 	PipelineStaticTools  *CurrentPipelineStaticTools
 	OutputLimitSequence  int64
+	// PausedExecutionID and PausedGeneration are the paused writer the
+	// command names (FU-265); admission re-reads them under the response lock.
+	PausedExecutionID string
+	PausedGeneration  int64
 }
 
 // PipelineDecisionID is stable for retries of one direct review occurrence.
@@ -648,6 +657,9 @@ func (service *CurrentApplicationStartService) ContinueCurrentAgent(
 
 	input, turn, capabilityID, err := service.currentContinuationInput(ctx, request, target, decisions)
 	if err != nil {
+		return CurrentApplicationStartOutcome{}, err
+	}
+	if err := namePausedWriter(input, turn, target); err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
 	projectID := strconv.FormatInt(request.ProjectID, 10)
@@ -977,4 +989,37 @@ func currentOutputContinuationIdempotencyKey(responseID string, sequence int64) 
 
 func stringPointer(value string) *string {
 	return &value
+}
+
+// PausedWriterMetaKey is the command meta key naming the paused writer a
+// continuation re-enters (FU-265). It is a key of its own beside the
+// continuation's decision envelope.
+const PausedWriterMetaKey = "elitea.continuation.paused_writer.v1"
+
+// namePausedWriter writes the paused writer the resolver read into the
+// command's meta and the admitted turn. An output-limit continuation names
+// none; any other continuation without one is refused.
+func namePausedWriter(input *runtimev1.AgentExecutionInputV1, turn *CurrentContinueTurn, target CurrentContinuationTarget) error {
+	if turn.ContinuationKind == CurrentContinuationOutputLimit {
+		return nil
+	}
+	if target.PausedExecutionID == "" || target.PausedGeneration < 1 {
+		return ErrUnsupportedCurrentAgentStart
+	}
+	meta := map[string]json.RawMessage{}
+	if len(input.Meta) != 0 && json.Unmarshal(input.Meta, &meta) != nil {
+		return ErrInvalidCurrentAgentStart
+	}
+	marker, err := json.Marshal(map[string]any{
+		"execution_id": target.PausedExecutionID, "generation": target.PausedGeneration,
+	})
+	if err != nil {
+		return ErrInvalidCurrentAgentStart
+	}
+	meta[PausedWriterMetaKey] = marker
+	if input.Meta, err = json.Marshal(meta); err != nil {
+		return ErrInvalidCurrentAgentStart
+	}
+	turn.PausedExecutionID, turn.PausedGeneration = target.PausedExecutionID, target.PausedGeneration
+	return nil
 }

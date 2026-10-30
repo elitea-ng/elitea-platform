@@ -151,7 +151,7 @@ type FanoutWakeTarget struct {
 
 // fanoutWakeResumeMarkers are the continuation discriminators of other kinds
 // a parked execution's frozen meta may still carry; a wake drops them.
-var fanoutWakeResumeMarkers = []string{"pipeline_static_resume_v1", "pipeline_static_tool_resume_v1"}
+var fanoutWakeResumeMarkers = []string{"pipeline_static_resume_v1", "pipeline_static_tool_resume_v1", PausedWriterMetaKey}
 
 // FanoutWakeInput derives the wake input from the parked execution's frozen
 // request (contract §8.1): every frozen field is the parked execution's;
