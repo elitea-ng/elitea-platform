@@ -88,6 +88,11 @@ type secretsDetector struct {
 	rules []secretRule
 }
 
+// segmentLocal: a rule match never crosses a message boundary. The
+// private-key rule matches through the end of the text when a PEM block has
+// no END line, and the end of the text is the end of the message.
+func (*secretsDetector) segmentLocal() {}
+
 // newSecretsDetector selects the whole rule set, or the ids listed in `rules`.
 func newSecretsDetector(obj map[string]any) (detectorImpl, error) {
 	all, err := loadSecretRules()

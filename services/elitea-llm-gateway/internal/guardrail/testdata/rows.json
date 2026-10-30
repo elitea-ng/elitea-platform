@@ -7,7 +7,10 @@
       {"type": "secrets", "action": "block", "rules": ["github-token", "jwt"]},
       {"name": "classifier", "type": "http", "action": "flag", "url": "https://classifier.example.com/v1/check", "auth_header": "X-Api-Key", "auth_secret": "{{secret.CLASSIFIER_KEY}}", "labels": ["toxicity"], "min_score": 0.7}
     ]}}},
-    {"name": "top-level shape", "valid": true, "data": {"stage": "output", "detectors": [{"type": "secrets", "action": "flag"}]}},
+    {"name": "top-level shape is refused", "valid": false, "data": {"stage": "output", "detectors": [{"type": "secrets", "action": "flag"}]}},
+    {"name": "top-level detectors only", "valid": false, "data": {"guardrail": null, "detectors": [{"type": "secrets", "action": "flag"}]}},
+    {"name": "guardrail not an object", "valid": false, "data": {"guardrail": "output"}},
+    {"name": "no guardrail object", "valid": false, "data": {"scope": {"project_ids": [1]}}},
     {"name": "no stage", "valid": false, "data": {"guardrail": {"detectors": [{"type": "secrets", "action": "mask"}]}}},
     {"name": "bad stage", "valid": false, "data": {"guardrail": {"stage": "both", "detectors": [{"type": "secrets", "action": "mask"}]}}},
     {"name": "no detectors", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": []}}},

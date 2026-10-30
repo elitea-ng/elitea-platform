@@ -13,13 +13,17 @@ package requestlog
 //
 // The verdicts ride the request log's batch: no second queue and no second
 // writer. They are written after the request log rows, and their failure does
-// not fail the request log batch. They follow the request log's retention
-// window (the `gateway_request_log` retention class).
+// not fail the request log batch: WriteBatch logs it, adds the dropped
+// verdicts to gateway_guardrail_verdict_write_failures_total and returns nil,
+// so the Recorder counts the request log rows as written. They follow the
+// request log's retention window (the `gateway_request_log` retention class).
 
 import (
 	"context"
 	"errors"
+	"expvar"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +39,32 @@ const verdictColumnsPerRow = 17
 // maxVerdictsPerBatch bounds one INSERT: 17 columns × 3000 rows stays far
 // below the 65535 bind parameters Postgres accepts.
 const maxVerdictsPerBatch = 3000
+
+// MetricGuardrailVerdictWriteFailures counts the guardrail verdicts that a
+// failed INSERT dropped. The request log rows of the same batch are written.
+const MetricGuardrailVerdictWriteFailures = "gateway_guardrail_verdict_write_failures_total"
+
+var verdictWriteFailures = expvar.NewInt(MetricGuardrailVerdictWriteFailures)
+
+// VerdictWriteFailures returns the number of verdicts dropped by a failed
+// write, since the process started.
+func VerdictWriteFailures() int64 { return verdictWriteFailures.Value() }
+
+// writeVerdictsAfterLog writes the verdicts of a batch whose request log rows
+// are already committed. A failure is logged and counted. It does not fail
+// the batch: the request log rows are written, and the Recorder must count
+// them as written.
+func (s *Store) writeVerdictsAfterLog(ctx context.Context, records []Record) {
+	if err := s.writeVerdicts(ctx, records); err != nil {
+		dropped := 0
+		for _, record := range records {
+			dropped += len(record.Guardrails)
+		}
+		verdictWriteFailures.Add(int64(dropped))
+		slog.Default().Error("requestlog: guardrail verdict write failed; the verdicts are dropped, the request log rows are written",
+			"verdicts", dropped, "err", err)
+	}
+}
 
 // isUndefinedTable reports Postgres 42P01, the code a missing table raises.
 func isUndefinedTable(err error) bool {
@@ -112,23 +142,24 @@ func (s *Store) writeVerdicts(ctx context.Context, records []Record) error {
 	return flush()
 }
 
-// pruneVerdicts deletes verdicts older than the request log window, bounded
-// like Prune.
+// pruneVerdicts deletes verdicts older than the request log window, in
+// bounded batches (see pruneBatches). A request writes one verdict per
+// detector, so this table grows several times faster than the request log.
 func (s *Store) pruneVerdicts(ctx context.Context, olderThan time.Time) (int64, error) {
 	if s.latched(&s.verdictsUntil) {
 		return 0, nil
 	}
-	tag, err := s.db.Exec(ctx, `
+	removed, err := s.pruneBatches(ctx, `
 		DELETE FROM gateway.guardrail_verdicts
 		 WHERE id IN (
 		       SELECT id FROM gateway.guardrail_verdicts
 		        WHERE occurred_at < $1
-		        LIMIT 10000)`, olderThan)
+		        LIMIT $2)`, olderThan)
 	if err != nil {
 		if isUndefinedTable(err) {
-			return 0, nil
+			return removed, nil
 		}
-		return 0, fmt.Errorf("prune guardrail verdicts: %w", err)
+		return removed, fmt.Errorf("prune guardrail verdicts: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	return removed, nil
 }

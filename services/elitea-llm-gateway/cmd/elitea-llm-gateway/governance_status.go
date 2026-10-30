@@ -23,6 +23,7 @@ import (
 	"net/http"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/account"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/policy"
 )
 
@@ -67,6 +68,11 @@ type governanceStatusBody struct {
 	Store                   policy.Status      `json:"store"`
 	Definitions             policy.Diagnostics `json:"definitions"`
 	RateLimiter             *rateLimiterCounts `json:"rate_limiter,omitempty"`
+	// GuardrailAgentScope says whether agent-scoped guardrail rows can be
+	// evaluated: a wired agent resolver (it needs the database, not NATS),
+	// the lookups that failed, and the rows that applied their fail mode
+	// because the agent was not known.
+	GuardrailAgentScope guardrailAgentScope `json:"guardrail_agent_scope"`
 	// Egress is the MERGED allowlist the gateway is enforcing, tagged by
 	// source: the GATEWAY_EGRESS_ALLOWLIST floor, the authored
 	// `egress_allowlist` rows, and the union of the two (gap G6).
@@ -92,6 +98,13 @@ type governanceStatusBody struct {
 type rateLimiterCounts struct {
 	Refused  int64 `json:"refused"`
 	Degraded int64 `json:"degraded"`
+}
+
+// guardrailAgentScope is the agent-scope report of /governance/status.
+type guardrailAgentScope struct {
+	ResolverWired  bool  `json:"resolver_wired"`
+	LookupFailures int64 `json:"lookup_failures"`
+	UnresolvedRows int64 `json:"unresolved_rows"`
 }
 
 // makeGovernanceStatusHandler builds the route. A nil store reports disabled
@@ -123,6 +136,12 @@ func makeGovernanceStatusHandler(
 			body.Definitions = store.Current().Diagnostics()
 		} else {
 			body.Definitions = policy.Empty.Diagnostics()
+		}
+		agents := limiter.Agents()
+		body.GuardrailAgentScope = guardrailAgentScope{
+			ResolverWired:  agents != nil,
+			LookupFailures: agents.Failures(),
+			UnresolvedRows: llmproxy.GuardrailAgentUnresolved(),
 		}
 		if limiter.Enabled() {
 			body.RateLimiter = &rateLimiterCounts{Refused: limiter.Refused(), Degraded: limiter.Degraded()}

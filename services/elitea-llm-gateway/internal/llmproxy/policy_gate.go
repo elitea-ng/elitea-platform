@@ -118,7 +118,7 @@ func policyUserID(raw string) int64 {
 func (h *Handler) rateSubject(ctx context.Context, snap *policy.Snapshot, provider schemas.ModelProvider, model string) policy.Subject {
 	sub := h.policySubject(ctx, provider, model)
 	if snap.HasAgentThrottles() {
-		sub.Agent = h.rateLimiter.Agent(ctx, identityExecutionFromCtx(ctx))
+		sub.Agent = h.agentResolver().Resolve(ctx, identityExecutionFromCtx(ctx))
 	}
 	return sub
 }

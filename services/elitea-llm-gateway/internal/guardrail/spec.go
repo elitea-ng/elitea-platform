@@ -123,13 +123,15 @@ func (d *Detector) HTTPAdapter() *HTTPConfig {
 	return nil
 }
 
-// ParseRow compiles the `guardrail` object of a row's data. The object can sit
-// under the `guardrail` key (the admin form's shape) or at the top level of
-// data (a hand-written row).
+// ParseRow compiles the `guardrail` object of a row's data. The object must
+// sit under the `guardrail` key. That is the one shape the admin form writes
+// and elitea-main accepts. A row with stage or detectors at the top level of
+// data is refused, so the admin form never shows defaults for a row that the
+// gateway runs with other values.
 func ParseRow(name string, data map[string]any) (*Row, error) {
-	g, _ := data["guardrail"].(map[string]any)
-	if len(g) == 0 {
-		g = data
+	g, err := guardrailObject(data)
+	if err != nil {
+		return nil, err
 	}
 	row := &Row{Name: name, StreamWindow: DefaultStreamWindow, Timeout: DefaultTimeout}
 
@@ -304,4 +306,23 @@ func stringList(obj map[string]any, key string) ([]string, error) {
 		out = append(out, s)
 	}
 	return out, nil
+}
+
+// guardrailObject returns data.guardrail. It refuses the top-level shape and
+// a missing or non-object value.
+func guardrailObject(data map[string]any) (map[string]any, error) {
+	raw, present := data["guardrail"]
+	if !present || raw == nil {
+		for _, key := range []string{"stage", "detectors"} {
+			if _, top := data[key]; top {
+				return nil, fmt.Errorf("%s must sit under data.guardrail, not at the top level of data", key)
+			}
+		}
+		return nil, errors.New("data.guardrail must be an object with stage and detectors")
+	}
+	g, ok := raw.(map[string]any)
+	if !ok {
+		return nil, errors.New("data.guardrail must be an object with stage and detectors")
+	}
+	return g, nil
 }

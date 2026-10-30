@@ -85,7 +85,13 @@ type AgentResolver struct {
 }
 
 // NewAgentResolver builds a resolver. A nil lookup builds one that resolves
-// nothing, so every agent-scoped row stays unmatched.
+// nothing: every agent throttle stays unmatched, and ResolveChecked reports
+// ErrNoAgentLookup for a request with an execution id.
+//
+// The resolver needs only the database. It does not need NATS: the gateway
+// builds one resolver and gives it to the rate limiter and to the guardrail
+// selection (llmproxy.WithAgentResolver), so agent-scoped guardrails apply on
+// a gateway without NATS.
 func NewAgentResolver(lookup AgentLookup, log *slog.Logger, now func() time.Time) *AgentResolver {
 	if log == nil {
 		log = slog.Default()
@@ -105,18 +111,35 @@ func (r *AgentResolver) Failures() int64 {
 	return r.failures.Load()
 }
 
+// ErrNoAgentLookup is the error of a resolver without a lookup: the agent of
+// a run cannot be known.
+var ErrNoAgentLookup = errors.New("policy: no agent lookup is configured")
+
 // Resolve returns the agent of executionID, or the zero AgentRef when there is
 // none or it cannot be known.
 func (r *AgentResolver) Resolve(ctx context.Context, executionID string) AgentRef {
-	if r == nil || r.lookup == nil || executionID == "" || len(executionID) > maxExecutionIDBytes {
-		return AgentRef{}
+	ref, _ := r.ResolveChecked(ctx, executionID)
+	return ref
+}
+
+// ResolveChecked is Resolve, and it tells "no agent" apart from "not known".
+// It returns an error when the request has an execution id and the agent of
+// that run cannot be read: a nil resolver, no lookup, or a failed lookup. A
+// guardrail scoped to agents uses the error to apply its fail mode; an agent
+// throttle ignores it (Resolve).
+func (r *AgentResolver) ResolveChecked(ctx context.Context, executionID string) (AgentRef, error) {
+	if executionID == "" || len(executionID) > maxExecutionIDBytes {
+		return AgentRef{}, nil
+	}
+	if r == nil || r.lookup == nil {
+		return AgentRef{}, ErrNoAgentLookup
 	}
 	now := r.now()
 	r.mu.Lock()
 	entry, hit := r.cache[executionID]
 	r.mu.Unlock()
 	if hit && now.Before(entry.expires) {
-		return entry.ref
+		return entry.ref, nil
 	}
 
 	lctx, cancel := context.WithTimeout(ctx, agentLookupTimeout)
@@ -126,10 +149,11 @@ func (r *AgentResolver) Resolve(ctx context.Context, executionID string) AgentRe
 		r.failures.Add(1)
 		if last := r.lastLog.Load(); now.UnixNano()-last >= int64(agentFailureLogEvery) &&
 			r.lastLog.CompareAndSwap(last, now.UnixNano()) {
-			r.log.Warn("policy: the agent of a run could not be read; agent throttles do NOT apply to its calls "+
-				"until the lookup succeeds", "execution_id", executionID, "failures", r.failures.Load(), "err", err)
+			r.log.Warn("policy: the agent of a run could not be read; agent throttles do NOT apply to its calls, "+
+				"and agent guardrails apply their fail mode, until the lookup succeeds",
+				"execution_id", executionID, "failures", r.failures.Load(), "err", err)
 		}
-		return AgentRef{}
+		return AgentRef{}, err
 	}
 	if !found || !ref.Known() {
 		ref, found = AgentRef{}, false
@@ -151,7 +175,7 @@ func (r *AgentResolver) Resolve(ctx context.Context, executionID string) AgentRe
 	}
 	r.cache[executionID] = agentEntry{ref: ref, found: found, expires: now.Add(ttl)}
 	r.mu.Unlock()
-	return ref
+	return ref, nil
 }
 
 // PostgresAgentLookup reads the agent from elitea_runtime.agent_execution_jobs

@@ -226,6 +226,14 @@ type Handler struct {
 	// guardrailSecrets resolves the auth secret of a guardrail http adapter
 	// (guardrail_gate.go). nil fails every adapter that names one.
 	guardrailSecrets GuardrailSecretResolver
+	// agents resolves the agent of a request for the agent-scoped rows
+	// (guardrails and agent throttles). It needs only the database, not
+	// NATS. nil falls back to the rate limiter's resolver; with neither, an
+	// agent-scoped guardrail applies its fail mode (guardrail_gate.go).
+	agents *policy.AgentResolver
+	// noAgentResolverLog logs once that agent-scoped guardrails cannot be
+	// evaluated because no agent resolver is wired.
+	noAgentResolverLog sync.Once
 }
 
 // HandlerOption customises Handler construction. It keeps NewHandler's core
@@ -728,7 +736,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	// The output guardrails run on the decoded answer before any byte of it
 	// is written. A blocked answer is still billed below.
 	if bErr == nil && resp != nil {
-		if v := h.applyOutputGuardrails(ctx, provider, model, chatResponseTexts(resp)); v != nil {
+		if v := h.applyOutputGuardrails(ctx, provider, model, chatResponseTargets(resp)); v != nil {
 			writeGuardrailRefusal(w, v)
 		} else {
 			h.writeUnary(w, resp, bErr)
@@ -773,7 +781,7 @@ func (h *Handler) TextCompletion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, bErr := h.router.TextCompletionRequest(ctx, bifReq)
-	h.writeGuardedUnary(w, ctx, provider, model, resp, bErr, func() []*string { return textResponseTexts(resp) })
+	h.writeGuardedUnary(w, ctx, provider, model, resp, bErr, func() guardTargets { return textResponseTargets(resp) })
 	if bErr == nil && resp != nil {
 		in, out := usageFromTextCompletionResponse(resp)
 		recordLoggedCacheTokens(ctx, resp.Usage)
@@ -864,7 +872,7 @@ func (h *Handler) Responses(w http.ResponseWriter, r *http.Request) {
 	}
 	defer sc.cancel()
 	resp, bErr := h.router.ResponsesRequest(ctx, bifReq)
-	h.writeGuardedUnary(w, ctx, provider, model, resp, bErr, func() []*string { return responsesResponseTexts(resp) })
+	h.writeGuardedUnary(w, ctx, provider, model, resp, bErr, func() guardTargets { return responsesResponseTargets(resp) })
 	// FIX #3: bill the unary response after writing to the client.
 	if bErr == nil && resp != nil {
 		in, out := usageFromResponsesResponse(resp)
@@ -975,7 +983,7 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 	}
 	// Write the response first, then bill asynchronously (FIX #18). The
 	// output guardrails run before the write; a blocked answer is billed.
-	if v := h.applyOutputGuardrails(ctx, provider, model, responsesResponseTexts(resp)); v != nil {
+	if v := h.applyOutputGuardrails(ctx, provider, model, responsesResponseTargets(resp)); v != nil {
 		writeGuardrailRefusal(w, v)
 	} else {
 		writeJSON(w, http.StatusOK, anthropic.ToAnthropicResponsesResponse(ctx, resp))
@@ -1125,7 +1133,7 @@ func (h *Handler) writeUnary(w http.ResponseWriter, resp interface{}, bErr *sche
 }
 
 // writeGuardedUnary is writeUnary with the output guardrails applied to the
-// texts of a successful answer first. A refused answer is written as the
+// texts and tool-call arguments of a successful answer first. A refused answer is written as the
 // guardrail refusal; the caller still bills it.
 func (h *Handler) writeGuardedUnary(
 	w http.ResponseWriter,
@@ -1133,10 +1141,10 @@ func (h *Handler) writeGuardedUnary(
 	provider, model string,
 	resp interface{},
 	bErr *schemas.BifrostError,
-	texts func() []*string,
+	targets func() guardTargets,
 ) {
 	if bErr == nil && resp != nil {
-		if v := h.applyOutputGuardrails(ctx, provider, model, texts()); v != nil {
+		if v := h.applyOutputGuardrails(ctx, provider, model, targets()); v != nil {
 			writeGuardrailRefusal(w, v)
 			return
 		}
@@ -1336,7 +1344,7 @@ func (h *Handler) streamResponses(
 		// Capture usage from the response.completed event (carries Response.Usage).
 		s.observe(chunk)
 		sr := chunk.BifrostResponsesStreamResponse
-		before, blocked := gs.responsesEvent(ctx, sr)
+		before, drop, blocked := gs.responsesEvent(ctx, sr)
 		if blocked != nil {
 			_ = sw.Event("error", guardrailErrorJSON(blocked))
 			s.settleEarly(lossReasonGuardrail)
@@ -1345,6 +1353,10 @@ func (h *Handler) streamResponses(
 		if writeErr := writeResponsesEvents(sw, before); writeErr != nil {
 			s.settleEarly(lossReasonWriteError)
 			return
+		}
+		if drop {
+			// The guardrails hold this tool-call argument delta.
+			continue
 		}
 		event := string(sr.Type)
 		data, mErr := json.Marshal(sr)
@@ -1446,13 +1458,17 @@ func (h *Handler) streamAnthropic(
 		// Capture usage from the response.completed event.
 		s.observe(chunk)
 		sr := chunk.BifrostResponsesStreamResponse
-		before, blocked := gs.responsesEvent(ctx, sr)
+		before, drop, blocked := gs.responsesEvent(ctx, sr)
 		if blocked != nil {
 			_ = sw.Event("error", anthropicGuardrailErrorJSON(blocked))
 			s.settleEarly(lossReasonGuardrail)
 			return
 		}
-		for _, item := range append(before, sr) {
+		if !drop {
+			// A held tool-call argument delta is not sent.
+			before = append(before, sr)
+		}
+		for _, item := range before {
 			if writeErr := h.writeAnthropicEvents(sw, ctx, item); writeErr != nil {
 				s.settleEarly(lossReasonWriteError)
 				return

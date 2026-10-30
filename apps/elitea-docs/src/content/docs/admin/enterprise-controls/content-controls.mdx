@@ -27,13 +27,18 @@ An entry has these settings:
 | `apply_to_embeddings` | `true` applies an input entry to embedding requests too. | `false` |
 | `stream_window_bytes` | 64 to 8192. The look-behind buffer of a streamed answer for an output entry. | 256 |
 
+Put the settings in the `guardrail` object of the entry data, as in the example below. The admin API refuses an entry with `stage` or `detectors` at the top level of the data (HTTP 400), and the gateway does not load such an entry.
+
+**Agent scope.** The gateway finds the agent of a request from the signed run id and the run record in the database. It does not need NATS for this. When a request comes from a run and the gateway cannot read the agent of the run, an agent entry that can apply is not skipped. Its fail mode applies: a `closed` entry refuses the request with HTTP 503, and an `open` entry lets the request continue. Both record a verdict with the detector `agent_scope` and the label `agent_unresolved`. `GET /governance/status` on the gateway shows `guardrail_agent_scope`, and the metric `gateway_guardrail_agent_unresolved_total` counts these entries.
+
 The gateway applies the entries as follows:
 
 1. **Every matching entry runs.** The narrowest entry does not replace the wider ones. The entries run from the widest scope to the narrowest, and then by name. The detectors of an entry run in their order.
 2. **Every detector reads the original content.** The gateway collects the spans of all `mask` detectors and replaces them one time, with `[REDACTED:<label>]`.
 3. **A `block` result stops the check** and refuses the request or the answer. A `flag` result changes nothing and adds a verdict.
-4. **The input stage runs before the provider call.** A blocked request does not reach the provider. A masked request goes to the provider with the markers.
-5. **The output stage runs on unary and streamed answers**, in the OpenAI chat and completions, Responses and Anthropic Messages formats.
+4. **The input stage runs before the provider call.** It reads the message text, the Responses instructions and the tool results in all formats: a chat `tool` message, a Responses `function_call_output` (text or content parts), a shell call output, and an Anthropic `tool_result`. A blocked request does not reach the provider. A masked request goes to the provider with the markers.
+5. **The output stage runs on unary and streamed answers**, in the OpenAI chat and completions, Responses and Anthropic Messages formats. It reads the answer text and the tool call arguments: chat `tool_calls[].function.arguments`, Responses `function_call` arguments and custom tool input, and Anthropic `tool_use` input. A `block` on tool call arguments refuses the answer.
+6. **A mask keeps tool call arguments valid JSON.** The gateway checks each string value of the arguments in its decoded form and replaces only the masked values. Arguments that are not valid JSON are checked and masked as plain text.
 
 A refusal uses the OpenAI error shape on all `/llm` routes:
 
@@ -47,7 +52,7 @@ The error message names the entry, the detector and the labels. It never contain
 #### Detectors
 
 - **`regex`** finds the `patterns` (1 to 64 expressions of at most 1024 bytes) and the `terms` (at most 1000 words or phrases, 64 KiB in total). The patterns use the RE2 syntax, which has linear time and no back-references. A pattern that matches an empty string is refused. A term matches without case, on word boundaries. Set a `label` to name the findings (default `custom`).
-- **`secrets`** uses the platform secret rules: `aws-access-key-id`, `aws-secret-access-key`, `private-key`, `github-token`, `github-fine-grained-token`, `gitlab-token`, `slack-token`, `slack-webhook`, `connection-string-password`, `password-assignment` and `jwt`. These are the rules that the desktop handoff uses. Set `rules` to use only some of them. The label of a finding is its rule id. When a rule names a secret group, a `mask` action replaces only the secret value, not the key name around it.
+- **`secrets`** uses the platform secret rules: `aws-access-key-id`, `aws-secret-access-key`, `private-key`, `github-token`, `github-fine-grained-token`, `gitlab-token`, `slack-token`, `slack-webhook`, `connection-string-password`, `password-assignment` and `jwt`. These are the rules that the desktop handoff uses. Set `rules` to use only some of them. The label of a finding is its rule id. When a rule names a secret group, a `mask` action replaces only the secret value, not the key name around it. The `private-key` rule matches the full PEM block, from the `BEGIN` line through the `END` line. A `mask` action replaces the header, the key body and the footer with one marker. When the text has no `END` line, the mask continues to the end of that message or tool result. In a request, a key without an `END` line does not mask the messages after it.
 - **`http`** sends the content to a classifier that you operate, with the [HTTP adapter contract](#http-adapter-contract).
 
 Example entry, which masks secrets and blocks a confidential project name in answers:
@@ -115,6 +120,8 @@ The call to the adapter is outbound traffic. The gateway applies its egress rule
 - **`block`**: the gateway ends the stream with a typed error event and does not send more text. The OpenAI format gets a `data:` frame with the error body. The Responses and Anthropic formats get an `event: error` frame. The tokens that the provider generated are billed.
 - **`mask`**: the gateway holds back the last `stream_window_bytes` of the text and checks the held text together with the text before it. A match that is split across two or more chunks is masked before the client gets any part of it. The client never gets raw text that a `mask` detector matched. When a match crosses the release point, the gateway holds the text from the start of the match. The gateway always releases the text when it holds 16 times the window.
 - **`flag`**: a flag detector does not delay the stream. It runs one time on the full answer (up to 1 MiB) when the stream ends.
+- **A long match, such as a PEM private key**: the gateway holds the text from the start of the match until the match ends and one window of text follows it. The hold has a limit of 16 times the window. At the limit, the gateway sends the held part of the match as the mask marker and continues to mask the new text of the match until its end. The client never gets a part of the key body or the footer. When an open match is longer than 64 KiB, the gateway masks the rest of the answer.
+- **Tool call arguments**: when a `block` or `mask` detector applies, the gateway holds the arguments of each tool call until the call is complete, and then checks them. Chat clients get the call id and name first, and all the masked arguments in the finish chunk of the choice. Responses and Anthropic clients get one argument delta with all the masked arguments before the `done` event. A flag-only entry does not hold the arguments.
 
 **Latency of a mask entry.** The client gets the text `stream_window_bytes` later than without the entry, at the default of 256 bytes about 60 tokens. The last part comes when the stream ends. A larger window masks longer matches across chunks but makes the delay longer.
 
@@ -124,12 +131,12 @@ Embedding requests have no text output, so output entries do not apply to them. 
 
 #### What is not inspected
 
-- Tool call arguments in requests and answers, and the provider refusal field.
+- Tool call arguments in the request history (the earlier assistant turns), and the provider refusal field.
 - Image, audio, real-time and token count requests.
 
 ### Evidence
 
-Each detector run is a **verdict**. A verdict records the entry, the detector, its type, the action, the outcome, the fail mode, the labels, the number of findings, the highest score, the latency and the number of checks it merges. **A verdict never contains the inspected text or the matched text.** The outcome is one of `pass`, `flagged`, `masked`, `blocked`, `error_open` (the detector failed and the request continued) and `error_closed` (the detector failed and the request was refused).
+Each detector run is a **verdict**. A verdict records the entry, the detector, its type, the action, the outcome, the fail mode, the labels, the number of findings, the highest score, the latency and the number of checks it merges. **A verdict never contains the inspected text or the matched text.** The outcome is one of `pass`, `flagged`, `masked`, `blocked`, `error_open` (the detector failed and the request continued) and `error_closed` (the detector failed and the request was refused). An agent entry that the gateway could not evaluate has a verdict with the detector `agent_scope`, the label `agent_unresolved` and the outcome `error_open` or `error_closed`.
 
 A streamed answer is checked one time for each window. The gateway merges these checks into one verdict for each detector, with `runs` set to the number of checks.
 
@@ -154,7 +161,7 @@ Example verdict:
 }
 ```
 
-The gateway writes the verdicts to the table `gateway.guardrail_verdicts` together with its request log, with the project, the user and the execution id of the request. A request without an execution id also gets its verdicts. The verdicts are kept for the retention window of the `gateway_request_log` data class.
+The gateway writes the verdicts to the table `gateway.guardrail_verdicts` together with its request log, with the project, the user and the execution id of the request. A request without an execution id also gets its verdicts. The verdicts are kept for the retention window of the `gateway_request_log` data class. Each hourly prune deletes the expired verdicts in batches of 10000 rows until none is left, with a limit of 100 batches and 10 seconds for each table. When a verdict write fails, the request log rows of the batch are kept, and the metric `gateway_guardrail_verdict_write_failures_total` counts the lost verdicts.
 
 For an agent run, the [run steps API](/admin/enterprise-controls/reconstruct-a-run) returns the verdicts of the run in `guardrail_verdicts` on the first page of `GET /api/v2/elitea_core/run_steps/prompt_lib/{project_id}/{run_id}`. The verdicts are not part of the run's hash chain: the gateway writes them, and elitea-main writes the chain.
 

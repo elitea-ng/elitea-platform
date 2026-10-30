@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"sort"
 	"strings"
@@ -85,5 +87,33 @@ func TestGuardrailScopeAcceptsAgentsButNotUsers(t *testing.T) {
 	if err := validateGovernanceRow(GovernanceRow{Type: "budget", Name: "b",
 		Data: map[string]any{"scope": map[string]any{"project_ids": []any{7.0}, "agent_ids": []any{3.0}}}}); err == nil {
 		t.Fatal("an agent-scoped budget was accepted")
+	}
+}
+
+// TestGuardrailTopLevelShapeIsRefusedWith400 pins the one data shape. The
+// admin form writes data.guardrail and reads only data.guardrail. A row with
+// stage and detectors at the top level of data would show defaults in the
+// form, and a save would overwrite the authored values. So the write refuses
+// it with a 400 that names data.guardrail. The validation runs before any
+// database call, so the handler needs no pool here.
+func TestGuardrailTopLevelShapeIsRefusedWith400(t *testing.T) {
+	body := `{"type":"guardrail","name":"g","data":{"stage":"output","detectors":[{"type":"secrets","action":"mask"}]}}`
+	req := httptest.NewRequest(http.MethodPost, "/governance", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	(&GovernanceHandler{}).Create(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "data.guardrail") {
+		t.Fatalf("the refusal does not name data.guardrail: %s", rec.Body.String())
+	}
+	for name, data := range map[string]map[string]any{
+		"not an object": {"guardrail": "output"},
+		"absent":        {},
+	} {
+		if err := validateGuardrailData(data); err == nil || !strings.Contains(err.Error(), "data.guardrail") {
+			t.Errorf("%s: err = %v", name, err)
+		}
 	}
 }

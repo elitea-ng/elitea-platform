@@ -19,12 +19,40 @@ type Pipeline struct {
 // Active reports whether the pipeline has a row to run.
 func (p *Pipeline) Active() bool { return p != nil && len(p.Rows) > 0 }
 
+// Holds reports whether a block or mask detector applies, so streamed output
+// must be held back until it is checked. A flag-only pipeline holds nothing.
+func (p *Pipeline) Holds() bool {
+	if !p.Active() {
+		return false
+	}
+	for _, row := range p.Rows {
+		for _, d := range row.Detectors {
+			if liveDetector(d) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // span is one byte range to mask, with the label of the first detector that
 // asked for it.
 type span struct {
 	start, end int
 	label      string
 }
+
+// segmentLocal marks a detector whose matches must not cross the boundary of
+// a part. CheckAll joins the parts into one content; such a detector reads
+// each part alone. The secrets detector is one: its private-key rule matches
+// through the end of the text when a PEM block has no END line, and that end
+// is the end of the part, not the end of the whole request.
+type segmentLocal interface {
+	segmentLocal()
+}
+
+// bound is the byte range of one part inside the joined content.
+type bound struct{ start, end int }
 
 // result is the outcome of one pipeline run on one content.
 type result struct {
@@ -54,10 +82,17 @@ func (p *Pipeline) Check(ctx context.Context, content string) (masked string, bl
 // run evaluates the selected detectors of every row, in row order and in
 // detector order. A block, or a failure of a closed row, stops the run.
 func (p *Pipeline) run(ctx context.Context, content string, filter detectorFilter) result {
+	return p.runParts(ctx, content, nil, filter)
+}
+
+// runParts is run on a content joined from parts. A segmentLocal detector
+// reads each part alone; the others read the whole content. Nil parts make
+// the whole content one part.
+func (p *Pipeline) runParts(ctx context.Context, content string, parts []bound, filter detectorFilter) result {
 	var res result
 	for _, row := range p.Rows {
 		rowCtx, cancel := context.WithTimeout(ctx, row.Timeout)
-		stop := p.runRow(rowCtx, row, content, filter, &res)
+		stop := p.runRow(rowCtx, row, content, parts, filter, &res)
 		cancel()
 		if stop {
 			return res
@@ -66,13 +101,43 @@ func (p *Pipeline) run(ctx context.Context, content string, filter detectorFilte
 	return res
 }
 
-func (p *Pipeline) runRow(ctx context.Context, row *Row, content string, filter detectorFilter, res *result) bool {
+// detectParts runs d on each part of content and moves the findings to
+// offsets in content. A finding without a span covers its part only.
+func (p *Pipeline) detectParts(ctx context.Context, d *Detector, content string, parts []bound) ([]Finding, error) {
+	var out []Finding
+	for _, b := range parts {
+		found, err := d.impl.detect(ctx, p.Env, p.Stage, content[b.start:b.end])
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range found {
+			if f.Whole {
+				f.Whole = false
+				f.Start, f.End = 0, b.end-b.start
+			}
+			f.Start += b.start
+			f.End += b.start
+			out = append(out, f)
+		}
+	}
+	return out, nil
+}
+
+func (p *Pipeline) runRow(ctx context.Context, row *Row, content string, parts []bound, filter detectorFilter, res *result) bool {
 	for _, d := range row.Detectors {
 		if !filter(d) {
 			continue
 		}
 		started := time.Now()
-		findings, err := d.impl.detect(ctx, p.Env, p.Stage, content)
+		var (
+			findings []Finding
+			err      error
+		)
+		if _, local := d.impl.(segmentLocal); local && len(parts) > 1 {
+			findings, err = p.detectParts(ctx, d, content, parts)
+		} else {
+			findings, err = d.impl.detect(ctx, p.Env, p.Stage, content)
+		}
 		latency := time.Since(started)
 		v := Verdict{
 			Stage: p.Stage, Row: row.Name, Detector: d.Name, DetectorType: d.Type,
@@ -157,6 +222,13 @@ func mergeSpans(spans []span) []span {
 
 // applyMasks replaces every span of content with its marker.
 func applyMasks(content string, spans []span) string {
+	return applyMasksFrom(content, spans, false)
+}
+
+// applyMasksFrom is applyMasks. With continued set, a span that starts at
+// byte 0 continues a mask that an earlier release already marked: it removes
+// its text and writes no second marker.
+func applyMasksFrom(content string, spans []span, continued bool) string {
 	merged := mergeSpans(spans)
 	if len(merged) == 0 {
 		return content
@@ -173,7 +245,9 @@ func applyMasks(content string, spans []span) string {
 			continue
 		}
 		b.WriteString(content[pos:start])
-		b.WriteString(MaskMarker(s.label))
+		if !continued || start != 0 {
+			b.WriteString(MaskMarker(s.label))
+		}
 		pos = end
 	}
 	b.WriteString(content[pos:])
@@ -196,7 +270,8 @@ const segmentSeparator = "\n\n"
 
 // CheckAll runs the pipeline once on parts joined by a blank line, and returns
 // each part masked, or blocked. A mask span that covers a separator masks
-// both parts it touches.
+// both parts it touches. A segmentLocal detector (secrets) reads each part
+// alone, so its spans never cross a separator.
 func (p *Pipeline) CheckAll(ctx context.Context, parts []string) ([]string, *Verdict) {
 	if !p.Active() || len(parts) == 0 {
 		return parts, nil
@@ -206,12 +281,18 @@ func (p *Pipeline) CheckAll(ctx context.Context, parts []string) ([]string, *Ver
 		return []string{out}, blocked
 	}
 	joined := strings.Join(parts, segmentSeparator)
-	res := p.run(ctx, joined, allDetectors)
+	bounds := make([]bound, len(parts))
+	offset := 0
+	for i, part := range parts {
+		bounds[i] = bound{start: offset, end: offset + len(part)}
+		offset += len(part) + len(segmentSeparator)
+	}
+	res := p.runParts(ctx, joined, bounds, allDetectors)
 	if res.blocked != nil {
 		return nil, res.blocked
 	}
 	out := make([]string, len(parts))
-	offset := 0
+	offset = 0
 	for i, part := range parts {
 		end := offset + len(part)
 		var local []span

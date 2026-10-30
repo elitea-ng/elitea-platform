@@ -60,10 +60,22 @@ var guardrailSecretRuleIDs = []string{
 }
 
 // validateGuardrailData refuses a guardrail entry the gateway would reject.
+// The entry must sit under data.guardrail: that is the one shape the admin
+// form writes and the gateway reads. Stage or detectors at the top level of
+// data are refused with a 400 that names the right place.
 func validateGuardrailData(data map[string]any) error {
-	g, _ := data["guardrail"].(map[string]any)
-	if len(g) == 0 {
-		g = data
+	rawGuard, present := data["guardrail"]
+	if !present || rawGuard == nil {
+		for _, key := range []string{"stage", "detectors"} {
+			if _, top := data[key]; top {
+				return fmt.Errorf("%s must sit under data.guardrail, not at the top level of data", key)
+			}
+		}
+		return errors.New("data.guardrail must be an object with stage and detectors")
+	}
+	g, ok := rawGuard.(map[string]any)
+	if !ok {
+		return errors.New("data.guardrail must be an object with stage and detectors")
 	}
 	stage, _ := g["stage"].(string)
 	if stage != "input" && stage != "output" {

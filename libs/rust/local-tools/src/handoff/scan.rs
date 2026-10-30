@@ -291,6 +291,26 @@ mod tests {
         }
     }
 
+    /// The private-key rule matches the whole PEM block, so the gateway mask
+    /// covers the body. The handoff scan reads lines: it still reports the
+    /// BEGIN line once, and the body and END lines are no finding.
+    #[test]
+    fn a_pem_block_is_one_finding_on_its_begin_line() {
+        let text = join(&[
+            "config\n-----BEGIN RSA ",
+            "PRIVATE KEY-----\nQUJDREVG\nR0hJSktM\n-----END RSA ",
+            "PRIVATE KEY-----\nafter\n",
+        ]);
+        let findings = scan("id_rsa", text.as_bytes()).expect("scan");
+        assert_eq!(
+            findings
+                .iter()
+                .map(|f| (f.line, f.rule.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(2, "private-key")]
+        );
+    }
+
     #[test]
     fn false_positives_are_not_findings() {
         let cases = [

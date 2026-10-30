@@ -180,9 +180,12 @@ type LimiterConfig struct {
 	Logger  *slog.Logger
 	Now     func() time.Time
 	// Agents reads the agent of a runtime execution, for the agent throttles
-	// (ADR-0041 decision 4). Production passes NewPostgresAgentLookup. nil
-	// disables agent throttles only.
+	// (ADR-0041 decision 4). nil disables agent throttles only.
 	Agents AgentLookup
+	// Resolver is a resolver the caller shares with other users (the
+	// guardrail selection). It takes precedence over Agents. Production
+	// passes one resolver over NewPostgresAgentLookup.
+	Resolver *AgentResolver
 }
 
 // NewLimiter builds a Limiter. A nil Counter or Subject builds a limiter that
@@ -198,7 +201,10 @@ func NewLimiter(cfg LimiterConfig) *Limiter {
 		nowFn = time.Now
 	}
 	l := &Limiter{subject: cfg.Subject, log: log, now: nowFn}
-	if cfg.Agents != nil {
+	switch {
+	case cfg.Resolver != nil:
+		l.agents = cfg.Resolver
+	case cfg.Agents != nil:
 		l.agents = NewAgentResolver(cfg.Agents, log, nowFn)
 	}
 	if cfg.Counter != nil {
@@ -216,8 +222,9 @@ func (l *Limiter) Enabled() bool {
 }
 
 // Degraded returns how many admissions skipped enforcement because the counter
-// was unreachable, or because the agent of the run could not be read for an
-// agent throttle.
+// was unreachable, plus the failed agent lookups of the resolver. The
+// resolver is shared with the guardrail selection, so a failed lookup there
+// counts here too.
 func (l *Limiter) Degraded() int64 {
 	if l == nil {
 		return 0
@@ -233,6 +240,14 @@ func (l *Limiter) Agent(ctx context.Context, executionID string) AgentRef {
 		return AgentRef{}
 	}
 	return l.agents.Resolve(ctx, executionID)
+}
+
+// Agents returns the limiter's agent resolver, or nil.
+func (l *Limiter) Agents() *AgentResolver {
+	if l == nil {
+		return nil
+	}
+	return l.agents
 }
 
 // Refused returns how many admissions the limiter blocked.

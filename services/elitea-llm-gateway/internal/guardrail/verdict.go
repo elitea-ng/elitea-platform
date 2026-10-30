@@ -19,6 +19,44 @@ const (
 // LabelDetectorError is the label of a verdict whose detector failed.
 const LabelDetectorError = "detector_error"
 
+// LabelAgentUnresolved is the label of a verdict for an agent-scoped row
+// that the gateway could not evaluate: the request names a run, and the agent
+// of that run could not be read.
+const LabelAgentUnresolved = "agent_unresolved"
+
+// DetectorAgentScope is the detector name and type of such a verdict.
+const DetectorAgentScope = "agent_scope"
+
+// RecordScopeUnresolved records that row could not be evaluated because the
+// agent of the request is not known, and returns the verdict. The row's fail
+// mode decides: closed refuses (OutcomeErrorClosed), open proceeds without
+// the row (OutcomeErrorOpen). The action is the row's strongest action.
+func RecordScopeUnresolved(c *Collector, stage string, row *Row) *Verdict {
+	v := Verdict{
+		Stage: stage, Row: row.Name, Detector: DetectorAgentScope, DetectorType: DetectorAgentScope,
+		Action: strongestAction(row), FailMode: row.FailMode, Labels: []string{LabelAgentUnresolved},
+		Outcome: OutcomeErrorOpen,
+	}
+	if row.FailMode == FailClosed {
+		v.Outcome = OutcomeErrorClosed
+	}
+	c.add(v, 0)
+	return &v
+}
+
+func strongestAction(row *Row) string {
+	action := ActionFlag
+	for _, d := range row.Detectors {
+		switch d.Action {
+		case ActionBlock:
+			return ActionBlock
+		case ActionMask:
+			action = ActionMask
+		}
+	}
+	return action
+}
+
 // Verdict is the record of one detector on one request. It is the step record
 // of ADR-0042 for a guardrail: it names the detector, the labels and the
 // action, and has no field that the inspected content can reach.
