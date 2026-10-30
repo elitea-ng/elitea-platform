@@ -689,3 +689,118 @@ fn a_nested_application_pause_is_refused_typed() {
     let error = child_card(&pause).expect_err("an Application pause is not proven here");
     assert!(error.to_string().contains("graph.parallel.pause_unproved"));
 }
+
+/// The card frame a `ToolGuard` `pause` raises, as the Worker serialises it.
+fn tool_guard_card(pause: &ParallelBranchPause) -> serde_json::Value {
+    use crate::agents::graph::fanout_frames::{
+        AgentPathTier, CardInput, FanoutMemberV1, InterruptCardV1, MemberHierarchy, member_call_id,
+    };
+    let parts = crate::agents::graph::parallel_cards::card_parts(pause).expect("card parts");
+    let member = FanoutMemberV1 {
+        activation: "0123456789abcdef".to_owned(),
+        kind: "parallel",
+        member: "left".to_owned(),
+        node: "fan".to_owned(),
+        ordinal: 1,
+        total: 2,
+    };
+    let hierarchy = MemberHierarchy {
+        path: vec![AgentPathTier {
+            call_id: member_call_id(&pause.thread_id),
+            name: "worker".to_owned(),
+            sibling_ordinal: Some(1),
+        }],
+    };
+    let card = InterruptCardV1::new(CardInput {
+        interrupt_key: &"a".repeat(64),
+        interrupt_id: &child_card(pause).unwrap().card.interrupt_id,
+        kind: parts.kind,
+        available_actions: &parts.available_actions,
+        payload_sha256: &parts.payload_sha256,
+        display: parts.display.clone(),
+        hierarchy: &hierarchy,
+        member: Some(&member),
+    })
+    .expect("the card frame builds");
+    serde_json::to_value(&card).expect("the card encodes")
+}
+
+/// The card fixture Main's upgrade replay test raises (FU-268).
+fn upgrade_card_fixture(name: &str) -> serde_json::Value {
+    let path = format!(
+        "{}/../elitea-main/internal/infra/db/repos/testdata/fu268/tool-guard-card-{name}.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    serde_json::from_slice(&std::fs::read(&path).expect("read the card fixture"))
+        .expect("card json")
+}
+
+/// The pipeline sensitive-tool pause a Worker from before the approval-rule
+/// release (#1540) stored (FU-268), as its fan-out receipt holds it.
+fn pre_1540_tool_guard_pause() -> ParallelBranchPause {
+    let path = format!(
+        "{}/tests/fixtures/fu268/tool-guard-pause-pre-1540.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("read the pause fixture"))
+            .expect("pause json");
+    ParallelBranchPause {
+        thread_id: stored["thread_id"].as_str().expect("thread").to_owned(),
+        checkpoint_id: stored["checkpoint_id"]
+            .as_str()
+            .expect("checkpoint")
+            .to_owned(),
+        interrupt: serde_json::from_value(stored["interrupt"].clone()).expect("interrupt"),
+        checkpointer: Arc::new(MemoryCheckpointer::new()),
+    }
+}
+
+/// FU-268: the upgraded Worker re-projects a card from a pause an earlier
+/// Worker stored (a restore or a wake raises every open card again) with the
+/// earlier card's bytes: the same payload digest, only the display argument
+/// digest Main tolerates is new. A pause that carries an approval rule keeps
+/// it in the card's bytes.
+#[test]
+fn a_tool_guard_card_from_an_earlier_pause_keeps_its_bytes_and_a_recorded_rule_is_kept() {
+    let pause = pre_1540_tool_guard_pause();
+    let card = tool_guard_card(&pause);
+    let earlier = upgrade_card_fixture("pre-1540");
+    let mut without_digest = card.clone();
+    without_digest["display"]
+        .as_object_mut()
+        .expect("display")
+        .remove("argument_digest");
+    assert_eq!(without_digest, earlier, "the earlier Worker's card");
+    assert_eq!(card, upgrade_card_fixture("fu268"), "the card Main replays");
+
+    let digest_with = |rule: serde_json::Value| {
+        let Interrupt::Dynamic {
+            message,
+            data: Some(mut data),
+        } = pause.interrupt.clone()
+        else {
+            panic!("a dynamic tool pause");
+        };
+        data["data"]["approval_rule"] = rule;
+        let ruled = ParallelBranchPause {
+            thread_id: pause.thread_id.clone(),
+            checkpoint_id: pause.checkpoint_id.clone(),
+            interrupt: Interrupt::Dynamic {
+                message,
+                data: Some(data),
+            },
+            checkpointer: pause.checkpointer.clone(),
+        };
+        crate::agents::graph::parallel_cards::card_parts(&ruled)
+            .expect("a ruled pause still renders")
+            .payload_sha256
+    };
+    let policy =
+        digest_with(json!({"source": "policy", "risk_tier": "high", "category": "delete"}));
+    let platform = digest_with(json!({"source": "platform"}));
+    let plain = card["payload_sha256"].as_str().expect("digest");
+    assert_ne!(policy, plain, "a policy rule is part of the card");
+    assert_ne!(platform, plain, "a recorded rule is part of the card");
+    assert_ne!(policy, platform);
+}
