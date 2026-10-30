@@ -58,6 +58,9 @@ export const executionInterruptCardDisplayToolCallIdMax = 512;
 
 export const executionInterruptCardDisplayToolArgsJsonMax = 16384;
 
+export const executionInterruptCardDisplayArgumentDigestRegExp = new RegExp(
+  "^sha256:[0-9a-f]{64}$",
+);
 export const executionInterruptCardDisplayPolicyMessageMax = 2048;
 
 export const executionInterruptCardDisplayInteractionTypeMax = 64;
@@ -116,6 +119,10 @@ export const ExecutionInterruptCardDisplay = zod
       .min(1)
       .max(executionInterruptCardDisplayToolArgsJsonMax)
       .optional(),
+    argument_digest: zod
+      .string()
+      .regex(executionInterruptCardDisplayArgumentDigestRegExp)
+      .optional(),
     policy_message: zod
       .string()
       .min(1)
@@ -139,7 +146,7 @@ export const ExecutionInterruptCardDisplay = zod
       .optional(),
   })
   .describe(
-    "Only fields today's card shows. Headers, tokens, resource metadata and checkpoint ids are never in a card.",
+    "Only fields today's card shows. Headers, tokens, resource metadata and checkpoint ids are never in a card. argument_digest is the worker's digest of the call's arguments before masking (the approval ledger evidence); a card from an earlier worker has none.",
   );
 
 export type ExecutionInterruptCardDisplay = zod.input<

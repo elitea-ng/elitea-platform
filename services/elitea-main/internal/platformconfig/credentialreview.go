@@ -90,7 +90,7 @@ func CredentialReviewPolicyFromValues(values Values) CredentialReviewPolicy {
 // table never saved it and answers the defaults.
 func LoadCredentialReviewPolicy(ctx context.Context, pool *pgxpool.Pool) (CredentialReviewPolicy, error) {
 	values, err := Load(ctx, pool, SectionCredentialReview)
-	if missingTable(err) {
+	if UndefinedTable(err) {
 		return DefaultCredentialReviewPolicy(), nil
 	}
 	if err != nil {

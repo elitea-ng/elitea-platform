@@ -177,7 +177,7 @@ func (f editorLifecycleFixture) persistTerminal(t *testing.T, request agentapp.S
 	if paused {
 		terminal = currentAgentTerminal{HITLPause: &currentAgentHITLPause{ThreadID: request.ClientStreamID, Interrupt: []byte(`{"interrupt_id":"original-decision"}`), Interrupts: []byte(`[{"interrupt_id":"original-decision"}]`), InvokedSkills: []byte(`[]`)}}
 	}
-	expected := outputapp.ExpectedAgentExecution{ClientStreamID: request.ClientStreamID, ClientMessageID: request.ClientMessageID, ExecutionID: outcome.ExecutionID, Generation: 1, ClientExecutionGeneration: request.CurrentTurn.QuestionID}
+	expected := outputapp.ExpectedAgentExecution{ClientStreamID: request.ClientStreamID, ClientMessageID: request.ClientMessageID, ExecutionID: outcome.ExecutionID, ProjectionProjectID: "1", Generation: 1, ClientExecutionGeneration: request.CurrentTurn.QuestionID}
 	if err := projects.WithinProjectTx(t.Context(), 1, pgx.TxOptions{}, func(tx sqlExecutor) error { return persistCurrentAgentTerminal(t.Context(), tx, expected, terminal) }); err != nil {
 		t.Fatal(err)
 	}

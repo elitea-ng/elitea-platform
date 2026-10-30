@@ -86,6 +86,27 @@ type ConfirmationClaim struct {
 	// repeat of the request that consumed it is accepted either way: a client
 	// polling a long run with the same Idempotency-Key repeats its body.
 	Fresh bool
+	// Call names the call for the approval ledger (ADR-0041 decision 5):
+	// the tool, its toolkit and the SHA-256 of its arguments. Never the
+	// arguments.
+	Call ConfirmationLedgerCall
+}
+
+// ConfirmationLedgerCall is what the approval ledger records of a confirmed
+// call.
+type ConfirmationLedgerCall struct {
+	ToolName        string
+	ToolkitName     string
+	ToolkitType     string
+	ArgumentsSHA256 string
+}
+
+// ConfirmationPauseRecorder records that the server asked the desktop to
+// confirm a call (a 409 confirmation_required): the pause row of the
+// approval ledger. A rejection happens on the desktop and sends no call, so
+// the server records no rejection.
+type ConfirmationPauseRecorder interface {
+	RecordConfirmationPause(ctx context.Context, executionID, interruptID string, call ConfirmationLedgerCall) error
 }
 
 // ConfirmationOutcome answers a claim: Accepted, or the interrupt id the

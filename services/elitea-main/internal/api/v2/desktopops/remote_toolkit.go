@@ -398,12 +398,16 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 			ApplicationID: body.ApplicationID, VersionID: body.VersionID,
 			ToolName: confirmationTool, ArgumentsSHA256: call.argumentsSHA256,
 		}.Digest()
+		ledgerCall := localturn.ConfirmationLedgerCall{
+			ToolName: call.toolName, ToolkitName: grant.ToolkitName, ToolkitType: grant.ToolkitType,
+			ArgumentsSHA256: call.argumentsSHA256,
+		}
 		next := ""
 		if body.Confirmation != nil {
 			consumed, err := h.confirmations.ConsumeConfirmation(request.Context(), localturn.ConfirmationClaim{
 				ExecutionID: body.ExecutionID, CallDigest: confirmationCall,
 				InterruptID: body.Confirmation.InterruptID, IdempotencyKey: runRequest.IdempotencyKey,
-				Fresh: confirmationFresh,
+				Fresh: confirmationFresh, Call: ledgerCall,
 			})
 			if err != nil {
 				call.outcome = "confirmation_unavailable"
@@ -424,6 +428,16 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 		// No confirmation, a stale one, or one of another call or already
 		// used: ask the user again, for this call.
 		if next != "" {
+			// The approval ledger's pause row (ADR-0041 decision 5). A
+			// failed record refuses the call: no question is asked that
+			// the ledger does not hold.
+			if recorder, ok := h.confirmations.(localturn.ConfirmationPauseRecorder); ok {
+				if err := recorder.RecordConfirmationPause(request.Context(), body.ExecutionID, next, ledgerCall); err != nil {
+					call.outcome = "confirmation_unavailable"
+					writeLiveTurnError(request.Context(), writer, err)
+					return
+				}
+			}
 			call.outcome = "confirmation_required"
 			writeConfirmationRequired(writer, toolkitID, call.toolName, next, grant)
 			return

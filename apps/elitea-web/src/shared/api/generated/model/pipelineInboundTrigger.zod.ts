@@ -126,6 +126,12 @@ export const PipelineInboundTrigger = zod
       .describe(
         "Whether the inbound body's `variables` may give new values to the agent's declared variables. Absent means false. A variable is substituted into the agent's instructions, so a caller can change instruction text only when the trigger opts in.\n",
       ),
+    on_approval_required: zod
+      .enum(["fail", "skip", "notify_and_wait"])
+      .optional()
+      .describe(
+        "What a run does at a step that needs a person's approval (a sensitive tool or a review node), when no person is there. `fail` ends the run with `approval_required_unattended`. `skip` refuses the step, and the model reads that it was skipped. `notify_and_wait` pauses the run, notifies its owner, and ends it with `approval_timed_out` when nobody answers in time. A run never approves on its own. The value shown is the trigger's own value, else the platform default `approvals.unattended_default` (default `fail`). Each run keeps the value it started with.\n",
+      ),
   })
   .describe(
     'One pipeline version\'s inbound trigger. `configured: false` with no other field is the answer for a pipeline that has none, and is a 200 rather than a 404 because "no trigger yet" is the normal state of almost every pipeline (triggers.go GetTrigger, :96-115).\n',

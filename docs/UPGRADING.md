@@ -4,6 +4,112 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Approval ledger and unattended approvals (#1491, on by default)
+
+ADR-0041 decision 5. Shared migration **0211** adds
+`elitea_runtime.approval_ledger` (append-only), `unattended_run_policies`,
+`unattended_approval_settings` and `unattended_approval_actions`, and adds
+`approval_required_unattended` and `approval_timed_out` to the allowed
+`execution_jobs.cancel_reason` values. No backfill: pauses that started
+before the upgrade have no `pause` row, and a decision on them is recorded.
+
+- **Flag.** The per-interrupt ledger is always on. The environment variable
+  `ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED` was already deleted and is
+  not read; remove it from your values if you still set it. No chart value
+  changes.
+- **Evidence.** Each pause, decision, timeout and unattended outcome writes one
+  ledger row and one `ai.elitea.security.v1.agent.approval` event to the
+  security audit outbox, in the decision's transaction, for every run (not
+  only governed runs). Expect more security audit events in the audit
+  export. A decision that cannot be recorded is refused.
+- **Behaviour change: unattended runs.** A run that a schedule or a webhook
+  trigger started and that gets to a sensitive tool or a review node used to
+  wait for a person indefinitely. It now takes the run's
+  `on_approval_required`: `fail` (the default: the run ends with
+  `approval_required_unattended`), `skip` or `notify_and_wait` (the owner is
+  notified; the run ends with `approval_timed_out` after
+  `approvals.unattended_wait_hours`, default 24). If your schedules need a
+  person to approve steps, set `notify_and_wait` on them, or change the
+  platform default under Configuration › Approvals
+  (`configuration.governance`).
+  This also applies to a static pipeline pause (`interrupt_before` or
+  `interrupt_after`). A static pause has no refusal, so `skip` on it uses
+  `fail`. When a `notify_and_wait` wait on a static pause expires, the run
+  ends with `approval_timed_out` and the pause cannot be continued.
+- **Argument digest.** The worker sends `argument_digest`, the SHA-256 of the
+  arguments before masking, with each root pause and in
+  `display.argument_digest` of each fan-out card (0157). The card schema
+  (`fanout-interrupt-card.v1`) and `ExecutionInterruptCardDisplay` gain this
+  optional field. Main no longer digests the masked arguments: a pause from an
+  earlier worker records no digest.
+- **API.** `PipelineSchedule`, `PipelineScheduleUpdate`,
+  `PipelineInboundTrigger` and `PipelineInboundTriggerModeRequest` gain the
+  optional field `on_approval_required`. No operation was added.
+- **Upgrade order.** Upgrade Main first, then the workers. The chart's Argo CD
+  sync waves do this: Main is wave 0, the workers are wave 1. A new worker
+  puts `argument_digest` in a fan-out card, and Main of an earlier release
+  refuses that card, because the card's `display` is closed. A new Main
+  accepts cards from an earlier worker (no digest). If you do not use the
+  chart's Argo CD application, upgrade Main and wait until it is ready before
+  you upgrade the workers.
+
+## Approval policy by risk tier and tool category (#1498, off until saved)
+
+ADR-0041 decision 5. No migration. Every built-in tool has a category in
+`libs/proto/contracts/tool-categories-v1.json` (`read`, `write`, `delete`,
+`external_send`, `payment`, `code_execution`; a tool that is not listed is
+`write`). A custom MCP server's pinned tools take the category the approver
+gave them (`pinned_tools[].category`).
+
+- **Setting.** Configuration › Approval Policy (`approval_policy` section,
+  gated on `configuration.governance`): per tier, the categories whose tools
+  need approval (default: `delete`, `external_send`, `payment` at `high` and
+  `critical`, nothing at `low` and `medium`), and
+  `require_hitl_tiers` (default none).
+- **Upgrade order: Main, then the workers.** Main sends the policy on the new
+  `WorkerCommandV1.approval_policy` field (68) **only after an administrator
+  saves the section**. A worker from an earlier release refuses the unknown
+  field, so do not save the section until every worker runs this release.
+  Until it is saved, only the platform's sensitive action tools pause, as
+  before. The defaults above apply from the save.
+- **Tier.** The root agent's `risk_tier` from its registry record (no record
+  is `low`). Callees use the root agent's tier.
+- **Evidence.** A sensitive tool pause carries `approval_rule`
+  (`{"source":"policy","risk_tier":"high","category":"delete"}`, or `source`
+  `platform` / `builtin`). A pipeline pause writes it only for a policy rule,
+  so an earlier worker still reads the pause; the chat frame shows `platform`
+  when it is absent.
+- **Behaviour change: pipeline starts can be refused.** With
+  `require_hitl_tiers` set, a pipeline at one of those tiers whose path to an
+  `external_send` or `payment` toolkit or MCP node has no `hitl` node does
+  not start: HTTP 422 `PIPELINE_HITL_REQUIRED`, with the node, the tool and
+  the path in the message. Pipelines are not publishable, so the check is
+  at every start (chat, schedule, trigger).
+
+## Nested pauses (#1498, on by default)
+
+ADR-0041 decision 5. No migration, no proto change, no setting. Worker only;
+Main and the browser are unchanged.
+
+- **Now supported.** A `hitl` node in a pipeline that an agent calls as a
+  tool, at any agent tier, and in a saved pipeline that a pipeline `agent`
+  node runs, resumes at the level that paused. Each level keeps its
+  checkpoint, the resume runs one time, and the callers continue. Before,
+  some of these pauses failed at resume.
+- **Behaviour change: some attached pipelines are no longer offered.** The
+  worker now skips, before any model call, an attached pipeline that can
+  pause in a position that it cannot resume: a `hitl` node with more than 3
+  delegations above it (the approval card names at most 3 tiers), or a
+  `hitl` node in a pipeline tool beneath a pipeline root. Before, these
+  pipelines were offered and failed when they paused. The agent answers
+  without the pipeline, and the worker logs
+  `an attached pipeline child could not be built and was skipped` with
+  `cause = pipeline.child_pause_unsupported` and `cause_detail` = the pause
+  kind (`pause_past_owner_path_tiers`, `hitl_gate_under_graph_root`,
+  `sensitive_tool_approval`, `clarifying_questions`, `mcp_authorization`,
+  `unscoped_agent_node`). After the upgrade, search the worker logs for this
+  cause. To fix a skipped pipeline, move its `hitl` node to a higher level.
+
 ## Delegation narrowing and depth cap (#1501, on by default)
 
 ADR-0044 decision 3. No migration. When an agent calls a saved agent or

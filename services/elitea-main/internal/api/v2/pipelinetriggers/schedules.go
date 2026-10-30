@@ -40,6 +40,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/robfig/cron/v3"
 )
 
@@ -72,6 +73,10 @@ type scheduleView struct {
 	LastResultText  string     `json:"last_result_detail,omitempty"`
 	LastResultAt    *time.Time `json:"last_result_at,omitempty"`
 	LastExecutionID string     `json:"last_execution_id,omitempty"`
+	// OnApprovalRequired is what a run of this schedule does at a step that
+	// needs an approval (#1491): the schedule's own value, else the platform
+	// default.
+	OnApprovalRequired string `json:"on_approval_required,omitempty"`
 	// NextRun is computed, not stored. It is the answer to "when will this
 	// actually fire", which a cron expression does not give a person on sight —
 	// and it is computed HERE, with the parser that will fire it, so the
@@ -126,12 +131,14 @@ type scheduleBody struct {
 	Cron   string  `json:"cron"`
 	Active *bool   `json:"active"`
 	Input  *string `json:"input"`
+	// OnApprovalRequired is parsed by parseOnApprovalRequired; absent keeps
+	// the stored value.
 }
 
 // GetSchedule reads the schedule. Like the trigger read it answers 200 with
 // `{"configured": false}` for a pipeline that has none.
 func (h *Handler) GetSchedule(w http.ResponseWriter, r *http.Request) {
-	schema, _, versionID, ok := h.routeTarget(w, r)
+	schema, projectID, versionID, ok := h.routeTarget(w, r)
 	if !ok {
 		return
 	}
@@ -145,7 +152,9 @@ func (h *Handler) GetSchedule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "the schedule could not be read")
 		return
 	}
-	writeJSON(w, http.StatusOK, scheduleViewOf(row))
+	view := scheduleViewOf(row)
+	view.OnApprovalRequired = h.viewOnApprovalRequired(r.Context(), projectID, approvalTargetSchedule, versionID)
+	writeJSON(w, http.StatusOK, view)
 }
 
 // SaveSchedule creates or replaces the schedule.
@@ -162,6 +171,11 @@ func (h *Handler) SaveSchedule(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxInboundBody))
 	if err != nil || json.Unmarshal(raw, &body) != nil {
 		writeError(w, http.StatusBadRequest, "the request body is not valid JSON")
+		return
+	}
+	onApproval, err := parseOnApprovalRequired(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, onApprovalRequiredMessage)
 		return
 	}
 	expression := strings.TrimSpace(body.Cron)
@@ -204,15 +218,27 @@ func (h *Handler) SaveSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	row, err := h.upsertSchedule(r.Context(), schema,
-		target.ApplicationID, versionID, actorID, expression, active, input)
+	// The schedule row and its approval action are one transaction: a
+	// failed action save leaves the schedule as it was.
+	var row scheduleRow
+	err = pgx.BeginFunc(r.Context(), h.pool, func(tx pgx.Tx) error {
+		var writeErr error
+		row, writeErr = upsertSchedule(r.Context(), tx, schema,
+			target.ApplicationID, versionID, actorID, expression, active, input)
+		if writeErr != nil {
+			return writeErr
+		}
+		return saveOnApprovalRequired(r.Context(), tx, projectID, approvalTargetSchedule, versionID, actorID, onApproval)
+	})
 	if err != nil {
 		h.log().Error("pipelinetriggers: write schedule", "err", err)
 		writeError(w, http.StatusInternalServerError, "the schedule could not be saved")
 		return
 	}
 	h.annotate(r, TargetKindPipeline, versionID, target.Name, 0)
-	writeJSON(w, http.StatusOK, scheduleViewOf(row))
+	view := scheduleViewOf(row)
+	view.OnApprovalRequired = h.viewOnApprovalRequired(r.Context(), projectID, approvalTargetSchedule, versionID)
+	writeJSON(w, http.StatusOK, view)
 }
 
 // DeleteSchedule removes the schedule.
@@ -223,7 +249,7 @@ func (h *Handler) SaveSchedule(w http.ResponseWriter, r *http.Request) {
 // configuration its own author can see and re-create, and every fire it ever
 // made is already an audit row.
 func (h *Handler) DeleteSchedule(w http.ResponseWriter, r *http.Request) {
-	schema, _, versionID, ok := h.routeTarget(w, r)
+	schema, projectID, versionID, ok := h.routeTarget(w, r)
 	if !ok {
 		return
 	}
@@ -235,6 +261,11 @@ func (h *Handler) DeleteSchedule(w http.ResponseWriter, r *http.Request) {
 		h.log().Error("pipelinetriggers: delete schedule", "err", err)
 		writeError(w, http.StatusInternalServerError, "the schedule could not be deleted")
 		return
+	}
+	if err := h.deleteOnApprovalRequired(r.Context(), projectID, approvalTargetSchedule, versionID); err != nil {
+		// The schedule is gone; a stale action is harmless (a new schedule
+		// shows it, and the author can change it).
+		h.log().Warn("pipelinetriggers: delete schedule approval action", "err", err)
 	}
 	h.annotate(r, TargetKindPipeline, versionID, "", 0)
 	writeJSON(w, http.StatusOK, scheduleView{})

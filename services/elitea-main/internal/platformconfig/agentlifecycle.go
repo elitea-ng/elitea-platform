@@ -74,7 +74,7 @@ func AgentLifecyclePolicyFromValues(values Values) agentlifecycle.Policy {
 // never saved it and answers the ADR defaults.
 func LoadAgentLifecyclePolicy(ctx context.Context, pool *pgxpool.Pool) (agentlifecycle.Policy, error) {
 	values, err := Load(ctx, pool, SectionAgentLifecycle)
-	if missingTable(err) {
+	if UndefinedTable(err) {
 		return agentlifecycle.DefaultPolicy(), nil
 	}
 	if err != nil {

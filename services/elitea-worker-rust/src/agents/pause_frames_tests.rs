@@ -444,3 +444,94 @@ fn a_member_pause_card_refuses_what_it_cannot_express() {
         assert!(fanout_member_card_parts(&tampered).is_none(), "{tampered}");
     }
 }
+
+/// The approval ledger's argument digest (ADR-0041 decision 5) covers the
+/// arguments BEFORE masking: elitea-main cannot digest the masked (or cut)
+/// `tool_args` the card shows, so the worker sends `argument_digest` with the
+/// root pause. The digest is `sha256:` over the canonical JSON (keys sorted,
+/// compact) of the real arguments.
+#[test]
+fn a_sensitive_tool_pause_digests_the_unmasked_arguments() {
+    use ring::digest;
+    let mut projector = AgentEventProjector::with_sensitive_tools(
+        AgentEventProjectionContext::fixture(json!({})),
+        sensitive_catalog(),
+    )
+    .expect("projector");
+    let args = json!({"token": "s3cr3t-value", "branch": "old"});
+    let frames = paused_frames(&mut projector, "delete_branch", &args, false);
+    let detail = &only(&frames, "agent_hitl_interrupt")["response_metadata"]["hitl_interrupt"];
+    assert_eq!(detail["tool_args"]["token"], "***", "{detail}");
+    let canonical = br#"{"branch":"old","token":"s3cr3t-value"}"#;
+    let hex = |bytes: &[u8]| {
+        use std::fmt::Write as _;
+        bytes.iter().fold(String::new(), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
+    };
+    let unmasked = format!(
+        "sha256:{}",
+        hex(digest::digest(&digest::SHA256, canonical).as_ref())
+    );
+    let masked = format!(
+        "sha256:{}",
+        hex(digest::digest(&digest::SHA256, br#"{"branch":"old","token":"***"}"#).as_ref())
+    );
+    assert_eq!(detail["argument_digest"], unmasked, "{detail}");
+    assert_ne!(detail["argument_digest"], masked);
+    assert!(!detail.to_string().contains("s3cr3t-value"), "{detail}");
+}
+
+#[test]
+fn a_clarifying_question_pause_carries_its_argument_digest() {
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    let args = json!({"questions": [{
+        "question": "Which environment should I use?",
+        "header": "Environment",
+        "options": [
+            {"label": "Staging", "description": "Use the staging project."},
+            {"label": "Production", "description": "Use the production project."}
+        ]
+    }]});
+    let frames = paused_frames(&mut projector, ASK_USER_TOOL_NAME, &args, true);
+    let detail = &only(&frames, "agent_hitl_interrupt")["response_metadata"]["hitl_interrupt"];
+    assert!(
+        detail["argument_digest"]
+            .as_str()
+            .is_some_and(|value| value.len() == 71 && value.starts_with("sha256:")),
+        "{detail}"
+    );
+}
+
+/// A fan-out member card (0157) carries `display.argument_digest`, the
+/// digest of the arguments before masking, and it survives the read back
+/// into the card parts the worker raises.
+#[test]
+fn a_member_pause_card_carries_the_unmasked_argument_digest() {
+    use super::events::{fanout_member_card, fanout_member_card_parts, unmasked_argument_digest};
+    let catalog = sensitive_catalog();
+    let args = json!({"token": "s3cr3t-value", "branch": "release/1.2"});
+    let card = fanout_member_card(&confirmation_event("delete_branch", &args), &catalog)
+        .expect("a sensitive-tool card");
+    let expected = unmasked_argument_digest(&args).expect("digest");
+    assert_eq!(card["display"]["argument_digest"], expected, "{card}");
+    assert!(
+        card["display"]["tool_args_json"]
+            .as_str()
+            .is_some_and(|text| text.contains("***") && !text.contains("s3cr3t-value"))
+    );
+    let (_, _, _, parts) = fanout_member_card_parts(&card).expect("the card reads back");
+    assert_eq!(
+        parts.display.argument_digest.as_deref(),
+        Some(expected.as_str())
+    );
+    let serialized = serde_json::to_value(&parts.display).expect("display JSON");
+    assert_eq!(serialized["argument_digest"], expected);
+    // A malformed digest never reaches the card.
+    let mut tampered = card.clone();
+    tampered["display"]["argument_digest"] = json!("sha256:ABC");
+    let (_, _, _, parts) = fanout_member_card_parts(&tampered).expect("the card reads back");
+    assert_eq!(parts.display.argument_digest, None);
+}

@@ -15,6 +15,11 @@ import (
 type PinnedTool struct {
 	Name   string `json:"name"`
 	Digest string `json:"digest"`
+	// Category is the ADR-0041 category the approved request declared for
+	// the tool. The worker's approval policy reads it (a tool with no
+	// category is write). A worker from an earlier release reads only the
+	// name and the digest of a pin.
+	Category ToolCategory `json:"category,omitempty"`
 }
 
 // PinnedToolsSetting is the frozen settings key the agent freeze writes on a
@@ -55,7 +60,7 @@ func BuildGrants(approved []ApprovedConnector) Grants {
 			}
 			for _, tool := range connector.Tools {
 				if tool.Digest != "" {
-					pinned[connector.Target][PinnedTool{Name: tool.Name, Digest: tool.Digest}] = true
+					pinned[connector.Target][PinnedTool{Name: tool.Name, Digest: tool.Digest, Category: tool.Category}] = true
 				}
 			}
 		}
@@ -69,7 +74,10 @@ func BuildGrants(approved []ApprovedConnector) Grants {
 			if pins[i].Name != pins[j].Name {
 				return pins[i].Name < pins[j].Name
 			}
-			return pins[i].Digest < pins[j].Digest
+			if pins[i].Digest != pins[j].Digest {
+				return pins[i].Digest < pins[j].Digest
+			}
+			return pins[i].Category < pins[j].Category
 		})
 		grants.CustomMCP[target] = pins
 	}
@@ -240,14 +248,30 @@ func (v View) AllowsType(toolkitType string) bool {
 	return v.Decide(toolkitType, nil).Allowed
 }
 
+// PinSet matches tools against pins by name and digest. The category of a
+// pin does not take part: it says how the approval policy treats the tool,
+// not which tool was approved.
+type PinSet map[[2]string]bool
+
+// NewPinSet is the set of the pins' names and digests.
+func NewPinSet(pins []PinnedTool) PinSet {
+	set := make(PinSet, len(pins))
+	for _, pin := range pins {
+		set[[2]string{pin.Name, pin.Digest}] = true
+	}
+	return set
+}
+
+// Has reports whether a pin names this tool with this digest.
+func (s PinSet) Has(name, digest string) bool {
+	return s[[2]string{name, digest}]
+}
+
 // FilterTools keeps the discovered tools of a custom MCP server whose name
 // and digest are pinned. The hidden tools' names come back too, for the
 // caller to report.
 func FilterTools(pins []PinnedTool, tools []mcpregistry.Tool) ([]mcpregistry.Tool, []string) {
-	allowed := map[PinnedTool]bool{}
-	for _, pin := range pins {
-		allowed[pin] = true
-	}
+	allowed := NewPinSet(pins)
 	kept := make([]mcpregistry.Tool, 0, len(tools))
 	var hidden []string
 	for _, tool := range tools {
@@ -256,7 +280,7 @@ func FilterTools(pins []PinnedTool, tools []mcpregistry.Tool) ([]mcpregistry.Too
 			schema = tool.InputSchema
 		}
 		digest, err := ToolDigest(tool.Name, tool.Description, schema)
-		if err == nil && allowed[PinnedTool{Name: tool.Name, Digest: digest}] {
+		if err == nil && allowed.Has(tool.Name, digest) {
 			kept = append(kept, tool)
 			continue
 		}
@@ -278,7 +302,11 @@ func PinNames(pins []PinnedTool) map[string]bool {
 func PinsSetting(pins []PinnedTool) []any {
 	out := make([]any, 0, len(pins))
 	for _, pin := range pins {
-		out = append(out, map[string]any{"name": pin.Name, "digest": pin.Digest})
+		entry := map[string]any{"name": pin.Name, "digest": pin.Digest}
+		if pin.Category != "" {
+			entry["category"] = string(pin.Category)
+		}
+		out = append(out, entry)
 	}
 	return out
 }

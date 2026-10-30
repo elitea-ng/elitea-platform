@@ -47,6 +47,12 @@ export const PipelineScheduleUpdate = zod
     cron: zod.string(),
     active: zod.boolean().optional(),
     input: zod.string().optional(),
+    on_approval_required: zod
+      .enum(["fail", "skip", "notify_and_wait"])
+      .optional()
+      .describe(
+        "What a run does at a step that needs a person's approval, when no person is there. Any other value is refused with 400. Without this field the stored value stays.\n",
+      ),
   })
   .describe(
     "The accepted schedule write (schedules.go scheduleBody, :126-130). There is deliberately no `author_id` and no `last_*` field: the author is the authenticated caller, and the outcome columns belong to the runner.\n",

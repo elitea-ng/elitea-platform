@@ -49,6 +49,8 @@ mod model_scope_tests;
 mod effect_pg_tests;
 #[path = "image_turn_tests.rs"]
 mod image_turn_tests;
+#[path = "ordinary_nested_pause_tests.rs"]
+mod nested_pause_tests;
 
 fn empty_tool_policy() -> Arc<ToolAdmissionPolicy> {
     Arc::new(ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("empty toolkit policy"))

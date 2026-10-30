@@ -36,6 +36,7 @@ import (
 	toolkitcallapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	workerapprovalpolicyapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerapprovalpolicy"
 	workerdelegationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerdelegation"
 	workeregressapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workeregress"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
@@ -126,6 +127,11 @@ type Dependencies struct {
 	// decision 3) for every agent execution command: the cache the admin
 	// save drops. Nil: a cache of its own, refreshed by its TTL only.
 	DelegationSettings workerdelegationapp.SettingsReader
+	// ApprovalPolicySettings reads the platform's approval_policy section
+	// (ADR-0041 decision 5) for every agent execution command and pipeline
+	// start: the cache the admin save drops. Nil: a cache of its own,
+	// refreshed by its TTL only.
+	ApprovalPolicySettings workerapprovalpolicyapp.SettingsReader
 	// IndexScheduleMandates and IndexScheduleMandateGate make every index
 	// schedule occurrence mandate-bound (#1122): built at the composition
 	// root only with credential governance on. Nil: the executor keeps the
@@ -381,6 +387,15 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if delegationSettings == nil {
 		delegationSettings = platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.DelegationSettings, error) {
 			return platformconfig.LoadDelegationSettings(ctx, dependencies.AdmissionPool)
+		}, 0)
+	}
+	// The platform's approval_policy section (ADR-0041 decision 5). Main
+	// sends the policy only once an administrator saved it; until then a
+	// command is unchanged byte for byte, so an older worker accepts it.
+	approvalSettings := dependencies.ApprovalPolicySettings
+	if approvalSettings == nil {
+		approvalSettings = platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.ApprovalPolicySettings, error) {
+			return platformconfig.LoadApprovalPolicySettings(ctx, dependencies.AdmissionPool)
 		}, 0)
 	}
 	delegationDataClasses, err := workerdelegationapp.NewSavedSectionDataClasses(delegationSettings, egressSources)
@@ -741,6 +756,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, err
 		}
 		agentProducer.WithDelegationPolicy(delegationPolicy)
+		// The approval policy (ADR-0041 decision 5), on the same gate.
+		approvalPolicy, err := workerapprovalpolicyapp.NewResolver(approvalSettings, egressSources, egressSources)
+		if err != nil {
+			return nil, err
+		}
+		agentProducer.WithApprovalPolicy(approvalPolicy)
 		// The catalogue project is the SAME id the freezer resolves shared
 		// models against, taken from the same place, so the one project a turn
 		// may borrow a published agent from and the one project it may borrow a
@@ -936,6 +957,16 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			agentStart.WithOriginalSourceDefinitions(codeSources)
 		}
 		agentStart = agentStart.WithMemories(repos.NewMemoriesRepo(dependencies.AdmissionPool))
+		// The approval policy's pipeline hitl rule (ADR-0041 decision 5).
+		pipelineApproval, targetErr := workerapprovalpolicyapp.NewPipelineAdmission(approvalSettings, egressSources)
+		if targetErr != nil {
+			return nil, targetErr
+		}
+		// The check reads the saved child pipelines a run reaches through the
+		// nested child route's reader, and freezes them with the start's
+		// freezer.
+		agentStart = agentStart.WithPipelineApproval(pipelineApproval,
+			pipelineApprovalChildren{versions: agentNestedVersions})
 		agentStart = agentStart.WithContextPolicy(repos.NewCurrentAgentContextPolicyRepository(dependencies.AdmissionPool))
 		// Project Context injection (#946). Same post-construction setter
 		// idiom, same admission pool. This is what replaced the admission
@@ -1128,6 +1159,23 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			publisherRoot, err = newPublisherSet(publisherRoot, fanoutWakes)
 			if err != nil {
 				return nil, fmt.Errorf("compose fanout wake admitter: %w", err)
+			}
+		}
+		// ADR-0041 decision 5 (#1491): an unattended run's skip is answered
+		// and its expired wait is closed, always with the agent runtime.
+		if agentStart != nil {
+			unattendedStore, storeErr := repos.NewUnattendedApprovalsRepository(dependencies.AdmissionPool)
+			if storeErr != nil {
+				return nil, fmt.Errorf("construct unattended approvals store: %w", storeErr)
+			}
+			unattendedApprovals, workerErr := agentexecutionapp.NewUnattendedApprovalWorker(unattendedStore, agentStart,
+				dependencies.Logger)
+			if workerErr != nil {
+				return nil, fmt.Errorf("construct unattended approval worker: %w", workerErr)
+			}
+			publisherRoot, err = newPublisherSet(publisherRoot, unattendedApprovals)
+			if err != nil {
+				return nil, fmt.Errorf("compose unattended approval worker: %w", err)
 			}
 		}
 	}

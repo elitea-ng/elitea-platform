@@ -177,6 +177,10 @@
       "edit_state_key": null,
       "hitl_interrupt": {
         "action_label": "Fixture Tools.delete_branch",
+        "approval_rule": {
+          "source": "platform"
+        },
+        "argument_digest": "sha256:d5452dfb77be7dc74e9780744bb1e0234297d52fca8d58a22d737eb81caa723b",
         "available_actions": [
           "approve",
           "reject",
@@ -201,6 +205,10 @@
       "hitl_interrupts": [
         {
           "action_label": "Fixture Tools.delete_branch",
+          "approval_rule": {
+            "source": "platform"
+          },
+          "argument_digest": "sha256:d5452dfb77be7dc74e9780744bb1e0234297d52fca8d58a22d737eb81caa723b",
           "available_actions": [
             "approve",
             "reject",

@@ -284,6 +284,16 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
 		return
 	}
+	// The unattended approval action and wait (ADR-0041 decision 5).
+	if reason := validateApprovalsValues(section.id, body.Values); reason != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+		return
+	}
+	// The approval policy's categories and tiers (ADR-0041 decision 5).
+	if reason := validateApprovalPolicyValues(section.id, body.Values); reason != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+		return
+	}
 	// The credential review policy's ranges (ADR-0044 decision 5).
 	if reason := validateCredentialReviewValues(section.id, body.Values); reason != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
@@ -307,6 +317,7 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 	}
 	h.invalidateRunSafety(section.id)
 	h.invalidateDelegation(section.id)
+	h.invalidateApprovalPolicy(section.id)
 	if section.id == platformconfig.SectionBranding {
 		h.invalidateBranding()
 		if stored, err := h.loadSectionValues(r, section.id); err == nil {

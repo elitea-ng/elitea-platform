@@ -1,6 +1,6 @@
 ---
 title: "Runtime safety"
-description: "Controls that stop or limit agent execution while it runs. The suspension and kill switch stops one agent, one toolkit type, one project or the whole platform. Agent, project and platform suspensions also cancel the runs in flight."
+description: "Controls that stop, limit or require approval for agent execution while it runs: the suspension and kill switch, the whole-run time cap, approval evidence, unattended runs, tool categories, the approval policy and required approval in pipelines."
 ---
 
 Runtime safety controls act on agent execution while it runs, not on configuration. This page describes the controls of ADR-0041.
@@ -157,3 +157,282 @@ The answer is marked as an error, so the user sees why the run stopped. The metr
 
 - Choose a cap that is longer than your longest legitimate run, including the time that people take to approve steps.
 - Alert on `elitea.runtime.run_caps.reached` if a stopped run needs attention.
+
+## Approval evidence and unattended runs
+
+### The risk
+
+A sensitive tool, a pipeline review node or a pipeline node with `interrupt_before` or `interrupt_after` (a static pause) pauses a run until a person approves or continues the step. An auditor must be able to prove who approved each step, what the step was, and when. A record that only the chat window shows changes with the conversation, and it is not tamper-evident. A run that a schedule or a webhook starts has no person to approve a step. If such a run approves a step on its own, the approval control does not apply to automated runs.
+
+### What is enforced
+
+**Every approval is a ledger row.** The table `elitea_runtime.approval_ledger` (migration 0211) records each event of each approval:
+
+| Phase | Outcomes |
+| --- | --- |
+| `pause` | `paused`: the run stopped at the step |
+| `notice` | `unattended_waiting`: an unattended run waits, and the platform notified its owner |
+| `decision` | `approved`, `rejected`, `edited`, `answered`, `other`, `timed_out`, `cancelled`, `superseded`, `unattended_failed`, `unattended_skipped` |
+
+Each row records the actor (a user, or the platform), the tool, the toolkit, the digest of the tool arguments, the decision and the time. The arguments themselves are not recorded. Rows cannot be changed: a database trigger refuses an update.
+
+The worker calculates the argument digest before it masks the arguments, and sends it with the pause: in the pause of the agent itself, and in `display.argument_digest` of a card of a parallel or fan-out run. For an agent, the digest is `sha256:` followed by the SHA-256 of the canonical JSON (keys in sorted order, no spaces) of the arguments that the tool runs with. For a pipeline node, the digest is the digest that the pipeline binds to the call. The masked arguments that the chat window shows are not the evidence, and the platform does not calculate a digest from them. Thus `argument_digest` is empty (`NULL`) in two cases:
+
+- a pause from a worker of an earlier release;
+- a static pause, which has no tool call and no arguments.
+
+The platform writes a row on every path that pauses or decides a step:
+
+- a decision in the chat window, or with the continue API (a pause of the agent itself);
+- a static pause of a pipeline (`interrupt_before` or `interrupt_after`), and the continue of that pause (action `continue`, outcome `approved`). This includes a static pause in a pipeline that an agent calls as a tool;
+- a decision on one card of a parallel or fan-out run, with the per-interrupt decisions API;
+- a confirmation of a sensitive tool from the desktop app;
+- a Stop, a regenerate or a new message that ends a pause (`cancelled` or `superseded`);
+- the end of a run that leaves a card open (`cancelled`, reason `run_ended`);
+- the expiry of an unattended wait (`timed_out`).
+
+The row is written in the same database transaction as the decision. If the row cannot be written, the decision is refused.
+
+**One winner.** A step has one decision. When two people decide the same step at the same time, the platform applies one decision, and the other person gets HTTP 409. A person who answers after the step was decided, timed out or skipped also gets HTTP 409.
+
+**Every row is an audit event.** In the same transaction, each row is written to the security audit outbox as one `ai.elitea.security.v1.agent.approval` event, at the next position of the hash chain of the project. These events are written for every run. They do not need the credential governance profile.
+
+**The chat window shows the ledger.** The pending steps in the message metadata (`hitl_interrupts`) are a view for the UI. The ledger is the record. Each pending step in the chat window has a `pause` row, and each decided step has a `decision` row.
+
+**Unattended runs never approve.** When a run that a schedule or a webhook trigger started gets to a step that needs approval, the platform does one of three things, set by `on_approval_required`:
+
+| Value | What happens | Ledger outcome |
+| --- | --- | --- |
+| `fail` (default) | The run ends with the error `approval_required_unattended`. | `unattended_failed` |
+| `skip` | The platform refuses the step. The model receives a tool result that says the step was skipped because the run has no approver, and continues without the step. | `unattended_skipped` |
+| `notify_and_wait` | The run pauses, and the run's owner gets a notification. The owner can approve or reject the step (or continue a static pause) in the conversation. If nobody answers in time, the run ends with the error `approval_timed_out`, and the pause cannot be continued. | `unattended_waiting`, then the decision or `timed_out` |
+
+No value approves a step. These pauses use `fail`, whatever the value is:
+
+- a `skip` of a step that has no refusal action. A static pause (`interrupt_before` or `interrupt_after`) has only the action `continue`, so an unattended static pause with `skip` uses `fail`, and the pause cannot be continued;
+- an unattended pause that also waits for a credential authorization;
+- a `skip` or a `notify_and_wait` pause of a run whose owner the platform cannot find. The platform cannot notify such a run's owner, and it cannot continue the run as the owner. The run ends with the error `approval_required_unattended`, and the ledger row has the outcome `unattended_failed` and the reason `approval_required_unattended`.
+
+On a `skip`, the platform is the actor of the decision. The ledger row has `actor_kind` `system`. On a card of a parallel or fan-out run, the card also names the platform: `decided_by` is empty and `decided_by_system` is true, and the `DECIDED` row of the card audit has `system_actor` true. The run's owner is not the actor. The owner is recorded only as the owner of the run (`unattended_run_policies.owner_user_id`).
+
+**A failed expiry does not stop other expiries.** The platform expires the waits of `notify_and_wait` runs in order of their expiry time. If the platform cannot expire one wait, it logs the error, ends that wait with the state `FAILED` and the failure code `expiry_failed`, and continues with the next wait. Later waits expire on time. The run of the failed wait stays paused until a person answers it or stops it.
+
+### Configuration
+
+**Platform default.** Open **Configuration › Approvals** (permission `configuration.governance`):
+
+| Field | Values | Default |
+| --- | --- | --- |
+| **Unattended Default** (`approvals.unattended_default`) | `fail`, `skip`, `notify_and_wait` | `fail` |
+| **Unattended Wait (hours)** (`approvals.unattended_wait_hours`) | 1 to 720 | 24 |
+
+**Per schedule and per trigger.** Set `on_approval_required` on the schedule or on the trigger of a pipeline version. If you do not set it, the platform default applies. The settings read shows the value that applies.
+
+| Method and path | Field |
+| --- | --- |
+| `PUT /api/v2/pipeline_schedules/prompt_lib/{project_id}/{version_id}` | `on_approval_required` in the body |
+| `POST /api/v2/pipeline_triggers/prompt_lib/{project_id}/{version_id}` (create or rotate) | `on_approval_required` in the body |
+
+A save or a rotation without the field keeps the stored value. Any other value is refused with HTTP 400.
+
+The platform saves the value in the same transaction as the schedule or the trigger. If the save fails, you get HTTP 500, and nothing changes: the schedule keeps its settings, and the trigger keeps its secret, so the secret that you have continues to work.
+
+Each run keeps the value that applied when it started (table `elitea_runtime.unattended_run_policies`). A later change does not change a run that is in flight.
+
+### Evidence
+
+Read the ledger of a run:
+
+```sql
+SELECT created_at, path, phase, outcome, action, actor_kind, actor_user_id,
+       tool_name, toolkit_name, argument_digest, reason, audit_event_id
+FROM elitea_runtime.approval_ledger
+WHERE execution_id = '<execution id>'
+ORDER BY id;
+```
+
+`audit_event_id` is the `id` of the audit event of the row. This is an example event of an approval:
+
+```json
+{
+  "specversion": "1.0",
+  "id": "01a18ca9-bedb-75cc-a7a3-fa1b173dfca0",
+  "source": "elitea-main",
+  "type": "ai.elitea.security.v1.agent.approval",
+  "subject": "chat_message/6f1d2c3e-8a4b-4c5d-9e6f-7a8b9c0d1e2f",
+  "time": "2026-10-30T09:15:02.418Z",
+  "datacontenttype": "application/json",
+  "dataschema": "urn:elitea:security-audit:v1",
+  "partitionkey": "7",
+  "sequence": "00000000000000000412",
+  "ocsfclassuid": 6003,
+  "ocsfcategoryuid": 6,
+  "data": {
+    "tenant_project_id": 7,
+    "action": "agent.approval.approved",
+    "effect": "allow",
+    "reasons": ["path:root", "origin:manual", "guardrail:sensitive_tool", "action:approve"],
+    "principal_ref": "user:4",
+    "actor_chain": [],
+    "actor_fidelity": "attributed",
+    "execution_id": "4b7c2d1e9f0a4b3c8d7e6f5a4b3c2d1e",
+    "invocation_id": "interrupt-root-1",
+    "decision_id": "1873",
+    "resource_type": "chat_message",
+    "resource_id": "6f1d2c3e-8a4b-4c5d-9e6f-7a8b9c0d1e2f",
+    "authorization_epoch": 0,
+    "revocation_epoch": 0,
+    "tool_name": "create_issue",
+    "toolkit_name": "jira",
+    "arguments_digest": "sha256:9c1f0e5b2d7a4c3e8f6b1a0d9e2c7b4a5f3e1d0c9b8a7f6e5d4c3b2a1f0e9d8c"
+  }
+}
+```
+
+An event of the platform has the `principal_ref` `system:elitea-main`. The security audit validator refuses a value that looks like a credential (for example, a JWT or a `Bearer` value), a control character, or a value longer than 256 bytes. When a tool name, a toolkit name or an interrupt ID has such a value, the event records the digest of the value (`sha256:` and 64 hex characters) in its place. The approval is not refused because of the name. An unattended outcome has the reason `approval_required_unattended`, `approval_skipped_unattended` or `approval_timed_out`. To verify the chain, use the security audit verifier (see the [evidence guide](/admin/enterprise-controls/evidence-guide)). To send the events to your SIEM, use the [audit export](/admin/audit-trail#export-to-your-siem).
+
+### What is not enforced
+
+- A rejection in the desktop app occurs on the user's computer and sends nothing to the server. The ledger has the `pause` row of the step, and no `decision` row.
+- A credential authorization pause (a toolkit that needs the user to sign in) is not an approval. It is not in the ledger, and `on_approval_required` does not apply to it.
+- When a parallel or fan-out run fails for a missing approver, the members that are already running continue until the worker sees the cancellation at its next lease renewal.
+- Pauses that started before migration 0211 have no `pause` row. A decision on such a pause is recorded.
+
+### Customer responsibility
+
+- Keep `approvals.unattended_default` at `fail`, unless a reviewed process needs `skip` or `notify_and_wait`.
+- Use `notify_and_wait` only when the owner of the schedule or trigger can answer before the wait expires.
+- Monitor `elitea_runtime.unattended_approval_actions` for rows with the failure code `expiry_failed`, and stop or answer those runs.
+- Send the `agent.approval` events to your SIEM, and alert on `unattended_failed` and `timed_out`.
+
+## Tool categories and approval policy
+
+### The risk
+
+A list of sensitive tools names each tool one by one. A new toolkit, or a new tool in a toolkit, does not ask for approval until someone adds it to the list. An agent that can delete records, post to people outside the organisation or move money can then act without a person.
+
+### What is enforced
+
+Each tool is in one category:
+
+| Category | Meaning |
+| --- | --- |
+| `read` | Reads data and changes nothing. |
+| `write` | Creates or changes data. A tool that is not declared is `write`. |
+| `delete` | Deletes data. |
+| `external_send` | Sends something that people outside the run see: an email, a chat post, a ticket or pull request comment. |
+| `payment` | Moves money. |
+| `code_execution` | Runs code or a query that the model wrote. |
+
+The categories of the built-in tools are declared in one contract, [`libs/proto/contracts/tool-categories-v1.json`](https://github.com/elitea-ng/elitea-platform/blob/main/libs/proto/contracts/tool-categories-v1.json). The worker compiles it in, and the main service reads the same file. The tools that are not `read` or `write`:
+
+| Category | Tools |
+| --- | --- |
+| `external_send` | GitHub `comment_on_issue`; GitLab and GitLab Org `comment_on_issue`, `create_pr_change_comment`; GitLab `comment_on_pr`; Bitbucket `add_pull_request_comment`; Azure DevOps Repos `comment_on_pull_request`; Aha! `add_comment`; Jira `add_comments`, `update_comment_with_file`; Figma `post_file_comment`; Slack `send_message`; Gmail (`yagmail`) `send_gmail_message` |
+| `delete` | Every `delete_*` tool, `remove_index` and OneNote `onenote_delete_page` |
+| `code_execution` | Data Analysis `pandas_analyze_data`; Sandbox `pyodide_sandbox`, `stateful_pyodide_sandbox`; SQL `execute_sql`; BigQuery `execute` |
+| `payment` | No built-in tool yet |
+
+The tools of a custom MCP server take the category that the approver gave each tool when the connector request was approved (the pinned tools carry it). A tool without a category is `write`.
+
+A tool call needs a human approval when one of these rules applies:
+
+- **Platform rule.** The administrator's sensitive action tools name the tool. This is the list under [Sensitive action authorization](/how-tos/chat-conversations/sensitive-action-authorization-guardrail). It applies at every tier.
+- **Policy rule.** The approval policy names the tool's category for the risk tier of the run's agent.
+
+The rules only add approvals. An agent author cannot remove an approval that a rule requires. A toolkit setting cannot move a declared tool to another category.
+
+The tier is the risk tier on the root agent's registry record (a missing record is `low`). An agent, pipeline or sub-agent that the root agent calls uses the root agent's tier, not its own.
+
+The default policy is the ADR default:
+
+| Tier | Categories that need approval |
+| --- | --- |
+| `low` | None |
+| `medium` | None |
+| `high` | `delete`, `external_send`, `payment` |
+| `critical` | `delete`, `external_send`, `payment` |
+
+#### Limits
+
+- The policy applies only after an administrator saves **Configuration › Approval Policy**. Until then, only the platform rule applies, as in earlier releases. Save the section only after every worker runs this release: a worker from an earlier release refuses commands that carry the policy.
+- A tool that is not declared is `write`. A policy that names `write` asks for approval on every tool that is not declared, and on every MCP tool without a category. When you port a toolkit, declare the categories of its tools in the contract.
+- Direct tool calls from outside a run (the platform's MCP endpoint) do not use the policy. They refuse every tool that is not read-only.
+- A change to the policy applies to the commands that the main service sends after the change, at once on the replica that saved it and within 15 seconds on the other replicas.
+
+### Configure
+
+Under **Configuration › Approval Policy**, a platform administrator (permission `configuration.governance`) sets, for each tier, the categories whose tools need approval. The defaults are the table above.
+
+### Evidence
+
+When a tool call pauses because of a rule, the pause carries the field `approval_rule`:
+
+```json
+{ "source": "policy", "risk_tier": "high", "category": "external_send" }
+```
+
+The `source` is `platform` for the platform rule, `policy` for the policy rule, and `builtin` for the cloud workspace's own approvals (destructive commands, push and pull request). The platform rule is named when both rules apply. The field is on the `hitl_interrupt` and `hitl_interrupts` of the chat frame, so the decision record of the pause can name the rule.
+
+### Customer responsibility
+
+- Set each production agent's risk tier, so the policy applies the correct row.
+- Decide which categories need approval at each tier. Add `code_execution` at `high` and `critical` if the model's code or queries can reach production data.
+- Keep the platform's sensitive action tools for single tools that need approval at every tier.
+
+## Required approval in pipelines
+
+### The risk
+
+A pipeline can call a tool from a toolkit node without a model. If the path to an `external_send` or `payment` tool has no `hitl` node, the pipeline sends the message or makes the payment without a person.
+
+### What is enforced
+
+**Configuration › Approval Policy › Tiers That Require a HITL Node in Pipelines** names the tiers where the rule applies. Under the rule, every path from the pipeline's entry point to a toolkit or MCP node that calls an `external_send` or `payment` tool must go through a `hitl` node. The check follows every edge: transitions, default outputs, decision and router routes, HITL routes, parallel branches, map workers and recovery routes.
+
+A static pause also counts as approval. The run stops before each node that the pipeline's `interrupt_before` list names, and after each node that its `interrupt_after` list names. A person resumes the run. Thus a tool node in `interrupt_before` is approved, and so is each node after a node in `interrupt_after`. A tool node in `interrupt_after` runs before the pause, so it is not approved.
+
+The check also covers saved child pipelines:
+
+- A node that can run a saved child pipeline continues the path into the child. An `agent` node can run the child that it selects. An `llm` node can run each child that its `tool_names` give to the model.
+- The check examines the child again on each path that reaches such a node. A `hitl` node or a static pause before the node approves the child on that path. If there is no approval on the path, each path in the child must go through a `hitl` node.
+- A pipeline that an agent attaches as a tool, and that no node of a pipeline names, is checked from its own entry point.
+- The check goes down three levels of saved pipelines, as the worker does. A deeper composition, or one with a cycle, does not start.
+- Each child is checked at the tier of its parent if that tier requires the rule. If not, the child is checked at its own tier.
+
+A pipeline that breaks the rule does not start. The start request returns HTTP 422 with the code `PIPELINE_HITL_REQUIRED` and a message that names the node, the tool, its category and the path that has no `hitl` node, for example:
+
+```text
+Node "post" calls "send_message", which is a tool in the external_send category. The approval policy requires a hitl node on every path to such a tool for high-tier agents, and the path "draft" -> "route" -> "post" has none. Add a hitl node before "post".
+```
+
+The check runs each time the platform admits a run: a chat turn, an ad hoc chat turn, a schedule, a trigger, a regenerate and a resume after a pause. All of these freeze the agent version through one step, and the check is part of that step. Pipelines cannot be published (publish refuses them with `pipeline_not_publishable`), so the run admission is where the rule applies.
+
+The default is off: no tier requires the node.
+
+#### Limits
+
+- The check reads the pipeline's toolkit and MCP nodes. A model node (`llm` or `agent`) that can call an `external_send` tool is covered by the policy rule at call time, not by this check.
+- The check uses the tier of the pipeline's registry record, and of the registry record of each child pipeline. An ad hoc chat has no record and is `low`.
+- The check does not read the tools of a child agent that is not a pipeline. A pipeline that such an agent attaches as a tool is not checked when the run starts.
+- If the check cannot read a child pipeline, the run does not start.
+
+### Configure
+
+Select the tiers under **Tiers That Require a HITL Node in Pipelines**. The [hardening checklist](/deployment/hardening-checklist) recommends `high` and `critical`.
+
+### Evidence
+
+The refused start returns the error above. No run starts, so no run step is written.
+
+### Customer responsibility
+
+- Add a `hitl` node before each node that sends outside the organisation or pays, in pipelines at the tiers you select.
+- Set the tiers of pipelines on their registry records.
+
+
+### Nested pauses
+
+A human approval can pause a run inside a nested composition. Examples are an agent that calls an agent or a pipeline, and a pipeline that runs a saved pipeline. Each pause shows one approval card with the path of its callers. The worker keeps a checkpoint at each level. After an approval or a rejection, the paused level continues one time. Then each caller continues. When a person rejects, the tool is not called, and the caller reads the rejection result.
+
+A pause can have a maximum of 3 delegations above it. The delegation depth limit under **Configuration › Delegation** also applies. The worker does not offer an attached pipeline that can pause in a position that it cannot resume. The worker writes a log entry with the reason `pipeline.child_pause_unsupported` and a detail code that names the pause kind. The [HITL node page](/how-tos/pipelines/nodes/interaction-nodes#hitl-nodes-in-nested-agents-and-pipelines) lists the pause kinds. To find the pipelines that the worker did not offer, search the worker logs for this reason.

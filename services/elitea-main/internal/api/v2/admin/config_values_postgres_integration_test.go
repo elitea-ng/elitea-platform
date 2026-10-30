@@ -799,9 +799,16 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		// ADR-0044 decision 3 (#1501): every agent execution command's
 		// preparation (workerdelegation.Resolver).
 		"delegation": true,
+		// ADR-0041 decision 5 (#1491): every schedule and trigger admission
+		// and the projection of an unattended pause.
+		"approvals": true,
 		// ADR-0044 decision 4 (#1501): the delegation assertion mint and the
 		// MCP endpoint's inbound assertion check.
 		"remote_agents": true,
+		// ADR-0041 decision 5 (#1498): every agent execution command's
+		// preparation (workerapprovalpolicy.Resolver) and every pipeline
+		// run start (the hitl rule).
+		"approval_policy": true,
 		// ADR-0040 decisions 3 and 5 (#1497): publish, change requests and
 		// the recertification routine.
 		"agent_lifecycle": true,

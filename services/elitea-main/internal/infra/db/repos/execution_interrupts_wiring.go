@@ -87,11 +87,18 @@ func projectExecutionInterrupt(ctx context.Context, tx sqlExecutor, projectID in
 		event.ExecutionGeneration != binding.executionGeneration || event.SIOEvent != binding.sioEvent {
 		return outputapp.ErrInvalidNodeEventOutput
 	}
-	_, err = raiseExecutionInterrupt(ctx, tx, domain.RaiseInput{
+	input := domain.RaiseInput{
 		ProjectID: projectID, RootResponseID: binding.messageID, ExecutionID: frame.Fence.ExecutionID,
 		Generation: int64(frame.Fence.Generation), SourceEventID: frame.EventID, SourceClaimID: claimID,
 		Frontier: frontier, Card: raw,
-	})
+	}
+	var raised domain.RaiseResult
+	raised, err = raiseExecutionInterrupt(ctx, tx, input)
+	if err == nil && !raised.Replay {
+		// The approval ledger (ADR-0041 decision 5): the pause row, and an
+		// unattended run's action, commit with the card.
+		err = projectInterruptApprovalRaise(ctx, tx, input, binding.streamID)
+	}
 	switch {
 	case err == nil:
 		return nil

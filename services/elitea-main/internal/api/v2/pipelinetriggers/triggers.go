@@ -26,12 +26,14 @@ package pipelinetriggers
 // query cache and in any HAR anyone ever exports.
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
@@ -76,6 +78,10 @@ type triggerView struct {
 	RotatedAt              *time.Time `json:"rotated_at,omitempty"`
 	RevokedAt              *time.Time `json:"revoked_at,omitempty"`
 	LastUsedAt             *time.Time `json:"last_used_at,omitempty"`
+	// OnApprovalRequired is what a run of this trigger does at a step that
+	// needs an approval (#1491): the trigger's own value, else the platform
+	// default.
+	OnApprovalRequired string `json:"on_approval_required,omitempty"`
 }
 
 // triggerURL is the inbound path, plus the provider SUFFIX for a preset that
@@ -114,6 +120,13 @@ func viewOf(projectID int64, trigger triggerRow) triggerView {
 	return view
 }
 
+// triggerViewOf is viewOf with the trigger's on_approval_required (#1491).
+func (h *Handler) triggerViewOf(ctx context.Context, projectID, versionID int64, trigger triggerRow) triggerView {
+	view := viewOf(projectID, trigger)
+	view.OnApprovalRequired = h.viewOnApprovalRequired(ctx, projectID, approvalTargetTrigger, versionID)
+	return view
+}
+
 // withSecret adds the credential-bearing fields. `secret_url` is the complete
 // thing a person copies; `secret` is the same credential on its own, for the
 // header form the tab also shows.
@@ -149,7 +162,7 @@ func (h *Handler) GetTrigger(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "the trigger could not be read")
 		return
 	}
-	writeJSON(w, http.StatusOK, viewOf(projectID, trigger))
+	writeJSON(w, http.StatusOK, h.triggerViewOf(r.Context(), projectID, versionID, trigger))
 }
 
 // RevealTrigger returns the live credential. WRITE-gated; see the file header.
@@ -183,7 +196,7 @@ func (h *Handler) RevealTrigger(w http.ResponseWriter, r *http.Request) {
 			"the stored credential for this trigger could not be read; rotate the trigger to issue a new one")
 		return
 	}
-	writeJSON(w, http.StatusOK, withSecret(viewOf(projectID, trigger), secret))
+	writeJSON(w, http.StatusOK, withSecret(h.triggerViewOf(r.Context(), projectID, versionID, trigger), secret))
 }
 
 // CreateOrRotateTrigger mints a credential.
@@ -198,8 +211,10 @@ func (h *Handler) RevealTrigger(w http.ResponseWriter, r *http.Request) {
 // written FIRST and the row second: if the row lands and the vault write then
 // fails, a live trigger exists whose secret nobody can ever be shown, and the
 // only repair is another rotation. With this order a failed row write leaves an
-// orphan vault entry, which is invisible and harmless, and the caller sees an
-// error and retries.
+// orphan vault entry, which is invisible and harmless (and removed at once
+// when it can be), and the caller sees an error and retries. The row and its
+// on_approval_required action are one transaction, so the action cannot fail
+// after the row is committed.
 func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) {
 	schema, projectID, versionID, ok := h.routeTarget(w, r)
 	if !ok {
@@ -233,6 +248,11 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest,
 			"`events` must be a non-empty list of provider event names, or [\"*\"] for every event, "+
 				"and `allow_variable_overrides` must be true or false")
+		return
+	}
+	onApproval, err := parseOnApprovalRequired(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, onApprovalRequiredMessage)
 		return
 	}
 	target, err := h.resolveRunTarget(r.Context(), schema, versionID, pipelinesAndAgents)
@@ -281,10 +301,26 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "the trigger credential could not be stored")
 		return
 	}
-	trigger, err := h.upsertTrigger(r.Context(), schema,
-		target.ApplicationID, versionID, actorID, tokenID, hash, secretName, mode, controls)
+	// The trigger row and its approval action are ONE transaction. A failed
+	// action save after a committed row would rotate the secret without
+	// showing it, and lock every sender out; this way a failure changes
+	// nothing in the database, and the caller still holds a working secret.
+	var trigger triggerRow
+	err = pgx.BeginFunc(r.Context(), h.pool, func(tx pgx.Tx) error {
+		var writeErr error
+		trigger, writeErr = upsertTrigger(r.Context(), tx, schema,
+			target.ApplicationID, versionID, actorID, tokenID, hash, secretName, mode, controls)
+		if writeErr != nil {
+			return writeErr
+		}
+		return saveOnApprovalRequired(r.Context(), tx, projectID, approvalTargetTrigger, versionID, actorID, onApproval)
+	})
 	if err != nil {
 		h.log().Error("pipelinetriggers: write trigger", "err", err)
+		// Nothing references the new vault entry: remove it.
+		if deleteErr := h.vault.DeleteAdminHiddenSecret(r.Context(), secretName); deleteErr != nil {
+			h.log().Warn("pipelinetriggers: could not remove the unused credential", "err", deleteErr)
+		}
 		writeError(w, http.StatusInternalServerError, "the trigger could not be saved")
 		return
 	}
@@ -298,7 +334,7 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	h.annotate(r, controls.TargetKind, versionID, target.Name, projectID)
-	writeJSON(w, http.StatusOK, withSecret(viewOf(projectID, trigger), secret))
+	writeJSON(w, http.StatusOK, withSecret(h.triggerViewOf(r.Context(), projectID, versionID, trigger), secret))
 }
 
 // RevokeTrigger makes the credential unusable and keeps the row.
@@ -332,7 +368,7 @@ func (h *Handler) RevokeTrigger(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.annotate(r, trigger.TargetKind, versionID, "", projectID)
-	writeJSON(w, http.StatusOK, viewOf(projectID, trigger))
+	writeJSON(w, http.StatusOK, h.triggerViewOf(r.Context(), projectID, versionID, trigger))
 }
 
 // routeTarget resolves and validates the two path segments every settings route

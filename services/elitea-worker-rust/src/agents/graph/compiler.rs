@@ -1293,6 +1293,13 @@ impl PipelineDefinition {
     }
 
     #[must_use]
+    pub(crate) fn has_hitl_nodes(&self) -> bool {
+        self.nodes
+            .iter()
+            .any(|node| matches!(node, PipelineNodeDefinition::Hitl(_)))
+    }
+
+    #[must_use]
     pub(crate) fn has_code_nodes(&self) -> bool {
         self.nodes
             .iter()

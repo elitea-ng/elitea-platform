@@ -20,6 +20,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/approvalpolicy"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -654,6 +655,10 @@ func writeStartError(writer http.ResponseWriter, err error) {
 		writePipelineLimit(writer, pipelinelimits.Refusal(err))
 	case applicationcomposition.Refusal(err) != nil:
 		writePipelineLimit(writer, applicationcomposition.Refusal(err))
+	case approvalpolicy.Refusal(err) != nil:
+		// The approval policy's pipeline hitl rule (ADR-0041 decision 5):
+		// the message names the node, the tool and the path.
+		writePipelineLimit(writer, approvalpolicy.Refusal(err))
 	case errors.Is(err, agentexecutionapp.ErrProjectSkillUnknown):
 		writeJSON(writer, http.StatusNotFound, map[string]string{
 			"error":   "project_skill_unknown",

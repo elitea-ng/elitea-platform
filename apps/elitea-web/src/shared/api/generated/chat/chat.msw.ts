@@ -1648,6 +1648,10 @@ export const getListExecutionInterruptsResponseMock = (
           faker.string.alpha({ length: { min: 1, max: 16384 } }),
           undefined,
         ]),
+        argument_digest: faker.helpers.arrayElement([
+          faker.helpers.fromRegExp("^sha256:[0-9a-f]{64}$"),
+          undefined,
+        ]),
         policy_message: faker.helpers.arrayElement([
           faker.string.alpha({ length: { min: 1, max: 2048 } }),
           undefined,

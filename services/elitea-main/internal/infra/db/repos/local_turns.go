@@ -507,9 +507,11 @@ func (r *LocalTurnsRepo) ConsumeConfirmation(ctx context.Context, claim localtur
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var locked string
+	var turn localTurnLedgerScope
 	err = tx.QueryRow(ctx, `
-SELECT execution_id FROM elitea_runtime.local_turn_executions WHERE execution_id = $1 FOR UPDATE`,
-		claim.ExecutionID).Scan(&locked)
+SELECT execution_id, project_id, actor_id, conversation_uuid::text, response_message_id::text
+FROM elitea_runtime.local_turn_executions WHERE execution_id = $1 FOR UPDATE`,
+		claim.ExecutionID).Scan(&locked, &turn.projectID, &turn.actorID, &turn.conversationUUID, &turn.responseMessageID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return localturn.ConfirmationOutcome{}, localturn.ErrNotFound
 	}
@@ -547,6 +549,12 @@ VALUES ($1, $2, $3, $4, $5)`,
 		claim.ExecutionID, claim.InterruptID, claim.CallDigest, consumed, claim.IdempotencyKey); err != nil {
 		return localturn.ConfirmationOutcome{}, fmt.Errorf("local turn: consume confirmation: %w", err)
 	}
+	// The approval ledger's decision row, with the consumption (ADR-0041
+	// decision 5). The desktop sends a confirmation only for an approval.
+	if err := recordLocalTurnApproval(ctx, tx, turn, claim.ExecutionID, claim.InterruptID, approvalPhaseDecision,
+		ApprovalOutcomeApproved, claim.Call); err != nil {
+		return localturn.ConfirmationOutcome{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return localturn.ConfirmationOutcome{}, fmt.Errorf("local turn: commit confirmation: %w", err)
 	}
@@ -562,6 +570,85 @@ func refuseLocalTurnWhileHandedOff(ctx context.Context, tx pgx.Tx, projectID int
 	}
 	if state != workspacestore.StateLocal {
 		return localturn.ErrThreadExecutorIsCloud
+	}
+	return nil
+}
+
+// localTurnLedgerScope is the local turn a desktop confirmation belongs to.
+type localTurnLedgerScope struct {
+	projectID         int64
+	actorID           string
+	conversationUUID  string
+	responseMessageID string
+}
+
+var _ localturn.ConfirmationPauseRecorder = (*LocalTurnsRepo)(nil)
+
+// RecordConfirmationPause writes the pause row of a desktop confirmation the
+// server asks for (ADR-0041 decision 5). Asking again for the same id is a
+// no-op.
+func (r *LocalTurnsRepo) RecordConfirmationPause(
+	ctx context.Context, executionID, interruptID string, call localturn.ConfirmationLedgerCall,
+) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("local turn: begin confirmation pause: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var turn localTurnLedgerScope
+	err = tx.QueryRow(ctx, `
+SELECT project_id, actor_id, conversation_uuid::text, response_message_id::text
+FROM elitea_runtime.local_turn_executions WHERE execution_id = $1`, executionID).
+		Scan(&turn.projectID, &turn.actorID, &turn.conversationUUID, &turn.responseMessageID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return localturn.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("local turn: read for confirmation pause: %w", err)
+	}
+	if err := recordLocalTurnApproval(ctx, tx, turn, executionID, interruptID, approvalPhasePause,
+		ApprovalOutcomePaused, call); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("local turn: commit confirmation pause: %w", err)
+	}
+	return nil
+}
+
+func recordLocalTurnApproval(
+	ctx context.Context, tx pgx.Tx, turn localTurnLedgerScope, executionID, interruptID, phase, outcome string,
+	call localturn.ConfirmationLedgerCall,
+) error {
+	actor, _ := strconv.ParseInt(turn.actorID, 10, 64)
+	digest := ""
+	if call.ArgumentsSHA256 != "" {
+		digest = "sha256:" + call.ArgumentsSHA256
+	}
+	entry := approvalEntry{
+		ProjectID: turn.projectID, ExecutionID: executionID, ResponseMessageID: turn.responseMessageID,
+		ConversationUUID: turn.conversationUUID, InterruptID: interruptID, Path: approvalPathDesktop,
+		Phase: phase, Outcome: outcome, TriggerOrigin: "manual",
+		Call: approvalCall{GuardrailType: "sensitive_tool", ToolName: call.ToolName, ToolkitName: call.ToolkitName,
+			ToolkitType: call.ToolkitType, ArgumentDigest: digest},
+	}
+	if phase == approvalPhaseDecision {
+		entry.Action, entry.ActorUserID = "approve", actor
+		if call.ToolName == "" {
+			// A claim that names no call takes it from the pause row the
+			// confirmation answers, when there is one.
+			err := tx.QueryRow(ctx, `
+SELECT COALESCE(tool_name, ''), COALESCE(toolkit_name, ''), COALESCE(toolkit_type, ''), COALESCE(argument_digest, '')
+FROM elitea_runtime.approval_ledger
+WHERE execution_id = $1 AND interrupt_id = $2 AND phase = 'pause'`, executionID, interruptID).Scan(
+				&entry.Call.ToolName, &entry.Call.ToolkitName, &entry.Call.ToolkitType, &entry.Call.ArgumentDigest)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("local turn: read the confirmation pause: %w", err)
+			}
+		}
+	}
+	if _, err := recordApproval(ctx, pgxExecutor{queryer: tx}, entry); err != nil {
+		return fmt.Errorf("local turn: record the approval: %w", err)
 	}
 	return nil
 }

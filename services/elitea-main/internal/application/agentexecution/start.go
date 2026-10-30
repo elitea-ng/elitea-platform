@@ -251,6 +251,12 @@ type CurrentApplicationStartService struct {
 	// without it answers a refused governed continuation and leaves the
 	// pause open.
 	governedRefusals GovernedRefusalSettler
+	// pipelineApproval is optional — attached via WithPipelineApproval
+	// (pipeline_approval.go, ADR-0041 decision 5). A service without it
+	// does not check the pipeline hitl rule.
+	pipelineApproval PipelineApprovalAdmission
+	// pipelineChildren reads the saved child versions the check covers.
+	pipelineChildren PipelineChildVersionSource
 }
 
 // WithAttachmentImages attaches the reader that lets an attached IMAGE reach
@@ -321,6 +327,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 			InternalTools:  target.InternalTools,
 		},
 		request.ConversationUUID,
+		target.ApplicationID,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err

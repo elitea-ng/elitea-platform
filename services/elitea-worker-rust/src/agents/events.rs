@@ -2110,6 +2110,9 @@ impl AgentEventProjector {
             }
             _ => AgentEventProjectionError::invalid_state(),
         })?;
+        // The ledger's argument digest covers the arguments BEFORE masking:
+        // the masked `tool_args` the person sees are not evidence of the call.
+        let argument_digest = unmasked_argument_digest(&active.arguments)?;
         let tool_args = mask_sensitive_arguments(&active.arguments, 0)?;
         let active = active.clone();
         let message = policy.policy_message().to_owned();
@@ -2132,7 +2135,11 @@ impl AgentEventProjector {
             "toolkit_type": policy.toolkit_type(),
             "action_label": policy.action_name(),
             "tool_args": tool_args,
+            "argument_digest": argument_digest,
             "policy_message": policy.policy_message(),
+            // The rule that paused the call (ADR-0041 decision 5): platform,
+            // policy (tier and category) or builtin.
+            "approval_rule": policy.rule().to_json(),
         });
         let metadata = json!({
             "thread_id": self.context.thread_id,
@@ -2204,6 +2211,7 @@ impl AgentEventProjector {
         let message = questions.message().to_owned();
         let question_values = questions.questions_value();
         let tool_args = questions.arguments_value();
+        let argument_digest = unmasked_argument_digest(&request.args)?;
         let pending = json!({
             "type": "hitl",
             "interrupt_id": interrupt_id,
@@ -2219,6 +2227,7 @@ impl AgentEventProjector {
             "toolkit_name": ASK_USER_TOOL_NAME,
             "toolkit_type": "internal",
             "tool_args": tool_args,
+            "argument_digest": argument_digest,
         });
         let metadata = json!({
             "thread_id": self.context.thread_id,
@@ -2504,6 +2513,7 @@ impl AgentEventProjector {
             "policy_message": data.policy_message,
             "definition_digest": data.definition_digest,
             "argument_digest": data.argument_digest,
+            "approval_rule": pipeline_approval_rule(data.approval_rule.as_ref()),
         });
         let metadata = json!({
             "thread_id": self.context.thread_id,
@@ -4349,8 +4359,20 @@ struct PipelineToolHitlData {
     tool_args: Value,
     argument_digest: String,
     policy_message: String,
+    /// The approval policy rule (ADR-0041 decision 5). A pipeline pause
+    /// writes it only for a policy rule, so a worker from an earlier release
+    /// still reads the pauses of a platform rule; absent is the platform rule.
+    #[serde(default)]
+    approval_rule: Option<Value>,
     #[serde(default)]
     llm_replay: Option<PipelineLlmReplayEnvelope>,
+}
+
+/// The `approval_rule` of a pipeline tool pause: the one it carries, else
+/// the platform rule.
+fn pipeline_approval_rule(rule: Option<&Value>) -> Value {
+    rule.cloned()
+        .unwrap_or_else(|| elitea_agent_runtime::approval_policy::ApprovalRule::Platform.to_json())
 }
 
 #[derive(Deserialize)]
@@ -5142,12 +5164,14 @@ pub(crate) fn fanout_card_parts(
             "toolkit_type": data.toolkit_type, "action_label": data.action_label,
             "tool_args": data.tool_args, "policy_message": data.policy_message,
             "definition_digest": data.definition_digest, "argument_digest": data.argument_digest,
+            "approval_rule": pipeline_approval_rule(data.approval_rule.as_ref()),
         });
         let display = CardDisplay {
             action_label: Some(data.action_label.clone()).filter(|label| !label.is_empty()),
             guardrail_type: "sensitive_tool",
             message: data.message.clone(),
             node_name: Some(data.node_name.clone()),
+            argument_digest: Some(data.argument_digest.clone()),
             policy_message: Some(data.policy_message.clone()).filter(|text| !text.is_empty()),
             tool_args_json: Some(args_json(&data.tool_args)?),
             tool_call_id: Some(data.tool_call_id.clone()),
@@ -5174,6 +5198,7 @@ pub(crate) fn fanout_card_parts(
             "definition_digest": data.definition_digest, "argument_digest": data.argument_digest,
         });
         let display = CardDisplay {
+            argument_digest: Some(data.argument_digest.clone()),
             guardrail_type: "clarifying_question",
             message: data.message.clone(),
             node_name: Some(data.node_name.clone()),
@@ -5997,10 +6022,35 @@ fn valid_graph_checkpoint_identity(value: &str) -> bool {
     !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control)
 }
 
+/// The card schema's `display.argument_digest`: `sha256:` and 64 lower-case
+/// hex digits.
+fn card_argument_digest(value: &str) -> bool {
+    value.len() == 71
+        && value.starts_with("sha256:")
+        && value[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 fn valid_sha256_label(value: &str) -> bool {
     value.len() == 71
         && value.starts_with("sha256:")
         && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// The approval ledger's argument digest of a root pause (ADR-0041 decision
+/// 5): `sha256:` and the SHA-256 of the canonical JSON (object keys sorted,
+/// no insignificant space) of the arguments the tool would run with, before
+/// `mask_sensitive_arguments`. Main records it as the pause's
+/// `argument_digest`; a pause without it (an earlier worker) records none.
+pub(crate) fn unmasked_argument_digest(
+    arguments: &Value,
+) -> Result<String, AgentEventProjectionError> {
+    let canonical = canonical_json(arguments)?;
+    Ok(format!(
+        "sha256:{}",
+        hex(digest::digest(&digest::SHA256, &canonical).as_ref())
+    ))
 }
 
 fn canonical_json(value: &Value) -> Result<Vec<u8>, AgentEventProjectionError> {
@@ -7215,6 +7265,49 @@ mod fanout_member_tier_tests {
     }
 }
 
+/// The `ask_user` arm of [`fanout_member_card`]: its kind, actions, pending
+/// payload and display.
+fn ask_user_member_card(
+    event: &Event,
+    tool_name: &str,
+    arguments: &Value,
+    interrupt_id: &str,
+    call_digest: &str,
+    call_id: &str,
+) -> Result<(&'static str, Vec<&'static str>, Value, Value), AgentEventProjectionError> {
+    if tool_name != ASK_USER_TOOL_NAME {
+        return Err(AgentEventProjectionError::invalid_state());
+    }
+    let questions = event
+        .provider_metadata
+        .get(ASK_USER_METADATA_KEY)
+        .and_then(|value| decode_ask_user_request(value))
+        .filter(|value| value.matches_arguments(arguments))
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    let tool_args = questions.arguments_value();
+    let argument_digest = unmasked_argument_digest(arguments)?;
+    let pending = json!({
+        "type": "hitl", "interrupt_id": interrupt_id, "call_digest": call_digest,
+        "guardrail_type": ASK_USER_GUARDRAIL_TYPE, "node_name": ASK_USER_TOOL_NAME,
+        "message": questions.message(), "questions": questions.questions_value(),
+        "available_actions": [ASK_USER_ANSWER_ACTION], "routes": {},
+        "tool_call_id": call_id, "tool_name": ASK_USER_TOOL_NAME,
+        "toolkit_name": ASK_USER_TOOL_NAME, "toolkit_type": "internal",
+        "tool_args": tool_args,
+    });
+    let display = json!({
+        "argument_digest": argument_digest,
+        "guardrail_type": ASK_USER_GUARDRAIL_TYPE,
+        "message": questions.message(),
+        "node_name": ASK_USER_TOOL_NAME,
+        "tool_args_json": serde_json::to_string(&tool_args)
+            .map_err(|_| AgentEventProjectionError::invalid_state())?,
+        "tool_call_id": call_id,
+        "tool_name": ASK_USER_TOOL_NAME,
+    });
+    Ok(("ask_user", vec![ASK_USER_ANSWER_ACTION], pending, display))
+}
+
 /// FU-246: the ledger card of a fixed Parallel member's own pause (its saved
 /// Agent asks the user or needs a sensitive-tool approval), built where the
 /// confirmation is born from the child's own sensitive catalog, with the
@@ -7254,39 +7347,21 @@ pub(crate) fn fanout_member_card(
     .map_err(|_| AgentEventProjectionError::invalid_state())?;
     let (kind, actions, pending, display) =
         if event.provider_metadata.contains_key(ASK_USER_METADATA_KEY) {
-            if request.tool_name != ASK_USER_TOOL_NAME {
-                return Err(AgentEventProjectionError::invalid_state());
-            }
-            let questions = event
-                .provider_metadata
-                .get(ASK_USER_METADATA_KEY)
-                .and_then(|value| decode_ask_user_request(value))
-                .filter(|value| value.matches_arguments(&request.args))
-                .ok_or_else(AgentEventProjectionError::invalid_state)?;
-            let tool_args = questions.arguments_value();
-            let pending = json!({
-                "type": "hitl", "interrupt_id": interrupt_id, "call_digest": call_digest,
-                "guardrail_type": ASK_USER_GUARDRAIL_TYPE, "node_name": ASK_USER_TOOL_NAME,
-                "message": questions.message(), "questions": questions.questions_value(),
-                "available_actions": [ASK_USER_ANSWER_ACTION], "routes": {},
-                "tool_call_id": call_id, "tool_name": ASK_USER_TOOL_NAME,
-                "toolkit_name": ASK_USER_TOOL_NAME, "toolkit_type": "internal",
-                "tool_args": tool_args,
-            });
-            let display = json!({
-                "guardrail_type": ASK_USER_GUARDRAIL_TYPE,
-                "message": questions.message(),
-                "node_name": ASK_USER_TOOL_NAME,
-                "tool_args_json": serde_json::to_string(&tool_args)
-                    .map_err(|_| AgentEventProjectionError::invalid_state())?,
-                "tool_call_id": call_id,
-                "tool_name": ASK_USER_TOOL_NAME,
-            });
-            ("ask_user", vec![ASK_USER_ANSWER_ACTION], pending, display)
+            ask_user_member_card(
+                event,
+                &request.tool_name,
+                &request.args,
+                &interrupt_id,
+                &call_digest,
+                call_id,
+            )?
         } else {
             let policy = sensitive
                 .policy_for(&request.tool_name)
                 .ok_or_else(AgentEventProjectionError::invalid_state)?;
+            // The card shows the masked arguments; its digest covers the
+            // arguments before masking.
+            let argument_digest = unmasked_argument_digest(&request.args)?;
             let tool_args = mask_sensitive_arguments(&request.args, 0)?;
             let actions = vec!["approve", "reject", "block_with_comment"];
             let pending = json!({
@@ -7297,9 +7372,11 @@ pub(crate) fn fanout_member_card(
                 "toolkit_name": policy.toolkit_name(), "toolkit_type": policy.toolkit_type(),
                 "action_label": policy.action_name(), "tool_args": tool_args,
                 "policy_message": policy.policy_message(),
+                "approval_rule": policy.rule().to_json(),
             });
             let display = json!({
                 "action_label": policy.action_name(),
+                "argument_digest": argument_digest,
                 "guardrail_type": "sensitive_tool",
                 "message": policy.policy_message(),
                 "node_name": "sensitive_tool_guard",
@@ -7364,6 +7441,8 @@ pub(crate) fn fanout_member_card_parts(
     };
     let display = CardDisplay {
         action_label: text(display, "action_label"),
+        argument_digest: text(display, "argument_digest")
+            .filter(|value| card_argument_digest(value)),
         guardrail_type,
         message: text(display, "message")?,
         node_name: text(display, "node_name"),

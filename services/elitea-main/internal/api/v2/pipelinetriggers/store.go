@@ -207,11 +207,11 @@ func (h *Handler) triggerByTokenID(ctx context.Context, schema, tokenID string) 
 // an explicit re-issue by a writer, so it records the kind the version has
 // NOW. That is how a trigger refused because its version changed kind is
 // brought back into use.
-func (h *Handler) upsertTrigger(
-	ctx context.Context, schema string, applicationID, versionID, actorID int64,
+func upsertTrigger(
+	ctx context.Context, db pgx.Tx, schema string, applicationID, versionID, actorID int64,
 	tokenID string, hash []byte, secretName string, mode triggerAuthMode, controls triggerControls,
 ) (triggerRow, error) {
-	return scanTrigger(h.pool.QueryRow(ctx, fmt.Sprintf(`
+	return scanTrigger(db.QueryRow(ctx, fmt.Sprintf(`
 INSERT INTO %s.pipeline_triggers
 	(application_id, version_id, token_id, token_hash, secret_name, created_by,
 	 auth_mode, signature_header, provider,
@@ -292,11 +292,11 @@ func (h *Handler) scheduleByVersion(ctx context.Context, schema string, versionI
 // while someone else edits the cron would let a caller retarget somebody
 // else's identity onto a new time. The person who last saved the schedule owns
 // what it does, and they had to hold the write permission to save it.
-func (h *Handler) upsertSchedule(
-	ctx context.Context, schema string, applicationID, versionID, authorID int64,
+func upsertSchedule(
+	ctx context.Context, db pgx.Tx, schema string, applicationID, versionID, authorID int64,
 	cron string, active bool, userInput string,
 ) (scheduleRow, error) {
-	return scanSchedule(h.pool.QueryRow(ctx, fmt.Sprintf(`
+	return scanSchedule(db.QueryRow(ctx, fmt.Sprintf(`
 INSERT INTO %s.pipeline_schedules
 	(application_id, version_id, cron, active, user_input, author_id)
 VALUES ($1, $2, $3, $4, $5, $6)

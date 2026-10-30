@@ -3,8 +3,10 @@ package repos
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 
 	"github.com/jackc/pgx/v5"
@@ -210,7 +212,7 @@ LEFT JOIN elitea_runtime.execution_interrupts existing
 		return domain.RaiseResult{}, err
 	}
 	if existingCard != nil {
-		if !bytes.Equal(existingCard, cardJSON) || sameFrontier == nil || !*sameFrontier {
+		if !sameRaisedCard(existingCard, cardJSON) || sameFrontier == nil || !*sameFrontier {
 			return domain.RaiseResult{}, domain.ErrRaiseConflict
 		}
 		return domain.RaiseResult{InterruptKey: card.InterruptKey, Replay: true}, nil
@@ -424,6 +426,12 @@ SELECT decided.revision, bumped.decision_revision, bumped.parked_execution_id, b
 			return err
 		}
 		result.State = domain.StateDecided
+		// The approval ledger (ADR-0041 decision 5): one decision row, in
+		// the transaction of the compare-and-set that won.
+		if err := recordInterruptApprovalDecision(ctx, tx, selector.ProjectID, selector.ResponseMessageID,
+			input.InterruptKey, string(decision.Action), selector.ActorUserID); err != nil {
+			return err
+		}
 		// Same transaction (contract §6, §8): other tabs drop the card, and a
 		// parked response gets exactly one wake.
 		action := decision.Action
@@ -754,9 +762,48 @@ WHERE root_response_id = $1::uuid AND state = 'QUEUED'`, rootResponseID, wakeClo
 	if err != nil {
 		return nil, resolvedNotice{}, err
 	}
+	// The approval ledger (ADR-0041 decision 5): every pause of the
+	// response that had no decision ends here.
+	outcome, reason := ApprovalOutcomeCancelled, ""
+	if pendingTo == domain.StateSuperseded {
+		outcome = ApprovalOutcomeSuperseded
+	}
+	if by.ActorUserID <= 0 {
+		reason = approvalRunEndedReason
+	}
+	if err := closeApprovalPausesOn(ctx, tx, rootResponseID, approvalPathInterrupt, outcome, by.ActorUserID, reason); err != nil {
+		return nil, resolvedNotice{}, err
+	}
 	return closed, notice, nil
 }
 
 func closingState(state domain.State) bool {
 	return state == domain.StateCancelled || state == domain.StateSuperseded
+}
+
+// sameRaisedCard reports whether a replayed card matches the stored one. The
+// bytes must be equal, with one exception for upgrades: a card that a worker
+// raised before display.argument_digest existed matches a replay that differs
+// only by adding that digest.
+func sameRaisedCard(stored, replay []byte) bool {
+	if bytes.Equal(stored, replay) {
+		return true
+	}
+	var old, next map[string]any
+	if json.Unmarshal(stored, &old) != nil || json.Unmarshal(replay, &next) != nil {
+		return false
+	}
+	oldDisplay, _ := old["display"].(map[string]any)
+	nextDisplay, _ := next["display"].(map[string]any)
+	if oldDisplay == nil || nextDisplay == nil {
+		return false
+	}
+	if _, had := oldDisplay["argument_digest"]; had {
+		return false
+	}
+	if _, has := nextDisplay["argument_digest"]; !has {
+		return false
+	}
+	delete(nextDisplay, "argument_digest")
+	return reflect.DeepEqual(old, next)
 }

@@ -83,6 +83,11 @@ impl MemberHierarchy {
 pub(crate) struct CardDisplay {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) action_label: Option<String>,
+    /// The worker's digest of the call's arguments BEFORE masking (the
+    /// approval ledger evidence, ADR-0041 decision 5). `tool_args_json` is
+    /// the masked text the card shows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) argument_digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) edit_state_key: Option<String>,
     pub(crate) guardrail_type: &'static str,

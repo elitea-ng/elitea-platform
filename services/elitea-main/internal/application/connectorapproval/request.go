@@ -50,6 +50,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/libs/go/egresslib"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/toolcategory"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
 
@@ -111,26 +112,18 @@ const (
 	OriginInventory Origin = "inventory"
 )
 
-// ToolCategory is an ADR-0041 tool category.
-type ToolCategory string
+// ToolCategory is an ADR-0041 tool category: the one definition in
+// domain/toolcategory.
+type ToolCategory = toolcategory.Category
 
 const (
-	CategoryRead          ToolCategory = "read"
-	CategoryWrite         ToolCategory = "write"
-	CategoryDelete        ToolCategory = "delete"
-	CategoryExternalSend  ToolCategory = "external_send"
-	CategoryPayment       ToolCategory = "payment"
-	CategoryCodeExecution ToolCategory = "code_execution"
+	CategoryRead          = toolcategory.Read
+	CategoryWrite         = toolcategory.Write
+	CategoryDelete        = toolcategory.Delete
+	CategoryExternalSend  = toolcategory.ExternalSend
+	CategoryPayment       = toolcategory.Payment
+	CategoryCodeExecution = toolcategory.CodeExecution
 )
-
-// Valid reports whether c is a known category.
-func (c ToolCategory) Valid() bool {
-	switch c {
-	case CategoryRead, CategoryWrite, CategoryDelete, CategoryExternalSend, CategoryPayment, CategoryCodeExecution:
-		return true
-	}
-	return false
-}
 
 // DeclaredTool is one tool a request declares.
 type DeclaredTool struct {

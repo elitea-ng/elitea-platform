@@ -37,6 +37,9 @@ type Handler struct {
 	// delegation is the cached delegation policy a save drops
 	// (delegation.go).
 	delegation SectionInvalidator
+	// approvalPolicy is the cached approval policy a save drops
+	// (approval_policy.go).
+	approvalPolicy SectionInvalidator
 	// cloudExecutorEncryption is the startup answer for the cloud executor's
 	// storage encryption at rest ("confirmed", "attested", "refused"; empty
 	// when the handoff is not composed). See WithCloudExecutorEncryption.

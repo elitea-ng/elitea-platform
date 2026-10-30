@@ -223,6 +223,12 @@ func cancelOpenInterruptCards(ctx context.Context, tx sqlExecutor, request agent
 	if err != nil {
 		return resolvedNotice{}, fmt.Errorf("cancel open interrupt cards: %w", err)
 	}
+	// The root pause of the response, which has no card row, ends too
+	// (ADR-0041 decision 5).
+	if err := closeApprovalPauses(ctx, tx, request.ResponseMessageID, ApprovalOutcomeCancelled,
+		request.ActorUserID, ""); err != nil {
+		return resolvedNotice{}, err
+	}
 	return notice, nil
 }
 
@@ -308,6 +314,12 @@ func (repository *CurrentAgentCancelRepository) SettleGovernedRefusal(
 			}
 			if projectionErr != nil {
 				return fmt.Errorf("project the refused governed continuation: %w", projectionErr)
+			}
+			// The refused continuation can never apply the decision: the
+			// pause ends in the ledger as cancelled (ADR-0041 decision 5).
+			if err := closeApprovalPauses(ctx, tx, request.ResponseMessageID, ApprovalOutcomeCancelled,
+				0, "governed_refusal"); err != nil {
+				return err
 			}
 			settled = true
 			return nil

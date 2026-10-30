@@ -943,7 +943,17 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// delegation assertions (ADR-0044 decision 4, #1501):
 	// elitea_identity.remote_agent_assertion_replays (issuer, jti, expiry).
 	// No data, no permission.
-	require.EqualValues(t, 210, Head(shared))
+	//
+	// 211: shared/0211_approval_ledger.sql, the approval decision ledger and
+	// unattended runs (ADR-0041 decision 5, #1491):
+	// elitea_runtime.approval_ledger (one append-only row per pause, decision,
+	// timeout and close, mirrored to the security audit outbox),
+	// unattended_run_policies, unattended_approval_settings and
+	// unattended_approval_actions, two new execution_jobs cancel reasons, and
+	// the platform-decider flags of a 0157 card and its audit row
+	// (execution_interrupts.decided_by_system,
+	// execution_interrupt_audit.system_actor). No data, no permission.
+	require.EqualValues(t, 211, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

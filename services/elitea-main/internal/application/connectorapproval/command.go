@@ -131,10 +131,7 @@ func frozenPinsWithin(raw any, approved []PinnedTool) bool {
 	if !ok {
 		return false
 	}
-	allowed := map[PinnedTool]bool{}
-	for _, pin := range approved {
-		allowed[pin] = true
-	}
+	allowed := NewPinSet(approved)
 	for _, item := range list {
 		entry, ok := item.(map[string]any)
 		if !ok {
@@ -142,7 +139,7 @@ func frozenPinsWithin(raw any, approved []PinnedTool) bool {
 		}
 		name, _ := entry["name"].(string)
 		digest, _ := entry["digest"].(string)
-		if !allowed[PinnedTool{Name: name, Digest: digest}] {
+		if !allowed.Has(name, digest) {
 			return false
 		}
 	}

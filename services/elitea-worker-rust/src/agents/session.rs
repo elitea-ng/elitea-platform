@@ -696,6 +696,10 @@ pub(crate) struct AuthorizedNativeCommandBinding {
     /// The execution's public egress policy and ledger (#1490), the same
     /// instance every path of this execution uses.
     egress: std::sync::Arc<elitea_agent_runtime::egress::RunEgress>,
+    /// The execution's approval policy (ADR-0041 decision 5, field 68): the
+    /// root agent's tier and the categories that ask at it. Every nested
+    /// callee of this execution uses it.
+    approval: std::sync::Arc<elitea_agent_runtime::approval_policy::ApprovalPolicy>,
 }
 
 impl AuthorizedNativeCommandBinding {
@@ -711,12 +715,17 @@ impl AuthorizedNativeCommandBinding {
         if command.generation == 0 {
             return Err(invalid_input());
         }
-        Ok(Self::new(command, agent))
+        // Verification validated the policy; a policy that does not read
+        // fails the command closed rather than run without its approvals.
+        let approval = crate::protocol::approval_policy::policy_from_command(command)
+            .map_err(|_| invalid_input())?;
+        Ok(Self::new(command, agent, approval))
     }
 
     fn new(
         command: &crate::protocol::elitea::runtime::v1::WorkerCommandV1,
         agent: &AgentExecutionCommandV1,
+        approval: std::sync::Arc<elitea_agent_runtime::approval_policy::ApprovalPolicy>,
     ) -> Self {
         Self {
             tenant_id: command.tenant_id.clone(),
@@ -730,12 +739,20 @@ impl AuthorizedNativeCommandBinding {
             sio_event: agent.sio_event.clone(),
             deadline_unix_millis: command.deadline_unix_millis,
             egress: crate::protocol::egress::run_egress(command),
+            approval,
         }
     }
 
     /// The execution's public egress policy and ledger (#1490).
     pub(crate) const fn egress(&self) -> &std::sync::Arc<elitea_agent_runtime::egress::RunEgress> {
         &self.egress
+    }
+
+    /// The execution's approval policy (ADR-0041 decision 5).
+    pub(crate) const fn approval_policy(
+        &self,
+    ) -> &std::sync::Arc<elitea_agent_runtime::approval_policy::ApprovalPolicy> {
+        &self.approval
     }
 
     #[cfg(test)]
@@ -752,6 +769,7 @@ impl AuthorizedNativeCommandBinding {
             sio_event: "chat_predict".to_owned(),
             deadline_unix_millis: 4_102_444_800_000,
             egress: elitea_agent_runtime::egress::RunEgress::open(),
+            approval: elitea_agent_runtime::approval_policy::ApprovalPolicy::none(),
         }
     }
 

@@ -266,9 +266,10 @@ impl PipelineExecutionProfile {
                 {
                     return Err(unsupported_pipeline_tool_scope());
                 }
-                if let Some(sensitive) = policy.sensitive_tool(
+                if let Some(sensitive) = policy.sensitive_tool_in(
                     reference.tool_type(),
                     reference.toolkit_name(),
+                    reference.settings(),
                     tool_name,
                 ) {
                     self.sensitive_llm_tools.insert(
@@ -312,9 +313,10 @@ impl PipelineExecutionProfile {
             {
                 return Err(unsupported_direct_tool_scope());
             }
-            if let Some(sensitive) = policy.sensitive_tool(
+            if let Some(sensitive) = policy.sensitive_tool_in(
                 reference.tool_type(),
                 reference.toolkit_name(),
+                reference.settings(),
                 selection.tool(),
             ) {
                 self.sensitive_direct_tools.insert(
@@ -1160,6 +1162,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             request.payload.toolkit_guardrails.as_ref(),
             &self.tool_policy,
             command.egress(),
+            command.approval_policy(),
         )?;
         let (profile, plan, _, _) = super::runtime::admit_pipeline_plan(
             request,
@@ -1193,6 +1196,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             request.payload.toolkit_guardrails.as_ref(),
             &self.tool_policy,
             command.egress(),
+            command.approval_policy(),
         )?;
         let (profile, plan, toolsets, start) = super::runtime::admit_pipeline_plan(
             request,
@@ -1286,6 +1290,7 @@ impl PipelineNativeAgentAssembler {
                 assembly.request().payload.toolkit_guardrails.as_ref(),
                 &self.tool_policy,
                 assembly.egress(),
+                assembly.approval_policy(),
             )?;
             // #606, the pipeline twin of the ordinary path's read. `platform`
             // is optional here only because the injected-state test constructor
@@ -2120,22 +2125,43 @@ pub(super) async fn materialize_saved_pipeline_tool(
             .contains(&"static continuation")
     {
         return Err(crate::agents::application_tools::composition_bound(
-            unsupported_pipeline_child_pauses(&bound.guarded_interrupt_kinds),
+            unsupported_pipeline_child_pauses("static continuation"),
             crate::agents::application_tools::bound::STATIC_PAUSE_UNDER_GRAPH_ROOT,
         ));
     }
-    if bound
+    // ADR-0041 decision 5: a `hitl` node, a static tool pause and a scoped
+    // ordinary descendant's pause resume at any depth the agent tiers, the
+    // pipeline depth and the delegation depth admit. Only the kinds below
+    // have no continuation through a pipeline called as an Agent's tool.
+    // A `hitl` gate of a pipeline tool beneath a graph root is one of them,
+    // for the reason a static pause is (FU-244): the graph root owns the
+    // checkpoint thread the gate would have to name. It is skipped and
+    // named, so the Agent node still runs without that tool.
+    if let Some(kind) = bound
         .guarded_interrupt_kinds
         .iter()
-        .any(|kind| match *kind {
+        .copied()
+        .find(|kind| match *kind {
             "static continuation" => false,
+            "hitl gate" => graph_root,
             "ordinary child continuation" => !scoped_proof,
             _ => true,
         })
     {
-        return Err(unsupported_pipeline_child_pauses(
-            &bound.guarded_interrupt_kinds,
-        ));
+        return Err(unsupported_pipeline_child_pauses(kind));
+    }
+    // A `hitl` card names its owner path, one tier for each delegation above
+    // the gate (an Agent call, a pipeline call, a pipeline `agent` node), so
+    // its tiers are the gate's delegation depth. Main and the browser hold
+    // the same bound of `MAX_AGENT_PATH_TIERS` tiers, so a gate that would
+    // sit deeper is refused here, before any model call, not at the pause.
+    if let (Some(height), Some(evidence)) = (bound.pause_height, bound.delegation.as_ref())
+        && usize::try_from(evidence.depth)
+            .unwrap_or(usize::MAX)
+            .saturating_add(height)
+            > elitea_agent_runtime::graph::fanout_budget::MAX_AGENT_PATH_TIERS
+    {
+        return Err(unsupported_pipeline_child_pauses("owner path"));
     }
     Ok(Ok((
         definition,
@@ -2188,16 +2214,60 @@ fn continuation_for_checkpoint(
     })
 }
 
+/// The typed cause of a saved pipeline, called as an Agent's tool, that can
+/// pause on a kind that call cannot resume (ADR-0041 decision 5). The cause
+/// detail names the kind as a stable code, such as `sensitive_tool_approval`.
+pub(crate) const UNSUPPORTED_CHILD_PAUSE_CODE: &str = "pipeline.child_pause_unsupported";
+
+/// The stable name of one refused pause kind, carried as the cause detail.
+fn unsupported_child_pause_detail(kind: &str) -> &'static str {
+    match kind {
+        "sensitive tool approval" => "sensitive_tool_approval",
+        "clarifying questions" => "clarifying_questions",
+        "MCP authorization" => "mcp_authorization",
+        "ordinary child continuation" => "unscoped_agent_node",
+        "static continuation" => "static_pause_under_graph_root",
+        "hitl gate" => "hitl_gate_under_graph_root",
+        "owner path" => "pause_past_owner_path_tiers",
+        _ => "unknown",
+    }
+}
+
 /// The one refusal that names WHAT the child could pause on.
 ///
-/// The message reaches the user through the skipped-child notice, so it says
-/// the capability rather than a code: "needs sensitive tool approval, which
-/// this worker cannot resume from inside an agent".
-fn unsupported_pipeline_child_pauses(kinds: &[&'static str]) -> NativeAgentAssemblyError {
-    tracing::debug!(?kinds, "pipeline child pause kinds refused");
+/// The message says the capability rather than a code; the cause carries
+/// the kind as a stable code for logs and for the skipped-child notice.
+pub(super) fn unsupported_pipeline_child_pauses(kind: &'static str) -> NativeAgentAssemblyError {
+    tracing::debug!(kind, "pipeline child pause kind refused");
     NativeAgentAssemblyError::new(
         NativeAgentAssemblyErrorCode::UnsupportedCapability,
-        "the attached pipeline pauses on a kind this worker cannot resume inside an agent",
+        match kind {
+            "sensitive tool approval" => {
+                "the attached pipeline can pause for sensitive tool approval, which a pipeline called as an agent's tool cannot resume"
+            }
+            "clarifying questions" => {
+                "the attached pipeline can pause for a clarifying question, which a pipeline called as an agent's tool cannot resume"
+            }
+            "MCP authorization" => {
+                "the attached pipeline can pause for MCP authorization, which a pipeline called as an agent's tool cannot resume"
+            }
+            "static continuation" => {
+                "the attached pipeline can pause on a static tool pause, which a pipeline tool beneath a pipeline root cannot resume"
+            }
+            "hitl gate" => {
+                "the attached pipeline has a hitl node, which a pipeline tool beneath a pipeline root cannot resume"
+            }
+            "owner path" => {
+                "the attached pipeline can pause deeper than the three owner levels a pause card can name"
+            }
+            _ => {
+                "the attached pipeline runs an agent node whose pause this run cannot resume"
+            }
+        },
+    )
+    .with_cause(
+        UNSUPPORTED_CHILD_PAUSE_CODE,
+        Some(unsupported_child_pause_detail(kind)),
     )
 }
 
@@ -2320,10 +2390,14 @@ async fn admit_saved_pipeline_child(
 /// The ordinary parent keeps refusing direct graph sensitive, `AskUser`, and MCP pauses.
 pub(super) struct BoundSavedPipeline {
     pub(super) runtimes: PipelineNodeRuntimes,
-    /// The interrupt kinds this child's stored definition can raise besides
-    /// its own `hitl` nodes, in a stable order, empty for a child that can
-    /// raise none.
+    /// The interrupt kinds this child's stored definition and its saved
+    /// children can raise, `hitl` gates included, in a stable order, empty
+    /// for a child that can raise none.
     pub(super) guarded_interrupt_kinds: Vec<&'static str>,
+    /// How many owner tiers below this pipeline its deepest `hitl` gate sits:
+    /// 0 for a gate of its own, one more for each saved pipeline between.
+    /// `None` for a composition without a gate.
+    pub(super) pause_height: Option<usize>,
     pub(super) presentations: ApplicationToolPresentationCatalog,
     /// This pipeline's delegation evidence when it was delegated to
     /// (ADR-0044 decision 3), for its delegation step.
@@ -2381,6 +2455,7 @@ fn bind_admitted_saved_pipeline<'a>(
         let mut nodes = BTreeMap::new();
         let mut call_owners = BTreeMap::new();
         let mut descendant_guards = BTreeSet::new();
+        let mut pause_height: Option<usize> = None;
         let mut presentations = ApplicationToolPresentationCatalog::default();
         let mut presented = BTreeSet::new();
         for (node, selection) in admitted.profile.definition().application_nodes() {
@@ -2398,6 +2473,7 @@ fn bind_admitted_saved_pipeline<'a>(
                 let bound =
                     bind_admitted_saved_pipeline(child, runtime, connector, child_path).await?;
                 descendant_guards.extend(bound.guarded_interrupt_kinds);
+                pause_height = pause_height.max(bound.pause_height.map(|height| height + 1));
                 if let Some(child_scopes) = bound.runtimes.application_scopes() {
                     scopes.merge(child_scopes.clone())?;
                 }
@@ -2467,6 +2543,7 @@ fn bind_admitted_saved_pipeline<'a>(
         .await?;
         descendant_guards.extend(bound.guarded_interrupt_kinds);
         bound.guarded_interrupt_kinds = descendant_guards.into_iter().collect();
+        bound.pause_height = bound.pause_height.max(pause_height);
         bound.presentations = presentations;
         bound.delegation = Some(delegation.evidence);
         bound.runtimes = bound
@@ -2625,22 +2702,28 @@ async fn bind_saved_pipeline_runtimes(
     }
     Ok(BoundSavedPipeline {
         runtimes,
+        pause_height: profile.definition().has_hitl_nodes().then_some(0),
         guarded_interrupt_kinds,
         presentations: ApplicationToolPresentationCatalog::default(),
         delegation: None,
     })
 }
 
-/// The interrupt kinds one nested pipeline can raise besides its `hitl` nodes.
+/// The interrupt kinds one nested pipeline can raise.
 ///
 /// Read from the ADMITTED definition, never from the run: each of these is a
 /// pause with its own resume contract in `graph::resume`, and a caller that
-/// implements only the `hitl` one has to know BEFORE the child starts.
+/// implements only some of them has to know BEFORE the child starts. A
+/// `hitl` gate (`"hitl gate"`) resumes through every caller but one: a
+/// pipeline tool beneath a graph root (ADR-0041 decision 5).
 pub(super) fn guarded_interrupt_kinds(
     profile: &PipelineExecutionProfile,
     delegated_authorization: &DelegatedAuthorizationCatalog,
 ) -> Vec<&'static str> {
     let mut kinds = Vec::new();
+    if profile.definition().has_hitl_nodes() {
+        kinds.push("hitl gate");
+    }
     if profile.definition().has_static_interrupts() {
         kinds.push("static continuation");
     }

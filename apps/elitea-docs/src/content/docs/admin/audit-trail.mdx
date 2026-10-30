@@ -33,7 +33,7 @@ From the Users page's row menu, the activity drawer filters this same audit data
 
 Audit Trail is the place to look; it is not where evidence should be kept. The hash chain on security audit events makes tampering detectable, but immutability and long retention belong to your SIEM or WORM store. Elitea sends two streams there, in one versioned envelope, [`elitea.audit.v1`](/reference/audit-event-schema):
 
-- **Security audit events** from the governed security audit outbox (credential decisions, grant, binding, mandate and delegation changes). These exist when enterprise credential governance is on. Each carries its position in the tamper-evident chain.
+- **Security audit events** from the security audit outbox (credential decisions, grant, binding, mandate and delegation changes). These exist when enterprise credential governance is on. Approval events (`ai.elitea.security.v1.agent.approval`) are written for every run, with or without governance: one event for each pause, decision, timeout and unattended outcome of a sensitive tool or review node. Each event carries its position in the tamper-evident chain.
 - **The audit trail on this page** (`centry.audit_events`): one event per completed request, scheduled job or admin task.
 
 Two transports are built in, and you can use either or both:
@@ -54,6 +54,10 @@ With neither set, export is off, no relay starts and nothing dials out. The full
 - **Outages do not drop evidence.** When the webhook receiver refuses a batch as malformed or too large (HTTP 400, 413 or 422), Elitea splits it in halves and sends each again, down to single events, so the other events in the batch are delivered. Only a single event the receiver refuses on its own, on five passes, is dead-lettered, by itself. A receiver that is down, rate limiting, or rejecting your credentials (401, 403, 404, 429, 5xx) is never dead-lettered; the lag alert fires instead. A security audit record that cannot be decoded is dead-lettered alone (sink `decode`) and the rest of its batch is sent. A dead-lettered event is still in its source table and is also listed in `elitea_runtime.audit_export_dead_letters`.
 - **Retention never outruns the export.** While audit export is on, the audit trail retention sweep in elitea-scheduler does not delete a row that has not yet reached every receiver, however old it is. If you switch the export off, delete its positions (`DELETE FROM elitea_runtime.audit_export_cursors WHERE stream = 'admin_audit'`) so retention resumes; the scheduler logs a warning while it is holding rows back for a position that has not moved within the retention window.
 - **Egress is guarded.** A webhook receiver on a private or loopback address is refused unless `ELITEA_AUDIT_EXPORT_EGRESS_ALLOWLIST` names it. Redirects are never followed.
+
+### Approval events
+
+Each approval event names the actor (`principal_ref`, `user:<id>` or `system:elitea-main`), the outcome (`data.action`, for example `agent.approval.approved` or `agent.approval.unattended_failed`), the tool (`tool_name`), the toolkit (`toolkit_name`) and the SHA-256 digest of the tool arguments (`arguments_digest`). The arguments are never in the event. `invocation_id` is the interrupt id, and `decision_id` is the row of `elitea_runtime.approval_ledger`. See [Approval evidence and unattended runs](/admin/enterprise-controls/runtime-safety#approval-evidence-and-unattended-runs).
 
 ### What it does not do
 

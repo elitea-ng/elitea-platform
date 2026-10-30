@@ -88,6 +88,15 @@ const (
 	// (remote_agent.invocation.refused). The reasons carry the refusal code.
 	// No event holds the assertion itself.
 	TypeRemoteAgent EventType = "ai.elitea.security.v1.remote_agent.assertion"
+	// TypeAgentApproval is one row of the approval decision ledger
+	// (ADR-0041 decision 5, #1491): a pause of a sensitive tool or a review
+	// node (agent.approval.paused), its decision (agent.approval.approved,
+	// .rejected, .edited, .answered, .other), its end without a decision
+	// (agent.approval.timed_out, .cancelled, .superseded) and each
+	// unattended outcome (agent.approval.unattended_failed,
+	// .unattended_skipped, .unattended_waiting). ToolName, ToolkitName and
+	// ArgumentsDigest name the call; the arguments are never in the event.
+	TypeAgentApproval EventType = "ai.elitea.security.v1.agent.approval"
 )
 
 // OCSF class and category uids (https://schema.ocsf.io).
@@ -120,6 +129,7 @@ var ocsfClasses = map[EventType]int{
 	TypeConnectorApproval:       OCSFClassEntityManagement,
 	TypeCredentialReview:        OCSFClassUserAccessManagement,
 	TypeRemoteAgent:             OCSFClassAuthorizeSession,
+	TypeAgentApproval:           OCSFClassAPIActivity,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.
@@ -246,6 +256,15 @@ type SecurityEvent struct {
 	// the events chained before these fields existed still verify.
 	ChainHead   string
 	ChainLength int64
+
+	// ToolName, ToolkitName and ArgumentsDigest name the tool call an
+	// approval event is about (TypeAgentApproval): the tool, its toolkit and
+	// "sha256:<hex>" of its canonical arguments. Empty on every other event,
+	// and then absent from the canonical form, so the events chained before
+	// these fields existed still verify.
+	ToolName        string
+	ToolkitName     string
+	ArgumentsDigest string
 }
 
 // PartitionKey is the chain partition of the event.
@@ -268,6 +287,8 @@ var (
 	jwtLike = regexp.MustCompile(`eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.`)
 	// chainHeadPattern is a lower-case hex SHA-256.
 	chainHeadPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	// argumentsDigestPattern is "sha256:" and a lower-case hex SHA-256.
+	argumentsDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
 // Validate checks the event before it is chained. The appender calls it.
@@ -314,6 +335,9 @@ func (e SecurityEvent) Validate() error {
 	}
 	if e.ChainHead != "" && !chainHeadPattern.MatchString(e.ChainHead) {
 		return fmt.Errorf("%w: chain_head must be a hex SHA-256", ErrInvalidEvent)
+	}
+	if e.ArgumentsDigest != "" && !argumentsDigestPattern.MatchString(e.ArgumentsDigest) {
+		return fmt.Errorf("%w: arguments_digest must be sha256:<hex>", ErrInvalidEvent)
 	}
 	if e.AuthorizationEpoch < 0 || e.RevocationEpoch < 0 {
 		return fmt.Errorf("%w: an epoch must not be negative", ErrInvalidEvent)
@@ -363,7 +387,18 @@ func (e SecurityEvent) stringFields() map[string]string {
 		"policy_revision_id":     e.PolicyRevisionID,
 		"correlation_id":         e.CorrelationID,
 		"chain_head":             e.ChainHead,
+		"tool_name":              e.ToolName,
+		"toolkit_name":           e.ToolkitName,
+		"arguments_digest":       e.ArgumentsDigest,
 	}
+}
+
+// AcceptsString reports whether Validate accepts value in a string field.
+// A producer that copies a value it does not control into an event (a tool
+// name, an interrupt id) uses it to digest or drop the value instead of
+// failing the event. It is checkString itself, so the two cannot drift.
+func AcceptsString(value string) bool {
+	return checkString("value", value) == nil
 }
 
 // checkString bounds one value. It refuses control characters (jsonb cannot
@@ -437,6 +472,9 @@ type eventData struct {
 	CorrelationID        string   `json:"correlation_id,omitempty"`
 	ChainHead            string   `json:"chain_head,omitempty"`
 	ChainLength          int64    `json:"chain_length,omitempty"`
+	ToolName             string   `json:"tool_name,omitempty"`
+	ToolkitName          string   `json:"toolkit_name,omitempty"`
+	ArgumentsDigest      string   `json:"arguments_digest,omitempty"`
 }
 
 // FormatSequence renders a partition sequence as the CloudEvents `sequence`
@@ -500,6 +538,9 @@ func (e SecurityEvent) Canonical(partitionSeq int64) ([]byte, error) {
 			CorrelationID:        e.CorrelationID,
 			ChainHead:            e.ChainHead,
 			ChainLength:          e.ChainLength,
+			ToolName:             e.ToolName,
+			ToolkitName:          e.ToolkitName,
+			ArgumentsDigest:      e.ArgumentsDigest,
 		},
 	}
 	return marshalEnvelope(env)
