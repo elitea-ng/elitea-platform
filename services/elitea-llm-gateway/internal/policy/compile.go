@@ -3,6 +3,7 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -52,7 +53,19 @@ func Compile(rows []Row, now time.Time) *Snapshot {
 			snap.Inert = append(snap.Inert, InertRow{ID: row.ID, Type: row.Type, Name: name, Reason: reason})
 		}
 
-		scope := parseScope(data)
+		scope, scopeErr := parseScope(data)
+		if scopeErr != nil {
+			reject(scopeErr.Error())
+			continue
+		}
+		// A throttle scope means something only to a rate limit. On any other
+		// type the gateway would ignore it and apply the row more widely than
+		// it was authored, so the row is refused instead.
+		if scope.throttles() && row.Type != TypeRateLimit {
+			reject("scope.agent_ids and scope.user_ids apply to rate_limit entries only; remove them from this " +
+				row.Type + " entry")
+			continue
+		}
 		// A team scope makes any row unenforceable, whatever its type. Report it
 		// once here rather than letting each accessor silently fail to match.
 		if !scope.evaluable() {
@@ -298,7 +311,11 @@ func parseRateLimit(name string, scope Scope, data map[string]any) (RateLimitDef
 	if len(rl) == 0 {
 		rl = data
 	}
-	def := RateLimitDef{Name: name, Scope: scope}
+	def := RateLimitDef{Name: name, Scope: scope, Class: rateClassOf(scope)}
+	if len(scope.AgentIDs) > 0 && len(scope.ProjectIDs) != 1 {
+		return RateLimitDef{}, fmt.Errorf("scope.agent_ids needs exactly one entry in scope.project_ids, the project "+
+			"that owns the agents (application ids are per project); got %d", len(scope.ProjectIDs))
+	}
 	if v, ok := floatField(rl, "tokens_per_min"); ok {
 		if v < 0 {
 			return RateLimitDef{}, fmt.Errorf("rate_limit.tokens_per_min must not be negative, got %g", v)
@@ -314,20 +331,69 @@ func parseRateLimit(name string, scope Scope, data map[string]any) (RateLimitDef
 	return def, nil
 }
 
+// MaxThrottleScopeIDs bounds scope.agent_ids and scope.user_ids. elitea-main
+// refuses a longer list on write; the gateway refuses one that reached the
+// table another way. A throttle that names more than this many principals is
+// better authored as a project rate limit.
+const MaxThrottleScopeIDs = 100
+
 // parseScope reads the `scope` object. It also accepts the fields at the top
 // level, because a hand-written row and an older authoring surface both produce
 // that shape.
-func parseScope(data map[string]any) Scope {
+//
+// The throttle dimensions are parsed STRICTLY. The older dimensions drop an
+// entry they cannot read, but a throttle that silently lost an id is a
+// throttle that does not apply to the principal the operator named, so a bad
+// entry rejects the row.
+func parseScope(data map[string]any) (Scope, error) {
 	s := subMap(data, "scope")
 	if len(s) == 0 {
 		s = data
+	}
+	agents, err := idList(s, "agent_ids")
+	if err != nil {
+		return Scope{}, err
+	}
+	users, err := idList(s, "user_ids")
+	if err != nil {
+		return Scope{}, err
 	}
 	return Scope{
 		Providers:  stringSlice(s, "providers"),
 		Models:     stringSlice(s, "models"),
 		ProjectIDs: intSlice(s, "project_ids"),
 		TeamIDs:    intSlice(s, "team_ids"),
+		AgentIDs:   agents,
+		UserIDs:    users,
+	}, nil
+}
+
+// idList reads a list of positive whole-number ids, at most
+// MaxThrottleScopeIDs long. Absent and empty are both nil.
+func idList(data map[string]any, key string) ([]int64, error) {
+	rawValue, present := data[key]
+	if !present || rawValue == nil {
+		return nil, nil
 	}
+	raw, ok := rawValue.([]any)
+	if !ok {
+		return nil, fmt.Errorf("scope.%s must be a list of ids", key)
+	}
+	if len(raw) > MaxThrottleScopeIDs {
+		return nil, fmt.Errorf("scope.%s names %d ids; the limit is %d", key, len(raw), MaxThrottleScopeIDs)
+	}
+	out := make([]int64, 0, len(raw))
+	for _, v := range raw {
+		f, ok := floatField(map[string]any{"v": v}, "v")
+		if !ok || f != math.Trunc(f) || f < 1 || f > math.MaxInt64/2 {
+			return nil, fmt.Errorf("scope.%s entry %v is not a positive whole-number id", key, v)
+		}
+		out = append(out, int64(f))
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 func subMap(data map[string]any, key string) map[string]any {
