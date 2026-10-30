@@ -52,20 +52,21 @@ async fn a_contract_node_answering_in_prose_is_retried_once_then_ends_the_run() 
         crate::protocol::output::model_failure(failure.upstream_code()),
         crate::protocol::output::RuntimeFailureKind::OutputContractViolation
     );
-    let requests = captured.lock().unwrap();
-    // The first answer and one retry; the next node was never invoked.
-    assert_eq!(requests.len(), 2);
-    let first: Value = serde_json::from_slice(&requests[0].body).unwrap();
-    let retry: Value = serde_json::from_slice(&requests[1].body).unwrap();
-    // The schema is the provider's response format.
-    assert_eq!(
-        first["response_format"]["json_schema"]["schema"]["required"],
-        json!(["total"])
-    );
-    let retry_text = retry["messages"].to_string();
-    assert!(retry_text.contains("The total is 42."));
-    assert!(retry_text.contains("not a JSON document"));
-    drop(requests);
+    {
+        let requests = captured.lock().unwrap();
+        // The first answer and one retry; the next node was never invoked.
+        assert_eq!(requests.len(), 2);
+        let first: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        let retry: Value = serde_json::from_slice(&requests[1].body).unwrap();
+        // The schema is the provider's response format.
+        assert_eq!(
+            first["response_format"]["json_schema"]["schema"]["required"],
+            json!(["total"])
+        );
+        let retry_text = retry["messages"].to_string();
+        assert!(retry_text.contains("The total is 42."));
+        assert!(retry_text.contains("not a JSON document"));
+    }
     let saved = graph
         .load(&private_pipeline_session_id(&request))
         .await

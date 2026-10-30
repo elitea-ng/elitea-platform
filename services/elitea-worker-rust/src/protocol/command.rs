@@ -110,7 +110,9 @@ const CONFORMANCE_HMAC_KEY: &[u8] = b"ELITEA_RUNTIME_V1_TEST_ONLY_NOT_A_SECRET";
 struct VerifiedWorkerCommand {
     exact_signed_envelope: Box<[u8]>,
     signed: SignedWorkerCommandEnvelopeV1,
-    command: WorkerCommandV1,
+    // Boxed: the decoded command is several KiB, and every future that
+    // holds a delivery across an await carries it.
+    command: Box<WorkerCommandV1>,
 }
 
 /// The sealed common view needed by claim, settlement and command retirement.
@@ -143,7 +145,7 @@ impl VerifiedAgentCommand {
     }
 
     #[must_use]
-    pub const fn command(&self) -> &WorkerCommandV1 {
+    pub fn command(&self) -> &WorkerCommandV1 {
         &self.common.command
     }
 
@@ -194,7 +196,7 @@ impl VerifiedToolkitExecuteReadCommand {
     }
 
     #[must_use]
-    pub const fn command(&self) -> &WorkerCommandV1 {
+    pub fn command(&self) -> &WorkerCommandV1 {
         &self.common.command
     }
 
@@ -455,7 +457,7 @@ fn parse_and_verify_worker_command(
     Ok(VerifiedWorkerCommand {
         exact_signed_envelope: raw.into(),
         signed,
-        command,
+        command: Box::new(command),
     })
 }
 

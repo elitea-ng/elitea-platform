@@ -677,7 +677,7 @@ impl AuthorizedAgentRun {
     }
 
     #[must_use]
-    pub(super) const fn trace_generation(&self) -> u64 {
+    pub(super) fn trace_generation(&self) -> u64 {
         self.verified.command().generation
     }
 
@@ -1000,7 +1000,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
         &self.request.payload
     }
 
-    pub(super) const fn trace_generation(&self) -> u64 {
+    pub(super) fn trace_generation(&self) -> u64 {
         self.verified.command().generation
     }
 
