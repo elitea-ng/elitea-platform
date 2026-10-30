@@ -7265,6 +7265,49 @@ mod fanout_member_tier_tests {
     }
 }
 
+/// The `ask_user` arm of [`fanout_member_card`]: its kind, actions, pending
+/// payload and display.
+fn ask_user_member_card(
+    event: &Event,
+    tool_name: &str,
+    arguments: &Value,
+    interrupt_id: &str,
+    call_digest: &str,
+    call_id: &str,
+) -> Result<(&'static str, Vec<&'static str>, Value, Value), AgentEventProjectionError> {
+    if tool_name != ASK_USER_TOOL_NAME {
+        return Err(AgentEventProjectionError::invalid_state());
+    }
+    let questions = event
+        .provider_metadata
+        .get(ASK_USER_METADATA_KEY)
+        .and_then(|value| decode_ask_user_request(value))
+        .filter(|value| value.matches_arguments(arguments))
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    let tool_args = questions.arguments_value();
+    let argument_digest = unmasked_argument_digest(arguments)?;
+    let pending = json!({
+        "type": "hitl", "interrupt_id": interrupt_id, "call_digest": call_digest,
+        "guardrail_type": ASK_USER_GUARDRAIL_TYPE, "node_name": ASK_USER_TOOL_NAME,
+        "message": questions.message(), "questions": questions.questions_value(),
+        "available_actions": [ASK_USER_ANSWER_ACTION], "routes": {},
+        "tool_call_id": call_id, "tool_name": ASK_USER_TOOL_NAME,
+        "toolkit_name": ASK_USER_TOOL_NAME, "toolkit_type": "internal",
+        "tool_args": tool_args,
+    });
+    let display = json!({
+        "argument_digest": argument_digest,
+        "guardrail_type": ASK_USER_GUARDRAIL_TYPE,
+        "message": questions.message(),
+        "node_name": ASK_USER_TOOL_NAME,
+        "tool_args_json": serde_json::to_string(&tool_args)
+            .map_err(|_| AgentEventProjectionError::invalid_state())?,
+        "tool_call_id": call_id,
+        "tool_name": ASK_USER_TOOL_NAME,
+    });
+    Ok(("ask_user", vec![ASK_USER_ANSWER_ACTION], pending, display))
+}
+
 /// FU-246: the ledger card of a fixed Parallel member's own pause (its saved
 /// Agent asks the user or needs a sensitive-tool approval), built where the
 /// confirmation is born from the child's own sensitive catalog, with the
@@ -7304,37 +7347,14 @@ pub(crate) fn fanout_member_card(
     .map_err(|_| AgentEventProjectionError::invalid_state())?;
     let (kind, actions, pending, display) =
         if event.provider_metadata.contains_key(ASK_USER_METADATA_KEY) {
-            if request.tool_name != ASK_USER_TOOL_NAME {
-                return Err(AgentEventProjectionError::invalid_state());
-            }
-            let questions = event
-                .provider_metadata
-                .get(ASK_USER_METADATA_KEY)
-                .and_then(|value| decode_ask_user_request(value))
-                .filter(|value| value.matches_arguments(&request.args))
-                .ok_or_else(AgentEventProjectionError::invalid_state)?;
-            let tool_args = questions.arguments_value();
-            let argument_digest = unmasked_argument_digest(&request.args)?;
-            let pending = json!({
-                "type": "hitl", "interrupt_id": interrupt_id, "call_digest": call_digest,
-                "guardrail_type": ASK_USER_GUARDRAIL_TYPE, "node_name": ASK_USER_TOOL_NAME,
-                "message": questions.message(), "questions": questions.questions_value(),
-                "available_actions": [ASK_USER_ANSWER_ACTION], "routes": {},
-                "tool_call_id": call_id, "tool_name": ASK_USER_TOOL_NAME,
-                "toolkit_name": ASK_USER_TOOL_NAME, "toolkit_type": "internal",
-                "tool_args": tool_args,
-            });
-            let display = json!({
-                "argument_digest": argument_digest,
-                "guardrail_type": ASK_USER_GUARDRAIL_TYPE,
-                "message": questions.message(),
-                "node_name": ASK_USER_TOOL_NAME,
-                "tool_args_json": serde_json::to_string(&tool_args)
-                    .map_err(|_| AgentEventProjectionError::invalid_state())?,
-                "tool_call_id": call_id,
-                "tool_name": ASK_USER_TOOL_NAME,
-            });
-            ("ask_user", vec![ASK_USER_ANSWER_ACTION], pending, display)
+            ask_user_member_card(
+                event,
+                &request.tool_name,
+                &request.args,
+                &interrupt_id,
+                &call_digest,
+                call_id,
+            )?
         } else {
             let policy = sensitive
                 .policy_for(&request.tool_name)

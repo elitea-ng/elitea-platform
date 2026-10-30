@@ -464,10 +464,11 @@ fn a_sensitive_tool_pause_digests_the_unmasked_arguments() {
     assert_eq!(detail["tool_args"]["token"], "***", "{detail}");
     let canonical = br#"{"branch":"old","token":"s3cr3t-value"}"#;
     let hex = |bytes: &[u8]| {
-        bytes
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
+        use std::fmt::Write as _;
+        bytes.iter().fold(String::new(), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
     };
     let unmasked = format!(
         "sha256:{}",
