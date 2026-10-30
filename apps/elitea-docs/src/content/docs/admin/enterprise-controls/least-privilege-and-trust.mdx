@@ -1,9 +1,63 @@
 ---
 title: "Least privilege and trust"
-description: "Controls that limit what an agent can reach, and the record of who may change it. The worker egress allowlist restricts the public hosts an agent's tools may call; the entitlement export lists who holds which role and what it allows, for access reviews."
+description: "Controls that limit what an agent can reach, and the evidence for reviewing it: connector approval, the worker egress allowlist, the credential inventory, the permission trimming report and the entitlement export."
 ---
 
-Least-privilege controls limit what an agent can reach and act on. This page describes the controls of ADR-0044 that are available now.
+Least-privilege controls limit what an agent can reach and act on, and give reviewers the evidence to keep it that way. This page describes the controls of ADR-0044 that are available now. Delegation narrowing between agents and signed assertions for remote agents are planned in [issue 1501](https://github.com/elitea-ng/elitea-platform/issues/1501).
+
+## Connector approval
+
+### The risk
+
+A toolkit type or an MCP server gives an agent a new way to read data and act. When any project member can add one, the platform's reach grows without anyone reviewing what the connector can do, which hosts it calls and which data it touches. An MCP server can also change the tools it offers after it was added.
+
+### What is enforced
+
+A platform setting, **catalogue mode**, has two values:
+
+- `open` (the default): today's behaviour. Toolkit types are offered as the [toolkit type policy](/admin/app-requests-and-toolkit-types#control-which-toolkit-types-are-offered) allows, and MCP servers can be added freely.
+- `approved_only`: a toolkit type, a prebuilt MCP server or a custom MCP server URL is usable only after a **connector request** for it is approved. The governed agent profile forces this mode, and so does every run that carries a governed security context.
+
+In `approved_only` mode:
+
+- **Unapproved connectors are refused everywhere.** They are left out of the selection lists, and creating, forking or updating a toolkit that uses one is refused with `403 connector_not_approved`, naming the connector to request. When an agent version is frozen for a run, unapproved connectors are dropped, and runtime admission refuses any command that still names one (`CONNECTOR_NOT_APPROVED`), including toolkits configured before the mode was switched.
+- **Approval needs a second person.** The approver holds `connector.approve` (granted to the platform `super_admin` and `admin` roles) and cannot be the requester; the database refuses a self-approval.
+- **Approval grants and allowlists in one step.** In one transaction it writes the toolkit type grant for the requested projects and adds the declared hosts to the [worker egress allowlist](#worker-egress-allowlist) of those projects (or to the platform allowlist for a platform-wide request), with a configuration revision naming the approver.
+- **A custom MCP server's tools are pinned at approval**, by name and schema digest. Tools the server adds or changes later are hidden from discovery and the tool lists, and a call to one is refused, until a new request for them is approved.
+- **Optional architecture review.** With **Require architecture attestation** on, a request can be approved only when a valid `architecture` [attestation](/admin/enterprise-controls/agent-lifecycle#attestations) for it exists (subject `connector`, subject id = the request id, recorded in the requesting project).
+
+A connector request records the requester, the target (toolkit type, prebuilt MCP server or custom URL), the projects, the declared tools with their categories, the egress hosts, the data classes it touches and a justification. Its states are draft, submitted, approved, rejected and withdrawn.
+
+### Configure and use
+
+<Steps>
+  <Step title="Seed requests for what is in use">
+    Before switching modes, open **Admin › Connector requests** and select **Create requests for connectors in use**. It files a submitted request for every connector configured in any project, with the tools and hosts in use. Review and approve them. The administrator who created them cannot approve them.
+  </Step>
+  <Step title="Switch the mode">
+    Open **Configuration › Connector Catalogue** and set **Mode** to `approved_only`. The page warns you how many connectors in use still have no approved request; each of them stops working at once.
+  </Step>
+  <Step title="Request a connector (project members)">
+    When a toolkit or MCP server is refused, select **Request connector**. For MCP, **Load tools** prefills the discovered tools and their schemas. Enter the projects, hosts, data classes and justification, and submit. Follow the request on the toolkit page.
+  </Step>
+  <Step title="Approve or reject (connector approvers)">
+    Open **Admin › Connector requests**, review the declared tools, categories, hosts and data classes, and approve, or reject with a reason.
+  </Step>
+</Steps>
+
+<Warning>
+The worker must be upgraded together with elitea-main before you rely on MCP tool pinning: an older worker does not apply the pinned tool list, so only direct calls are checked.
+</Warning>
+
+### Evidence
+
+Each state change of a request (created, submitted, withdrawn, approved, rejected) is a security audit event of type `ai.elitea.security.v1.connector.approval`, with the actor, the request and its target, and is exported with the rest of the [audit evidence](/reference/audit-event-schema). The request itself, with who approved it and when, stays in `centry.connector_requests`.
+
+### Customer responsibility
+
+- The architecture or security review behind an approval happens in your own process; record its result as an attestation.
+- Decide who holds `connector.approve`, and keep requesters and approvers apart.
+
 
 ## Worker egress allowlist
 
@@ -123,6 +177,77 @@ To find the same data with the API, call `GET /api/v2/admin/worker_egress/hosts`
 - Keep network egress control at your perimeter as well. This allowlist is enforced inside the worker; a firewall or egress gateway is your independent second layer.
 - Keep the list of hosts that the operator configured for the worker (web-search providers, model endpoints) under your change process, because this policy does not judge them.
 
+## Credential inventory
+
+### The risk
+
+Credentials an agent can use (personal access tokens, toolkit secrets, OAuth tokens, governed credential grants) accumulate. Without one view, nobody can tell which ones are still used, who owns them, and which agents depend on them, so unused credentials stay valid indefinitely.
+
+### What is available
+
+**Admin › Credential inventory** (permission `credentials.inventory.read`) lists every credential an agent can use, never its value:
+
+| Kind | Examples |
+| --- | --- |
+| Personal access token | Tokens users and integrations authenticate with |
+| Toolkit secret | Secrets referenced by a toolkit's settings |
+| MCP OAuth token | Tokens an MCP server's OAuth flow issued |
+| Provider OAuth grant | OAuth grants for model or service providers |
+| Credential reference and use grant | Governed credentials (ADR-0039) |
+
+Each row shows the owner, project, scope, creation, expiry, **last used**, the agents that use it, and whether it is **stale**. Filter by kind, project and stale.
+
+**Last use** is recorded when a token authenticates, when a toolkit secret or OAuth token is resolved for a run, and when the credential broker redeems a reference. It is precise to one hour: each credential is written at most once an hour.
+
+**Staleness.** A daily routine, `main.credential_staleness`, flags credentials unused for longer than the threshold (90 days by default) and notifies their owners once. A credential with no recorded use counts from the later of its creation and the first time the routine saw it, so an upgrade does not flag every older token at once.
+
+### Configure and use
+
+Open **Configuration › Credential Review** (permission `credentials.inventory.manage`):
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `stale_after_days` | 90 | Days without use before a credential is stale |
+| `stale_action` | `flag` | `flag` only flags and notifies. `revoke` also revokes stale personal access tokens and credential use grants. |
+| `trimming_window_days` | 30 | The window the [permission trimming report](#permission-trimming) compares against |
+
+<Warning>
+`revoke` deletes stale personal access tokens and revokes stale credential grants without asking. Run with `flag` first and review the list.
+</Warning>
+
+To revoke one credential by hand, select **Revoke** on its row (permission `credentials.inventory.manage`) and enter a reason. Toolkit secrets, MCP and provider OAuth tokens and credential references are issued by other systems: Elitea flags them, but revoking them is answered with `409 credential_not_revocable`; rotate or revoke them where they were issued.
+
+### Evidence
+
+- Audit events `credential.stale.flagged` and `credential.revoked` (with the reason and who revoked it).
+- Owner notifications `credential_stale` and `credential_revoked_stale`.
+
+## Permission trimming
+
+### The risk
+
+Agents are granted more than they use: a toolkit added for a test, a tool nobody calls, a credential grant or an egress host left after a change. Every unused grant is reach an attacker or a confused agent could use.
+
+### What is available
+
+The trimming report compares what each agent is granted (tools, toolkits, credential grants and their scopes, egress hosts) with what its [run step records](/admin/enterprise-controls/audit-evidence-and-retention#run-step-records) and egress summaries show it used in the window (30 days by default). Each grant shows its uses and last use; one not used in the window is a **removal candidate**.
+
+- **Per agent:** the **Permission trimming** tab in the agent's **⋮ › Governance** dialog (permission `agents.trimming.manage`, held by the project `admin` role).
+- **Across projects:** **Admin › Permission trimming** (`credentials.inventory.read` to read, `credentials.inventory.manage` to remove).
+
+**Remove** acts on one item at a time through the normal edit path, with its validation: a tool or toolkit is removed from the agent's draft version, a credential grant is revoked, and an egress host is removed from the project or platform allowlist (which also needs `models.project_settings.edit` for a project entry). Published versions are not changed; publish the edited draft through the usual [approval](/how-tos/agents-pipelines/publishing#publish-with-approval).
+
+A weekly routine, `main.permission_trimming`, recomputes the report and notifies the agent's owners (its registry owners, else its author) of **new** candidates only.
+
+### Evidence
+
+Each removal is an audit event `permission.trimmed` with the agent, the item and who removed it. Owner notifications are `permission_trimming_candidates`.
+
+### Customer responsibility
+
+- Decide the window that reflects how your agents are used; a grant used only at quarter end needs a longer window.
+- Act on the report: the platform lists candidates and removes on request, it does not remove on its own.
+
 ## Entitlement export for access reviews
 
 ### The risk
@@ -152,6 +277,52 @@ The SCIM tree uses the same SCIM client credential as provisioning (see [Authent
 </Steps>
 
 The list is read on every request, so removing an id stops that client at once.
+
+### Export format
+
+**CSV columns**, one row per user, scope, role, capability and grant path:
+
+| Column | Meaning |
+| --- | --- |
+| `user_id`, `user_name`, `display_name` | The account |
+| `user_active` | `false` for a suspended user; their grants are dormant |
+| `scope_type` | `platform`, `project` or `agent` |
+| `scope_id` | The platform mode (`administration`, `developer`), the project id or the agent id |
+| `scope_name` | Its display name |
+| `project_id` | The project of a project or agent scope; empty for platform rows |
+| `scope_active` | `false` for a suspended project |
+| `role` | The role, or the registry owner role (`business_owner`, `technical_owner`) |
+| `capability` | One governance capability the role carries; empty when the role carries none, so every role holder still appears |
+| `permissions` | The permissions behind the capability, space-separated |
+| `granted_via` | `role` or `owner` (agent registry ownership) |
+
+The file is UTF-8 with CRLF line ends and a header row. Fields with commas, quotes or line breaks are quoted, and a cell starting with `=`, `+`, `-` or `@` is prefixed with `'` so spreadsheets do not run it. The `X-Entitlement-Rows` response header carries the number of data rows, so an import can detect a cut-off file.
+
+```csv
+user_id,user_name,display_name,user_active,scope_type,scope_id,scope_name,project_id,scope_active,role,capability,permissions,granted_via
+101,alice@example.com,Alice,true,platform,administration,Platform (administration),,true,admin,suspend,safety.suspend,role
+101,alice@example.com,Alice,true,project,201,Alpha,201,true,admin,approve_change_requests,models.applications.governance,role
+101,alice@example.com,Alice,true,agent,31,Support Bot,201,true,technical_owner,edit_agent_registry,,owner
+102,bob@example.com,Bob,true,project,201,Alpha,201,true,viewer,,,role
+```
+
+**Capabilities:** `configure_agents`, `configure_toolkits`, `configure_credentials`, `approve_credentials`, `publish_agents`, `approve_publication`, `approve_change_requests`, `override_release_gates`, `edit_agent_registry`, `attest`, `mark_recertification_due`, `suspend`, `override_caps`, `approve_connectors`, `manage_retention`, `manage_legal_hold`, `read_run_evidence`, `read_audit_trail`, `review_credentials`, `revoke_credentials`, `trim_agent_permissions`, `manage_access`, `manage_secrets`, `manage_agent_identity`, `approve_agent_identity`, `manage_projects`, `administer_platform`, `export_entitlements`. A test fails the build when a new permission is neither mapped to a capability nor marked as not relevant to access reviews, so the export cannot silently miss one.
+
+**SCIM resources.** A `User` carries `groups` (its role groups), `roles` (`project:<id>:<role>`, `agent:<project>/<agent>:<role>`, `platform:<mode>:<role>`), `entitlements` (`<scope>:<capability>`) and the extension `urn:elitea:params:scim:schemas:extension:entitlements:2.0:User` with every grant as in the CSV. A `Group` (`platform-role-<id>` or `project-role-<id>`) lists its `members` and, in its extension, the scope, role, capabilities and permissions. `attributes` and `excludedAttributes=members` are honoured.
+
+```json
+{
+  "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User", "urn:elitea:params:scim:schemas:extension:entitlements:2.0:User"],
+  "id": "101",
+  "userName": "alice@example.com",
+  "active": true,
+  "groups": [{ "value": "project-role-301", "display": "project Alpha / admin", "type": "direct" }],
+  "roles": [{ "value": "project:201:admin", "display": "admin on project Alpha", "type": "project" }],
+  "entitlements": [{ "value": "project:201:approve_change_requests", "type": "approve_change_requests" }]
+}
+```
+
+A Group shows what its role grants on its own. The per-user rows also apply the rule that a project's own role definition takes precedence over the platform default role of the same name, so use the User resources or the CSV for the effective grants.
 
 ### Evidence
 

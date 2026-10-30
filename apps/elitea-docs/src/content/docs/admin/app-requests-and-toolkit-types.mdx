@@ -39,6 +39,8 @@ Open **Toolkits**. This decides, per toolkit type, whether it is enabled, disabl
 
 <Screenshot id="admin-toolkit-types-table" alt="Toolkit types table with availability and worker column" />
 
+With no rows, every type is offered. To make the catalogue default-deny, set **Configuration › Connector Catalogue › Mode** to `approved_only`: a toolkit type or MCP server is then usable only after a connector request is approved under **Connector requests**, and approval writes the type's availability for the requested projects. See [Connector approval](/admin/enterprise-controls/least-privilege-and-trust#connector-approval).
+
 <Note>
 This page does not add a new toolkit type. A pre-built MCP server becomes a type through Configuration's MCP Servers section, and an external provider's toolkits would arrive through Service Descriptors — a third registration path here would be a third thing to keep synchronized.
 </Note>
