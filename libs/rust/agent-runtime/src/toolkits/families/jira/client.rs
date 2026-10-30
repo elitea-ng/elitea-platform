@@ -851,8 +851,18 @@ impl JiraClient {
                 false,
             );
         }
+        let mut fields = fields.clone();
+        // API v3 takes a description in Atlassian Document Format only. A
+        // string description (also the AI disclosure marker that the worker
+        // adds to an issue without one) becomes one paragraph per block.
+        if self.config.api_version() == JiraApiVersion::V3
+            && let Some(Value::String(description)) = fields.get("description")
+        {
+            let document = adf_document(description);
+            fields.insert("description".into(), document);
+        }
         let mut body = Map::new();
-        body.insert("fields".into(), Value::Object(fields.clone()));
+        body.insert("fields".into(), Value::Object(fields));
         if let Some(update) = params.get("update").filter(|value| !value.is_null()) {
             if !update.is_object() {
                 return text(format!("{PREFIX}: 'update' must be a JSON object"), false);
@@ -1777,6 +1787,18 @@ fn labels_update(add: &[&str], remove: &[&str]) -> Value {
         .chain(remove.iter().map(|label| json!({ "remove": label })))
         .collect::<Vec<_>>();
     json!({ "labels": operations })
+}
+
+/// An Atlassian Document Format document with one paragraph for each block
+/// of `text` that a blank line separates.
+fn adf_document(text: &str) -> Value {
+    let content = text
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|block| !block.is_empty())
+        .map(|block| json!({"type": "paragraph", "content": [{"type": "text", "text": block}]}))
+        .collect::<Vec<_>>();
+    json!({"type": "doc", "version": 1, "content": content})
 }
 
 fn adf_paragraph(text: &str) -> Value {

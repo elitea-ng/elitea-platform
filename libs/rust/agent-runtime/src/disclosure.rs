@@ -17,6 +17,14 @@
 //! Where the target renders Markdown, the marker also carries the run id in
 //! an HTML comment, which the target does not show. The marker is appended
 //! once: a text that already ends with it is not changed.
+//!
+//! A tool that takes its text inside a JSON document argument (Jira
+//! `create_issue`, Bitbucket `create_pull_request`, Azure DevOps Boards
+//! `create_work_item`) names the text with an RFC 6901 JSON pointer into
+//! that argument (`issue_json#/fields/description`). The argument can be a
+//! JSON string or an object. A string that is not JSON is left as it is: the
+//! toolkit refuses it. An absent text field gets the marker only; an Atlassian
+//! Document Format value gets the marker as a last paragraph.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, LazyLock};
@@ -49,6 +57,9 @@ pub enum DisclosureFormat {
     /// The target renders Markdown and hides HTML comments: the marker also
     /// carries the run id in a comment.
     Markdown,
+    /// The target renders HTML (an Azure DevOps work item description): the
+    /// marker is a paragraph, with the text escaped.
+    Html,
 }
 
 /// One text parameter of a tool.
@@ -59,6 +70,10 @@ enum TextPath {
     /// A string field of each object in a top-level list argument
     /// (`list[].field`).
     ListField(Box<str>, Box<str>),
+    /// A text field inside a JSON document argument: the argument and the
+    /// unescaped reference tokens of an RFC 6901 pointer
+    /// (`issue_json#/fields/description`).
+    JsonPointer(Box<str>, Box<[Box<str>]>),
 }
 
 impl TextPath {
@@ -69,6 +84,14 @@ impl TextPath {
                     .chars()
                     .all(|character| character.is_ascii_alphanumeric() || character == '_')
         };
+        if let Some((argument, pointer)) = raw.split_once('#') {
+            let tokens = pointer
+                .strip_prefix('/')?
+                .split('/')
+                .map(unescape_pointer_token)
+                .collect::<Option<Box<[_]>>>()?;
+            return valid(argument).then(|| Self::JsonPointer(argument.into(), tokens));
+        }
         match raw.split_once("[].") {
             Some((list, field)) if valid(list) && valid(field) => {
                 Some(Self::ListField(list.into(), field.into()))
@@ -77,6 +100,28 @@ impl TextPath {
             _ => None,
         }
     }
+}
+
+/// One RFC 6901 reference token, unescaped (`~1` is `/`, `~0` is `~`). An
+/// empty token or a `~` that starts no escape is malformed.
+fn unescape_pointer_token(token: &str) -> Option<Box<str>> {
+    if token.is_empty() {
+        return None;
+    }
+    let mut out = String::with_capacity(token.len());
+    let mut characters = token.chars();
+    while let Some(character) = characters.next() {
+        if character == '~' {
+            match characters.next() {
+                Some('0') => out.push('~'),
+                Some('1') => out.push('/'),
+                _ => return None,
+            }
+        } else {
+            out.push(character);
+        }
+    }
+    Some(out.into())
 }
 
 /// One listed tool.
@@ -108,6 +153,7 @@ fn parse_contract(raw: &str) -> Option<Declarations> {
             let format = match entry.get("format")?.as_str()? {
                 "plain" => DisclosureFormat::Plain,
                 "markdown" => DisclosureFormat::Markdown,
+                "html" => DisclosureFormat::Html,
                 _ => return None,
             };
             let paths = entry
@@ -245,6 +291,7 @@ impl DisclosurePolicy {
             (DisclosureFormat::Markdown, Some(run_id)) => {
                 format!("{} <!-- elitea-run-id: {run_id} -->", self.text)
             }
+            (DisclosureFormat::Html, _) => format!("<p>{}</p>", escape_html(&self.text)),
             _ => self.text.to_string(),
         }
     }
@@ -252,7 +299,8 @@ impl DisclosurePolicy {
     /// Append the marker to each text parameter of a listed tool's call.
     /// Returns how many parameters got it. A parameter that is absent or
     /// not a string is left to the tool's own validation; a text that
-    /// already ends with the marker is not changed.
+    /// already ends with the marker is not changed. Inside a JSON document
+    /// argument, an absent or empty text field gets the marker only.
     pub fn apply(
         &self,
         toolkit_type: &str,
@@ -275,6 +323,11 @@ impl DisclosurePolicy {
                             .get_mut(&**field)
                             .is_some_and(|value| append_marker(value, &marker)),
                     );
+                }
+                TextPath::JsonPointer(argument, tokens) => {
+                    applied += usize::from(arguments.get_mut(&**argument).is_some_and(|value| {
+                        append_marker_in_document(value, tokens, &marker, self.text())
+                    }));
                 }
                 TextPath::ListField(list, field) => {
                     if let Some(Value::Array(items)) = arguments.get_mut(&**list) {
@@ -324,6 +377,121 @@ fn append_marker(value: &mut Value, marker: &str) -> bool {
     text.push_str(SEPARATOR);
     text.push_str(marker);
     true
+}
+
+/// Append the marker to the text field at `tokens` inside a JSON document
+/// argument: a JSON string (re-encoded after the change) or an object. A
+/// string that is not a JSON object, or a path whose parent is not an
+/// object, is not changed.
+fn append_marker_in_document(
+    argument: &mut Value,
+    tokens: &[Box<str>],
+    marker: &str,
+    marker_text: &str,
+) -> bool {
+    match argument {
+        Value::String(encoded) => {
+            let Ok(mut document) = serde_json::from_str::<Value>(encoded) else {
+                return false;
+            };
+            if !document.is_object()
+                || !append_at_pointer(&mut document, tokens, marker, marker_text)
+            {
+                return false;
+            }
+            match serde_json::to_string(&document) {
+                Ok(changed) => {
+                    *encoded = changed;
+                    true
+                }
+                Err(_) => false,
+            }
+        }
+        Value::Object(_) => append_at_pointer(argument, tokens, marker, marker_text),
+        _ => false,
+    }
+}
+
+fn append_at_pointer(
+    document: &mut Value,
+    tokens: &[Box<str>],
+    marker: &str,
+    marker_text: &str,
+) -> bool {
+    let Some((leaf, parents)) = tokens.split_last() else {
+        return false;
+    };
+    let mut parent = document;
+    for token in parents {
+        let Some(child) = parent
+            .as_object_mut()
+            .and_then(|object| object.get_mut(&**token))
+        else {
+            return false;
+        };
+        parent = child;
+    }
+    let Some(parent) = parent.as_object_mut() else {
+        return false;
+    };
+    match parent.get_mut(&**leaf) {
+        None | Some(Value::Null) => {
+            parent.insert(leaf.to_string(), Value::String(marker.to_owned()));
+            true
+        }
+        Some(Value::String(text)) if text.trim().is_empty() => {
+            marker.clone_into(text);
+            true
+        }
+        Some(value @ Value::String(_)) => append_marker(value, marker),
+        Some(Value::Object(adf)) => append_adf_paragraph(adf, marker_text),
+        Some(_) => false,
+    }
+}
+
+/// Append the marker as the last paragraph of an Atlassian Document Format
+/// document (Jira Cloud API v3). A document whose last paragraph is the
+/// marker is not changed; an object that is not a document is not changed.
+fn append_adf_paragraph(document: &mut Map<String, Value>, marker_text: &str) -> bool {
+    if document.get("type").and_then(Value::as_str) != Some("doc") {
+        return false;
+    }
+    let Some(Value::Array(content)) = document.get_mut("content") else {
+        return false;
+    };
+    let last_text = content.last().and_then(|node| {
+        (node.get("type").and_then(Value::as_str) == Some("paragraph")).then(|| {
+            node.get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|inline| inline.get("text").and_then(Value::as_str))
+                .collect::<String>()
+        })
+    });
+    if last_text.is_some_and(|text| text.trim() == marker_text) {
+        return false;
+    }
+    content.push(serde_json::json!({
+        "type": "paragraph",
+        "content": [{"type": "text", "text": marker_text}],
+    }));
+    true
+}
+
+fn escape_html(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 fn truncate(text: &str, max_bytes: usize) -> &str {
@@ -397,9 +565,12 @@ mod tests {
             "{",
             r#"{"contract":"other","default_marker_text":"Generated with Elitea AI","toolkits":{}}"#,
             r#"{"contract":"elitea.tool-disclosure.v1","default_marker_text":"x","toolkits":{}}"#,
-            r#"{"contract":"elitea.tool-disclosure.v1","default_marker_text":"Generated with Elitea AI","toolkits":{"x":{"a":{"format":"html","text_parameters":["b"]}}}}"#,
+            r#"{"contract":"elitea.tool-disclosure.v1","default_marker_text":"Generated with Elitea AI","toolkits":{"x":{"a":{"format":"rtf","text_parameters":["b"]}}}}"#,
             r#"{"contract":"elitea.tool-disclosure.v1","default_marker_text":"Generated with Elitea AI","toolkits":{"x":{"a":{"format":"plain","text_parameters":[]}}}}"#,
             r#"{"contract":"elitea.tool-disclosure.v1","default_marker_text":"Generated with Elitea AI","toolkits":{"x":{"a":{"format":"plain","text_parameters":["a.b"]}}}}"#,
+            r#"{"contract":"elitea.tool-disclosure.v1","default_marker_text":"Generated with Elitea AI","toolkits":{"x":{"a":{"format":"plain","text_parameters":["doc#fields"]}}}}"#,
+            r#"{"contract":"elitea.tool-disclosure.v1","default_marker_text":"Generated with Elitea AI","toolkits":{"x":{"a":{"format":"plain","text_parameters":["doc#/fields//x"]}}}}"#,
+            r#"{"contract":"elitea.tool-disclosure.v1","default_marker_text":"Generated with Elitea AI","toolkits":{"x":{"a":{"format":"plain","text_parameters":["doc#/a~2b"]}}}}"#,
         ] {
             assert!(parse_contract(raw).is_none(), "{raw}");
         }
@@ -440,6 +611,95 @@ mod tests {
             declared_category("github", "create_pull_request").unwrap_or(ToolCategory::Write),
             ToolCategory::Write
         );
+    }
+
+    fn document(call: &Map<String, Value>, argument: &str) -> Value {
+        serde_json::from_str(call[argument].as_str().expect("a JSON string")).expect("JSON")
+    }
+
+    /// Jira `create_issue` takes its text inside `issue_json`: a wiki or
+    /// plain description gets the marker, an ADF description (API v3) gets a
+    /// last paragraph, an absent one gets the marker only. The rest of the
+    /// document is not changed.
+    #[test]
+    fn jira_create_issue_writes_the_marker_inside_issue_json() {
+        let policy = DisclosurePolicy::default();
+        let fields = json!({"project": {"key": "EL"}, "summary": "Fix", "issuetype": {"name": "Bug"}, "customfield_1": 1.50});
+        let mut plain = fields.clone();
+        plain["description"] = json!("The build fails.");
+        let mut call = arguments(&json!({"issue_json": json!({"fields": plain}).to_string()}));
+        assert_eq!(policy.apply("jira", "create_issue", &mut call), 1);
+        let created = document(&call, "issue_json");
+        assert_eq!(
+            created["fields"]["description"],
+            "The build fails.\n\nGenerated with Elitea AI"
+        );
+        assert_eq!(created["fields"]["summary"], "Fix");
+        assert_eq!(created["fields"]["customfield_1"], fields["customfield_1"]);
+        // Applied once: a replayed call is not marked twice.
+        assert_eq!(policy.apply("jira", "create_issue", &mut call), 0);
+
+        let mut call = arguments(&json!({"issue_json": json!({"fields": fields}).to_string()}));
+        assert_eq!(policy.apply("jira", "create_issue", &mut call), 1);
+        assert_eq!(
+            document(&call, "issue_json")["fields"]["description"],
+            "Generated with Elitea AI"
+        );
+
+        let mut adf = fields.clone();
+        adf["description"] = json!({"type": "doc", "version": 1, "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": "The build fails."}]}
+        ]});
+        // An object argument is changed in place.
+        let mut call = arguments(&json!({"issue_json": {"fields": adf}}));
+        assert_eq!(policy.apply("jira", "create_issue", &mut call), 1);
+        let content = &call["issue_json"]["fields"]["description"]["content"];
+        assert_eq!(content.as_array().map(Vec::len), Some(2));
+        assert_eq!(
+            content[1],
+            json!({"type": "paragraph", "content": [{"type": "text", "text": "Generated with Elitea AI"}]})
+        );
+        assert_eq!(policy.apply("jira", "create_issue", &mut call), 0);
+    }
+
+    /// A document argument that is not JSON, or has no object on the path,
+    /// is left as it is: the toolkit refuses it with its own message.
+    #[test]
+    fn a_malformed_document_argument_is_left_as_it_is() {
+        let policy = DisclosurePolicy::default();
+        for raw in ["{not json", "[1, 2]", r#"{"fields": "x"}"#, r#""text""#] {
+            let mut call = arguments(&json!({"issue_json": raw}));
+            assert_eq!(policy.apply("jira", "create_issue", &mut call), 0, "{raw}");
+            assert_eq!(call["issue_json"], raw);
+        }
+        // No `fields` object: no field is invented above the text.
+        let mut call = arguments(&json!({"issue_json": r#"{"update": {}}"#}));
+        assert_eq!(policy.apply("jira", "create_issue", &mut call), 0);
+    }
+
+    #[test]
+    fn bitbucket_and_azure_devops_documents_get_their_formats() {
+        let policy = DisclosurePolicy::new("AI & <us>", Vec::<String>::new()).with_run_id("exec-9");
+        let mut call =
+            arguments(&json!({"pr_json_data": r#"{"title":"Fix","description":"Fixes it."}"#}));
+        assert_eq!(
+            policy.apply("bitbucket", "create_pull_request", &mut call),
+            1
+        );
+        assert_eq!(
+            document(&call, "pr_json_data")["description"],
+            "Fixes it.\n\nAI & <us> <!-- elitea-run-id: exec-9 -->"
+        );
+        let mut call = arguments(&json!({
+            "work_item_json": r#"{"fields":{"System.Title":"Fix","System.Description":"<div>Broken</div>"}}"#,
+            "wi_type": "Task"
+        }));
+        assert_eq!(policy.apply("ado_boards", "create_work_item", &mut call), 1);
+        assert_eq!(
+            document(&call, "work_item_json")["fields"]["System.Description"],
+            "<div>Broken</div>\n\n<p>AI &amp; &lt;us&gt;</p>"
+        );
+        assert_eq!(policy.apply("ado_boards", "create_work_item", &mut call), 0);
     }
 
     #[test]

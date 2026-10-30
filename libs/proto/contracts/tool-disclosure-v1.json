@@ -1,9 +1,12 @@
 {
   "contract": "elitea.tool-disclosure.v1",
-  "description": "ADR-0043 decision 3: the text parameters of the built-in tools that write human-readable text outside the platform: every external_send tool, and the write tools that create or change a pull request, an issue, a case, a ticket or a page with a description or body. The categories do not change: a write tool listed here keeps its approval defaults. The worker appends the AI disclosure marker to each listed parameter before the call. A path is a top-level argument (`comment`) or a text field of each object in a top-level list (`inline_comments[].comment_text`). `format` markdown targets render HTML comments as hidden, so the marker carries the run id there; plain targets get the text only. Every external_send tool of tool-categories-v1.json is listed under toolkits or under exempt with a reason. Tools whose text is inside a JSON document argument (Jira create_issue, Bitbucket create_pull_request, Azure DevOps Boards create_work_item) are not listed: the marker would change the document. Read by the Rust worker and by elitea-main (the opt-out toolkit types); elitea-main keeps a copy that a test holds equal.",
+  "description": "ADR-0043 decision 3: the text parameters of the built-in tools that write human-readable text outside the platform: every external_send tool, and the write tools that create or change a pull request, an issue, a case, a ticket or a page with a description or body. The categories do not change: a write tool listed here keeps its approval defaults. The worker appends the AI disclosure marker to each listed parameter before the call. A path is a top-level argument (`comment`), a text field of each object in a top-level list (`inline_comments[].comment_text`), or an RFC 6901 JSON pointer into a JSON document argument (`issue_json#/fields/description`). The document argument can be a JSON string or an object; a string that is not a JSON object is left as it is. An absent or empty text field in a document gets the marker only, and an Atlassian Document Format value gets the marker as a last paragraph. Update tools with a document argument are not listed: an absent field would replace the text that the item has. `format` markdown targets render HTML comments as hidden, so the marker carries the run id there; plain targets get the text only; html targets get the text as an escaped paragraph. Every external_send tool of tool-categories-v1.json is listed under toolkits or under exempt with a reason. Read by the Rust worker and by elitea-main (the opt-out toolkit types); elitea-main keeps a copy that a test holds equal.",
   "default_marker_text": "Generated with Elitea AI",
-  "formats": ["plain", "markdown"],
+  "formats": ["plain", "markdown", "html"],
   "toolkits": {
+    "ado_boards": {
+      "create_work_item": {"format": "html", "text_parameters": ["work_item_json#/fields/System.Description"]}
+    },
     "ado_repos": {
       "create_pull_request": {"format": "markdown", "text_parameters": ["pull_request_body"]},
       "comment_on_pull_request": {"format": "markdown", "text_parameters": ["comment_query", "inline_comments[].comment_text"]}
@@ -12,6 +15,7 @@
       "add_comment": {"format": "plain", "text_parameters": ["body"]}
     },
     "bitbucket": {
+      "create_pull_request": {"format": "markdown", "text_parameters": ["pr_json_data#/description"]},
       "close_pull_request": {"format": "markdown", "text_parameters": ["message"]},
       "add_pull_request_comment": {"format": "markdown", "text_parameters": ["content"]}
     },
@@ -44,6 +48,7 @@
       "create_pr_change_comment": {"format": "markdown", "text_parameters": ["comment"]}
     },
     "jira": {
+      "create_issue": {"format": "plain", "text_parameters": ["issue_json#/fields/description"]},
       "add_comments": {"format": "plain", "text_parameters": ["comment"]}
     },
     "salesforce": {

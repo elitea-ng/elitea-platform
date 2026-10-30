@@ -59,7 +59,7 @@ func loadDisclosure(raw []byte) (map[string]string, error) {
 			return nil, fmt.Errorf("toolcategory: disclosure toolkit %q is empty or listed twice", toolkit)
 		}
 		for tool, entry := range tools {
-			if (entry.Format != "plain" && entry.Format != "markdown") || len(entry.TextParameters) == 0 {
+			if (entry.Format != "plain" && entry.Format != "markdown" && entry.Format != "html") || len(entry.TextParameters) == 0 {
 				return nil, fmt.Errorf("toolcategory: disclosure tool %s.%s is malformed", toolkit, tool)
 			}
 		}

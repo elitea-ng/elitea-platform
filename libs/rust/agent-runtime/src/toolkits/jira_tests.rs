@@ -593,6 +593,40 @@ async fn server_search_paginates_by_start_at_under_the_context_path_with_basic_a
     assert!(output.contains("https://jira.example.test/jira/browse/OPS-0"));
 }
 
+/// API v3 takes an ADF description only: a string one (for example the AI
+/// disclosure marker that the worker adds to an issue without a description)
+/// is sent as one paragraph per block.
+#[tokio::test]
+async fn create_issue_on_api_v3_sends_a_string_description_as_adf() {
+    let (client, transport) = client_after_probe(
+        &cloud_settings(),
+        vec![
+            JiraHttpResponse::fixture(
+                StatusCode::CREATED,
+                Some(json!({"id": "10051", "key": "PROJ-51"})),
+            ),
+            JiraHttpResponse::fixture(StatusCode::NO_CONTENT, None),
+        ],
+    );
+    run(
+        &client,
+        JiraOperation::CreateIssue {
+            issue_json: r#"{"fields": {"project": {"key": "PROJ"}, "summary": "New", "issuetype": {"name": "Task"}, "description": "Steps.\n\nGenerated with Elitea AI"}}"#,
+        },
+    )
+    .await;
+    assert_eq!(
+        transport.requests()[1].body,
+        Some(
+            json!({"fields": {"project": {"key": "PROJ"}, "summary": "New", "issuetype": {"name": "Task"},
+            "description": {"type": "doc", "version": 1, "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "Steps."}]},
+                {"type": "paragraph", "content": [{"type": "text", "text": "Generated with Elitea AI"}]}
+            ]}}})
+        )
+    );
+}
+
 #[tokio::test]
 async fn create_issue_posts_fields_then_applies_default_labels() {
     let (client, transport) = client_after_probe(

@@ -53,6 +53,7 @@ func TestDisclosureNamesExternalSendToolsAndTheirArguments(t *testing.T) {
 				found = true
 				for _, path := range entry.TextParameters {
 					top, _, _ := strings.Cut(path, "[].")
+					top, _, _ = strings.Cut(top, "#")
 					if _, ok := schema.Properties[top]; !ok {
 						t.Errorf("%s.%s has no argument %q", toolkit, tool, top)
 					}
@@ -82,7 +83,7 @@ func TestDisclosureToolkitTypes(t *testing.T) {
 	for name, raw := range map[string]string{
 		"not json":       `{`,
 		"wrong contract": `{"contract":"x","default_marker_text":"Generated with Elitea AI","toolkits":{}}`,
-		"bad format":     `{"contract":"elitea.tool-disclosure.v1","default_marker_text":"Generated with Elitea AI","toolkits":{"a":{"b":{"format":"html","text_parameters":["c"]}}}}`,
+		"bad format":     `{"contract":"elitea.tool-disclosure.v1","default_marker_text":"Generated with Elitea AI","toolkits":{"a":{"b":{"format":"rtf","text_parameters":["c"]}}}}`,
 	} {
 		if _, err := loadDisclosure([]byte(raw)); err == nil {
 			t.Errorf("%s: loaded", name)

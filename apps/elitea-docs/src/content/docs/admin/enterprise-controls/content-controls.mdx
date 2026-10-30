@@ -276,7 +276,7 @@ The tools are declared in one contract, [`libs/proto/contracts/tool-disclosure-v
 
 | Toolkit | Tools | Format |
 | --- | --- | --- |
-| Jira | `add_comments` | Plain text |
+| Jira | `add_comments`, `create_issue` (the description in `issue_json`) | Plain text, or a paragraph in Atlassian Document Format |
 | Slack | `send_message` | Plain text |
 | Gmail (`yagmail`) | `send_gmail_message` | Plain text |
 | Aha! | `add_comment` | Plain text |
@@ -288,10 +288,20 @@ The tools are declared in one contract, [`libs/proto/contracts/tool-disclosure-v
 | GitHub | `comment_on_issue`, `create_pull_request`, `create_issue`, `update_issue`, `create_issue_on_project`, `update_issue_on_project` | Markdown |
 | GitLab | `comment_on_issue`, `comment_on_pr`, `create_pr_change_comment`, `create_pull_request` | Markdown |
 | GitLab Org | `comment_on_issue`, `create_pr_change_comment`, `create_pull_request` | Markdown |
-| Bitbucket | `add_pull_request_comment`, `close_pull_request` (the close message) | Markdown |
+| Bitbucket | `add_pull_request_comment`, `close_pull_request` (the close message), `create_pull_request` (the description in `pr_json_data`) | Markdown |
 | Azure DevOps Repos | `comment_on_pull_request` (also each inline comment), `create_pull_request` | Markdown |
+| Azure DevOps Boards | `create_work_item` (the `System.Description` field in `work_item_json`) | HTML paragraph |
 
 An update of a body that already has a marker does not get a second marker. This is also true when the marker has the run id of an earlier run.
+
+Some tools get their text inside a JSON document parameter. The contract names the text field with a JSON pointer (RFC 6901), for example `issue_json#/fields/description`. The worker reads the parameter as a JSON string or an object, and adds the marker to that field:
+
+- When the field has text, the worker adds the marker to the end of the text.
+- When the field is absent or empty, the worker adds the field with the marker only.
+- When the field is a Jira document in Atlassian Document Format, the worker adds the marker as the last paragraph. On Jira API v3, the toolkit sends a text description as an Atlassian document.
+- When the parameter is not JSON, or the path has no object above the field, the worker does not change the parameter. The toolkit then refuses the call.
+
+Update tools with a JSON document parameter (for example Jira `update_issue`) do not get the marker. If the field is absent, a marker would replace the text that the item has.
 
 Jira `update_comment_with_file` is `external_send` but has no marker: it replaces the text of a comment that already exists, and that comment got its marker when the agent wrote it.
 
@@ -306,7 +316,7 @@ A project can change the marker text, but it cannot remove the marker. Only a pl
 - The marker text is at most 200 bytes. The worker replaces control characters with spaces.
 - The worker adds the marker only to the tools in the contract. A tool that writes text in another parameter, or a new tool, needs a contract entry.
 - The tools of a custom MCP server do not get the marker.
-- A tool that sends its text inside a JSON document parameter does not get the marker: Jira `create_issue`, Bitbucket `create_pull_request` and Azure DevOps Boards `create_work_item`.
+- An update tool with a JSON document parameter (Jira `update_issue`, Azure DevOps Boards `update_work_item`) does not get the marker.
 - An agent can still write text that looks like a marker, or ask a person to remove it. The marker is a disclosure, not a watermark.
 
 ### Configure

@@ -117,7 +117,14 @@ security audit event). Worker commands gain field **71**
   `create_issue_on_project`, `update_issue_on_project`; GitLab and GitLab Org
   `create_pull_request`; Azure DevOps Repos `create_pull_request`; Bitbucket
   `close_pull_request`; Confluence `create_page`; Salesforce `create_case`,
-  `update_case`; Carrier `create_ticket`; TestIO `confirm_bug_fix`.
+  `update_case`; Carrier `create_ticket`; TestIO `confirm_bug_fix`. Tools
+  that take their text in a JSON document get the marker in the field that a
+  JSON pointer names: Jira `create_issue` (`/fields/description`; an ADF
+  description gets a last paragraph), Bitbucket `create_pull_request`
+  (`/description`) and Azure DevOps Boards `create_work_item`
+  (`/fields/System.Description`, as an HTML paragraph). An absent field gets
+  the marker only. On Jira API v3, `create_issue` now sends a string
+  description as an ADF document (Jira refused it before).
 - **Behaviour change: tool results are wrapped.** Each tool result now
   reaches the model as `<untrusted source="TOOL">…</untrusted>`, and a
   built-in preamble (approximately 30 tokens) goes before every system
