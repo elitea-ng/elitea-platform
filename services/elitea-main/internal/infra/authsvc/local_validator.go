@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialuse"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 )
 
@@ -93,6 +94,15 @@ func (v *LocalValidator) ValidateToken(ctx context.Context, tokenStr string) (au
 	if principal.TokenID <= 0 || principal.UserID <= 0 {
 		return auth.User{}, fmt.Errorf("%w: token principal contains invalid identity data", ErrTokenValidationUnavailable)
 	}
+
+	// The credential inventory's last use (ADR-0044 decision 5): an
+	// in-memory coalescer, flushed in batches off the request; no statement
+	// on this path (internal/credentialuse).
+	var boundProject int64
+	if principal.ProjectID != nil {
+		boundProject = int64(*principal.ProjectID)
+	}
+	credentialuse.Default().TouchID(credentialuse.KindPAT, int64(principal.TokenID), boundProject)
 
 	return auth.User{
 		ID:             strconv.FormatInt(int64(principal.UserID), 10),

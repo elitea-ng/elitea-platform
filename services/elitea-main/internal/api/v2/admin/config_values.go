@@ -254,6 +254,11 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
 		return
 	}
+	// The credential review policy's ranges (ADR-0044 decision 5).
+	if reason := validateCredentialReviewValues(section.id, body.Values); reason != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+		return
+	}
 
 	principal, _ := auth.UserFromContext(r.Context())
 	author := principal.Email

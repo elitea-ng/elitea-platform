@@ -918,7 +918,20 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// anchor), the canonical-form function, the AFTER INSERT chain trigger
 	// and an append-only UPDATE guard on chained rows. No data apart from the
 	// head row, no permission.
-	require.EqualValues(t, 206, Head(shared))
+	//
+	// 207: claimed by the catalogue mode and connector approval change
+	// (ADR-0044 decision 1), merged beside this one.
+	//
+	// 208: shared/0208_credential_inventory.sql, the evidence for credential
+	// and access review (ADR-0044 decision 5, #1501):
+	// elitea_identity.credential_last_use (hourly-coalesced last use per
+	// credential), elitea_identity.credential_review_state (first seen,
+	// flagged, notified, revoked) and
+	// elitea_lifecycle.permission_trimming_candidates (what the weekly
+	// routine notified). Grants credentials.inventory.read and
+	// credentials.inventory.manage to super_admin and admin, and
+	// agents.trimming.manage to the project admin.
+	require.EqualValues(t, 208, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialuse"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 	"strings"
 )
@@ -68,6 +69,8 @@ func (m *CurrentConfigurationsMaterializer) materializeToolkitRuntimeContext(ctx
 	if err != nil {
 		return nil, toolkitTokenMaterializationError(ctx, err)
 	}
+	// The credential inventory's last use (ADR-0044 decision 5).
+	credentialuse.Default().Touch(credentialuse.KindMCPOAuthToken, reference.Reference, int64(projectID))
 	delete(object, "mcp_token_reference")
 	if !strings.EqualFold(token.TokenType, "Bearer") {
 		return nil, ErrContentRejected

@@ -21,6 +21,7 @@ import (
 	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/toolrelation"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/toolkitnaming"
 )
 
@@ -1452,14 +1453,10 @@ func (h *Handler) updateToolRelation(w http.ResponseWriter, r *http.Request, pro
 	}
 	hasRelation, _ := body["has_relation"].(bool)
 
-	// Guard: block changes to published/embedded versions
-	var verStatus string
-	err := h.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT status FROM %s.application_versions WHERE id = $1`, s), entityVersionID).Scan(&verStatus)
-	if err == nil && (verStatus == "published" || verStatus == "embedded") {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": "Cannot change tools on a published version. Unpublish first.",
-		})
+	// Guard: block changes to published/embedded versions. The same rules
+	// serve the permission trimming report's removals (toolrelation).
+	if err := toolrelation.CheckVersionEditable(ctx, h.pool, s, entityVersionID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 
@@ -1469,19 +1466,15 @@ func (h *Handler) updateToolRelation(w http.ResponseWriter, r *http.Request, pro
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
-		q := selectedToolsRelationInsertSQL(s, hasSelectedTools)
-		args := []any{entityVersionID, entityID, entityType, toolID}
-		if hasSelectedTools {
-			args = append(args, selectedTools)
+		if !hasSelectedTools {
+			selectedTools = nil
 		}
-		if _, err := h.pool.Exec(ctx, q, args...); err != nil {
+		if err := toolrelation.Attach(ctx, h.pool, s, entityVersionID, entityID, entityType, toolID, selectedTools); err != nil {
 			writeToolkitInternalError(w, r, "update_tool_relation", "failed to add the tool relation", err)
 			return
 		}
 	} else {
-		q := fmt.Sprintf(`DELETE FROM %s.entity_tool_mapping WHERE entity_version_id = $1 AND tool_id = $2`, s)
-		_, err := h.pool.Exec(ctx, q, entityVersionID, toolID)
-		if err != nil {
+		if _, err := toolrelation.Detach(ctx, h.pool, s, entityVersionID, toolID); err != nil {
 			writeToolkitInternalError(w, r, "update_tool_relation", "failed to remove the tool relation", err)
 			return
 		}
@@ -1537,17 +1530,10 @@ func selectedToolsPayload(body map[string]any) ([]byte, bool, error) {
 	return encoded, true, nil
 }
 
-// selectedToolsRelationInsertSQL builds the attach statement. `_entity_tool_unique
-// (entity_version_id, tool_id, entity_type)` is the upsert target, so a selection
-// edit on an ALREADY-attached toolkit (the only way the UI ever sends the key)
-// updates the existing mapping row instead of conflicting into a no-op — the
-// bug this whole branch removes: the previous statement was an unconditional
-// `DO NOTHING` and never named `selected_tools` at all.
+// selectedToolsRelationInsertSQL is toolrelation.AttachSQL (the statement
+// moved there so the permission trimming removals share it).
 func selectedToolsRelationInsertSQL(schema string, withSelectedTools bool) string {
-	if !withSelectedTools {
-		return fmt.Sprintf(`INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, created_at) VALUES ($1, $2, $3, $4, now() AT TIME ZONE 'UTC') ON CONFLICT (entity_version_id, tool_id, entity_type) DO NOTHING`, schema)
-	}
-	return fmt.Sprintf(`INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at) VALUES ($1, $2, $3, $4, $5::jsonb, now() AT TIME ZONE 'UTC') ON CONFLICT (entity_version_id, tool_id, entity_type) DO UPDATE SET selected_tools = EXCLUDED.selected_tools, updated_at = (now() AT TIME ZONE 'UTC')`, schema)
+	return toolrelation.AttachSQL(schema, withSelectedTools)
 }
 
 // Delete removes a toolkit instance. With a cleanup journal wired the delete is

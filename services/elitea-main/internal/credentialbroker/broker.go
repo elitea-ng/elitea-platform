@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/cache"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/epoch"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialuse"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/mandate"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
@@ -364,7 +366,22 @@ func (b *Broker) Redeem(ctx context.Context, req RedeemRequest) (result Result, 
 		}
 		return Result{}, fmt.Errorf("credential broker: record the redemption: %w", err)
 	}
+	// The credential inventory's last use of the reference and of the use
+	// grant it was redeemed under (ADR-0044 decision 5). The grant is keyed
+	// by its live-grant key, which this path holds without another read.
+	uses := credentialuse.Default()
+	uses.Touch(credentialuse.KindCredentialReference, req.Invocation.CredentialReferenceID, req.Run.TenantProjectID)
+	if sc.agentBindingID != "" {
+		uses.Touch(credentialuse.KindCredentialGrant, CredentialGrantUseID(sc.agentBindingID,
+			req.Invocation.ToolkitID, req.Invocation.CredentialReferenceID), req.Run.TenantProjectID)
+	}
 	return Result{Envelope: envelope}, nil
+}
+
+// CredentialGrantUseID is the credential inventory id of a use grant: its
+// live-grant key "<agent binding id>/<toolkit id>/<reference id>".
+func CredentialGrantUseID(agentBindingID string, toolkitID int64, referenceID string) string {
+	return agentBindingID + "/" + strconv.FormatInt(toolkitID, 10) + "/" + referenceID
 }
 
 // verifiedContext checks the stored context against the request digest and
