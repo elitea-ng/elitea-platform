@@ -67,6 +67,42 @@ type graphNode struct {
 	toolkit  string
 	tool     string
 	targets  []string
+	// exposed are the toolkit aliases an `llm` node gives its model: the
+	// keys of `tool_names` with at least one tool.
+	exposed []string
+}
+
+// childAliases answers the aliases of the children a node can run: the
+// child an `agent` node selects, and each child an `llm` node gives its
+// model as a tool.
+func (node graphNode) childAliases() []string {
+	switch node.nodeType {
+	case "agent":
+		if node.tool != "" {
+			return []string{node.tool}
+		}
+	case "llm":
+		return node.exposed
+	}
+	return nil
+}
+
+// childFor resolves an alias to a child as the worker binds a toolkit: the
+// exact name, else the legacy key.
+func childFor(children map[string]*PipelineGraph, alias string) (string, bool) {
+	if _, ok := children[alias]; ok {
+		return alias, true
+	}
+	key := legacyKey(alias)
+	if key == "" {
+		return "", false
+	}
+	for name := range children {
+		if legacyKey(name) == key {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 // PipelineGraph is one version of a pipeline composition the check walks:
@@ -110,11 +146,13 @@ func CheckPipelineHITL(instructions string, toolkits []PipelineToolkit, tier age
 // node is not a tool node; the run's approval categories cover it at call
 // time.
 //
-// An `agent` node that selects a saved child pipeline continues the path
-// into the child: the child's paths from its own entry point are checked
-// with the parent's path as their prefix. A child no `agent` node selects
-// (a pipeline attached as a tool a model calls) is checked from its own
-// entry point. The caller bounds the composition: the graph has no cycle.
+// A node that can run a saved child pipeline continues the path into the
+// child: an `agent` node that selects it, and an `llm` node whose
+// `tool_names` give it to the model. The child's paths from its own entry
+// point are checked with the parent's path as their prefix, once for each
+// such node a path reaches ungated. A child no node of the pipeline names
+// (a pipeline attached as a tool of an agent) is checked from its own entry
+// point. The caller bounds the composition: the graph has no cycle.
 //
 // A document that does not parse, has no entry point or names a node that
 // does not exist is not refused here: the compiler refuses it when the run
@@ -201,9 +239,9 @@ func walkGraph(graph *PipelineGraph, prefix []string, selected map[string]bool) 
 		}
 	}
 	for _, node := range nodes {
-		if node.nodeType == "agent" && node.tool != "" {
-			if _, ok := graph.Children[node.tool]; ok {
-				selected[node.tool] = true
+		for _, alias := range node.childAliases() {
+			if name, ok := childFor(graph.Children, alias); ok {
+				selected[name] = true
 			}
 		}
 	}
@@ -253,9 +291,11 @@ func walkGraph(graph *PipelineGraph, prefix []string, selected map[string]bool) 
 				return refusal(nodes, parent, current, prefix, category, graph.Tier)
 			}
 		}
-		if node.nodeType == "agent" {
-			if child, ok := graph.Children[node.tool]; ok {
-				if err := checkGraph(child, pathTo(nodes, parent, current, prefix)); err != nil {
+		// The node can run a child: the child continues this path. Each
+		// path that reaches a child checks it again.
+		for _, alias := range node.childAliases() {
+			if name, ok := childFor(graph.Children, alias); ok {
+				if err := checkGraph(graph.Children[name], pathTo(nodes, parent, current, prefix)); err != nil {
 					return err
 				}
 			}
@@ -390,6 +430,15 @@ func readNode(node *yaml.Node) (graphNode, bool) {
 				// A hitl node's routes; the node ends a path anyway.
 				for j := 1; j < len(value.Content); j += 2 {
 					out.targets = appendScalar(out.targets, aliased(value.Content[j]))
+				}
+			}
+		case "tool_names":
+			if value.Kind == yaml.MappingNode {
+				for j := 0; j+1 < len(value.Content); j += 2 {
+					tools := aliased(value.Content[j+1])
+					if alias := scalar(aliased(value.Content[j])); alias != "" && tools.Kind == yaml.SequenceNode && len(tools.Content) > 0 {
+						out.exposed = append(out.exposed, alias)
+					}
 				}
 			}
 		case "branches":

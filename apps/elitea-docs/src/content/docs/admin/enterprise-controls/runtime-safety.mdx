@@ -378,8 +378,9 @@ A static pause also counts as approval. The run stops before each node that the 
 
 The check also covers saved child pipelines:
 
-- An `agent` node that runs a saved child pipeline continues the path into the child. A `hitl` node before the `agent` node approves the whole child. If there is no such node, each path in the child must go through a `hitl` node.
-- A pipeline that an agent attaches as a tool is checked from its own entry point.
+- A node that can run a saved child pipeline continues the path into the child. An `agent` node can run the child that it selects. An `llm` node can run each child that its `tool_names` give to the model.
+- The check examines the child again on each path that reaches such a node. A `hitl` node or a static pause before the node approves the child on that path. If there is no approval on the path, each path in the child must go through a `hitl` node.
+- A pipeline that an agent attaches as a tool, and that no node of a pipeline names, is checked from its own entry point.
 - The check goes down three levels of saved pipelines, as the worker does. A deeper composition, or one with a cycle, does not start.
 - Each child is checked at the tier of its parent if that tier requires the rule. If not, the child is checked at its own tier.
 

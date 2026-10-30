@@ -312,6 +312,50 @@ nodes:
 			&PipelineGraph{Children: map[string]*PipelineGraph{"Sender": child(sendsDirectly, agentlifecycle.TierHigh)}},
 			true, `"Sender" -> "post"`,
 		},
+		"gated on the agent node path, ungated through an llm node": {
+			&PipelineGraph{IsPipeline: true, Tier: agentlifecycle.TierHigh, Instructions: `
+entry_point: route
+nodes:
+  - {id: route, type: decision, nodes: [review, ask]}
+  - {id: review, type: hitl, routes: {approve: run, reject: END}}
+  - {id: run, type: agent, tool: Sender, transition: END}
+  - {id: ask, type: llm, tool_names: {Sender: [Sender]}, transition: END}
+`,
+				Children: map[string]*PipelineGraph{"Sender": child(sendsDirectly, agentlifecycle.TierHigh)}},
+			true, `"route" -> "ask" -> "post"`,
+		},
+		"an llm node behind a hitl node covers the child": {
+			&PipelineGraph{IsPipeline: true, Tier: agentlifecycle.TierHigh, Instructions: `
+entry_point: review
+nodes:
+  - {id: review, type: hitl, routes: {approve: ask, reject: END}}
+  - {id: ask, type: llm, tool_names: {Sender: [Sender]}, transition: END}
+`,
+				Children: map[string]*PipelineGraph{"Sender": child(sendsDirectly, agentlifecycle.TierHigh)}},
+			false, "",
+		},
+		"an llm node behind a static pause covers the child": {
+			&PipelineGraph{IsPipeline: true, Tier: agentlifecycle.TierHigh, Instructions: `
+entry_point: a
+interrupt_after: [a]
+nodes:
+  - {id: a, type: llm, transition: ask}
+  - {id: ask, type: llm, tool_names: {sender: [Sender]}, transition: END}
+`,
+				Children: map[string]*PipelineGraph{"Sender": child(sendsDirectly, agentlifecycle.TierHigh)}},
+			false, "",
+		},
+		"an llm node whose tool list for the child is empty": {
+			&PipelineGraph{IsPipeline: true, Tier: agentlifecycle.TierHigh, Instructions: `
+entry_point: ask
+nodes:
+  - {id: ask, type: llm, tool_names: {Sender: []}, transition: review}
+  - {id: review, type: hitl, routes: {approve: run, reject: END}}
+  - {id: run, type: agent, tool: Sender, transition: END}
+`,
+				Children: map[string]*PipelineGraph{"Sender": child(sendsDirectly, agentlifecycle.TierHigh)}},
+			false, "",
+		},
 		"a pipeline attached to a pipeline and no agent node": {
 			&PipelineGraph{IsPipeline: true, Instructions: passesTheHITL, Tier: agentlifecycle.TierHigh, Toolkits: toolkits,
 				Children: map[string]*PipelineGraph{"Other": child(sendsDirectly, agentlifecycle.TierHigh)}},
