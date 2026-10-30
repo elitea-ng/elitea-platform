@@ -2133,3 +2133,63 @@ fn only_the_reserved_origin_and_an_app_mcp_path_name_an_internal_category() {
         );
     }
 }
+
+// ---- ADR-0044 decision 4: delegation assertions on remote MCP calls ----
+
+struct RefusedMint(AtomicUsize);
+
+#[async_trait]
+impl crate::remote_assertion::DelegationAssertionSource for RefusedMint {
+    async fn mint(
+        &self,
+        _audience: &str,
+    ) -> Result<crate::remote_assertion::MintedAssertion, crate::remote_assertion::DelegationAssertionError>
+    {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Err(crate::remote_assertion::DelegationAssertionError::Unavailable)
+    }
+}
+
+/// A governed run that cannot mint its assertion refuses the connection
+/// with a typed, visible error before it dials the server.
+#[tokio::test]
+async fn a_governed_run_refuses_a_remote_mcp_call_it_cannot_sign() {
+    let mint = Arc::new(RefusedMint(AtomicUsize::new(0)));
+    let config = direct_config(json!({}), &Map::new()).with_assertions(Some(
+        crate::remote_assertion::DelegationAssertions::new(mint.clone(), true),
+    ));
+    let error = AdkHttpMcpConnector::new()
+        .connect_session(&config)
+        .await
+        .err()
+        .expect("refused");
+    assert_eq!(
+        error.code(),
+        McpMaterializationErrorCode::UnsupportedAuthority
+    );
+    assert_eq!(
+        error.assertion_refusal(),
+        Some(crate::remote_assertion::DelegationAssertionError::Unavailable)
+    );
+    assert_eq!(
+        error.visible_message(),
+        Some(super::mcp::ASSERTION_REFUSED_MESSAGE)
+    );
+    assert_eq!(mint.0.load(Ordering::SeqCst), 1);
+}
+
+/// The internal tool service is the platform's own authority: it never
+/// carries a delegation assertion.
+#[test]
+fn an_internal_category_carries_no_assertion() {
+    let mint = Arc::new(RefusedMint(AtomicUsize::new(0)));
+    let config = direct_config(json!({}), &Map::new())
+        .with_endpoint_for_test(&format!(
+            "{}/app/7/mcp",
+            super::mcp_internal::INTERNAL_TOOLS_ORIGIN
+        ))
+        .with_assertions(Some(crate::remote_assertion::DelegationAssertions::new(
+            mint, true,
+        )));
+    assert!(!config.carries_delegation_for_test());
+}

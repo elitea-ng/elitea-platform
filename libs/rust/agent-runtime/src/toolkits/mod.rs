@@ -50,6 +50,7 @@ mod git_receive_pack;
 pub(crate) mod invocation;
 pub(crate) mod materialize;
 pub(crate) mod mcp;
+pub(crate) mod mcp_assertion;
 pub(crate) mod mcp_error;
 pub(crate) mod mcp_internal;
 pub(crate) mod mcp_pin;

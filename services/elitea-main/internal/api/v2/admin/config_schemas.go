@@ -287,6 +287,7 @@ func configSections() []map[string]any {
 		nativeClientPolicySection(),
 		cloudExecutorSection(),
 		workerEgressSection(),
+		remoteAgentsSection(),
 		catalogueSection(),
 		entitlementExportSection(),
 		runCapsSection(),

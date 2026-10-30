@@ -32,6 +32,7 @@ const (
 	RuntimeControlService_ClaimSteeringMessages_FullMethodName         = "/elitea.runtime.v1.RuntimeControlService/ClaimSteeringMessages"
 	RuntimeControlService_ReportEgressSummary_FullMethodName           = "/elitea.runtime.v1.RuntimeControlService/ReportEgressSummary"
 	RuntimeControlService_ReportRunSteps_FullMethodName                = "/elitea.runtime.v1.RuntimeControlService/ReportRunSteps"
+	RuntimeControlService_MintDelegationAssertion_FullMethodName       = "/elitea.runtime.v1.RuntimeControlService/MintDelegationAssertion"
 )
 
 // RuntimeControlServiceClient is the client API for RuntimeControlService service.
@@ -51,6 +52,7 @@ type RuntimeControlServiceClient interface {
 	ClaimSteeringMessages(ctx context.Context, in *ClaimSteeringMessagesRequestV1, opts ...grpc.CallOption) (*ClaimSteeringMessagesResponseV1, error)
 	ReportEgressSummary(ctx context.Context, in *ReportEgressSummaryRequestV1, opts ...grpc.CallOption) (*ReportEgressSummaryResponseV1, error)
 	ReportRunSteps(ctx context.Context, in *ReportRunStepsRequestV1, opts ...grpc.CallOption) (*ReportRunStepsResponseV1, error)
+	MintDelegationAssertion(ctx context.Context, in *MintDelegationAssertionRequestV1, opts ...grpc.CallOption) (*MintDelegationAssertionResponseV1, error)
 }
 
 type runtimeControlServiceClient struct {
@@ -191,6 +193,16 @@ func (c *runtimeControlServiceClient) ReportRunSteps(ctx context.Context, in *Re
 	return out, nil
 }
 
+func (c *runtimeControlServiceClient) MintDelegationAssertion(ctx context.Context, in *MintDelegationAssertionRequestV1, opts ...grpc.CallOption) (*MintDelegationAssertionResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MintDelegationAssertionResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeControlService_MintDelegationAssertion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RuntimeControlServiceServer is the server API for RuntimeControlService service.
 // All implementations must embed UnimplementedRuntimeControlServiceServer
 // for forward compatibility.
@@ -208,6 +220,7 @@ type RuntimeControlServiceServer interface {
 	ClaimSteeringMessages(context.Context, *ClaimSteeringMessagesRequestV1) (*ClaimSteeringMessagesResponseV1, error)
 	ReportEgressSummary(context.Context, *ReportEgressSummaryRequestV1) (*ReportEgressSummaryResponseV1, error)
 	ReportRunSteps(context.Context, *ReportRunStepsRequestV1) (*ReportRunStepsResponseV1, error)
+	MintDelegationAssertion(context.Context, *MintDelegationAssertionRequestV1) (*MintDelegationAssertionResponseV1, error)
 	mustEmbedUnimplementedRuntimeControlServiceServer()
 }
 
@@ -256,6 +269,9 @@ func (UnimplementedRuntimeControlServiceServer) ReportEgressSummary(context.Cont
 }
 func (UnimplementedRuntimeControlServiceServer) ReportRunSteps(context.Context, *ReportRunStepsRequestV1) (*ReportRunStepsResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ReportRunSteps not implemented")
+}
+func (UnimplementedRuntimeControlServiceServer) MintDelegationAssertion(context.Context, *MintDelegationAssertionRequestV1) (*MintDelegationAssertionResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MintDelegationAssertion not implemented")
 }
 func (UnimplementedRuntimeControlServiceServer) mustEmbedUnimplementedRuntimeControlServiceServer() {}
 func (UnimplementedRuntimeControlServiceServer) testEmbeddedByValue()                               {}
@@ -512,6 +528,24 @@ func _RuntimeControlService_ReportRunSteps_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RuntimeControlService_MintDelegationAssertion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MintDelegationAssertionRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeControlServiceServer).MintDelegationAssertion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeControlService_MintDelegationAssertion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeControlServiceServer).MintDelegationAssertion(ctx, req.(*MintDelegationAssertionRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RuntimeControlService_ServiceDesc is the grpc.ServiceDesc for RuntimeControlService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -570,6 +604,10 @@ var RuntimeControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportRunSteps",
 			Handler:    _RuntimeControlService_ReportRunSteps_Handler,
+		},
+		{
+			MethodName: "MintDelegationAssertion",
+			Handler:    _RuntimeControlService_MintDelegationAssertion_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

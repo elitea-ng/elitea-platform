@@ -105,7 +105,7 @@ pub async fn materialize_governed_mcp_toolsets(
     let mut out = GovernedMcpToolsets::default();
     let mut admitted = Vec::with_capacity(references.len());
     for reference in references {
-        let Some(server) = GovernedServer::admit(reference)? else {
+        let Some(server) = GovernedServer::admit(reference, policy)? else {
             tracing::warn!(
                 event = "agent_toolkit_refused",
                 reason_code = "toolkit_not_governable",
@@ -181,7 +181,10 @@ struct GovernedServer {
 
 impl GovernedServer {
     /// `None`: not governable (left out before any redemption).
-    fn admit(reference: &FrozenToolReference<'_>) -> Result<Option<Self>, McpMaterializationError> {
+    fn admit(
+        reference: &FrozenToolReference<'_>,
+        policy: &ToolAdmissionPolicy,
+    ) -> Result<Option<Self>, McpMaterializationError> {
         let Some(toolkit_id) = reference
             .tool_id()
             .and_then(|id| i64::try_from(id).ok())
@@ -193,7 +196,8 @@ impl GovernedServer {
             return Ok(None);
         }
         let settings = reference.settings().ok_or_else(invalid_configuration)?;
-        let config = RemoteMcpConfig::parse(reference, &Map::new())?;
+        let config = RemoteMcpConfig::parse(reference, &Map::new())?
+            .with_assertions(policy.egress().assertions());
         // A credential in the toolkit's own headers is a claim-time credential;
         // the internal tool service is the platform's authority, not a grant.
         if config.served_internally() || !config.static_headers.is_empty() {
@@ -255,6 +259,7 @@ impl GovernedServer {
             tool_list_ttl: None,
             internal_builder: false,
             pinned_tools: base.pinned_tools.clone(),
+            assertions: base.assertions.clone(),
         }
     }
 
@@ -310,6 +315,10 @@ async fn list(
         // The worker could not build the client: not this server's answer.
         Err(error) if error.code() == McpMaterializationErrorCode::InvalidConfiguration => {
             return Err(error);
+        }
+        // The run must sign the call and cannot (ADR-0044 decision 4).
+        Err(error) if error.assertion_refusal().is_some() => {
+            return Ok(Listing::Refused(crate::remote_assertion::ASSERTION_UNAVAILABLE));
         }
         // The server refused the redeemed token (never a fallback to the
         // browser flow on a governed run) or did not answer.
@@ -482,10 +491,10 @@ impl GovernedMcpTool {
             .connector
             .connect_session(&config)
             .await
-            .map_err(|error| session_error(error.code()))?;
+            .map_err(|error| session_error(&error))?;
         let (tools, _) = discover_tools(&config, &session)
             .await
-            .map_err(|error| session_error(error.code()))?;
+            .map_err(|error| session_error(&error))?;
         // A tool changed since its approval is not served (#1501).
         let tool = crate::toolkits::mcp_pin::keep_pinned(tools, config.pinned_tools.as_ref())
             .into_iter()
@@ -497,7 +506,7 @@ impl GovernedMcpTool {
             self.server.timeout(),
             Arc::new(config.error_redaction()),
         )
-        .map_err(|error| session_error(error.code()))?;
+        .map_err(|error| session_error(&error))?;
         let result = bounded.execute(ctx, args).await;
         drop(bounded);
         drop(session);
@@ -508,8 +517,16 @@ impl GovernedMcpTool {
 
 /// A session failure as the model reads it: a stable code, never the
 /// endpoint, a header or a body.
-fn session_error(code: McpMaterializationErrorCode) -> AdkError {
-    if code == McpMaterializationErrorCode::AuthorizationRequired {
+fn session_error(error: &McpMaterializationError) -> AdkError {
+    if error.assertion_refusal().is_some() {
+        return AdkError::new(
+            ErrorComponent::Tool,
+            ErrorCategory::Forbidden,
+            crate::remote_assertion::ASSERTION_UNAVAILABLE,
+            "the MCP call needs a signed agent assertion and none could be minted",
+        );
+    }
+    if error.code() == McpMaterializationErrorCode::AuthorizationRequired {
         return AdkError::new(
             ErrorComponent::Tool,
             ErrorCategory::Forbidden,

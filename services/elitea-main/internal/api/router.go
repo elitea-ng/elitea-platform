@@ -797,6 +797,10 @@ type RouterConfig struct {
 	// inbound issuer configured; nil leaves the MCP routes, their
 	// authentication and their responses unchanged, and mounts no metadata.
 	GovernedMCPInbound *v2mcp.GovernedInbound
+	// RemoteAgentMCPInbound verifies the delegation assertions of remote
+	// agents on the MCP routes and holds the governed agent invocation
+	// policy (ADR-0044 decision 4, #1501). nil changes nothing.
+	RemoteAgentMCPInbound *v2mcp.RemoteAgentInbound
 	// GovernedMCPOutbound serves the Client ID Metadata Document remote MCP
 	// authorization servers fetch (issue 1123). Set only with the flag on
 	// and governed MCP OAuth composed; nil mounts no route.
@@ -1408,6 +1412,7 @@ func mountMCPServerRoutes(
 	folderHandler *v2folders.Handler,
 	platformTools *desktopopsapi.PlatformToolBridge,
 	governed *v2mcp.GovernedInbound,
+	remoteAgents *v2mcp.RemoteAgentInbound,
 ) {
 	// The resolver ASKS for the personal project it could not find, for the
 	// reason stated at `withPersonalProjects`: an MCP client authenticates
@@ -1432,6 +1437,7 @@ func mountMCPServerRoutes(
 		v2mcp.WithToolkitExecuteRead(toolkitExecute),
 		v2mcp.WithResumeCursorCodec(mcpResponseCursorCodec()),
 		v2mcp.WithToolkitDiscovery(toolkitDiscovery),
+		v2mcp.WithRemoteAgents(remoteAgents),
 	)
 	// The desktop's executeRemoteToolkitTool runs a platform MCP server's
 	// tool through THIS handler's dispatch, so a local turn and a cloud turn
@@ -1445,6 +1451,11 @@ func mountMCPServerRoutes(
 	r.Group(func(r chi.Router) {
 		r.Use(authenticate)
 		r.Use(apimw.RequireProjectAccess(pool))
+		if remoteAgents != nil {
+			// After authentication: an assertion is bound to the
+			// credential that presents it.
+			r.Use(remoteAgents.Middleware)
+		}
 		r.Get("/app/{projectID}/mcp", handler.Endpoint)
 		r.Post("/app/{projectID}/mcp", handler.Endpoint)
 		r.Get("/app/{projectID}/mcp/*", handler.Endpoint)
@@ -2202,7 +2213,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg.CurrentNotificationStore,
 		cfg.ToolkitArgumentSchemas, cfg.MCPToolkitRun, personalProjects,
 		cfg.InternalConfigurationTools, draftHandler, cfg.ToolkitDiscovery, convHandler, folderHandler,
-		cfg.PlatformMCPTools, cfg.GovernedMCPInbound,
+		cfg.PlatformMCPTools, cfg.GovernedMCPInbound, cfg.RemoteAgentMCPInbound,
 	)
 
 	// SCIM 2.0 provisioning (shared migrations 0096, 0098, 0134).

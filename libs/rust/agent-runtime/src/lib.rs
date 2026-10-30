@@ -63,6 +63,7 @@ pub mod context_budget;
 pub mod context_management;
 pub mod context_status;
 pub mod context_summary;
+pub mod remote_assertion;
 pub mod edit_profile;
 pub mod egress;
 pub mod exact_number;

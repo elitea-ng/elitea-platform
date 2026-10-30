@@ -33,6 +33,8 @@ use elitea_platform_rpc::internal_tools::InternalToolClient;
 use serde_json::{Map, Value, json};
 use zeroize::Zeroizing;
 
+use crate::remote_assertion::DelegationAssertions;
+
 use super::delegated_auth::{
     DelegatedAuthorizationCatalog, DelegatedAuthorizationRequirement, delegated_authorization_error,
 };
@@ -103,6 +105,9 @@ pub enum McpMaterializationErrorCode {
 pub struct McpMaterializationError {
     code: McpMaterializationErrorCode,
     authorization: Option<Box<DelegatedAuthorizationRequirement>>,
+    /// The delegation assertion this call requires could not be had
+    /// (ADR-0044 decision 4). The code is then `UnsupportedAuthority`.
+    assertion: Option<crate::remote_assertion::DelegationAssertionError>,
 }
 
 impl McpMaterializationError {
@@ -113,6 +118,13 @@ impl McpMaterializationError {
 
     pub fn authorization(&self) -> Option<&DelegatedAuthorizationRequirement> {
         self.authorization.as_deref()
+    }
+
+    /// The refused delegation assertion, when that is why the connection
+    /// was refused (reason code [`crate::remote_assertion::ASSERTION_UNAVAILABLE`]).
+    #[must_use]
+    pub const fn assertion_refusal(&self) -> Option<crate::remote_assertion::DelegationAssertionError> {
+        self.assertion
     }
 }
 
@@ -155,6 +167,9 @@ impl McpMaterializationError {
     /// cause the user can fix; `None` for every other code.
     #[must_use]
     pub const fn visible_message(&self) -> Option<&'static str> {
+        if self.assertion.is_some() {
+            return Some(ASSERTION_REFUSED_MESSAGE);
+        }
         match self.code {
             McpMaterializationErrorCode::RetiredSseEndpoint => Some(RETIRED_SSE_MESSAGE),
             McpMaterializationErrorCode::SavedToolkitRequired => {
@@ -167,6 +182,12 @@ impl McpMaterializationError {
         }
     }
 }
+
+/// Text for a connection refused because its delegation assertion could
+/// not be minted (ADR-0044 decision 4).
+pub const ASSERTION_REFUSED_MESSAGE: &str = "agent_assertion_unavailable: this run must prove \
+     its agent identity to the MCP server with a signed agent assertion, and none could be \
+     minted; ask an administrator to configure the agent assertion key";
 
 /// Text for [`McpMaterializationErrorCode::SavedToolkitRequired`].
 pub const SAVED_TOOLKIT_REQUIRED_MESSAGE: &str = "an MCP server with a client secret needs a \
@@ -225,6 +246,9 @@ pub struct RemoteMcpConfig {
     /// The approved tool pin of a custom server under the `approved_only`
     /// connector catalogue (#1501); `None` serves every listed tool.
     pinned_tools: Option<HashSet<super::mcp_pin::PinnedTool>>,
+    /// The run's delegation assertions (ADR-0044 decision 4): every request
+    /// to the server carries one. `None` sends none.
+    assertions: Option<Arc<DelegationAssertions>>,
 }
 
 impl RemoteMcpConfig {
@@ -319,7 +343,20 @@ impl RemoteMcpConfig {
             internal_builder: reference.is_internal_builder(),
             pinned_tools: super::mcp_pin::parse_pinned_tools(settings)
                 .map_err(|()| invalid_configuration())?,
+            assertions: None,
         })
+    }
+
+    /// Carry the run's delegation assertions on every request to the
+    /// server (an internal category never carries one).
+    #[must_use]
+    pub(crate) fn with_assertions(mut self, assertions: Option<Arc<DelegationAssertions>>) -> Self {
+        self.assertions = if self.served_internally() {
+            None
+        } else {
+            assertions
+        };
+        self
     }
 
     /// The identity a cached tool listing is valid for: toolkit, endpoint and
@@ -477,6 +514,11 @@ impl RemoteMcpConfig {
     }
 
     #[cfg(test)]
+    pub(crate) const fn carries_delegation_for_test(&self) -> bool {
+        self.assertions.is_some()
+    }
+
+    #[cfg(test)]
     pub(crate) fn request_headers_for_test(
         &self,
     ) -> Result<reqwest_mcp::header::HeaderMap, McpMaterializationError> {
@@ -612,6 +654,7 @@ impl McpConnector for AdkHttpMcpConnector {
         let transport_config = StreamableHttpClientTransportConfig::with_uri(config.endpoint())
             .max_sse_event_size(MAX_SSE_EVENT_BYTES)
             .reinit_on_expired_session(false);
+        let client = asserting_client(config, client).await?;
         let transport = StreamableHttpClientTransport::with_client(client, transport_config);
         let running = match tokio::time::timeout(config.timeout(), ().serve(transport)).await {
             Ok(Ok(running)) => running,
@@ -629,6 +672,37 @@ impl McpConnector for AdkHttpMcpConnector {
             toolset: Arc::new(McpToolset::new(running)),
             reuses_listings: true,
         })
+    }
+}
+
+/// The session client: `client`, and with the run's delegation assertions
+/// one assertion on every request. The first one is minted here, so a run
+/// that requires assertions refuses the connection before it dials.
+async fn asserting_client(
+    config: &RemoteMcpConfig,
+    client: reqwest_mcp::Client,
+) -> Result<super::mcp_assertion::AssertingClient, McpMaterializationError> {
+    let Some(delegation) = config.assertions.clone() else {
+        return Ok(super::mcp_assertion::AssertingClient::plain(client));
+    };
+    delegation
+        .assertion_for(config.endpoint())
+        .await
+        .map_err(assertion_refused)?;
+    Ok(super::mcp_assertion::AssertingClient::new(
+        client,
+        delegation,
+        config.endpoint(),
+    ))
+}
+
+const fn assertion_refused(
+    error: crate::remote_assertion::DelegationAssertionError,
+) -> McpMaterializationError {
+    McpMaterializationError {
+        code: McpMaterializationErrorCode::UnsupportedAuthority,
+        authorization: None,
+        assertion: Some(error),
     }
 }
 
@@ -767,7 +841,8 @@ pub async fn materialize_mcp_toolsets_with_tokens_and_authorization(
     let mut toolsets = Vec::with_capacity(references.len());
     let mut authorization = DelegatedAuthorizationCatalog::default();
     for reference in references {
-        let config = RemoteMcpConfig::parse(reference, mcp_tokens)?;
+        let config = RemoteMcpConfig::parse(reference, mcp_tokens)?
+            .with_assertions(policy.egress().assertions());
         // A remote server outside the run's egress policy is never contacted
         // (#1490); internal categories go to Main over gRPC, not a public host.
         let endpoint = public_endpoint(&config);
@@ -1579,6 +1654,7 @@ fn authorization_required(
             challenge.map(ToOwned::to_owned),
         )
         .map(Box::new),
+        assertion: None,
     }
 }
 
@@ -1921,6 +1997,7 @@ const fn invalid_configuration() -> McpMaterializationError {
     McpMaterializationError {
         code: McpMaterializationErrorCode::InvalidConfiguration,
         authorization: None,
+        assertion: None,
     }
 }
 
@@ -1928,6 +2005,7 @@ const fn unsupported_authority() -> McpMaterializationError {
     McpMaterializationError {
         code: McpMaterializationErrorCode::UnsupportedAuthority,
         authorization: None,
+        assertion: None,
     }
 }
 
@@ -1935,6 +2013,7 @@ const fn resource_exhausted() -> McpMaterializationError {
     McpMaterializationError {
         code: McpMaterializationErrorCode::ResourceExhausted,
         authorization: None,
+        assertion: None,
     }
 }
 
@@ -1942,6 +2021,7 @@ const fn saved_toolkit_required() -> McpMaterializationError {
     McpMaterializationError {
         code: McpMaterializationErrorCode::SavedToolkitRequired,
         authorization: None,
+        assertion: None,
     }
 }
 
@@ -1949,6 +2029,7 @@ const fn retired_sse_endpoint() -> McpMaterializationError {
     McpMaterializationError {
         code: McpMaterializationErrorCode::RetiredSseEndpoint,
         authorization: None,
+        assertion: None,
     }
 }
 
@@ -1956,5 +2037,6 @@ const fn dependency_unavailable() -> McpMaterializationError {
     McpMaterializationError {
         code: McpMaterializationErrorCode::DependencyUnavailable,
         authorization: None,
+        assertion: None,
     }
 }
