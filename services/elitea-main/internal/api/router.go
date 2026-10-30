@@ -7,9 +7,11 @@ import (
 	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
 	safetyapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/emailsettings"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,17 +40,20 @@ import (
 	v2budgets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/budgets"
 	v2canvaspresence "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
 	v2configs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
+	v2connectorrequests "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/connectorrequests"
 	v2contextmgr "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2credentialconsent "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialconsent"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
 	v2credentialprobe "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialprobe"
 	v2credentialreferences "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreferences"
+	v2credentialreview "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreview"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	v2discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
 	v2drafts "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/drafts"
 	v2core "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	v2entitlements "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entitlements"
 	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
@@ -85,6 +90,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/artifactbootstrap"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/connectorapproval"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/conversationactivity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/nativepolicy"
 	notificationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/notifications"
@@ -103,6 +109,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
+	entitlementsdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/entitlements"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/events"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/governedmcp"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
@@ -451,6 +458,15 @@ type RouterConfig struct {
 	// recertification resumed a certification suspension. Nil: the
 	// gate's snapshot age applies.
 	SuspensionChanged func(id int64)
+	// CatalogueGoverned is the process's credential governance profile
+	// (ADR-0039): when governed, the connector catalogue (ADR-0044 decision
+	// 1, #1501) is approved_only whatever the platform section says.
+	CatalogueGoverned bool
+	// CredentialReview and PermissionTrimming serve the credential
+	// inventory and the permission trimming report (ADR-0044 decision 5,
+	// #1501). Nil leaves their six routes registered, answering 503.
+	CredentialReview   *dbrepos.CredentialReview
+	PermissionTrimming *dbrepos.PermissionTrimming
 	// OnProjectProvisioner, when set, is called once with the one shared project
 	// provisioner, after it is built. The process uses it to start the
 	// project-deletion reconciler (#1211) over the same provisioner the routes
@@ -1470,8 +1486,10 @@ func newToolkitHandler(
 	cfg RouterConfig,
 	prebuiltMCPStore *mcpregistry.PrebuiltStore,
 	journal *toolkitcleanup.Journal,
+	connectorGate *connectorapproval.Gate,
 ) *v2toolkits.Handler {
 	options := []v2toolkits.Option{
+		v2toolkits.WithConnectorGate(connectorGate),
 		v2toolkits.WithArgumentSchemas(cfg.ToolkitArgumentSchemas),
 		v2toolkits.WithDiscovery(cfg.ToolkitDiscovery),
 		v2toolkits.WithSettingsDefinitions(cfg.ToolkitSettingsDefinitions),
@@ -2069,7 +2087,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			cfg.OnToolkitCleanupJournal(cleanupJournal)
 		}
 	}
-	toolkitHandler := newToolkitHandler(cfg, prebuiltMCPStore, cleanupJournal)
+	// The connector catalogue gate and the approval queue (ADR-0044
+	// decision 1, #1501). Without a pool both stay nil: the gate is open and
+	// the request routes answer 503.
+	connectorGate, connectorRequests, err := dbrepos.ComposeConnectorGate(cfg.Pool, cfg.CatalogueGoverned)
+	if err != nil {
+		slog.Error("connector catalogue: compose the gate", "err", err)
+	}
+	toolkitHandler := newToolkitHandler(cfg, prebuiltMCPStore, cleanupJournal, connectorGate)
 	// The platform MCP vault and eliteacore handler are constructed here rather
 	// than inside /api/v2 because both REST and the root-mounted internal MCP
 	// server consume them. One instance keeps project-context validation and
@@ -2134,6 +2159,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithCostBudgets(cfg.GatewayStatus != nil),
 		v2core.WithEvents(cfg.DomainEvents),
 		v2core.WithPublishAIValidation(publishAIValidator(cfg.PredictCompleter)),
+		v2core.WithConnectorGate(connectorGate),
 	)
 	agentLifecycle.ComposePublisher(coreHandler)
 
@@ -2226,6 +2252,26 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	if cfg.SCIMClientAddresses != nil {
 		scimClientAddresses = cfg.SCIMClientAddresses
 	}
+	// The entitlement export (ADR-0044 decision 5, #1501): the read-only
+	// SCIM tree at /api/v2/scim/v2/entitlements and the admin CSV/JSON at
+	// /api/v2/admin/entitlements read the same store. Interface variables
+	// stay nil without a pool so both answer 503 rather than panic.
+	var (
+		scimEntitlements   scimapi.EntitlementSource
+		adminEntitlements  v2entitlements.Store
+		entitlementClients scimapi.EntitlementClientAllowlist
+	)
+	if cfg.Pool != nil {
+		store := dbrepos.NewEntitlements(cfg.Pool)
+		scimEntitlements, adminEntitlements = store, store
+		// The SCIM tree is opt-in per client: the `entitlement_export`
+		// section lists who may read it, read on every request.
+		pool := cfg.Pool
+		entitlementClients = func(ctx context.Context) ([]int64, error) {
+			settings, err := platformconfig.LoadEntitlementExportSettings(ctx, pool)
+			return settings.SCIMClientIDs, err
+		}
+	}
 	r.Group(func(r chi.Router) {
 		r.Use(apimw.NoStore)
 		r.With(apimw.Audit(successfulOnlyRecorder(auditRecorder))).
@@ -2234,7 +2280,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			scimapi.Authenticate(scimCredentials),
 			apimw.Audit(auditRecorder),
 			scimapi.AnnotateAuditActor,
-		).Mount(scimapi.BasePath, scimapi.NewHandler(scimdirectory.NewStore(cfg.Pool).WithMemoryUserJournal(memoryUserJournal)).Routes())
+		).Mount(scimapi.BasePath, scimapi.NewHandler(scimdirectory.NewStore(cfg.Pool).WithMemoryUserJournal(memoryUserJournal)).
+			WithEntitlements(scimEntitlements).WithEntitlementClients(entitlementClients).Routes())
 	})
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its
@@ -3105,6 +3152,48 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Agent Lifecycle section.
 				r.With(central("configuration.governance")).
 					Get(v2agentlifecycle.AdminRegistryPath, v2agentlifecycle.NewHandler(agentLifecycle, nil).AdminRegistry)
+
+				// The connector approval queue (ADR-0044 decision 1, #1501):
+				// every request, approve and reject, behind connector.approve
+				// in the administration mode (shared 0207). Mounted
+				// unconditionally: a nil store answers 503.
+				{
+					connectors := v2connectorrequests.NewHandler(connectorRequests, connectorGate)
+					approve := central(connectorapproval.ApprovePermission)
+					r.With(approve).Get(v2connectorrequests.AdminRequestsPath, connectors.AdminList)
+					r.With(approve).Get(v2connectorrequests.AdminRequestPath, connectors.AdminGet)
+					r.With(approve).Post(v2connectorrequests.AdminApprovePath, connectors.Approve)
+					r.With(approve).Post(v2connectorrequests.AdminRejectPath, connectors.Reject)
+					// The on-ramp to approved_only: the connectors in use
+					// that no approved request covers, and requests for them.
+					r.With(approve).Get(v2connectorrequests.AdminInventoryPath, connectors.AdminInventory)
+					r.With(approve).Post(v2connectorrequests.AdminInventoryRequestsPath, connectors.CreateInventoryRequests)
+				}
+
+				// The entitlement export (ADR-0044 decision 5, #1501): who
+				// holds which role on which project and agent, and which
+				// governance capabilities each carries. CSV (streamed) or
+				// JSON pages, behind entitlements.export (shared 0209).
+				r.With(central(entitlementsdomain.ExportPermission)).
+					Get(v2entitlements.AdminPath, v2entitlements.NewHandler(adminEntitlements).Export)
+
+				// The credential inventory and the cross-project permission
+				// trimming report (ADR-0044 decision 5): reads behind
+				// credentials.inventory.read, a revoke or a removal behind
+				// credentials.inventory.manage. Under the audited
+				// /api/v2/admin/ prefix; each change also appends a
+				// security audit event.
+				{
+					review := v2credentialreview.NewHandler(cfg.CredentialReview, cfg.PermissionTrimming, nil)
+					r.With(central(v2credentialreview.ReadPermission)).
+						Get(v2credentialreview.InventoryPath, review.Inventory)
+					r.With(central(v2credentialreview.ManagePermission)).
+						Post(v2credentialreview.InventoryRevokePath, review.Revoke)
+					r.With(central(v2credentialreview.ReadPermission)).
+						Get(v2credentialreview.AdminTrimmingPath, review.AdminTrimming)
+					r.With(central(v2credentialreview.ManagePermission)).
+						Post(v2credentialreview.AdminTrimmingRemove, review.AdminRemove)
+				}
 
 				// Regular app admin endpoints (with projectID)
 				//
@@ -4471,6 +4560,30 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(projectPermission("models.applications.versions.get")).
 						Get(v2agentreleases.RevisionsPath, releases.Revisions)
 				}
+				// The connector approval queue, project side (ADR-0044
+				// decision 1, #1501). Reads take the toolkit list
+				// permission; a request, its submit and its withdrawal take
+				// the permission that adds a toolkit
+				// (models.applications.tools.create).
+				{
+					inProject := apimw.HoldsPermissionIn(coreResolver, platformauth.PermissionModeDefault, connectorapproval.RequestPermission)
+					approver := apimw.HoldsPermissionIn(permissionResolver, platformauth.PermissionModeAdministration, connectorapproval.ApprovePermission)
+					connectors := v2connectorrequests.NewHandler(connectorRequests, connectorGate).WithRequestScope(v2connectorrequests.RequestScope{
+						InProject: func(r *http.Request, projectID int64) (bool, error) {
+							return inProject(r, strconv.FormatInt(projectID, 10))
+						},
+						// Central modes ignore the project id.
+						PlatformWide: func(r *http.Request) (bool, error) { return approver(r, "") },
+					})
+					readToolkits := projectPermission("models.applications.tools.list")
+					requestConnector := projectPermission(connectorapproval.RequestPermission)
+					r.With(readToolkits).Get(v2connectorrequests.CataloguePath, connectors.Catalogue)
+					r.With(readToolkits).Get(v2connectorrequests.RequestsPath, connectors.ListProject)
+					r.With(requestConnector).Post(v2connectorrequests.RequestsPath, connectors.Create)
+					r.With(readToolkits).Get(v2connectorrequests.RequestPath, connectors.GetProject)
+					r.With(requestConnector).Post(v2connectorrequests.SubmitPath, connectors.Submit)
+					r.With(requestConnector).Post(v2connectorrequests.WithdrawPath, connectors.Withdraw)
+				}
 				// Agent lifecycle governance (ADR-0040 decisions 1, 3, 5 and
 				// 6). The reads take the version reads' permission; a change
 				// request and a registry edit take the publish permission.
@@ -4483,6 +4596,19 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					lifecycle := v2agentlifecycle.NewHandler(agentLifecycle, apimw.HoldsResolvedPermission(
 						coreResolver, platformauth.PermissionModeDefault, agentlifecycle.GovernancePermission))
 					readVersions := projectPermission("models.applications.versions.get")
+					// The project's permission trimming report and its
+					// one-click removals (ADR-0044 decision 5): the project
+					// admin's agents.trimming.manage. A project egress
+					// entry also needs the configuration route's
+					// models.project_settings.edit (resolved in the handler).
+					trimming := v2credentialreview.NewHandler(cfg.CredentialReview, cfg.PermissionTrimming,
+						apimw.HoldsResolvedPermission(coreResolver, platformauth.PermissionModeDefault,
+							v2credentialreview.ProjectEgressPermision))
+					r.With(projectPermission(v2credentialreview.TrimmingPermission)).
+						Get(v2credentialreview.ProjectTrimmingPath, trimming.ProjectTrimming)
+					r.With(projectPermission(v2credentialreview.TrimmingPermission)).
+						Post(v2credentialreview.ProjectTrimmingRemove, trimming.ProjectRemove)
+
 					r.With(readVersions).Get(v2agentlifecycle.RegistryPath, lifecycle.GetRegistry)
 					r.With(requirePublish).Put(v2agentlifecycle.RegistryPath, lifecycle.UpdateRegistry)
 					r.With(projectPermission(agentlifecycle.MarkDuePermission)).

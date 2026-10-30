@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/connectorapproval"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
@@ -44,6 +45,18 @@ type CurrentApplicationVersionFreezeRequest struct {
 	// SummaryLLMSettings comes from the resolved context strategy. A saved
 	// version cannot supply the authorized summary_model snapshot itself.
 	SummaryLLMSettings map[string]any
+	// GovernedRun is a run admitted under the governed credential profile
+	// (one that carries a security context): the connector catalogue holds
+	// it to approved_only whatever the platform mode, exactly as the
+	// command gate does for its worker command (governedRun =
+	// SecurityContextRef != nil), so the freeze pins what the gate checks.
+	GovernedRun bool
+	// ContinuationScope (ContinuationScope()) is set on a continuation: the
+	// run is governed when its scope carries a governed pin.
+	ContinuationScope string
+	// ParentExecutionID is set on a nested child freeze: the child is
+	// governed when its parent execution is.
+	ParentExecutionID string
 }
 
 type CurrentAgentToolkitNameRequest struct {
@@ -86,6 +99,78 @@ type CurrentApplicationToolSnapshotService struct {
 	// (ADR-0030 I1). nil on the Python indexing path, where the key is not
 	// written and the SDK worker serves the index tools.
 	indexes CurrentAgentIndexCatalogResolver
+	// connectors is the connector catalogue gate (ADR-0044 decision 1,
+	// #1501). nil is the open mode.
+	connectors CurrentAgentConnectorGate
+	// governance answers whether the run being frozen is governed when the
+	// request alone cannot say (a continuation, a nested child). nil: only
+	// the process profile and request.GovernedRun govern.
+	governance CurrentAgentRunGovernance
+}
+
+// CurrentAgentRunGovernance answers whether a run carries the governed
+// credential profile: a continuation inherits its scope's governed pin, a
+// nested child its parent execution's security context, even on a process
+// that now runs the legacy profile. It is the same fact the command gate
+// reads as SecurityContextRef != nil.
+type CurrentAgentRunGovernance interface {
+	GovernedContinuationScope(ctx context.Context, scope string) (bool, error)
+	GovernedExecution(ctx context.Context, executionID string) (bool, error)
+}
+
+// WithRunGovernance makes the freeze ask whether a continuation or a nested
+// child is governed.
+func (service *CurrentApplicationToolSnapshotService) WithRunGovernance(
+	governance CurrentAgentRunGovernance,
+) *CurrentApplicationToolSnapshotService {
+	service.governance = governance
+	return service
+}
+
+// ContinuationScope names the logical run a continuation resumes: the scope
+// its admission pin is written and inherited under.
+func ContinuationScope(conversationUUID, responseMessageID string) string {
+	if conversationUUID == "" || responseMessageID == "" {
+		return ""
+	}
+	return "agent-response:" + conversationUUID + ":" + responseMessageID
+}
+
+// governedRun decides whether the run being frozen is governed. An
+// unreadable answer is an error: an unknown governance is not "legacy".
+func (service *CurrentApplicationToolSnapshotService) governedRun(
+	ctx context.Context,
+	request CurrentApplicationVersionFreezeRequest,
+) (bool, error) {
+	if request.GovernedRun || service.governance == nil {
+		return request.GovernedRun, nil
+	}
+	if request.ParentExecutionID != "" {
+		governed, err := service.governance.GovernedExecution(ctx, request.ParentExecutionID)
+		if err != nil || governed {
+			return governed, err
+		}
+	}
+	if request.ContinuationScope != "" {
+		return service.governance.GovernedContinuationScope(ctx, request.ContinuationScope)
+	}
+	return false, nil
+}
+
+// CurrentAgentConnectorGate answers one project's connector catalogue view
+// (connectorapproval.Gate). Under approved_only the freeze drops a toolkit
+// whose connector the project may not use, and writes an approved custom MCP
+// server's pinned tools into its frozen settings.
+type CurrentAgentConnectorGate interface {
+	ForProject(ctx context.Context, projectID int64, governedRun bool) (connectorapproval.View, error)
+}
+
+// WithConnectorGate makes the freeze apply the connector catalogue.
+func (service *CurrentApplicationToolSnapshotService) WithConnectorGate(
+	gate CurrentAgentConnectorGate,
+) *CurrentApplicationToolSnapshotService {
+	service.connectors = gate
+	return service
 }
 
 // CurrentAgentIndexCatalogResolver lists the searchable indexes of the
@@ -195,6 +280,26 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 		}
 		return nil, unsupportedStartBecause("guardrails policy resolution", err)
 	}
+	// The connector catalogue, resolved once like the guardrails, and like
+	// them a failed read fails the freeze: an unreadable approval list is
+	// not "everything approved".
+	connectors := connectorapproval.View{}
+	if service.connectors != nil {
+		governed, governanceErr := service.governedRun(ctx, request)
+		if governanceErr != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return nil, contextErr
+			}
+			return nil, unsupportedStartBecause("run governance resolution", governanceErr)
+		}
+		connectors, err = service.connectors.ForProject(ctx, int64(request.ProjectID), governed)
+		if err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return nil, contextErr
+			}
+			return nil, unsupportedStartBecause("connector catalogue resolution", err)
+		}
+	}
 
 	// Rebuilt rather than index-assigned: a blocked toolkit is DROPPED, which
 	// changes the length.
@@ -285,6 +390,17 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 			}
 			return nil, unsupportedStartBecause("toolkit settings resolution", err)
 		}
+		// An unapproved connector is dropped under approved_only, as a
+		// blocked toolkit is: an agent saved before the mode switched still
+		// names it, and the agent runs without it. Judged on the RESOLVED
+		// settings, the ones the worker dials: a configuration reference
+		// can supply or replace the URL of a custom MCP toolkit.
+		connector := connectors.Decide(toolType, frozen)
+		if !connector.Allowed {
+			slog.WarnContext(ctx, "connector catalogue: dropped an unapproved connector from an agent execution",
+				"toolkit_type", toolType, "target_kind", string(connector.Kind), "project_id", request.ProjectID)
+			continue
+		}
 
 		var storedName *string
 		if name, exists := tool["name"]; exists && name != nil {
@@ -308,7 +424,8 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 			return nil, unsupportedStartBecause("toolkit name resolution", err)
 		}
 		tool["id"] = toolID
-		tool["settings"] = withoutBlockedSelectedTools(ctx, policy, toolType, toolkitName, frozen)
+		tool["settings"] = withPinnedTools(connector,
+			withoutBlockedSelectedTools(ctx, policy, toolType, toolkitName, frozen))
 		tool["toolkit_name"] = toolkitName
 		if service.indexes != nil && indexcatalog.Family(toolType) {
 			if toolID > math.MaxInt32 {
@@ -926,5 +1043,21 @@ func withoutBlockedSelectedTools(
 		rebuilt[key] = value
 	}
 	rebuilt["selected_tools"] = kept
+	return rebuilt
+}
+
+// withPinnedTools writes an approved custom MCP server's pinned tools into
+// its frozen settings (connectorapproval.PinnedToolsSetting): the worker
+// keeps only the listed tools whose live digest matches. Every other toolkit
+// is returned as it is.
+func withPinnedTools(decision connectorapproval.Decision, settings map[string]any) map[string]any {
+	if !decision.Gated || decision.Kind != connectorapproval.TargetCustomMCP || settings == nil {
+		return settings
+	}
+	rebuilt := make(map[string]any, len(settings)+1)
+	for key, value := range settings {
+		rebuilt[key] = value
+	}
+	rebuilt[connectorapproval.PinnedToolsSetting] = connectorapproval.PinsSetting(decision.Pins)
 	return rebuilt
 }

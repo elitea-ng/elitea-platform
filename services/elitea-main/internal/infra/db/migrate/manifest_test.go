@@ -918,7 +918,27 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// anchor), the canonical-form function, the AFTER INSERT chain trigger
 	// and an append-only UPDATE guard on chained rows. No data apart from the
 	// head row, no permission.
-	require.EqualValues(t, 206, Head(shared))
+	//
+	// 207: shared/0207_connector_approval.sql, default-deny catalogue mode
+	// and connector approval (ADR-0044 decision 1, #1501):
+	// centry.connector_requests (four eyes by CHECK), the
+	// CONNECTOR_NOT_APPROVED outbox refusal code, the `connector`
+	// attestation subject, and connector.approve for super_admin and admin.
+	//
+	// 208: shared/0208_credential_inventory.sql, the evidence for credential
+	// and access review (ADR-0044 decision 5, #1501):
+	// elitea_identity.credential_last_use (hourly-coalesced last use per
+	// credential), elitea_identity.credential_review_state (first seen,
+	// flagged, notified, revoked) and
+	// elitea_lifecycle.permission_trimming_candidates (what the weekly
+	// routine notified). Grants credentials.inventory.read and
+	// credentials.inventory.manage to super_admin and admin, and
+	// agents.trimming.manage to the project admin.
+	//
+	// 209: shared/0209_entitlement_export.sql, the entitlement export
+	// permission (ADR-0044 decision 5, #1501): grants entitlements.export to
+	// super_admin and admin in the administration mode. No table.
+	require.EqualValues(t, 209, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

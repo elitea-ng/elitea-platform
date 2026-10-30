@@ -100,7 +100,7 @@ type recordedRequest struct {
 
 func newFakeCloudProvider(status, tokenStatus int) *fakeCloudProvider {
 	fp := &fakeCloudProvider{status: status, tokenStatus: tokenStatus}
-	fp.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fp.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fp.hits.Add(1)
 		fp.mu.Lock()
 		fp.requests = append(fp.requests, recordedRequest{
@@ -128,7 +128,23 @@ func newFakeCloudProvider(status, tokenStatus int) *fakeCloudProvider {
 		w.WriteHeader(fp.status)
 		_, _ = w.Write([]byte(`{}`))
 	}))
+	// Every response closes its connection. On a reused keep-alive connection
+	// that the server closed under load, net/http retries the request without
+	// telling the caller, and an exact Hits() count then reads one call too
+	// many (a CI flake on TestProbeVertex_ListRefusalIsUnauthorized).
+	fp.Config.SetKeepAlivesEnabled(false)
+	fp.Start()
 	return fp
+}
+
+// hitsReport names every recorded request, so a wrong Hits() count says which
+// call came twice or did not come.
+func (fp *fakeCloudProvider) hitsReport() string {
+	var b strings.Builder
+	for _, r := range fp.recorded() {
+		fmt.Fprintf(&b, "\n  %s %s%s", r.method, r.host, r.path)
+	}
+	return b.String()
 }
 
 func (fp *fakeCloudProvider) Hits() int64 { return fp.hits.Load() }
@@ -319,7 +335,7 @@ func TestProbeVertex_MintsTokenThenListsPublisherModels(t *testing.T) {
 		t.Fatalf("probe failed: %v", err)
 	}
 	if fp.Hits() != 2 {
-		t.Fatalf("expected two real round trips (token + list), got %d", fp.Hits())
+		t.Fatalf("expected two real round trips (token + list), got %d:%s", fp.Hits(), fp.hitsReport())
 	}
 
 	hosts := dialer.dialledHosts()
@@ -429,7 +445,7 @@ func TestProbeVertex_ListRefusalIsUnauthorized(t *testing.T) {
 		t.Fatalf("detail must not echo the provider body, got %q", detail)
 	}
 	if fp.Hits() != 2 {
-		t.Fatalf("expected the token exchange and the list call, got %d", fp.Hits())
+		t.Fatalf("expected the token exchange and the list call, got %d:%s", fp.Hits(), fp.hitsReport())
 	}
 }
 

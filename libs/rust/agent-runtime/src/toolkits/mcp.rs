@@ -222,6 +222,9 @@ pub struct RemoteMcpConfig {
     /// Main's automatic built-in category (no toolkit row): served by the
     /// platform's internal tool service, never over HTTP.
     internal_builder: bool,
+    /// The approved tool pin of a custom server under the `approved_only`
+    /// connector catalogue (#1501); `None` serves every listed tool.
+    pinned_tools: Option<HashSet<super::mcp_pin::PinnedTool>>,
 }
 
 impl RemoteMcpConfig {
@@ -314,6 +317,8 @@ impl RemoteMcpConfig {
             tool_list_ttl: (enable_caching && !reference.is_internal_builder())
                 .then(|| Duration::from_secs(cache_ttl)),
             internal_builder: reference.is_internal_builder(),
+            pinned_tools: super::mcp_pin::parse_pinned_tools(settings)
+                .map_err(|()| invalid_configuration())?,
         })
     }
 
@@ -360,6 +365,31 @@ impl RemoteMcpConfig {
     }
 
     #[must_use]
+    /// The selected tools a server needing authorization is offered with:
+    /// not excluded, and pinned when the toolkit carries a pin (#1501).
+    fn guarded_tool_names(&self) -> Vec<&String> {
+        self.selected_tools
+            .iter()
+            .filter(|name| !contains_tool_name(&self.excluded_tools, name))
+            .filter(|name| super::mcp_pin::name_is_pinned(self.pinned_tools.as_ref(), name))
+            .collect()
+    }
+
+    /// The listed tools the toolkit selects, less any tool its approved pin
+    /// does not name with this digest: a tool the server added or changed
+    /// since the approval is never offered, so it can never be called
+    /// (#1501).
+    pub(crate) fn select_pinned_tools(
+        &self,
+        tools: Vec<Arc<dyn Tool>>,
+    ) -> Result<Vec<Arc<dyn Tool>>, McpMaterializationError> {
+        let tools = select_tools(tools, &self.selected_tools, &self.excluded_tools)?;
+        Ok(super::mcp_pin::keep_pinned(
+            tools,
+            self.pinned_tools.as_ref(),
+        ))
+    }
+
     pub(crate) fn selected_tools(&self) -> &[String] {
         &self.selected_tools
     }
@@ -760,11 +790,7 @@ pub async fn materialize_mcp_toolsets_with_tokens_and_authorization(
                         .map_err(|()| invalid_configuration())?;
                     continue;
                 }
-                let guarded_names = config
-                    .selected_tools()
-                    .iter()
-                    .filter(|name| !contains_tool_name(config.excluded_tools(), name))
-                    .collect::<Vec<_>>();
+                let guarded_names = config.guarded_tool_names();
                 if guarded_names.is_empty() {
                     return Err(error);
                 }
@@ -800,7 +826,7 @@ pub async fn materialize_mcp_toolsets_with_tokens_and_authorization(
             policy.egress().record_reached(endpoint);
         }
         let (tools, listing) = discover_tools(&config, &session).await?;
-        let tools = select_tools(tools, config.selected_tools(), config.excluded_tools())?;
+        let tools = config.select_pinned_tools(tools)?;
         let redaction = Arc::new(config.error_redaction());
         let wrapped = tools
             .into_iter()

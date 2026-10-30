@@ -38,6 +38,18 @@ export interface UseGetRemoteMcpToolsOptions {
   onToolsFetched?: ((tools: readonly unknown[], argsSchemas: Record<string, unknown> | undefined) => void) | undefined;
   onError?: ((message: string) => void) | undefined;
   onSuccess?: ((toolCount: number) => void) | undefined;
+  /**
+   * The server is not an approved connector of the project (#1501). Without
+   * this callback the preview is applied like any listing.
+   */
+  onConnectorApprovalRequired?: ((required: McpConnectorApprovalRequired) => void) | undefined;
+}
+
+/** A discovery the `approved_only` catalogue answered as a preview. */
+export interface McpConnectorApprovalRequired {
+  readonly targetKind: string;
+  readonly target: string;
+  readonly tools: readonly unknown[];
 }
 
 export interface UseGetRemoteMcpToolsResult {
@@ -48,6 +60,10 @@ export interface UseGetRemoteMcpToolsResult {
 
 export function useGetRemoteMcpTools(options: UseGetRemoteMcpToolsOptions): UseGetRemoteMcpToolsResult {
   const { values, toolkitType, projectId, onToolsFetched, onError, onSuccess } = options;
+  const onConnectorRef = useRef(options.onConnectorApprovalRequired);
+  useEffect(() => {
+    onConnectorRef.current = options.onConnectorApprovalRequired;
+  }, [options.onConnectorApprovalRequired]);
   const [isLoading, setIsLoading] = useState(false);
   const socket = useSocketClient();
 
@@ -97,8 +113,9 @@ export function useGetRemoteMcpTools(options: UseGetRemoteMcpToolsOptions): UseG
       const response = await mcpSyncTools(requestParams);
       if (currentRequest.current !== requestIdentity) return;
 
-      applySyncToolsOutcome(classifySyncToolsResult(response), {
+      applySyncToolsOutcome(classifySyncToolsResult(response, onConnectorRef.current !== undefined), {
         handleMcpAuthRequired,
+        onConnectorRef,
         onToolsFetchedRef,
         onSuccess,
         onError,
@@ -196,7 +213,8 @@ function buildSyncToolsRequestParams(
 type SyncToolsOutcome =
   | { kind: 'auth_required'; responseMetadata: Record<string, unknown> }
   | { kind: 'tools'; tools: readonly unknown[]; argsSchemas: Record<string, unknown> | undefined }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string }
+  | { kind: 'connector'; required: McpConnectorApprovalRequired };
 
 /**
  * Pure classification of a `mcp_sync_tools` response into the three outcomes
@@ -204,7 +222,17 @@ type SyncToolsOutcome =
  * response`, `useGetRemoteMcpTools.hooks.js:94-118`). Split out for the same
  * complexity-budget reason as `validateSyncToolsInputs`.
  */
-function classifySyncToolsResult(response: McpSyncToolsResponse): SyncToolsOutcome {
+/** The approved_only catalogue's preview (#1501), for a caller that handles it. */
+function connectorOutcome(response: McpSyncToolsResponse, connectorAware: boolean): SyncToolsOutcome | undefined {
+  const result = response.result ?? response;
+  if (!connectorAware || result.connector_approval_required !== true) return undefined;
+  const required = { targetKind: result.connector_target_kind ?? '', target: result.connector_target ?? '', tools: result.tools ?? [] };
+  return { kind: 'connector', required };
+}
+
+function classifySyncToolsResult(response: McpSyncToolsResponse, connectorAware: boolean): SyncToolsOutcome {
+  const connector = connectorOutcome(response, connectorAware);
+  if (connector !== undefined) return connector;
   const result = response.result ?? response;
 
   if (result.requires_authorization) {
@@ -229,6 +257,7 @@ interface SyncToolsOutcomeHandlers {
   markConnectionVerified: () => void;
   onSuccess: ((toolCount: number) => void) | undefined;
   onError: ((message: string) => void) | undefined;
+  onConnectorRef: { current: ((required: McpConnectorApprovalRequired) => void) | undefined };
 }
 
 /** Applies a classified outcome to the hook's side-effecting callbacks. */
@@ -244,6 +273,9 @@ function applySyncToolsOutcome(outcome: SyncToolsOutcome, handlers: SyncToolsOut
       return;
     case 'error':
       handlers.onError?.(outcome.message);
+      return;
+    case 'connector':
+      handlers.onConnectorRef.current?.(outcome.required);
       return;
   }
 }

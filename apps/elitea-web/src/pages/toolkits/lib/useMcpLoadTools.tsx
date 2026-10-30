@@ -2,7 +2,9 @@ import { useCallback, useMemo, useState, type ReactNode } from 'react';
 
 import Typography from '@mui/material/Typography';
 
-import { McpAuthModal, McpAuthStatusBadge, useGetRemoteMcpTools } from '@/features/mcps';
+import { ConnectorNotApprovedNotice, type ConnectorTarget } from '@/features/connector-requests';
+import { McpAuthModal, McpAuthStatusBadge, useGetRemoteMcpTools, type McpConnectorApprovalRequired } from '@/features/mcps';
+import type { ConnectorDeclaredTool } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
 import type { EditToolDetail } from './toolkitFormTypes';
@@ -124,6 +126,32 @@ function toRemoteMcpValues(editToolDetail: EditToolDetail | null | undefined): R
   };
 }
 
+/** An unapproved server's preview as the request form's tools: name, description and the schema the pin digests. */
+function declaredTools(tools: readonly unknown[]): ConnectorDeclaredTool[] {
+  return tools.flatMap((tool) => {
+    if (typeof tool !== 'object' || tool === null) return [];
+    const { name, description, inputSchema } = tool as { name?: unknown; description?: unknown; inputSchema?: unknown };
+    if (typeof name !== 'string' || name === '') return [];
+    return [{
+      name,
+      category: 'write' as const,
+      ...(typeof description === 'string' && description !== '' ? { description } : {}),
+      input_schema: typeof inputSchema === 'object' && inputSchema !== null ? (inputSchema as Record<string, unknown>) : {},
+    }];
+  });
+}
+
+interface UnapprovedConnector {
+  readonly target: ConnectorTarget;
+  readonly tools: readonly ConnectorDeclaredTool[];
+}
+
+function unapprovedConnector(required: McpConnectorApprovalRequired): UnapprovedConnector | undefined {
+  const kind = required.targetKind;
+  if ((kind !== 'custom_mcp' && kind !== 'prebuilt_mcp') || required.target === '') return undefined;
+  return { target: { targetKind: kind, target: required.target }, tools: declaredTools(required.tools) };
+}
+
 export interface UseMcpLoadToolsParams {
   readonly projectId: string | undefined;
   readonly editToolDetail: EditToolDetail | null | undefined;
@@ -136,6 +164,7 @@ export interface UseMcpLoadToolsParams {
  */
 export function useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail }: UseMcpLoadToolsParams): McpLoadToolsSlot | undefined {
   const [error, setError] = useState<string | undefined>(undefined);
+  const [unapproved, setUnapproved] = useState<UnapprovedConnector>();
 
   const toolkitType = editToolDetail?.type;
   /** Memoized: a fresh object every render would churn the hook below through every one of its own memos. */
@@ -144,6 +173,7 @@ export function useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail 
   const onToolsFetched = useCallback(
     (tools: readonly unknown[]) => {
       setError(undefined);
+      setUnapproved(undefined);
       const names = toolNamesOf(tools);
       onChangeToolDetail((previous) => {
         if (previous === null) return previous;
@@ -161,6 +191,13 @@ export function useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail 
   // rendered as its own state. Writing an empty tool list instead would report
   // a dead server as a server that publishes no tools.
   const onError = useCallback((message: string) => setError(message), []);
+  // The approved_only catalogue (#1501): the server answered a preview
+  // because it is not an approved connector. Its tools are not applied; the
+  // slot offers "Request connector" with them instead.
+  const onConnectorApprovalRequired = useCallback((required: McpConnectorApprovalRequired) => {
+    setError(undefined);
+    setUnapproved(unapprovedConnector(required));
+  }, []);
 
   const { fetchTools, isLoading, getModalProps } = useGetRemoteMcpTools({
     values,
@@ -168,6 +205,7 @@ export function useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail 
     ...(projectId !== undefined ? { projectId } : {}),
     onToolsFetched,
     onError,
+    onConnectorApprovalRequired,
   });
 
   const canLoadTools = useMemo(
@@ -194,9 +232,17 @@ export function useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail 
             {error}
           </Typography>
         )}
+        {unapproved !== undefined && (
+          <ConnectorNotApprovedNotice
+            key={unapproved.target.target}
+            projectId={projectId}
+            target={unapproved.target}
+            tools={unapproved.tools}
+          />
+        )}
       </>
     ),
-    [getModalProps, error],
+    [getModalProps, error, unapproved, projectId],
   );
 
   if (!isMcpToolkitType(toolkitType)) return undefined;

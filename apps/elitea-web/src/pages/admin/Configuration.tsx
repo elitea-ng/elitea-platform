@@ -127,7 +127,6 @@ import type { ComponentType } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
 import LinearProgress from '@mui/material/LinearProgress';
 import List from '@mui/material/List';
 import ListItemButton from '@mui/material/ListItemButton';
@@ -148,6 +147,7 @@ import { IDENTITY_PROVIDERS_MANAGED_SURFACE } from './api/adminIdentityProviders
 import { LLM_PROXY_MANAGED_SURFACE } from './api/adminLlmProxyApi';
 import { MCP_SERVERS_MANAGED_SURFACE } from './api/adminMcpServersApi';
 import { NATIVE_CLIENTS_MANAGED_SURFACE } from './api/adminNativeClientsApi';
+import { ConfigurationSectionActions } from './ConfigurationSectionActions';
 import { ConfigurationSectionForm } from './ConfigurationSectionForm';
 import { WorkerEgressHostsPanel } from './WorkerEgressHostsPanel';
 import { useAdminConfigurationPage, type AdminConfigurationPageState } from './useAdminConfigurationPage';
@@ -294,28 +294,7 @@ function SectionForm({ state }: { readonly state: AdminConfigurationPageState })
         disabled={state.isSaving}
         onChange={state.onFieldChange}
       />
-      <Box sx={{ display: 'flex', gap: '0.5rem' }}>
-        <Button
-          size="small"
-          variant="secondary"
-          disabled={!state.isDirty || state.isSaving}
-          onClick={state.onDiscard}
-          sx={{ textTransform: 'none' }}
-        >
-          {t('pages.admin.configuration.discard', 'Discard')}
-        </Button>
-        <Button
-          size="small"
-          variant="elitea" color="primary"
-          disabled={!state.isDirty || state.isSaving}
-          onClick={state.onSave}
-          sx={{ textTransform: 'none' }}
-        >
-          {state.isSaving
-            ? t('pages.admin.configuration.saving', 'Saving…')
-            : t('pages.admin.configuration.save', 'Save')}
-        </Button>
-      </Box>
+      <ConfigurationSectionActions state={state} />
     </Box>
   );
 }

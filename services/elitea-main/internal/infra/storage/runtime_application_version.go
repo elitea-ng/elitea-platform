@@ -186,6 +186,7 @@ func (service *RuntimeApplicationVersionService) Resolve(
 		actorID,
 		applicationID,
 		versionID,
+		claim.ExecutionID,
 	)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
@@ -287,6 +288,7 @@ func freezeSavedApplicationVersion(
 	actorID int64,
 	applicationID uint64,
 	versionID uint64,
+	parentExecutionID string,
 ) (CurrentApplicationVersionRecord, json.RawMessage, error) {
 	if versions == nil || freezer == nil ||
 		projectID <= 0 || projectID > math.MaxInt32 ||
@@ -330,6 +332,10 @@ func freezeSavedApplicationVersion(
 			ProjectID:      int32(projectID),
 			ActorUserID:    int32(actorID),
 			VersionDetails: record.VersionDetails,
+			// A nested child is governed when its parent run is, so its
+			// custom MCP tools are pinned as the parent's command gate
+			// judges them.
+			ParentExecutionID: parentExecutionID,
 		},
 	)
 	if err != nil {

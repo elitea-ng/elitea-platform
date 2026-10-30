@@ -859,7 +859,22 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // verifyAuditChain (the centry.audit_events hash chain). No web code calls
 // the first four yet and admin routes are not in the manifest, so the
 // manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 441;
+// 441 -> 451 (issue 1501, ADR-0044 decision 1): the connector catalogue
+// (getConnectorCatalogue), the project's connector requests
+// (listConnectorRequests, createConnectorRequest, getConnectorRequest,
+// submitConnectorRequest, withdrawConnectorRequest) and the approval queue
+// (listAdminConnectorRequests, getAdminConnectorRequest,
+// approveConnectorRequest, rejectConnectorRequest).
+// 441 -> 448 (issue 1501, ADR-0044 decision 5): exportEntitlements (the
+// admin entitlement export), listCredentialInventory,
+// revokeInventoryCredential, listAdminPermissionTrimming and
+// removeAdminPermissionTrimmingItem (admin routes, not in the manifest), and
+// listProjectPermissionTrimming and removeProjectPermissionTrimmingItem.
+// The two changes merged together: 441 + 10 + 7 = 458.
+// 458 -> 460 (issue 1501, ADR-0044 decision 1): the on-ramp to
+// approved_only, getConnectorInventory and createConnectorInventoryRequests
+// (admin routes, not in the manifest).
+const GENERATED_OPERATION_COUNT = 460;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1105,8 +1120,15 @@ const GENERATED_OPERATION_COUNT = 441;
  * (features/agent-evaluation: listReleaseGateSuites, putReleaseGateSuite).
  * Generated. The admin registry (listAdminAgentRegistry) is an admin route
  * and stays out of the manifest.
+ *
+ * 309 -> 311 (issue 1501, ADR-0044 decision 1): the "Request connector"
+ * offer where an unapproved connector is refused (features/connector-requests:
+ * listConnectorRequests, createConnectorRequest). Generated. The approval
+ * queue (listAdminConnectorRequests, getAdminConnectorRequest,
+ * approveConnectorRequest, rejectConnectorRequest) is an admin route and
+ * stays out of the manifest.
  */
-const MANIFEST_ENTRY_COUNT = 309;
+const MANIFEST_ENTRY_COUNT = 311;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

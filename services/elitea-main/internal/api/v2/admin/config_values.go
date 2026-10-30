@@ -110,6 +110,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -243,6 +244,22 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		}
 	}
 
+	// The connector catalogue mode (ADR-0044 decision 1).
+	if section.id == platformconfig.SectionCatalogue {
+		if reason := validateCatalogueValues(body.Values); reason != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+			return
+		}
+	}
+
+	// The entitlement export SCIM allowlist (ADR-0044 decision 5).
+	if section.id == platformconfig.SectionEntitlementExport {
+		if reason := validateEntitlementExportValues(body.Values); reason != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+			return
+		}
+	}
+
 	// The run-safety sections' ranges (ADR-0041 decision 3, ADR-0042
 	// decision 5).
 	if reason := validateRunSafetyValues(section.id, body.Values); reason != "" {
@@ -251,6 +268,11 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 	}
 	// The agent lifecycle tier table's floors (ADR-0040 decision 3).
 	if reason := validateAgentLifecycleValues(section.id, body.Values); reason != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+		return
+	}
+	// The credential review policy's ranges (ADR-0044 decision 5).
+	if reason := validateCredentialReviewValues(section.id, body.Values); reason != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
 		return
 	}
@@ -502,6 +524,13 @@ func (h *Handler) storeSectionValues(
             ON CONFLICT (section, key)
             DO UPDATE SET value = EXCLUDED.value, updated_at = (now() AT TIME ZONE 'UTC'), updated_by = EXCLUDED.updated_by
         `, section, key, string(encoded), author); err != nil {
+			return err
+		}
+	}
+	// An entry taken off the platform egress allowlist starts its permission
+	// trimming window over if it is added back (ADR-0044 decision 5).
+	if list, ok := values[platformconfig.KeyWorkerEgressAllowlist]; ok && section == platformconfig.SectionWorkerEgress {
+		if err := repos.ForgetPlatformEgressSightingsTx(ctx, tx, stringList(list)); err != nil {
 			return err
 		}
 	}
@@ -852,4 +881,20 @@ func validateLinks(key string, value any) string {
 		}
 	}
 	return ""
+}
+
+// stringList reads a JSON list of strings; anything else is left out.
+func stringList(value any) []string {
+	var out []string
+	switch list := value.(type) {
+	case []any:
+		for _, item := range list {
+			if text, ok := item.(string); ok {
+				out = append(out, text)
+			}
+		}
+	case []string:
+		out = append(out, list...)
+	}
+	return out
 }

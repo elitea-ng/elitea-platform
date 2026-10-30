@@ -52,6 +52,7 @@ pub(crate) mod materialize;
 pub(crate) mod mcp;
 pub(crate) mod mcp_error;
 pub(crate) mod mcp_internal;
+pub(crate) mod mcp_pin;
 pub(crate) mod mcp_tool_cache;
 pub(crate) mod policy;
 pub mod snapshot;

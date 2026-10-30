@@ -117,6 +117,10 @@ function adminVolatileRegions(page: Page): Locator[] {
     // `Last run` and `Next run` on Schedules - wall-clock times of the
     // routines elitea-main registers, which move with every start of the stack.
     page.getByTestId('admin-schedules-time'),
+    // `Use` on Permission trimming - "too new" until a grant outlives the
+    // window, then a use count and a locale date of the last use, all of which
+    // follow when the stack seeded its agents and what earlier journeys ran.
+    page.getByTestId('permission-trimming-usage'),
   ];
 }
 
@@ -443,6 +447,28 @@ const ADMIN_ROUTES: readonly AdminVisualRoute[] = [
     // Measured: loaded YES, stalled no.
     landmark: (page) =>
       page.getByRole('grid', { name: 'Toolkit types this platform can serve' }),
+  },
+  {
+    // @covers /admin/app/connector-requests
+    name: 'admin-connector-requests',
+    path: '/admin/app/connector-requests',
+    // The on-ramp count: it renders only once the connector inventory query
+    // resolved (`missing !== undefined`), while the request list's own fetch
+    // shows a LinearProgress that `noProgressBar` waits out. The table head
+    // and the empty row are no landmark - the head renders under load.
+    // The stack seeds no connector request, so the reference is the empty
+    // submitted queue; the count follows the seeded toolkits, which are fixed.
+    landmark: (page) => page.getByTestId('connector-inventory-count'),
+  },
+  {
+    // @covers /admin/app/permission-trimming
+    name: 'admin-permission-trimming',
+    path: '/admin/app/permission-trimming',
+    // The table or its empty text: `PermissionTrimmingTable` mounts only when
+    // the report resolved, and renders one of the two. The `Use` cells are
+    // masked (`adminVolatileRegions`).
+    landmark: (page) =>
+      page.getByTestId('permission-trimming-table').or(page.getByTestId('permission-trimming-empty')),
   },
 ];
 

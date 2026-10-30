@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -237,5 +237,68 @@ describe('useMcpLoadTools', () => {
     // it was never supplied at all, so a server that answers 401 could not be
     // authorized from the toolkit form.
     expect(result.current?.mcpAuthModal).not.toBeNull();
+  });
+
+  /**
+   * The approved_only catalogue (#1501): an unapproved server answers a
+   * preview. Its tools are not applied; the slot offers a connector request
+   * with the tools it could declare.
+   */
+  describe('an unapproved connector', () => {
+    function preview(kind: string, target: string) {
+      return HttpResponse.json({
+        success: true,
+        connector_approval_required: true,
+        connector_target_kind: kind,
+        connector_target: target,
+        tools: [
+          'not-an-object',
+          { description: 'no name' },
+          { name: '' },
+          { name: 'search', description: 'Search the index', inputSchema: { type: 'object' } },
+          { name: 'fetch', description: '', inputSchema: 'not-a-schema' },
+        ],
+      });
+    }
+
+    async function loadPreview(kind: string, target: string) {
+      server.use(http.post(PATH, () => preview(kind, target)));
+      const onChangeToolDetail = vi.fn();
+      const hook = renderHook(
+        () =>
+          useMcpLoadTools({
+            projectId: '1',
+            editToolDetail: detail({ settings: { url: 'https://mcp.example/mcp', scopes: ['read', 7, 'write'] } }),
+            onChangeToolDetail,
+          }),
+        { wrapper },
+      );
+      act(() => hook.result.current?.onLoadTools());
+      await waitFor(() => expect(hook.result.current?.isLoadingTools).toBe(false));
+      return { ...hook, onChangeToolDetail };
+    }
+
+    it('offers a connector request instead of applying the tools', async () => {
+      const { result, onChangeToolDetail } = await loadPreview('custom_mcp', 'https://mcp.example/mcp');
+
+      expect(onChangeToolDetail).not.toHaveBeenCalled();
+      render(<>{result.current?.mcpAuthModal}</>, { wrapper });
+      expect(screen.getByTestId('connector-not-approved')).toBeInTheDocument();
+    });
+
+    it('offers nothing for a target kind the form cannot request', async () => {
+      const { result, onChangeToolDetail } = await loadPreview('toolkit_type', 'jira');
+
+      expect(onChangeToolDetail).not.toHaveBeenCalled();
+      render(<>{result.current?.mcpAuthModal}</>, { wrapper });
+      expect(screen.queryByTestId('connector-not-approved')).toBeNull();
+    });
+
+    it('offers nothing when the server names no target', async () => {
+      const { result } = await loadPreview('prebuilt_mcp', '');
+
+      render(<>{result.current?.mcpAuthModal}</>, { wrapper });
+      expect(screen.queryByTestId('connector-not-approved')).toBeNull();
+    });
   });
 });

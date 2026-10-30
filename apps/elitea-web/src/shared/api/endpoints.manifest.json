@@ -3596,6 +3596,26 @@
       "responseSchema": "ReleaseGateSuite",
       "fixture": null,
       "usedBy": ["features/agent-evaluation"]
+    },
+    {
+      "id": "toolkits.listConnectorRequests",
+      "method": "GET",
+      "path": "/elitea_core/connector_requests/prompt_lib/{project_id}",
+      "operationId": "listConnectorRequests",
+      "source": "generated",
+      "responseSchema": "ConnectorRequestList",
+      "fixture": null,
+      "usedBy": ["features/connector-requests"]
+    },
+    {
+      "id": "toolkits.createConnectorRequest",
+      "method": "POST",
+      "path": "/elitea_core/connector_requests/prompt_lib/{project_id}",
+      "operationId": "createConnectorRequest",
+      "source": "generated",
+      "responseSchema": "ConnectorRequest",
+      "fixture": null,
+      "usedBy": ["features/connector-requests"]
     }
   ]
 }

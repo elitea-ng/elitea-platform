@@ -1604,7 +1604,7 @@ func agentAdmissionPin(admission agentexecutionapp.Admission) admissionPin {
 		pin.continuation = true
 	}
 	if conversationID != "" && responseID != "" {
-		pin.continuationScope = "agent-response:" + conversationID + ":" + responseID
+		pin.continuationScope = agentexecutionapp.ContinuationScope(conversationID, responseID)
 	}
 	return pin
 }

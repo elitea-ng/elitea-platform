@@ -218,6 +218,12 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
   // 001_initial.sql and migrations/shared/0194_execution_suspensions.sql
   // (ADR-0041 decision 1), administration mode, super_admin and admin.
   'safety.suspend',
+  // 001_initial.sql and migrations/shared/0207_connector_approval.sql
+  // (ADR-0044 decision 1), administration mode, super_admin and admin.
+  'connector.approve',
+  // 001_initial.sql and migrations/shared/0208_credential_inventory.sql
+  // (ADR-0044 decision 5), administration mode, super_admin and admin.
+  'credentials.inventory.read',
 ]);
 
 /**

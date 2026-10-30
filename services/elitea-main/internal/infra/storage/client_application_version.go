@@ -167,7 +167,7 @@ func (service *ClientApplicationVersionService) Resolve(
 		return ClientApplicationVersion{}, ErrContentNotFound
 	}
 	record, frozen, err := freezeSavedApplicationVersion(
-		ctx, service.versions, service.freezer, projectID, actorID, applicationID, versionID,
+		ctx, service.versions, service.freezer, projectID, actorID, applicationID, versionID, "",
 	)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {

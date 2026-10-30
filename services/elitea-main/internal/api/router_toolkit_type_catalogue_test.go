@@ -150,7 +150,7 @@ func TestInternalMCPToolkitBuilderReusesTheComposedRESTHandler(t *testing.T) {
 
 	source := readRouterSource(t)
 	for description, pattern := range map[string]string{
-		"single composed handler":    `toolkitHandler := newToolkitHandler\(cfg, prebuiltMCPStore, cleanupJournal\)`,
+		"single composed handler":    `toolkitHandler := newToolkitHandler\(cfg, prebuiltMCPStore, cleanupJournal, connectorGate\)`,
 		"MCP mount receives handler": `mountMCPServerRoutes\([\s\S]*toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg\.CurrentNotificationStore`,
 		"MCP handler option":         `v2mcp\.WithInternalToolkitHandler\(toolkitHandler\)`,
 	} {

@@ -277,7 +277,7 @@ func (service *CurrentApplicationStartService) authorizeStaticFrozenInput(ctx co
 	if json.Unmarshal(original.Application, &app) != nil {
 		return nil, ErrUnsupportedCurrentAgentStart
 	}
-	frozen, err := service.freezer.FreezeCurrentApplicationVersion(ctx, CurrentApplicationVersionFreezeRequest{ProjectID: project, ActorUserID: actor, VersionDetails: app["version_details"], InternalTools: original.InternalTools})
+	frozen, err := service.freezer.FreezeCurrentApplicationVersion(ctx, CurrentApplicationVersionFreezeRequest{ProjectID: project, ActorUserID: actor, VersionDetails: app["version_details"], InternalTools: original.InternalTools, ContinuationScope: ContinuationScope(request.ConversationUUID, request.ResponseMessageID)})
 	if err != nil {
 		return nil, err
 	}

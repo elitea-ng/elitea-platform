@@ -160,12 +160,16 @@ const (
 	SubjectRelease SubjectType = "release"
 	SubjectToolkit SubjectType = "toolkit"
 	SubjectIndex   SubjectType = "index"
+	// SubjectConnector is a connector request (ADR-0044 decision 1,
+	// #1501); subject_id is the request id. Its architecture attestation
+	// can be a precondition of the approval.
+	SubjectConnector SubjectType = "connector"
 )
 
 // Valid reports whether s is a known subject type.
 func (s SubjectType) Valid() bool {
 	switch s {
-	case SubjectAgent, SubjectRelease, SubjectToolkit, SubjectIndex:
+	case SubjectAgent, SubjectRelease, SubjectToolkit, SubjectIndex, SubjectConnector:
 		return true
 	}
 	return false

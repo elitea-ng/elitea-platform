@@ -4,6 +4,149 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Default-deny connector catalogue and connector approval (#1501, off by default)
+
+ADR-0044 decision 1. Shared migration **0207_connector_approval** adds
+`centry.connector_requests` (states draft, submitted, approved, rejected,
+withdrawn; a CHECK refuses an approver who is the requester), widens
+`elitea_runtime.command_outbox`'s refusal CHECK with `CONNECTOR_NOT_APPROVED`,
+adds `connector` to the attestation subject types, and grants the new
+`connector.approve` permission to `super_admin` and `admin` in the
+administration mode (also seeded in `001_initial.sql`).
+
+- **Setting.** Configuration › Connector Catalogue (`catalogue` section,
+  gated on `configuration.governance`): `mode` = `open` (default, behaviour
+  unchanged) or `approved_only`, and `require_architecture_attestation`
+  (default off). A mode value that is not `open` reads as `approved_only`.
+- **Governed profile.** A deployment running the governed credential profile
+  is always `approved_only`, whatever the setting says; so is any governed run
+  (a command carrying a security context).
+- **approved_only.** A toolkit type, a pre-built MCP server or a custom MCP
+  URL is usable only by the projects an approved connector request names (or
+  every project, for a platform-wide request). Platform-internal types
+  (application, artifact, memory, vectorstore, datasource, the MCP registry)
+  are exempt. Enforced on the type catalogue, toolkit create/update/fork
+  (403 `connector_not_approved`), MCP tool discovery (an unapproved server is
+  answered as an unstored preview with `connector_approval_required`), the
+  agent freeze, and worker command admission (the run fails with
+  `CONNECTOR_NOT_APPROVED`). **Switching an existing deployment to
+  approved_only refuses every existing toolkit until its connector is
+  approved** — file and approve requests first.
+- **Approval** writes the toolkit-type grant (and an `enabled` policy row if
+  none exists; a `disabled` policy refuses the approval) and the worker
+  egress allowlist entries (the project's `worker_egress` setting, or the
+  platform allowlist for a platform-wide request) in one transaction, and is
+  audited (`ai.elitea.security.v1.connector.approval`). With the attestation
+  setting on, an `architecture` attestation of subject `connector` with the
+  request id must exist in the requesting project.
+- **Custom MCP pinning.** An approved custom MCP server's tools are pinned by
+  name and digest (SHA-256 of the canonical JSON of name, description and
+  input schema). A tool the server adds or changes later is hidden from
+  discovery and refused at call time until a new request is approved. The
+  freeze writes `pinned_tools` into the frozen toolkit settings, and the
+  worker (agent-runtime) keeps only pinned tools: **upgrade the worker with
+  Main**; an older worker ignores `pinned_tools` (Main still refuses direct
+  calls of unpinned tools and runs frozen without current pins).
+- **UI.** Admin › Connector requests (`connector.approve`); a "Request
+  connector" offer where a toolkit save or an MCP Load Tools is refused.
+
+## Credential inventory, staleness and permission trimming (#1501)
+
+* **Shared migration 0208** creates `elitea_identity.credential_last_use`
+  (last use per credential, any kind), `elitea_identity.credential_review_state`
+  (first seen, flagged, notified and revoked stamps),
+  `elitea_lifecycle.permission_trimming_candidates` (removal candidates and
+  what owners were notified of) and
+  `elitea_lifecycle.permission_trimming_observed` (when the weekly routine
+  first saw each granted item). It grants `credentials.inventory.read` and
+  `credentials.inventory.manage` to the administration `super_admin` and
+  `admin` roles, and `agents.trimming.manage` to every project's `admin`
+  role (saved role matrices included). Nothing is backfilled: last use
+  starts empty, so every credential reads as never used until it is used,
+  and its stale clock starts at the first staleness pass (first seen), not
+  at its creation.
+* **Last use is recorded** on personal access token authentication, toolkit
+  secret resolution for a run, MCP OAuth token use, provider OAuth token use
+  and credential broker redemption (reference and use grant). Writes are
+  coalesced in memory and flushed every 30 seconds in one batched upsert,
+  at most one write per credential per hour (the SQL guard makes that hold
+  across replicas too); no request path writes to the database for it.
+* **New Platform settings section "Credential review"**
+  (`credential_review`, gated on `configuration.governance`):
+  `stale_after_days` (default 90, 1-3650), `stale_action` (`flag`, the
+  default, or `revoke`) and `trimming_window_days` (default 30, 1-365).
+  Under `revoke` the daily pass **deletes stale personal access tokens and
+  revokes stale credential use grants**; check the inventory before
+  switching it on. Toolkit secrets, MCP and provider OAuth tokens and
+  credential references are only ever flagged: they are issued elsewhere.
+* **Two new routines** under Administration → Schedules, both paused in
+  maintenance: `main.credential_staleness` (daily) flags stale credentials,
+  revokes under the `revoke` policy, audits both
+  (`ai.elitea.security.v1.credential.review`) and notifies the owner once
+  per flag; `main.permission_trimming` (weekly) recomputes the trimming
+  report and notifies agent owners (registry business and technical owner,
+  else the agent's author) of new removal candidates only. An item granted
+  for less than the trimming window is never a candidate ("too new to
+  judge"); egress entries and tools of an edited selection are dated by the
+  routine's first sighting, so they become candidates no sooner than one
+  window after the first weekly pass.
+* **New admin pages** Credential inventory and Permission trimming, and a
+  Permission trimming tab in an agent's ⋮ › Governance dialog. Removals
+  edit the draft version only (a published version is changed by
+  publishing), go through the same paths as the editor and the settings
+  page, and are audited as `permission.trimmed`.
+
+## Entitlement export: CSV and a read-only SCIM tree (#1501)
+
+* **Shared migration 0209** grants the new permission `entitlements.export`
+  to the platform `super_admin` and `admin` roles (administration mode). No
+  table and no data change. A custom administration role needs the grant
+  added by hand to reach the export.
+* **`GET /api/v2/admin/entitlements`** (`exportEntitlements`, behind
+  `entitlements.export`) answers who holds which role on the platform, on
+  each project and on each agent (agent registry business and technical
+  owners), with the governance capabilities each role carries: one row per
+  (user, scope, role, capability, granted_via). `format=csv` streams every
+  row from one snapshot as RFC 4180 CSV with an `X-Entitlement-Rows`
+  header; `format=json` (default) pages with `limit` and `offset`. Filters:
+  `user_id`, `project_id`. Admin › Users has an **Export entitlements**
+  button for the CSV.
+* **`/api/v2/scim/v2/entitlements`** is a second, read-only SCIM 2.0
+  service provider for identity governance tools: `/Users` (each with
+  `groups`, `roles`, `entitlements` and the
+  `urn:elitea:params:scim:schemas:extension:entitlements:2.0:User` grants),
+  `/Groups` (one per platform role and per project role, ids
+  `platform-role-<id>` and `project-role-<id>`), `/Users/{id}`,
+  `/Groups/{id}` and the discovery documents. `startIndex`/`count` paging,
+  `filter` on `userName`, `displayName`, `id` and `active` (Users) and
+  `displayName`, `id` (Groups). It takes the same SCIM client credential as
+  provisioning (Admin › Configuration › Authentication). Write verbs answer
+  405.
+* **The SCIM tree is opt-in per client; nobody can read it after the
+  upgrade.** SCIM clients carry no scopes, so a new platform-config section,
+  `entitlement_export` (Admin › Configuration › **Entitlement Export**,
+  behind `entitlements.export`), lists the SCIM client ids allowed to read
+  it in `scim_client_ids`. The default is empty: every client — every
+  existing provisioning credential included — gets 403 with a SCIM error
+  body on every path of the tree, discovery included, until an
+  administrator lists it. Provisioning (`/api/v2/scim/v2/Users`, `/Groups`)
+  is unchanged. To connect an identity governance tool, create a SCIM client
+  for it (or reuse one) and add its id to the list; the change is audited
+  like every other configuration save, and the list is read on every
+  request, so removing an id cuts access at once. The CSV/JSON admin export
+  is not affected by this list.
+* **Every export is audited** in `centry.audit_events` (`entity_type
+  entitlements`, `entity_name` csv, json or scim, the row count in
+  `action`, the administrator or `scim:<client>` as actor), written before
+  any row is sent. When the row cannot be written the export is refused
+  with 503.
+* **Capabilities are derived from permissions** in one table,
+  `services/elitea-main/internal/domain/entitlements/capabilities.go`; a
+  test fails when a gated or granted permission is in neither that table
+  nor its not-governance-relevant list. `connector.approve` is mapped to
+  `approve_connectors` ahead of the connector approval change and produces
+  no row until it is granted.
+
 ## Run step records: evidence, chain, export and retention (#1499)
 
 * **Shared migration 0205** creates `elitea_runtime.run_step_heads` (one row

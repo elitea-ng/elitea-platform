@@ -1,5 +1,6 @@
 /* Applied by admin.visual.spec.ts while it takes a screenshot; see
    ADMIN_SCREENSHOT_STYLE there. The cells stay masked. */
-[data-testid='admin-schedules-time'] {
+[data-testid='admin-schedules-time'],
+[data-testid='permission-trimming-usage'] {
   font-size: 0 !important;
 }

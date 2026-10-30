@@ -146,7 +146,7 @@ func (service *ClientApplicationVersionService) AuthorizeRemoteTool(
 
 	record, frozen, err := freezeSavedApplicationVersion(
 		ctx, service.versions, service.freezer, request.ProjectID, request.ActorID,
-		uint64(request.ApplicationID), uint64(request.VersionID),
+		uint64(request.ApplicationID), uint64(request.VersionID), "",
 	)
 	if err != nil {
 		return RemoteToolGrant{}, clientFreezeError(ctx, err)

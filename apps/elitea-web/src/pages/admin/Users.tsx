@@ -59,6 +59,7 @@ import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
 import { AdminBulkInviteDialog } from './AdminBulkInviteDialog';
+import { AdminEntitlementsExportButton } from './AdminEntitlementsExportButton';
 import { AdminUserDevicesDrawer } from './AdminUserDevicesDrawer';
 import { AdminUsersTable, type AdminUserRowActions } from './AdminUsersTable';
 import type { AdminUserRow } from './api/adminUsersApi';
@@ -161,6 +162,7 @@ export function AdminUsers() {
           >
             {t('pages.admin.users.action.bulkInvite', 'Bulk invite')}
           </Button>
+          <AdminEntitlementsExportButton />
           <Tooltip title={t('pages.admin.users.action.export', 'Export to CSV')}>
             {/* `span`: a disabled button fires no events, so the tooltip needs
                 a wrapper to hang its listeners on while the export runs. */}

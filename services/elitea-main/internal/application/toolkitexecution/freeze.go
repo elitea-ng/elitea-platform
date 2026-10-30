@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/connectorapproval"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 )
 
@@ -131,6 +132,9 @@ func (f FrozenCurrentReadTool) Clone() FrozenCurrentReadTool {
 // mode. This second read closes the tools/list -> tools/call race without
 // copying SQL into the HTTP handler.
 type CurrentReadToolFreezer struct {
+	// connectors pins an approved custom MCP server's tools into the frozen
+	// settings under approved_only (#1501). nil: the open mode.
+	connectors connectorapproval.ProjectViewer
 	toolkits   CurrentMCPToolkitReader
 	settings   CurrentToolkitSettingsResolver
 	guardrails CurrentGuardrailResolver
@@ -145,6 +149,13 @@ func NewCurrentReadToolFreezer(
 		return nil, errors.New("current direct toolkit dependencies are required")
 	}
 	return &CurrentReadToolFreezer{toolkits: toolkits, settings: settings, guardrails: guardrails}, nil
+}
+
+// WithConnectorGate makes the freeze write an approved custom MCP server's
+// pins into the frozen settings (connectorapproval.PinDirectSettings).
+func (f *CurrentReadToolFreezer) WithConnectorGate(gate connectorapproval.ProjectViewer) *CurrentReadToolFreezer {
+	f.connectors = gate
+	return f
 }
 
 func (f *CurrentReadToolFreezer) Freeze(
@@ -238,6 +249,14 @@ func (f *CurrentReadToolFreezer) Freeze(
 	// this newly owned map so Rust receives the current SDK shape. Malformed
 	// entries authorize nothing and duplicates collapse deterministically.
 	resolved["selected_tools"] = canonicalSelected
+	if f.connectors != nil {
+		resolved, err = connectorapproval.PinDirectSettings(ctx, f.connectors, int64(request.ProjectID), toolkit.Type, resolved)
+		if err != nil {
+			return FrozenCurrentReadTool{}, currentReadToolAdmissionError(
+				CurrentReadToolAdmissionSettings, err,
+			)
+		}
+	}
 
 	// No `indexes` catalog on this path (ADR-0030 I1): a direct read serves
 	// no index tools — its claim carries no vector token — and the worker's

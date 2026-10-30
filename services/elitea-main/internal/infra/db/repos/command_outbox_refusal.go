@@ -23,11 +23,18 @@ import (
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
-// refusalCodeEgressPolicyInvalid is the one refusal 0197 admits.
-const refusalCodeEgressPolicyInvalid = "EGRESS_POLICY_INVALID"
+// The refusals the outbox admits: 0197's egress policy and 0207's
+// unapproved connector (ADR-0044 decision 1).
+const (
+	refusalCodeEgressPolicyInvalid  = "EGRESS_POLICY_INVALID"
+	refusalCodeConnectorNotApproved = "CONNECTOR_NOT_APPROVED"
+)
 
-// refusalChatErrorCode is the refusal as a chat answer's `error_code`.
-const refusalChatErrorCode = "egress_policy_invalid"
+// refusalChatErrorCodes are the refusals as a chat answer's `error_code`.
+var refusalChatErrorCodes = map[string]string{
+	refusalCodeEgressPolicyInvalid:  "egress_policy_invalid",
+	refusalCodeConnectorNotApproved: "connector_not_approved",
+}
 
 // DispatchRefusals records refused commands (commandbus.DispatchRefusalRecorder).
 type DispatchRefusals struct{ pool *pgxpool.Pool }
@@ -52,7 +59,7 @@ func (r *DispatchRefusals) RefuseDispatch(ctx context.Context, executionID strin
 	if r == nil || r.pool == nil {
 		return errors.New("dispatch refusals database is required")
 	}
-	if executionID == "" || generation == 0 || code != refusalCodeEgressPolicyInvalid ||
+	if _, known := refusalChatErrorCodes[code]; executionID == "" || generation == 0 || !known ||
 		message == "" || len(message) > 1024 || !utf8.ValidString(message) {
 		return errors.New("invalid dispatch refusal")
 	}
@@ -95,7 +102,7 @@ RETURNING j.capability_id, j.projection_project_id`,
 		return fmt.Errorf("record the dispatch refusal: %w", err)
 	}
 	if capability == executiondomain.AgentApplicationCapability || capability == executiondomain.AgentAdhocCapability {
-		if err := projectAgentRefusal(ctx, tx, projectionProjectID, executionID, generation, message); err != nil {
+		if err := projectAgentRefusal(ctx, tx, projectionProjectID, executionID, generation, code, message); err != nil {
 			return err
 		}
 	}
@@ -108,8 +115,8 @@ RETURNING j.capability_id, j.projection_project_id`,
 
 // projectAgentRefusal settles the run's chat answer as the refusal: not
 // streaming, `is_error`, the message as its error and egress_policy_invalid
-// as its error code. The question is kept: the refusal is the answer.
-func projectAgentRefusal(ctx context.Context, tx pgx.Tx, projectionProjectID int64, executionID string, generation uint64, message string) error {
+// (or connector_not_approved) as its error code. The question is kept: the refusal is the answer.
+func projectAgentRefusal(ctx context.Context, tx pgx.Tx, projectionProjectID int64, executionID string, generation uint64, code, message string) error {
 	schema, err := tenantSchema(strconv.FormatInt(projectionProjectID, 10))
 	if err != nil {
 		return err
@@ -129,7 +136,7 @@ WHERE binding.execution_id = $1
   AND response.uuid::text = binding.client_message_id
   AND response.task_id = binding.execution_id
   AND response.meta ->> 'execution_generation' = binding.client_execution_generation`, schema),
-		executionID, int64(generation), message, refusalChatErrorCode); err != nil {
+		executionID, int64(generation), message, refusalChatErrorCodes[code]); err != nil {
 		return fmt.Errorf("project the refused agent answer: %w", err)
 	}
 	return nil

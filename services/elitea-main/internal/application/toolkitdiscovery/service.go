@@ -10,6 +10,7 @@ import (
 	"time"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/connectorapproval"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	call "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
@@ -80,6 +81,7 @@ type Service struct {
 	policy      DispatchPolicy
 	newID       executionapp.IDGenerator
 	deadline    time.Duration
+	connectors  *connectorapproval.Gate
 }
 
 func NewService(resolver Resolver, verdict call.ToolkitTypeVerdict, admissions admissionSubmitter, dispatcher runDispatcher, settlements SettlementReader, artifacts ArtifactReader, policy DispatchPolicy, newID executionapp.IDGenerator, deadline time.Duration) (*Service, error) {
@@ -89,7 +91,19 @@ func NewService(resolver Resolver, verdict call.ToolkitTypeVerdict, admissions a
 	if deadline <= 0 {
 		deadline = 60 * time.Second
 	}
-	return &Service{resolver, verdict, admissions, dispatcher, settlements, artifacts, policy, newID, deadline}, nil
+	return &Service{resolver: resolver, verdict: verdict, admissions: admissions, dispatcher: dispatcher, settlements: settlements,
+		artifacts: artifacts, policy: policy, newID: newID, deadline: deadline}, nil
+}
+
+// WithConnectorGate supplies the connector catalogue gate (ADR-0044 decision
+// 1, #1501): under approved_only an approved custom MCP server's discovered
+// tools are kept only when an approved request pins their name and digest,
+// as Load Tools (mcp_sync_tools) keeps them. Nil is the open mode.
+func (s *Service) WithConnectorGate(gate *connectorapproval.Gate) *Service {
+	if s != nil {
+		s.connectors = gate
+	}
+	return s
 }
 func (s *Service) AvailableTools(ctx context.Context, request Request) (Result, error) {
 	if err := request.Validate(); err != nil {
@@ -164,7 +178,7 @@ func (s *Service) AvailableTools(ctx context.Context, request Request) (Result, 
 					return Result{}, fmt.Errorf("invalid toolkit discovery authorization")
 				}
 			}
-			return result, nil
+			return s.keepPinned(wait, request.ProjectID, inputs, admitted.Outcome.SecurityContext.ContentID != "", result)
 		}
 		interval *= 2
 		if interval > 2*time.Second {
@@ -172,4 +186,62 @@ func (s *Service) AvailableTools(ctx context.Context, request Request) (Result, 
 		}
 		timer.Reset(interval)
 	}
+}
+
+// keepPinned narrows a custom MCP server's discovered tools to the pins of
+// its approved requests under approved_only. A gate that cannot be read is
+// an error, never the unfiltered list.
+func (s *Service) keepPinned(ctx context.Context, projectID int64, inputs AuthoritativeInputs, governedRun bool, result Result) (Result, error) {
+	if s.connectors == nil || result.AuthorizationRequired != nil {
+		return result, nil
+	}
+	view, err := s.connectors.ForProject(ctx, projectID, governedRun)
+	if err != nil {
+		return Result{}, fmt.Errorf("toolkit discovery: read the connector catalogue: %w", err)
+	}
+	if !view.ApprovedOnly() {
+		return result, nil
+	}
+	settings := map[string]any{}
+	if len(inputs.Settings) > 0 {
+		if err := json.Unmarshal(inputs.Settings, &settings); err != nil {
+			return Result{}, ErrRuntimeFailure
+		}
+	}
+	decision := view.Decide(inputs.ToolkitType, settings)
+	if !decision.Gated || decision.Kind != connectorapproval.TargetCustomMCP {
+		return result, nil
+	}
+	return FilterPinnedResult(decision.Pins, result), nil
+}
+
+// FilterPinnedResult keeps the tools whose name and digest (over the name,
+// the description and the argument schema the worker listed, the digest the
+// worker's pin check computes) are pinned; an unapproved server (no pins)
+// keeps none.
+func FilterPinnedResult(pins []connectorapproval.PinnedTool, result Result) Result {
+	allowed := make(map[connectorapproval.PinnedTool]bool, len(pins))
+	for _, pin := range pins {
+		allowed[pin] = true
+	}
+	kept := Result{Tools: make([]Tool, 0, len(result.Tools)), ArgsSchemas: map[string]json.RawMessage{}}
+	for _, tool := range result.Tools {
+		var schema any
+		if raw := result.ArgsSchemas[tool.Name]; len(raw) > 0 {
+			decoded, err := connectorapproval.DecodeJSONValue(raw)
+			if err != nil {
+				continue
+			}
+			schema = decoded
+		}
+		digest, err := connectorapproval.ToolDigest(tool.Name, tool.Description, schema)
+		if err != nil || !allowed[connectorapproval.PinnedTool{Name: tool.Name, Digest: digest}] {
+			continue
+		}
+		kept.Tools = append(kept.Tools, tool)
+		if raw, ok := result.ArgsSchemas[tool.Name]; ok {
+			kept.ArgsSchemas[tool.Name] = raw
+		}
+	}
+	return kept
 }

@@ -126,6 +126,30 @@ const ITEMS = [
     heading: 'Agent registry',
     path: '/admin/app/agent-registry',
   },
+  // Connector requests (ADR-0044 decision 1, issue 1501) renders for this
+  // persona because shared migration 0207 grants `connector.approve` to the
+  // administration `admin` role.
+  {
+    id: 'connector-requests',
+    label: 'Connector requests',
+    heading: 'Connector requests',
+    path: '/admin/app/connector-requests',
+  },
+  // Credential inventory and Permission trimming (ADR-0044 decision 5, issue
+  // 1501): shared migration 0208 grants `credentials.inventory.read` to the
+  // administration `admin` role, the nav gate's name.
+  {
+    id: 'credential-inventory',
+    label: 'Credential inventory',
+    heading: 'Credential inventory',
+    path: '/admin/app/credential-inventory',
+  },
+  {
+    id: 'permission-trimming',
+    label: 'Permission trimming',
+    heading: 'Permission trimming',
+    path: '/admin/app/permission-trimming',
+  },
   // Budgets renders for this persona because shared migration 0062 grants
   // `models.admin.project_budgets.view` to the administration `admin` role,
   // and `apps/elitea-web/scripts/e2e-stack.sh` gives e2e-admin that role. The

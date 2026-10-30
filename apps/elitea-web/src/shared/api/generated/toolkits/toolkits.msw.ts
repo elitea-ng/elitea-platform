@@ -46,6 +46,9 @@ import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
 import type {
+  ConnectorCatalogue,
+  ConnectorRequest,
+  ConnectorRequestList,
   GetToolkitToolResult202,
   IndexWriteAck,
   InternalMcpPatStatus,
@@ -159,6 +162,366 @@ export const getRegisterMcpOAuthClientResponseMock = (
   scope: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetConnectorCatalogueResponseMock = (
+  overrideResponse: Partial<Extract<ConnectorCatalogue, object>> = {},
+): ConnectorCatalogue => ({
+  mode: faker.helpers.arrayElement(["open", "approved_only"] as const),
+  platform_mode: faker.helpers.arrayElement(["open", "approved_only"] as const),
+  governed: faker.datatype.boolean(),
+  require_architecture_attestation: faker.datatype.boolean(),
+  approved: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    target_kind: "toolkit_type",
+    target: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    tools: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+  })),
+  ...overrideResponse,
+});
+
+export const getListConnectorRequestsResponseMock = (
+  overrideResponse: Partial<Extract<ConnectorRequestList, object>> = {},
+): ConnectorRequestList => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    project_id: faker.number.int(),
+    target_kind: "toolkit_type",
+    target: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    toolkit_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    platform_wide: faker.datatype.boolean(),
+    project_ids: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.number.int()),
+    tools: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      name: faker.string.alpha({ length: { min: 1, max: 128 } }),
+      category: "read",
+      description: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 4096 } }),
+        undefined,
+      ]),
+      input_schema: faker.helpers.arrayElement([{}, undefined]),
+      digest: faker.helpers.arrayElement([
+        faker.helpers.fromRegExp("^[0-9a-f]{64}$"),
+        undefined,
+      ]),
+    })),
+    egress_hosts: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    data_classes: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    justification: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    state: "submitted",
+    origin: faker.helpers.arrayElement(["user", "inventory"] as const),
+    requested_by: faker.helpers.arrayElement([faker.number.int(), null]),
+    created_by: faker.helpers.arrayElement([faker.number.int(), null]),
+    requester_name: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    requester_email: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    decided_by: faker.helpers.arrayElement([faker.number.int(), null]),
+    decision_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    attestation_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    submitted_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    decided_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+  })),
+  total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getCreateConnectorRequestResponseMock = (
+  overrideResponse: Partial<Extract<ConnectorRequest, object>> = {},
+): ConnectorRequest => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  target_kind: "toolkit_type",
+  target: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  toolkit_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  platform_wide: faker.datatype.boolean(),
+  project_ids: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.number.int()),
+  tools: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    name: faker.string.alpha({ length: { min: 1, max: 128 } }),
+    category: "read",
+    description: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 4096 } }),
+      undefined,
+    ]),
+    input_schema: faker.helpers.arrayElement([{}, undefined]),
+    digest: faker.helpers.arrayElement([
+      faker.helpers.fromRegExp("^[0-9a-f]{64}$"),
+      undefined,
+    ]),
+  })),
+  egress_hosts: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  data_classes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  justification: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: "submitted",
+  origin: faker.helpers.arrayElement(["user", "inventory"] as const),
+  requested_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  created_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  requester_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  requester_email: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  decision_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  attestation_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  submitted_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetConnectorRequestResponseMock = (
+  overrideResponse: Partial<Extract<ConnectorRequest, object>> = {},
+): ConnectorRequest => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  target_kind: "toolkit_type",
+  target: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  toolkit_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  platform_wide: faker.datatype.boolean(),
+  project_ids: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.number.int()),
+  tools: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    name: faker.string.alpha({ length: { min: 1, max: 128 } }),
+    category: "read",
+    description: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 4096 } }),
+      undefined,
+    ]),
+    input_schema: faker.helpers.arrayElement([{}, undefined]),
+    digest: faker.helpers.arrayElement([
+      faker.helpers.fromRegExp("^[0-9a-f]{64}$"),
+      undefined,
+    ]),
+  })),
+  egress_hosts: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  data_classes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  justification: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: "submitted",
+  origin: faker.helpers.arrayElement(["user", "inventory"] as const),
+  requested_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  created_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  requester_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  requester_email: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  decision_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  attestation_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  submitted_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getSubmitConnectorRequestResponseMock = (
+  overrideResponse: Partial<Extract<ConnectorRequest, object>> = {},
+): ConnectorRequest => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  target_kind: "toolkit_type",
+  target: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  toolkit_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  platform_wide: faker.datatype.boolean(),
+  project_ids: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.number.int()),
+  tools: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    name: faker.string.alpha({ length: { min: 1, max: 128 } }),
+    category: "read",
+    description: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 4096 } }),
+      undefined,
+    ]),
+    input_schema: faker.helpers.arrayElement([{}, undefined]),
+    digest: faker.helpers.arrayElement([
+      faker.helpers.fromRegExp("^[0-9a-f]{64}$"),
+      undefined,
+    ]),
+  })),
+  egress_hosts: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  data_classes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  justification: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: "submitted",
+  origin: faker.helpers.arrayElement(["user", "inventory"] as const),
+  requested_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  created_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  requester_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  requester_email: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  decision_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  attestation_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  submitted_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getWithdrawConnectorRequestResponseMock = (
+  overrideResponse: Partial<Extract<ConnectorRequest, object>> = {},
+): ConnectorRequest => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  target_kind: "toolkit_type",
+  target: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  toolkit_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  platform_wide: faker.datatype.boolean(),
+  project_ids: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.number.int()),
+  tools: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    name: faker.string.alpha({ length: { min: 1, max: 128 } }),
+    category: "read",
+    description: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 4096 } }),
+      undefined,
+    ]),
+    input_schema: faker.helpers.arrayElement([{}, undefined]),
+    digest: faker.helpers.arrayElement([
+      faker.helpers.fromRegExp("^[0-9a-f]{64}$"),
+      undefined,
+    ]),
+  })),
+  egress_hosts: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  data_classes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  justification: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: "submitted",
+  origin: faker.helpers.arrayElement(["user", "inventory"] as const),
+  requested_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  created_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  requester_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  requester_email: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  decision_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  attestation_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  submitted_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
   ]),
   ...overrideResponse,
 });
@@ -609,6 +972,162 @@ export const getRegisterMcpOAuthClientMockHandler = (
   );
 };
 
+export const getGetConnectorCatalogueMockHandler = (
+  overrideResponse?:
+    | ConnectorCatalogue
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ConnectorCatalogue> | ConnectorCatalogue),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/connector_catalogue/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetConnectorCatalogueResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListConnectorRequestsMockHandler = (
+  overrideResponse?:
+    | ConnectorRequestList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ConnectorRequestList> | ConnectorRequestList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/connector_requests/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListConnectorRequestsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateConnectorRequestMockHandler = (
+  overrideResponse?:
+    | ConnectorRequest
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ConnectorRequest> | ConnectorRequest),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/connector_requests/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateConnectorRequestResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetConnectorRequestMockHandler = (
+  overrideResponse?:
+    | ConnectorRequest
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ConnectorRequest> | ConnectorRequest),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/connector_requests/prompt_lib/:projectId/:requestId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetConnectorRequestResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSubmitConnectorRequestMockHandler = (
+  overrideResponse?:
+    | ConnectorRequest
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ConnectorRequest> | ConnectorRequest),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/connector_requests/prompt_lib/:projectId/:requestId/submit",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSubmitConnectorRequestResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getWithdrawConnectorRequestMockHandler = (
+  overrideResponse?:
+    | ConnectorRequest
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ConnectorRequest> | ConnectorRequest),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/connector_requests/prompt_lib/:projectId/:requestId/withdraw",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getWithdrawConnectorRequestResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getExecuteRemoteToolkitToolMockHandler = (
   overrideResponse?:
     | RemoteToolkitCallResult
@@ -1002,6 +1521,12 @@ export const getGetInternalMcpPatStatusMockHandler = (
 export const getToolkitsMock = () => [
   getExchangeMcpOAuthGrantMockHandler(),
   getRegisterMcpOAuthClientMockHandler(),
+  getGetConnectorCatalogueMockHandler(),
+  getListConnectorRequestsMockHandler(),
+  getCreateConnectorRequestMockHandler(),
+  getGetConnectorRequestMockHandler(),
+  getSubmitConnectorRequestMockHandler(),
+  getWithdrawConnectorRequestMockHandler(),
   getExecuteRemoteToolkitToolMockHandler(),
   getGetToolkitMockHandler(),
   getUpdateToolkitMockHandler(),

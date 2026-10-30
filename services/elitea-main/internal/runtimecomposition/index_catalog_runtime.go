@@ -2,6 +2,7 @@ package runtimecomposition
 
 import (
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/connectorapproval"
 	indexregistryapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexregistry"
 	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 )
@@ -30,4 +31,13 @@ func indexCatalogOption(resolver *indexregistryapp.CatalogResolver) toolkitcallt
 		return func(*toolkitcalltoolapp.CurrentAuthoritativeInputResolver) {}
 	}
 	return toolkitcalltoolapp.WithIndexCatalog(resolver)
+}
+
+// toolkitConnectorOption makes the tool-run resolver pin an approved custom
+// MCP server's tools (#1501). A nil gate is the open mode: no option.
+func toolkitConnectorOption(gate *connectorapproval.Gate) toolkitcalltoolapp.ResolverOption {
+	if gate == nil {
+		return func(*toolkitcalltoolapp.CurrentAuthoritativeInputResolver) {}
+	}
+	return toolkitcalltoolapp.WithConnectorGate(gate)
 }

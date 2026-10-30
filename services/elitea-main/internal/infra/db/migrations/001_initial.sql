@@ -1190,7 +1190,25 @@ JOIN (VALUES
     -- Issue 1499, run step evidence (ADR-0042). Existing databases get the
     -- grant from migrations/shared/0205_run_steps.sql.
     ('super_admin', 'runs.evidence.read'),
-    ('admin', 'runs.evidence.read')
+    ('admin', 'runs.evidence.read'),
+    -- Issue 1501, connector approval (ADR-0044 decision 1). Platform
+    -- administrators approve or reject connector requests. Existing
+    -- databases get the grant from
+    -- migrations/shared/0207_connector_approval.sql.
+    ('super_admin', 'connector.approve'),
+    ('admin', 'connector.approve'),
+    -- Issue 1501, the entitlement export (ADR-0044 decision 5). Existing
+    -- databases get the grant from
+    -- migrations/shared/0209_entitlement_export.sql.
+    ('super_admin', 'entitlements.export'),
+    ('admin', 'entitlements.export'),
+    -- Issue 1501, credential inventory and permission trimming (ADR-0044
+    -- decision 5). Existing databases get the grants from
+    -- migrations/shared/0208_credential_inventory.sql.
+    ('super_admin', 'credentials.inventory.read'),
+    ('admin', 'credentials.inventory.read'),
+    ('super_admin', 'credentials.inventory.manage'),
+    ('admin', 'credentials.inventory.manage')
 ) AS grant_row(role_name, permission) ON grant_row.role_name = role.name
 WHERE role.mode = 'administration'
 ON CONFLICT (role_id, permission) DO NOTHING;
@@ -1215,6 +1233,15 @@ ON CONFLICT (role_id, permission) DO NOTHING;
 -- from migrations/shared/0205_run_steps.sql.
 INSERT INTO auth_core__role_permission (role_id, permission)
 SELECT role.id, 'runs.evidence.read'
+FROM auth_core__role AS role
+WHERE role.mode = 'default' AND role.name = 'admin'
+ON CONFLICT (role_id, permission) DO NOTHING;
+
+-- Issue 1501: the project admin reads the permission trimming report of the
+-- project's agents and removes an unused grant. Existing databases get the
+-- grant from migrations/shared/0208_credential_inventory.sql.
+INSERT INTO auth_core__role_permission (role_id, permission)
+SELECT role.id, 'agents.trimming.manage'
 FROM auth_core__role AS role
 WHERE role.mode = 'default' AND role.name = 'admin'
 ON CONFLICT (role_id, permission) DO NOTHING;
