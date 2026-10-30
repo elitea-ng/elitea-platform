@@ -4784,6 +4784,11 @@ export type updateAgentRegistryResponse404 = {
   status: 404;
 };
 
+export type updateAgentRegistryResponse422 = {
+  data: AgentLifecycleRefusal;
+  status: 422;
+};
+
 export type updateAgentRegistryResponseSuccess =
   updateAgentRegistryResponse200 & {
     headers: Headers;
@@ -4793,6 +4798,7 @@ export type updateAgentRegistryResponseError = (
   | updateAgentRegistryResponse401
   | updateAgentRegistryResponse403
   | updateAgentRegistryResponse404
+  | updateAgentRegistryResponse422
 ) & {
   headers: Headers;
 };
@@ -4808,7 +4814,7 @@ export const getUpdateAgentRegistryUrl = (
 };
 
 /**
- * Changes the owners, risk tier, uses or data classes. Only an owner or a holder of `models.applications.governance` can edit; an agent with no owner accepts any caller the route admits. Raising the tier needs an owner or the governance role; lowering it needs the governance role. A tier change is written to the security audit outbox as agent.registry.tier_changed. Requires `models.applications.publish.post`.
+ * Changes the owners, risk tier, uses or data classes. Only an owner or a holder of `models.applications.governance` can edit; an agent with no owner accepts any caller the route admits. Raising the tier needs an owner or the governance role; lowering it needs the governance role. A tier change is written to the security audit outbox as agent.registry.tier_changed. The circuit breaker override can only tighten the tier default; a change is written as agent.registry.breaker_override_changed. Requires `models.applications.publish.post`.
  * @summary Edit the registry record of an agent
  */
 export const updateAgentRegistry = async (

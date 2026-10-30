@@ -100,6 +100,9 @@ export const getListProjectExecutionSuspensionsResponseMock = (
     resumed_at: null,
     resumed_by: null,
     resume_reason: null,
+    breaker: null,
+    resume_approved_by: null,
+    resume_approved_at: null,
   })),
   ...overrideResponse,
 });
@@ -121,6 +124,9 @@ export const getCreateProjectExecutionSuspensionResponseMock =
     resumed_at: null,
     resumed_by: null,
     resume_reason: null,
+    breaker: null,
+    resume_approved_by: null,
+    resume_approved_at: null,
   });
 
 export const getResumeProjectExecutionSuspensionResponseMock =
@@ -140,6 +146,9 @@ export const getResumeProjectExecutionSuspensionResponseMock =
     resumed_at: null,
     resumed_by: null,
     resume_reason: null,
+    breaker: null,
+    resume_approved_by: null,
+    resume_approved_at: null,
   });
 
 export const getGenerateProjectContextDraftResponseMock = (

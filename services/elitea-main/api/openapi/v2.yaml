@@ -7595,7 +7595,7 @@ components:
       required: [project_id, application_id, application_name, business_owner_id, technical_owner_id,
         risk_tier, intended_use, out_of_scope_use, data_classes, certification_state,
         certified_release_id, certified_at, recertify_by, state_reason, state_changed_at,
-        suspension_id, updated_at]
+        suspension_id, circuit_breaker, updated_at]
       properties:
         project_id: { type: integer, format: int64 }
         application_id: { type: integer, format: int64 }
@@ -7626,6 +7626,7 @@ components:
           format: int64
           nullable: true
           description: The active agent suspension (kill switch), of any source.
+        circuit_breaker: { $ref: '#/components/schemas/AgentBreakerOverride' }
         updated_at: { type: string, format: date-time }
       description: >
         NOTE(W2): internal/api/v2/agentlifecycle/handler.go, RegistryRecord.
@@ -7646,6 +7647,8 @@ components:
         state_reason: ''
         state_changed_at: '2026-10-29T09:00:00Z'
         suspension_id: null
+        circuit_breaker:
+          error_rate_percent: 30
         updated_at: '2026-10-29T09:00:00Z'
 
     AgentRegistryList:
@@ -7723,10 +7726,51 @@ components:
           type: array
           maxItems: 32
           items: { type: string, pattern: '^[a-z0-9][a-z0-9_.-]{0,63}$' }
+        circuit_breaker: { $ref: '#/components/schemas/AgentBreakerOverride' }
       description: An absent field is unchanged.
       example:
         risk_tier: high
         business_owner_id: 4
+
+    AgentBreakerOverride:
+      type: object
+      additionalProperties: false
+      description: >
+        The agent's circuit breaker override (ADR-0041 decision 2). Each set
+        limit replaces the default of the agent's risk tier in the
+        circuit_breaker configuration section, and it can only be tighter
+        than that default; an absent limit keeps the default. An empty
+        object clears the override. 0 turns a rule off, so it is accepted
+        only for a rule the tier default also has off.
+      properties:
+        error_rate_percent:
+          type: integer
+          minimum: 0
+          maximum: 99
+          description: Trip when more than this percentage of the window's runs failed.
+        error_rate_window_runs:
+          type: integer
+          minimum: 5
+          maximum: 200
+          description: The number of latest ended runs the error rate reads. A smaller window is tighter.
+        spend_per_hour_usd:
+          type: number
+          minimum: 0
+          maximum: 1000000
+          description: Trip when the agent's spend in the last hour is more than this amount.
+        tool_failure_streak:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Trip when one tool fails this many times in a row inside one run.
+        runs_per_hour:
+          type: integer
+          minimum: 0
+          maximum: 1000000
+          description: Trip when more runs than this ended in the last hour.
+      example:
+        error_rate_percent: 30
+        spend_per_hour_usd: 5
 
     AgentLifecycleReason:
       type: object
@@ -8295,8 +8339,9 @@ components:
             change_request_open, change_request_stale,
             change_request_proposer_only, agent_not_certifiable,
             registry_owner_required, tier_lowering_requires_governance,
-            governance_role_required, invalid_request or not_found. A
-            publish refusal of the candidate keeps the publish route's code.
+            governance_role_required, circuit_breaker_override_loosens,
+            invalid_request or not_found. A publish refusal of the candidate
+            keeps the publish route's code.
         message: { type: string }
         failures:
           type: array
@@ -8308,6 +8353,10 @@ components:
           description: attestation_missing only, the missing kinds.
         risk_tier: { type: string, description: change_request_required and change_request_not_required. }
         required_approvals: { type: integer, description: change_request_required only. }
+        fields:
+          type: array
+          items: { type: string }
+          description: circuit_breaker_override_loosens only, the override fields that are looser than the tier default.
       description: >
         NOTE(W2): internal/api/v2/agentlifecycle/handler.go, writeError.
       example:
@@ -8347,7 +8396,7 @@ components:
         actor_id:
           type: integer
           format: int64
-          description: The user who suspended. 0 is the scheduled self-test.
+          description: The user who suspended. 0 is the system (the scheduled self-test or the circuit breaker).
         source:
           type: string
           description: One of manual, breaker, certification, self_test.
@@ -8365,6 +8414,20 @@ components:
         resumed_at: { type: string, format: date-time, nullable: true }
         resumed_by: { type: integer, format: int64, nullable: true }
         resume_reason: { type: string, nullable: true }
+        breaker:
+          allOf:
+            - $ref: '#/components/schemas/ExecutionSuspensionBreaker'
+          nullable: true
+          description: The circuit breaker's record of the trip. Set for the source breaker only.
+        resume_approved_by:
+          type: integer
+          format: int64
+          nullable: true
+          description: >
+            The first platform administrator who approved the resume of a
+            two_person suspension the system wrote. A different
+            administrator must complete the resume.
+        resume_approved_at: { type: string, format: date-time, nullable: true }
       example:
         id: 12
         scope: agent
@@ -8381,6 +8444,39 @@ components:
         resumed_at: null
         resumed_by: null
         resume_reason: null
+        breaker: null
+        resume_approved_by: null
+        resume_approved_at: null
+
+    ExecutionSuspensionBreaker:
+      type: object
+      description: >
+        Why the circuit breaker stopped the agent (ADR-0041 decision 2): the
+        rule, the value it observed and the limit.
+      required: [rule, observed, threshold, unit]
+      properties:
+        rule:
+          type: string
+          description: One of error_rate, spend_per_hour, tool_failure_streak, runs_per_hour.
+        observed: { type: number }
+        threshold: { type: number }
+        unit:
+          type: string
+          description: One of percent, usd, failures, runs.
+        tier: { type: string, description: The agent's risk tier when the breaker tripped. }
+        window_runs: { type: integer, format: int64, description: error_rate only. }
+        failed_runs: { type: integer, format: int64, description: error_rate only. }
+        window_seconds: { type: integer, format: int64, description: spend_per_hour and runs_per_hour only. }
+        tool_name: { type: string, description: tool_failure_streak only. }
+        execution_id: { type: string, description: 'tool_failure_streak only: the run.' }
+      example:
+        rule: error_rate
+        observed: 55
+        threshold: 50
+        unit: percent
+        tier: high
+        window_runs: 20
+        failed_runs: 11
 
     ExecutionSuspensionList:
       type: object
@@ -19574,9 +19670,13 @@ paths:
         runs stay cancelled. The resume rule of the suspension applies:
         any_admin lets any caller with safety.suspend resume it,
         governance_role needs a platform administrator, and two_person needs a
-        platform administrator who is not the suspender. The body is empty or
-        has an optional `reason`. The audit record of the request carries the
-        action safety.suspension.resumed.
+        platform administrator who is not the suspender. A two_person
+        suspension the system wrote (the circuit breaker) needs two different
+        platform administrators: the first call records an approval and
+        answers 202, a call by a different administrator resumes. The body is
+        empty or has an optional `reason`. The audit record of the request
+        carries the action safety.suspension.resumed, or
+        safety.suspension.resume_approved for the approval.
       tags: [admin]
       requestBody:
         required: false
@@ -19589,6 +19689,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ExecutionSuspension' }
+        '202':
+          description: The first approval of a system two_person suspension is recorded; the suspension stays active until a different platform administrator resumes it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutionSuspension' }
         '400':
           description: A malformed suspension id or body
           content:
@@ -19596,7 +19701,7 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '401': { $ref: '#/components/responses/401' }
         '403':
-          description: The caller lacks safety.suspend, or (code resume_forbidden) the resume rule of the suspension does not let this caller resume it
+          description: The caller lacks safety.suspend, (code resume_forbidden) the resume rule of the suspension does not let this caller resume it, or (code second_person_required) the caller already approved and a different administrator must resume
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -25677,7 +25782,9 @@ paths:
         with no owner accepts any caller the route admits. Raising the tier
         needs an owner or the governance role; lowering it needs the
         governance role. A tier change is written to the security audit
-        outbox as agent.registry.tier_changed. Requires
+        outbox as agent.registry.tier_changed. The circuit breaker override
+        can only tighten the tier default; a change is written as
+        agent.registry.breaker_override_changed. Requires
         `models.applications.publish.post`.
       tags: [applications]
       requestBody:
@@ -25703,6 +25810,11 @@ paths:
             a governance role holder; (code
             tier_lowering_requires_governance) lowering the tier needs the
             governance role.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+        '422':
+          description: (code circuit_breaker_override_loosens) The circuit breaker override is looser than the default of the agent's tier; fields names the looser limits
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }

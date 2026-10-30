@@ -6,14 +6,18 @@
  * `execution_suspended`; agent, project and platform suspensions also cancel
  * the runs in flight (a toolkit type suspension does not); see the embedded
  * docs page Runtime safety, section Suspension and kill switch. The list
- * refreshes every ten seconds, so a stop made by another administrator or by
- * the scheduled self-test shows here without a reload.
+ * refreshes every ten seconds, so a stop made by another administrator, by
+ * the scheduled self-test or by the agent circuit breaker (ADR-0041 decision
+ * 2) shows here without a reload. A breaker row shows its rule, the value it
+ * observed and the limit; a system two-person stop needs two different
+ * platform administrators (the first Resume records an approval, 202).
  */
 import { useState, type ReactNode } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
+import Chip from '@mui/material/Chip';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import LinearProgress from '@mui/material/LinearProgress';
 import Switch from '@mui/material/Switch';
@@ -25,7 +29,12 @@ import TableRow from '@mui/material/TableRow';
 import type { SxProps, Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
-import { describeSuspensionError, type ExecutionSuspensionRow } from '@/features/kill-switch';
+import {
+  BREAKER_SOURCE,
+  breakerSummary,
+  describeSuspensionError,
+  type ExecutionSuspensionRow,
+} from '@/features/kill-switch';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
@@ -58,6 +67,7 @@ export function AdminKillSwitch(props: AdminKillSwitchProps = {}): ReactNode {
   const [dialogKey, setDialogKey] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [error, setError] = useState<string>();
+  const [info, setInfo] = useState<string>();
   const list = useAdminSuspensions(!showHistory, props.refetchInterval ?? 10_000);
   const create = useCreateAdminSuspension();
   const resume = useResumeAdminSuspension();
@@ -98,6 +108,11 @@ export function AdminKillSwitch(props: AdminKillSwitchProps = {}): ReactNode {
       {error !== undefined && (
         <Alert severity="error" onClose={() => setError(undefined)}>{error}</Alert>
       )}
+      {info !== undefined && (
+        <Alert severity="info" data-testid="kill-switch-info" onClose={() => setInfo(undefined)}>
+          {info}
+        </Alert>
+      )}
 
       <Table size="small" data-testid="kill-switch-table">
         <TableHead>
@@ -123,10 +138,24 @@ export function AdminKillSwitch(props: AdminKillSwitchProps = {}): ReactNode {
             <TableRow key={row.id} data-testid={`kill-switch-row-${row.id}`}>
               <TableCell>{scopeLabel(row.scope)}</TableCell>
               <TableCell>{suspensionTarget(row)}</TableCell>
-              <TableCell>{row.reason}</TableCell>
+              <TableCell>
+                <SuspensionReason row={row} />
+              </TableCell>
               <TableCell>{new Date(row.created_at).toLocaleString()}</TableCell>
               <TableCell>{row.cancelled_runs}</TableCell>
-              <TableCell>{resumeRuleLabel(row.resume_requires)}</TableCell>
+              <TableCell>
+                {resumeRuleLabel(row.resume_requires)}
+                {row.active && row.resume_approved_by !== undefined && row.resume_approved_by !== null && (
+                  <Typography
+                    variant="bodySmall"
+                    color="text.secondary"
+                    component="div"
+                    data-testid={`kill-switch-approved-${row.id}`}
+                  >
+                    {t('pages.admin.killSwitch.approvedBy', 'Approved by user')} {row.resume_approved_by}
+                  </Typography>
+                )}
+              </TableCell>
               <TableCell align="right">
                 {row.active ? (
                   <Button
@@ -135,7 +164,18 @@ export function AdminKillSwitch(props: AdminKillSwitchProps = {}): ReactNode {
                     onClick={() =>
                       resume.mutate(
                         { id: row.id, reason: '' },
-                        { onError: (failure) => setError(describeSuspensionError(failure)) },
+                        {
+                          onSuccess: (outcome) =>
+                            setInfo(
+                              outcome.approvalRecorded
+                                ? t(
+                                    'pages.admin.killSwitch.approvalRecorded',
+                                    'Your approval is recorded. A different platform administrator must resume this suspension.',
+                                  )
+                                : undefined,
+                            ),
+                          onError: (failure) => setError(describeSuspensionError(failure)),
+                        },
                       )
                     }
                   >
@@ -164,6 +204,31 @@ export function AdminKillSwitch(props: AdminKillSwitchProps = {}): ReactNode {
   );
 }
 
+/** The reason, and for a circuit breaker stop the rule with its observed value and limit. */
+function SuspensionReason({ row }: { readonly row: ExecutionSuspensionRow }): ReactNode {
+  const summary = breakerSummary(row);
+  if (row.source !== BREAKER_SOURCE) return row.reason;
+  return (
+    <Box data-testid={`kill-switch-breaker-${row.id}`}>
+      <Chip
+        size="small"
+        color="warning"
+        sx={chipSx}
+        label={t('pages.admin.killSwitch.breakerSource', 'Circuit breaker')}
+      />
+      {summary !== undefined && (
+        <Typography variant="bodySmall" component="div">
+          {summary}
+        </Typography>
+      )}
+      <Typography variant="bodySmall" color="text.secondary" component="div">
+        {row.reason}
+      </Typography>
+    </Box>
+  );
+}
+
+const chipSx: SxProps<Theme> = (theme) => ({ marginBottom: theme.spacing(0.5) });
 const titleSx: SxProps<Theme> = (theme) => ({ marginBottom: theme.spacing(0.5) });
 const subtitleSx: SxProps<Theme> = (theme) => ({ marginBottom: theme.spacing(2) });
 const toolbarSx: SxProps<Theme> = (theme) => ({

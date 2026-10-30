@@ -33,6 +33,18 @@ const ROW: ExecutionSuspensionRow = {
   resume_reason: null,
 };
 
+const BREAKER_ROW: ExecutionSuspensionRow = {
+  ...ROW,
+  id: 14,
+  actor_id: 0,
+  source: 'breaker',
+  resume_requires: 'two_person',
+  reason: 'Circuit breaker (error_rate): 11 of the last 20 runs failed (55 %).',
+  breaker: { rule: 'error_rate', observed: 55, threshold: 50, unit: 'percent', tier: 'critical', window_runs: 20, failed_runs: 11 },
+  resume_approved_by: null,
+  resume_approved_at: null,
+};
+
 let rows: ExecutionSuspensionRow[];
 let creates: unknown[];
 let resumes: string[];
@@ -54,6 +66,12 @@ beforeEach(() => {
     http.post('*/admin/execution_suspensions/:id', ({ params }) => {
       const id = String(params['id']);
       resumes.push(id);
+      if (id === '14:resume') {
+        // A system two-person stop: the first approval is recorded (202).
+        const approved = { ...BREAKER_ROW, resume_approved_by: 3, resume_approved_at: '2026-10-29T10:00:00Z' };
+        rows = [approved];
+        return HttpResponse.json(approved, { status: 202 });
+      }
       if (id === '12:resume' && rows[0]?.resume_requires === 'two_person') {
         return HttpResponse.json({ error: 'no', code: 'resume_forbidden' }, { status: 403 });
       }
@@ -90,6 +108,23 @@ describe('AdminKillSwitch', () => {
 
     await user.click(within(await screen.findByTestId('kill-switch-row-12')).getByRole('button', { name: 'Resume' }));
     expect(await screen.findByText(/does not let you resume it/)).toBeInTheDocument();
+  });
+
+  it('shows the rule of a circuit breaker stop and records the first of two approvals', async () => {
+    rows = [BREAKER_ROW];
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminKillSwitch refetchInterval={false} />);
+
+    const row = await screen.findByTestId('kill-switch-row-14');
+    const reason = within(row).getByTestId('kill-switch-breaker-14');
+    expect(reason).toHaveTextContent('Circuit breaker');
+    expect(reason).toHaveTextContent('Error rate: 55 % (limit 50 %)');
+    await user.click(within(row).getByRole('button', { name: 'Resume' }));
+
+    expect(await screen.findByTestId('kill-switch-info')).toHaveTextContent(
+      'A different platform administrator must resume this suspension',
+    );
+    expect(await screen.findByTestId('kill-switch-approved-14')).toHaveTextContent('Approved by user 3');
   });
 });
 

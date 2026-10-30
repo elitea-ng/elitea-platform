@@ -1262,6 +1262,7 @@ export const getGetAgentRegistryResponseMock = (): AgentRegistryRecord => ({
   state_reason: "",
   state_changed_at: "2026-10-29T09:00:00Z",
   suspension_id: null,
+  circuit_breaker: { error_rate_percent: 30 },
   updated_at: "2026-10-29T09:00:00Z",
 });
 
@@ -1282,6 +1283,7 @@ export const getUpdateAgentRegistryResponseMock = (): AgentRegistryRecord => ({
   state_reason: "",
   state_changed_at: "2026-10-29T09:00:00Z",
   suspension_id: null,
+  circuit_breaker: { error_rate_percent: 30 },
   updated_at: "2026-10-29T09:00:00Z",
 });
 
@@ -1421,6 +1423,7 @@ export const getMarkAgentDueResponseMock = (): AgentRegistryRecord => ({
   state_reason: "",
   state_changed_at: "2026-10-29T09:00:00Z",
   suspension_id: null,
+  circuit_breaker: { error_rate_percent: 30 },
   updated_at: "2026-10-29T09:00:00Z",
 });
 

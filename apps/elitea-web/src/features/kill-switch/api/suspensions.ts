@@ -43,6 +43,67 @@ export interface ExecutionSuspensionRow {
   readonly resumed_at: string | null;
   readonly resumed_by: number | null;
   readonly resume_reason: string | null;
+  /** The circuit breaker's record of the trip (ADR-0041 decision 2); source breaker only. */
+  readonly breaker?: SuspensionBreakerDetail | null;
+  /** The first platform administrator who approved the resume of a system two_person stop. */
+  readonly resume_approved_by?: number | null;
+  readonly resume_approved_at?: string | null;
+}
+
+/** Why the circuit breaker stopped the agent: the rule, the value it observed and the limit. */
+export interface SuspensionBreakerDetail {
+  readonly rule: string;
+  readonly observed: number;
+  readonly threshold: number;
+  readonly unit: string;
+  readonly tier?: string;
+  readonly window_runs?: number;
+  readonly failed_runs?: number;
+  readonly window_seconds?: number;
+  readonly tool_name?: string;
+  readonly execution_id?: string;
+}
+
+/** The suspension source the circuit breaker writes. */
+export const BREAKER_SOURCE = 'breaker';
+
+function breakerRuleLabel(rule: string): string {
+  switch (rule) {
+    case 'error_rate':
+      return t('features.killSwitch.breaker.rule.errorRate', 'Error rate');
+    case 'spend_per_hour':
+      return t('features.killSwitch.breaker.rule.spendPerHour', 'Spend per hour');
+    case 'tool_failure_streak':
+      return t('features.killSwitch.breaker.rule.toolFailureStreak', 'Same tool failing in a row');
+    case 'runs_per_hour':
+      return t('features.killSwitch.breaker.rule.runsPerHour', 'Runs per hour');
+    default:
+      return rule;
+  }
+}
+
+function breakerValue(value: number, unit: string): string {
+  switch (unit) {
+    case 'percent':
+      return `${value} %`;
+    case 'usd':
+      return `${value.toFixed(2)} USD`;
+    default:
+      return String(value);
+  }
+}
+
+/**
+ * One line for a breaker suspension: the rule, the observed value and the
+ * limit, e.g. "Error rate: 55 % (limit 50 %)". Undefined for any other row.
+ */
+export function breakerSummary(row: ExecutionSuspensionRow): string | undefined {
+  const detail = row.breaker;
+  if (row.source !== BREAKER_SOURCE || detail === undefined || detail === null) return undefined;
+  const limit = t('features.killSwitch.breaker.limit', 'limit');
+  let line = `${breakerRuleLabel(detail.rule)}: ${breakerValue(detail.observed, detail.unit)} (${limit} ${breakerValue(detail.threshold, detail.unit)})`;
+  if (detail.tool_name !== undefined && detail.tool_name !== '') line += ` · ${detail.tool_name}`;
+  return line;
 }
 
 /** Reads `{suspensions: [...]}` out of the envelope or the bare body. */
@@ -71,6 +132,11 @@ function codeMessage(code: unknown): string | undefined {
       return t(
         'features.killSwitch.error.resumeForbidden',
         'The resume rule of this suspension does not let you resume it. Ask a platform administrator.',
+      );
+    case 'second_person_required':
+      return t(
+        'features.killSwitch.error.secondPersonRequired',
+        'You already approved this resume. A different platform administrator must resume it.',
       );
     default:
       return undefined;
