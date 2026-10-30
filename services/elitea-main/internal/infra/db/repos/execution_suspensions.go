@@ -20,6 +20,7 @@ package repos
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -54,7 +55,8 @@ func NewExecutionSuspensionRepository(pool *pgxpool.Pool) (*ExecutionSuspensionR
 var _ safety.Store = (*ExecutionSuspensionRepository)(nil)
 
 const suspensionColumns = `id, scope, project_id, scope_key, reason, actor_id, source, resume_requires,
-       created_at, cancelled_runs, resumed_at, resumed_by, resume_reason`
+       created_at, cancelled_runs, resumed_at, resumed_by, resume_reason,
+       detail, resume_approved_by, resume_approved_at`
 
 // cancellableStates are the non-terminal states, the same list as the admin
 // Tasks cancel and agent_cancel.sql.
@@ -282,13 +284,21 @@ func (r *ExecutionSuspensionRepository) CreateSuspensionTx(
 	if k := s.Target.Key(); k != "" {
 		key = &k
 	}
+	var detail []byte
+	if s.Detail != nil {
+		encoded, err := json.Marshal(s.Detail)
+		if err != nil {
+			return safety.Suspension{}, fmt.Errorf("encode the suspension detail: %w", err)
+		}
+		detail = encoded
+	}
 	row := tx.QueryRow(ctx, `
 INSERT INTO elitea_runtime.execution_suspensions
-    (scope, project_id, scope_key, reason, actor_id, source, resume_requires)
-VALUES ($1, $2::bigint, $3, $4, $5, $6, $7)
+    (scope, project_id, scope_key, reason, actor_id, source, resume_requires, detail)
+VALUES ($1, $2::bigint, $3, $4, $5, $6, $7, $8::jsonb)
 ON CONFLICT DO NOTHING
 RETURNING `+suspensionColumns,
-		string(s.Target.Scope), projectID, key, s.Reason, s.ActorID, string(s.Source), string(s.ResumeRequires))
+		string(s.Target.Scope), projectID, key, s.Reason, s.ActorID, string(s.Source), string(s.ResumeRequires), detail)
 	created, err := scanSuspension(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		existing, findErr := r.activeFor(ctx, tx, s.Target)
@@ -375,6 +385,33 @@ RETURNING `+suspensionColumns, record.ID, record.ResumedBy, reason))
 	return resumed, nil
 }
 
+// ApproveResume records the first person of a system-written two_person
+// suspension. The row is answered as it is when another person approved
+// first, so the service treats this caller as the second person.
+func (r *ExecutionSuspensionRepository) ApproveResume(
+	ctx context.Context, id, approvedBy int64,
+) (safety.Suspension, error) {
+	approved, err := scanSuspension(r.pool.QueryRow(ctx, `
+UPDATE elitea_runtime.execution_suspensions
+SET resume_approved_by = $2, resume_approved_at = greatest(clock_timestamp(), created_at)
+WHERE id = $1 AND resumed_at IS NULL AND resume_approved_by IS NULL
+RETURNING `+suspensionColumns, id, approvedBy))
+	if errors.Is(err, pgx.ErrNoRows) {
+		current, getErr := r.GetSuspension(ctx, id)
+		if getErr != nil {
+			return safety.Suspension{}, getErr
+		}
+		if !current.Active() {
+			return safety.Suspension{}, safety.ErrNotActive
+		}
+		return current, nil
+	}
+	if err != nil {
+		return safety.Suspension{}, fmt.Errorf("record the resume approval: %w", err)
+	}
+	return approved, nil
+}
+
 // GetSuspension reads one row.
 func (r *ExecutionSuspensionRepository) GetSuspension(ctx context.Context, id int64) (safety.Suspension, error) {
 	found, err := scanSuspension(r.pool.QueryRow(ctx,
@@ -453,10 +490,17 @@ func scanSuspension(row pgx.Row) (safety.Suspension, error) {
 		resumedAt    *time.Time
 		resumedBy    *int64
 		resumeReason *string
+		detail       []byte
 	)
 	if err := row.Scan(&s.ID, &scope, &projectID, &key, &s.Reason, &s.ActorID, &source, &requires,
-		&createdAt, &cancelled, &resumedAt, &resumedBy, &resumeReason); err != nil {
+		&createdAt, &cancelled, &resumedAt, &resumedBy, &resumeReason,
+		&detail, &s.ResumeApprovedBy, &s.ResumeApprovedAt); err != nil {
 		return safety.Suspension{}, err
+	}
+	if len(detail) > 0 {
+		// A detail that does not decode is shown as none: it is evidence
+		// for a person, never an input to a decision.
+		_ = json.Unmarshal(detail, &s.Detail)
 	}
 	s.Target.Scope = safety.Scope(scope)
 	if projectID != nil {

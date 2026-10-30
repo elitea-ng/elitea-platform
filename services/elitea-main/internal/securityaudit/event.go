@@ -97,6 +97,12 @@ const (
 	// .unattended_skipped, .unattended_waiting). ToolName, ToolkitName and
 	// ArgumentsDigest name the call; the arguments are never in the event.
 	TypeAgentApproval EventType = "ai.elitea.security.v1.agent.approval"
+	// TypeAgentBreaker is a trip of the agent circuit breaker (ADR-0041
+	// decision 2, #1498): action agent.breaker.tripped, the agent as the
+	// resource, the rule, the observed value, the threshold, the tier, the
+	// resume requirement and the suspension id as reason codes. Written on
+	// every install, whatever the credential governance profile.
+	TypeAgentBreaker EventType = "ai.elitea.security.v1.agent.breaker"
 )
 
 // OCSF class and category uids (https://schema.ocsf.io).
@@ -130,6 +136,7 @@ var ocsfClasses = map[EventType]int{
 	TypeCredentialReview:        OCSFClassUserAccessManagement,
 	TypeRemoteAgent:             OCSFClassAuthorizeSession,
 	TypeAgentApproval:           OCSFClassAPIActivity,
+	TypeAgentBreaker:            OCSFClassEntityManagement,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.

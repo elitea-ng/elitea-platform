@@ -48,6 +48,9 @@ const (
 const (
 	AuditActionCreated = "safety.suspension.created"
 	AuditActionResumed = "safety.suspension.resumed"
+	// AuditActionResumeApproved is the first of two persons of a breaker
+	// suspension at two_person.
+	AuditActionResumeApproved = "safety.suspension.resume_approved"
 )
 
 // Service is *safetyapp.Service.
@@ -87,6 +90,61 @@ type Suspension struct {
 	ResumedAt      *time.Time `json:"resumed_at"`
 	ResumedBy      *int64     `json:"resumed_by"`
 	ResumeReason   *string    `json:"resume_reason"`
+	// Breaker is what the circuit breaker recorded about its trip (the
+	// rule and the observed values); null for every other source.
+	Breaker *BreakerDetail `json:"breaker"`
+	// ResumeApprovedBy and ResumeApprovedAt are the first of the two
+	// platform administrators a breaker suspension at two_person needs.
+	ResumeApprovedBy *int64     `json:"resume_approved_by"`
+	ResumeApprovedAt *time.Time `json:"resume_approved_at"`
+}
+
+// BreakerDetail is a breaker suspension's record of its trip.
+type BreakerDetail struct {
+	Rule          string  `json:"rule"`
+	Observed      float64 `json:"observed"`
+	Threshold     float64 `json:"threshold"`
+	Unit          string  `json:"unit"`
+	Tier          string  `json:"tier,omitempty"`
+	WindowRuns    *int64  `json:"window_runs,omitempty"`
+	FailedRuns    *int64  `json:"failed_runs,omitempty"`
+	WindowSeconds *int64  `json:"window_seconds,omitempty"`
+	ToolName      *string `json:"tool_name,omitempty"`
+	ExecutionID   *string `json:"execution_id,omitempty"`
+}
+
+// breakerDetail reads the stored detail of a breaker suspension.
+func breakerDetail(s safetyapp.Suspension) *BreakerDetail {
+	if s.Source != safetyapp.SourceBreaker || s.Detail == nil {
+		return nil
+	}
+	text := func(key string) string {
+		value, _ := s.Detail[key].(string)
+		return value
+	}
+	num := func(key string) float64 {
+		value, _ := s.Detail[key].(float64)
+		return value
+	}
+	whole := func(key string) *int64 {
+		value, ok := s.Detail[key].(float64)
+		if !ok {
+			return nil
+		}
+		n := int64(value)
+		return &n
+	}
+	optional := func(key string) *string {
+		if value := text(key); value != "" {
+			return &value
+		}
+		return nil
+	}
+	return &BreakerDetail{
+		Rule: text("rule"), Observed: num("observed"), Threshold: num("threshold"), Unit: text("unit"),
+		Tier: text("tier"), WindowRuns: whole("window_runs"), FailedRuns: whole("failed_runs"),
+		WindowSeconds: whole("window_seconds"), ToolName: optional("tool_name"), ExecutionID: optional("execution_id"),
+	}
 }
 
 func wire(s safetyapp.Suspension) Suspension {
@@ -94,6 +152,7 @@ func wire(s safetyapp.Suspension) Suspension {
 		ID: s.ID, Scope: string(s.Target.Scope), Reason: s.Reason, ActorID: s.ActorID,
 		Source: string(s.Source), ResumeRequires: string(s.ResumeRequires), CreatedAt: s.CreatedAt,
 		CancelledRuns: s.CancelledRuns, Active: s.Active(), ResumedAt: s.ResumedAt, ResumedBy: s.ResumedBy,
+		Breaker: breakerDetail(s), ResumeApprovedBy: s.ResumeApprovedBy, ResumeApprovedAt: s.ResumeApprovedAt,
 	}
 	switch s.Target.Scope {
 	case safetyapp.ScopeProject:
@@ -291,6 +350,13 @@ func (h *Handler) resume(w http.ResponseWriter, r *http.Request, actor safetyapp
 		}
 	}
 	resumed, err := h.service.Resume(r.Context(), actor, safetyapp.ResumeRequest{ID: id, Reason: body.Reason})
+	if errors.Is(err, safetyapp.ErrResumeApprovalRecorded) {
+		// The first of two platform administrators: the suspension stays
+		// active until a different one resumes it.
+		annotate(r.Context(), AuditActionResumeApproved, resumed)
+		writeJSON(w, http.StatusAccepted, wire(resumed))
+		return
+	}
 	if err != nil {
 		writeError(r.Context(), w, err)
 		return
@@ -374,6 +440,11 @@ func writeError(ctx context.Context, w http.ResponseWriter, err error) {
 		})
 	case errors.Is(err, safetyapp.ErrScopeForbidden):
 		apierr.WriteStatus(w, http.StatusForbidden, "this surface may not suspend that scope")
+	case errors.Is(err, safetyapp.ErrSecondPersonRequired):
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "you recorded the first approval; a different platform administrator must resume this suspension",
+			"code":  "second_person_required",
+		})
 	case errors.Is(err, safetyapp.ErrResumeForbidden):
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "the suspension's resume rule does not let this caller resume it",

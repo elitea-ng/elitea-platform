@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -242,6 +243,14 @@ type Service struct {
 	db          DB
 	logger      *slog.Logger
 	closers     []func(context.Context) error
+	extra       ExtraMetrics
+}
+
+// ExtraMetrics are more figures served on the same /metrics listener after
+// the export's own: the runtime safety metrics (breaker.Metrics), so one
+// scrape target carries both.
+type ExtraMetrics interface {
+	WriteTextContext(ctx context.Context, w io.Writer) error
 }
 
 // Deps are the collaborators Build needs.
@@ -249,6 +258,8 @@ type Deps struct {
 	DB             DB
 	Logger         *slog.Logger
 	ServiceVersion string
+	// ExtraMetrics, when set, are written after the export's own figures.
+	ExtraMetrics ExtraMetrics
 }
 
 // Build constructs the sinks. It reads the key and header files once, so a
@@ -271,7 +282,7 @@ func Build(ctx context.Context, cfg Config, deps Deps) (*Service, error) {
 		Logger:               deps.Logger,
 	}
 	metrics.RegisterDecodeFailures()
-	svc := &Service{cfg: cfg, metrics: metrics, db: deps.DB, logger: deps.Logger, deadLetters: pipeline.DeadLetters}
+	svc := &Service{cfg: cfg, metrics: metrics, db: deps.DB, logger: deps.Logger, deadLetters: pipeline.DeadLetters, extra: deps.ExtraMetrics}
 	var sinks Fanout
 
 	if cfg.OTLPEndpoint != "" {
@@ -349,6 +360,18 @@ func readHeadersFile(path string) (map[string]string, error) {
 // Metrics returns the registry.
 func (s *Service) Metrics() *Metrics { return s.metrics }
 
+// metricsHandler serves the export's figures, then the extra ones.
+func (s *Service) metricsHandler() http.Handler {
+	if s.extra == nil {
+		return s.metrics.Handler()
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		_ = s.metrics.WriteText(w)
+		_ = s.extra.WriteTextContext(r.Context(), w)
+	})
+}
+
 // SecurityExporter is the exporter to give securityaudit.RelayConfig.
 func (s *Service) SecurityExporter() securityaudit.Exporter {
 	return SecurityExporter{Sink: s.sinks, DeadLetters: s.deadLetters, Metrics: s.metrics, Logger: s.logger}
@@ -363,7 +386,7 @@ func (s *Service) Run(ctx context.Context, securityEnabled bool) error {
 
 	if s.cfg.MetricsAddr != "" {
 		mux := http.NewServeMux()
-		mux.Handle("GET /metrics", s.metrics.Handler())
+		mux.Handle("GET /metrics", s.metricsHandler())
 		server := &http.Server{Addr: s.cfg.MetricsAddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 		go func() {
 			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

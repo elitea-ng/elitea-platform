@@ -294,6 +294,7 @@ func configSections() []map[string]any {
 		delegationSection(),
 		approvalsSection(),
 		approvalPolicySection(),
+		circuitBreakerSection(),
 		sessionPolicySection(),
 		agentLifecycleSection(),
 		credentialReviewSection(),

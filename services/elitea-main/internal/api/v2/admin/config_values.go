@@ -294,6 +294,11 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
 		return
 	}
+	// The circuit breaker's ranges and resume rules (ADR-0041 decision 2).
+	if reason := validateCircuitBreakerValues(section.id, body.Values); reason != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+		return
+	}
 	// The credential review policy's ranges (ADR-0044 decision 5).
 	if reason := validateCredentialReviewValues(section.id, body.Values); reason != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})

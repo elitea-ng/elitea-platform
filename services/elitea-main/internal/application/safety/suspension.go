@@ -83,6 +83,10 @@ const (
 	SourceSelfTest      Source = "self_test"
 )
 
+// BreakerMessage is the caller-safe sentence of a run refused by a breaker
+// suspension.
+const BreakerMessage = "The agent circuit breaker stopped this agent. An administrator must resume it."
+
 // Permission is the grant behind every suspend and resume route: central
 // (administration mode) for the admin routes, project-resolved (default
 // mode) for the project routes. Shared 0194 seeds it.
@@ -193,6 +197,22 @@ type Suspension struct {
 	ResumedAt     *time.Time
 	ResumedBy     *int64
 	ResumeReason  string
+	// Detail is what a breaker suspension recorded about its trip: the rule
+	// and the observed values (BreakerDetail keys). Nil for every other
+	// source.
+	Detail map[string]any
+	// ResumeApprovedBy and ResumeApprovedAt are the first of two persons of
+	// a system-written two_person suspension (NeedsSecondPerson).
+	ResumeApprovedBy *int64
+	ResumeApprovedAt *time.Time
+}
+
+// NeedsSecondPerson reports whether resuming s takes two different platform
+// administrators: a two_person suspension that the system wrote (actor 0,
+// the circuit breaker). For a suspension a person wrote, "a platform
+// administrator who did not suspend it" is the second person.
+func (s Suspension) NeedsSecondPerson() bool {
+	return s.ResumeRequires == ResumeTwoPerson && s.ActorID == 0 && s.Source != SourceSelfTest
 }
 
 // Active reports whether the suspension is still in force.
@@ -271,6 +291,9 @@ func (e *SuspendedError) Is(target error) bool { return target == ErrExecutionSu
 func (e *SuspendedError) Message() string {
 	if e.Source == SourceCertification {
 		return "This agent's certification lapsed. Recertify the agent to run it again."
+	}
+	if e.Source == SourceBreaker {
+		return BreakerMessage
 	}
 	switch e.Scope {
 	case ScopePlatform:

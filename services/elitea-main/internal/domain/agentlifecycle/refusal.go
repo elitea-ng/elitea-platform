@@ -164,3 +164,10 @@ func AsPublishRefusal(err error) (*PublishRefusal, bool) {
 	}
 	return nil, false
 }
+
+// BreakerOverrideLoosensCode refuses a circuit breaker override that is
+// looser than the tier default (422, ADR-0041 decision 2). The refusal's
+// "fields" names each looser limit.
+const BreakerOverrideLoosensCode = "circuit_breaker_override_loosens"
+
+func init() { statuses[BreakerOverrideLoosensCode] = http.StatusUnprocessableEntity }

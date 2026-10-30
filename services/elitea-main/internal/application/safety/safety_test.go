@@ -44,7 +44,7 @@ func (m *memoryStore) CreateSuspension(_ context.Context, s NewSuspension) (Susp
 	}
 	created := Suspension{
 		ID: int64(len(m.rows) + 1), Target: s.Target, Reason: s.Reason, ActorID: s.ActorID,
-		Source: s.Source, ResumeRequires: s.ResumeRequires, CreatedAt: time.Now(),
+		Source: s.Source, ResumeRequires: s.ResumeRequires, CreatedAt: time.Now(), Detail: s.Detail,
 	}
 	m.cancelled = append(m.cancelled, s.Target)
 	m.rows = append(m.rows, created)
@@ -63,6 +63,25 @@ func (m *memoryStore) ResumeSuspension(_ context.Context, r ResumeRecord) (Suspe
 		}
 		now, by := time.Now(), r.ResumedBy
 		m.rows[i].ResumedAt, m.rows[i].ResumedBy, m.rows[i].ResumeReason = &now, &by, r.Reason
+		return m.rows[i], nil
+	}
+	return Suspension{}, ErrNotFound
+}
+
+func (m *memoryStore) ApproveResume(_ context.Context, id, approvedBy int64) (Suspension, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.rows {
+		if m.rows[i].ID != id {
+			continue
+		}
+		if !m.rows[i].Active() {
+			return Suspension{}, ErrNotActive
+		}
+		if m.rows[i].ResumeApprovedBy == nil {
+			now, by := time.Now(), approvedBy
+			m.rows[i].ResumeApprovedAt, m.rows[i].ResumeApprovedBy = &now, &by
+		}
 		return m.rows[i], nil
 	}
 	return Suspension{}, ErrNotFound
@@ -556,5 +575,53 @@ func TestTargetRefusesIDsPastTheIntegerRange(t *testing.T) {
 	}
 	if _, err := (Target{Scope: ScopeProject, ProjectID: MaxTargetID}).Normalize(); err != nil {
 		t.Fatalf("the largest integer id: %v", err)
+	}
+}
+
+// A breaker suspension (actor 0) at two_person needs two different platform
+// administrators: the first call records the approval, the same person
+// cannot be the second, and a project admin is refused outright.
+func TestResume_SystemTwoPersonNeedsTwoPlatformAdministrators(t *testing.T) {
+	store, _, service, _ := newFixture(t)
+	created, err := store.CreateSuspension(t.Context(), NewSuspension{
+		Target: Target{Scope: ScopeAgent, ProjectID: 3, ApplicationID: 9},
+		Reason: "breaker", ActorID: 0, Source: SourceBreaker, ResumeRequires: ResumeTwoPerson,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectAdmin := Actor{UserID: 5, ProjectID: 3}
+	if _, err := service.Resume(t.Context(), projectAdmin, ResumeRequest{ID: created.ID}); !errors.Is(err, ErrResumeForbidden) {
+		t.Fatalf("project admin err = %v, want ErrResumeForbidden", err)
+	}
+	first := Actor{UserID: 11, PlatformAdmin: true}
+	approved, err := service.Resume(t.Context(), first, ResumeRequest{ID: created.ID})
+	if !errors.Is(err, ErrResumeApprovalRecorded) || !approved.Active() || approved.ResumeApprovedBy == nil {
+		t.Fatalf("first person: err = %v, active = %v", err, approved.Active())
+	}
+	if _, err := service.Resume(t.Context(), first, ResumeRequest{ID: created.ID}); !errors.Is(err, ErrSecondPersonRequired) {
+		t.Fatalf("same person again: err = %v, want ErrSecondPersonRequired", err)
+	}
+	resumed, err := service.Resume(t.Context(), Actor{UserID: 12, PlatformAdmin: true}, ResumeRequest{ID: created.ID})
+	if err != nil || resumed.Active() {
+		t.Fatalf("second person: err = %v, active = %v", err, resumed.Active())
+	}
+}
+
+// A breaker suspension at governance_role refuses the project admin.
+func TestResume_BreakerGovernanceRoleRefusesProjectAdmin(t *testing.T) {
+	store, _, service, _ := newFixture(t)
+	created, err := store.CreateSuspension(t.Context(), NewSuspension{
+		Target: Target{Scope: ScopeAgent, ProjectID: 3, ApplicationID: 9},
+		Reason: "breaker", ActorID: 0, Source: SourceBreaker, ResumeRequires: ResumeGovernanceRole,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Resume(t.Context(), Actor{UserID: 5, ProjectID: 3}, ResumeRequest{ID: created.ID}); !errors.Is(err, ErrResumeForbidden) {
+		t.Fatalf("err = %v, want ErrResumeForbidden", err)
+	}
+	if resumed, err := service.Resume(t.Context(), Actor{UserID: 6, PlatformAdmin: true}, ResumeRequest{ID: created.ID}); err != nil || resumed.Active() {
+		t.Fatalf("platform admin: err = %v", err)
 	}
 }
