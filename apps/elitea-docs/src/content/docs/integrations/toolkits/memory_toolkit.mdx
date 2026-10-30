@@ -31,12 +31,14 @@ Name the toolkit and select **Create**. Attach it to an agent, pipeline or conve
 
 <Accordion title="Available tools (4)">
 
-| Tool |
-|---|
-| Delete memory |
-| Get memory |
-| Manage memory |
-| Search memory |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Delete memory | `delete` |
+| Get memory | `read` |
+| Manage memory | `write` |
+| Search memory | `read` |
 
 </Accordion>
 

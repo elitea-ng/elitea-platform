@@ -12,6 +12,8 @@ on:
       - "apps/elitea-docs/**"
       # check:dist also resolves the web app's hard-coded links into the docs.
       - "apps/elitea-web/src/**"
+      # The tool categories the toolkit reference pages are generated from.
+      - "libs/proto/contracts/tool-categories-v1.json"
       # The palette the diagrams are drawn in.
       - "libs/ts/client-core/src/brand/tokens.json"
       # The nginx locations that serve the built site, and its CSP.
@@ -61,6 +63,8 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Content checks (nav, front matter, components, screenshots)
         run: npm run check
+      - name: Toolkit tool categories match libs/proto/contracts/tool-categories-v1.json
+        run: node scripts/tool-categories.mjs --check
       - name: Type check (astro check)
         run: npm run typecheck
       - name: Build (Pagefind indexes the built pages)

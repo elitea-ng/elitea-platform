@@ -36,25 +36,27 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (17)">
 
-| Tool |
-|---|
-| Analyze file |
-| Extract design tokens |
-| Extract design tokens batch |
-| Get file |
-| Get file comments |
-| Get file images |
-| Get file nodes |
-| Get file versions |
-| Get project files |
-| Get team projects |
-| Index data |
-| List indexes |
-| Post file comment |
-| Remove index |
-| Search index |
-| Stepback search index |
-| Stepback summary index |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Analyze file | `read` |
+| Extract design tokens | `read` |
+| Extract design tokens batch | `read` |
+| Get file | `read` |
+| Get file comments | `read` |
+| Get file images | `read` |
+| Get file nodes | `read` |
+| Get file versions | `read` |
+| Get project files | `read` |
+| Get team projects | `read` |
+| Index data | `write` |
+| List indexes | `read` |
+| Post file comment | `external_send` |
+| Remove index | `delete` |
+| Search index | `read` |
+| Stepback search index | `read` |
+| Stepback summary index | `read` |
 
 </Accordion>
 

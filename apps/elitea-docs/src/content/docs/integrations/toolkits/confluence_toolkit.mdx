@@ -36,33 +36,35 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (25)">
 
-| Tool |
-|---|
-| Add file to page |
-| Create page |
-| Create pages |
-| Delete page |
-| Execute generic confluence |
-| Get page attachments |
-| Get page id by title |
-| Get page tree |
-| Get page with image descriptions |
-| Get pages with label |
-| Index data |
-| List indexes |
-| List pages with label |
-| Read page by id |
-| Remove index |
-| Search by title |
-| Search index |
-| Search pages |
-| Site search |
-| Stepback search index |
-| Stepback summary index |
-| Update labels |
-| Update page by id |
-| Update page by title |
-| Update pages |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Add file to page | `write` |
+| Create page | `write` |
+| Create pages | `write` |
+| Delete page | `delete` |
+| Execute generic confluence | `write` |
+| Get page attachments | `read` |
+| Get page id by title | `read` |
+| Get page tree | `read` |
+| Get page with image descriptions | `read` |
+| Get pages with label | `read` |
+| Index data | `write` |
+| List indexes | `read` |
+| List pages with label | `read` |
+| Read page by id | `read` |
+| Remove index | `delete` |
+| Search by title | `read` |
+| Search index | `read` |
+| Search pages | `read` |
+| Site search | `read` |
+| Stepback search index | `read` |
+| Stepback summary index | `read` |
+| Update labels | `write` |
+| Update page by id | `write` |
+| Update page by title | `write` |
+| Update pages | `write` |
 
 </Accordion>
 

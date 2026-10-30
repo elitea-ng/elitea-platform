@@ -36,31 +36,33 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (23)">
 
-| Tool |
-|---|
-| Add comments |
-| Add file to issue description |
-| Create issue |
-| Execute generic rq |
-| Get attachments content |
-| Get comments with image descriptions |
-| Get field with image descriptions |
-| Get remote links |
-| Get specific field info |
-| Index data |
-| Link issues |
-| List comments |
-| List indexes |
-| List projects |
-| Modify labels |
-| Remove index |
-| Search index |
-| Search using jql |
-| Set issue status |
-| Stepback search index |
-| Stepback summary index |
-| Update comment with file |
-| Update issue |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Add comments | `external_send` |
+| Add file to issue description | `write` |
+| Create issue | `write` |
+| Execute generic rq | `write` |
+| Get attachments content | `read` |
+| Get comments with image descriptions | `read` |
+| Get field with image descriptions | `read` |
+| Get remote links | `read` |
+| Get specific field info | `read` |
+| Index data | `write` |
+| Link issues | `write` |
+| List comments | `read` |
+| List indexes | `read` |
+| List projects | `read` |
+| Modify labels | `write` |
+| Remove index | `delete` |
+| Search index | `read` |
+| Search using jql | `read` |
+| Set issue status | `write` |
+| Stepback search index | `read` |
+| Stepback summary index | `read` |
+| Update comment with file | `external_send` |
+| Update issue | `write` |
 
 </Accordion>
 

@@ -36,19 +36,21 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (11)">
 
-| Tool |
-|---|
-| Add steps |
-| Create testcase |
-| Get test case |
-| Get testcases by zql |
-| Index data |
-| List indexes |
-| Remove index |
-| Search index |
-| Search zql |
-| Stepback search index |
-| Stepback summary index |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Add steps | `write` |
+| Create testcase | `write` |
+| Get test case | `read` |
+| Get testcases by zql | `read` |
+| Index data | `write` |
+| List indexes | `read` |
+| Remove index | `delete` |
+| Search index | `read` |
+| Search zql | `read` |
+| Stepback search index | `read` |
+| Stepback summary index | `read` |
 
 </Accordion>
 

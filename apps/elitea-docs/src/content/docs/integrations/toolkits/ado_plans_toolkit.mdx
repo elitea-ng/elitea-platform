@@ -37,26 +37,28 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (18)">
 
-| Tool |
-|---|
-| Add test case |
-| Create test case |
-| Create test cases |
-| Create test plan |
-| Create test suite |
-| Delete test plan |
-| Delete test suite |
-| Get all test case fields for project |
-| Get test case |
-| Get test cases |
-| Get test plan |
-| Get test suite |
-| Index data |
-| List indexes |
-| Remove index |
-| Search index |
-| Stepback search index |
-| Stepback summary index |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Add test case | `write` |
+| Create test case | `write` |
+| Create test cases | `write` |
+| Create test plan | `write` |
+| Create test suite | `write` |
+| Delete test plan | `delete` |
+| Delete test suite | `delete` |
+| Get all test case fields for project | `read` |
+| Get test case | `read` |
+| Get test cases | `read` |
+| Get test plan | `read` |
+| Get test suite | `read` |
+| Index data | `write` |
+| List indexes | `read` |
+| Remove index | `delete` |
+| Search index | `read` |
+| Stepback search index | `read` |
+| Stepback summary index | `read` |
 
 </Accordion>
 

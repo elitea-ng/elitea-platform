@@ -36,34 +36,36 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (26)">
 
-| Tool |
-|---|
-| Add test steps |
-| Create issue links |
-| Create test case |
-| Create test cases |
-| Create test script |
-| Create web links |
-| Get folders |
-| Get links |
-| Get test |
-| Get test script |
-| Get test steps |
-| Get tests |
-| Get tests by folder name |
-| Get tests by folder path |
-| Get tests recursive |
-| Get version |
-| Get versions |
-| Index data |
-| List indexes |
-| Remove index |
-| Search index |
-| Search test cases |
-| Stepback search index |
-| Stepback summary index |
-| Update test case |
-| Update test steps |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Add test steps | `write` |
+| Create issue links | `write` |
+| Create test case | `write` |
+| Create test cases | `write` |
+| Create test script | `write` |
+| Create web links | `write` |
+| Get folders | `read` |
+| Get links | `read` |
+| Get test | `read` |
+| Get test script | `read` |
+| Get test steps | `read` |
+| Get tests | `read` |
+| Get tests by folder name | `read` |
+| Get tests by folder path | `read` |
+| Get tests recursive | `read` |
+| Get version | `read` |
+| Get versions | `read` |
+| Index data | `write` |
+| List indexes | `read` |
+| Remove index | `delete` |
+| Search index | `read` |
+| Search test cases | `read` |
+| Stepback search index | `read` |
+| Stepback summary index | `read` |
+| Update test case | `write` |
+| Update test steps | `write` |
 
 </Accordion>
 

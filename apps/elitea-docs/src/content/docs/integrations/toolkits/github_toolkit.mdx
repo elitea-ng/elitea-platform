@@ -36,52 +36,54 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (44)">
 
-| Tool |
-|---|
-| Apply git patch |
-| Apply git patch from file |
-| Comment on issue |
-| Create branch |
-| Create file |
-| Create issue |
-| Create issue on project |
-| Create pull request |
-| Delete branch |
-| Delete file |
-| Generic github api call |
-| Get commit changes |
-| Get commits |
-| Get commits diff |
-| Get files from directory |
-| Get issue |
-| Get issues |
-| Get me |
-| Get pull request |
-| Get workflow logs |
-| Get workflow status |
-| Grep file |
-| Index data |
-| List branches in repo |
-| List files in bot branch |
-| List files in main branch |
-| List indexes |
-| List open pull requests |
-| List project issues |
-| List pull request diffs |
-| Read file |
-| Read multiple files |
-| Remove index |
-| Search code |
-| Search index |
-| Search issues |
-| Search project issues |
-| Set active branch |
-| Stepback search index |
-| Stepback summary index |
-| Trigger workflow |
-| Update file |
-| Update issue |
-| Update issue on project |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Apply git patch | `write` |
+| Apply git patch from file | `write` |
+| Comment on issue | `external_send` |
+| Create branch | `write` |
+| Create file | `write` |
+| Create issue | `write` |
+| Create issue on project | `write` |
+| Create pull request | `write` |
+| Delete branch | `delete` |
+| Delete file | `delete` |
+| Generic github api call | `write` |
+| Get commit changes | `read` |
+| Get commits | `read` |
+| Get commits diff | `read` |
+| Get files from directory | `read` |
+| Get issue | `read` |
+| Get issues | `read` |
+| Get me | `read` |
+| Get pull request | `read` |
+| Get workflow logs | `read` |
+| Get workflow status | `read` |
+| Grep file | `read` |
+| Index data | `write` |
+| List branches in repo | `read` |
+| List files in bot branch | `read` |
+| List files in main branch | `read` |
+| List indexes | `read` |
+| List open pull requests | `read` |
+| List project issues | `read` |
+| List pull request diffs | `read` |
+| Read file | `read` |
+| Read multiple files | `read` |
+| Remove index | `delete` |
+| Search code | `read` |
+| Search index | `read` |
+| Search issues | `read` |
+| Search project issues | `read` |
+| Set active branch | `write` |
+| Stepback search index | `read` |
+| Stepback summary index | `read` |
+| Trigger workflow | `write` |
+| Update file | `write` |
+| Update issue | `write` |
+| Update issue on project | `write` |
 
 </Accordion>
 

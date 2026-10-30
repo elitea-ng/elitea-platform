@@ -31,16 +31,18 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (8)">
 
-| Tool |
-|---|
-| Create artifact |
-| Get context |
-| Get entities |
-| Get project |
-| Get types |
-| Get user |
-| Get workspace |
-| Update artifact |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Create artifact | `write` |
+| Get context | `read` |
+| Get entities | `read` |
+| Get project | `read` |
+| Get types | `read` |
+| Get user | `read` |
+| Get workspace | `read` |
+| Update artifact | `write` |
 
 </Accordion>
 
