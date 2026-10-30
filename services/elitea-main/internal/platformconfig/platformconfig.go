@@ -22,8 +22,10 @@ package platformconfig
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -122,7 +124,27 @@ func Load(ctx context.Context, pool *pgxpool.Pool, section string) (Values, erro
 	if pool == nil {
 		return Values{}, nil
 	}
-	rows, err := pool.Query(ctx,
+	return LoadVia(ctx, func(ctx context.Context, sql string, args ...any) (Rows, error) {
+		return pool.Query(ctx, sql, args...)
+	}, section)
+}
+
+// Rows is the part of a query result LoadVia reads.
+type Rows interface {
+	Close()
+	Err() error
+	Next() bool
+	Scan(dest ...any) error
+}
+
+// QueryFunc runs one query: a pool's, a transaction's or a caller's
+// executor's Query.
+type QueryFunc func(ctx context.Context, sql string, args ...any) (Rows, error)
+
+// LoadVia is Load through query, so a caller reads a section on its own
+// transaction.
+func LoadVia(ctx context.Context, query QueryFunc, section string) (Values, error) {
+	rows, err := query(ctx,
 		`SELECT key, value FROM centry.platform_config WHERE section = $1`, section)
 	if err != nil {
 		return nil, err
@@ -146,6 +168,14 @@ func Load(ctx context.Context, pool *pgxpool.Pool, section string) (Values, erro
 		return nil, err
 	}
 	return values, nil
+}
+
+// UndefinedTable reports PostgreSQL 42P01 (undefined_table): a database that
+// does not have a table yet, for example a test database with a part of the
+// migration corpus.
+func UndefinedTable(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "42P01"
 }
 
 // Bool reads a boolean, falling back when the key is absent or holds something

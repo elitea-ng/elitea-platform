@@ -26,7 +26,6 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
@@ -68,19 +67,32 @@ func parseOnApprovalRequired(raw []byte) (platformconfig.OnApprovalRequired, err
 	return action, nil
 }
 
-// saveOnApprovalRequired stores the schedule's or the trigger's action.
-func (h *Handler) saveOnApprovalRequired(
-	ctx context.Context, projectID int64, target string, versionID, actorID int64,
+// saveOnApprovalRequired stores the schedule's or the trigger's action on the
+// caller's transaction, the one that writes the schedule or the trigger row:
+// both commit or neither does. A database without shared 0211 (a package
+// test that applies the tenant corpus only) has nowhere to store it, as
+// effectiveOnApprovalRequired reads: the save is skipped. The table is
+// probed first, because a failed statement would abort the transaction.
+func saveOnApprovalRequired(
+	ctx context.Context, tx pgx.Tx, projectID int64, target string, versionID, actorID int64,
 	action platformconfig.OnApprovalRequired,
 ) error {
 	if action == "" {
+		return nil
+	}
+	var present bool
+	if err := tx.QueryRow(ctx,
+		`SELECT to_regclass('elitea_runtime.unattended_approval_settings') IS NOT NULL`).Scan(&present); err != nil {
+		return fmt.Errorf("pipelinetriggers: save on_approval_required: %w", err)
+	}
+	if !present {
 		return nil
 	}
 	var updatedBy any
 	if actorID > 0 {
 		updatedBy = actorID
 	}
-	_, err := h.pool.Exec(ctx, `
+	_, err := tx.Exec(ctx, `
 INSERT INTO elitea_runtime.unattended_approval_settings
     (project_id, target, version_id, on_approval_required, updated_by)
 VALUES ($1, $2, $3, $4, $5)
@@ -117,7 +129,7 @@ func (h *Handler) effectiveOnApprovalRequired(
 SELECT on_approval_required FROM elitea_runtime.unattended_approval_settings
 WHERE project_id = $1 AND target = $2 AND version_id = $3`, projectID, target, versionID).Scan(&stored)
 	switch {
-	case undefinedTable(err):
+	case platformconfig.UndefinedTable(err):
 		// A database without shared 0211 (a package test that applies the
 		// tenant corpus only): no stored setting.
 	case err == nil:
@@ -176,7 +188,7 @@ VALUES ($1, $2::uuid, $3, $4, $5, $6)
 ON CONFLICT (project_id, conversation_uuid) DO NOTHING`,
 		request.ProjectID, conversationUUID, string(executionTriggerOrigin(request.Origin)),
 		request.VersionID, request.ActorUserID, string(action))
-	if undefinedTable(err) {
+	if platformconfig.UndefinedTable(err) {
 		// Without shared 0211 there is no snapshot; Main then reads the
 		// platform default (fail) when the run pauses.
 		return nil
@@ -185,10 +197,4 @@ ON CONFLICT (project_id, conversation_uuid) DO NOTHING`,
 		return fmt.Errorf("pipelinetriggers: record run approval policy: %w", err)
 	}
 	return nil
-}
-
-// undefinedTable reports PostgreSQL 42P01.
-func undefinedTable(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "42P01"
 }
