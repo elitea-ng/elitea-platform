@@ -829,9 +829,21 @@ pub(crate) struct OrdinaryNativeAgentPlan {
     /// This invocation's stop after a failed dispatch record, shared by every
     /// dispatch journal and guarded model of the run (`dispatch_journal`).
     dispatch_abort: super::dispatch_journal::DispatchAbort,
+    /// FU-265: the paused execution a pipeline continuation re-enters, as
+    /// Main named it inside the admission that authorized the decision.
+    paused_writer: Option<super::graph::continuation_writer::PausedWriter>,
 }
 
 impl OrdinaryNativeAgentPlan {
+    /// FU-265: name the paused execution a continuation re-enters.
+    pub(super) fn with_paused_writer(
+        mut self,
+        writer: Option<super::graph::continuation_writer::PausedWriter>,
+    ) -> Self {
+        self.paused_writer = writer;
+        self
+    }
+
     /// The original command deadline as a monotonic instant for fan-out
     /// nodes. A deadline already passed is refused: the run lifecycle ends it
     /// as `DeadlineExceeded` anyway, and a fan-out must never start past it.
@@ -1019,6 +1031,7 @@ impl OrdinaryNativeAgentPlan {
             instruction_plan: profile.instruction_plan().clone(),
             deadline_unix_millis: binding.deadline_unix_millis,
             dispatch_abort: super::dispatch_journal::DispatchAbort::default(),
+            paused_writer: None,
         })
     }
 
@@ -1762,6 +1775,64 @@ impl PipelineStateServices {
         Err(child_refused(CHILD_NOT_PARKED))
     }
 
+    /// FU-265: whether `checkpoint`, the latest root row, is the paused row
+    /// this continuation re-enters. One proof for the first attempt and the
+    /// reclaim: the row is this execution's own (it saved already), or it was
+    /// written by exactly the paused writer Main named, is a pause frontier on
+    /// this run's root thread, and the root session's latest pause event names
+    /// exactly that row. The refusal logs ids and generations only.
+    pub(super) async fn prove_continuation_row(
+        &self,
+        plan: &OrdinaryNativeAgentPlan,
+        paused: &super::graph::continuation_writer::PausedWriter,
+        checkpoint: &adk_rust::graph::Checkpoint,
+    ) -> Result<(), NativeAgentAssemblyError> {
+        let writer = checkpoint.metadata.get("elitea.pipeline.execution.v1");
+        let refuse = |cause: &'static str| {
+            tracing::warn!(
+                event = "pipeline_recovery_frontier_refused",
+                cause,
+                execution_id = %plan.execution_id,
+                generation = plan.generation,
+                expected_execution_id = paused.execution_id(),
+                expected_generation = paused.generation(),
+                found_writer = %writer.map_or_else(String::new, ToString::to_string),
+            );
+            child_refused(cause)
+        };
+        if writer == Some(&serde_json::json!([plan.execution_id, plan.generation])) {
+            return Ok(());
+        }
+        if !paused.is_writer(writer) {
+            return Err(refuse(ROOT_WRITER_MISMATCH));
+        }
+        if checkpoint.thread_id != plan.session_id.as_str()
+            || checkpoint.pending_nodes.is_empty()
+            || checkpoint.cleared_interrupt.is_some()
+        {
+            return Err(refuse(CONTINUATION_PAUSE_UNBOUND));
+        }
+        let session = restore_pipeline_session(self, plan).await?;
+        let events = session.events().all();
+        // The latest pause event names exactly this row: the paused execution's
+        // frontier. Events after it are this continuation's own (its input and
+        // records); the continuation's resolver binds the decision to the pause
+        // again when it runs.
+        let bound = events
+            .iter()
+            .rev()
+            .find_map(adk_rust::graph::interrupt::GraphInterruptPayload::from_event)
+            .is_some_and(|pause| {
+                pause.thread_id == plan.session_id.as_str()
+                    && pause.checkpoint_id == checkpoint.checkpoint_id
+            });
+        if bound {
+            Ok(())
+        } else {
+            Err(refuse(CONTINUATION_PAUSE_UNBOUND))
+        }
+    }
+
     pub(super) async fn inspect_checkpoint(
         &self,
         plan: &OrdinaryNativeAgentPlan,
@@ -1785,8 +1856,30 @@ impl PipelineStateServices {
             // is still the park that the parked execution named by the wake
             // wrote, which it re-enters. Any other writer is refused.
             RecoveryFrontier::WakePark
+        } else if let Some(paused) = plan.paused_writer.as_ref() {
+            // FU-265: a continuation lost before its first root save. Its row
+            // is proven exactly as on the first attempt, but re-running the
+            // continuation is FU-269: until then it ends typed, nothing runs.
+            self.prove_continuation_row(plan, paused, &checkpoint)
+                .await?;
+            tracing::warn!(
+                event = "pipeline_recovery_frontier_refused",
+                cause = CONTINUATION_RERUN_UNSUPPORTED,
+                execution_id = %plan.execution_id,
+                generation = plan.generation,
+                expected_execution_id = paused.execution_id(),
+                expected_generation = paused.generation(),
+            );
+            return Err(child_refused(CONTINUATION_RERUN_UNSUPPORTED));
         } else {
-            return Err(invalid_configuration());
+            tracing::warn!(
+                event = "pipeline_recovery_frontier_refused",
+                cause = ROOT_WRITER_MISMATCH,
+                execution_id = %plan.execution_id,
+                generation = plan.generation,
+                found_writer = %writer.map_or_else(String::new, ToString::to_string),
+            );
+            return Err(child_refused(ROOT_WRITER_MISMATCH));
         };
         if checkpoint.thread_id != plan.session_id.as_str()
             || !definition
@@ -1887,6 +1980,14 @@ const CHILD_UNSTAMPED: &str = "pipeline.recovery.child_unstamped";
 const CHILD_FRONTIER_UNSUPPORTED: &str = "pipeline.recovery.child_frontier_unsupported";
 const CHILD_DEFINITION_MISMATCH: &str = "pipeline.recovery.child_definition_mismatch";
 const CHILD_NOT_PARKED: &str = "pipeline.recovery.child_not_parked";
+/// FU-265: the latest root row is neither this execution's nor the paused
+/// writer its continuation names.
+const ROOT_WRITER_MISMATCH: &str = "pipeline.recovery.root_writer_mismatch";
+/// FU-265: the named paused row is not this continuation's pause.
+const CONTINUATION_PAUSE_UNBOUND: &str = "pipeline.recovery.continuation_pause_unbound";
+/// FU-265: the continuation's paused row is proven, but a continuation is not
+/// re-run before FU-269 (owner-proven suffix); it ends typed.
+const CONTINUATION_RERUN_UNSUPPORTED: &str = "pipeline.recovery.continuation_rerun_unsupported";
 
 fn child_refused(cause: &'static str) -> NativeAgentAssemblyError {
     invalid_configuration().with_cause(cause, None)
@@ -1900,6 +2001,9 @@ pub(crate) fn is_recovery_frontier_cause(code: &str) -> bool {
         CHILD_FRONTIER_UNSUPPORTED,
         CHILD_DEFINITION_MISMATCH,
         CHILD_NOT_PARKED,
+        ROOT_WRITER_MISMATCH,
+        CONTINUATION_PAUSE_UNBOUND,
+        CONTINUATION_RERUN_UNSUPPORTED,
     ]
     .contains(&code)
 }
@@ -2541,6 +2645,7 @@ pub(super) async fn assemble_pipeline_native(
         instruction_plan,
         deadline_unix_millis: _,
         dispatch_abort,
+        paused_writer: _,
     } = plan;
     // Node models consume the admitted policy. The Runner never summarizes
     // deterministic graph state or introduces a pipeline-wide summary model.
@@ -2628,6 +2733,21 @@ async fn resolve_pipeline_start(
             .await
             .map_err(|_| dependency_unavailable())?;
         reset_session_for_regeneration(state.sessions.as_ref(), &plan.user_id, &plan.session_id)
+            .await?;
+    }
+    // FU-265: with Main's paused writer, the first attempt proves the paused
+    // row exactly as a reclaim does (`prove_continuation_row`).
+    if start.reenters_paused_row()
+        && let Some(paused) = plan.paused_writer.as_ref()
+    {
+        let checkpoint = state
+            .checkpointer
+            .load(plan.session_id.as_ref())
+            .await
+            .map_err(|_| dependency_unavailable())?
+            .ok_or_else(|| child_refused(CONTINUATION_PAUSE_UNBOUND))?;
+        state
+            .prove_continuation_row(plan, paused, &checkpoint)
             .await?;
     }
     Ok(match start {
@@ -3081,6 +3201,7 @@ where
         instruction_plan: _,
         deadline_unix_millis: _,
         dispatch_abort: _,
+        paused_writer: _,
     } = plan;
     // `session_compaction` (#1368): the desktop's step compaction prepares
     // every root request when the model's limits are frozen; without them the
@@ -3687,6 +3808,7 @@ where
         instruction_plan: _,
         deadline_unix_millis: _,
         dispatch_abort: _,
+        paused_writer: _,
     } = plan;
     let context_compaction =
         context_management.prepare_runner_composition(model.summarization_model())?;

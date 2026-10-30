@@ -188,7 +188,7 @@ All against real PostgreSQL, except the pinned-identity test, which is a unit te
 | Worker × read-only direct call in a saved child, lost mid-call | I (reruns), unproven | `session.rs:1710` | none yet: FU-266 |
 | Worker × started call in a fan-out member's child, Worker lost | C → F (`graph.fanout.may_have_started`), unproven | `direct_tool.rs:837`, `node_events.rs:247-261`, `scoped_runtime.rs:398-405` | none yet: FU-267 |
 | Worker × a child re-entered at its own unfinished frontier (reclaim, wake) | R (input preserved, task not appended twice) | `application.rs:797-807` | all recovery tests reopen the same journal thread, including the mapped-variable cases; the child resume pin |
-| Worker × an approved child direct call, lost before the continuation's first root save | F− (never repeated; ends with the generic Internal failure, not yet the registered terminal) | `session.rs:1747-1758`, `checkpoint_recovery.rs:146-160` | browser: fanpar chat 44 kill; FU-265 |
+| Worker × an approved child direct call, lost before the continuation's first root save | F− at FU-248; now F typed (`RECOVERY_FRONTIER_UNSUPPORTED`) after FU-265 (`continuation-lost-before-root-save-20261030.md`); R/C/I is FU-269 | `session.rs:1747-1758`, `checkpoint_recovery.rs:146-160` | browser: fanpar chat 44 kill; FU-265 |
 | Worker × sensitive child direct call in a fan-out member | R (card, decision, one call) | `parallel_compiler.rs:1025`, branch family journals | `…_pauses_then_runs_once_or_never` |
 
 ## Browser evidence (fanpar)

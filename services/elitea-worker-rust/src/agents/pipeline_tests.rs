@@ -5258,3 +5258,25 @@ fn a_toolkit_node_calling_an_index_tool_on_a_catalog_toolkit_asks_for_the_claim_
     other["settings"]["repositories"] = json!("group/project");
     assert!(!asks("list_indexes", other));
 }
+
+/// FU-265: the paused writer rides only on a continuation that re-enters a
+/// paused root row; a fresh run carrying it is refused before anything runs.
+#[tokio::test]
+async fn a_paused_writer_is_refused_on_a_fresh_run() {
+    let assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::new(InMemorySessionService::new()),
+        Arc::new(MemoryCheckpointer::new()),
+    );
+    let mut request = pipeline_request();
+    request.payload.meta.insert(
+        crate::agents::graph::continuation_writer::PAUSED_WRITER_META_KEY.to_owned(),
+        json!({"execution_id": "0123456789abcdef0123456789abcdef", "generation": 1}),
+    );
+    assert!(
+        assembler
+            .assemble(authorized_execution(&request, "execution-fresh"))
+            .await
+            .is_err(),
+        "a fresh run carrying a paused writer must be refused"
+    );
+}

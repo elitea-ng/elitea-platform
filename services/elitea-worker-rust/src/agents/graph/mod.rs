@@ -45,6 +45,7 @@ mod compiler_identifier_tests;
 mod compiler_limit_tests;
 #[cfg(test)]
 mod compiler_tests;
+pub(crate) mod continuation_writer;
 mod data_shaping;
 #[cfg(test)]
 mod data_shaping_tests;
