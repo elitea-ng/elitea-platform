@@ -141,8 +141,8 @@ pub enum RuntimeFailureKind {
     /// a saved child pipeline's stored frontier fails the recovery walk).
     /// Nothing is repeated; never retryable.
     RecoveryFrontierUnsupported,
-    /// The run reached a run cap (ADR-0041 decision 3): RESOURCE_EXHAUSTED
-    /// with the cap's registered message, which Main maps to CAP_REACHED and
+    /// The run reached a run cap (ADR-0041 decision 3): `RESOURCE_EXHAUSTED`
+    /// with the cap's registered message, which Main maps to `CAP_REACHED` and
     /// the cap's name. Never retryable.
     CapReached(elitea_agent_runtime::run_caps::RunCap),
     Internal,
@@ -840,8 +840,8 @@ pub(crate) const RECOVERY_REFUSED_DETAIL: &str =
 pub(crate) const RECOVERY_FRONTIER_UNSUPPORTED_MESSAGE: &str = "This run stopped at a point where it cannot be safely continued. Nothing was repeated. Start it again, and share the support reference with your administrator if it happens again.";
 
 /// Registered texts of [`RuntimeFailureKind::CapReached`], one per cap, sent
-/// under RESOURCE_EXHAUSTED. Main holds the same texts and maps each to the
-/// public code CAP_REACHED and the cap's name.
+/// under `RESOURCE_EXHAUSTED`. Main holds the same texts and maps each to the
+/// public code `CAP_REACHED` and the cap's name.
 pub(crate) const CAP_REACHED_MAX_TOOL_CALLS_MESSAGE: &str = "The run stopped because it reached the maximum number of tool calls an administrator set. The task may be incomplete. Check what it completed before you continue.";
 pub(crate) const CAP_REACHED_MAX_MODEL_TURNS_MESSAGE: &str = "The run stopped because it reached the maximum number of model turns an administrator set. The task may be incomplete. Check what it completed before you continue.";
 pub(crate) const CAP_REACHED_MAX_RECORDS_READ_MESSAGE: &str = "The run stopped because it reached the maximum number of records read an administrator set. The task may be incomplete. Check what it completed before you continue.";
@@ -1810,7 +1810,7 @@ mod continuation_failure_tests {
     }
 
     /// ADR-0041 decision 3: each cap's upstream code is its own registered,
-    /// non-retryable RESOURCE_EXHAUSTED message that replays.
+    /// non-retryable `RESOURCE_EXHAUSTED` message that replays.
     #[test]
     fn run_caps_are_registered_resource_exhausted_failures() {
         for (code, cap, noun) in [

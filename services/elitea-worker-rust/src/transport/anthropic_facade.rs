@@ -319,13 +319,7 @@ impl Llm for EliteaAnthropicModel {
                     "the claim-scoped native Anthropic invocation exceeded its approved turn limit",
                 ))
             })?;
-        // The run's model turns (ADR-0041 decision 3): a turn past the run's
-        // cap, or any turn after the run reached a cap, is never sent.
-        if let Some(run_caps) = &self.invocation.run_caps {
-            run_caps.charge_model_turn().map_err(|cap| {
-                super::model_text::not_sent(elitea_agent_runtime::run_caps::cap_error(cap))
-            })?;
-        }
+        self.invocation.charge_run_cap_turn()?;
         let span = tracing::info_span!(
             "agent.model.request",
             model_adapter = "anthropic",

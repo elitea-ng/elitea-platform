@@ -147,6 +147,20 @@ pub(crate) struct ModelFacadeInvocation {
     pub(crate) run_caps: Option<Arc<elitea_agent_runtime::run_caps::RunCapsMeter>>,
 }
 
+impl ModelFacadeInvocation {
+    /// Charges one model turn to the run's caps (ADR-0041 decision 3). A turn
+    /// past the run's cap, or any turn after the run reached a cap, is never
+    /// sent.
+    pub(crate) fn charge_run_cap_turn(&self) -> adk_rust::Result<()> {
+        if let Some(run_caps) = &self.run_caps {
+            run_caps.charge_model_turn().map_err(|cap| {
+                super::model_text::not_sent(elitea_agent_runtime::run_caps::cap_error(cap))
+            })?;
+        }
+        Ok(())
+    }
+}
+
 /// OpenAI-compatible reasoning control preserved from the frozen SDK input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ModelReasoningEffort {
@@ -596,13 +610,7 @@ impl Llm for EliteaOpenAiCompatibleModel {
                     "the claim-scoped model invocation exceeded its approved turn limit",
                 ))
             })?;
-        // The run's model turns (ADR-0041 decision 3): a turn past the run's
-        // cap, or any turn after the run reached a cap, is never sent.
-        if let Some(run_caps) = &self.invocation.run_caps {
-            run_caps.charge_model_turn().map_err(|cap| {
-                super::model_text::not_sent(elitea_agent_runtime::run_caps::cap_error(cap))
-            })?;
-        }
+        self.invocation.charge_run_cap_turn()?;
         let span = tracing::info_span!(
             "agent.model.request",
             model_adapter = "openai_compatible",
