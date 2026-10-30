@@ -98,6 +98,11 @@ struct RawLlmNodeDefinition {
     tool_names: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     structured_output: bool,
+    /// The node's output contract (ADR-0043 decision 2). A worker of an
+    /// earlier release refuses the unknown field, so a contract is never
+    /// silently ignored.
+    #[serde(default)]
+    output_contract: Option<Value>,
     #[serde(default = "default_tool_timeout")]
     tool_execution_timeout: u64,
     #[serde(default)]
@@ -150,6 +155,9 @@ pub(crate) struct LlmNodeDefinition {
     output: Vec<String>,
     tool_selections: Vec<LlmToolkitSelection>,
     structured_output: bool,
+    output_contract: Option<Arc<elitea_agent_runtime::output_contract::OutputContract>>,
+    /// The stored contract, for the configuration digest.
+    output_contract_source: Option<Value>,
     tool_execution_timeout: u64,
     transition: Option<String>,
 }
@@ -239,9 +247,21 @@ impl LlmNodeDefinition {
             ));
         }
 
+        let output_contract = elitea_agent_runtime::output_contract::OutputContract::from_value(
+            raw.output_contract.as_ref(),
+        )
+        .map_err(|_| LlmConfigurationError::Invalid("the LLM node output contract is invalid"))?
+        .map(Arc::new);
+        if output_contract.is_some() && raw.structured_output {
+            return Err(LlmConfigurationError::Invalid(
+                "a structured LLM node cannot also have an output contract",
+            ));
+        }
         let input_mapping = validate_input_mapping(raw.input_mapping)?;
         let tool_selections = validate_tool_selections(raw.tool_names)?;
         Ok(Self {
+            output_contract,
+            output_contract_source: raw.output_contract.filter(|value| !value.is_null()),
             id: raw.id,
             input_mapping,
             input: raw.input,
@@ -281,6 +301,13 @@ impl LlmNodeDefinition {
         self.structured_output
     }
 
+    /// The node's output contract (ADR-0043 decision 2).
+    pub(crate) fn output_contract(
+        &self,
+    ) -> Option<&Arc<elitea_agent_runtime::output_contract::OutputContract>> {
+        self.output_contract.as_ref()
+    }
+
     pub(crate) const fn tool_execution_timeout(&self) -> u64 {
         self.tool_execution_timeout
     }
@@ -297,6 +324,8 @@ impl LlmNodeDefinition {
             output: Vec::new(),
             tool_selections: Vec::new(),
             structured_output: false,
+            output_contract: None,
+            output_contract_source: None,
             tool_execution_timeout: DEFAULT_TOOL_TIMEOUT_SECONDS,
             transition: None,
         }
@@ -520,6 +549,15 @@ impl LlmNodeDefinition {
             }
         }
         digest_field(&mut context, &[u8::from(self.structured_output)]);
+        // Only a node with a contract adds a field, so the digest of every
+        // node without one stays what an earlier release computed.
+        if let Some(contract) = &self.output_contract_source {
+            digest_field(&mut context, b"output_contract");
+            digest_field(
+                &mut context,
+                &elitea_agent_runtime::canonical::to_vec(contract).unwrap_or_default(),
+            );
+        }
         digest_field(&mut context, &self.tool_execution_timeout.to_be_bytes());
         digest_field(
             &mut context,
@@ -1176,10 +1214,17 @@ impl Node for LlmNode {
                 .replay_state(&context.state, &input_digest)
                 .map_err(|_| node_failure(self.name()))?;
             tracing::Span::current().record("stage", "agent_binding");
+            // A JSON Schema output contract is the provider's response format
+            // (ADR-0043 decision 2); a structured node has no contract.
             let schema = self
                 .definition
                 .output_schema(&self.state_types)
-                .map_err(|_| node_failure(self.name()))?;
+                .map_err(|_| node_failure(self.name()))?
+                .or_else(|| {
+                    self.definition
+                        .output_contract()
+                        .and_then(|contract| contract.response_schema().cloned())
+                });
             match run_model_agent(
                 &self.definition,
                 input,
@@ -1195,6 +1240,23 @@ impl Node for LlmNode {
                 _ => node_failure(self.name()),
             })? {
                 PipelineLlmRunOutcome::Completed(text) => {
+                    // The model binding validated each final answer and
+                    // retried once (ADR-0043 decision 2). An answer joined
+                    // from output continuations is checked here, with no
+                    // retry: it never reaches the next node unchecked.
+                    if let Some(contract) = self.definition.output_contract()
+                        && contract.validate(&text).is_err()
+                    {
+                        if let Some(sender) = self.factory.event_sender() {
+                            sender
+                                .send_execution_failure(
+                                    elitea_agent_runtime::output_contract::VIOLATION_CODE,
+                                )
+                                .await
+                                .map_err(|_| node_failure(self.name()))?;
+                        }
+                        return Err(node_failure(self.name()));
+                    }
                     tracing::Span::current().record("stage", "state_projection");
                     let updates = self
                         .definition

@@ -95,6 +95,10 @@ http-body-util = "0.1.5"
 hyper = { version = "1.12.0", default-features = false, features = ["client", "http1", "http2"] }
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "http2", "native-tokio", "ring"] }
 hyper-util = { version = "0.1.21", default-features = false, features = ["client-legacy", "http1", "http2", "tokio"] }
+# Output contracts (ADR-0043 decision 2): validates a JSON Schema contract.
+# No remote or file `$ref` resolution (the default features); the version
+# adk-agent already locks.
+jsonschema = { version = "0.47.0", default-features = false }
 md-5 = "0.11.0"
 minijinja = { version = "3.0.4", default-features = false, features = ["builtins", "fuel", "serde"] }
 percent-encoding = "2.3.2"

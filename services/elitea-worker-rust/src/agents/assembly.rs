@@ -68,6 +68,10 @@ pub(crate) struct OrdinaryNoToolProfile {
     /// when it names one: with the model it picks the workspace's edit
     /// tools ([`Self::edit_profile`], #1214).
     edit_format: Option<String>,
+    /// The version's `meta.output_contract` (ADR-0043 decision 2): the
+    /// agent's final answer must meet it. A pipeline keeps its contracts on
+    /// its LLM nodes, so a pipeline shell has none.
+    output_contract: Option<Arc<elitea_agent_runtime::output_contract::OutputContract>>,
 }
 
 /// Admitted independently from the task model before credential redemption.
@@ -253,6 +257,7 @@ impl OrdinaryNoToolProfile {
             internal_tools,
             instruction_plan: super::instruction_authority::InstructionPlan::admit(request)?,
             edit_format: application_edit_format(request),
+            output_contract: None,
         })
     }
 
@@ -302,6 +307,7 @@ impl OrdinaryNoToolProfile {
             internal_tools,
             instruction_plan: super::instruction_authority::InstructionPlan::admit(request)?,
             edit_format: application_edit_format(request),
+            output_contract: application_output_contract(request)?,
         })
     }
 
@@ -426,6 +432,11 @@ impl OrdinaryNoToolProfile {
             )?,
             // A nested agent runs no workspace turn of its own.
             edit_format: None,
+            output_contract: if expected_agent_type == "agent" {
+                version_output_contract(version)?
+            } else {
+                None
+            },
         })
     }
 
@@ -450,6 +461,14 @@ impl OrdinaryNoToolProfile {
             instructions,
             ..self.clone()
         }
+    }
+
+    /// The agent's output contract, when its version declares one.
+    #[must_use]
+    pub(crate) fn output_contract(
+        &self,
+    ) -> Option<&Arc<elitea_agent_runtime::output_contract::OutputContract>> {
+        self.output_contract.as_ref()
     }
 
     #[must_use]
@@ -783,6 +802,39 @@ fn application_edit_format(request: &AgentExecutionRequest) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// An application version's `meta.output_contract`; an ad-hoc turn has
+/// none. Main checked it on save; a contract this worker cannot admit refuses
+/// the turn rather than running without it.
+fn application_output_contract(
+    request: &AgentExecutionRequest,
+) -> Result<
+    Option<Arc<elitea_agent_runtime::output_contract::OutputContract>>,
+    NativeAgentAssemblyError,
+> {
+    if request.kind != AgentExecutionKind::Application {
+        return Ok(None);
+    }
+    match request.payload.application.get("version_details") {
+        Some(Value::Object(version)) => version_output_contract(version),
+        _ => Ok(None),
+    }
+}
+
+fn version_output_contract(
+    version: &Map<String, Value>,
+) -> Result<
+    Option<Arc<elitea_agent_runtime::output_contract::OutputContract>>,
+    NativeAgentAssemblyError,
+> {
+    let contract = version
+        .get("meta")
+        .and_then(Value::as_object)
+        .and_then(|meta| meta.get(elitea_agent_runtime::output_contract::META_KEY));
+    elitea_agent_runtime::output_contract::OutputContract::from_value(contract)
+        .map(|contract| contract.map(Arc::new))
+        .map_err(|_| invalid_profile())
+}
+
 fn internal_tools_from_version(
     version: &Map<String, Value>,
 ) -> Result<InternalToolCatalog, NativeAgentAssemblyError> {
@@ -910,6 +962,10 @@ fn validate_application_meta(value: Option<&Value>) -> Result<(), NativeAgentAss
     };
     let meta = value.as_object().ok_or_else(invalid_profile)?;
     validate_application_meta_step_limit(meta.get("step_limit"))?;
+    elitea_agent_runtime::output_contract::OutputContract::from_value(
+        meta.get(elitea_agent_runtime::output_contract::META_KEY),
+    )
+    .map_err(|_| invalid_profile())?;
     InternalToolCatalog::from_values(meta.get("internal_tools"))
         .map_err(internal_tool_profile_error)?;
     match meta.get("lazy_tools_mode") {

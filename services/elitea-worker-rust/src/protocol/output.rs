@@ -145,6 +145,11 @@ pub enum RuntimeFailureKind {
     /// with the cap's registered message, which Main maps to `CAP_REACHED` and
     /// the cap's name. Never retryable.
     CapReached(elitea_agent_runtime::run_caps::RunCap),
+    /// The final answer did not meet its output contract after one retry
+    /// (ADR-0043 decision 2): [`OUTPUT_CONTRACT_VIOLATION_MESSAGE`] under
+    /// `MODEL_RESPONSE_INVALID`, not retryable. Main shows it as
+    /// `OUTPUT_CONTRACT_VIOLATION`.
+    OutputContractViolation,
     Internal,
 }
 
@@ -726,6 +731,9 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
     if let Some(cap) = upstream_code.and_then(RunCap::from_error_code) {
         return RuntimeFailureKind::CapReached(cap);
     }
+    if upstream_code == Some(elitea_agent_runtime::output_contract::VIOLATION_CODE) {
+        return RuntimeFailureKind::OutputContractViolation;
+    }
     match upstream_code {
         Some("pipeline.child_input_type_invalid") => {
             RuntimeFailureKind::PipelineChildInputTypeInvalid
@@ -854,6 +862,11 @@ pub(crate) const fn cap_reached_message(cap: RunCap) -> &'static str {
         RunCap::MaxRecordsRead => CAP_REACHED_MAX_RECORDS_READ_MESSAGE,
     }
 }
+
+/// Registered text of [`RuntimeFailureKind::OutputContractViolation`]. Main
+/// holds the same text (`internal/domain/outputcontract`
+/// `ViolationSafeMessage`) and maps it to `OUTPUT_CONTRACT_VIOLATION`.
+pub(crate) const OUTPUT_CONTRACT_VIOLATION_MESSAGE: &str = "The answer did not have the format that the agent or pipeline node requires, and one retry did not correct it. Later nodes did not run. Change the instructions or the output contract, or select a different model.";
 
 /// Registered text of [`RuntimeFailureKind::RecoveryRefused`]; Main holds the same text.
 pub(crate) const RECOVERY_REFUSED_MESSAGE: &str = "An approved tool call may have started before the run stopped, and its result was not recorded. It was not repeated. Check the target system before retrying, and share the support reference with your administrator.";
@@ -1081,6 +1094,11 @@ pub(crate) fn runtime_error_policy(
             cap_reached_message(cap),
             false,
         ),
+        RuntimeFailureKind::OutputContractViolation => (
+            RuntimeErrorCodeV1::ModelResponseInvalid,
+            OUTPUT_CONTRACT_VIOLATION_MESSAGE,
+            false,
+        ),
         RuntimeFailureKind::Internal => (
             RuntimeErrorCodeV1::Internal,
             "The runtime operation failed.",
@@ -1135,6 +1153,7 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::CapReached(RunCap::MaxToolCalls),
         RuntimeFailureKind::CapReached(RunCap::MaxModelTurns),
         RuntimeFailureKind::CapReached(RunCap::MaxRecordsRead),
+        RuntimeFailureKind::OutputContractViolation,
         RuntimeFailureKind::OutputContinuationExhausted,
         RuntimeFailureKind::ModelTimeout,
         RuntimeFailureKind::ModelRateLimited,

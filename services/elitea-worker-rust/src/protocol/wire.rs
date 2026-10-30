@@ -64,8 +64,8 @@ mod merge_contract_tests {
             Err(super::ProtocolError::InvalidInput(_))
         ));
         // Field 66 is the egress policy (#1490), 67 the delegation policy
-        // (#1501), 68 the approval policy (#1498), 69 the run caps (#1498);
-        // 70 is still unknown.
+        // (#1501), 68 the approval policy (#1498), 69 the run caps (#1498),
+        // 70 the output contracts (#1500); 71 is still unknown.
         assert!(
             scan_message(&[0x92, 0x04, 0x00], Schema::WorkerCommand)
                 .unwrap()
@@ -86,8 +86,13 @@ mod merge_contract_tests {
                 .unwrap()
                 .contains(69)
         );
+        assert!(
+            scan_message(&[0xb2, 0x04, 0x00], Schema::WorkerCommand)
+                .unwrap()
+                .contains(70)
+        );
         assert!(matches!(
-            scan_message(&[0xb2, 0x04, 0x00], Schema::WorkerCommand),
+            scan_message(&[0xba, 0x04, 0x00], Schema::WorkerCommand),
             Err(super::ProtocolError::IncompatibleVersion(_))
         ));
         // The reference holds 1-3; an unknown nested field 4 is refused.
@@ -176,6 +181,19 @@ mod merge_contract_tests {
         ));
         assert!(matches!(
             scan_message(&[0x1a, 0x00], Schema::WorkerApprovalPolicy),
+            Err(super::ProtocolError::IncompatibleVersion(_))
+        ));
+    }
+
+    #[test]
+    fn the_output_contracts_hold_one_varint_revision() {
+        assert!(
+            scan_message(&[0x08, 0x01], Schema::WorkerOutputContracts)
+                .unwrap()
+                .contains(1)
+        );
+        assert!(matches!(
+            scan_message(&[0x10, 0x01], Schema::WorkerOutputContracts),
             Err(super::ProtocolError::IncompatibleVersion(_))
         ));
     }
@@ -270,6 +288,8 @@ pub(crate) enum Schema {
     WorkerApprovalPolicy,
     /// `WorkerCommandV1.run_caps` (field 69, ADR-0041 #1498).
     WorkerRunCaps,
+    /// `WorkerCommandV1.output_contracts` (field 70, ADR-0043 #1500).
+    WorkerOutputContracts,
 }
 
 #[derive(Clone, Copy)]
@@ -444,8 +464,9 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         Schema::WorkerCommand => match field {
             // 65 is the governed security context reference (#1115), 66 the
             // public egress policy (#1490), 67 the delegation policy (#1501),
-            // 68 the approval policy (#1498), 69 the run caps (#1498).
-            1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 | 65..=69 => Some(length()),
+            // 68 the approval policy (#1498), 69 the run caps (#1498), 70
+            // the output contracts (#1500).
+            1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 | 65..=70 => Some(length()),
             4 | 6..=7 | 21..=22 => Some(varint()),
             // Preserve the complete language-neutral capability oneof.
             32..=36 | 64 => Some(FieldRule {
@@ -505,6 +526,7 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         Schema::WorkerDelegationPolicy => delegation_policy_rule(field),
         Schema::WorkerApprovalPolicy => approval_policy_rule(field),
         Schema::WorkerRunCaps => run_caps_rule(field),
+        Schema::WorkerOutputContracts => output_contracts_rule(field),
         Schema::SecurityContextReference
         | Schema::SecurityContext
         | Schema::CallerContext
@@ -558,6 +580,14 @@ const fn approval_policy_rule(field: u32) -> Option<FieldRule> {
 const fn run_caps_rule(field: u32) -> Option<FieldRule> {
     match field {
         1..=3 => Some(varint()),
+        _ => None,
+    }
+}
+
+/// `WorkerOutputContractsV1` (#1500): the varint revision 1.
+const fn output_contracts_rule(field: u32) -> Option<FieldRule> {
+    match field {
+        1 => Some(varint()),
         _ => None,
     }
 }

@@ -207,6 +207,12 @@ pub(super) fn terminal_failure_step(
                     Value::Null
                 },
             ),
+        // The violation step names the contract (ADR-0043 decision 2).
+        None if matches!(kind, RuntimeFailureKind::OutputContractViolation) => StepDraft::new(
+            RunStepKindV1::Error,
+            "output_contract_violation",
+            at_unix_ms,
+        ),
         None => StepDraft::new(RunStepKindV1::Error, code, at_unix_ms),
     };
     step.summary("error_code", json!(code))

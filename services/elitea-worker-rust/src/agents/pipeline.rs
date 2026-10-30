@@ -1824,7 +1824,14 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
                 invocation,
                 self.profile.summary_model(),
             )
-            .map_err(|_| LlmExecutionError::Unavailable)?;
+            .map_err(|_| LlmExecutionError::Unavailable)?
+            .with_output_contract(
+                definition.output_contract().cloned(),
+                crate::agents::output_contract_model::ContractStepScope {
+                    execution_id: self.context.execution_id().to_owned(),
+                    node_id: definition.id().to_owned(),
+                },
+            );
         let plan = match self.profile.context_management() {
             ContextManagementPlan::Disabled => None,
             ContextManagementPlan::Summarize(plan) => Some(plan),

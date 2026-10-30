@@ -1315,6 +1315,7 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "jsonschema",
  "md-5",
  "minijinja",
  "percent-encoding",

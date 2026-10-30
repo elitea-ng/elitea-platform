@@ -4327,7 +4327,10 @@ struct PreparedChildApplicationResume {
 impl LazyNestedAgent {
     fn bind_model(&self) -> adk_rust::Result<BoundModelFacade> {
         let invocation = ModelInvocation {
-            response_schema: None,
+            response_schema: self
+                .profile
+                .output_contract()
+                .and_then(|contract| contract.response_schema().cloned()),
             allow_text_continuation: false,
             context_budget: self.profile.context_budget(),
             model_name: self.profile.model_name().to_owned(),
@@ -4353,6 +4356,17 @@ impl LazyNestedAgent {
                 invocation,
                 self.profile.summary_model(),
             )
+            .map(|bound| {
+                // The child's own contract (ADR-0043 decision 2): a violation
+                // ends the child's call as a typed failure.
+                bound.with_output_contract(
+                    self.profile.output_contract().cloned(),
+                    crate::agents::output_contract_model::ContractStepScope {
+                        execution_id: self.elitea_context.execution_id().to_owned(),
+                        node_id: String::new(),
+                    },
+                )
+            })
             .map_err(model_error)
     }
 
