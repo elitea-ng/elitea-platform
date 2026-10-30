@@ -82,7 +82,25 @@
 
 ## Browser evidence (fanpar)
 
-To be completed.
+- **Stack.** fanpar, project 118, Claude in Chrome, local mock-OIDC test identity. Calls are counted from the mock MCP
+  server's `jsonrpc tools/call` lines.
+- **Before the upgrade.** Main and Worker were `pm-68fb160ef`, based on `0990ab10f`, before #1540.
+  - Chat 45 ("FP parallel child direct", two Parallel members that run the saved "FP direct reverse"): the run parked
+    with two `tool_guard` cards.
+  - Cards `8fed4ba7…` (payload `88f78dce…`) and `c752d807…` (payload `54bf953a…`) were PENDING at revision 1.
+  - Calls: 10.
+- **The upgrade.** Main and Worker moved to `pm-8c7e1bb75`, built from this branch's commit in the build worktree.
+  - The shared migrations ran up to #1540's 0211.
+  - verify-profile: 49 passed, 1 failed. The failure is the known stale worktree comparison (ledger 211, worktree 204).
+  - The fix adds no unique string literal, so image provenance is the build commit rather than a binary marker.
+- **After the upgrade.**
+  - Reload: both cards were still shown.
+  - Authorize member (1): its call ran once (calls 11).
+  - The wake republished the still-open card (2) as one `agent_interrupt_pending` frame. Main accepted it as a replay:
+    the row stayed PENDING revision 1 with the same payload `54bf953a…`, and there was no raise conflict.
+  - The run parked again (`stream_disposition="paused"`).
+  - Block member (2): the run completed with the root `echo` (calls 12), and member (2)'s tool never ran.
+  - Both cards are CONSUMED at revision 3, and the result survives a reload.
 
 ## Follow-ups
 
