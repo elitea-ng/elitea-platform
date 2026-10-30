@@ -19,6 +19,10 @@
 //! * [`tool_namespacing`] — the provider-alias notice for renamed tools;
 //! * [`tool_category`], [`approval_policy`] — the category of every tool and
 //!   the tier by category approval policy (ADR-0041 decision 5);
+//! * [`disclosure`], [`preamble`], [`untrusted`] — the AI disclosure
+//!   marker on outbound writes, the platform preamble and the
+//!   untrusted-content envelope with the "read untrusted, then act" rule
+//!   (ADR-0043 decisions 3 and 4);
 //! * [`context`] — shrinking older tool results in a long turn's model
 //!   requests (host opt-in);
 //! * [`step_limit`] — the end of a run that used its model steps, and the
@@ -66,6 +70,7 @@ pub mod context_management;
 pub mod context_status;
 pub mod context_summary;
 pub mod delegation;
+pub mod disclosure;
 pub mod edit_profile;
 pub mod egress;
 pub mod exact_number;
@@ -77,6 +82,7 @@ pub mod lazy_tools;
 pub mod memory_tools;
 pub mod planner;
 pub mod platform;
+pub mod preamble;
 pub mod remote_assertion;
 pub mod request;
 pub mod run_caps;
@@ -86,6 +92,7 @@ pub mod text;
 pub mod tool_category;
 pub mod tool_namespacing;
 pub mod toolkits;
+pub mod untrusted;
 pub mod workspace_archive;
 pub mod workspace_tools;
 

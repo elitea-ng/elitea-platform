@@ -242,6 +242,11 @@ type RouterConfig struct {
 	// section (ADR-0041 decision 5); an admin save drops it. Nil leaves the
 	// cache TTL as the only refresh.
 	ApprovalPolicyCache admin.SectionInvalidator
+	// ContentControlsCache is the per-replica cache of the content controls
+	// (ADR-0043 decisions 3 and 4): the ai_disclosure and platform_preamble
+	// sections and the approval policy's rule tiers. An admin save drops it.
+	// Nil leaves the cache TTL as the only refresh.
+	ContentControlsCache admin.SectionInvalidator
 	// NativeAccess resolves the client of a native bearer token for the 426
 	// gate when the principal came from the edge's forwarded identity (which
 	// carries no client id). Nil skips that fallback.
@@ -2560,6 +2565,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					admin.WithRunCapsCache(cfg.RunCapsCache),
 					admin.WithDelegationCache(cfg.DelegationCache),
 					admin.WithApprovalPolicyCache(cfg.ApprovalPolicyCache),
+					admin.WithContentControlsCache(cfg.ContentControlsCache),
 					admin.WithBrandingAssets(brandingAssets),
 					admin.WithMailer(adminMailer),
 					admin.WithEmailSettings(emailResolver.Store(), emailResolver),

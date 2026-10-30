@@ -30,6 +30,9 @@ type runSafety struct {
 	// approvalPolicy is the approval policy (ADR-0041 decision 5): the
 	// agent execution commands carry it and pipeline starts check it.
 	approvalPolicy *platformconfig.CachedSection[platformconfig.ApprovalPolicySettings]
+	// contentControls are the content controls (ADR-0043 decisions 3 and
+	// 4) every agent execution command carries.
+	contentControls *platformconfig.CachedSection[platformconfig.ContentControlsSettings]
 }
 
 func newRunSafety(pool *pgxpool.Pool) runSafety {
@@ -45,6 +48,9 @@ func newRunSafety(pool *pgxpool.Pool) runSafety {
 		}, 0),
 		approvalPolicy: platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.ApprovalPolicySettings, error) {
 			return platformconfig.LoadApprovalPolicySettings(ctx, pool)
+		}, 0),
+		contentControls: platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.ContentControlsSettings, error) {
+			return platformconfig.LoadContentControlsSettings(ctx, pool)
 		}, 0),
 	}
 }

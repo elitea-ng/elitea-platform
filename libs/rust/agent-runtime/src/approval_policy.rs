@@ -144,6 +144,10 @@ pub enum ApprovalRule {
     /// A rule the runtime holds for one built-in tool (the cloud workspace's
     /// destructive commands, its push and its pull request).
     Builtin,
+    /// The "read untrusted, then act" rule (ADR-0043 decision 4): the run
+    /// read a tool result earlier in the turn, and the tool is in
+    /// `external_send`, `delete` or `payment` (see [`crate::untrusted`]).
+    UntrustedReadThenAct { category: ToolCategory },
 }
 
 impl ApprovalRule {
@@ -154,18 +158,24 @@ impl ApprovalRule {
             Self::Platform => "platform",
             Self::Policy { .. } => "policy",
             Self::Builtin => "builtin",
+            Self::UntrustedReadThenAct { .. } => "untrusted_read_then_act",
         }
     }
 
     /// The interrupt payload's `approval_rule`:
     /// `{"source":"policy","risk_tier":"high","category":"delete"}`, or
-    /// `{"source":"platform"}` / `{"source":"builtin"}`.
+    /// `{"source":"platform"}` / `{"source":"builtin"}`, or
+    /// `{"source":"untrusted_read_then_act","category":"external_send"}`.
     #[must_use]
     pub fn to_json(self) -> Value {
         match self {
             Self::Policy { tier, category } => json!({
                 "source": self.source(),
                 "risk_tier": tier.as_str(),
+                "category": category.as_str(),
+            }),
+            Self::UntrustedReadThenAct { category } => json!({
+                "source": self.source(),
                 "category": category.as_str(),
             }),
             Self::Platform | Self::Builtin => json!({"source": self.source()}),
@@ -244,6 +254,13 @@ mod tests {
         assert_eq!(
             ApprovalRule::Builtin.to_json(),
             json!({"source": "builtin"})
+        );
+        assert_eq!(
+            ApprovalRule::UntrustedReadThenAct {
+                category: ToolCategory::ExternalSend
+            }
+            .to_json(),
+            json!({"source": "untrusted_read_then_act", "category": "external_send"})
         );
     }
 

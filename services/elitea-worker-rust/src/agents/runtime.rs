@@ -346,6 +346,14 @@ impl<'a> AuthorizedNativeAssembly<'a> {
         self.command.run_caps()
     }
 
+    /// The execution's content controls (ADR-0043 decisions 3 and 4).
+    #[must_use]
+    pub(crate) const fn content_controls(
+        &self,
+    ) -> &Arc<elitea_agent_runtime::preamble::ContentControls> {
+        self.command.content_controls()
+    }
+
     /// Validate the first production assembly profile before credential
     /// redemption becomes reachable.
     pub(crate) fn admit_llm_agent(

@@ -703,6 +703,10 @@ pub(crate) struct AuthorizedNativeCommandBinding {
     /// The execution's run caps meter (ADR-0041 decision 3, field 69): one
     /// meter for every path of this execution, nested callees included.
     run_caps: std::sync::Arc<elitea_agent_runtime::run_caps::RunCapsMeter>,
+    /// The execution's content controls (ADR-0043 decisions 3 and 4, field
+    /// 71): the disclosure marker, the preamble and the run's untrusted
+    /// reads, shared by every path of this execution.
+    content: std::sync::Arc<elitea_agent_runtime::preamble::ContentControls>,
 }
 
 impl AuthorizedNativeCommandBinding {
@@ -742,6 +746,7 @@ impl AuthorizedNativeCommandBinding {
             sio_event: agent.sio_event.clone(),
             deadline_unix_millis: command.deadline_unix_millis,
             egress: crate::protocol::egress::run_egress(command),
+            content: crate::protocol::preamble::controls_from_command(command, &approval),
             approval,
             run_caps: crate::protocol::run_caps::meter_from_command(command),
         }
@@ -766,6 +771,13 @@ impl AuthorizedNativeCommandBinding {
         &self.run_caps
     }
 
+    /// The execution's content controls (ADR-0043 decisions 3 and 4).
+    pub(crate) const fn content_controls(
+        &self,
+    ) -> &std::sync::Arc<elitea_agent_runtime::preamble::ContentControls> {
+        &self.content
+    }
+
     #[cfg(test)]
     pub(super) fn fixture() -> Self {
         Self {
@@ -784,6 +796,7 @@ impl AuthorizedNativeCommandBinding {
             run_caps: elitea_agent_runtime::run_caps::RunCapsMeter::new(
                 elitea_agent_runtime::run_caps::RunCapLimits::worker_default(),
             ),
+            content: elitea_agent_runtime::preamble::ContentControls::worker_default(),
         }
     }
 
@@ -3371,6 +3384,8 @@ fn build_runtime_agent(
     if internal_tools.ask_user_enabled() {
         builder = builder.require_tool_confirmation(ASK_USER_TOOL_NAME);
     }
+    // ADR-0043 decision 4: a candidate call after an untrusted read asks.
+    let tool_call_confirmation = sensitive_tools.untrusted_act_gate(tool_call_confirmation);
     builder = bind_turn_hooks(builder, tool_call_confirmation, steering);
     let ApplicationRuntimeProjection {
         presentations: application_tools,

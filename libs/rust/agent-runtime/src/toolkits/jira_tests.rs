@@ -1326,3 +1326,58 @@ async fn a_refused_setting_is_named_to_the_user_not_silently_skipped() {
         "{error}"
     );
 }
+
+/// ADR-0043 verification (decision 3): a Jira comment tool call writes the
+/// AI disclosure marker. The call goes through the admitted tool, as a run's
+/// call does, and the result is recorded as an untrusted read (decision 4).
+#[tokio::test]
+async fn a_jira_comment_tool_call_writes_the_disclosure_marker() {
+    use crate::disclosure::DisclosurePolicy;
+    use crate::preamble::ContentControls;
+    use crate::untrusted::UntrustedReads;
+
+    let (client, transport) = client_after_probe(
+        &cloud_settings(),
+        vec![JiraHttpResponse::fixture(
+            StatusCode::CREATED,
+            Some(json!({"id": "10200"})),
+        )],
+    );
+    let api: Arc<dyn JiraApi> = Arc::new(client);
+    let reads = UntrustedReads::new(true);
+    let content = Arc::new(ContentControls::new(
+        "",
+        0,
+        DisclosurePolicy::new("Written with ACME AI", Vec::<String>::new()).with_run_id("exec-1"),
+        Arc::clone(&reads),
+    ));
+    let policy = Arc::new(
+        ToolAdmissionPolicy::new(&[], &BTreeMap::<String, Vec<String>>::new())
+            .expect("policy")
+            .with_content_controls(content),
+    );
+    let toolset =
+        test_build_with_api("tracker", &["add_comments"], &policy, &api).expect("toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("tools");
+    let add_comments = tools
+        .iter()
+        .find(|tool| tool.name() == "add_comments")
+        .expect("add_comments");
+    assert!(!reads.has_read());
+    add_comments
+        .execute(
+            context(),
+            json!({"issue_key": "PROJ-1", "comment": "Looks good"}),
+        )
+        .await
+        .expect("comment added");
+    assert_eq!(
+        transport.requests()[1].body,
+        Some(
+            json!({"body": {"type": "doc", "version": 1, "content": [{"type": "paragraph",
+            "content": [{"type": "text", "text": "Looks good\n\nWritten with ACME AI"}]}]}})
+        )
+    );
+    assert!(reads.has_read(), "the tool result is an untrusted read");
+}

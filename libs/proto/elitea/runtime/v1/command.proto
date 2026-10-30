@@ -103,6 +103,18 @@ message WorkerCommandV1 {
   // from an earlier release run.
   WorkerRunCapsV1 run_caps = 69;
 
+  // The content controls of an agent run (ADR-0043 decisions 3 and 4,
+  // #1500): the AI disclosure marker, the platform preamble and the "read
+  // untrusted, then act" switch for the root agent's tier. Absent means the
+  // worker's defaults: the default marker text on every listed outbound
+  // tool, the built-in preamble only, and the rule on at the high and
+  // critical tiers of approval_policy (off without it). Main omits it until
+  // an administrator saves the `ai_disclosure` or `platform_preamble`
+  // section, or the approval policy's `untrusted_read_then_act_tiers`, so
+  // commands are unchanged byte for byte while workers from an earlier
+  // release run.
+  WorkerContentControlsV1 content_controls = 71;
+
   reserved 15, 26 to 31;
   reserved "grant_template_id";
   reserved 37 to 63;
@@ -178,6 +190,30 @@ message WorkerApprovalPolicyV1 {
   // most once. Empty: no category needs an approval at this tier.
   repeated string approval_categories = 2;
   reserved 3 to 10;
+}
+
+// A run's content controls (ADR-0043 decisions 3 and 4). Each text is
+// platform configuration that an administrator or a project administrator
+// wrote; no user or agent content is in it.
+message WorkerContentControlsV1 {
+  // The AI disclosure marker text, at most 200 bytes: the project's text,
+  // else the administrator's, else "Generated with Elitea AI". Empty is the
+  // default text; the marker cannot be removed through the text.
+  string disclosure_text = 1;
+  // Toolkit types whose outbound tools get no marker: the types the
+  // project opted out of, each one the administrator allowed. At most 64.
+  repeated string disclosure_opt_out_toolkit_types = 2;
+  // The administrator's platform preamble, at most 8 KiB. The worker puts
+  // the built-in preamble and then this text before every agent's system
+  // prompt. Empty: the built-in preamble only.
+  string platform_preamble = 3;
+  // The revision of platform_preamble (each save is one); 0 when none.
+  uint32 platform_preamble_revision = 4;
+  // Whether the "read untrusted, then act" rule is on for the root agent's
+  // tier: a call of an external_send, delete or payment tool after a tool
+  // result in the same turn needs an approval.
+  bool untrusted_read_then_act = 5;
+  reserved 6 to 10;
 }
 
 // A run's caps (ADR-0041 decision 3). Each value is the most the whole run

@@ -153,6 +153,7 @@ impl ChatModelBinder for ModelFacade {
             temperature: request.temperature,
             max_model_turns: 1,
             run_caps: None,
+            preamble: None,
         };
         // The index's model is the claim's resource project's (or the shared
         // public fallback the gateway resolves), like the step-back binder.

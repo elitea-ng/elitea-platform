@@ -1,0 +1,46 @@
+{
+  "contract": "elitea.tool-disclosure.v1",
+  "description": "ADR-0043 decision 3: the text parameters of the built-in external_send tools that write human-readable text outside the platform. The worker appends the AI disclosure marker to each listed parameter before the call. A path is a top-level argument (`comment`) or a text field of each object in a top-level list (`inline_comments[].comment_text`). `format` markdown targets render HTML comments as hidden, so the marker carries the run id there; plain targets get the text only. Every external_send tool of tool-categories-v1.json is listed under toolkits or under exempt with a reason. Read by the Rust worker and by elitea-main (the opt-out toolkit types); elitea-main keeps a copy that a test holds equal.",
+  "default_marker_text": "Generated with Elitea AI",
+  "formats": ["plain", "markdown"],
+  "toolkits": {
+    "ado_repos": {
+      "comment_on_pull_request": {"format": "markdown", "text_parameters": ["comment_query", "inline_comments[].comment_text"]}
+    },
+    "aha": {
+      "add_comment": {"format": "plain", "text_parameters": ["body"]}
+    },
+    "bitbucket": {
+      "add_pull_request_comment": {"format": "markdown", "text_parameters": ["content"]}
+    },
+    "figma": {
+      "post_file_comment": {"format": "plain", "text_parameters": ["message"]}
+    },
+    "github": {
+      "comment_on_issue": {"format": "markdown", "text_parameters": ["comment"]}
+    },
+    "gitlab": {
+      "comment_on_issue": {"format": "markdown", "text_parameters": ["comment_query"]},
+      "comment_on_pr": {"format": "markdown", "text_parameters": ["comment"]},
+      "create_pr_change_comment": {"format": "markdown", "text_parameters": ["comment"]}
+    },
+    "gitlab_org": {
+      "comment_on_issue": {"format": "markdown", "text_parameters": ["comment_query"]},
+      "create_pr_change_comment": {"format": "markdown", "text_parameters": ["comment"]}
+    },
+    "jira": {
+      "add_comments": {"format": "plain", "text_parameters": ["comment"]}
+    },
+    "slack": {
+      "send_message": {"format": "plain", "text_parameters": ["message"]}
+    },
+    "yagmail": {
+      "send_gmail_message": {"format": "plain", "text_parameters": ["message"]}
+    }
+  },
+  "exempt": {
+    "jira": {
+      "update_comment_with_file": "Adds a file to a comment that exists. The tool writes no text of its own."
+    }
+  }
+}

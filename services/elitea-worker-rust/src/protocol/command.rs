@@ -473,6 +473,7 @@ fn scan_agent_worker_command(raw: &[u8]) -> Result<(), ProtocolError> {
     scan_delegation_policy(&fields)?;
     scan_approval_policy(&fields)?;
     scan_run_caps(&fields)?;
+    scan_content_controls(&fields)?;
     let input_reference = fields.length_field(16, "the input bundle reference is missing")?;
     let input_fields = scan_message(input_reference, Schema::InputBundleReference)?;
     let input_digest = input_fields.length_field(3, "the input bundle digest is missing")?;
@@ -587,6 +588,18 @@ fn scan_run_caps(fields: &ScannedFields<'_>) -> Result<(), ProtocolError> {
     Ok(())
 }
 
+/// Field 71 (ADR-0043 decisions 3 and 4, #1500): the content controls
+/// admit no unknown field. Only an agent execution carries them.
+fn scan_content_controls(fields: &ScannedFields<'_>) -> Result<(), ProtocolError> {
+    if fields.contains(71) {
+        scan_message(
+            fields.length_field(71, "the worker content controls are missing")?,
+            Schema::WorkerContentControls,
+        )?;
+    }
+    Ok(())
+}
+
 fn validate_agent_command(command: &WorkerCommandV1) -> Result<AgentExecutionKind, ProtocolError> {
     if command.protocol_revision != PROTOCOL_REVISION || command.limits_revision != LIMITS_REVISION
     {
@@ -612,6 +625,7 @@ fn validate_agent_command(command: &WorkerCommandV1) -> Result<AgentExecutionKin
     super::egress::policy_from_command(command)?;
     super::delegation::policy_from_command(command)?;
     super::approval_policy::policy_from_command(command)?;
+    super::preamble::validate_command(command)?;
     Ok(kind)
 }
 

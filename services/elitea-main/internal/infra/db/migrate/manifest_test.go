@@ -971,7 +971,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// two-person resume approval columns, and
 	// agent_registry.circuit_breaker (the per-agent override). No data, no
 	// permission.
-	require.EqualValues(t, 213, Head(shared))
+	//
+	// 216: shared/0216_platform_preamble_revisions.sql, the platform
+	// preamble's revision history (ADR-0043 decision 3, #1500):
+	// elitea_runtime.platform_preamble_revisions (one append-only row per
+	// save that changes the text, with its sha256, author and the mirrored
+	// security audit event). No data, no permission.
+	require.EqualValues(t, 216, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

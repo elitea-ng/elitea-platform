@@ -103,6 +103,9 @@ func LoadPinnedCurrentAvailableCatalog() (*CurrentAvailableCatalog, error) {
 	if err := catalog.addWorkerEgressProjectSetting(); err != nil {
 		return nil, err
 	}
+	if err := catalog.addAIDisclosureProjectSetting(); err != nil {
+		return nil, err
+	}
 	return catalog, nil
 }
 

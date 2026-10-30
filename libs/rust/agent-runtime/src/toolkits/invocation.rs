@@ -249,6 +249,14 @@ impl Tool for PolicyBoundTool {
             // top-level fields before dispatch. Nested values remain untouched.
             arguments.retain(|_, value| !value.is_null());
 
+            // The AI disclosure marker (ADR-0043 decision 3): an outbound
+            // tool's text gets the run's marker before the call, after any
+            // approval. Nothing the model or the author sets removes it.
+            let content = self.policy.content_controls();
+            content
+                .disclosure()
+                .apply(&self.toolkit_type, &self.name, &mut arguments);
+
             // The run's caps (ADR-0041 decision 3): the call past the tool
             // call cap does not run, and neither does any call after a cap
             // was reached.
@@ -277,6 +285,9 @@ impl Tool for PolicyBoundTool {
             run_caps
                 .charge_records(records)
                 .map_err(crate::run_caps::cap_error)?;
+            // The result is untrusted content in the run's context (ADR-0043
+            // decision 4): later act-category calls of the turn may ask.
+            content.untrusted().record_read();
             Ok(value)
         }
         .instrument(span.clone())

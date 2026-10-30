@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::approval_policy::{ApprovalPolicy, ApprovalRule};
 use crate::egress::RunEgress;
+use crate::preamble::ContentControls;
 use crate::run_caps::RunCapsMeter;
 use crate::tool_category::tool_category;
 
@@ -102,6 +103,7 @@ pub struct ToolAdmissionPolicy {
     egress: Arc<RunEgress>,
     approval: Arc<ApprovalPolicy>,
     run_caps: Arc<RunCapsMeter>,
+    content: Arc<ContentControls>,
 }
 
 /// Model/UI-safe presentation for one sensitive concrete tool.
@@ -310,6 +312,7 @@ impl ToolAdmissionPolicy {
             egress: RunEgress::open(),
             approval: ApprovalPolicy::none(),
             run_caps: RunCapsMeter::unlimited(),
+            content: ContentControls::worker_default(),
         })
     }
 
@@ -354,6 +357,50 @@ impl ToolAdmissionPolicy {
     #[must_use]
     pub const fn run_caps(&self) -> &Arc<RunCapsMeter> {
         &self.run_caps
+    }
+
+    /// This generation bound to one run's content controls (ADR-0043
+    /// decisions 3 and 4): the disclosure marker its outbound tools write,
+    /// the preamble its agents get, and the run's untrusted reads. The
+    /// worker defaults unless the host lends the run's.
+    #[must_use]
+    pub fn with_content_controls(mut self, content: Arc<ContentControls>) -> Self {
+        self.content = content;
+        self
+    }
+
+    /// The run's content controls.
+    #[must_use]
+    pub const fn content_controls(&self) -> &Arc<ContentControls> {
+        &self.content
+    }
+
+    /// The "read untrusted, then act" rule for one tool the other rules do
+    /// not name (ADR-0043 decision 4): when the rule is on for the run and
+    /// the tool's category is `external_send`, `delete` or `payment`, the
+    /// tool is a CONDITIONAL approval candidate. A host asks for an approval
+    /// only for a call after the run read untrusted content
+    /// ([`crate::untrusted::UntrustedReads::requires_approval`]).
+    #[must_use]
+    pub fn untrusted_act_tool_in(
+        &self,
+        toolkit_type: &str,
+        toolkit_name: &str,
+        settings: Option<&Map<String, Value>>,
+        tool_name: &str,
+    ) -> Option<SensitiveToolPolicy> {
+        if !self.content.untrusted().act_rule() {
+            return None;
+        }
+        let category = tool_category(toolkit_type, settings, tool_name);
+        crate::untrusted::is_act_category(category).then(|| {
+            self.sensitive_presentation(
+                toolkit_type,
+                toolkit_name,
+                tool_name,
+                ApprovalRule::UntrustedReadThenAct { category },
+            )
+        })
     }
 
     #[must_use]
@@ -432,6 +479,16 @@ impl ToolAdmissionPolicy {
             self.approval
                 .rule_for(tool_category(toolkit_type, settings, tool_name))?
         };
+        Some(self.sensitive_presentation(toolkit_type, toolkit_name, tool_name, rule))
+    }
+
+    fn sensitive_presentation(
+        &self,
+        toolkit_type: &str,
+        toolkit_name: &str,
+        tool_name: &str,
+        rule: ApprovalRule,
+    ) -> SensitiveToolPolicy {
         let toolkit_label = if toolkit_name.trim().is_empty() {
             toolkit_type.trim()
         } else {
@@ -445,13 +502,13 @@ impl ToolAdmissionPolicy {
             toolkit_label,
             &action_name,
         );
-        Some(SensitiveToolPolicy {
+        SensitiveToolPolicy {
             toolkit_type: toolkit_type.trim().into(),
             toolkit_name: toolkit_name.trim().into(),
             action_name: action_name.into(),
             policy_message: policy_message.into(),
             rule,
-        })
+        }
     }
 }
 

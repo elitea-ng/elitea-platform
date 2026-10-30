@@ -69,8 +69,28 @@ type Producer struct {
 	approval ApprovalPolicyResolver
 	// runCaps answers an agent execution command's run caps (ADR-0041
 	// decision 3); nil leaves the field absent (the worker's defaults).
-	runCaps  RunCapsResolver
+	runCaps RunCapsResolver
+	// content answers an agent execution command's content controls
+	// (ADR-0043 decisions 3 and 4); nil leaves the field absent (the
+	// worker's defaults).
+	content  ContentControlsResolver
 	refusals DispatchRefusalRecorder
+}
+
+// ContentControlsResolver answers the content controls an agent execution
+// command carries (ADR-0043 decisions 3 and 4; workercontentcontrols.Resolver).
+// Nil leaves the field absent. An error refuses the command: it is never
+// signed without the controls it should carry, and the dispatch is retried
+// within the run's deadline.
+type ContentControlsResolver interface {
+	WorkerContentControls(ctx context.Context, command *runtimev1.WorkerCommandV1) (*runtimev1.WorkerContentControlsV1, error)
+}
+
+// WithContentControls makes every agent execution command this producer
+// prepares carry its content controls.
+func (p *Producer) WithContentControls(resolver ContentControlsResolver) *Producer {
+	p.content = resolver
+	return p
 }
 
 // RunCapsResolver answers the run caps an agent execution command carries
@@ -238,6 +258,13 @@ func (p *Producer) prepareCommand(ctx context.Context, command *runtimev1.Worker
 			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker run caps: %w", err)
 		}
 		command.RunCaps = caps
+	}
+	if p.content != nil && command.GetAgentExecution() != nil {
+		controls, err := p.content.WorkerContentControls(ctx, command)
+		if err != nil {
+			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker content controls: %w", err)
+		}
+		command.ContentControls = controls
 	}
 	if err := validateBoundedStrings(command, p.config.Limits.MaxStringBytes); err != nil {
 		return executionapp.PreparedCommandEnvelope{}, err

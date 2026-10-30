@@ -37,6 +37,7 @@ import (
 	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	workerapprovalpolicyapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerapprovalpolicy"
+	workercontentcontrolsapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workercontentcontrols"
 	workerdelegationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerdelegation"
 	workeregressapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workeregress"
 	workerruncapsapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerruncaps"
@@ -133,6 +134,12 @@ type Dependencies struct {
 	// start: the cache the admin save drops. Nil: a cache of its own,
 	// refreshed by its TTL only.
 	ApprovalPolicySettings workerapprovalpolicyapp.SettingsReader
+	// ContentControlsSettings reads the platform's ai_disclosure and
+	// platform_preamble sections and the approval policy's rule tiers
+	// (ADR-0043 decisions 3 and 4) for every agent execution command: the
+	// cache the admin save drops. Nil: a cache of its own, refreshed by its
+	// TTL only.
+	ContentControlsSettings workercontentcontrolsapp.SettingsReader
 	// RunCapsSettings reads the platform's run_caps section (ADR-0041
 	// decision 3) for every agent execution command: the cache the admin
 	// save drops. Nil: a cache of its own, refreshed by its TTL only.
@@ -401,6 +408,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if approvalSettings == nil {
 		approvalSettings = platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.ApprovalPolicySettings, error) {
 			return platformconfig.LoadApprovalPolicySettings(ctx, dependencies.AdmissionPool)
+		}, 0)
+	}
+	// The content controls (ADR-0043 decisions 3 and 4), on the same gate.
+	contentSettings := dependencies.ContentControlsSettings
+	if contentSettings == nil {
+		contentSettings = platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.ContentControlsSettings, error) {
+			return platformconfig.LoadContentControlsSettings(ctx, dependencies.AdmissionPool)
 		}, 0)
 	}
 	// The platform's run_caps section (ADR-0041 decision 3). Main sends the
@@ -776,6 +790,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, err
 		}
 		agentProducer.WithApprovalPolicy(approvalPolicy)
+		// The content controls (ADR-0043 decisions 3 and 4), on the same
+		// gate: absent until an administrator saves one of their sections.
+		contentControls, err := workercontentcontrolsapp.NewResolver(contentSettings, egressSources, egressSources, egressSources)
+		if err != nil {
+			return nil, err
+		}
+		agentProducer.WithContentControls(contentControls)
 		// The run caps (ADR-0041 decision 3), on the same gate. The
 		// repository records each run's effective caps (the evidence and the
 		// spend routine's input) and consumes an open override grant.

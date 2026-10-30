@@ -482,8 +482,7 @@ impl OrdinaryNativeAgentAssembler {
         let runtime =
             if profile.internal_tools().subagents_enabled() || context.workspace().is_some() {
                 let (adapter, _) = model_adapter(&profile);
-                let invocation =
-                    model_invocation(&profile, "", output_continuation, tool_policy.run_caps());
+                let invocation = model_invocation(&profile, "", output_continuation, &tool_policy);
                 let facade = Arc::clone(&self.model_facade);
                 let context = Arc::clone(&context);
                 let model_project_id = profile.model_project_id();
@@ -510,7 +509,7 @@ impl OrdinaryNativeAgentAssembler {
             &runtime.instruction_suffix(profile.instructions()),
             context.as_ref(),
             output_continuation,
-            tool_policy.run_caps(),
+            &tool_policy,
         )?;
         tracing::Span::current().record("stage", "runner");
         Ok(OrdinaryRunnerInputs {
@@ -975,6 +974,7 @@ impl OrdinaryNativeAgentAssembler {
                 // Single use, enforced by the facade; never the agent's turns.
                 max_model_turns: 1,
                 run_caps: None,
+                preamble: None,
             };
             let bound: Result<BoundModelFacade, ModelFacadeError> =
                 facade.bind(adapter, context.as_ref(), model_project_id, invocation);
@@ -994,10 +994,14 @@ impl OrdinaryNativeAgentAssembler {
         system_instruction: &str,
         context: &crate::transport::runtime_context::ClaimScopedEliteaContext,
         output_continuation: bool,
-        run_caps: &Arc<elitea_agent_runtime::run_caps::RunCapsMeter>,
+        tool_policy: &crate::toolkits::ToolAdmissionPolicy,
     ) -> Result<BoundModelFacade, NativeAgentAssemblyError> {
-        let invocation =
-            model_invocation(profile, system_instruction, output_continuation, run_caps);
+        let invocation = model_invocation(
+            profile,
+            system_instruction,
+            output_continuation,
+            tool_policy,
+        );
         let (adapter, adapter_name) = model_adapter(profile);
         tracing::Span::current().record("model_adapter", adapter_name);
         tracing::Span::current().record("model_project_id", profile.model_project_id());
@@ -1019,7 +1023,7 @@ fn model_invocation(
     profile: &super::assembly::OrdinaryNoToolProfile,
     system_instruction: &str,
     output_continuation: bool,
-    run_caps: &Arc<elitea_agent_runtime::run_caps::RunCapsMeter>,
+    tool_policy: &crate::toolkits::ToolAdmissionPolicy,
 ) -> ModelInvocation {
     ModelInvocation {
         response_schema: None,
@@ -1035,7 +1039,9 @@ fn model_invocation(
         max_model_turns: profile.step_limit(),
         // The run's model turns (ADR-0041 decision 3), shared with every
         // nested agent and sub-agent of the run.
-        run_caps: Some(Arc::clone(run_caps)),
+        run_caps: Some(Arc::clone(tool_policy.run_caps())),
+        // The platform preamble (ADR-0043), before the agent's instructions.
+        preamble: Some(Arc::clone(tool_policy.content_controls().preamble())),
     }
 }
 
@@ -1109,7 +1115,11 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
             assembly.egress(),
             assembly.approval_policy(),
             assembly.run_caps(),
+            assembly.content_controls(),
         )?;
+        // A recovered turn already ran its earlier steps: their tool results
+        // are in the saved request (ADR-0043 decision 4).
+        assembly.content_controls().untrusted().record_read();
         // The saved model request already contains resolved attachments. Do not
         // reread mutable documents while reconstructing this execution.
         let redeemed = self
@@ -1146,7 +1156,12 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
                 assembly.egress(),
                 assembly.approval_policy(),
                 assembly.run_caps(),
+                assembly.content_controls(),
             )?;
+            super::sensitive_tools::seed_continued_turn(
+                &assembly.request().payload,
+                assembly.content_controls(),
+            );
             // #606: this turn's attached documents are read HERE, before
             // admission builds the human message. It is infallible by design —
             // a file the platform will not serve reaches the model as its name

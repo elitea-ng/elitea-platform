@@ -129,7 +129,7 @@ fn parse_contract(raw: &str) -> Option<Declarations> {
 
 /// The guardrails match key: lower case, ASCII letters and digits only. The
 /// sensitive tool rules compare toolkit types and tool names on it.
-fn canonical_key(value: &str) -> Option<String> {
+pub(crate) fn canonical_key(value: &str) -> Option<String> {
     let key = value
         .trim()
         .chars()
@@ -139,21 +139,25 @@ fn canonical_key(value: &str) -> Option<String> {
     (!key.is_empty()).then_some(key)
 }
 
-/// The declared category of a built-in tool, if the contract lists it. A
-/// tool name with a routing prefix (`toolkit___tool`, `server:tool`) is
-/// matched as the sensitive tool rules match it: the whole name first, then
-/// the name with each prefix removed.
-#[must_use]
-pub fn declared_category(toolkit_type: &str, tool_name: &str) -> Option<ToolCategory> {
+/// The contract key of a stored toolkit type: its canonical key, with a type
+/// the contract lists under another name mapped to that name.
+pub(crate) fn contract_toolkit_key(toolkit_type: &str) -> Option<String> {
     let mut key = canonical_key(toolkit_type)?;
     if let Some((_, listed)) = STORED_TYPES.iter().find(|(stored, _)| *stored == key) {
         (*listed).clone_into(&mut key);
     }
-    let tools = DECLARED.get(&key)?;
+    Some(key)
+}
+
+/// The canonical keys a tool name is matched on, as the sensitive tool rules
+/// match it: the whole name first, then the name with each routing prefix
+/// (`toolkit___tool`, `server:tool`) removed.
+pub(crate) fn tool_keys(tool_name: &str) -> Vec<String> {
+    let mut keys = Vec::new();
     let mut current = tool_name.trim().to_lowercase();
     while !current.is_empty() {
-        if let Some(category) = canonical_key(&current).and_then(|tool| tools.get(&tool)) {
-            return Some(*category);
+        if let Some(key) = canonical_key(&current) {
+            keys.push(key);
         }
         let mut reduced = current.as_str();
         if let Some((_, suffix)) = reduced.split_once("___") {
@@ -167,7 +171,20 @@ pub fn declared_category(toolkit_type: &str, tool_name: &str) -> Option<ToolCate
         }
         current = reduced.to_owned();
     }
-    None
+    keys
+}
+
+/// The declared category of a built-in tool, if the contract lists it. A
+/// tool name with a routing prefix (`toolkit___tool`, `server:tool`) is
+/// matched as the sensitive tool rules match it: the whole name first, then
+/// the name with each prefix removed.
+#[must_use]
+pub fn declared_category(toolkit_type: &str, tool_name: &str) -> Option<ToolCategory> {
+    let tools = DECLARED.get(&contract_toolkit_key(toolkit_type)?)?;
+    tool_keys(tool_name)
+        .iter()
+        .find_map(|key| tools.get(key))
+        .copied()
 }
 
 /// The category an approved MCP server's pin gives the tool, if the
