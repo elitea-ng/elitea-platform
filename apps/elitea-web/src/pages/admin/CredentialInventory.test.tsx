@@ -94,7 +94,7 @@ describe('AdminCredentialInventory', () => {
     const secret = screen.getByTestId('credential-inventory-row-toolkit_secret-12:aha_token');
     expect(within(secret).getByRole('link', { name: 'Refund assistant' })).toHaveAttribute(
       'href',
-      '/agents/all/31?project_id=12',
+      '/12/agents/all/31',
     );
     expect(secret).toHaveTextContent('Flag only');
     expect(screen.queryByTestId('credential-inventory-revoke-toolkit_secret-12:aha_token')).not.toBeInTheDocument();

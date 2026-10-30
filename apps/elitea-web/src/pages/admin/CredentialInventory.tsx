@@ -68,9 +68,9 @@ function when(value: string | null | undefined): string {
   return value === null || value === undefined ? '—' : new Date(value).toLocaleDateString();
 }
 
-/** The owning agent in the main app; the project is chosen there. */
+/** The owning agent in the main app; the `/:projectId/` prefix switches to its project first (ROUTE-070). */
 function agentHref(projectId: number, applicationId: number): string {
-  return `/agents/all/${applicationId}?project_id=${projectId}`;
+  return `/${projectId}/agents/all/${applicationId}`;
 }
 
 export function AdminCredentialInventory(): ReactNode {
