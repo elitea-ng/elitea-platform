@@ -1,7 +1,9 @@
 package applications
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/outputcontract"
@@ -54,4 +56,31 @@ func bodyAgentType(body map[string]any, fallback string) string {
 		return agentType
 	}
 	return fallback
+}
+
+// storedApplicationAgentType is the agent_type of an application's stored
+// version (its base version, else its newest), for a new version whose body
+// names none: a meta contract on a pipeline application is then refused as
+// it is on update. It queries only when the body has no agent_type and its
+// meta holds a contract; otherwise, and when nothing is found, it answers "".
+func (h *Handler) storedApplicationAgentType(ctx context.Context, projectID, applicationID string, body map[string]any) string {
+	if h.pool == nil || bodyAgentType(body, "") != "" {
+		return ""
+	}
+	if meta, _ := body["meta"].(map[string]any); meta == nil || meta[outputcontract.MetaKey] == nil {
+		return ""
+	}
+	schema, ok := tenantSchema(projectID)
+	if !ok {
+		return ""
+	}
+	var agentType string
+	err := h.pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT agent_type FROM %s.application_versions WHERE application_id = $1
+		 ORDER BY (name = 'base') DESC, id DESC LIMIT 1`, schema),
+		applicationID).Scan(&agentType)
+	if err != nil {
+		return ""
+	}
+	return agentType
 }
