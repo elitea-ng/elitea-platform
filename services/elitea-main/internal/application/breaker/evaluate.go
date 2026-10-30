@@ -35,8 +35,9 @@ type Observation struct {
 	// The breaker does not trip it again.
 	Suspended bool
 	// Outcomes are the states of its latest ended runs, newest first, at
-	// most the error-rate window; cancelled runs are left out (a cancel is
-	// a person's or a cap's stop, not a failure of the agent).
+	// most the error-rate window. Cancelled runs and runs a run cap stopped
+	// are left out: a person's stop or a cap's stop is not a failure of the
+	// agent.
 	Outcomes []string
 	// RunsLastHour counts its runs that ended in the last hour, in any
 	// terminal state.

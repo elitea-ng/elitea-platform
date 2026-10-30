@@ -8,14 +8,16 @@
 --   elitea_runtime.agent_breaker_runs
 --       One row per settled agent run (execution job generation) that the
 --       routine has seen: the project and agent, when the run started and
---       ended, its terminal state, and the longest streak of consecutive
---       failures of one tool inside the run (from run_steps, shared 0205).
---       The routine copies the runs that ended in the last few minutes on
---       every pass (ON CONFLICT updates the row, so a late step record is
---       counted), and deletes rows older than seven days. The table is the
---       breaker's own window: a run that ended before the routine was first
---       enabled is never in it, so turning the breaker on does not judge an
---       agent on old runs.
+--       ended, its terminal state, whether a run cap stopped it
+--       (cap_reached), and the longest streak of consecutive failures of
+--       one tool inside the run (from run_steps, shared 0205). A tool call
+--       that the run caps meter refused is not a failure of that tool.
+--       Each pass copies the runs that ended in the last few minutes and
+--       are not in the table yet, so each run is computed once. The routine
+--       deletes rows older than seven days. The table is the breaker's own
+--       window: a run that ended before the routine was first enabled is
+--       never in it, so turning the breaker on does not judge an agent on
+--       old runs.
 --
 --   execution_jobs_agent_settled (index)
 --       The routine's read of "agent runs that ended since <t>". Partial: only
@@ -61,6 +63,11 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.agent_breaker_runs (
     state               text NOT NULL CHECK (state IN ('SUCCEEDED', 'FAILED', 'CANCELLED')),
     tool_failure_streak integer NOT NULL DEFAULT 0 CHECK (tool_failure_streak >= 0),
     tool_failure_name   text NOT NULL DEFAULT '' CHECK (length(tool_failure_name) <= 128),
+    -- A run cap stopped the run: Main's wall or spend cap (CANCELLED,
+    -- cancel_reason cap_reached) or the worker's tool call, model turn or
+    -- records cap (FAILED, failure code CAP_REACHED). Not a failure of the
+    -- agent: the error rate leaves it out.
+    cap_reached         boolean NOT NULL DEFAULT false,
     recorded_at         timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (execution_id, generation)
 );

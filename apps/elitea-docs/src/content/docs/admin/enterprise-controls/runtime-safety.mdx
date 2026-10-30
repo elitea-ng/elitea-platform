@@ -136,7 +136,7 @@ An agent can fail again and again without a person who sees it. For example, a t
 
 ### What is enforced
 
-The routine `main.agent_breaker` runs every minute. It reads the agent runs that ended since the last pass and checks each agent against four rules:
+The routine `main.agent_breaker` runs every minute. It reads the agent runs that ended since the last pass, and reads each run one time only. A run that ended less than 30 seconds before the pass waits for the next pass. Then the routine checks each agent against four rules:
 
 | Rule | Trips when | Default |
 | --- | --- | --- |
@@ -155,6 +155,8 @@ The breaker does not trip an agent that is already suspended, by any source. Aft
 
 An agent with fewer ended runs than the window since its last resume is not judged on `error_rate`. A cancelled run does not count as a failure or as a run in the window.
 
+**A run cap stop is not a failure.** A run that a [run cap](#run-caps) stopped (`CAP_REACHED`) does not count as a failure or as a run in the `error_rate` window. This applies to all caps: the wall time and spend caps that Main applies, and the tool call, model turn and records caps that the worker applies. A tool call that the worker refused because the run reached a cap is not a failure of that tool, so it does not add to `tool_failure_streak`. Thus an agent that does long tasks and often reaches its caps is not stopped by the breaker for that reason.
+
 **Who can resume** depends on the agent's risk tier:
 
 | Tier | `resume_requires` | Who can resume |
@@ -169,7 +171,7 @@ An agent with fewer ended runs than the window since its last resume is not judg
 
 - The breaker acts once a minute, on runs that ended. It does not stop a run in the middle of its first failures. Use [run caps](#run-caps) and project budgets for limits inside one run.
 - `tool_failure_streak` reads the run step records. A run whose worker records no tool steps is not checked on that rule.
-- `spend_per_hour` reads the gateway request log. Spend that the gateway does not attribute to a run is not counted.
+- `spend_per_hour` reads the gateway request log. Spend that the gateway does not attribute to a run is not counted. Each pass reads only the agents whose spend in the last hour is more than their own limit (the tier default, or the tighter override).
 - An agent's limits apply to the agent in all its runs. The breaker has no limit per user.
 
 ### Configuration

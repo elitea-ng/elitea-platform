@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"time"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
@@ -20,25 +19,34 @@ const DefaultSchedule = "1m"
 
 // The store's windows.
 const (
-	// IngestLookback is how far back each pass copies ended runs into the
-	// breaker's window. Passes overlap, so a run whose settlement committed
-	// late, or whose step records arrived after it ended, is still counted
-	// (the copy is idempotent).
+	// IngestLookback is how far back each pass looks for ended runs that
+	// are not in the breaker's window yet. Passes overlap, so a run whose
+	// settlement committed late, or a pass that failed, does not lose a run.
+	// A run already in the window is not read again.
 	IngestLookback = 10 * time.Minute
+	// IngestSettleGrace is how long a run waits after it settled before a
+	// pass copies it: a step report that passed the claim check just before
+	// the settlement commits in this time. After it, nothing about the run
+	// changes, so the pass computes each run once.
+	IngestSettleGrace = 30 * time.Second
 	// Retention is how long the breaker's window keeps a run.
 	Retention = 7 * 24 * time.Hour
 )
 
 // Store is the durable half (repos.AgentBreaker).
 type Store interface {
-	// IngestRuns copies the agent runs that ended within lookback into the
-	// window and answers the agents it touched.
+	// IngestRuns copies the agent runs that ended within lookback, and are
+	// not in the window yet, into the window and answers the agents it
+	// touched. A run stopped at a run cap is marked: it is not a failure.
 	IngestRuns(ctx context.Context, lookback time.Duration) ([]AgentKey, error)
-	// SpendLastHour answers each agent's spend in the last hour, counted
-	// from the later of an hour ago and the agent's last resume.
-	SpendLastHour(ctx context.Context) (map[AgentKey]float64, error)
+	// SpendOverLimit answers the agents whose spend in the last hour
+	// (counted from the later of an hour ago and the agent's last resume)
+	// is over their own spend limit, with that spend. An agent's limit is
+	// tierLimits[its tier] tightened by its override (Effective); 0 is no
+	// limit. One read for all agents.
+	SpendOverLimit(ctx context.Context, tierLimits map[agentlifecycle.Tier]float64) (map[AgentKey]float64, error)
 	// AnySpendOverride reports whether any agent's override sets a spend
-	// limit (the spend read runs only when some limit can apply).
+	// limit. The pass asks only when no tier sets one.
 	AnySpendOverride(ctx context.Context) (bool, error)
 	// Observe reads one agent: tier, override, suspension, its latest
 	// window ended runs, and the hourly figures.
@@ -119,25 +127,23 @@ func (p *Pass) run(ctx context.Context) (Summary, error) {
 	}
 	summary.Ingested = len(touched)
 
+	// Only the agents over their own spend limit are candidates by spend:
+	// an agent that spends under its limit is not read.
 	spend := map[AgentKey]float64{}
-	lowest, tierSpend := lowestSpendLimit(settings)
-	overrides, err := p.Store.AnySpendOverride(ctx)
-	if err != nil {
-		return summary, fmt.Errorf("breaker: read the spend overrides: %w", err)
+	tierLimits, tierSpend := spendLimits(settings)
+	readSpend := tierSpend
+	if !tierSpend {
+		if readSpend, err = p.Store.AnySpendOverride(ctx); err != nil {
+			return summary, fmt.Errorf("breaker: read the spend overrides: %w", err)
+		}
 	}
-	if tierSpend || overrides {
-		spend, err = p.Store.SpendLastHour(ctx)
+	if readSpend {
+		spend, err = p.Store.SpendOverLimit(ctx, tierLimits)
 		if err != nil {
 			return summary, fmt.Errorf("breaker: read the spend of the last hour: %w", err)
 		}
-		if overrides {
-			// An override can set a limit below every tier's.
-			lowest = 0
-		}
-		for key, usd := range spend {
-			if usd > lowest {
-				candidates[key] = true
-			}
+		for key := range spend {
+			candidates[key] = true
 		}
 	}
 
@@ -220,14 +226,14 @@ func (p *Pass) run(ctx context.Context) (Summary, error) {
 	return summary, nil
 }
 
-// lowestSpendLimit answers the lowest tier spend limit, and whether any
-// tier has one.
-func lowestSpendLimit(settings Settings) (float64, bool) {
-	lowest, any := math.Inf(1), false
+// spendLimits answers each tier's spend limit, and whether any tier has
+// one.
+func spendLimits(settings Settings) (map[agentlifecycle.Tier]float64, bool) {
+	limits, any := map[agentlifecycle.Tier]float64{}, false
 	for _, tier := range agentlifecycle.Tiers {
-		if usd := settings.Tier(tier).Rules.SpendPerHourUSD; usd > 0 {
-			lowest, any = math.Min(lowest, usd), true
-		}
+		usd := settings.Tier(tier).Rules.SpendPerHourUSD
+		limits[tier] = usd
+		any = any || usd > 0
 	}
-	return lowest, any
+	return limits, any
 }

@@ -214,18 +214,29 @@ type fakeStore struct {
 	observations map[AgentKey]Observation
 	spend        map[AgentKey]float64
 	spendReads   int
+	spendLimits  map[agentlifecycle.Tier]float64
+	anyOverride  bool
+	overrideAsks int
+	observed     []AgentKey
 	trips        []Trip
 	notified     int
 	nextID       int64
 }
 
-func (f *fakeStore) IngestRuns(context.Context, time.Duration) ([]AgentKey, error) { return f.touched, nil }
-func (f *fakeStore) SpendLastHour(context.Context) (map[AgentKey]float64, error) {
+func (f *fakeStore) IngestRuns(context.Context, time.Duration) ([]AgentKey, error) {
+	return f.touched, nil
+}
+func (f *fakeStore) SpendOverLimit(_ context.Context, limits map[agentlifecycle.Tier]float64) (map[AgentKey]float64, error) {
 	f.spendReads++
+	f.spendLimits = limits
 	return f.spend, nil
 }
-func (f *fakeStore) AnySpendOverride(context.Context) (bool, error) { return false, nil }
+func (f *fakeStore) AnySpendOverride(context.Context) (bool, error) {
+	f.overrideAsks++
+	return f.anyOverride, nil
+}
 func (f *fakeStore) Observe(_ context.Context, key AgentKey, _ int) (Observation, error) {
+	f.observed = append(f.observed, key)
 	o := f.observations[key]
 	o.Key = key
 	return o, nil
@@ -348,5 +359,49 @@ func TestMetricsActiveGauge(t *testing.T) {
 	_ = metrics.WriteText(&text)
 	if !strings.Contains(text.String(), `elitea_safety_suspensions_active{scope="platform",source="manual"} 1`) {
 		t.Errorf("a failed read reset the gauge")
+	}
+}
+
+// The spend read: with no tier limit the pass asks whether any override
+// sets one, and reads the spend only then; it passes every tier's limit; the
+// agents the store answers (over their own limit) are the only candidates
+// by spend, and their spend reaches the evaluation.
+func TestPassSpendCandidates(t *testing.T) {
+	// No tier limit and no override: no spend read, nobody observed.
+	store := &fakeStore{spend: map[AgentKey]float64{{1, 1}: 50}}
+	if _, err := (&Pass{Store: store, Settings: func(context.Context) (Settings, error) { return DefaultSettings(), nil }}).Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if store.overrideAsks != 1 || store.spendReads != 0 || len(store.observed) != 0 {
+		t.Fatalf("asks %d reads %d observed %v", store.overrideAsks, store.spendReads, store.observed)
+	}
+
+	// An override sets a limit: one read for all agents, and only the
+	// agent the store answers is observed and tripped.
+	over := AgentKey{1, 2}
+	store = &fakeStore{anyOverride: true, spend: map[AgentKey]float64{over: 3},
+		observations: map[AgentKey]Observation{over: {Tier: agentlifecycle.TierLow, Override: Override{SpendPerHourUSD: ptr(2.0)}}}}
+	summary, err := (&Pass{Store: store, Settings: func(context.Context) (Settings, error) { return DefaultSettings(), nil }}).Run(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.spendReads != 1 || len(store.observed) != 1 || store.observed[0] != over || summary.Tripped != 1 ||
+		store.trips[0].Rule != RuleSpendPerHour || store.trips[0].Observed != 3 {
+		t.Fatalf("summary %s observed %v trips %+v", summary.String(), store.observed, store.trips)
+	}
+
+	// A tier limit: no override question, and the store gets each tier's
+	// limit.
+	settings := DefaultSettings()
+	high := settings.Tiers[agentlifecycle.TierHigh]
+	high.Rules.SpendPerHourUSD = 7
+	settings.Tiers[agentlifecycle.TierHigh] = high
+	store = &fakeStore{spend: map[AgentKey]float64{}}
+	if _, err := (&Pass{Store: store, Settings: func(context.Context) (Settings, error) { return settings, nil }}).Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if store.overrideAsks != 0 || store.spendReads != 1 || store.spendLimits[agentlifecycle.TierHigh] != 7 ||
+		store.spendLimits[agentlifecycle.TierLow] != 0 || len(store.spendLimits) != len(agentlifecycle.Tiers) {
+		t.Fatalf("asks %d reads %d limits %v", store.overrideAsks, store.spendReads, store.spendLimits)
 	}
 }
