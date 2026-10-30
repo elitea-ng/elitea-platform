@@ -25,10 +25,22 @@
 --       past that cap once. The NEXT agent run of the conversation consumes
 --       the grant (consumed_execution_id) and runs with that cap doubled; a
 --       grant not consumed within an hour expires. At most one grant per
---       stopped response (the unique index) and one open grant per
---       conversation. Rows are never deleted with the run: they are the
+--       stopped response (the unique index) and one live grant per
+--       conversation: a grant that is not consumed and not lapsed. The next
+--       grant in the conversation sets lapsed_at on an unused grant past
+--       expires_at, so an expired grant never blocks a new one. Only a
+--       grant on a cap Main enforces (max_spend, max_wall_seconds) is
+--       consumed by a run whose command carries no run_caps. Rows are never
+--       deleted with the run: they are the
 --       evidence of who let a run pass a cap. Each grant is also a security
 --       audit event (ai.elitea.security.v1.agent.cap.override).
+--
+--   gateway.llm_request_logs (execution_id, occurred_at)
+--       The spend routine sums the log rows of each capped run every 30
+--       seconds. The index lets it read only the rows of that run. The
+--       runner is transactional, so the index is not built CONCURRENTLY:
+--       the build holds a SHARE lock on the log table (writes wait, reads
+--       continue). See docs/UPGRADING.md.
 --
 -- Permission: safety.override_cap goes to the platform administrators
 -- (administration mode: super_admin, admin) and to the project admin
@@ -89,8 +101,11 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.run_cap_overrides (
     consumed_execution_id text CHECK (consumed_execution_id IS NULL
                                       OR length(consumed_execution_id) BETWEEN 1 AND 128),
     consumed_at           timestamptz,
+    lapsed_at             timestamptz,
     CONSTRAINT run_cap_overrides_consumed
         CHECK ((consumed_execution_id IS NULL) = (consumed_at IS NULL)),
+    CONSTRAINT run_cap_overrides_lapsed
+        CHECK (lapsed_at IS NULL OR (consumed_execution_id IS NULL AND lapsed_at >= expires_at)),
     CONSTRAINT run_cap_overrides_expiry CHECK (expires_at > granted_at)
 );
 
@@ -98,15 +113,29 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.run_cap_overrides (
 CREATE UNIQUE INDEX IF NOT EXISTS run_cap_overrides_source
     ON elitea_runtime.run_cap_overrides (project_id, source_message_id);
 
--- One open grant per conversation: the next run takes it.
+-- One live grant per conversation: the next run takes it. A lapsed grant
+-- (expired unused) is out of the index.
 CREATE UNIQUE INDEX IF NOT EXISTS run_cap_overrides_open
     ON elitea_runtime.run_cap_overrides (project_id, conversation_uuid)
-    WHERE consumed_execution_id IS NULL;
+    WHERE consumed_execution_id IS NULL AND lapsed_at IS NULL;
 
 -- The run that consumed a grant.
 CREATE INDEX IF NOT EXISTS run_cap_overrides_consumed_execution
     ON elitea_runtime.run_cap_overrides (consumed_execution_id)
     WHERE consumed_execution_id IS NOT NULL;
+
+-- The spend routine reads the log rows of one run.
+DO $$
+BEGIN
+    IF to_regclass('gateway.llm_request_logs') IS NULL THEN
+        RAISE NOTICE '0212: gateway.llm_request_logs absent, no spend index';
+        RETURN;
+    END IF;
+    CREATE INDEX IF NOT EXISTS idx_llm_request_logs_execution_time
+        ON gateway.llm_request_logs (execution_id, occurred_at)
+        WHERE execution_id IS NOT NULL;
+END
+$$;
 
 DO $$
 BEGIN

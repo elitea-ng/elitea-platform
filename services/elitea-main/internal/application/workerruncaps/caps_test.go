@@ -95,7 +95,10 @@ func TestResolverSendsNothingUntilSaved(t *testing.T) {
 	if err != nil || caps != nil {
 		t.Fatalf("caps = %v, err = %v", caps, err)
 	}
-	if len(binder.bindings) != 1 || binder.bindings[0].Caps != platformconfig.DefaultTierRunCaps() {
+	// The command carries no caps, so the binder must not consume a grant on
+	// a worker cap.
+	if len(binder.bindings) != 1 || binder.bindings[0].Caps != platformconfig.DefaultTierRunCaps() ||
+		binder.bindings[0].WorkerCapsSent {
 		t.Fatalf("bindings = %+v", binder.bindings)
 	}
 }
@@ -118,7 +121,7 @@ func TestResolverLowersTheTierCapsByTheAuthorCaps(t *testing.T) {
 	if !proto.Equal(caps, want) {
 		t.Fatalf("caps = %v, want %v", caps, want)
 	}
-	if got := binder.bindings[0]; got.ExecutionID != "exec-1" || got.ProjectID != 17 ||
+	if got := binder.bindings[0]; got.ExecutionID != "exec-1" || got.ProjectID != 17 || !got.WorkerCapsSent ||
 		got.Caps != (platformconfig.TierRunCaps{MaxToolCalls: 20, MaxModelTurns: 40, MaxSpend: 1.5}) {
 		t.Fatalf("binding = %+v", got)
 	}

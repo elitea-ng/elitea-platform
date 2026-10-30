@@ -57,7 +57,9 @@ func (r runCapsRecord) caps() platformconfig.TierRunCaps {
 // The execution's row is locked first, so two replicas preparing the same
 // command agree: the first record of an execution wins and a later
 // generation (a redispatch) copies it. With no record yet, an open, unexpired
-// override grant of the run's conversation is consumed and raises its cap.
+// override grant of the run's conversation is consumed and raises its cap. A
+// grant on a worker cap is consumed only when the command carries the caps
+// (Binding.WorkerCapsSent).
 func (r *RunCapsRepository) BindRunCaps(ctx context.Context, binding workerruncaps.Binding) (platformconfig.TierRunCaps, error) {
 	if binding.ExecutionID == "" || binding.Generation == 0 || binding.ProjectID <= 0 {
 		return platformconfig.TierRunCaps{}, errors.New("run caps: execution identity is required")
@@ -131,7 +133,8 @@ WHERE execution_id = $1 AND generation = $2 AND run_caps IS NULL`,
 // when there is none. The grant is on the project that holds the
 // conversation (the run's projection project, which for a borrowed agent is
 // not its resource project). A run of the stopped response itself (a
-// regenerate) does not consume it.
+// regenerate) does not consume it. A grant on a worker cap is consumed only
+// when the command carries the caps; else it stays open for a later run.
 func claimOverride(ctx context.Context, tx pgx.Tx, binding workerruncaps.Binding) (string, error) {
 	var cap string
 	err := tx.QueryRow(ctx, `
@@ -146,8 +149,10 @@ WHERE agent.execution_id = $1
   AND grant_row.conversation_uuid = agent.client_stream_id
   AND grant_row.source_message_id <> agent.client_message_id
   AND grant_row.consumed_execution_id IS NULL
+  AND grant_row.lapsed_at IS NULL
   AND grant_row.expires_at > clock_timestamp()
-RETURNING grant_row.cap`, binding.ExecutionID, int64(binding.Generation)).Scan(&cap)
+  AND ($3 OR grant_row.cap IN ('max_spend', 'max_wall_seconds'))
+RETURNING grant_row.cap`, binding.ExecutionID, int64(binding.Generation), binding.WorkerCapsSent).Scan(&cap)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
@@ -170,7 +175,9 @@ type SpendCapCancel struct {
 // max_spend is positive and whose spend so far reached it. Spend is the
 // run's gateway request log rows: model calls at the price catalogue rate
 // and metered tool operations at their cost. A run another stop already
-// cancelled keeps that stop.
+// cancelled keeps that stop. The log join reads the partial index
+// idx_llm_request_logs_execution_time (shared 0212): the explicit
+// "execution_id IS NOT NULL" lets the planner prove its predicate.
 const enforceSpendCapsSQL = `
 WITH capped AS (
     SELECT j.execution_id, j.generation, j.resource_project_id, j.admitted_at,
@@ -193,6 +200,7 @@ WITH capped AS (
     JOIN gateway.llm_request_logs AS l
       ON l.project_id = c.resource_project_id
      AND l.execution_id = c.execution_id
+     AND l.execution_id IS NOT NULL
      AND l.occurred_at >= c.admitted_at
     LEFT JOIN gateway.gateway_models AS m
       ON m.provider = l.provider AND m.model_name = l.model
@@ -298,6 +306,19 @@ WHERE message_group.uuid::text = $1
 		var source *string
 		if sourceExecution != "" && len(sourceExecution) <= 128 {
 			source = &sourceExecution
+		}
+		// An unused grant of the conversation past its expiry lapses here,
+		// so it does not block this grant on run_cap_overrides_open. The
+		// row stays as evidence.
+		if _, err := tx.Exec(ctx, `
+UPDATE elitea_runtime.run_cap_overrides
+SET lapsed_at = clock_timestamp()
+WHERE project_id = $1
+  AND conversation_uuid = $2
+  AND consumed_execution_id IS NULL
+  AND lapsed_at IS NULL
+  AND expires_at <= clock_timestamp()`, request.ProjectID, conversationUUID); err != nil {
+			return fmt.Errorf("lapse the expired run cap overrides: %w", err)
 		}
 		err = tx.QueryRow(ctx, `
 INSERT INTO elitea_runtime.run_cap_overrides (

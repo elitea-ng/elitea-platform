@@ -55,6 +55,12 @@ type Binding struct {
 	Generation  uint64
 	ProjectID   int64
 	Caps        platformconfig.TierRunCaps
+	// WorkerCapsSent is whether the command carries run_caps (an
+	// administrator saved a per-tier key). When false the run consumes only
+	// a grant on a cap Main enforces (max_spend, max_wall_seconds): a grant
+	// on a worker cap stays open, because the worker would not see the
+	// raised cap.
+	WorkerCapsSent bool
 }
 
 // Resolver computes an agent execution command's run caps. It is the
@@ -106,7 +112,7 @@ func (r *Resolver) WorkerRunCaps(ctx context.Context, command *runtimev1.WorkerC
 	if r.binder != nil && command.GetExecutionId() != "" && command.GetGeneration() > 0 && projectID > 0 {
 		caps, err = r.binder.BindRunCaps(ctx, Binding{
 			ExecutionID: command.GetExecutionId(), Generation: command.GetGeneration(),
-			ProjectID: projectID, Caps: caps,
+			ProjectID: projectID, Caps: caps, WorkerCapsSent: settings.TierCapsStored,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("worker run caps: record the run's caps: %w", err)
