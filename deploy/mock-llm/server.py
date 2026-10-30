@@ -116,6 +116,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import struct
 import threading
 import time
@@ -355,6 +356,21 @@ def _message_text(message: dict) -> str:
     return ""
 
 
+# The worker wraps every tool and retrieval result in this envelope before the
+# model sees it (ADR-0043 decision 4, #1500): one `<untrusted source="...">`
+# line, the content, one `</untrusted>` line. The scripts quote a result to
+# show WHICH result came back, so they quote the content inside the envelope.
+# A result without the envelope (an older runtime) is quoted unchanged.
+_UNTRUSTED_ENVELOPE = re.compile(r'\A<untrusted source="[^"\n]*">\n(.*)\n</untrusted>\Z', re.DOTALL)
+
+
+def _tool_message_text(message: dict) -> str:
+    """A tool result's text, without the worker's untrusted-content envelope."""
+    text = _message_text(message)
+    match = _UNTRUSTED_ENVELOPE.match(text)
+    return match.group(1) if match else text
+
+
 def _system_text(messages: list[dict]) -> str:
     """Every instruction message this request carried, joined by newline.
 
@@ -445,7 +461,7 @@ def _tool_result_text(messages: list[dict]) -> str | None:
     """
     for message in reversed(messages or []):
         if message.get("role") in ("tool", "function"):
-            return _message_text(message)
+            return _tool_message_text(message)
     return None
 
 
@@ -470,7 +486,7 @@ def _tool_result_text_this_turn(messages: list[dict]) -> str | None:
         if role == "user":
             return None
         if role in ("tool", "function"):
-            return _message_text(message)
+            return _tool_message_text(message)
     return None
 
 
@@ -520,7 +536,7 @@ def _tool_results_this_turn(messages: list[dict], calls: list[dict]) -> list[str
             and message["name"] in function_names
         )
         if role in ("tool", "function") and (matching_call or legacy_function):
-            results.append(_message_text(message))
+            results.append(_tool_message_text(message))
     results.reverse()
     return results
 
