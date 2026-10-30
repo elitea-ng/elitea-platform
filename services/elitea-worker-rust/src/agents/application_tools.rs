@@ -3584,6 +3584,7 @@ impl ApplicationAssemblyState<'_> {
                 .as_ref()
                 .map(|scopes| scopes.with_application_tools(child_tools.agent_tool_names())),
             egress: Arc::clone(self.policy.egress()),
+            run_caps: Arc::clone(self.policy.run_caps()),
         });
         Ok(AssembledApplication::Built(Arc::new(BuiltApplication {
             saved_agent_fingerprint,
@@ -4284,6 +4285,9 @@ struct LazyNestedAgent {
     model_scopes: Option<ModelScopeSessions>,
     /// The run's egress policy, for delegated-auth discovery (#1490).
     egress: Arc<elitea_agent_runtime::egress::RunEgress>,
+    /// The run's caps meter (ADR-0041 decision 3): a nested agent's model
+    /// turns count toward the run's.
+    run_caps: Arc<elitea_agent_runtime::run_caps::RunCapsMeter>,
 }
 
 #[async_trait]
@@ -4335,6 +4339,7 @@ impl LazyNestedAgent {
             // ADK still admits only step_limit logical model/tool iterations.
             max_model_turns: self.profile.step_limit()
                 + crate::agents::request::MAX_OUTPUT_CONTINUATION_CALLS,
+            run_caps: Some(Arc::clone(&self.run_caps)),
         };
         let adapter = match self.profile.model_provider() {
             OrdinaryModelProvider::OpenAiChat => ModelAdapterKind::OpenAiCompatible,

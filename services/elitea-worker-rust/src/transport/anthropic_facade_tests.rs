@@ -113,6 +113,7 @@ fn invocation(model: &str, effort: Option<ModelReasoningEffort>) -> ModelFacadeI
         reasoning_effort: effort,
         temperature: effort.is_none().then_some(0.7),
         max_model_turns: 25,
+        run_caps: None,
     }
 }
 

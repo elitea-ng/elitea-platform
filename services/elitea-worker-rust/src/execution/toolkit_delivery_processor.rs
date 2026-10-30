@@ -2236,6 +2236,7 @@ const fn runtime_failure_code(failure: RuntimeFailureKind) -> &'static str {
         RuntimeFailureKind::ResultRefused => "runtime.result_refused",
         RuntimeFailureKind::RecoveryRefused => "runtime.recovery_refused",
         RuntimeFailureKind::RecoveryFrontierUnsupported => "runtime.recovery_frontier_unsupported",
+        RuntimeFailureKind::CapReached(cap) => cap.error_code(),
         RuntimeFailureKind::OutputContinuationExhausted => "runtime.output_continuation_exhausted",
         RuntimeFailureKind::ModelTimeout => "runtime.model_timeout",
         RuntimeFailureKind::ModelRateLimited => "runtime.model_rate_limited",

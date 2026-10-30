@@ -11,6 +11,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use elitea_agent_runtime::run_caps::RunCapsMeter;
 use serde_json::{Map, Value};
 use tracing::Instrument as _;
 
@@ -492,6 +493,7 @@ where
     RC: CommandRetirementClient + 'static,
     K: UnixMillisClock,
 {
+    let run_caps = started.run_caps();
     let (mut run, mut native, mut projector, mut completion_selector) = started.into_parts();
 
     // ADR-0042 (#1499): this command's step records. The decisions a
@@ -624,6 +626,7 @@ where
             return Box::pin(run.close_no_ack(error.code().as_str(), error.retryable())).await;
         }
     };
+    failure = cap_reached_terminal(failure, &run_caps);
 
     if failure.is_none() && matches!(successful_terminal, FreshAgentTerminalSelection::Completed) {
         tracing::info!(event = "agent_completion_selection_started");
@@ -1675,6 +1678,25 @@ where
 
 /// The terminal of a failed event stream: a fixed Parallel resource-bound
 /// refusal keeps its typed limit (PM-3); anything else maps its upstream code.
+/// ADR-0041 decision 3: a run whose meter tripped ends as that cap, whatever
+/// failure (or success) the stream reported after the refused call.
+fn cap_reached_terminal(
+    failure: Option<RuntimeFailureKind>,
+    run_caps: &RunCapsMeter,
+) -> Option<RuntimeFailureKind> {
+    let Some(cap) = run_caps.tripped() else {
+        return failure;
+    };
+    let (used, limit) = run_caps.usage(cap);
+    tracing::warn!(
+        event = "agent_run_cap_reached",
+        cap = cap.as_str(),
+        used,
+        limit,
+    );
+    Some(RuntimeFailureKind::CapReached(cap))
+}
+
 fn stream_failure(error: &crate::agents::runtime::NativeAgentRuntimeError) -> RuntimeFailureKind {
     if error.parallel_resource_exhausted() {
         RuntimeFailureKind::ResourceExhausted
@@ -1775,6 +1797,31 @@ mod taxonomy_tests {
 
     /// Live 4.45.1: a reasoning-only Continue cut reasoning-only again is the
     /// typed continuation failure the chat explains, never INTERNAL.
+    /// ADR-0041 decision 3: once the meter trips, the run ends as that cap
+    /// whatever the stream reported; an untripped meter changes nothing.
+    #[test]
+    fn a_tripped_meter_is_the_terminal_failure() {
+        use elitea_agent_runtime::run_caps::{RunCap, RunCapLimits, RunCapsMeter};
+
+        let meter = RunCapsMeter::new(RunCapLimits {
+            max_tool_calls: 1,
+            ..RunCapLimits::unlimited()
+        });
+        assert_eq!(super::cap_reached_terminal(None, &meter), None);
+        assert_eq!(
+            super::cap_reached_terminal(Some(RuntimeFailureKind::Internal), &meter),
+            Some(RuntimeFailureKind::Internal)
+        );
+        meter.charge_tool_call().unwrap();
+        assert_eq!(meter.charge_tool_call(), Err(RunCap::MaxToolCalls));
+        for stream in [None, Some(RuntimeFailureKind::Internal)] {
+            assert_eq!(
+                super::cap_reached_terminal(stream, &meter),
+                Some(RuntimeFailureKind::CapReached(RunCap::MaxToolCalls))
+            );
+        }
+    }
+
     #[test]
     fn exhausted_reasoning_only_continuation_is_the_continuation_failure() {
         assert_eq!(

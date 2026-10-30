@@ -159,6 +159,8 @@ mod rally_tests;
 #[cfg(test)]
 mod report_portal_tests;
 #[cfg(test)]
+mod run_caps_invocation_tests;
+#[cfg(test)]
 mod salesforce_tests;
 /// The SDK schema gate (ADR-0027 decision 8). Test-only: the worker's
 /// artifact suite (`test-support`) asserts the same contract.

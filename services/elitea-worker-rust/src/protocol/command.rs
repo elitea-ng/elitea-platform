@@ -472,6 +472,7 @@ fn scan_agent_worker_command(raw: &[u8]) -> Result<(), ProtocolError> {
     scan_egress_policy(&fields)?;
     scan_delegation_policy(&fields)?;
     scan_approval_policy(&fields)?;
+    scan_run_caps(&fields)?;
     let input_reference = fields.length_field(16, "the input bundle reference is missing")?;
     let input_fields = scan_message(input_reference, Schema::InputBundleReference)?;
     let input_digest = input_fields.length_field(3, "the input bundle digest is missing")?;
@@ -569,6 +570,18 @@ fn scan_approval_policy(fields: &ScannedFields<'_>) -> Result<(), ProtocolError>
         scan_message(
             fields.length_field(68, "the worker approval policy is missing")?,
             Schema::WorkerApprovalPolicy,
+        )?;
+    }
+    Ok(())
+}
+
+/// Field 69 (ADR-0041 decision 3, #1498): the run caps admit no unknown
+/// field. Only an agent execution carries them.
+fn scan_run_caps(fields: &ScannedFields<'_>) -> Result<(), ProtocolError> {
+    if fields.contains(69) {
+        scan_message(
+            fields.length_field(69, "the worker run caps are missing")?,
+            Schema::WorkerRunCaps,
         )?;
     }
     Ok(())

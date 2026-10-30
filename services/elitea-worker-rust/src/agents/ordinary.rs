@@ -482,7 +482,8 @@ impl OrdinaryNativeAgentAssembler {
         let runtime =
             if profile.internal_tools().subagents_enabled() || context.workspace().is_some() {
                 let (adapter, _) = model_adapter(&profile);
-                let invocation = model_invocation(&profile, "", output_continuation);
+                let invocation =
+                    model_invocation(&profile, "", output_continuation, tool_policy.run_caps());
                 let facade = Arc::clone(&self.model_facade);
                 let context = Arc::clone(&context);
                 let model_project_id = profile.model_project_id();
@@ -509,6 +510,7 @@ impl OrdinaryNativeAgentAssembler {
             &runtime.instruction_suffix(profile.instructions()),
             context.as_ref(),
             output_continuation,
+            tool_policy.run_caps(),
         )?;
         tracing::Span::current().record("stage", "runner");
         Ok(OrdinaryRunnerInputs {
@@ -972,6 +974,7 @@ impl OrdinaryNativeAgentAssembler {
                 temperature,
                 // Single use, enforced by the facade; never the agent's turns.
                 max_model_turns: 1,
+                run_caps: None,
             };
             let bound: Result<BoundModelFacade, ModelFacadeError> =
                 facade.bind(adapter, context.as_ref(), model_project_id, invocation);
@@ -991,8 +994,10 @@ impl OrdinaryNativeAgentAssembler {
         system_instruction: &str,
         context: &crate::transport::runtime_context::ClaimScopedEliteaContext,
         output_continuation: bool,
+        run_caps: &Arc<elitea_agent_runtime::run_caps::RunCapsMeter>,
     ) -> Result<BoundModelFacade, NativeAgentAssemblyError> {
-        let invocation = model_invocation(profile, system_instruction, output_continuation);
+        let invocation =
+            model_invocation(profile, system_instruction, output_continuation, run_caps);
         let (adapter, adapter_name) = model_adapter(profile);
         tracing::Span::current().record("model_adapter", adapter_name);
         tracing::Span::current().record("model_project_id", profile.model_project_id());
@@ -1014,6 +1019,7 @@ fn model_invocation(
     profile: &super::assembly::OrdinaryNoToolProfile,
     system_instruction: &str,
     output_continuation: bool,
+    run_caps: &Arc<elitea_agent_runtime::run_caps::RunCapsMeter>,
 ) -> ModelInvocation {
     ModelInvocation {
         response_schema: None,
@@ -1027,6 +1033,9 @@ fn model_invocation(
             .map(|effort| continuation_reasoning_effort(effort, output_continuation)),
         temperature: profile.temperature(),
         max_model_turns: profile.step_limit(),
+        // The run's model turns (ADR-0041 decision 3), shared with every
+        // nested agent and sub-agent of the run.
+        run_caps: Some(Arc::clone(run_caps)),
     }
 }
 
@@ -1099,6 +1108,7 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
             &self.tool_policy,
             assembly.egress(),
             assembly.approval_policy(),
+            assembly.run_caps(),
         )?;
         // The saved model request already contains resolved attachments. Do not
         // reread mutable documents while reconstructing this execution.
@@ -1135,6 +1145,7 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
                 &self.tool_policy,
                 assembly.egress(),
                 assembly.approval_policy(),
+                assembly.run_caps(),
             )?;
             // #606: this turn's attached documents are read HERE, before
             // admission builds the human message. It is infallible by design —

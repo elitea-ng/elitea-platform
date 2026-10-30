@@ -79,6 +79,7 @@ pub mod planner;
 pub mod platform;
 pub mod remote_assertion;
 pub mod request;
+pub mod run_caps;
 pub mod step_limit;
 pub mod subagents;
 pub mod text;
