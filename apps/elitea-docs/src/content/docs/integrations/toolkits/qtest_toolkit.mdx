@@ -36,33 +36,35 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (25)">
 
-| Tool |
-|---|
-| Add file to test case |
-| Create test cases |
-| Delete test case |
-| Find defects by test run id |
-| Find entity by id |
-| Find requirements by test case id |
-| Find test case by id |
-| Find test cases by requirement id |
-| Find test runs by test case id |
-| Get all test cases fields for project |
-| Get modules |
-| Get test case versions |
-| Index data |
-| Link tests to jira requirement |
-| Link tests to qtest requirement |
-| List indexes |
-| Remove index |
-| Search by dql |
-| Search entities by dql |
-| Search index |
-| Stepback search index |
-| Stepback summary index |
-| Update test case |
-| Update test run status |
-| Upload attachment to test run |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Add file to test case | `write` |
+| Create test cases | `write` |
+| Delete test case | `delete` |
+| Find defects by test run id | `read` |
+| Find entity by id | `read` |
+| Find requirements by test case id | `read` |
+| Find test case by id | `read` |
+| Find test cases by requirement id | `read` |
+| Find test runs by test case id | `read` |
+| Get all test cases fields for project | `read` |
+| Get modules | `read` |
+| Get test case versions | `read` |
+| Index data | `write` |
+| Link tests to jira requirement | `write` |
+| Link tests to qtest requirement | `write` |
+| List indexes | `read` |
+| Remove index | `delete` |
+| Search by dql | `read` |
+| Search entities by dql | `read` |
+| Search index | `read` |
+| Stepback search index | `read` |
+| Stepback summary index | `read` |
+| Update test case | `write` |
+| Update test run status | `write` |
+| Upload attachment to test run | `write` |
 
 </Accordion>
 

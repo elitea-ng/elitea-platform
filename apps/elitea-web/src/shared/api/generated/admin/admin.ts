@@ -6454,6 +6454,11 @@ export type resumeExecutionSuspensionResponse200 = {
   status: 200;
 };
 
+export type resumeExecutionSuspensionResponse202 = {
+  data: ExecutionSuspension;
+  status: 202;
+};
+
 export type resumeExecutionSuspensionResponse400 = {
   data: ErrorResponse;
   status: 400;
@@ -6479,10 +6484,11 @@ export type resumeExecutionSuspensionResponse409 = {
   status: 409;
 };
 
-export type resumeExecutionSuspensionResponseSuccess =
-  resumeExecutionSuspensionResponse200 & {
-    headers: Headers;
-  };
+export type resumeExecutionSuspensionResponseSuccess = (
+  resumeExecutionSuspensionResponse200 | resumeExecutionSuspensionResponse202
+) & {
+  headers: Headers;
+};
 export type resumeExecutionSuspensionResponseError = (
   | resumeExecutionSuspensionResponse400
   | resumeExecutionSuspensionResponse401
@@ -6502,7 +6508,7 @@ export const getResumeExecutionSuspensionUrl = (suspensionId: number) => {
 };
 
 /**
- * Ends an active suspension. Admission accepts new runs again; cancelled runs stay cancelled. The resume rule of the suspension applies: any_admin lets any caller with safety.suspend resume it, governance_role needs a platform administrator, and two_person needs a platform administrator who is not the suspender. The body is empty or has an optional `reason`. The audit record of the request carries the action safety.suspension.resumed.
+ * Ends an active suspension. Admission accepts new runs again; cancelled runs stay cancelled. The resume rule of the suspension applies: any_admin lets any caller with safety.suspend resume it, governance_role needs a platform administrator, and two_person needs a platform administrator who is not the suspender. A two_person suspension the system wrote (the circuit breaker) needs two different platform administrators: the first call records an approval and answers 202, a call by a different administrator resumes. The body is empty or has an optional `reason`. The audit record of the request carries the action safety.suspension.resumed, or safety.suspension.resume_approved for the approval.
  * @summary Resume a suspension
  */
 export const resumeExecutionSuspension = async (

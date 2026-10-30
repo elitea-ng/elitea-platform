@@ -700,6 +700,9 @@ pub(crate) struct AuthorizedNativeCommandBinding {
     /// root agent's tier and the categories that ask at it. Every nested
     /// callee of this execution uses it.
     approval: std::sync::Arc<elitea_agent_runtime::approval_policy::ApprovalPolicy>,
+    /// The execution's run caps meter (ADR-0041 decision 3, field 69): one
+    /// meter for every path of this execution, nested callees included.
+    run_caps: std::sync::Arc<elitea_agent_runtime::run_caps::RunCapsMeter>,
 }
 
 impl AuthorizedNativeCommandBinding {
@@ -740,6 +743,7 @@ impl AuthorizedNativeCommandBinding {
             deadline_unix_millis: command.deadline_unix_millis,
             egress: crate::protocol::egress::run_egress(command),
             approval,
+            run_caps: crate::protocol::run_caps::meter_from_command(command),
         }
     }
 
@@ -753,6 +757,13 @@ impl AuthorizedNativeCommandBinding {
         &self,
     ) -> &std::sync::Arc<elitea_agent_runtime::approval_policy::ApprovalPolicy> {
         &self.approval
+    }
+
+    /// The execution's run caps meter (ADR-0041 decision 3).
+    pub(crate) const fn run_caps(
+        &self,
+    ) -> &std::sync::Arc<elitea_agent_runtime::run_caps::RunCapsMeter> {
+        &self.run_caps
     }
 
     #[cfg(test)]
@@ -770,6 +781,9 @@ impl AuthorizedNativeCommandBinding {
             deadline_unix_millis: 4_102_444_800_000,
             egress: elitea_agent_runtime::egress::RunEgress::open(),
             approval: elitea_agent_runtime::approval_policy::ApprovalPolicy::none(),
+            run_caps: elitea_agent_runtime::run_caps::RunCapsMeter::new(
+                elitea_agent_runtime::run_caps::RunCapLimits::worker_default(),
+            ),
         }
     }
 

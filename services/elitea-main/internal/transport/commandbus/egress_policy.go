@@ -25,6 +25,13 @@ func (p *AgentExecutionProducer) WithApprovalPolicy(resolver ApprovalPolicyResol
 	return p
 }
 
+// WithRunCaps makes the agent execution commands carry their run caps
+// (ADR-0041 decision 3).
+func (p *AgentExecutionProducer) WithRunCaps(resolver RunCapsResolver) *AgentExecutionProducer {
+	p.producer.WithRunCaps(resolver)
+	return p
+}
+
 // WithEgressPolicy makes the index ingest commands carry their policy.
 func (p *IndexIngestProducer) WithEgressPolicy(resolver EgressPolicyResolver) *IndexIngestProducer {
 	p.producer.WithEgressPolicy(resolver)

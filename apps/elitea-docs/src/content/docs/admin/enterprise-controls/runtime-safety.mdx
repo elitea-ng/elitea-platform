@@ -1,6 +1,6 @@
 ---
 title: "Runtime safety"
-description: "Controls that stop, limit or require approval for agent execution while it runs: the suspension and kill switch, the whole-run time cap, approval evidence, unattended runs, tool categories, the approval policy and required approval in pipelines."
+description: "Controls that stop, limit or require approval for agent execution while it runs: the suspension and kill switch, the agent circuit breaker, run caps, throttles per agent and per user, approval evidence, unattended runs, tool categories, the approval policy and required approval in pipelines."
 ---
 
 Runtime safety controls act on agent execution while it runs, not on configuration. This page describes the controls of ADR-0041.
@@ -92,7 +92,7 @@ Each suspension has a **resume rule**:
 | --- | --- |
 | `any_admin` (default) | Any caller with `safety.suspend` on a surface that can see the suspension |
 | `governance_role` | A platform administrator only |
-| `two_person` | A platform administrator who is not the person who created the suspension. The database also enforces this rule. |
+| `two_person` | A platform administrator who is not the person who created the suspension. The database also enforces this rule. For a suspension that the platform created (the [circuit breaker](#agent-circuit-breaker)), two different platform administrators: the first records an approval, the second resumes. |
 
 A project admin can resume only an `any_admin` suspension of their own project. A suspension made by a platform administrator for a project is visible on the project routes, but its rule can keep the project admin from resuming it.
 
@@ -128,35 +128,244 @@ The self-test writes a `schedule` event with the action `safety.kill_switch.self
 - Keep the [emergency stop runbook](/deployment/emergency-stop-runbook) in your incident procedure, and practise it.
 - After you resume, start again the runs that were cancelled, if they are still necessary.
 
-## Whole-run time cap
+## Agent circuit breaker
 
 ### The risk
 
-The worker limits the time of each turn of a run, but a long autonomous run can continue for many turns. Without a limit on the whole run, a looping agent can keep running and spending for days.
+An agent can fail again and again without a person who sees it. For example, a tool starts to refuse every call, the model loops on the same failing tool, or the agent spends much more than usual. Each run fails, but new runs continue to start, and each run uses the budget and calls external systems. A person who reads a dashboard sees the problem too late. The platform must stop such an agent by rule, and keep it stopped until a person examines it.
 
 ### What is enforced
 
-Under **Configuration › Run Caps**, a platform administrator (permission `configuration.governance`) sets **Maximum Run Time (seconds)**: 0 (off, the default), or 60 to 604800 (7 days). It applies to agent runs.
+The routine `main.agent_breaker` runs every minute. It reads the agent runs that ended since the last pass, and reads each run one time only. A run that ended less than 30 seconds before the pass waits for the next pass. Then the routine checks each agent against four rules:
 
-The time counts from the run's original start. A resumed run keeps that start, so time spent waiting for a human approval counts too. The main service checks the cap whenever the worker renews the run's lease or reads its desired state. A run past the cap is cancelled with the reason `cap_reached`, and the worker stops it on the same call. When the cap is off, the check adds no database query.
+| Rule | Trips when | Default |
+| --- | --- | --- |
+| `error_rate` | More than this percentage of the agent's latest ended runs failed. The window is the latest 20 runs. | On: more than 50 % of 20 runs |
+| `tool_failure_streak` | One tool failed this many times in a row inside one run. A call of a different tool between two failures does not stop the count. A success of the same tool does. | On: 5 failures |
+| `spend_per_hour` | The agent's model and metered tool spend in the last hour is more than this amount (USD) | Off |
+| `runs_per_hour` | More runs of the agent than this ended in the last hour | Off |
 
-The run ends with the state `cancelled`. Its event and the agent's answer carry a typed error:
+When a rule trips, the breaker writes a **suspension** of the source `breaker` at the `agent` scope. This is the same suspension that the [kill switch](#suspension-and-kill-switch) uses:
 
-```json
-{ "code": "CAP_REACHED", "cap": "max_wall_seconds", "retryable": false }
-```
+- admission refuses new runs of the agent with HTTP 409 `execution_suspended`, and the message `The agent circuit breaker stopped this agent. An administrator must resume it.`;
+- the runs of the agent that are in flight are cancelled in the same transaction;
+- the suspension records the rule, the observed value, the limit and the agent's risk tier.
 
-The answer is marked as an error, so the user sees why the run stopped. The metric `elitea.runtime.run_caps.reached` with the label `cap=max_wall_seconds` counts the runs stopped by the cap.
+The breaker does not trip an agent that is already suspended, by any source. After a resume, the window starts again: runs admitted before the resume do not count. Its first pass after the upgrade reads only the runs that ended in the 10 minutes before. Older runs are not judged.
+
+An agent with fewer ended runs than the window since its last resume is not judged on `error_rate`. A cancelled run does not count as a failure or as a run in the window.
+
+**A run cap stop is not a failure.** A run that a [run cap](#run-caps) stopped (`CAP_REACHED`) does not count as a failure or as a run in the `error_rate` window. This applies to all caps: the wall time and spend caps that Main applies, and the tool call, model turn and records caps that the worker applies. A tool call that the worker refused because the run reached a cap is not a failure of that tool, so it does not add to `tool_failure_streak`. Thus an agent that does long tasks and often reaches its caps is not stopped by the breaker for that reason.
+
+**Who can resume** depends on the agent's risk tier:
+
+| Tier | `resume_requires` | Who can resume |
+| --- | --- | --- |
+| `low`, `medium` | `any_admin` | A project admin of the project, or a platform administrator |
+| `high` | `governance_role` | A platform administrator |
+| `critical` | `two_person` | Two different platform administrators. The first **Resume** records an approval and answers HTTP 202; the suspension stays active. A second platform administrator selects **Resume** to end it. The same administrator cannot do both steps (HTTP 403 `second_person_required`). The database also enforces this rule. |
+
+**Many agents at the same time.** When a model provider or a shared tool is down, many agents fail together. Stopping all of them would turn a short outage into a long one, because each agent then needs a person to resume it. If more agents than the **storm limit** (default 5) would trip on `error_rate` or `tool_failure_streak` in one pass, the breaker stops none of them on those rules. It raises the `EliteaAgentBreakerStorm` alert instead. The `spend_per_hour` and `runs_per_hour` rules still trip.
 
 #### Limits
 
-- The cap is one platform-wide value. Caps per agent or per project, and caps on tool calls, spend and records read, are planned ([issue 1498](https://github.com/elitea-ng/elitea-platform/issues/1498)).
-- The cap takes effect at the next lease renewal, so a run can pass it by up to one renewal interval.
+- The breaker acts once a minute, on runs that ended. It does not stop a run in the middle of its first failures. Use [run caps](#run-caps) and project budgets for limits inside one run.
+- `tool_failure_streak` reads the run step records. A run whose worker records no tool steps is not checked on that rule.
+- `spend_per_hour` reads the gateway request log. Spend that the gateway does not attribute to a run is not counted. Each pass reads only the agents whose spend in the last hour is more than their own limit (the tier default, or the tighter override).
+- An agent's limits apply to the agent in all its runs. The breaker has no limit per user.
+
+### Configuration
+
+Open **Configuration › Circuit Breaker** (permission `configuration.governance`). The section has:
+
+- **Circuit Breaker On**: on by default. Turn it off to stop all passes.
+- **Error Rate Window (runs)**: the number of latest ended runs the error rate reads (5 to 200, default 20).
+- **Storm Limit (agents per pass)**: default 5. 0 turns the storm limit off.
+- For each risk tier: **Error Rate (%)**, **Spend per Hour (USD)**, **Same Tool Failing in a Row**, **Runs per Hour** and **Who Can Resume**. 0 turns a rule off.
+
+The routine reads the section at each pass, so a change applies within one minute. Change the routine's schedule, or turn it off, in **Admin › Schedules & Tasks**. It does not run while maintenance mode is on.
+
+**One agent.** The agent's registry record can set tighter limits than its tier. It cannot set looser limits. Use the registry API with the field `circuit_breaker`:
+
+```bash
+curl -sS -X PUT "$ELITEA/api/v2/elitea_core/agent_registry/prompt_lib/12/31" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"circuit_breaker":{"error_rate_percent":30,"spend_per_hour_usd":5}}'
+```
+
+A value looser than the tier default is refused with HTTP 422 `circuit_breaker_override_loosens`, and `fields` names the looser limits. A smaller `error_rate_window_runs` is tighter. `{}` clears the override. Each change writes the security audit action `agent.registry.breaker_override_changed`.
+
+### Evidence
+
+Each trip writes, in the same transaction as the suspension:
+
+- the suspension row in `elitea_runtime.execution_suspensions`, with `source = breaker`, `actor_id = 0` and the rule in `detail`;
+- one security audit event of the type `ai.elitea.security.v1.agent.breaker`, in the hash-chained security audit log. The audit export sends it to your SIEM.
+
+Example event:
+
+```json
+{
+  "type": "ai.elitea.security.v1.agent.breaker",
+  "subject": "agent/31",
+  "time": "2026-10-30T15:30:11.187Z",
+  "data": {
+    "action": "agent.breaker.tripped",
+    "principal_ref": "system:agent_breaker",
+    "tenant_project_id": 12,
+    "resource_type": "agent",
+    "resource_id": "31",
+    "reasons": [
+      "rule:error_rate", "observed:55", "threshold:50", "unit:percent",
+      "tier:high", "resume_requires:governance_role", "suspension:41",
+      "window_runs:20", "failed_runs:11"
+    ]
+  }
+}
+```
+
+The agent's owners and the project admins get a notification with the rule and the observed value. **Admin › Kill switch** shows each breaker suspension with the label **Circuit breaker**, the rule, the observed value and the limit. The agent's page shows **Stopped by circuit breaker**. The suspension API returns the same values in the field `breaker`.
+
+The resume is written to the audit trail with the action `safety.suspension.resumed`. The first approval of a `two_person` resume is written with the action `safety.suspension.resume_approved`.
+
+**Metrics and alerts.** elitea-main serves these Prometheus metrics on its metrics port (`ELITEA_AUDIT_EXPORT_METRICS_ADDR`, port 9464), also when the audit export is off. No series has a project or an agent label.
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `elitea_safety_suspensions_active{scope,source}` | gauge | Active suspensions. Every replica reports the same count. |
+| `elitea_breaker_trips_total{rule}` | counter | Agents the breaker stopped, by rule |
+| `elitea_breaker_storms_total` | counter | Passes that stopped no agent because of the storm limit |
+| `elitea_breaker_pass_failures_total` | counter | Breaker passes that failed |
+
+The Helm chart ships these alerts in a PrometheusRule wherever the Prometheus Operator API is available (`main.safetyAlerts`, on by default):
+
+| Alert | Severity | Fires when |
+| --- | --- | --- |
+| `EliteaPlatformExecutionSuspended` | critical | A platform suspension is active for 1 minute. The scheduled self-test is not included. |
+| `EliteaAgentBreakerStorm` | critical | A pass hit the storm limit |
+| `EliteaAgentBreakerTripped` | warning | The breaker stopped an agent in the last 10 minutes (label `rule`) |
+| `EliteaExecutionSuspensionsActive` | warning | An agent, project or toolkit type suspension stays active for `main.safetyAlerts.prometheusRule.activeFor` (default 30 minutes) |
+| `EliteaAgentBreakerPassFailing` | warning | 5 or more passes failed in 15 minutes |
 
 ### Customer responsibility
 
-- Choose a cap that is longer than your longest legitimate run, including the time that people take to approve steps.
-- Alert on `elitea.runtime.run_caps.reached` if a stopped run needs attention.
+- **Paging and on-call stay with you.** Elitea stops the agent and raises the alert. Route the alerts to your incident-management tool, and decide who is on call for agents. Elitea does not page a person.
+- Set the limits to match your agents. A low error-rate limit stops agents during short provider outages; a high one lets a broken agent run longer.
+- Set spend and runs limits for agents that can spend money or send messages, because they are off by default.
+- Decide who examines a stopped agent and who resumes it. For `critical` agents, keep two platform administrators available.
+- Before you resume, find the cause: read the run step records of the failed runs, and correct the agent, the tool or the credential.
+- Keep the Prometheus Operator, or scrape port 9464 with your own monitoring, so that the alerts can fire.
+
+## Run caps
+
+### The risk
+
+The worker limits each turn of a run, but a long autonomous run can continue for many turns. Without limits on the whole run, a looping agent can keep running, calling tools, reading records and spending for days.
+
+### What is enforced
+
+A run cap is the most that one agent run can use. There are five caps:
+
+| Cap | Counts | Enforced by | Default |
+| --- | --- | --- | --- |
+| `max_wall_seconds` | Time from the run's original start | Main, at each lease renewal | 0 (off) |
+| `max_tool_calls` | Calls of toolkit tools, MCP tools included | Worker, before each call | 200 |
+| `max_model_turns` | Model calls | Worker, before each call | 0 (off) |
+| `max_spend` | Model and metered tool spend, in USD | Main, every 30 seconds | 0 (off) |
+| `max_records_read` | Records that the counting tools return | Worker, after each call | 0 (off) |
+
+`max_wall_seconds` is one platform-wide value. The other four have a value for each risk tier (`low`, `medium`, `high`, `critical`). The tier is the root agent's tier from its [registry record](/admin/enterprise-controls/agent-lifecycle). An agent without a record, and an ad hoc chat, use the `low` tier. A nested agent or a pipeline node uses the caps of the root run, and its calls count against them.
+
+**Author caps.** An agent author can set lower caps for one agent in the version's `meta.run_caps`, for example `{"max_tool_calls": 50, "max_spend": 0.5}`. The lower value of the tier cap and the author cap applies. An author cannot raise a cap: a save with a value above the tier cap fails with HTTP 422:
+
+```json
+{ "code": "RUN_CAP_ABOVE_TIER", "cap": "max_tool_calls", "tier": "high", "tier_cap": 80, "requested": 100,
+  "error": "meta.run_caps.max_tool_calls is 100, above the platform cap 80 for high tier agents: an agent can lower a run cap, never raise it" }
+```
+
+A value that is not a positive number in the cap's range fails with `RUN_CAP_INVALID`.
+
+**Step limit.** An agent's `step_limit` still limits each agent loop. With `max_model_turns`, the lower of the two stops the run first.
+
+**What is counted.**
+
+- Tool calls: every call of a toolkit tool or an MCP tool, in every agent and pipeline node of the run. Platform tools that are not toolkit tools (the planner, attachments, an agent called as a tool) are not counted. The toolkit calls that such an agent makes are counted.
+- Model turns: every model call of the run's agents. Summary and compaction calls are not counted.
+- Records read: only these tools report a count. Other tools count 0.
+
+  | Toolkit type | Tool | Counted items |
+  | --- | --- | --- |
+  | `jira` | `search_using_jql` | Issues returned |
+  | `github` | `search_issues` | Issues and pull requests returned |
+  | `sql` | `execute_sql` | Rows returned |
+  | `confluence` | `search_pages`, `search_by_title` | Pages returned |
+  | Every index toolkit | `search_index` | Documents returned |
+
+- Spend: the run's rows in the gateway request log. A model call costs its tokens at the price catalogue rate. A metered tool costs its recorded cost.
+
+**When a run reaches a cap.** The run stops and ends with a typed error. A worker cap ends the run as failed. A Main cap (`max_wall_seconds`, `max_spend`) cancels the run with the reason `cap_reached`. The run's event and the agent's answer carry:
+
+```json
+{ "code": "CAP_REACHED", "cap": "max_tool_calls", "retryable": false }
+```
+
+The answer shows a message that names the cap, for example "The run stopped because it reached the maximum number of tool calls an administrator set. The task may be incomplete. Check what it completed before you continue."
+
+**Override.** A user with the permission `safety.override_cap` can let the conversation continue past the cap one time. The platform administrators and the project `admin` role have this permission. The user selects **Allow the next run past this cap** on the stopped answer (or calls `POST /api/v2/elitea_core/run_cap_overrides/prompt_lib/{project_id}` with `message_id`). The next agent run of that conversation gets twice the cap that stopped the answer. The other caps do not change. One override is permitted for each stopped answer, and one unused override for each conversation. An unused override expires after one hour. After it expires, a user can give a new override on a different stopped answer in that conversation. A worker cap cannot be overridden until an administrator saves the per-tier caps (HTTP 422 `tier_caps_not_saved`). If an administrator removes the per-tier caps after an override on a worker cap, the next run does not use that override, because the worker does not get the caps. The override stays available until it expires.
+
+#### Limits
+
+- `max_wall_seconds` takes effect at the next lease renewal, so a run can pass it by up to one renewal interval.
+- `max_spend` is checked every 30 seconds after the gateway records each call. A run can pass the cap by what it spends in that interval, plus the time to its next lease renewal. A single model call that is in progress is not stopped part way.
+- Spend is in USD, the currency of the price catalogue. A model without a price costs 0.
+- Records read counts only the tools in the table above.
+- Counters are per execution. A run that continues after an approval pause is a new execution, and its tool calls, model turns, records and spend start at zero. Its wall time counts from the original start.
+- Each new message in a conversation starts a new run with its own caps.
+- When a cap trips, a cancel that arrives later still ends the run with `CAP_REACHED`.
+
+### Configure
+
+Under **Configuration › Run Caps**, a platform administrator (permission `configuration.governance`) sets:
+
+- **Maximum Run Time (seconds)**: 0 (off, the default), or 60 to 604800 (7 days).
+- For each tier: **Maximum Tool Calls**, **Maximum Model Turns**, **Maximum Spend (USD)** and **Maximum Records Read**. 0 is no cap. Counts are whole numbers. Spend has at most four decimals.
+
+Until an administrator saves a per-tier value, the worker applies its defaults (200 tool calls, no other worker cap), and Main does not send caps to the worker. **Save the per-tier caps only after every worker runs this release.** A worker of an earlier release refuses commands that carry caps.
+
+### Evidence
+
+- `elitea_runtime.execution_jobs.run_caps` records the effective caps of each run, and `override` names the cap that an override raised. `cancel_cap` names the Main cap that cancelled a run.
+- `elitea_runtime.run_cap_overrides` records each override: the answer, the cap, who granted it, when, and the run that used it. `lapsed_at` records when an override that expired unused was closed.
+- Each override is a security audit event, in the same transaction as the override (excerpt):
+
+```json
+{
+  "type": "ai.elitea.security.v1.agent.cap.override",
+  "data": {
+    "action": "agent.cap.override.granted",
+    "effect": "allow",
+    "tenant_project_id": 12,
+    "principal_ref": "user:7",
+    "execution_id": "0f6c…",
+    "resource_type": "chat_message",
+    "resource_id": "0190f2a6-7d1c-7cc1-9a35-3f4b4d2a1b11",
+    "decision_id": "41",
+    "reasons": ["cap:max_tool_calls", "raise:double", "ttl_seconds:3600"]
+  }
+}
+```
+
+- The request's admin audit record has the action `safety.run_cap_override.granted`.
+- The metric `elitea.runtime.run_caps.reached` with the label `cap` counts the runs that Main stopped (`max_wall_seconds`, `max_spend`). The worker logs `agent_run_cap_reached` with the cap, the count and the limit for a worker cap.
+- The run's step record has the `CAP_REACHED` error and its cap.
+
+### Customer responsibility
+
+- Choose caps above your longest legitimate run at each tier, including the time that people take to approve steps. Lower the caps for the high and critical tiers.
+- Give `safety.override_cap` only to the people who can decide that a run may use more. Review the `agent.cap.override` events.
+- Alert on `elitea.runtime.run_caps.reached` and on the worker's `agent_run_cap_reached` log event if a stopped run needs attention.
+- Keep the price catalogue current, so that `max_spend` uses correct prices.
+- Use [project budgets](/admin/budgets-and-governance) for spend across runs. A run cap limits one run only.
 
 ## Approval evidence and unattended runs
 
@@ -379,6 +588,53 @@ The `source` is `platform` for the platform rule, `policy` for the policy rule, 
 - Set each production agent's risk tier, so the policy applies the correct row.
 - Decide which categories need approval at each tier. Add `code_execution` at `high` and `critical` if the model's code or queries can reach production data.
 - Keep the platform's sensitive action tools for single tools that need approval at every tier.
+
+## Throttles per agent and per user
+
+### The risk
+
+A rate limit at the LLM gateway counts the calls of a whole project. One agent that loops, or one user who runs many agents, can use all of the project's calls. The other agents and users of the project then get `429` refusals.
+
+### What is enforced
+
+A rate limit entry under **LLM Governance** can name agents (`scope.agent_ids`) or users (`scope.user_ids`). Such an entry is a throttle:
+
+- An agent throttle counts the calls of each named agent in its own counter. It applies to every model call that a run of that agent makes, also when the run starts from another project.
+- A user throttle counts the calls of each named user in its own counter. The counter is shared across the projects that the entry selects.
+- An entry that names agents and users counts each pair of agent and user.
+
+A throttle adds to the project rate limit. It does not replace it. A call must pass the project rate limit, the agent throttle and the user throttle that apply to it. In each of these three groups, the narrowest entry applies.
+
+The gateway checks the agent throttle first, then the user throttle, then the project rate limit. A call that one of them refuses does not use a call of the others. Thus an agent that retries after its `429` does not use the calls of the project. When the project rate limit refuses a call after a throttle counted it, the gateway gives the call back to the throttle. For a very short time between the count and the give-back, a different call to that throttle can see one call too many and get a `429`. The gateway never admits a call above a ceiling because of this.
+
+When a counter gets to its ceiling, the gateway refuses the call with HTTP `429`, `rate_limit_error` and `rate_limit_exceeded`, and the `Retry-After` header gives the seconds until the minute ends. The message names the agent, user or project limit. A throttle refuses calls only. It does not suspend the agent or the user, and the next minute starts with a new counter.
+
+The gateway knows the agent from the signed execution id of the call. It reads the agent of the run from the run's admission record. The gateway knows the user from the signed user id of the call. A caller cannot set either value.
+
+#### Limits
+
+- An agent id is an application id of one project. An entry that names agents must name exactly one project in `scope.project_ids`.
+- An entry can name at most 100 agents and 100 users.
+- A call that does not come from an agent run (for example, a chat without an agent) does not match an agent throttle. A call without a user does not match a user throttle.
+- **The throttles fail open, as the project rate limits do.** When the shared NATS counter is not available, or the gateway cannot read the agent of a run, the gateway admits the call and does not apply the throttle. It counts each such call.
+- The token ceiling applies to the call after the call that crossed it, as for every rate limit.
+
+### Configuration
+
+Under **LLM Governance**, a platform administrator (permission `configuration.governance`) creates a **Rate limit** entry. Set **Requests per minute** or **Tokens per minute**, and then fill **Throttled agents** (with one project in **Projects**) or **Throttled users**. Each id must be a positive whole number. The form shows an error and does not save a list with a different value. The main service refuses an entry that names an agent that is not in that project, or a user that does not exist. It applies the same checks to `agent_ids` and `user_ids` at the top level of `data`, because the gateway reads them there when the entry has no `scope` object or an empty one. See [Budgets and LLM governance](/admin/budgets-and-governance#throttles-per-agent-and-per-user).
+
+### Evidence
+
+- Each refusal writes a gateway log line `governance: authored rate limit refused the request` with the rule, the class (`project`, `agent` or `user`), the agent, the user and the counts.
+- The refused call is in the gateway request log with the status `429`.
+- `GET /governance/status` on the gateway gives `rate_limiter.refused` and `rate_limiter.degraded`. `degraded` counts the calls that were admitted without a limit because the counter or the agent lookup failed.
+
+### Customer responsibility
+
+- Set throttles that are larger than the normal load of each agent and user, and smaller than the project rate limit.
+- Make sure that the agents and users that you throttle can retry after `Retry-After`.
+- Alert on a growing `rate_limiter.degraded` count. While it grows, no rate limit or throttle is in force.
+- To stop an agent, use the [suspension](#suspension-and-kill-switch), not a throttle.
 
 ## Required approval in pipelines
 

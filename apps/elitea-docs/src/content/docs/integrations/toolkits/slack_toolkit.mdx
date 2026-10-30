@@ -31,15 +31,17 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (7)">
 
-| Tool |
-|---|
-| Create slack channel |
-| Invite to conversation |
-| List channel users |
-| List workspace conversations |
-| List workspace users |
-| Read messages |
-| Send message |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Create slack channel | `write` |
+| Invite to conversation | `write` |
+| List channel users | `read` |
+| List workspace conversations | `read` |
+| List workspace users | `read` |
+| Read messages | `read` |
+| Send message | `external_send` |
 
 </Accordion>
 

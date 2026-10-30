@@ -67,7 +67,25 @@ type Producer struct {
 	// approval answers an agent execution command's approval policy
 	// (ADR-0041 decision 5); nil leaves the field absent (no category rule).
 	approval ApprovalPolicyResolver
+	// runCaps answers an agent execution command's run caps (ADR-0041
+	// decision 3); nil leaves the field absent (the worker's defaults).
+	runCaps  RunCapsResolver
 	refusals DispatchRefusalRecorder
+}
+
+// RunCapsResolver answers the run caps an agent execution command carries
+// (ADR-0041 decision 3; workerruncaps.Resolver). Nil leaves the field absent.
+// An error refuses the command: it is never signed without the caps it
+// should carry, and the dispatch is retried within the run's deadline.
+type RunCapsResolver interface {
+	WorkerRunCaps(ctx context.Context, command *runtimev1.WorkerCommandV1) (*runtimev1.WorkerRunCapsV1, error)
+}
+
+// WithRunCaps makes every agent execution command this producer prepares
+// carry its run caps.
+func (p *Producer) WithRunCaps(resolver RunCapsResolver) *Producer {
+	p.runCaps = resolver
+	return p
 }
 
 // ApprovalPolicyResolver answers the approval policy an agent execution
@@ -213,6 +231,13 @@ func (p *Producer) prepareCommand(ctx context.Context, command *runtimev1.Worker
 			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker approval policy: %w", err)
 		}
 		command.ApprovalPolicy = policy
+	}
+	if p.runCaps != nil && command.GetAgentExecution() != nil {
+		caps, err := p.runCaps.WorkerRunCaps(ctx, command)
+		if err != nil {
+			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker run caps: %w", err)
+		}
+		command.RunCaps = caps
 	}
 	if err := validateBoundedStrings(command, p.config.Limits.MaxStringBytes); err != nil {
 		return executionapp.PreparedCommandEnvelope{}, err

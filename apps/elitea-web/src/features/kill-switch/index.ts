@@ -6,9 +6,12 @@
  */
 export { StopAgentButton } from './ui/StopAgentButton';
 export {
+  BREAKER_SOURCE,
   SAFETY_SUSPEND_PERMISSION,
+  breakerSummary,
   describeSuspensionError,
   suspensionRow,
   suspensionRows,
   type ExecutionSuspensionRow,
+  type SuspensionBreakerDetail,
 } from './api/suspensions';

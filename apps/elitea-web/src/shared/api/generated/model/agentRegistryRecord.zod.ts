@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { AgentBreakerOverride } from "./agentBreakerOverride.zod";
 import { AgentCertificationState } from "./agentCertificationState.zod";
 import { AgentRiskTier } from "./agentRiskTier.zod";
 
@@ -77,6 +78,7 @@ export const AgentRegistryRecord = zod
       .int()
       .nullable()
       .describe("The active agent suspension (kill switch), of any source."),
+    circuit_breaker: AgentBreakerOverride,
     updated_at: zod.iso.datetime({ offset: true }),
   })
   .describe(

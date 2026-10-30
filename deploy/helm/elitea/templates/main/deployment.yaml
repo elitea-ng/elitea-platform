@@ -177,8 +177,9 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
-            # The SIEM audit export's /metrics (ELITEA_AUDIT_EXPORT_METRICS_ADDR).
-            # Declared always; the process listens only with an exporter set.
+            # elitea-main's /metrics (ELITEA_AUDIT_EXPORT_METRICS_ADDR): the SIEM
+            # audit export's figures with an exporter set, and the runtime
+            # safety figures (breaker trips, active suspensions) always.
             - name: audit-metrics
               containerPort: {{ .Values.main.auditExport.metrics.port }}
               protocol: TCP

@@ -36,31 +36,33 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (23)">
 
-| Tool |
-|---|
-| Add case |
-| Add cases |
-| Add file to case |
-| Add section |
-| Delete case |
-| Delete section |
-| Get case |
-| Get cases |
-| Get cases by filter |
-| Get results |
-| Get results for case |
-| Get results for run |
-| Get run |
-| Get runs |
-| Get sections |
-| Get suites |
-| Index data |
-| List indexes |
-| Remove index |
-| Search index |
-| Stepback search index |
-| Stepback summary index |
-| Update case |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Add case | `write` |
+| Add cases | `write` |
+| Add file to case | `write` |
+| Add section | `write` |
+| Delete case | `delete` |
+| Delete section | `delete` |
+| Get case | `read` |
+| Get cases | `read` |
+| Get cases by filter | `read` |
+| Get results | `read` |
+| Get results for case | `read` |
+| Get results for run | `read` |
+| Get run | `read` |
+| Get runs | `read` |
+| Get sections | `read` |
+| Get suites | `read` |
+| Index data | `write` |
+| List indexes | `read` |
+| Remove index | `delete` |
+| Search index | `read` |
+| Stepback search index | `read` |
+| Stepback summary index | `read` |
+| Update case | `write` |
 
 </Accordion>
 

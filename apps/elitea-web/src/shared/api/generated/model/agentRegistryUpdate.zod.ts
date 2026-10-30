@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { AgentBreakerOverride } from "./agentBreakerOverride.zod";
 import { AgentRiskTier } from "./agentRiskTier.zod";
 
 export const agentRegistryUpdateBusinessOwnerIdMin = 0;
@@ -81,6 +82,7 @@ export const AgentRegistryUpdate = zod
       .array(zod.string().regex(agentRegistryUpdateDataClassesItemRegExp))
       .max(agentRegistryUpdateDataClassesMax)
       .optional(),
+    circuit_breaker: AgentBreakerOverride.optional(),
   })
   .describe("An absent field is unchanged.");
 

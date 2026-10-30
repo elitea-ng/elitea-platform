@@ -22,6 +22,8 @@ import Tooltip from '@mui/material/Tooltip';
 import { t } from '@/shared/i18n';
 
 import {
+  BREAKER_SOURCE,
+  breakerSummary,
   describeSuspensionError,
   useCanSuspend,
   useProjectSuspensions,
@@ -54,9 +56,10 @@ export function StopAgentButton({ projectId, applicationId, onError }: StopAgent
 
   if (active !== undefined) {
     const projectWide = active.scope === 'project';
+    const breakerLine = breakerSummary(active);
     return (
       <>
-        <Tooltip title={active.reason}>
+        <Tooltip title={breakerLine === undefined ? active.reason : `${breakerLine}. ${active.reason}`}>
           <Chip
             color="error"
             size="small"
@@ -64,7 +67,9 @@ export function StopAgentButton({ projectId, applicationId, onError }: StopAgent
             label={
               projectWide
                 ? t('features.killSwitch.agent.projectStopped', 'Project stopped')
-                : t('features.killSwitch.agent.stopped', 'Agent stopped')
+                : active.source === BREAKER_SOURCE
+                  ? t('features.killSwitch.agent.breakerStopped', 'Stopped by circuit breaker')
+                  : t('features.killSwitch.agent.stopped', 'Agent stopped')
             }
           />
         </Tooltip>

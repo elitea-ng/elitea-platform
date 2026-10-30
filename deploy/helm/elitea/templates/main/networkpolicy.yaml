@@ -28,7 +28,8 @@
 #   control      elitea-vector, on the control listener only, for token
 #                introspection (ADR-0031), when vector is enabled.
 #   audit metrics networkPolicies.main.metricsFrom, on main.auditExport.metrics
-#                .port only: the scraper of the SIEM audit export's /metrics.
+#                .port only: the scraper of elitea-main's /metrics (the SIEM
+#                audit export and the runtime safety figures).
 #
 # Kubelet probes are not subject to the policy on the CNIs this chart is tested
 # with; networkPolicies.probeFrom is for those that apply it to them.

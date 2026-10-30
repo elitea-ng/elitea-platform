@@ -7,6 +7,7 @@ import (
 	browserapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/browserauth"
 	v2branding "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/branding"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/brandpackage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/breaker"
 	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/emailsettings"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimclient"
@@ -331,7 +332,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		"profile", string(credentialAdmission.Profile()),
 		"policy_revision", credentialRevision.ID,
 		"continuation_guard", credentialAdmission.ContinuationGuard())
-	auditExport, closeAuditExport, err := auditExportAtBoot(ctx, os.LookupEnv, credentialAdmission, pool, logger)
+	// The runtime safety metrics (ADR-0041: active suspensions, breaker
+	// trips), served on the main metrics listener with the audit export's.
+	safetyMetrics := breaker.NewMetrics()
+	auditExport, closeAuditExport, err := auditExportAtBoot(ctx, os.LookupEnv, credentialAdmission, pool, safetyMetrics, logger)
 	if err != nil {
 		return err
 	}
@@ -398,12 +402,21 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err := startKillSwitchSelfTest(ctx, pool, executionSuspensions, auditRecorder, logger); err != nil {
 		return err
 	}
+	safetyMetrics.SetActiveSource(executionSuspensions.gate.Active)
+	// The agent circuit breaker (ADR-0041 decision 2, #1498): the
+	// main.agent_breaker routine, every minute, off the request path.
+	if err := startAgentBreaker(ctx, pool, executionSuspensions, safetyMetrics, logger); err != nil {
+		return err
+	}
 
 	// The run-safety Configuration sections (#1496, #1498): the
 	// administrator's session policy and the whole-run wall cap, one cache
 	// each per replica, and the session lifecycle sweep and audit relay.
 	runSafetySections := newRunSafety(pool)
 	if err := startBrowserSessionLifecycle(ctx, pool, runSafetySections, logger); err != nil {
+		return err
+	}
+	if err := startRunSpendCap(ctx, pool, logger); err != nil {
 		return err
 	}
 
@@ -2129,6 +2142,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			MaxRunWall:                       runSafetySections.maxRunWall,
 			DelegationSettings:               runSafetySections.delegation,
 			ApprovalPolicySettings:           runSafetySections.approvalPolicy,
+			RunCapsSettings:                  runSafetySections.runCaps,
 			IndexScheduleMandates:            governedTriggers.IndexMandates,
 			IndexScheduleMandateGate:         governedTriggers.IndexGate,
 			ControlPool:                      runtimePools.Control,

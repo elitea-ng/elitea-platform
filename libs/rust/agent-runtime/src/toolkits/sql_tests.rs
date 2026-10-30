@@ -858,3 +858,39 @@ async fn mysql_without_tls_is_refused_before_any_authentication_byte() {
     let error = outcome.expect_err("a non-TLS MySQL server is refused");
     assert_refused_without_leaking(&error);
 }
+
+#[tokio::test]
+async fn execute_sql_reports_the_rows_it_returned_to_the_run_caps() {
+    let api = Arc::new(FixtureApi::new([
+        Ok(json!([{"id": 1}, {"id": 2}, {"id": 3}])),
+        Ok(json!({"executed": true, "rows_affected": 9})),
+    ]));
+    let api_trait: Arc<dyn SqlApi> = api.clone();
+    let meter = crate::run_caps::RunCapsMeter::new(crate::run_caps::RunCapLimits::unlimited());
+    let policy = Arc::new(
+        policy(&[])
+            .as_ref()
+            .clone()
+            .with_run_caps(Arc::clone(&meter)),
+    );
+    let toolset = test_build_with_api("analytics", &[], SqlDialect::Postgres, &policy, &api_trait)
+        .expect("SQL fixture toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("SQL tools");
+    let execute = tools
+        .iter()
+        .find(|tool| tool.name() == "execute_sql")
+        .expect("execute_sql");
+    execute
+        .execute(context(), json!({"sql_query": "SELECT id FROM users"}))
+        .await
+        .expect("rows");
+    assert_eq!(meter.records_read(), 3);
+    // A statement that returns no row list counts nothing.
+    execute
+        .execute(context(), json!({"sql_query": "UPDATE users SET a = 1"}))
+        .await
+        .expect("effect");
+    assert_eq!(meter.records_read(), 3);
+    assert_eq!(meter.tool_calls(), 2);
+}

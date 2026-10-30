@@ -1182,6 +1182,10 @@ JOIN (VALUES
     -- the grant from migrations/shared/0194_execution_suspensions.sql.
     ('super_admin', 'safety.suspend'),
     ('admin', 'safety.suspend'),
+    -- Issue 1498, the run cap override (ADR-0041 decision 3). Existing
+    -- databases get the grant from migrations/shared/0212_run_caps.sql.
+    ('super_admin', 'safety.override_cap'),
+    ('admin', 'safety.override_cap'),
     -- Issue 1497, agent lifecycle governance (ADR-0040). Existing databases
     -- get the grant from
     -- migrations/shared/0204_agent_lifecycle_governance.sql.
@@ -1251,6 +1255,15 @@ ON CONFLICT (role_id, permission) DO NOTHING;
 -- the grant from migrations/shared/0194_execution_suspensions.sql.
 INSERT INTO auth_core__role_permission (role_id, permission)
 SELECT role.id, 'safety.suspend'
+FROM auth_core__role AS role
+WHERE role.mode = 'default' AND role.name = 'admin'
+ON CONFLICT (role_id, permission) DO NOTHING;
+
+-- Issue 1498: the project admin lets a conversation continue past a run cap
+-- once (the cap override). Existing databases get the grant from
+-- migrations/shared/0212_run_caps.sql.
+INSERT INTO auth_core__role_permission (role_id, permission)
+SELECT role.id, 'safety.override_cap'
 FROM auth_core__role AS role
 WHERE role.mode = 'default' AND role.name = 'admin'
 ON CONFLICT (role_id, permission) DO NOTHING;

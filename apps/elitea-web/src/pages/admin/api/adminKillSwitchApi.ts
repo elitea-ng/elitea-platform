@@ -34,11 +34,23 @@ export function useCreateAdminSuspension() {
   });
 }
 
+/**
+ * The outcome of a resume: the suspension, and whether the call only
+ * recorded the first approval of a two-person resume (202) so the
+ * suspension stays active until a different administrator resumes it.
+ */
+export interface AdminResumeOutcome {
+  readonly row: ExecutionSuspensionRow;
+  readonly approvalRecorded: boolean;
+}
+
 export function useResumeAdminSuspension() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { readonly id: number; readonly reason: string }) =>
-      suspensionRow(await resumeExecutionSuspension(input.id, input.reason === '' ? {} : { reason: input.reason })),
+    mutationFn: async (input: { readonly id: number; readonly reason: string }): Promise<AdminResumeOutcome> => {
+      const response = await resumeExecutionSuspension(input.id, input.reason === '' ? {} : { reason: input.reason });
+      return { row: suspensionRow(response), approvalRecorded: response.status === 202 };
+    },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: KEY }),
   });
 }

@@ -26,7 +26,7 @@ import { t } from '@/shared/i18n';
 
 import { GOVERNANCE_TYPES, isGlobalGovernanceType, type GovernanceType } from './api/adminGovernanceApi';
 import { ScopeFields, TypeFields, typeHelp, typeLabel } from './GovernanceDialogFields';
-import type { GovernanceDraft } from './useGatewayGovernancePage';
+import { draftFieldErrors, type GovernanceDraft } from './useGatewayGovernancePage';
 
 export interface GovernanceDialogProps {
   readonly draft: GovernanceDraft;
@@ -124,7 +124,7 @@ export function GovernanceDialog({
         <Button
           variant="contained"
           onClick={onSave}
-          disabled={isSaving || draft.name.trim() === ''}
+          disabled={isSaving || draft.name.trim() === '' || Object.keys(draftFieldErrors(draft)).length > 0}
           data-testid="governance-save"
         >
           {t('common.save', 'Save')}

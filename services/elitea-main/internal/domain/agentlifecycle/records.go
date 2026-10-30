@@ -24,6 +24,10 @@ type Registry struct {
 	UpdatedAt      time.Time
 	// SuspensionID is the active agent suspension (ADR-0041), 0 when none.
 	SuspensionID int64
+	// CircuitBreaker is the agent's circuit breaker override (ADR-0041
+	// decision 2), a JSON object; {} for none. Package breaker parses and
+	// judges it.
+	CircuitBreaker []byte
 }
 
 // IsOwner reports whether userID is the business or technical owner.
@@ -40,6 +44,9 @@ type RegistryUpdate struct {
 	IntendedUse      *string
 	OutOfScopeUse    *string
 	DataClasses      *[]string
+	// CircuitBreaker replaces the circuit breaker override (a JSON object,
+	// {} to clear it). It must not loosen the tier default.
+	CircuitBreaker []byte
 }
 
 // RegistryFilter narrows the cross-project registry listing.

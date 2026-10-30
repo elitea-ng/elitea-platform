@@ -390,13 +390,15 @@ func (r *RuntimeFailureResultsRepository) ProjectRuntimeFailure(ctx context.Cont
 		// CANCELLED.
 		browserData := projection.BrowserData
 		capReached := false
+		capName := ""
 		if projection.Frame.Failure.Code == "CANCELLED" && agentExecutionCapability(projection.CapabilityID) {
-			capReached, err = cancelledAtCap(ctx, tx, record.ExecutionID, record.Generation)
+			capName, err = cancelledAtCap(ctx, tx, record.ExecutionID, record.Generation)
 			if err != nil {
 				return err
 			}
+			capReached = capName != ""
 			if capReached {
-				if browserData, err = capReachedBrowserData(); err != nil {
+				if browserData, err = capReachedBrowserData(capName); err != nil {
 					return err
 				}
 			}
@@ -428,7 +430,7 @@ func (r *RuntimeFailureResultsRepository) ProjectRuntimeFailure(ctx context.Cont
 			return err
 		}
 		if capReached {
-			if err := presentCapReachedAgentResponse(ctx, tx, record); err != nil {
+			if err := presentCapReachedAgentResponse(ctx, tx, record, capName); err != nil {
 				return err
 			}
 		} else if err := persistCurrentAgentRuntimeTerminal(
@@ -441,6 +443,11 @@ func (r *RuntimeFailureResultsRepository) ProjectRuntimeFailure(ctx context.Cont
 			projection.Frame.Failure.SafeMessage,
 		); err != nil {
 			return err
+		} else if projection.Frame.Failure.Code == CapReachedCode && agentExecutionCapability(projection.CapabilityID) {
+			// The worker stopped the run at a cap; the response names it.
+			if err := presentWorkerCapReached(ctx, tx, record, projection.Frame.Failure.Cap); err != nil {
+				return err
+			}
 		}
 		// After the runtime terminal, so the typed approval error is what
 		// the response shows.
@@ -764,17 +771,17 @@ func materializeCanonicalCancellation(
 	// An agent run Main cancelled at a run cap shows CAP_REACHED
 	// (cap_reached_presentation.go). Only agent runs are capped, so no other
 	// run pays the read.
-	capReached := false
+	capName := ""
 	if agentRun {
-		if capReached, err = cancelledAtCap(ctx, tx, cancelled.ExecutionID, cancelled.Generation); err != nil {
+		if capName, err = cancelledAtCap(ctx, tx, cancelled.ExecutionID, cancelled.Generation); err != nil {
 			return err
 		}
 	}
-	if capReached {
-		if browserData, err = capReachedBrowserData(); err != nil {
+	if capName != "" {
+		if browserData, err = capReachedBrowserData(capName); err != nil {
 			return err
 		}
-		if err := presentCapReachedAgentResponse(ctx, tx, cancelled); err != nil {
+		if err := presentCapReachedAgentResponse(ctx, tx, cancelled, capName); err != nil {
 			return err
 		}
 	} else if agentRun {

@@ -263,10 +263,17 @@ impl Tool for SqlTool {
                     .and_then(Value::as_str)
                     .ok_or_else(invalid_arguments)?;
                 let admitted = admit_one_statement(sql, self.dialect).map_err(map_lex_error)?;
-                self.client
+                let rows = self
+                    .client
                     .execute_sql(admitted.as_str())
                     .await
-                    .map_err(SqlClientError::into_adk)
+                    .map_err(SqlClientError::into_adk)?;
+                // The run caps' record count (ADR-0041 decision 3): the rows
+                // a query returned.
+                if let Value::Array(returned) = &rows {
+                    crate::run_caps::report_records(returned.len() as u64);
+                }
+                Ok(rows)
             }
             SqlToolKind::ListTablesAndColumns => {
                 reject_unknown_keys(arguments, &[])?;

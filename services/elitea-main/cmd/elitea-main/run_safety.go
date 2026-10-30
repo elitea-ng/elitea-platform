@@ -8,8 +8,12 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/libs/go/routines"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -106,6 +110,60 @@ func startBrowserSessionLifecycle(
 		if result.Expired > 0 || result.Events > 0 {
 			logger.Info("browser session lifecycle pass",
 				"expired", result.Expired, "audit_events", result.Events)
+		}
+		return routines.OutcomeOK, nil
+	})
+	return nil
+}
+
+// RunSpendCapRoutineID is the routine registry row of the spend cap pass.
+const RunSpendCapRoutineID = "main.run_spend_cap"
+
+// startRunSpendCap runs the max_spend cap (ADR-0041 decision 3) on a
+// routines.Loop: one replica per pass, every 30 seconds by default. A pass
+// cancels every running agent run whose gateway spend reached the max_spend
+// recorded on it (repos.RunCapsRepository.EnforceSpendCaps), through the same
+// desired-state cancel as every other stop. The run can overshoot the cap by
+// what it spends between two passes plus the time to its next lease
+// renewal; the documentation states that bound. It runs in maintenance too:
+// a cap is not deferred work.
+func startRunSpendCap(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) error {
+	if pool == nil {
+		return nil
+	}
+	caps, err := repos.NewRunCapsRepository(pool)
+	if err != nil {
+		return fmt.Errorf("compose the run spend cap: %w", err)
+	}
+	// The same counter the wall cap adds to (transport/runtimegrpc/control).
+	reached, err := otel.Meter("elitea-main").Int64Counter("elitea.runtime.run_caps.reached",
+		metric.WithDescription("Agent runs cancelled because they reached a run cap, by cap."))
+	if err != nil {
+		return fmt.Errorf("compose the run spend cap metric: %w", err)
+	}
+	spendAttribute := metric.WithAttributes(attribute.String("cap", "max_spend"))
+	loop := &routines.Loop{
+		Backend: routines.NewStore(pool),
+		Def: routines.Definition{
+			ID:              RunSpendCapRoutineID,
+			Owner:           routines.OwnerMain,
+			Description:     "Stops agent runs whose model and tool spend reached the run's max_spend cap.",
+			DefaultSchedule: "30s",
+			MinInterval:     10 * time.Second,
+		},
+		Logger: logger,
+	}
+	go loop.Run(ctx, func(ctx context.Context) (string, error) {
+		cancelled, err := caps.EnforceSpendCaps(ctx)
+		if err != nil {
+			logger.Error("run spend cap pass failed", "err", err)
+			return routines.OutcomeError, err
+		}
+		for _, run := range cancelled {
+			reached.Add(context.WithoutCancel(ctx), 1, spendAttribute)
+			logger.Warn("run stopped at its spend cap",
+				"cap", "max_spend", "execution_id", run.ExecutionID, "generation", run.Generation,
+				"project_id", run.ProjectID, "spent_usd", run.Spent, "max_spend_usd", run.MaxSpend)
 		}
 		return routines.OutcomeOK, nil
 	})

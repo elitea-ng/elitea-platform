@@ -31,6 +31,9 @@ import {
   type GovernanceRow,
   type GovernanceType,
 } from './api/adminGovernanceApi';
+import { draftFieldErrors, splitIntList, splitList } from './governanceIdLists';
+
+export { draftFieldErrors } from './governanceIdLists';
 
 /** One weighted routing target as the dialog edits it: all strings. */
 export interface RoutingTargetDraft {
@@ -57,6 +60,9 @@ export interface GovernanceDraft {
   readonly scopeProjectIds: string;
   readonly scopeProviders: string;
   readonly scopeModels: string;
+  // rate_limit throttles (ADR-0041 decision 4)
+  readonly scopeAgentIds: string;
+  readonly scopeUserIds: string;
 
   // budget
   readonly budgetIsUnlimited: boolean;
@@ -91,6 +97,8 @@ export const EMPTY_DRAFT: GovernanceDraft = {
   scopeProjectIds: '',
   scopeProviders: '',
   scopeModels: '',
+  scopeAgentIds: '',
+  scopeUserIds: '',
   budgetIsUnlimited: false,
   budgetLimitUsd: '',
   budgetPeriod: 'monthly',
@@ -105,21 +113,6 @@ export const EMPTY_DRAFT: GovernanceDraft = {
   priority: '0',
   targets: [{ provider: '', model: '', weight: '1' }],
 };
-
-/** Splits a comma or newline separated list into trimmed, non-empty entries. */
-function splitList(raw: string): string[] {
-  return raw
-    .split(/[\n,]/)
-    .map((part) => part.trim())
-    .filter((part) => part !== '');
-}
-
-/** Parses a list of integers, dropping anything that is not one. */
-function splitIntList(raw: string): number[] {
-  return splitList(raw)
-    .map((part) => Number.parseInt(part, 10))
-    .filter((value) => Number.isFinite(value));
-}
 
 /** Joins a stored list back into the comma-separated form the field shows. */
 function joinList(value: unknown): string {
@@ -155,6 +148,14 @@ function draftToScope(draft: GovernanceDraft): Record<string, unknown> | undefin
   if (providers.length > 0) scope.providers = providers;
   const models = splitList(draft.scopeModels);
   if (models.length > 0) scope.models = models;
+  // The throttle dimensions mean something to a rate limit only, and the
+  // server refuses them on every other type.
+  if (draft.type === 'rate_limit') {
+    const agentIds = splitIntList(draft.scopeAgentIds);
+    if (agentIds.length > 0) scope.agent_ids = agentIds;
+    const userIds = splitIntList(draft.scopeUserIds);
+    if (userIds.length > 0) scope.user_ids = userIds;
+  }
   return Object.keys(scope).length > 0 ? scope : undefined;
 }
 
@@ -255,6 +256,8 @@ export function rowToDraft(row: GovernanceRow): GovernanceDraft {
     scopeProjectIds: joinList(scope.project_ids),
     scopeProviders: joinList(scope.providers),
     scopeModels: joinList(scope.models),
+    scopeAgentIds: joinList(scope.agent_ids),
+    scopeUserIds: joinList(scope.user_ids),
     budgetIsUnlimited: budget.is_unlimited === true,
     budgetLimitUsd: readString(budget, 'limit_usd'),
     budgetPeriod: readString(budget, 'period', 'monthly'),
@@ -339,6 +342,9 @@ export function useGatewayGovernancePage(): GatewayGovernancePageState {
 
   const onSave = useCallback(() => {
     if (draft === undefined) return;
+    // The dialog disables Save on a field error; this guard keeps the rule
+    // true for any other caller of onSave.
+    if (Object.keys(draftFieldErrors(draft)).length > 0) return;
     const payload = {
       id: draft.id,
       type: draft.type,

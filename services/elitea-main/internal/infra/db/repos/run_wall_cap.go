@@ -37,18 +37,22 @@ func NewRunWallCapRepository(pool *pgxpool.Pool) (*RunWallCapRepository, error) 
 const CapReasonWallCap = "cap_reached"
 
 // enforceWallCapSQL cancels one running agent generation whose run started
-// at least $3 milliseconds ago. A run another stop already cancelled keeps
-// that stop: desired_state must still be RUNNING.
+// at least $3 milliseconds ago, twice that for a run that consumed a
+// max_wall_seconds override grant (run_caps.override, shared 0212). A run
+// another stop already cancelled keeps that stop: desired_state must still
+// be RUNNING.
 const enforceWallCapSQL = `
 UPDATE elitea_runtime.execution_jobs AS j
-SET desired_state = 'CANCELLED', cancel_reason = 'cap_reached'
+SET desired_state = 'CANCELLED', cancel_reason = 'cap_reached', cancel_cap = 'max_wall_seconds'
 WHERE j.execution_id = $1
   AND j.generation = $2
   AND j.desired_state = 'RUNNING'
   AND j.capability_id IN ('agent.execute.application.v1', 'agent.execute.adhoc.v1')
   AND j.state IN ('PENDING', 'DISPATCHED', 'CLAIMED', 'RUNNING', 'SETTLING')
   AND COALESCE(j.run_started_at, j.admitted_at)
-      <= clock_timestamp() - ($3::bigint * interval '1 millisecond')`
+      <= clock_timestamp() - ($3::bigint
+          * CASE WHEN j.run_caps->>'override' = 'max_wall_seconds' THEN 2 ELSE 1 END
+          * interval '1 millisecond')`
 
 // EnforceWallCap cancels the run when it is past limit and reports whether
 // this call cancelled it. A limit of 0 or less is off.

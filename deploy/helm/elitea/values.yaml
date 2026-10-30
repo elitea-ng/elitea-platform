@@ -4084,6 +4084,28 @@ main:
         # EliteaAuditExportBacklog: more undelivered events than this.
         backlogEvents: 10000
 
+  # Runtime safety alerts (ADR-0041 decisions 1 and 2, #1498): the agent
+  # circuit breaker's trips (elitea_breaker_trips_total{rule}) and the active
+  # execution suspensions (elitea_safety_suspensions_active{scope,source}),
+  # served on the main metrics listener (ELITEA_AUDIT_EXPORT_METRICS_ADDR,
+  # main.auditExport.metrics.port) with or without an audit exporter.
+  # Rendered only where monitoring.coreos.com/v1 exists and that listener is
+  # on. The PodMonitor renders only when the audit export's PodMonitor does
+  # not (that one already scrapes the same port). Severities: a platform
+  # suspension and a breaker storm are critical; a trip and a suspension that
+  # stays active are warnings. Route them to your on-call.
+  safetyAlerts:
+    podMonitor:
+      enabled: true
+      interval: 30s
+      labels: {}
+    prometheusRule:
+      enabled: true
+      labels: {}
+      # EliteaExecutionSuspensionsActive fires when a project, agent or
+      # toolkit type suspension stays active this long.
+      activeFor: 30m
+
   # Grafana dashboard "Elitea / Agent runs, errors, tool calls and spend"
   # (ADR-0042, #1499): a ConfigMap labelled grafana_dashboard: "1" for a
   # Grafana dashboard sidecar (kube-prometheus-stack's, for example), with the

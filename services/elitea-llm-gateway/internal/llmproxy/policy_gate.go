@@ -97,7 +97,30 @@ func (h *Handler) policySubject(ctx context.Context, provider schemas.ModelProvi
 		TenantID:  bifrostCtxString(ctx, schemas.BifrostContextKeyGovernanceCustomerID), //nolint:staticcheck // SA1019: bifrost core 1.13 still reads this key (schemas/context.go, plugin pipelines); its Grant API has no setter for the gateway
 		Provider:  string(provider),
 		Model:     model,
+		UserID:    policyUserID(identityUserFromCtx(ctx)),
 	}
+}
+
+// policyUserID reads the signed caller id with parseUserID. A missing or
+// non-numeric value is 0, and a row scoped to users then does not match: a
+// throttle never applies on a guess.
+func policyUserID(raw string) int64 {
+	if id := parseUserID(raw); id > 0 {
+		return int64(id)
+	}
+	return 0
+}
+
+// rateSubject is policySubject plus the request's agent, which the agent
+// throttles key on (ADR-0041 decision 4). The agent is read only when a loaded
+// rate limit names agents, so a deployment without agent throttles never pays
+// for the lookup.
+func (h *Handler) rateSubject(ctx context.Context, snap *policy.Snapshot, provider schemas.ModelProvider, model string) policy.Subject {
+	sub := h.policySubject(ctx, provider, model)
+	if snap.HasAgentThrottles() {
+		sub.Agent = h.rateLimiter.Agent(ctx, identityExecutionFromCtx(ctx))
+	}
+	return sub
 }
 
 // applyPolicy runs the routing rules and then the provider/model allowlist. It
@@ -266,9 +289,15 @@ func (h *Handler) checkMCPAllowlist(
 	return false
 }
 
-// rateVerdict applies the authored per-minute rate limits. It returns a
-// budgetVerdict so the HTTP path and the realtime path refuse on identical
-// terms, exactly as the budget and loop-breaker refusals already do.
+// rateVerdict applies the authored per-minute rate limits and throttles. It
+// returns a budgetVerdict so the HTTP path and the realtime path refuse on
+// identical terms, exactly as the budget and loop-breaker refusals already do.
+//
+// Up to three limits apply: the project's rate limit, a throttle on the
+// request's agent and a throttle on its user (Snapshot.RateLimits). The first
+// one that refuses answers 429 with Retry-After, and a refused request consumes
+// no allowance of the other limits (Limiter.AdmitAll). A throttle delays or refuses
+// the call; it never suspends the agent or the user (ADR-0041 decision 4).
 func (h *Handler) rateVerdict(ctx context.Context, model string, mode admissionMode) budgetVerdict {
 	if h.policy == nil || !h.rateLimiter.Enabled() {
 		return budgetAllowed
@@ -281,31 +310,28 @@ func (h *Handler) rateVerdict(ctx context.Context, model string, mode admissionM
 	// carries the model only. A rate-limit row scoped to a provider therefore
 	// does not match here — see the note on Scope.selects: a constraint the
 	// subject cannot answer does not apply, rather than applying on a guess.
-	sub := h.policySubject(ctx, "", model)
-	def, ok := snap.RateLimit(sub)
-	if !ok || !def.Limited() {
-		return budgetAllowed
+	sub := h.rateSubject(ctx, snap, "", model)
+	dec := h.rateLimiter.AdmitAll(ctx, snap.RateLimits(sub), sub, mode == admissionArrival)
+	if !dec.Allowed {
+		h.logger.WarnContext(ctx, "governance: authored rate limit refused the request",
+			"rule", dec.Rule, "class", dec.Class.String(), "bucket", dec.Bucket,
+			"limit", dec.Limit, "observed", dec.Observed, "project_id", sub.ProjectID,
+			"user_id", sub.UserID, "agent_project_id", sub.Agent.ProjectID, "agent_id", sub.Agent.ApplicationID)
+		return budgetVerdict{
+			status:  http.StatusTooManyRequests,
+			errType: "rate_limit_error",
+			message: fmt.Sprintf("the LLM governance policy limits this %s to %d %s per minute; retry after the window resets",
+				dec.Class.String(), dec.Limit, dec.Bucket),
+			code:       "rate_limit_exceeded",
+			retryAfter: dec.RetryAfter,
+		}
 	}
-	dec := h.rateLimiter.Admit(ctx, def, sub, mode == admissionArrival)
-	if dec.Allowed {
-		return budgetAllowed
-	}
-	h.logger.WarnContext(ctx, "governance: authored rate limit refused the request",
-		"rule", dec.Rule, "bucket", dec.Bucket,
-		"limit", dec.Limit, "observed", dec.Observed, "project_id", sub.ProjectID)
-	return budgetVerdict{
-		status:  http.StatusTooManyRequests,
-		errType: "rate_limit_error",
-		message: fmt.Sprintf("the LLM governance policy limits this project to %d %s per minute; retry after the window resets",
-			dec.Limit, dec.Bucket),
-		code:       "rate_limit_exceeded",
-		retryAfter: dec.RetryAfter,
-	}
+	return budgetAllowed
 }
 
-// recordPolicyTokens adds a completed request's tokens to its rate-limit
-// window. It is called from the billing path, which is the only place the
-// authoritative token count is known.
+// recordPolicyTokens adds a completed request's tokens to every rate-limit
+// window that applies to it. It is called from the billing path, which is the
+// only place the authoritative token count is known.
 func (h *Handler) recordPolicyTokens(ctx context.Context, provider, model string, tokens int64, admittedAt time.Time) {
 	if h.policy == nil || !h.rateLimiter.Enabled() || tokens <= 0 {
 		return
@@ -314,12 +340,13 @@ func (h *Handler) recordPolicyTokens(ctx context.Context, provider, model string
 	if snap == nil {
 		return
 	}
-	sub := h.policySubject(ctx, schemas.ModelProvider(provider), model)
-	def, ok := snap.RateLimit(sub)
-	if !ok || def.TokensPerMin <= 0 {
-		return
+	sub := h.rateSubject(ctx, snap, schemas.ModelProvider(provider), model)
+	for _, def := range snap.RateLimits(sub) {
+		if def.TokensPerMin <= 0 {
+			continue
+		}
+		h.rateLimiter.RecordTokens(ctx, def, sub, admittedAt, tokens)
 	}
-	h.rateLimiter.RecordTokens(ctx, def, sub, admittedAt, tokens)
 }
 
 // ratePolicyFor returns the authored billing treatment for a request. Callers

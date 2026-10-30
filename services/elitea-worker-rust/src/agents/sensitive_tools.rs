@@ -36,6 +36,7 @@ pub(crate) fn policy_for_guardrails(
     fallback: &Arc<ToolAdmissionPolicy>,
     egress: &Arc<elitea_agent_runtime::egress::RunEgress>,
     approval: &Arc<elitea_agent_runtime::approval_policy::ApprovalPolicy>,
+    run_caps: &Arc<elitea_agent_runtime::run_caps::RunCapsMeter>,
 ) -> Result<Arc<ToolAdmissionPolicy>, NativeAgentAssemblyError> {
     let Some(guardrails) = guardrails else {
         return Ok(Arc::new(
@@ -43,7 +44,8 @@ pub(crate) fn policy_for_guardrails(
                 .as_ref()
                 .clone()
                 .with_egress(Arc::clone(egress))
-                .with_approval_policy(Arc::clone(approval)),
+                .with_approval_policy(Arc::clone(approval))
+                .with_run_caps(Arc::clone(run_caps)),
         ));
     };
     let runtime = Map::from_iter([(
@@ -55,7 +57,8 @@ pub(crate) fn policy_for_guardrails(
             Arc::new(
                 policy
                     .with_egress(Arc::clone(egress))
-                    .with_approval_policy(Arc::clone(approval)),
+                    .with_approval_policy(Arc::clone(approval))
+                    .with_run_caps(Arc::clone(run_caps)),
             )
         })
         .map_err(|error| match error.code() {
@@ -545,6 +548,7 @@ mod tests {
     use adk_rust::tool::{BasicToolset, FunctionTool};
     use adk_rust::{Tool, Toolset};
     use elitea_agent_runtime::approval_policy::ApprovalPolicy;
+    use elitea_agent_runtime::run_caps::{RunCapLimits, RunCapsMeter};
     use serde_json::{Map, Value, json};
 
     use super::{
@@ -602,8 +606,14 @@ mod tests {
         let fallback = policy(json!({"sensitive_tools": {"*": ["delete_file"]}}));
 
         let open = elitea_agent_runtime::egress::RunEgress::open();
-        let absent = policy_for_guardrails(None, &fallback, &open, &ApprovalPolicy::none())
-            .expect("absent policy");
+        let absent = policy_for_guardrails(
+            None,
+            &fallback,
+            &open,
+            &ApprovalPolicy::none(),
+            &RunCapsMeter::unlimited(),
+        )
+        .expect("absent policy");
         assert!(Arc::ptr_eq(absent.egress(), &open), "bound to the run");
         assert!(
             absent
@@ -612,9 +622,14 @@ mod tests {
         );
 
         let empty = Map::new();
-        let resolved =
-            policy_for_guardrails(Some(&empty), &fallback, &open, &ApprovalPolicy::none())
-                .expect("empty policy");
+        let resolved = policy_for_guardrails(
+            Some(&empty),
+            &fallback,
+            &open,
+            &ApprovalPolicy::none(),
+            &RunCapsMeter::unlimited(),
+        )
+        .expect("empty policy");
         assert!(!Arc::ptr_eq(&resolved, &fallback));
         assert!(
             resolved
@@ -638,13 +653,16 @@ mod tests {
             elitea_agent_runtime::egress::PublicPolicy::allowlist(["api.example.com"])
                 .expect("policy"),
         );
+        let meter = RunCapsMeter::new(RunCapLimits::worker_default());
         let resolved = policy_for_guardrails(
             Some(&guardrails),
             &fallback,
             &egress,
             &ApprovalPolicy::none(),
+            &meter,
         )
         .expect("command policy");
+        assert!(Arc::ptr_eq(resolved.run_caps(), &meter), "bound to the run");
         assert!(Arc::ptr_eq(resolved.egress(), &egress), "bound to the run");
         assert_ne!(
             resolved.toolkit_decision("sharepoint"),

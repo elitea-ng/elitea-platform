@@ -15,6 +15,8 @@ type NewSuspension struct {
 	ActorID        int64
 	Source         Source
 	ResumeRequires ResumeRequirement
+	// Detail is the breaker's rule and observed values; nil otherwise.
+	Detail map[string]any
 }
 
 // ResumeRecord is what the store writes on resume.
@@ -43,6 +45,10 @@ type Store interface {
 	// ResumeSuspension stamps resumed_at on an ACTIVE row; ErrNotActive
 	// otherwise.
 	ResumeSuspension(ctx context.Context, r ResumeRecord) (Suspension, error)
+	// ApproveResume records the first person of a system-written two_person
+	// suspension on an ACTIVE row that has none; ErrNotActive when the row
+	// was resumed, and the row as it is when another person approved first.
+	ApproveResume(ctx context.Context, id, approvedBy int64) (Suspension, error)
 	GetSuspension(ctx context.Context, id int64) (Suspension, error)
 	ListSuspensions(ctx context.Context, f ListFilter) ([]Suspension, error)
 }
@@ -59,6 +65,14 @@ var (
 	ErrScopeForbidden = errors.New("the caller may not suspend this scope")
 	// ErrConfirmationRequired: a platform suspension needs the typed "STOP".
 	ErrConfirmationRequired = errors.New("a platform stop needs the typed confirmation")
+	// ErrResumeApprovalRecorded: the caller is the first of two persons of a
+	// system-written two_person suspension. The approval is recorded; a
+	// second platform administrator must resume it. The suspension stays
+	// active.
+	ErrResumeApprovalRecorded = errors.New("the first resume approval is recorded; a second administrator must resume")
+	// ErrSecondPersonRequired: the caller already recorded the first
+	// approval of this suspension and cannot also be the second person.
+	ErrSecondPersonRequired = errors.New("a different administrator must resume this suspension")
 )
 
 // AlreadySuspendedError: an active suspension already covers the target.
@@ -201,6 +215,23 @@ func (s *Service) Resume(ctx context.Context, actor Actor, request ResumeRequest
 	}
 	if actor.UserID < 0 || (actor.UserID == 0 && current.Source != SourceSelfTest) {
 		return Suspension{}, ErrResumeForbidden
+	}
+	if current.NeedsSecondPerson() {
+		if current.ResumeApprovedBy == nil {
+			approved, err := s.store.ApproveResume(ctx, current.ID, actor.UserID)
+			if err != nil {
+				return Suspension{}, err
+			}
+			if approved.ResumeApprovedBy != nil && *approved.ResumeApprovedBy == actor.UserID {
+				return approved, ErrResumeApprovalRecorded
+			}
+			// Another administrator approved first: this caller is the
+			// second person.
+			current = approved
+		}
+		if *current.ResumeApprovedBy == actor.UserID {
+			return current, ErrSecondPersonRequired
+		}
 	}
 	resumed, err := s.store.ResumeSuspension(ctx, ResumeRecord{ID: current.ID, ResumedBy: actor.UserID, Reason: reason})
 	if err != nil {

@@ -31,25 +31,27 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (17)">
 
-| Tool |
-|---|
-| Append file |
-| Comment on issue |
-| Create branch |
-| Create file |
-| Create pr change comment |
-| Create pull request |
-| Delete file |
-| Get commits |
-| Get issue |
-| Get issues |
-| Get pr changes |
-| List branches in repo |
-| List files |
-| List folders |
-| Read file |
-| Set active branch |
-| Update file |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Append file | `write` |
+| Comment on issue | `external_send` |
+| Create branch | `write` |
+| Create file | `write` |
+| Create pr change comment | `external_send` |
+| Create pull request | `write` |
+| Delete file | `delete` |
+| Get commits | `read` |
+| Get issue | `read` |
+| Get issues | `read` |
+| Get pr changes | `read` |
+| List branches in repo | `read` |
+| List files | `read` |
+| List folders | `read` |
+| Read file | `read` |
+| Set active branch | `write` |
+| Update file | `write` |
 
 </Accordion>
 

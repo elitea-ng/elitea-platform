@@ -867,6 +867,7 @@ impl PipelineNativeAgentAssembler {
                 ask_user_enabled: profile.shell().internal_tools().ask_user_enabled(),
                 node_events: node_event_sender.clone(),
                 model_scopes,
+                run_caps: Arc::clone(tool_policy.run_caps()),
             }) as Arc<dyn PipelineLlmAgentFactory>
         });
         let mut nodes =
@@ -1169,6 +1170,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             &self.tool_policy,
             command.egress(),
             command.approval_policy(),
+            command.run_caps(),
         )?;
         let (profile, plan, _, _) = super::runtime::admit_pipeline_plan(
             request,
@@ -1203,6 +1205,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             &self.tool_policy,
             command.egress(),
             command.approval_policy(),
+            command.run_caps(),
         )?;
         let (profile, plan, toolsets, start) = super::runtime::admit_pipeline_plan(
             request,
@@ -1297,6 +1300,7 @@ impl PipelineNativeAgentAssembler {
                 &self.tool_policy,
                 assembly.egress(),
                 assembly.approval_policy(),
+                assembly.run_caps(),
             )?;
             // #606, the pipeline twin of the ordinary path's read. `platform`
             // is optional here only because the injected-state test constructor
@@ -1482,6 +1486,9 @@ struct NativePipelineLlmAgentFactory {
     ask_user_enabled: bool,
     node_events: PipelineNodeEventSender,
     model_scopes: ModelScopeSessions,
+    /// The run's caps meter (ADR-0041 decision 3): an llm node's model turns
+    /// count toward the run's.
+    run_caps: Arc<elitea_agent_runtime::run_caps::RunCapsMeter>,
 }
 
 struct NativePipelineDirectToolResolver {
@@ -1802,6 +1809,7 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             temperature: self.profile.temperature(),
             max_model_turns: self.profile.step_limit()
                 + crate::agents::request::MAX_OUTPUT_CONTINUATION_CALLS,
+            run_caps: Some(Arc::clone(&self.run_caps)),
         };
         let adapter = match self.profile.model_provider() {
             OrdinaryModelProvider::OpenAiChat => ModelAdapterKind::OpenAiCompatible,
@@ -2708,6 +2716,7 @@ async fn bind_saved_pipeline_runtimes(
             ask_user_enabled: profile.shell().internal_tools().ask_user_enabled(),
             node_events: runtime.node_events.clone(),
             model_scopes: runtime.model_scopes.clone(),
+            run_caps: Arc::clone(runtime.tool_policy.run_caps()),
         }) as Arc<dyn PipelineLlmAgentFactory>
     });
     let mut runtimes = PipelineNodeRuntimes::new(llm_factory, direct_tool_resolver, application)

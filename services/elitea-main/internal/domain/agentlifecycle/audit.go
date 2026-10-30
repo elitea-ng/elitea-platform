@@ -35,3 +35,7 @@ const (
 	// certified when its tier moves to one with no recertification cadence.
 	ReasonTierWithoutCadence = "tier_without_cadence"
 )
+
+// ActionRegistryBreakerOverride is a change of the agent's circuit breaker
+// override (ADR-0041 decision 2).
+const ActionRegistryBreakerOverride = "agent.registry.breaker_override_changed"

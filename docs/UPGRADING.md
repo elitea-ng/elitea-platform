@@ -4,6 +4,149 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Agent circuit breaker (#1498, on by default)
+
+ADR-0041 decision 2. Shared migration **0213** adds
+`elitea_runtime.agent_breaker_runs` (the breaker's window of ended agent
+runs, kept 7 days), the partial index `execution_jobs_agent_settled` on
+`elitea_runtime.execution_jobs (settled_at)` for agent runs, the columns
+`detail`, `resume_approved_by` and `resume_approved_at` on
+`elitea_runtime.execution_suspensions`, and `circuit_breaker` (jsonb, default
+`{}`) on `elitea_lifecycle.agent_registry`. The index is built in the
+migration transaction, not `CONCURRENTLY`: on a large `execution_jobs` table
+it blocks writes to that table while it builds. Run the migration in a quiet
+period if the table is large.
+
+- **Behaviour change: agents can be stopped automatically.** The routine
+  `main.agent_breaker` runs every minute. By default it suspends an agent
+  when more than 50 % of its latest 20 ended runs failed, or when one tool
+  failed 5 times in a row in one run. A run that a run cap stopped
+  (`CAP_REACHED`) is not a failure. Spend per hour and runs per hour are off.
+  A stopped agent's new runs are refused with `execution_suspended`, and its
+  runs in flight are cancelled. To keep the old behaviour, turn off
+  **Configuration › Circuit Breaker › Circuit Breaker On**, or turn off the
+  routine in **Admin › Schedules & Tasks**. The first pass reads only the
+  runs that ended in the 10 minutes before it.
+- **Resume of high and critical agents.** A breaker stop of a `high` tier
+  agent needs a platform administrator; a project admin gets 403
+  `resume_forbidden`. A `critical` tier stop needs two different platform
+  administrators: `POST /api/v2/admin/execution_suspensions/{id}:resume` by
+  the first answers **202** with the suspension still active, and the same
+  administrator again gets 403 `second_person_required`. A client that
+  treats every 2xx answer of a resume as "resumed" must check `active`.
+- **Many agents at once.** When more agents than the storm limit (default 5)
+  would trip on the error rate or tool failure rules in one pass, none is
+  stopped and the `EliteaAgentBreakerStorm` alert fires.
+- **Metrics without the audit export.** elitea-main now serves `/metrics` on
+  `ELITEA_AUDIT_EXPORT_METRICS_ADDR` (chart default `:9464`) also when no
+  audit exporter is configured, with the runtime safety metrics
+  `elitea_safety_suspensions_active{scope,source}`,
+  `elitea_breaker_trips_total{rule}`, `elitea_breaker_storms_total` and
+  `elitea_breaker_pass_failures_total`. Set the variable to empty to close the
+  port.
+- **Chart.** New values `main.safetyAlerts.podMonitor` and
+  `main.safetyAlerts.prometheusRule` (both on). Where the Prometheus Operator
+  API exists, the chart renders a `PodMonitor` named `<release>-safety` (only
+  when the audit export's PodMonitor is not rendered) and a `PrometheusRule`
+  named `<release>-safety`. `EliteaPlatformExecutionSuspended` and
+  `EliteaAgentBreakerStorm` are `critical`; route them to your on-call.
+- **Evidence.** Each trip writes one `ai.elitea.security.v1.agent.breaker`
+  event to the security audit outbox and notifies the agent's owners and the
+  project admins (`agent_breaker_tripped`).
+- **API.** `ExecutionSuspension` gains `breaker`, `resume_approved_by` and
+  `resume_approved_at`. `AgentRegistryRecord` gains `circuit_breaker`;
+  `updateAgentRegistry` accepts it and refuses a looser override with 422
+  `circuit_breaker_override_loosens`. No operation was added.
+
+## Throttles per agent and per user (#1498, off until authored)
+
+ADR-0041 decision 4. A `rate_limit` row in `gateway.governance_config` can
+name `scope.agent_ids` (with exactly one `scope.project_ids` entry) and
+`scope.user_ids`. No migration and no chart value changes: the row data is
+JSONB, and the `type` value set does not change.
+
+- **Upgrade order.** Upgrade the LLM gateway before you author a throttle. A
+  gateway from an earlier release does not know the two fields and applies
+  the row as a rate limit for the WHOLE project.
+- **Database reads.** When a loaded rate limit names agents, the gateway reads
+  `elitea_runtime.agent_execution_jobs` and `elitea_runtime.execution_jobs`
+  (one primary-key read per run, cached for 10 minutes) on its existing
+  database connection. If the gateway connects with its own database role,
+  give that role `SELECT` on both tables. Without it, agent throttles fail
+  open and `rate_limiter.degraded` on `GET /governance/status` grows.
+- **Write validation.** `POST` and `PUT /admin/gateway/governance` refuse the
+  fields on every type other than `rate_limit`, refuse more than 100 ids,
+  and refuse an agent that is not in the named project or a user that does
+  not exist.
+- **Fail open.** Like the project rate limits, a throttle does not apply when
+  the NATS counter is not available.
+
+## Run caps per risk tier (#1498, tool call default on)
+
+ADR-0041 decision 3. Shared migration **0212** adds
+`elitea_runtime.execution_jobs.run_caps` (the effective caps of each agent
+run, written when Main prepares its command) and `cancel_cap` (the Main cap
+that cancelled a run: `max_wall_seconds` or `max_spend`), the table
+`elitea_runtime.run_cap_overrides`, and the permission
+`safety.override_cap` for the platform administrators (`super_admin`,
+`admin`) and the project `admin` role, including projects whose role matrix
+was saved. It also adds the index `idx_llm_request_logs_execution_time` on
+`gateway.llm_request_logs (execution_id, occurred_at)` for the spend routine.
+No backfill.
+
+- **Lock during the upgrade.** The migration runner is transactional, so the
+  index is not built `CONCURRENTLY`. While the index builds, writes to
+  `gateway.llm_request_logs` wait (the gateway's request log writes are
+  delayed, reads continue). On a large log table, run the migration in a
+  quiet period, or create the index before the upgrade:
+  `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_llm_request_logs_execution_time ON gateway.llm_request_logs (execution_id, occurred_at) WHERE execution_id IS NOT NULL;`
+  The migration then skips it.
+
+- **Setting.** Configuration › Run Caps (`run_caps` section,
+  `configuration.governance`) keeps **Maximum Run Time** and gains, for each
+  tier (`low`, `medium`, `high`, `critical`), `<tier>_max_tool_calls`
+  (default 200), `<tier>_max_model_turns`, `<tier>_max_spend` (USD, at most
+  four decimals) and `<tier>_max_records_read` (default 0, no cap). The tier
+  is the root agent's registry tier; no record is `low`.
+- **Behaviour change: 200 tool calls.** A worker of this release stops a run
+  after 200 toolkit or MCP tool calls, also when Main sends no caps. The run
+  ends with `CAP_REACHED` (`cap` = `max_tool_calls`). If your agents need more,
+  save a higher `<tier>_max_tool_calls` after the workers roll, or set 0 for
+  no cap. Model turns, spend and records read are not capped until you save
+  a value. An agent's `step_limit` still applies; with `max_model_turns` the
+  lower one stops first.
+- **Upgrade order: Main, then the workers** (Argo CD sync wave 0, then wave
+  1). Main sends the caps on the new `WorkerCommandV1.run_caps` field (69)
+  **only after an administrator saves a per-tier key**. A worker of an earlier
+  release refuses the unknown field, so do not save the per-tier caps (and do
+  not save the Run Caps form, which saves them all) until every worker runs
+  this release. Saving only Maximum Run Time through the API, as before,
+  sends nothing new.
+- **Spend cap.** The routine `main.run_spend_cap` (Admin › Routines, every 30
+  seconds) cancels a running agent run whose spend in
+  `gateway.llm_request_logs` reached its `max_spend`, through the usual
+  desired-state cancel. A run can pass the cap by the spend of one interval
+  plus one lease renewal.
+- **Records read.** Only `jira.search_using_jql`, `github.search_issues`,
+  `sql.execute_sql`, `confluence.search_pages`, `confluence.search_by_title`
+  and every index toolkit's `search_index` report records. Other tools count 0.
+- **Author caps.** An agent version's `meta.run_caps` can lower the caps for
+  that agent. Creating an agent or saving a version with a value above the
+  tier cap now answers HTTP 422 `RUN_CAP_ABOVE_TIER` (or `RUN_CAP_INVALID`).
+- **Override.** `POST /api/v2/elitea_core/run_cap_overrides/prompt_lib/{project_id}`
+  (new operation `createRunCapOverride`, `safety.override_cap`) lets the next
+  agent run of the conversation of a `CAP_REACHED` answer use twice that cap.
+  Each grant writes an `ai.elitea.security.v1.agent.cap.override` event to
+  the security audit outbox. A worker cap cannot be overridden before the
+  per-tier caps are saved. One unused override is permitted for each
+  conversation; an override that expired unused does not block the next
+  one. A run whose command carries no caps does not use an override on a
+  worker cap.
+- **Evidence.** The metric `elitea.runtime.run_caps.reached` gains the label
+  value `cap=max_spend`. The worker logs `agent_run_cap_reached` for a worker
+  cap. Counters are per execution: a run that continues after an approval
+  pause starts its counts at zero.
+
 ## Approval ledger and unattended approvals (#1491, on by default)
 
 ADR-0041 decision 5. Shared migration **0211** adds

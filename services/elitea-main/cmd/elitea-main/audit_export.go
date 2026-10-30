@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/breaker"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auditexport"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
@@ -20,11 +24,19 @@ import (
 // refuses the boot. The returned service's SecurityExporter is given to the
 // security audit relay, which keeps each outbox row pending until the sinks
 // accepted it. closeFn shuts the OTLP exporter down.
+//
+// The export's metrics listener (ELITEA_AUDIT_EXPORT_METRICS_ADDR) is the
+// main metrics listener: it also serves the runtime safety metrics
+// (safetyMetrics: active suspensions, breaker trips). With no exporter
+// configured, the listener still starts when the address is set, and
+// serves those alone, so the breaker and kill switch alerts work on every
+// install.
 func auditExportAtBoot(
 	ctx context.Context,
 	lookup func(string) (string, bool),
 	admission profile.Admission,
 	pool *pgxpool.Pool,
+	safetyMetrics *breaker.Metrics,
 	logger *slog.Logger,
 ) (service *auditexport.Service, closeFn func(context.Context) error, err error) {
 	cfg, err := auditexport.ConfigFromEnv(lookup)
@@ -32,12 +44,19 @@ func auditExportAtBoot(
 		return nil, nil, err
 	}
 	if !cfg.Enabled() {
+		if cfg.MetricsAddr != "" && safetyMetrics != nil {
+			return nil, serveSafetyMetrics(ctx, cfg.MetricsAddr, safetyMetrics, logger), nil
+		}
 		return nil, nil, nil
 	}
 	if pool == nil {
 		return nil, nil, fmt.Errorf("audit export needs the platform database")
 	}
-	service, err = auditexport.Build(ctx, cfg, auditexport.Deps{DB: pool, Logger: logger})
+	deps := auditexport.Deps{DB: pool, Logger: logger}
+	if safetyMetrics != nil {
+		deps.ExtraMetrics = safetyMetrics
+	}
+	service, err = auditexport.Build(ctx, cfg, deps)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -54,6 +73,21 @@ func auditExportAtBoot(
 		"audit_events", cfg.AuditEvents, "run_steps", cfg.RunSteps, "security_audit", true,
 		"governed", admission.Governed())
 	return service, service.Close, nil
+}
+
+// serveSafetyMetrics serves GET /metrics with the runtime safety metrics
+// alone, on an install with no audit exporter. closeFn stops it.
+func serveSafetyMetrics(ctx context.Context, addr string, metrics *breaker.Metrics, logger *slog.Logger) func(context.Context) error {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metrics.Handler())
+	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("metrics listener stopped", "addr", addr, "err", err)
+		}
+	}()
+	logger.Info("metrics listener started (runtime safety)", "addr", addr)
+	return server.Shutdown
 }
 
 // securityAuditExporter is the exporter for the security audit relay: nil

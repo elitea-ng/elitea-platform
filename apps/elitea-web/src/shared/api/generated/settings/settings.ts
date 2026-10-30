@@ -72,6 +72,8 @@ import type {
   ProjectCloudExecutorSwitch,
   ProjectCloudExecutorSwitchUpdate,
   ProjectContextDraft,
+  RunCapOverride,
+  RunCapOverrideRequest,
 } from "../model";
 
 import { eliteaFetch } from ".././mutator";
@@ -1400,6 +1402,281 @@ export function useResumeProjectExecutionSuspension<
     projectId,
     suspensionId,
     executionSuspensionResume,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createRunCapOverrideResponse201 = {
+  data: RunCapOverride;
+  status: 201;
+};
+
+export type createRunCapOverrideResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type createRunCapOverrideResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createRunCapOverrideResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createRunCapOverrideResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type createRunCapOverrideResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type createRunCapOverrideResponse422 = {
+  data: ErrorResponse;
+  status: 422;
+};
+
+export type createRunCapOverrideResponseSuccess =
+  createRunCapOverrideResponse201 & {
+    headers: Headers;
+  };
+export type createRunCapOverrideResponseError = (
+  | createRunCapOverrideResponse400
+  | createRunCapOverrideResponse401
+  | createRunCapOverrideResponse403
+  | createRunCapOverrideResponse404
+  | createRunCapOverrideResponse409
+  | createRunCapOverrideResponse422
+) & {
+  headers: Headers;
+};
+
+export type createRunCapOverrideResponse =
+  createRunCapOverrideResponseSuccess | createRunCapOverrideResponseError;
+
+export const getCreateRunCapOverrideUrl = (projectId: string) => {
+  return `/elitea_core/run_cap_overrides/prompt_lib/${projectId}`;
+};
+
+/**
+ * ADR-0041 decision 3. The response named by message_id must have ended with CAP_REACHED. The next agent run of its conversation gets that one cap doubled; every other cap keeps its value. One grant per stopped response, one unused grant per conversation; an unused grant expires after one hour. The grant is a security audit event (ai.elitea.security.v1.agent.cap.override). Requires `safety.override_cap` in the project (the project admin and the platform administrators).
+ * @summary Let a conversation continue past the run cap it reached, once
+ */
+export const createRunCapOverride = async (
+  projectId: string,
+  runCapOverrideRequest: RunCapOverrideRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createRunCapOverrideResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createRunCapOverrideResponse>(
+    getCreateRunCapOverrideUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(runCapOverrideRequest),
+    },
+  );
+};
+
+export const getCreateRunCapOverrideQueryKey = (
+  projectId: string,
+  runCapOverrideRequest?: RunCapOverrideRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/run_cap_overrides/prompt_lib/${projectId}`,
+    runCapOverrideRequest,
+  ] as const;
+};
+
+export const getCreateRunCapOverrideQueryOptions = <
+  TData = Awaited<ReturnType<typeof createRunCapOverride>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  runCapOverrideRequest: RunCapOverrideRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createRunCapOverride>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateRunCapOverrideQueryKey(projectId, runCapOverrideRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createRunCapOverride>>
+  > = ({ signal }) =>
+    createRunCapOverride(projectId, runCapOverrideRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof createRunCapOverride>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateRunCapOverrideQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createRunCapOverride>>
+>;
+export type CreateRunCapOverrideQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useCreateRunCapOverride<
+  TData = Awaited<ReturnType<typeof createRunCapOverride>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  runCapOverrideRequest: RunCapOverrideRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createRunCapOverride>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createRunCapOverride>>,
+          TError,
+          Awaited<ReturnType<typeof createRunCapOverride>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateRunCapOverride<
+  TData = Awaited<ReturnType<typeof createRunCapOverride>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  runCapOverrideRequest: RunCapOverrideRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createRunCapOverride>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createRunCapOverride>>,
+          TError,
+          Awaited<ReturnType<typeof createRunCapOverride>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateRunCapOverride<
+  TData = Awaited<ReturnType<typeof createRunCapOverride>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  runCapOverrideRequest: RunCapOverrideRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createRunCapOverride>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Let a conversation continue past the run cap it reached, once
+ */
+
+export function useCreateRunCapOverride<
+  TData = Awaited<ReturnType<typeof createRunCapOverride>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  runCapOverrideRequest: RunCapOverrideRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createRunCapOverride>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateRunCapOverrideQueryOptions(
+    projectId,
+    runCapOverrideRequest,
     options,
   );
 

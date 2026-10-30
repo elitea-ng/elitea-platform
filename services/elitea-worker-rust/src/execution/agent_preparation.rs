@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use elitea_agent_runtime::run_caps::RunCapsMeter;
 use tracing::Instrument as _;
 
 use super::agent_invocation::AgentAuthorizedLifecycleCompletion;
@@ -844,6 +845,8 @@ where
 {
     run: CursorBoundAuthorizedAgentRun<C>,
     assembled: AssembledNativeAgentInvocation<S>,
+    // ADR-0041 decision 3: the run's cap meter, read at the terminal.
+    run_caps: Arc<RunCapsMeter>,
 }
 
 impl<C, S> AssembledAuthorizedAgentRun<C, S>
@@ -896,7 +899,11 @@ where
     pub(super) fn start(
         self,
     ) -> Result<StartedAuthorizedAgentRun<C, S>, Box<NativeStartFailure<C>>> {
-        let Self { mut run, assembled } = self;
+        let Self {
+            mut run,
+            assembled,
+            run_caps,
+        } = self;
         if run.permit.is_none()
             || run.runtime_context.is_some()
             || run.session.is_some()
@@ -919,6 +926,7 @@ where
                 native,
                 projector,
                 completion,
+                run_caps,
             }),
             Err(error) => Err(Box::new(NativeStartFailure { run, error })),
         }
@@ -934,12 +942,18 @@ where
     native: NativeAgentRun,
     projector: Box<crate::agents::events::AgentEventProjector>,
     completion: S,
+    run_caps: Arc<RunCapsMeter>,
 }
 
 impl<C, S> StartedAuthorizedAgentRun<C, S>
 where
     C: AgentProgressConnector,
 {
+    /// The cap meter every tool and model call of this run charged.
+    pub(super) fn run_caps(&self) -> Arc<RunCapsMeter> {
+        Arc::clone(&self.run_caps)
+    }
+
     pub(super) fn into_parts(
         self,
     ) -> (
@@ -1130,6 +1144,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             ),
         );
         let state_writer_lease = Arc::new(lease.state_probe());
+        let run_caps = Arc::clone(command_binding.run_caps());
         let assembly = AuthorizedNativeAssembly::from_authorized(
             &request,
             runtime_context_authority,
@@ -1170,6 +1185,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                 AgentNativeAssemblyOutcome::Assembled(Box::new(AssembledAuthorizedAgentRun {
                     run,
                     assembled: assembled_invocation,
+                    run_caps,
                 }))
             }
             Ok(Err(error)) => AgentNativeAssemblyOutcome::Failed {

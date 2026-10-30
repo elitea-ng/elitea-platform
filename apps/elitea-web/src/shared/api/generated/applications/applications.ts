@@ -188,6 +188,7 @@ import type {
   ReleaseGateSuiteList,
   ReleaseGateSuiteRequest,
   ResolvedApplicationVersion,
+  RunCapRefusal,
   RunPipelineInboundTriggerParams,
   RunStepContent,
   RunStepsPage,
@@ -4784,6 +4785,11 @@ export type updateAgentRegistryResponse404 = {
   status: 404;
 };
 
+export type updateAgentRegistryResponse422 = {
+  data: AgentLifecycleRefusal;
+  status: 422;
+};
+
 export type updateAgentRegistryResponseSuccess =
   updateAgentRegistryResponse200 & {
     headers: Headers;
@@ -4793,6 +4799,7 @@ export type updateAgentRegistryResponseError = (
   | updateAgentRegistryResponse401
   | updateAgentRegistryResponse403
   | updateAgentRegistryResponse404
+  | updateAgentRegistryResponse422
 ) & {
   headers: Headers;
 };
@@ -4808,7 +4815,7 @@ export const getUpdateAgentRegistryUrl = (
 };
 
 /**
- * Changes the owners, risk tier, uses or data classes. Only an owner or a holder of `models.applications.governance` can edit; an agent with no owner accepts any caller the route admits. Raising the tier needs an owner or the governance role; lowering it needs the governance role. A tier change is written to the security audit outbox as agent.registry.tier_changed. Requires `models.applications.publish.post`.
+ * Changes the owners, risk tier, uses or data classes. Only an owner or a holder of `models.applications.governance` can edit; an agent with no owner accepts any caller the route admits. Raising the tier needs an owner or the governance role; lowering it needs the governance role. A tier change is written to the security audit outbox as agent.registry.tier_changed. The circuit breaker override can only tighten the tier default; a change is written as agent.registry.breaker_override_changed. Requires `models.applications.publish.post`.
  * @summary Edit the registry record of an agent
  */
 export const updateAgentRegistry = async (
@@ -13023,6 +13030,11 @@ export type createApplicationResponse403 = {
   status: 403;
 };
 
+export type createApplicationResponse422 = {
+  data: RunCapRefusal;
+  status: 422;
+};
+
 export type createApplicationResponseSuccess = createApplicationResponse201 & {
   headers: Headers;
 };
@@ -13030,6 +13042,7 @@ export type createApplicationResponseError = (
   | createApplicationResponse400
   | createApplicationResponse401
   | createApplicationResponse403
+  | createApplicationResponse422
 ) & {
   headers: Headers;
 };
@@ -13100,7 +13113,7 @@ export const getCreateApplicationQueryKey = (
 
 export const getCreateApplicationQueryOptions = <
   TData = Awaited<ReturnType<typeof createApplication>>,
-  TError = N400Response | N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response | RunCapRefusal,
 >(
   projectId: string,
   applicationCreateRequest: ApplicationCreateRequest,
@@ -13145,11 +13158,11 @@ export type CreateApplicationQueryResult = NonNullable<
   Awaited<ReturnType<typeof createApplication>>
 >;
 export type CreateApplicationQueryError =
-  N400Response | N401Response | N403Response;
+  N400Response | N401Response | N403Response | RunCapRefusal;
 
 export function useCreateApplication<
   TData = Awaited<ReturnType<typeof createApplication>>,
-  TError = N400Response | N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response | RunCapRefusal,
 >(
   projectId: string,
   applicationCreateRequest: ApplicationCreateRequest,
@@ -13177,7 +13190,7 @@ export function useCreateApplication<
 };
 export function useCreateApplication<
   TData = Awaited<ReturnType<typeof createApplication>>,
-  TError = N400Response | N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response | RunCapRefusal,
 >(
   projectId: string,
   applicationCreateRequest: ApplicationCreateRequest,
@@ -13205,7 +13218,7 @@ export function useCreateApplication<
 };
 export function useCreateApplication<
   TData = Awaited<ReturnType<typeof createApplication>>,
-  TError = N400Response | N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response | RunCapRefusal,
 >(
   projectId: string,
   applicationCreateRequest: ApplicationCreateRequest,
@@ -13229,7 +13242,7 @@ export function useCreateApplication<
 
 export function useCreateApplication<
   TData = Awaited<ReturnType<typeof createApplication>>,
-  TError = N400Response | N401Response | N403Response,
+  TError = N400Response | N401Response | N403Response | RunCapRefusal,
 >(
   projectId: string,
   applicationCreateRequest: ApplicationCreateRequest,
@@ -15928,6 +15941,11 @@ export type updateApplicationVersionResponse404 = {
   status: 404;
 };
 
+export type updateApplicationVersionResponse422 = {
+  data: RunCapRefusal;
+  status: 422;
+};
+
 export type updateApplicationVersionResponseSuccess =
   updateApplicationVersionResponse201 & {
     headers: Headers;
@@ -15937,6 +15955,7 @@ export type updateApplicationVersionResponseError = (
   | updateApplicationVersionResponse401
   | updateApplicationVersionResponse403
   | updateApplicationVersionResponse404
+  | updateApplicationVersionResponse422
 ) & {
   headers: Headers;
 };
@@ -16016,7 +16035,8 @@ export const getUpdateApplicationVersionQueryKey = (
 
 export const getUpdateApplicationVersionQueryOptions = <
   TData = Awaited<ReturnType<typeof updateApplicationVersion>>,
-  TError = N400Response | N401Response | N403Response | N404Response,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -16077,11 +16097,12 @@ export type UpdateApplicationVersionQueryResult = NonNullable<
   Awaited<ReturnType<typeof updateApplicationVersion>>
 >;
 export type UpdateApplicationVersionQueryError =
-  N400Response | N401Response | N403Response | N404Response;
+  N400Response | N401Response | N403Response | N404Response | RunCapRefusal;
 
 export function useUpdateApplicationVersion<
   TData = Awaited<ReturnType<typeof updateApplicationVersion>>,
-  TError = N400Response | N401Response | N403Response | N404Response,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -16111,7 +16132,8 @@ export function useUpdateApplicationVersion<
 };
 export function useUpdateApplicationVersion<
   TData = Awaited<ReturnType<typeof updateApplicationVersion>>,
-  TError = N400Response | N401Response | N403Response | N404Response,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -16141,7 +16163,8 @@ export function useUpdateApplicationVersion<
 };
 export function useUpdateApplicationVersion<
   TData = Awaited<ReturnType<typeof updateApplicationVersion>>,
-  TError = N400Response | N401Response | N403Response | N404Response,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -16167,7 +16190,8 @@ export function useUpdateApplicationVersion<
 
 export function useUpdateApplicationVersion<
   TData = Awaited<ReturnType<typeof updateApplicationVersion>>,
-  TError = N400Response | N401Response | N403Response | N404Response,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -16798,6 +16822,11 @@ export type saveApplicationNewVersionResponse404 = {
   status: 404;
 };
 
+export type saveApplicationNewVersionResponse422 = {
+  data: RunCapRefusal;
+  status: 422;
+};
+
 export type saveApplicationNewVersionResponseSuccess =
   saveApplicationNewVersionResponse201 & {
     headers: Headers;
@@ -16807,6 +16836,7 @@ export type saveApplicationNewVersionResponseError = (
   | saveApplicationNewVersionResponse401
   | saveApplicationNewVersionResponse403
   | saveApplicationNewVersionResponse404
+  | saveApplicationNewVersionResponse422
 ) & {
   headers: Headers;
 };
@@ -16886,7 +16916,8 @@ export const getSaveApplicationNewVersionQueryKey = (
 
 export const getSaveApplicationNewVersionQueryOptions = <
   TData = Awaited<ReturnType<typeof saveApplicationNewVersion>>,
-  TError = N400Response | N401Response | N403Response | N404Response,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -16942,11 +16973,12 @@ export type SaveApplicationNewVersionQueryResult = NonNullable<
   Awaited<ReturnType<typeof saveApplicationNewVersion>>
 >;
 export type SaveApplicationNewVersionQueryError =
-  N400Response | N401Response | N403Response | N404Response;
+  N400Response | N401Response | N403Response | N404Response | RunCapRefusal;
 
 export function useSaveApplicationNewVersion<
   TData = Awaited<ReturnType<typeof saveApplicationNewVersion>>,
-  TError = N400Response | N401Response | N403Response | N404Response,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -16975,7 +17007,8 @@ export function useSaveApplicationNewVersion<
 };
 export function useSaveApplicationNewVersion<
   TData = Awaited<ReturnType<typeof saveApplicationNewVersion>>,
-  TError = N400Response | N401Response | N403Response | N404Response,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -17004,7 +17037,8 @@ export function useSaveApplicationNewVersion<
 };
 export function useSaveApplicationNewVersion<
   TData = Awaited<ReturnType<typeof saveApplicationNewVersion>>,
-  TError = N400Response | N401Response | N403Response | N404Response,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
 >(
   projectId: string,
   applicationId: number,
@@ -17029,7 +17063,8 @@ export function useSaveApplicationNewVersion<
 
 export function useSaveApplicationNewVersion<
   TData = Awaited<ReturnType<typeof saveApplicationNewVersion>>,
-  TError = N400Response | N401Response | N403Response | N404Response,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | RunCapRefusal,
 >(
   projectId: string,
   applicationId: number,

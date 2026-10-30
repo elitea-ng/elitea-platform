@@ -36,20 +36,22 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (12)">
 
-| Tool |
-|---|
-| Add attachment to test step |
-| Create test |
-| Create tests |
-| Execute graphql |
-| Get test step attachments |
-| Get tests |
-| Index data |
-| List indexes |
-| Remove index |
-| Search index |
-| Stepback search index |
-| Stepback summary index |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Add attachment to test step | `write` |
+| Create test | `write` |
+| Create tests | `write` |
+| Execute graphql | `write` |
+| Get test step attachments | `read` |
+| Get tests | `read` |
+| Index data | `write` |
+| List indexes | `read` |
+| Remove index | `delete` |
+| Search index | `read` |
+| Stepback search index | `read` |
+| Stepback summary index | `read` |
 
 </Accordion>
 

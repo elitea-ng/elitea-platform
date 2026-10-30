@@ -50,7 +50,7 @@ export const AgentLifecycleRefusal = zod
     code: zod
       .string()
       .describe(
-        "change_request_required, change_request_not_required, self_approval_refused, approver_role_required, change_request_already_approved, release_gate_pending, release_gate_failed, release_gate_not_overridable, attestation_missing, change_request_state_conflict, change_request_open, change_request_stale, change_request_proposer_only, agent_not_certifiable, registry_owner_required, tier_lowering_requires_governance, governance_role_required, invalid_request or not_found. A publish refusal of the candidate keeps the publish route's code.\n",
+        "change_request_required, change_request_not_required, self_approval_refused, approver_role_required, change_request_already_approved, release_gate_pending, release_gate_failed, release_gate_not_overridable, attestation_missing, change_request_state_conflict, change_request_open, change_request_stale, change_request_proposer_only, agent_not_certifiable, registry_owner_required, tier_lowering_requires_governance, governance_role_required, circuit_breaker_override_loosens, invalid_request or not_found. A publish refusal of the candidate keeps the publish route's code.\n",
       ),
     message: zod.string(),
     failures: zod
@@ -69,6 +69,12 @@ export const AgentLifecycleRefusal = zod
       .int()
       .optional()
       .describe("change_request_required only."),
+    fields: zod
+      .array(zod.string())
+      .optional()
+      .describe(
+        "circuit_breaker_override_loosens only, the override fields that are looser than the tier default.",
+      ),
   })
   .describe(
     "NOTE(W2): internal/api/v2/agentlifecycle/handler.go, writeError.\n",

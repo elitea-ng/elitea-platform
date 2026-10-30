@@ -7,6 +7,8 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runcaps"
 )
 
 // The typed outcome of a run Main cancelled at a run cap (ADR-0041 decision
@@ -20,44 +22,55 @@ import (
 // cap_reached (shared 0201), the replay event the browser reads says
 // CAP_REACHED with the cap's name, and the agent's response is marked as an
 // error with the same code and text instead of a quiet stop.
+//
+// Main cancels at two caps: the whole-run wall cap and the spend cap
+// (execution_jobs.cancel_cap, shared 0212; NULL on a row written before
+// 0212 is the wall cap). A run the WORKER stopped at a cap is a runtime
+// failure that Main's output plane already maps to CAP_REACHED; its cap is
+// written by presentWorkerCapReached.
 const (
-	CapReachedCode    = "CAP_REACHED"
-	CapMaxWallSeconds = "max_wall_seconds"
-	capReachedMessage = "The run stopped because it reached the maximum run time an administrator set. " +
-		"The task may be incomplete. Check what it completed before you continue."
+	CapReachedCode    = runcaps.Code
+	CapMaxWallSeconds = runcaps.MaxWallSeconds
 )
 
-// capReachedBrowserData is the replay event of a run stopped at the cap.
-func capReachedBrowserData() ([]byte, error) {
+// capReachedBrowserData is the replay event of a run stopped at cap.
+func capReachedBrowserData(cap string) ([]byte, error) {
 	return json.Marshal(struct {
 		Code        string `json:"code"`
 		Cap         string `json:"cap"`
 		SafeMessage string `json:"safe_message"`
 		Retryable   bool   `json:"retryable"`
-	}{Code: CapReachedCode, Cap: CapMaxWallSeconds, SafeMessage: capReachedMessage})
+	}{Code: CapReachedCode, Cap: cap, SafeMessage: runcaps.Message(cap)})
 }
 
-// cancelledAtCap reports whether Main cancelled this job generation at a
-// run cap.
-func cancelledAtCap(ctx context.Context, tx sqlExecutor, executionID string, generation uint64) (bool, error) {
-	var reason *string
+// cancelledAtCap answers the cap Main cancelled this job generation at, or
+// "" when Main did not cancel it at a cap. A database before 0212 has no
+// cancel_cap column, and only the wall cap.
+func cancelledAtCap(ctx context.Context, tx sqlExecutor, executionID string, generation uint64) (string, error) {
+	var reason, cap *string
 	err := tx.QueryRow(ctx, `
-SELECT cancel_reason FROM elitea_runtime.execution_jobs
-WHERE execution_id = $1 AND generation = $2`, executionID, int64(generation)).Scan(&reason)
+SELECT cancel_reason, to_jsonb(j)->>'cancel_cap' FROM elitea_runtime.execution_jobs AS j
+WHERE execution_id = $1 AND generation = $2`, executionID, int64(generation)).Scan(&reason, &cap)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		return "", nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("read the run's cancel reason: %w", err)
+		return "", fmt.Errorf("read the run's cancel reason: %w", err)
 	}
-	return reason != nil && *reason == CapReasonWallCap, nil
+	if reason == nil || *reason != CapReasonWallCap {
+		return "", nil
+	}
+	if cap == nil || !runcaps.Valid(*cap) {
+		return CapMaxWallSeconds, nil
+	}
+	return *cap, nil
 }
 
 // presentCapReachedAgentResponse marks the agent response of a run stopped
-// at the cap: streaming ends, and the response is an error with the cap's
-// code and text. A run with no response group left (an ad hoc run whose
+// at cap: streaming ends, and the response is an error with the cap's code,
+// name and text. A run with no response group left (an ad hoc run whose
 // group a Stop removed, or a non-agent run) updates nothing.
-func presentCapReachedAgentResponse(ctx context.Context, tx sqlExecutor, record outputRecord) error {
+func presentCapReachedAgentResponse(ctx context.Context, tx sqlExecutor, record outputRecord, cap string) error {
 	schema, err := currentProjectSchema(record.ProjectionProjectID)
 	if err != nil {
 		return err
@@ -84,8 +97,18 @@ WHERE agent.execution_id = $1
       agent.client_execution_generation`,
 		schema+".chat_message_group",
 		schema+".chat_conversations",
-	), record.ExecutionID, int64(record.Generation), capReachedMessage, CapReachedCode, CapMaxWallSeconds); err != nil {
+	), record.ExecutionID, int64(record.Generation), runcaps.Message(cap), CapReachedCode, cap); err != nil {
 		return fmt.Errorf("mark the agent response stopped at the run cap: %w", err)
 	}
 	return nil
+}
+
+// presentWorkerCapReached writes the cap's name on the agent response of a
+// run the worker stopped at a cap (a runtime failure Main mapped to
+// CAP_REACHED; persistCurrentAgentRuntimeTerminal wrote the code and text).
+func presentWorkerCapReached(ctx context.Context, tx sqlExecutor, record outputRecord, cap string) error {
+	if !runcaps.Valid(cap) {
+		return nil
+	}
+	return presentCapReachedAgentResponse(ctx, tx, record, cap)
 }

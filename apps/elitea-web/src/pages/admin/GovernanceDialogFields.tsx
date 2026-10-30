@@ -22,7 +22,8 @@ import { t } from '@/shared/i18n';
 
 import { BUDGET_PERIODS, NATS_FAIL_MODES, RATE_POLICIES } from './api/adminGovernanceApi';
 import { RoutingFields } from './GovernanceRoutingFields';
-import type { GovernanceDraft } from './useGatewayGovernancePage';
+import { ThrottleScopeFields } from './GovernanceThrottleFields';
+import { draftFieldErrors, type GovernanceDraft } from './useGatewayGovernancePage';
 
 export interface GovernanceDialogProps {
   readonly draft: GovernanceDraft;
@@ -66,7 +67,7 @@ export function typeHelp(type: string): string {
     case 'rate_limit':
       return t(
         'pages.admin.governance.help.rateLimit',
-        'Requests and tokens per minute, counted per project. The token ceiling is applied to the request after the one that crossed it, because a request’s token cost is unknown until the provider answers.',
+        'Requests and tokens per minute, counted per project. Name agents or users to make it a throttle: each agent or user then gets its own counter, in addition to the project limit. The token ceiling is applied to the request after the one that crossed it, because a request’s token cost is unknown until the provider answers.',
       );
     case 'model_config':
       return t(
@@ -106,14 +107,16 @@ export function ScopeFields({
   readonly onChange: (patch: Partial<GovernanceDraft>) => void;
 }) {
   const isAllowlist = draft.type === 'model_config';
+  const errors = draftFieldErrors(draft);
   return (
     <>
       <TextField
         label={t('pages.admin.governance.field.projectIds', 'Projects')}
-        helperText={t(
-          'pages.admin.governance.field.projectIdsHelp',
-          'Comma-separated project ids. Empty means every project.',
-        )}
+        error={errors.scopeProjectIds !== undefined}
+        helperText={
+          errors.scopeProjectIds ??
+          t('pages.admin.governance.field.projectIdsHelp', 'Comma-separated project ids. Empty means every project.')
+        }
         value={draft.scopeProjectIds}
         onChange={(event) => onChange({ scopeProjectIds: event.target.value })}
         size="small"
@@ -166,6 +169,9 @@ export function ScopeFields({
         fullWidth
         slotProps={{ htmlInput: { 'data-testid': 'governance-scope-models' } }}
       />
+      {draft.type === 'rate_limit' ? (
+        <ThrottleScopeFields draft={draft} errors={errors} onChange={onChange} />
+      ) : null}
     </>
   );
 }

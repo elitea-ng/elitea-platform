@@ -208,3 +208,42 @@ func TestCreateRefusesIDsOutsideTheIntegerRange(t *testing.T) {
 		t.Fatalf("the largest integer id: status = %d %s", recorder.Code, recorder.Body)
 	}
 }
+
+// approvingService answers a resume as the first approval of a system
+// two-person stop: the suspension stays active (ADR-0041 decision 2).
+type approvingService struct {
+	fakeService
+	err error
+}
+
+func (a *approvingService) Resume(_ context.Context, _ safetyapp.Actor, request safetyapp.ResumeRequest) (safetyapp.Suspension, error) {
+	by, at := int64(42), time.Unix(20, 0)
+	return safetyapp.Suspension{
+		ID: request.ID, Target: safetyapp.Target{Scope: safetyapp.ScopeAgent, ProjectID: 7, ApplicationID: 31},
+		Source: safetyapp.SourceBreaker, ResumeRequires: safetyapp.ResumeTwoPerson, CreatedAt: time.Unix(0, 0),
+		Detail: map[string]any{"rule": "error_rate", "observed": 55.0, "threshold": 50.0, "unit": "percent",
+			"tier": "critical", "window_runs": 20.0, "failed_runs": 11.0},
+		ResumeApprovedBy: &by, ResumeApprovedAt: &at,
+	}, a.err
+}
+
+func TestResumeOfASystemTwoPersonStop(t *testing.T) {
+	t.Parallel()
+	recorder, annotation := do(t, router(t, &approvingService{err: safetyapp.ErrResumeApprovalRecorded}),
+		http.MethodPost, "/admin/execution_suspensions/9:resume", "")
+	if recorder.Code != http.StatusAccepted || annotation.Action != AuditActionResumeApproved {
+		t.Fatalf("first approval: %d %+v %s", recorder.Code, annotation, recorder.Body)
+	}
+	var body Suspension
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || !body.Active || body.Breaker == nil ||
+		body.Breaker.Rule != "error_rate" || body.Breaker.Observed != 55 || body.Breaker.FailedRuns == nil ||
+		*body.Breaker.FailedRuns != 11 || body.ResumeApprovedBy == nil || *body.ResumeApprovedBy != 42 {
+		t.Fatalf("body = %s", recorder.Body)
+	}
+	recorder, annotation = do(t, router(t, &approvingService{err: safetyapp.ErrSecondPersonRequired}),
+		http.MethodPost, "/admin/execution_suspensions/9:resume", "")
+	if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), `"code":"second_person_required"`) ||
+		annotation.Action != "" {
+		t.Fatalf("same administrator again: %d %+v %s", recorder.Code, annotation, recorder.Body)
+	}
+}

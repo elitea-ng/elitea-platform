@@ -319,6 +319,7 @@ impl Llm for EliteaAnthropicModel {
                     "the claim-scoped native Anthropic invocation exceeded its approved turn limit",
                 ))
             })?;
+        self.invocation.charge_run_cap_turn()?;
         let span = tracing::info_span!(
             "agent.model.request",
             model_adapter = "anthropic",
@@ -376,12 +377,7 @@ impl Llm for EliteaAnthropicModel {
             Ok(anthropic_response_stream(
                 response,
                 &self.invocation.model_name,
-                AnthropicStreamLimits {
-                    idle_timeout: self.config.stream_idle_timeout,
-                    max_event_bytes: self.config.max_sse_event_bytes,
-                    max_stream_bytes: self.config.max_stream_bytes,
-                    max_events: self.config.max_sse_events,
-                },
+                AnthropicStreamLimits::of(&self.config),
                 allowed_tools,
                 self.completion.clone(),
             ))
@@ -1211,6 +1207,17 @@ struct AnthropicStreamLimits {
     max_event_bytes: usize,
     max_stream_bytes: usize,
     max_events: usize,
+}
+
+impl AnthropicStreamLimits {
+    fn of(config: &super::openai_compatible_facade::ModelGatewayConfig) -> Self {
+        Self {
+            idle_timeout: config.stream_idle_timeout,
+            max_event_bytes: config.max_sse_event_bytes,
+            max_stream_bytes: config.max_stream_bytes,
+            max_events: config.max_sse_events,
+        }
+    }
 }
 
 fn anthropic_response_stream(

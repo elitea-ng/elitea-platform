@@ -952,7 +952,14 @@ impl Tool for IndexTool {
             arguments: &arguments,
         };
         match self.authority.host().call(call).await {
-            Ok(value) => Ok(value),
+            Ok(value) => {
+                // The run caps' record count (ADR-0041 decision 3): the
+                // documents a search returned.
+                if let (IndexToolName::SearchIndex, Value::Array(documents)) = (self.tool, &value) {
+                    crate::run_caps::report_records(documents.len() as u64);
+                }
+                Ok(value)
+            }
             Err(failure) => Ok(Value::String(failure.message().to_owned())),
         }
     }

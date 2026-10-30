@@ -1,0 +1,110 @@
+# promtool unit tests for the runtime safety alerts, run by
+# deploy/helm/tests/render-safety-alerts.sh against the rule the elitea chart
+# renders (templates/main/safety-monitoring.yaml).
+rule_files:
+  - rules.yaml
+evaluation_interval: 1m
+tests:
+  # elitea-main exposes every rule's series at 0, then the breaker trips ONE
+  # agent on error_rate. The alert fires on that first trip.
+  - interval: 1m
+    input_series:
+      - series: 'elitea_breaker_trips_total{rule="error_rate"}'
+        values: '0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'elitea_breaker_trips_total{rule="spend_per_hour"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: EliteaAgentBreakerTripped
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: EliteaAgentBreakerTripped
+        exp_alerts:
+          - exp_labels: {severity: warning, rule: error_rate}
+            exp_annotations:
+              summary: "The agent circuit breaker stopped an agent (rule error_rate)"
+              description: "The error_rate rule tripped in the last 10 minutes. The agent stays stopped until an administrator resumes it. See Admin > Kill switch for the agent, the observed value and the limit, and the security audit event agent.breaker.tripped."
+      # The trip is older than the window: the alert resolves.
+      - eval_time: 25m
+        alertname: EliteaAgentBreakerTripped
+        exp_alerts: []
+  # A series that appears late, already at 1 (a restart between scrapes): the
+  # `unless ... offset` arm fires.
+  - interval: 1m
+    input_series:
+      - series: 'elitea_breaker_trips_total{rule="tool_failure_streak"}'
+        values: '_ _ _ _ _ 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: EliteaAgentBreakerTripped
+        exp_alerts:
+          - exp_labels: {severity: warning, rule: tool_failure_streak}
+            exp_annotations:
+              summary: "The agent circuit breaker stopped an agent (rule tool_failure_streak)"
+              description: "The tool_failure_streak rule tripped in the last 10 minutes. The agent stays stopped until an administrator resumes it. See Admin > Kill switch for the agent, the observed value and the limit, and the security audit event agent.breaker.tripped."
+  # A storm is critical.
+  - interval: 1m
+    input_series:
+      - series: 'elitea_breaker_storms_total'
+        values: '0 0 0 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: EliteaAgentBreakerStorm
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "Many agents are failing at the same time"
+              description: "A circuit breaker pass found more failing agents than the storm limit and stopped none of them. Examine the model providers and the external tools the agents use. The elitea-main WARN log \"breaker: storm\" gives the count."
+  # A platform stop is critical after a minute; the scheduled self-test's own
+  # platform stop never alerts. Two replicas report the same count: one alert.
+  - interval: 1m
+    input_series:
+      - series: 'elitea_safety_suspensions_active{scope="platform",source="manual",pod="main-a"}'
+        values: '0 0 1 1 1 1 1 1'
+      - series: 'elitea_safety_suspensions_active{scope="platform",source="manual",pod="main-b"}'
+        values: '0 0 1 1 1 1 1 1'
+      - series: 'elitea_safety_suspensions_active{scope="platform",source="self_test",pod="main-a"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: EliteaPlatformExecutionSuspended
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: EliteaPlatformExecutionSuspended
+        exp_alerts:
+          - exp_labels: {severity: critical, source: manual}
+            exp_annotations:
+              summary: "Every run on the platform is suspended (source manual)"
+              description: "A platform suspension is active: admission refuses every run with execution_suspended. Resume it in Admin > Kill switch when the incident is over."
+  # An agent suspension of the breaker that stays active alerts after
+  # activeFor (30m by default).
+  - interval: 1m
+    input_series:
+      - series: 'elitea_safety_suspensions_active{scope="agent",source="breaker",pod="main-a"}'
+        values: '1x40'
+      - series: 'elitea_safety_suspensions_active{scope="project",source="manual",pod="main-a"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: EliteaExecutionSuspensionsActive
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: EliteaExecutionSuspensionsActive
+        exp_alerts:
+          - exp_labels: {severity: warning, scope: agent, source: breaker}
+            exp_annotations:
+              summary: "1 agent suspension(s) of source breaker are active"
+              description: "New runs of the suspended targets are refused. Resume each one in Admin > Kill switch when its cause is fixed."
+  # The breaker pass fails every minute.
+  - interval: 1m
+    input_series:
+      - series: 'elitea_breaker_pass_failures_total'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: EliteaAgentBreakerPassFailing
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "The agent circuit breaker pass is failing"
+              description: "15 breaker passes failed in the last 15 minutes, so the breaker does not stop failing agents. The elitea-main log lines that start with \"breaker:\" give the error."

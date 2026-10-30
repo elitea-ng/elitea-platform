@@ -1,3 +1,4 @@
+use elitea_agent_runtime::run_caps::RunCap;
 use prost::Message;
 use ring::digest;
 
@@ -140,6 +141,10 @@ pub enum RuntimeFailureKind {
     /// a saved child pipeline's stored frontier fails the recovery walk).
     /// Nothing is repeated; never retryable.
     RecoveryFrontierUnsupported,
+    /// The run reached a run cap (ADR-0041 decision 3): `RESOURCE_EXHAUSTED`
+    /// with the cap's registered message, which Main maps to `CAP_REACHED` and
+    /// the cap's name. Never retryable.
+    CapReached(elitea_agent_runtime::run_caps::RunCap),
     Internal,
 }
 
@@ -717,6 +722,10 @@ fn failure_terminal_parts(
 }
 
 pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
+    // A run cap refused a tool call or a model turn (ADR-0041 decision 3).
+    if let Some(cap) = upstream_code.and_then(RunCap::from_error_code) {
+        return RuntimeFailureKind::CapReached(cap);
+    }
     match upstream_code {
         Some("pipeline.child_input_type_invalid") => {
             RuntimeFailureKind::PipelineChildInputTypeInvalid
@@ -829,6 +838,22 @@ pub(crate) const RECOVERY_REFUSED_DETAIL: &str =
 /// Registered text of [`RuntimeFailureKind::RecoveryFrontierUnsupported`]; Main holds the
 /// same text. Data-free: the walk's distinct cause stays in the Worker's logs.
 pub(crate) const RECOVERY_FRONTIER_UNSUPPORTED_MESSAGE: &str = "This run stopped at a point where it cannot be safely continued. Nothing was repeated. Start it again, and share the support reference with your administrator if it happens again.";
+
+/// Registered texts of [`RuntimeFailureKind::CapReached`], one per cap, sent
+/// under `RESOURCE_EXHAUSTED`. Main holds the same texts and maps each to the
+/// public code `CAP_REACHED` and the cap's name.
+pub(crate) const CAP_REACHED_MAX_TOOL_CALLS_MESSAGE: &str = "The run stopped because it reached the maximum number of tool calls an administrator set. The task may be incomplete. Check what it completed before you continue.";
+pub(crate) const CAP_REACHED_MAX_MODEL_TURNS_MESSAGE: &str = "The run stopped because it reached the maximum number of model turns an administrator set. The task may be incomplete. Check what it completed before you continue.";
+pub(crate) const CAP_REACHED_MAX_RECORDS_READ_MESSAGE: &str = "The run stopped because it reached the maximum number of records read an administrator set. The task may be incomplete. Check what it completed before you continue.";
+
+/// The registered text of a run stopped at `cap`.
+pub(crate) const fn cap_reached_message(cap: RunCap) -> &'static str {
+    match cap {
+        RunCap::MaxToolCalls => CAP_REACHED_MAX_TOOL_CALLS_MESSAGE,
+        RunCap::MaxModelTurns => CAP_REACHED_MAX_MODEL_TURNS_MESSAGE,
+        RunCap::MaxRecordsRead => CAP_REACHED_MAX_RECORDS_READ_MESSAGE,
+    }
+}
 
 /// Registered text of [`RuntimeFailureKind::RecoveryRefused`]; Main holds the same text.
 pub(crate) const RECOVERY_REFUSED_MESSAGE: &str = "An approved tool call may have started before the run stopped, and its result was not recorded. It was not repeated. Check the target system before retrying, and share the support reference with your administrator.";
@@ -1051,6 +1076,11 @@ pub(crate) fn runtime_error_policy(
             "The model service reported an error while generating the response. Try again or select another model. An administrator can inspect the execution logs.",
             true,
         ),
+        RuntimeFailureKind::CapReached(cap) => (
+            RuntimeErrorCodeV1::ResourceExhausted,
+            cap_reached_message(cap),
+            false,
+        ),
         RuntimeFailureKind::Internal => (
             RuntimeErrorCodeV1::Internal,
             "The runtime operation failed.",
@@ -1102,6 +1132,9 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::ResultRefused,
         RuntimeFailureKind::RecoveryRefused,
         RuntimeFailureKind::RecoveryFrontierUnsupported,
+        RuntimeFailureKind::CapReached(RunCap::MaxToolCalls),
+        RuntimeFailureKind::CapReached(RunCap::MaxModelTurns),
+        RuntimeFailureKind::CapReached(RunCap::MaxRecordsRead),
         RuntimeFailureKind::OutputContinuationExhausted,
         RuntimeFailureKind::ModelTimeout,
         RuntimeFailureKind::ModelRateLimited,
@@ -1774,6 +1807,38 @@ mod continuation_failure_tests {
         assert!(!error.retryable);
         assert!(error.safe_message.contains("wrong type"));
         assert_eq!(canonical_runtime_failure(&error), Some(kind));
+    }
+
+    /// ADR-0041 decision 3: each cap's upstream code is its own registered,
+    /// non-retryable `RESOURCE_EXHAUSTED` message that replays.
+    #[test]
+    fn run_caps_are_registered_resource_exhausted_failures() {
+        for (code, cap, noun) in [
+            (
+                "run_caps.max_tool_calls",
+                RunCap::MaxToolCalls,
+                "tool calls",
+            ),
+            (
+                "run_caps.max_model_turns",
+                RunCap::MaxModelTurns,
+                "model turns",
+            ),
+            (
+                "run_caps.max_records_read",
+                RunCap::MaxRecordsRead,
+                "records read",
+            ),
+        ] {
+            let kind = model_failure(Some(code));
+            assert_eq!(kind, RuntimeFailureKind::CapReached(cap));
+            let error = runtime_error(kind);
+            assert_eq!(error.code, RuntimeErrorCodeV1::ResourceExhausted as i32);
+            assert!(!error.retryable);
+            assert!(error.safe_message.len() <= MAX_SAFE_STRING_BYTES);
+            assert!(error.safe_message.contains(noun));
+            assert_eq!(canonical_runtime_failure(&error), Some(kind));
+        }
     }
 }
 

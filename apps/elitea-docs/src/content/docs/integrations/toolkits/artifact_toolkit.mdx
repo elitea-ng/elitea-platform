@@ -33,24 +33,26 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (16)">
 
-| Tool |
-|---|
-| Append data |
-| Create file |
-| Create new bucket |
-| Delete file |
-| Edit file |
-| Get file metadata |
-| Grep file |
-| Index data |
-| List files |
-| List indexes |
-| Read file |
-| Read multiple files |
-| Remove index |
-| Search index |
-| Stepback search index |
-| Stepback summary index |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Append data | `write` |
+| Create file | `write` |
+| Create new bucket | `write` |
+| Delete file | `delete` |
+| Edit file | `write` |
+| Get file metadata | `read` |
+| Grep file | `read` |
+| Index data | `write` |
+| List files | `read` |
+| List indexes | `read` |
+| Read file | `read` |
+| Read multiple files | `read` |
+| Remove index | `delete` |
+| Search index | `read` |
+| Stepback search index | `read` |
+| Stepback summary index | `read` |
 
 </Accordion>
 

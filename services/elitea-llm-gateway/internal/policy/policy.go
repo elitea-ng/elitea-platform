@@ -121,15 +121,47 @@ type Subject struct {
 	// request will actually dispatch to and the name that provider accepts.
 	Provider string
 	Model    string
+	// UserID is the numeric caller from the signed X-Elitea-User-Id header. It
+	// is 0 when the request carries no user, or a user id that is not a number.
+	UserID int64
+	// Agent is the agent the request was made from, resolved from the signed
+	// X-Elitea-Execution-Id through elitea_runtime.agent_execution_jobs. It is
+	// the zero value when the request was not made from an agent run, or when
+	// the run could not be resolved.
+	Agent AgentRef
 }
 
+// AgentRef names one agent. Application ids are per tenant schema, so the
+// project that owns the agent is part of its identity: application 3 of
+// project 7 and application 3 of project 9 are different agents.
+type AgentRef struct {
+	// ProjectID is the project that owns the agent (the run's
+	// resource_project_id).
+	ProjectID int
+	// ApplicationID is the agent's application id in that project.
+	ApplicationID int64
+}
+
+// Known reports whether the ref names an agent.
+func (a AgentRef) Known() bool { return a.ApplicationID > 0 && a.ProjectID > 0 }
+
 // Scope is a definition's selector. Every dimension is "empty means all".
+//
+// AgentIDs and UserIDs are the throttle dimensions (ADR-0041 decision 4). Only
+// a rate_limit row may carry them; Compile rejects them on every other type.
+// An agent id is an application id of the ONE project the row names in
+// ProjectIDs, because application ids are per project.
 type Scope struct {
 	Providers  []string
 	Models     []string
 	ProjectIDs []int
 	TeamIDs    []int
+	AgentIDs   []int64
+	UserIDs    []int64
 }
+
+// throttles reports whether the scope selects by agent or by user.
+func (s Scope) throttles() bool { return len(s.AgentIDs) > 0 || len(s.UserIDs) > 0 }
 
 // evaluable reports whether this scope can be decided at all. A scope naming
 // teams cannot: see Subject.
@@ -146,6 +178,8 @@ func (s Scope) specificity() int {
 		len(s.Models) > 0,
 		len(s.ProjectIDs) > 0,
 		len(s.TeamIDs) > 0,
+		len(s.AgentIDs) > 0,
+		len(s.UserIDs) > 0,
 	} {
 		if constrained {
 			n++
@@ -174,8 +208,23 @@ func (s Scope) selectsProject(sub Subject) bool {
 // MCP allowlists): a definition that cannot be evaluated must not be applied on
 // a guess. For the permissive read — model_config — the caller uses
 // selectsProject instead, so this asymmetry never widens an allowlist.
+//
+// For an agent-scoped row the project dimension names the project that OWNS
+// the agent, so it is compared with the agent's own project and not with the
+// request's project header. The agent is what the row throttles, wherever its
+// run was started from.
 func (s Scope) selects(sub Subject) bool {
-	if !s.selectsProject(sub) {
+	if len(s.AgentIDs) > 0 {
+		if !s.evaluable() || !sub.Agent.Known() {
+			return false
+		}
+		if !containsInt(s.ProjectIDs, sub.Agent.ProjectID) || !containsInt64(s.AgentIDs, sub.Agent.ApplicationID) {
+			return false
+		}
+	} else if !s.selectsProject(sub) {
+		return false
+	}
+	if len(s.UserIDs) > 0 && (sub.UserID <= 0 || !containsInt64(s.UserIDs, sub.UserID)) {
 		return false
 	}
 	if len(s.Providers) > 0 && !containsFold(s.Providers, sub.Provider) {
@@ -212,6 +261,48 @@ type RateLimitDef struct {
 	Scope          Scope
 	TokensPerMin   int64
 	RequestsPerMin int64
+	// Class says what the row limits: a project (the classic rate limit), an
+	// agent or a user. Compile derives it from the scope.
+	Class RateClass
+}
+
+// RateClass is what a rate limit counts: a project, an agent or a user. Each
+// class keeps its own counter, and the limits of different classes add up.
+type RateClass int
+
+const (
+	// RateClassProject is the classic rate limit: one counter per project.
+	RateClassProject RateClass = iota
+	// RateClassAgent is a throttle per agent (scope.agent_ids): one counter
+	// per agent, and per user too when the row also names users.
+	RateClassAgent
+	// RateClassUser is a throttle per user (scope.user_ids and no agent): one
+	// counter per user, across the projects the row selects.
+	RateClassUser
+
+	rateClassCount = 3
+)
+
+// String names the class for logs and refusal messages.
+func (c RateClass) String() string {
+	switch c {
+	case RateClassAgent:
+		return "agent"
+	case RateClassUser:
+		return "user"
+	}
+	return "project"
+}
+
+// rateClassOf derives the class from a scope.
+func rateClassOf(s Scope) RateClass {
+	switch {
+	case len(s.AgentIDs) > 0:
+		return RateClassAgent
+	case len(s.UserIDs) > 0:
+		return RateClassUser
+	}
+	return RateClassProject
 }
 
 // Limited reports whether this definition constrains anything at all. A row
@@ -379,22 +470,65 @@ func (d BudgetDef) LimitNanoUSD() (int64, bool) {
 // rather than shared through a dependency that would only carry a constant.
 const nanoUSD = 1_000_000_000
 
-// RateLimit returns the narrowest authored rate limit applying to sub.
+// RateLimit returns the narrowest authored PROJECT rate limit applying to sub:
+// the narrowest row that names no agent and no user. RateLimits returns every
+// limit that applies, throttles included.
 func (s *Snapshot) RateLimit(sub Subject) (RateLimitDef, bool) {
-	if s == nil {
-		return RateLimitDef{}, false
+	defs := s.RateLimits(sub)
+	if len(defs) > 0 && defs[0].Class == RateClassProject {
+		return defs[0], true
 	}
-	best, found := RateLimitDef{}, false
-	bestSpec := -1
+	return RateLimitDef{}, false
+}
+
+// RateLimits returns the rate limits that apply to sub: at most one of each
+// class, in the order project, agent, user.
+//
+// Within a class the narrowest row wins, as it always has. Across classes the
+// limits ADD UP, and that is the point of a throttle (ADR-0041 decision 4): a
+// per-agent or per-user throttle is a further limit on top of the project's
+// rate limit, never a replacement for it. If the narrowest row won across
+// classes, an operator who throttled one agent would lift the project limit
+// from that agent, which is the opposite of what they authored.
+func (s *Snapshot) RateLimits(sub Subject) []RateLimitDef {
+	if s == nil || len(s.rateLimits) == 0 {
+		return nil
+	}
+	var (
+		best     [rateClassCount]RateLimitDef
+		bestSpec = [rateClassCount]int{-1, -1, -1}
+	)
 	for _, d := range s.rateLimits {
 		if !d.Scope.selects(sub) {
 			continue
 		}
-		if spec := d.Scope.specificity(); spec > bestSpec {
-			best, bestSpec, found = d, spec, true
+		c := d.Class
+		if spec := d.Scope.specificity(); spec > bestSpec[c] {
+			best[c], bestSpec[c] = d, spec
 		}
 	}
-	return best, found
+	var out []RateLimitDef
+	for c := range best {
+		if bestSpec[c] >= 0 {
+			out = append(out, best[c])
+		}
+	}
+	return out
+}
+
+// HasAgentThrottles reports whether any rate limit is scoped to agents. The
+// gateway resolves a request's agent only when one is, so a deployment with
+// no agent throttle never pays for the lookup.
+func (s *Snapshot) HasAgentThrottles() bool {
+	if s == nil {
+		return false
+	}
+	for _, d := range s.rateLimits {
+		if d.Class == RateClassAgent {
+			return true
+		}
+	}
+	return false
 }
 
 // CredentialPolicy returns the narrowest authored rate policy applying to sub,
@@ -601,6 +735,15 @@ func sortRouting(rules []RoutingRuleDef) {
 		}
 		return rules[i].Name < rules[j].Name
 	})
+}
+
+func containsInt64(haystack []int64, needle int64) bool {
+	for _, v := range haystack {
+		if v == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func containsInt(haystack []int, needle int) bool {

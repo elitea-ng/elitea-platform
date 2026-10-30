@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -43,7 +44,8 @@ const rateLimitOpTimeout = 2 * time.Second
 //
 // REQUESTS are counted on arrival: the limiter increments first and refuses if
 // the new total exceeds the ceiling. A refused request therefore still counts
-// toward its window. That is the standard fixed-window behaviour and it is
+// toward the window of the limit that refused it (and of no other limit; see
+// AdmitAll). That is the standard fixed-window behaviour and it is
 // self-limiting — a caller hammering a closed window keeps it closed, which is
 // the intent — but it does mean the observed count can exceed the ceiling.
 //
@@ -73,6 +75,9 @@ type Limiter struct {
 	subject SubjectBuilder
 	log     *slog.Logger
 	now     func() time.Time
+	// agents resolves a request's agent for the agent throttles. nil resolves
+	// nothing, and then no agent-scoped row matches.
+	agents *AgentResolver
 
 	// degraded counts admissions that skipped the limit because the counter was
 	// unreachable. It is a gauge of how much enforcement was actually lost.
@@ -174,6 +179,10 @@ type LimiterConfig struct {
 	Subject SubjectBuilder
 	Logger  *slog.Logger
 	Now     func() time.Time
+	// Agents reads the agent of a runtime execution, for the agent throttles
+	// (ADR-0041 decision 4). Production passes NewPostgresAgentLookup. nil
+	// disables agent throttles only.
+	Agents AgentLookup
 }
 
 // NewLimiter builds a Limiter. A nil Counter or Subject builds a limiter that
@@ -189,6 +198,9 @@ func NewLimiter(cfg LimiterConfig) *Limiter {
 		nowFn = time.Now
 	}
 	l := &Limiter{subject: cfg.Subject, log: log, now: nowFn}
+	if cfg.Agents != nil {
+		l.agents = NewAgentResolver(cfg.Agents, log, nowFn)
+	}
 	if cfg.Counter != nil {
 		// Configured counters start unprobed (degraded) and do not read at
 		// construction; the monitor's first Probe promotes them to enforced.
@@ -204,12 +216,23 @@ func (l *Limiter) Enabled() bool {
 }
 
 // Degraded returns how many admissions skipped enforcement because the counter
-// was unreachable.
+// was unreachable, or because the agent of the run could not be read for an
+// agent throttle.
 func (l *Limiter) Degraded() int64 {
 	if l == nil {
 		return 0
 	}
-	return l.degraded.Load()
+	return l.degraded.Load() + l.agents.Failures()
+}
+
+// Agent returns the agent of a runtime execution, or the zero AgentRef when
+// the request has none, or when it cannot be read (agent throttles then fail
+// open, and Degraded counts it).
+func (l *Limiter) Agent(ctx context.Context, executionID string) AgentRef {
+	if l == nil {
+		return AgentRef{}
+	}
+	return l.agents.Resolve(ctx, executionID)
 }
 
 // Refused returns how many admissions the limiter blocked.
@@ -226,6 +249,8 @@ type RateDecision struct {
 	Allowed bool
 	// Rule names the authored row that refused, for the log and the message.
 	Rule string
+	// Class is what the refusing row limits: a project, an agent or a user.
+	Class RateClass
 	// Bucket is "requests" or "tokens".
 	Bucket string
 	// Limit and Observed describe the refusal in the operator's own units.
@@ -240,77 +265,155 @@ type RateDecision struct {
 // allowed is the decision every admitted request gets.
 var rateAllowed = RateDecision{Allowed: true}
 
-// Admit applies the rate limit that governs sub, if any.
-//
-// countRequest says whether this is an ARRIVAL. An arrival increments the
-// request bucket; a re-check of work already admitted — a live realtime
-// session re-asking on its ticker — only observes it. The distinction is the
-// same one the loop breaker draws, and for the same reason: a long session
-// re-checking every few seconds would otherwise spend the project's whole
-// request allowance on itself while making no requests at all. The token
-// bucket is READ either way, so a session that has burned the token ceiling is
-// still stopped.
+// Admit applies the rate limit that governs sub, if any. It is AdmitAll with
+// one definition; see AdmitAll for the semantics.
 //
 // It returns rateAllowed when no definition applies, when the definition limits
 // nothing, or when the counter is unavailable. def must come from
 // Snapshot.RateLimit.
 func (l *Limiter) Admit(ctx context.Context, def RateLimitDef, sub Subject, countRequest bool) RateDecision {
-	if !l.Enabled() || !def.Limited() {
+	return l.AdmitAll(ctx, []RateLimitDef{def}, sub, countRequest)
+}
+
+// AdmitAll applies every rate limit that governs sub (Snapshot.RateLimits) as
+// ONE admission: a request that one limit refuses consumes no allowance of the
+// others.
+//
+// countRequest says whether this is an ARRIVAL. An arrival increments the
+// request buckets; a re-check of work already admitted — a live realtime
+// session re-asking on its ticker — only observes them. The distinction is the
+// same one the loop breaker draws, and for the same reason: a long session
+// re-checking every few seconds would otherwise spend the project's whole
+// request allowance on itself while making no requests at all. The token
+// buckets are READ either way, so a session that has burned the token ceiling
+// is still stopped.
+//
+// # Order and compensation
+//
+//  1. Every token bucket is read first. Reads change nothing, so a refusal here
+//     costs no request slot in any bucket.
+//  2. The request buckets are incremented narrowest first: the agent throttle,
+//     then the user throttle, then the project rate limit. A throttled agent
+//     that retries after its 429 is therefore refused before its request
+//     reaches the project bucket.
+//  3. When a request bucket refuses, the limiter decrements each bucket that
+//     this call already incremented (a compensating Nats-Incr of -1 on the same
+//     window subject). The bucket that refused keeps its count: that is the
+//     fixed-window behaviour documented on Limiter.
+//
+// The counter has no multi-subject transaction, so this is
+// increment-then-compensate, not all-or-nothing. The remaining race: between an
+// increment and its compensation, a concurrent request on that earlier bucket
+// sees a count one higher and can be refused. The error is always toward
+// refusing, never toward admitting over a ceiling, and it lasts one counter
+// round-trip. When the compensating decrement fails, the earlier bucket keeps
+// the extra count until its window closes; Degraded counts it and it is logged.
+//
+// A counter failure on one limit FAILS OPEN for that limit only; the other
+// limits still apply.
+func (l *Limiter) AdmitAll(ctx context.Context, defs []RateLimitDef, sub Subject, countRequest bool) RateDecision {
+	if !l.Enabled() {
 		return rateAllowed
 	}
+	limited := make([]RateLimitDef, 0, len(defs))
+	for _, def := range defs {
+		if def.Limited() {
+			limited = append(limited, def)
+		}
+	}
+	if len(limited) == 0 {
+		return rateAllowed
+	}
+	// Narrowest first. RateLimits returns project, agent, user; a stable sort
+	// on the class keeps that contract out of this function.
+	sort.SliceStable(limited, func(i, j int) bool {
+		return admitRank(limited[i].Class) < admitRank(limited[j].Class)
+	})
+
 	now := l.now()
 	window := windowStart(now)
-	key := RateLimitKey(def.Name, sub.ProjectID)
 	retry := windowRemaining(now)
 
-	// The token bucket is checked FIRST, and by reading rather than
-	// incrementing. Checking it after the request increment would burn a
-	// request slot on a call the token ceiling was going to refuse anyway.
-	if def.TokensPerMin > 0 {
-		total, err := l.read(ctx, kindTokens, key, window)
+	// 1. Token buckets: read only. A limit whose counter fails here is skipped
+	// for the rest of the admission, so one outage counts once in Degraded.
+	failed := make([]bool, len(limited))
+	for i, def := range limited {
+		if def.TokensPerMin <= 0 {
+			continue
+		}
+		total, err := l.read(ctx, kindTokens, BucketKey(def, sub), window)
 		if err != nil {
 			l.failOpen("tokens", def, sub, err)
-			return rateAllowed
+			failed[i] = true
+			continue
 		}
 		if total >= def.TokensPerMin {
 			l.refused.Add(1)
 			return RateDecision{
-				Rule: def.Name, Bucket: "tokens",
+				Rule: def.Name, Class: def.Class, Bucket: "tokens",
 				Limit: def.TokensPerMin, Observed: total, RetryAfter: retry,
 			}
 		}
 	}
 
-	if def.RequestsPerMin > 0 {
-		if !countRequest {
-			total, err := l.read(ctx, kindRequests, key, window)
-			if err != nil {
-				l.failOpen("requests", def, sub, err)
-				return rateAllowed
-			}
-			if total > def.RequestsPerMin {
-				l.refused.Add(1)
-				return RateDecision{
-					Rule: def.Name, Bucket: "requests",
-					Limit: def.RequestsPerMin, Observed: total, RetryAfter: retry,
-				}
-			}
-			return rateAllowed
+	// 2. Request buckets.
+	var counted []RateLimitDef
+	for i, def := range limited {
+		if def.RequestsPerMin <= 0 || failed[i] {
+			continue
 		}
-		total, err := l.incr(ctx, kindRequests, key, window, 1)
+		key := BucketKey(def, sub)
+		var (
+			total int64
+			err   error
+		)
+		if countRequest {
+			total, err = l.incr(ctx, kindRequests, key, window, 1)
+		} else {
+			total, err = l.read(ctx, kindRequests, key, window)
+		}
 		if err != nil {
 			l.failOpen("requests", def, sub, err)
-			return rateAllowed
+			continue
 		}
 		if total > def.RequestsPerMin {
 			l.refused.Add(1)
+			// 3. Give back the slots this refused request took in the
+			// buckets that admitted it.
+			l.compensate(ctx, counted, sub, window)
 			return RateDecision{
-				Rule: def.Name, Bucket: "requests",
+				Rule: def.Name, Class: def.Class, Bucket: "requests",
 				Limit: def.RequestsPerMin, Observed: total, RetryAfter: retry,
 			}
 		}
+		if countRequest {
+			counted = append(counted, def)
+		}
 	}
 	return rateAllowed
+}
+
+// admitRank orders the classes for AdmitAll: agent, user, project.
+func admitRank(c RateClass) int {
+	switch c {
+	case RateClassAgent:
+		return 0
+	case RateClassUser:
+		return 1
+	}
+	return 2
+}
+
+// compensate decrements the request bucket of each def in window by one. It
+// runs on a request that a later bucket refused.
+func (l *Limiter) compensate(ctx context.Context, defs []RateLimitDef, sub Subject, window int64) {
+	for _, def := range defs {
+		if _, err := l.incr(ctx, kindRequests, BucketKey(def, sub), window, -1); err != nil {
+			l.degraded.Add(1)
+			l.log.Warn("policy: rate limit slot of a refused request was NOT given back; the bucket over-counts until its window closes",
+				"rule", def.Name, "class", def.Class.String(), "project_id", sub.ProjectID, "err", err)
+		}
+	}
 }
 
 // RecordTokens adds a completed request's token usage to the window that was
@@ -327,11 +430,11 @@ func (l *Limiter) RecordTokens(ctx context.Context, def RateLimitDef, sub Subjec
 	if !l.Enabled() || def.TokensPerMin <= 0 || tokens <= 0 {
 		return
 	}
-	key := RateLimitKey(def.Name, sub.ProjectID)
+	key := BucketKey(def, sub)
 	if _, err := l.incr(ctx, kindTokens, key, windowStart(admittedAt), tokens); err != nil {
 		l.degraded.Add(1)
 		l.log.Warn("policy: rate limit token usage was NOT recorded; the token ceiling is under-counting",
-			"rule", def.Name, "project_id", sub.ProjectID, "tokens", tokens, "err", err)
+			"rule", def.Name, "class", def.Class.String(), "project_id", sub.ProjectID, "tokens", tokens, "err", err)
 	}
 }
 
@@ -350,7 +453,7 @@ func (l *Limiter) incr(ctx context.Context, kind, key string, window, delta int6
 func (l *Limiter) failOpen(bucket string, def RateLimitDef, sub Subject, err error) {
 	l.degraded.Add(1)
 	l.log.Warn("policy: rate-limit counter unavailable; ADMITTING the request without enforcing the limit",
-		"bucket", bucket, "rule", def.Name, "project_id", sub.ProjectID, "err", err)
+		"bucket", bucket, "rule", def.Name, "class", def.Class.String(), "project_id", sub.ProjectID, "err", err)
 }
 
 // RateLimitKey builds the bucket identity for a rule and a project.
@@ -363,6 +466,33 @@ func (l *Limiter) failOpen(bucket string, def RateLimitDef, sub Subject, err err
 // today, and that gap is better than silently picking the surprising reading.
 func RateLimitKey(rule string, projectID int) string {
 	return sanitiseToken(rule) + "-" + fmt.Sprint(projectID)
+}
+
+// BucketKey builds the counter identity for a rule and the request it governs.
+//
+// A project rate limit counts per project (RateLimitKey). A throttle counts per
+// principal (ADR-0041 decision 4):
+//
+//   - an agent throttle counts per agent, keyed on the agent's own project and
+//     application id, so two agents of one project never share a counter. When
+//     the row also names users, it counts per agent and user.
+//   - a user throttle counts per user, across every project the row selects.
+//     It is a limit on the person, not on one of their projects.
+//
+// The class letter ("a", "u") keeps the three key families apart: a project
+// key ends in "-<project>", which no throttle key does.
+func BucketKey(def RateLimitDef, sub Subject) string {
+	switch def.Class {
+	case RateClassAgent:
+		key := fmt.Sprintf("%s-a%d_%d", sanitiseToken(def.Name), sub.Agent.ProjectID, sub.Agent.ApplicationID)
+		if len(def.Scope.UserIDs) > 0 {
+			key += fmt.Sprintf("-u%d", sub.UserID)
+		}
+		return key
+	case RateClassUser:
+		return fmt.Sprintf("%s-u%d", sanitiseToken(def.Name), sub.UserID)
+	}
+	return RateLimitKey(def.Name, sub.ProjectID)
 }
 
 // sanitiseToken maps an operator-authored rule name onto the NATS token

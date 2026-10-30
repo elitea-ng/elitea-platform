@@ -1075,6 +1075,8 @@ fn project_issue_search(value: &Value, max_count: usize) -> Result<Value, GitHub
         .take(count)
         .map(project_issue_search_item)
         .collect::<Result<Vec<_>, _>>()?;
+    // The run caps' record count (ADR-0041 decision 3).
+    crate::run_caps::report_records(projected.len() as u64);
     bounded_issue_output(Value::Array(projected))
 }
 

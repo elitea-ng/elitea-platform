@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ExecutionSuspensionBreaker } from "./executionSuspensionBreaker.zod";
 
 export const ExecutionSuspension = zod
   .object({
@@ -65,7 +66,9 @@ export const ExecutionSuspension = zod
     reason: zod.string(),
     actor_id: zod
       .int()
-      .describe("The user who suspended. 0 is the scheduled self-test."),
+      .describe(
+        "The user who suspended. 0 is the system (the scheduled self-test or the circuit breaker).",
+      ),
     source: zod
       .string()
       .describe("One of manual, breaker, certification, self_test."),
@@ -82,6 +85,19 @@ export const ExecutionSuspension = zod
     resumed_at: zod.iso.datetime({ offset: true }).nullable(),
     resumed_by: zod.int().nullable(),
     resume_reason: zod.string().nullable(),
+    breaker: zod
+      .union([ExecutionSuspensionBreaker, zod.null()])
+      .optional()
+      .describe(
+        "The circuit breaker's record of the trip. Set for the source breaker only.",
+      ),
+    resume_approved_by: zod
+      .int()
+      .nullish()
+      .describe(
+        "The first platform administrator who approved the resume of a two_person suspension the system wrote. A different administrator must complete the resume.\n",
+      ),
+    resume_approved_at: zod.iso.datetime({ offset: true }).nullish(),
   })
   .describe(
     "A kill-switch suspension (ADR-0041 decision 1). It is active while resumed_at is null.\n",

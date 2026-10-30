@@ -39,6 +39,7 @@ const ROW: AgentRegistryRecord = {
   state_reason: '',
   state_changed_at: '2026-10-29T09:00:00Z',
   suspension_id: null,
+  circuit_breaker: {},
   updated_at: '2026-10-29T09:00:00Z',
 };
 

@@ -300,9 +300,16 @@ func chooseTarget(targets []RoutingTarget, pick func(total float64) float64) (Ro
 // from a database restore, a manual UPDATE, or a version of the authoring
 // surface older than these rules.
 func parseRoutingRule(name string, data map[string]any) (RoutingRuleDef, error) {
+	scope, err := parseScope(data)
+	if err != nil {
+		return RoutingRuleDef{}, err
+	}
+	if scope.throttles() {
+		return RoutingRuleDef{}, errors.New("scope.agent_ids and scope.user_ids apply to rate_limit entries only")
+	}
 	rule := RoutingRuleDef{
 		Name:     name,
-		Scope:    parseScope(data),
+		Scope:    scope,
 		CEL:      stringField(data, "cel"),
 		Priority: intField(data, "priority"),
 	}

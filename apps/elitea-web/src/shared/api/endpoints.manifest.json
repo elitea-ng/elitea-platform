@@ -3428,6 +3428,16 @@
       "usedBy": ["features/kill-switch"]
     },
     {
+      "id": "settings.createRunCapOverride",
+      "method": "POST",
+      "path": "/elitea_core/run_cap_overrides/prompt_lib/{project_id}",
+      "operationId": "createRunCapOverride",
+      "source": "generated",
+      "responseSchema": "RunCapOverride",
+      "fixture": null,
+      "usedBy": ["features/chat-messages"]
+    },
+    {
       "id": "settings.resumeProjectExecutionSuspension",
       "method": "POST",
       "path": "/elitea_core/execution_suspensions/prompt_lib/{project_id}/{suspension_id}:resume",

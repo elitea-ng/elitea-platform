@@ -73,6 +73,20 @@ The chart ships a Grafana dashboard of agent runs, errors, tool calls and spend.
 
 Spend per agent covers model calls made by agent runs that produced step records; spend outside agent runs is not attributed to an agent.
 
+## Runtime safety alerts
+
+elitea-main serves the runtime safety metrics on its metrics port (`ELITEA_AUDIT_EXPORT_METRICS_ADDR`, default `:9464`, port name `audit-metrics`), also when the audit export is off: `elitea_safety_suspensions_active{scope,source}`, `elitea_breaker_trips_total{rule}`, `elitea_breaker_storms_total` and `elitea_breaker_pass_failures_total`. Wherever the Prometheus Operator API is available, the chart renders a PodMonitor (only when the audit export's PodMonitor does not already scrape the port) and a PrometheusRule with these alerts:
+
+| Alert | Severity |
+| --- | --- |
+| `EliteaPlatformExecutionSuspended` | critical |
+| `EliteaAgentBreakerStorm` | critical |
+| `EliteaAgentBreakerTripped` | warning |
+| `EliteaExecutionSuspensionsActive` | warning |
+| `EliteaAgentBreakerPassFailing` | warning |
+
+Turn them off with `main.safetyAlerts.podMonitor.enabled` and `main.safetyAlerts.prometheusRule.enabled`; add the labels your Prometheus selects with `.labels`. `main.safetyAlerts.prometheusRule.activeFor` (default `30m`) sets how long a non-platform suspension stays active before it alerts. Without the Prometheus Operator, scrape the port with your own monitoring and copy the rules from `deploy/helm/elitea/templates/main/safety-monitoring.yaml`. Route the alerts to your on-call: Elitea does not page a person. See [Agent circuit breaker](/admin/enterprise-controls/runtime-safety#agent-circuit-breaker).
+
 ## Backups
 
 <AccordionGroup>

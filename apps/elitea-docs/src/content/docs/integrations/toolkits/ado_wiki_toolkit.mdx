@@ -37,22 +37,24 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 <Accordion title="Available tools (14)">
 
-| Tool |
-|---|
-| Delete page by id |
-| Delete page by path |
-| Get wiki |
-| Get wiki page |
-| Get wiki page by id |
-| Get wiki page by path |
-| Index data |
-| List indexes |
-| Modify wiki page |
-| Remove index |
-| Rename wiki page |
-| Search index |
-| Stepback search index |
-| Stepback summary index |
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Delete page by id | `delete` |
+| Delete page by path | `delete` |
+| Get wiki | `read` |
+| Get wiki page | `read` |
+| Get wiki page by id | `read` |
+| Get wiki page by path | `read` |
+| Index data | `write` |
+| List indexes | `read` |
+| Modify wiki page | `write` |
+| Remove index | `delete` |
+| Rename wiki page | `write` |
+| Search index | `read` |
+| Stepback search index | `read` |
+| Stepback summary index | `read` |
 
 </Accordion>
 

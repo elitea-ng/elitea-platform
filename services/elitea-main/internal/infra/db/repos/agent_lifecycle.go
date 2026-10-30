@@ -157,7 +157,7 @@ type lifecycleQuerier interface {
 const registryColumns = `tenant_project_id, application_id, COALESCE(business_owner_id, 0),
        COALESCE(technical_owner_id, 0), risk_tier, intended_use, out_of_scope_use, data_classes,
        certification_state, COALESCE(certified_release_id, 0), certified_at, recertify_by,
-       state_reason, state_changed_at, created_at, updated_at`
+       state_reason, state_changed_at, created_at, updated_at, circuit_breaker`
 
 func scanRegistry(row pgx.Row) (agentlifecycle.Registry, error) {
 	var (
@@ -167,7 +167,7 @@ func scanRegistry(row pgx.Row) (agentlifecycle.Registry, error) {
 	)
 	if err := row.Scan(&r.ProjectID, &r.ApplicationID, &r.BusinessOwnerID, &r.TechnicalOwnerID, &tier,
 		&r.IntendedUse, &r.OutOfScopeUse, &dataClasses, &state, &r.CertifiedReleaseID, &r.CertifiedAt,
-		&r.RecertifyBy, &r.StateReason, &r.StateChangedAt, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		&r.RecertifyBy, &r.StateReason, &r.StateChangedAt, &r.CreatedAt, &r.UpdatedAt, &r.CircuitBreaker); err != nil {
 		return agentlifecycle.Registry{}, err
 	}
 	if dataClasses == nil {
@@ -435,17 +435,35 @@ func (s *AgentLifecycle) UpdateRegistry(ctx context.Context, projectID, applicat
 		if update.DataClasses != nil {
 			classes = *update.DataClasses
 		}
+		override := current.CircuitBreaker
+		if update.CircuitBreaker != nil {
+			encoded, err := checkBreakerOverride(ctx, s.pool, tier, update.CircuitBreaker)
+			if err != nil {
+				return err
+			}
+			override = encoded
+		}
+		if len(override) == 0 {
+			override = []byte("{}")
+		}
 		updated, err = scanRegistry(tx.QueryRow(ctx, `
 UPDATE elitea_lifecycle.agent_registry
 SET business_owner_id = $3, technical_owner_id = $4, risk_tier = $5, intended_use = $6,
-    out_of_scope_use = $7, data_classes = $8::text[], updated_at = clock_timestamp()
+    out_of_scope_use = $7, data_classes = $8::text[], circuit_breaker = $9::jsonb, updated_at = clock_timestamp()
 WHERE tenant_project_id = $1 AND application_id = $2
 RETURNING `+registryColumns,
 			projectID, applicationID, pick(update.BusinessOwnerID, current.BusinessOwnerID),
 			pick(update.TechnicalOwnerID, current.TechnicalOwnerID), string(tier),
-			text(update.IntendedUse, current.IntendedUse), text(update.OutOfScopeUse, current.OutOfScopeUse), classes))
+			text(update.IntendedUse, current.IntendedUse), text(update.OutOfScopeUse, current.OutOfScopeUse), classes,
+			override))
 		if err != nil {
 			return fmt.Errorf("agent lifecycle: update the registry row: %w", err)
+		}
+		if update.CircuitBreaker != nil && !jsonEqual(current.CircuitBreaker, updated.CircuitBreaker) {
+			if err := s.append(ctx, tx, lifecycleEvent(projectID, agentlifecycle.ActionRegistryBreakerOverride, actor.UserID,
+				"agent", agentRef(applicationID), breakerOverrideReasons(updated.CircuitBreaker)...)); err != nil {
+				return err
+			}
 		}
 		if tier != current.Tier {
 			if err := s.append(ctx, tx, lifecycleEvent(projectID, agentlifecycle.ActionRegistryTierChanged, actor.UserID,
@@ -639,7 +657,7 @@ LIMIT $5 OFFSET $6`, string(filter.Tier), string(filter.State), filter.OwnerID, 
 		)
 		if err := rows.Scan(&r.ProjectID, &r.ApplicationID, &r.BusinessOwnerID, &r.TechnicalOwnerID, &tier,
 			&r.IntendedUse, &r.OutOfScopeUse, &classes, &state, &r.CertifiedReleaseID, &r.CertifiedAt,
-			&r.RecertifyBy, &r.StateReason, &r.StateChangedAt, &r.CreatedAt, &r.UpdatedAt, &total); err != nil {
+			&r.RecertifyBy, &r.StateReason, &r.StateChangedAt, &r.CreatedAt, &r.UpdatedAt, &r.CircuitBreaker, &total); err != nil {
 			return nil, 0, fmt.Errorf("agent lifecycle: scan the registry: %w", err)
 		}
 		if classes == nil {

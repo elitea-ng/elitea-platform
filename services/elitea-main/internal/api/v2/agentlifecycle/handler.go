@@ -123,6 +123,9 @@ type RegistryRecord struct {
 	StateChangedAt     time.Time  `json:"state_changed_at"`
 	SuspensionID       *int64     `json:"suspension_id"`
 	UpdatedAt          time.Time  `json:"updated_at"`
+	// CircuitBreaker is the agent's circuit breaker override (ADR-0041
+	// decision 2); {} for none.
+	CircuitBreaker json.RawMessage `json:"circuit_breaker"`
 }
 
 // Approval is one recorded approval in a response.
@@ -212,7 +215,16 @@ func registryRecord(r agentlifecycle.Registry) RegistryRecord {
 		CertificationState: string(r.State), CertifiedReleaseID: positive(r.CertifiedReleaseID),
 		CertifiedAt: r.CertifiedAt, RecertifyBy: r.RecertifyBy, StateReason: r.StateReason,
 		StateChangedAt: r.StateChangedAt, SuspensionID: positive(r.SuspensionID), UpdatedAt: r.UpdatedAt,
+		CircuitBreaker: breakerOverride(r.CircuitBreaker),
 	}
+}
+
+// breakerOverride is the stored override, {} for none or an unreadable one.
+func breakerOverride(raw []byte) json.RawMessage {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return json.RawMessage("{}")
+	}
+	return json.RawMessage(raw)
 }
 
 func changeRequest(c agentlifecycle.ChangeRequest) ChangeRequest {
@@ -277,6 +289,10 @@ func (h *Handler) UpdateRegistry(w http.ResponseWriter, r *http.Request) {
 		IntendedUse      *string   `json:"intended_use"`
 		OutOfScopeUse    *string   `json:"out_of_scope_use"`
 		DataClasses      *[]string `json:"data_classes"`
+		// CircuitBreaker replaces the agent's breaker override; {} or null
+		// clears it. A looser override than the tier default is refused
+		// with 422 circuit_breaker_override_loosens.
+		CircuitBreaker json.RawMessage `json:"circuit_breaker"`
 	}
 	if !decode(w, r, &body, false) {
 		return
@@ -284,6 +300,9 @@ func (h *Handler) UpdateRegistry(w http.ResponseWriter, r *http.Request) {
 	update := agentlifecycle.RegistryUpdate{
 		BusinessOwnerID: body.BusinessOwnerID, TechnicalOwnerID: body.TechnicalOwnerID,
 		IntendedUse: body.IntendedUse, OutOfScopeUse: body.OutOfScopeUse, DataClasses: body.DataClasses,
+	}
+	if len(body.CircuitBreaker) > 0 {
+		update.CircuitBreaker = []byte(body.CircuitBreaker)
 	}
 	if body.RiskTier != nil {
 		tier := agentlifecycle.Tier(*body.RiskTier)
