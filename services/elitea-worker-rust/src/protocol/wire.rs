@@ -91,8 +91,13 @@ mod merge_contract_tests {
                 .unwrap()
                 .contains(70)
         );
+        assert!(
+            scan_message(&[0xba, 0x04, 0x00], Schema::WorkerCommand)
+                .unwrap()
+                .contains(71)
+        );
         assert!(matches!(
-            scan_message(&[0xba, 0x04, 0x00], Schema::WorkerCommand),
+            scan_message(&[0xc2, 0x04, 0x00], Schema::WorkerCommand),
             Err(super::ProtocolError::IncompatibleVersion(_))
         ));
         // The reference holds 1-3; an unknown nested field 4 is refused.
@@ -498,11 +503,8 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
             // 65 is the governed security context reference (#1115), 66 the
             // public egress policy (#1490), 67 the delegation policy (#1501),
             // 68 the approval policy (#1498), 69 the run caps (#1498), 70
-            // the output contracts (#1500).
-            1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 | 65..=70 => Some(length()),
-            // 68 the approval policy (#1498), 69 the run caps (#1498), 71
-            // the content controls (#1500).
-            1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 | 65..=69 | 71 => Some(length()),
+            // the output contracts and 71 the content controls (#1500).
+            1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 | 65..=71 => Some(length()),
             4 | 6..=7 | 21..=22 => Some(varint()),
             // Preserve the complete language-neutral capability oneof.
             32..=36 | 64 => Some(FieldRule {
