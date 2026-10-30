@@ -109,6 +109,13 @@ const (
 	// (agent.cap.override.granted). ResourceID is the stopped response,
 	// ExecutionID its run, and the reasons name the cap.
 	TypeAgentCapOverride EventType = "ai.elitea.security.v1.agent.cap.override"
+	// TypeConfigChanged is a change of governed platform configuration
+	// (ADR-0043 decision 3, #1500): action config.platform_preamble.revised
+	// for a new platform preamble revision. ResourceType is the
+	// configuration section, ResourceID the revision, and the reasons give
+	// the revision and the sha256 of the text. The text is never in the
+	// event.
+	TypeConfigChanged EventType = "ai.elitea.security.v1.config.changed"
 )
 
 // OCSF class and category uids (https://schema.ocsf.io).
@@ -144,6 +151,7 @@ var ocsfClasses = map[EventType]int{
 	TypeAgentApproval:           OCSFClassAPIActivity,
 	TypeAgentBreaker:            OCSFClassEntityManagement,
 	TypeAgentCapOverride:        OCSFClassAPIActivity,
+	TypeConfigChanged:           OCSFClassEntityManagement,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.

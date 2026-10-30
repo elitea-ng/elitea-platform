@@ -40,6 +40,10 @@ type Handler struct {
 	// approvalPolicy is the cached approval policy a save drops
 	// (approval_policy.go).
 	approvalPolicy SectionInvalidator
+	// contentControls is the cached content controls (ADR-0043) a save of
+	// ai_disclosure, platform_preamble or approval_policy drops
+	// (content_controls.go).
+	contentControls SectionInvalidator
 	// cloudExecutorEncryption is the startup answer for the cloud executor's
 	// storage encryption at rest ("confirmed", "attested", "refused"; empty
 	// when the handoff is not composed). See WithCloudExecutorEncryption.

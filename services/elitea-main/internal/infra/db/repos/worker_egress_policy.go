@@ -15,6 +15,7 @@ import (
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workercontentcontrols"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workeregress"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
@@ -31,10 +32,11 @@ import (
 type WorkerEgressSources struct{ pool *pgxpool.Pool }
 
 var (
-	_ workeregress.PlatformReader       = (*WorkerEgressSources)(nil)
-	_ workeregress.ProjectReader        = (*WorkerEgressSources)(nil)
-	_ workeregress.InputReader          = (*WorkerEgressSources)(nil)
-	_ workeregress.GovernedTargetReader = (*WorkerEgressSources)(nil)
+	_ workeregress.PlatformReader         = (*WorkerEgressSources)(nil)
+	_ workeregress.ProjectReader          = (*WorkerEgressSources)(nil)
+	_ workeregress.InputReader            = (*WorkerEgressSources)(nil)
+	_ workeregress.GovernedTargetReader   = (*WorkerEgressSources)(nil)
+	_ workercontentcontrols.ProjectReader = (*WorkerEgressSources)(nil)
 )
 
 // workerEgressTxKey carries an open transaction the sources read through.
@@ -224,4 +226,40 @@ WHERE $3::text <> '' AND g.tenant_project_id = $1 AND g.agent_binding_id = NULLI
 		return nil, fmt.Errorf("worker egress: read the governed credential targets: %w", err)
 	}
 	return targets, nil
+}
+
+// AIDisclosureProjectSetting reads the project's `ai_disclosure` setting
+// (ADR-0043 decision 3) for the worker content controls. A project with no
+// row has the zero setting. An undecodable row is an error, never the zero
+// setting: the command is then retried instead of silently losing the
+// project's text. It reads through the pool, as WorkerEgressProjectEntries
+// does.
+func (s *WorkerEgressSources) AIDisclosureProjectSetting(ctx context.Context, projectID int64) (workercontentcontrols.ProjectSetting, error) {
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return workercontentcontrols.ProjectSetting{}, err
+	}
+	var raw []byte
+	err = s.pool.QueryRow(ctx, fmt.Sprintf(`
+SELECT data FROM %s.configuration WHERE type = $1 ORDER BY id LIMIT 1`, schema),
+		configurationapp.AIDisclosureConfigurationType).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) || undefinedTable(err) {
+		return workercontentcontrols.ProjectSetting{}, nil
+	}
+	if err != nil {
+		return workercontentcontrols.ProjectSetting{}, fmt.Errorf("ai disclosure: read the project setting: %w", err)
+	}
+	var setting struct {
+		MarkerText         string   `json:"marker_text"`
+		OptOutToolkitTypes []string `json:"opt_out_toolkit_types"`
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &setting); err != nil {
+			return workercontentcontrols.ProjectSetting{}, fmt.Errorf("ai disclosure: the project setting is corrupt: %w", err)
+		}
+	}
+	return workercontentcontrols.ProjectSetting{
+		MarkerText:         strings.TrimSpace(setting.MarkerText),
+		OptOutToolkitTypes: setting.OptOutToolkitTypes,
+	}, nil
 }

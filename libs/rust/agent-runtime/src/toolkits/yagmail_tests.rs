@@ -378,7 +378,8 @@ async fn metadata_schema_selection_and_optional_cc_are_truthful() {
         [json!({
             "effect_id":"email-effect-17",
             "receiver":"person@example.com",
-            "message":"hello",
+            // The AI disclosure marker (ADR-0043 decision 3).
+            "message":"hello\n\nGenerated with Elitea AI",
             "subject":"status",
             "cc":[]
         })]

@@ -136,6 +136,7 @@ impl ModelFacade {
                     temperature: summary.temperature,
                     max_model_turns: turns,
                     run_caps: None,
+                    preamble: None,
                 },
             )?;
             bound.summary = Some(match selected.primary {

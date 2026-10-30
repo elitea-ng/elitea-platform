@@ -74,7 +74,11 @@ type Producer struct {
 	// definition holds an output contract (ADR-0043 decision 2); nil never
 	// marks one.
 	outputContracts OutputContractsResolver
-	refusals        DispatchRefusalRecorder
+	// content answers an agent execution command's content controls
+	// (ADR-0043 decisions 3 and 4); nil leaves the field absent (the
+	// worker's defaults).
+	content  ContentControlsResolver
+	refusals DispatchRefusalRecorder
 }
 
 // OutputContractsResolver answers field 70 of an agent execution command
@@ -90,6 +94,22 @@ type OutputContractsResolver interface {
 // prepares carry field 70 when its definition holds an output contract.
 func (p *Producer) WithOutputContracts(resolver OutputContractsResolver) *Producer {
 	p.outputContracts = resolver
+	return p
+}
+
+// ContentControlsResolver answers the content controls an agent execution
+// command carries (ADR-0043 decisions 3 and 4; workercontentcontrols.Resolver).
+// Nil leaves the field absent. An error refuses the command: it is never
+// signed without the controls it should carry, and the dispatch is retried
+// within the run's deadline.
+type ContentControlsResolver interface {
+	WorkerContentControls(ctx context.Context, command *runtimev1.WorkerCommandV1) (*runtimev1.WorkerContentControlsV1, error)
+}
+
+// WithContentControls makes every agent execution command this producer
+// prepares carry its content controls.
+func (p *Producer) WithContentControls(resolver ContentControlsResolver) *Producer {
+	p.content = resolver
 	return p
 }
 
@@ -265,6 +285,13 @@ func (p *Producer) prepareCommand(ctx context.Context, command *runtimev1.Worker
 			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker output contracts: %w", err)
 		}
 		command.OutputContracts = contracts
+	}
+	if p.content != nil && command.GetAgentExecution() != nil {
+		controls, err := p.content.WorkerContentControls(ctx, command)
+		if err != nil {
+			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker content controls: %w", err)
+		}
+		command.ContentControls = controls
 	}
 	if err := validateBoundedStrings(command, p.config.Limits.MaxStringBytes); err != nil {
 		return executionapp.PreparedCommandEnvelope{}, err

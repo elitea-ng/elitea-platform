@@ -294,6 +294,12 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
 		return
 	}
+	// The content controls' bounds, opt-out types and rule tiers (ADR-0043
+	// decisions 3 and 4).
+	if reason := validateContentControlsValues(section.id, body.Values); reason != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+		return
+	}
 	// The circuit breaker's ranges and resume rules (ADR-0041 decision 2).
 	if reason := validateCircuitBreakerValues(section.id, body.Values); reason != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
@@ -323,6 +329,7 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 	h.invalidateRunSafety(section.id)
 	h.invalidateDelegation(section.id)
 	h.invalidateApprovalPolicy(section.id)
+	h.invalidateContentControls(section.id)
 	if section.id == platformconfig.SectionBranding {
 		h.invalidateBranding()
 		if stored, err := h.loadSectionValues(r, section.id); err == nil {
@@ -563,6 +570,11 @@ func (h *Handler) storeSectionValues(
 		if err := repos.ForgetPlatformEgressSightingsTx(ctx, tx, stringList(list)); err != nil {
 			return err
 		}
+	}
+	// A save that changes the platform preamble is a new revision with its
+	// security audit event (ADR-0043 decision 3, shared 0216).
+	if err := recordPlatformPreambleTx(ctx, tx, section, values, author); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }

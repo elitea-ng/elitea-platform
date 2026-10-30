@@ -1,0 +1,68 @@
+{
+  "contract": "elitea.tool-disclosure.v1",
+  "description": "ADR-0043 decision 3: the text parameters of the built-in tools that write human-readable text outside the platform: every external_send tool, and the write tools that create or change a pull request, an issue, a case, a ticket or a page with a description or body. The categories do not change: a write tool listed here keeps its approval defaults. The worker appends the AI disclosure marker to each listed parameter before the call. A path is a top-level argument (`comment`) or a text field of each object in a top-level list (`inline_comments[].comment_text`). `format` markdown targets render HTML comments as hidden, so the marker carries the run id there; plain targets get the text only. Every external_send tool of tool-categories-v1.json is listed under toolkits or under exempt with a reason. Tools whose text is inside a JSON document argument (Jira create_issue, Bitbucket create_pull_request, Azure DevOps Boards create_work_item) are not listed: the marker would change the document. Read by the Rust worker and by elitea-main (the opt-out toolkit types); elitea-main keeps a copy that a test holds equal.",
+  "default_marker_text": "Generated with Elitea AI",
+  "formats": ["plain", "markdown"],
+  "toolkits": {
+    "ado_repos": {
+      "create_pull_request": {"format": "markdown", "text_parameters": ["pull_request_body"]},
+      "comment_on_pull_request": {"format": "markdown", "text_parameters": ["comment_query", "inline_comments[].comment_text"]}
+    },
+    "aha": {
+      "add_comment": {"format": "plain", "text_parameters": ["body"]}
+    },
+    "bitbucket": {
+      "close_pull_request": {"format": "markdown", "text_parameters": ["message"]},
+      "add_pull_request_comment": {"format": "markdown", "text_parameters": ["content"]}
+    },
+    "carrier": {
+      "create_ticket": {"format": "plain", "text_parameters": ["description"]}
+    },
+    "confluence": {
+      "create_page": {"format": "plain", "text_parameters": ["body"]}
+    },
+    "figma": {
+      "post_file_comment": {"format": "plain", "text_parameters": ["message"]}
+    },
+    "github": {
+      "create_issue": {"format": "markdown", "text_parameters": ["body"]},
+      "create_issue_on_project": {"format": "markdown", "text_parameters": ["body"]},
+      "create_pull_request": {"format": "markdown", "text_parameters": ["body"]},
+      "update_issue": {"format": "markdown", "text_parameters": ["body"]},
+      "update_issue_on_project": {"format": "markdown", "text_parameters": ["body"]},
+      "comment_on_issue": {"format": "markdown", "text_parameters": ["comment"]}
+    },
+    "gitlab": {
+      "create_pull_request": {"format": "markdown", "text_parameters": ["pr_body"]},
+      "comment_on_issue": {"format": "markdown", "text_parameters": ["comment_query"]},
+      "comment_on_pr": {"format": "markdown", "text_parameters": ["comment"]},
+      "create_pr_change_comment": {"format": "markdown", "text_parameters": ["comment"]}
+    },
+    "gitlab_org": {
+      "create_pull_request": {"format": "markdown", "text_parameters": ["pr_body"]},
+      "comment_on_issue": {"format": "markdown", "text_parameters": ["comment_query"]},
+      "create_pr_change_comment": {"format": "markdown", "text_parameters": ["comment"]}
+    },
+    "jira": {
+      "add_comments": {"format": "plain", "text_parameters": ["comment"]}
+    },
+    "salesforce": {
+      "create_case": {"format": "plain", "text_parameters": ["description"]},
+      "update_case": {"format": "plain", "text_parameters": ["description"]}
+    },
+    "slack": {
+      "send_message": {"format": "plain", "text_parameters": ["message"]}
+    },
+    "testio": {
+      "confirm_bug_fix": {"format": "plain", "text_parameters": ["comment"]}
+    },
+    "yagmail": {
+      "send_gmail_message": {"format": "plain", "text_parameters": ["message"]}
+    }
+  },
+  "exempt": {
+    "jira": {
+      "update_comment_with_file": "Adds a file to a comment that exists. The tool writes no text of its own."
+    }
+  }
+}

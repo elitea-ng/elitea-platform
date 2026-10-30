@@ -294,6 +294,18 @@ type WorkerCommandV1 struct {
 	// Main-first rollout. Absent on every other command, so those commands
 	// are unchanged byte for byte.
 	OutputContracts *WorkerOutputContractsV1 `protobuf:"bytes,70,opt,name=output_contracts,json=outputContracts,proto3" json:"output_contracts,omitempty"`
+	// The content controls of an agent run (ADR-0043 decisions 3 and 4,
+	// #1500): the AI disclosure marker, the platform preamble's revision and
+	// digest (its text is in the input bundle) and the "read
+	// untrusted, then act" switch for the root agent's tier. Absent means the
+	// worker's defaults: the default marker text on every listed outbound
+	// tool, the built-in preamble only, and the rule on at the high and
+	// critical tiers of approval_policy (off without it). Main omits it until
+	// an administrator saves the `ai_disclosure` or `platform_preamble`
+	// section, or the approval policy's `untrusted_read_then_act_tiers`, so
+	// commands are unchanged byte for byte while workers from an earlier
+	// release run.
+	ContentControls *WorkerContentControlsV1 `protobuf:"bytes,71,opt,name=content_controls,json=contentControls,proto3" json:"content_controls,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -599,6 +611,13 @@ func (x *WorkerCommandV1) GetOutputContracts() *WorkerOutputContractsV1 {
 	return nil
 }
 
+func (x *WorkerCommandV1) GetContentControls() *WorkerContentControlsV1 {
+	if x != nil {
+		return x.ContentControls
+	}
+	return nil
+}
+
 type isWorkerCommandV1_CapabilityCommand interface {
 	isWorkerCommandV1_CapabilityCommand()
 }
@@ -826,6 +845,100 @@ func (x *WorkerApprovalPolicyV1) GetApprovalCategories() []string {
 	return nil
 }
 
+// A run's content controls (ADR-0043 decisions 3 and 4). Each text is
+// platform configuration that an administrator or a project administrator
+// wrote; no user or agent content is in it.
+type WorkerContentControlsV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The AI disclosure marker text, at most 200 bytes: the project's text,
+	// else the administrator's, else "Generated with Elitea AI". Empty is the
+	// default text; the marker cannot be removed through the text.
+	DisclosureText string `protobuf:"bytes,1,opt,name=disclosure_text,json=disclosureText,proto3" json:"disclosure_text,omitempty"`
+	// Toolkit types whose outbound tools get no marker: the types the
+	// project opted out of, each one the administrator allowed. At most 64.
+	DisclosureOptOutToolkitTypes []string `protobuf:"bytes,2,rep,name=disclosure_opt_out_toolkit_types,json=disclosureOptOutToolkitTypes,proto3" json:"disclosure_opt_out_toolkit_types,omitempty"`
+	// The lowercase hex SHA-256 of the administrator's platform preamble that
+	// the run's input carries (AgentExecutionInputV1.platform_preamble, field
+	// 67). The text itself is a prompt: it travels in the input bundle, never
+	// on the command bus. The worker refuses the command when the input's
+	// text does not have this digest, or when the input has a preamble and
+	// this is empty. Empty: the built-in preamble only.
+	PlatformPreambleSha256 string `protobuf:"bytes,3,opt,name=platform_preamble_sha256,json=platformPreambleSha256,proto3" json:"platform_preamble_sha256,omitempty"`
+	// The revision of that preamble (each change is one); 0 when none.
+	PlatformPreambleRevision uint32 `protobuf:"varint,4,opt,name=platform_preamble_revision,json=platformPreambleRevision,proto3" json:"platform_preamble_revision,omitempty"`
+	// Whether the "read untrusted, then act" rule is on for the root agent's
+	// tier: a call of an external_send, delete or payment tool after a tool
+	// result in the same turn needs an approval.
+	UntrustedReadThenAct bool `protobuf:"varint,5,opt,name=untrusted_read_then_act,json=untrustedReadThenAct,proto3" json:"untrusted_read_then_act,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *WorkerContentControlsV1) Reset() {
+	*x = WorkerContentControlsV1{}
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkerContentControlsV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkerContentControlsV1) ProtoMessage() {}
+
+func (x *WorkerContentControlsV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkerContentControlsV1.ProtoReflect.Descriptor instead.
+func (*WorkerContentControlsV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *WorkerContentControlsV1) GetDisclosureText() string {
+	if x != nil {
+		return x.DisclosureText
+	}
+	return ""
+}
+
+func (x *WorkerContentControlsV1) GetDisclosureOptOutToolkitTypes() []string {
+	if x != nil {
+		return x.DisclosureOptOutToolkitTypes
+	}
+	return nil
+}
+
+func (x *WorkerContentControlsV1) GetPlatformPreambleSha256() string {
+	if x != nil {
+		return x.PlatformPreambleSha256
+	}
+	return ""
+}
+
+func (x *WorkerContentControlsV1) GetPlatformPreambleRevision() uint32 {
+	if x != nil {
+		return x.PlatformPreambleRevision
+	}
+	return 0
+}
+
+func (x *WorkerContentControlsV1) GetUntrustedReadThenAct() bool {
+	if x != nil {
+		return x.UntrustedReadThenAct
+	}
+	return false
+}
+
 // A run's caps (ADR-0041 decision 3). Each value is the most the whole run
 // may use, nested agents and pipeline nodes included; 0 is no cap. Reaching
 // a cap ends the run with CAP_REACHED and the cap's name.
@@ -845,7 +958,7 @@ type WorkerRunCapsV1 struct {
 
 func (x *WorkerRunCapsV1) Reset() {
 	*x = WorkerRunCapsV1{}
-	mi := &file_elitea_runtime_v1_command_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -857,7 +970,7 @@ func (x *WorkerRunCapsV1) String() string {
 func (*WorkerRunCapsV1) ProtoMessage() {}
 
 func (x *WorkerRunCapsV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_command_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -870,7 +983,7 @@ func (x *WorkerRunCapsV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerRunCapsV1.ProtoReflect.Descriptor instead.
 func (*WorkerRunCapsV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{4}
+	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *WorkerRunCapsV1) GetMaxToolCalls() uint32 {
@@ -906,7 +1019,7 @@ type WorkerOutputContractsV1 struct {
 
 func (x *WorkerOutputContractsV1) Reset() {
 	*x = WorkerOutputContractsV1{}
-	mi := &file_elitea_runtime_v1_command_proto_msgTypes[5]
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -918,7 +1031,7 @@ func (x *WorkerOutputContractsV1) String() string {
 func (*WorkerOutputContractsV1) ProtoMessage() {}
 
 func (x *WorkerOutputContractsV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_command_proto_msgTypes[5]
+	mi := &file_elitea_runtime_v1_command_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -931,7 +1044,7 @@ func (x *WorkerOutputContractsV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerOutputContractsV1.ProtoReflect.Descriptor instead.
 func (*WorkerOutputContractsV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{5}
+	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *WorkerOutputContractsV1) GetRevision() uint32 {
@@ -945,7 +1058,7 @@ var File_elitea_runtime_v1_command_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\n" +
-	"\x1felitea/runtime/v1/command.proto\x12\x11elitea.runtime.v1\x1a\x1delitea/runtime/v1/agent.proto\x1a elitea/runtime/v1/indexing.proto\x1a\x1delitea/runtime/v1/input.proto\x1a(elitea/runtime/v1/security_context.proto\x1a\x1felitea/runtime/v1/toolkit.proto\x1a\"elitea/runtime/v1/validation.proto\"\x9c\x11\n" +
+	"\x1felitea/runtime/v1/command.proto\x12\x11elitea.runtime.v1\x1a\x1delitea/runtime/v1/agent.proto\x1a elitea/runtime/v1/indexing.proto\x1a\x1delitea/runtime/v1/input.proto\x1a(elitea/runtime/v1/security_context.proto\x1a\x1felitea/runtime/v1/toolkit.proto\x1a\"elitea/runtime/v1/validation.proto\"\xf3\x11\n" +
 	"\x0fWorkerCommandV1\x12+\n" +
 	"\x11protocol_revision\x18\x01 \x01(\tR\x10protocolRevision\x12\x1d\n" +
 	"\n" +
@@ -988,7 +1101,8 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\x11delegation_policy\x18C \x01(\v2+.elitea.runtime.v1.WorkerDelegationPolicyV1R\x10delegationPolicy\x12R\n" +
 	"\x0fapproval_policy\x18D \x01(\v2).elitea.runtime.v1.WorkerApprovalPolicyV1R\x0eapprovalPolicy\x12=\n" +
 	"\brun_caps\x18E \x01(\v2\".elitea.runtime.v1.WorkerRunCapsV1R\arunCaps\x12U\n" +
-	"\x10output_contracts\x18F \x01(\v2*.elitea.runtime.v1.WorkerOutputContractsV1R\x0foutputContractsB\x14\n" +
+	"\x10output_contracts\x18F \x01(\v2*.elitea.runtime.v1.WorkerOutputContractsV1R\x0foutputContracts\x12U\n" +
+	"\x10content_controls\x18G \x01(\v2*.elitea.runtime.v1.WorkerContentControlsV1R\x0fcontentControlsB\x14\n" +
 	"\x12capability_commandJ\x04\b\x0f\x10\x10J\x04\b\x1a\x10 J\x04\b%\x10@R\x11grant_template_id\"m\n" +
 	"\x14WorkerEgressPolicyV1\x129\n" +
 	"\x04mode\x18\x01 \x01(\x0e2%.elitea.runtime.v1.WorkerEgressModeV1R\x04mode\x12\x14\n" +
@@ -999,7 +1113,13 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\x11root_data_classes\x18\x03 \x03(\tR\x0frootDataClassesJ\x04\b\x04\x10\v\"l\n" +
 	"\x16WorkerApprovalPolicyV1\x12\x1b\n" +
 	"\trisk_tier\x18\x01 \x01(\tR\briskTier\x12/\n" +
-	"\x13approval_categories\x18\x02 \x03(\tR\x12approvalCategoriesJ\x04\b\x03\x10\v\"\x8f\x01\n" +
+	"\x13approval_categories\x18\x02 \x03(\tR\x12approvalCategoriesJ\x04\b\x03\x10\v\"\xbf\x02\n" +
+	"\x17WorkerContentControlsV1\x12'\n" +
+	"\x0fdisclosure_text\x18\x01 \x01(\tR\x0edisclosureText\x12F\n" +
+	" disclosure_opt_out_toolkit_types\x18\x02 \x03(\tR\x1cdisclosureOptOutToolkitTypes\x128\n" +
+	"\x18platform_preamble_sha256\x18\x03 \x01(\tR\x16platformPreambleSha256\x12<\n" +
+	"\x1aplatform_preamble_revision\x18\x04 \x01(\rR\x18platformPreambleRevision\x125\n" +
+	"\x17untrusted_read_then_act\x18\x05 \x01(\bR\x14untrustedReadThenActJ\x04\b\x06\x10\v\"\x8f\x01\n" +
 	"\x0fWorkerRunCapsV1\x12$\n" +
 	"\x0emax_tool_calls\x18\x01 \x01(\rR\fmaxToolCalls\x12&\n" +
 	"\x0fmax_model_turns\x18\x02 \x01(\rR\rmaxModelTurns\x12(\n" +
@@ -1042,7 +1162,7 @@ func file_elitea_runtime_v1_command_proto_rawDescGZIP() []byte {
 }
 
 var file_elitea_runtime_v1_command_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_elitea_runtime_v1_command_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_elitea_runtime_v1_command_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_elitea_runtime_v1_command_proto_goTypes = []any{
 	(WorkerCommandTypeV1)(0),                    // 0: elitea.runtime.v1.WorkerCommandTypeV1
 	(WorkerEgressModeV1)(0),                     // 1: elitea.runtime.v1.WorkerEgressModeV1
@@ -1051,39 +1171,41 @@ var file_elitea_runtime_v1_command_proto_goTypes = []any{
 	(*WorkerEgressPolicyV1)(nil),                // 4: elitea.runtime.v1.WorkerEgressPolicyV1
 	(*WorkerDelegationPolicyV1)(nil),            // 5: elitea.runtime.v1.WorkerDelegationPolicyV1
 	(*WorkerApprovalPolicyV1)(nil),              // 6: elitea.runtime.v1.WorkerApprovalPolicyV1
-	(*WorkerRunCapsV1)(nil),                     // 7: elitea.runtime.v1.WorkerRunCapsV1
-	(*WorkerOutputContractsV1)(nil),             // 8: elitea.runtime.v1.WorkerOutputContractsV1
-	(*ExecutionInputBundleReferenceV1)(nil),     // 9: elitea.runtime.v1.ExecutionInputBundleReferenceV1
-	(*ConfigurationValidationCommandV1)(nil),    // 10: elitea.runtime.v1.ConfigurationValidationCommandV1
-	(*ToolkitAvailableToolsCommandV1)(nil),      // 11: elitea.runtime.v1.ToolkitAvailableToolsCommandV1
-	(*IndexIngestCommandV1)(nil),                // 12: elitea.runtime.v1.IndexIngestCommandV1
-	(*AgentExecutionCommandV1)(nil),             // 13: elitea.runtime.v1.AgentExecutionCommandV1
-	(*ToolkitCallToolCommandV1)(nil),            // 14: elitea.runtime.v1.ToolkitCallToolCommandV1
-	(*ToolkitExecuteReadCommandV1)(nil),         // 15: elitea.runtime.v1.ToolkitExecuteReadCommandV1
-	(*ExecutionSecurityContextReferenceV1)(nil), // 16: elitea.runtime.v1.ExecutionSecurityContextReferenceV1
+	(*WorkerContentControlsV1)(nil),             // 7: elitea.runtime.v1.WorkerContentControlsV1
+	(*WorkerRunCapsV1)(nil),                     // 8: elitea.runtime.v1.WorkerRunCapsV1
+	(*WorkerOutputContractsV1)(nil),             // 9: elitea.runtime.v1.WorkerOutputContractsV1
+	(*ExecutionInputBundleReferenceV1)(nil),     // 10: elitea.runtime.v1.ExecutionInputBundleReferenceV1
+	(*ConfigurationValidationCommandV1)(nil),    // 11: elitea.runtime.v1.ConfigurationValidationCommandV1
+	(*ToolkitAvailableToolsCommandV1)(nil),      // 12: elitea.runtime.v1.ToolkitAvailableToolsCommandV1
+	(*IndexIngestCommandV1)(nil),                // 13: elitea.runtime.v1.IndexIngestCommandV1
+	(*AgentExecutionCommandV1)(nil),             // 14: elitea.runtime.v1.AgentExecutionCommandV1
+	(*ToolkitCallToolCommandV1)(nil),            // 15: elitea.runtime.v1.ToolkitCallToolCommandV1
+	(*ToolkitExecuteReadCommandV1)(nil),         // 16: elitea.runtime.v1.ToolkitExecuteReadCommandV1
+	(*ExecutionSecurityContextReferenceV1)(nil), // 17: elitea.runtime.v1.ExecutionSecurityContextReferenceV1
 }
 var file_elitea_runtime_v1_command_proto_depIdxs = []int32{
 	0,  // 0: elitea.runtime.v1.WorkerCommandV1.command_type:type_name -> elitea.runtime.v1.WorkerCommandTypeV1
-	9,  // 1: elitea.runtime.v1.WorkerCommandV1.input_bundle_ref:type_name -> elitea.runtime.v1.ExecutionInputBundleReferenceV1
-	10, // 2: elitea.runtime.v1.WorkerCommandV1.configuration_validation:type_name -> elitea.runtime.v1.ConfigurationValidationCommandV1
-	11, // 3: elitea.runtime.v1.WorkerCommandV1.toolkit_available_tools:type_name -> elitea.runtime.v1.ToolkitAvailableToolsCommandV1
-	12, // 4: elitea.runtime.v1.WorkerCommandV1.index_ingest:type_name -> elitea.runtime.v1.IndexIngestCommandV1
-	13, // 5: elitea.runtime.v1.WorkerCommandV1.agent_execution:type_name -> elitea.runtime.v1.AgentExecutionCommandV1
-	14, // 6: elitea.runtime.v1.WorkerCommandV1.toolkit_call_tool:type_name -> elitea.runtime.v1.ToolkitCallToolCommandV1
-	15, // 7: elitea.runtime.v1.WorkerCommandV1.toolkit_execute_read:type_name -> elitea.runtime.v1.ToolkitExecuteReadCommandV1
-	16, // 8: elitea.runtime.v1.WorkerCommandV1.security_context_ref:type_name -> elitea.runtime.v1.ExecutionSecurityContextReferenceV1
+	10, // 1: elitea.runtime.v1.WorkerCommandV1.input_bundle_ref:type_name -> elitea.runtime.v1.ExecutionInputBundleReferenceV1
+	11, // 2: elitea.runtime.v1.WorkerCommandV1.configuration_validation:type_name -> elitea.runtime.v1.ConfigurationValidationCommandV1
+	12, // 3: elitea.runtime.v1.WorkerCommandV1.toolkit_available_tools:type_name -> elitea.runtime.v1.ToolkitAvailableToolsCommandV1
+	13, // 4: elitea.runtime.v1.WorkerCommandV1.index_ingest:type_name -> elitea.runtime.v1.IndexIngestCommandV1
+	14, // 5: elitea.runtime.v1.WorkerCommandV1.agent_execution:type_name -> elitea.runtime.v1.AgentExecutionCommandV1
+	15, // 6: elitea.runtime.v1.WorkerCommandV1.toolkit_call_tool:type_name -> elitea.runtime.v1.ToolkitCallToolCommandV1
+	16, // 7: elitea.runtime.v1.WorkerCommandV1.toolkit_execute_read:type_name -> elitea.runtime.v1.ToolkitExecuteReadCommandV1
+	17, // 8: elitea.runtime.v1.WorkerCommandV1.security_context_ref:type_name -> elitea.runtime.v1.ExecutionSecurityContextReferenceV1
 	4,  // 9: elitea.runtime.v1.WorkerCommandV1.egress_policy:type_name -> elitea.runtime.v1.WorkerEgressPolicyV1
 	5,  // 10: elitea.runtime.v1.WorkerCommandV1.delegation_policy:type_name -> elitea.runtime.v1.WorkerDelegationPolicyV1
 	6,  // 11: elitea.runtime.v1.WorkerCommandV1.approval_policy:type_name -> elitea.runtime.v1.WorkerApprovalPolicyV1
-	7,  // 12: elitea.runtime.v1.WorkerCommandV1.run_caps:type_name -> elitea.runtime.v1.WorkerRunCapsV1
-	8,  // 13: elitea.runtime.v1.WorkerCommandV1.output_contracts:type_name -> elitea.runtime.v1.WorkerOutputContractsV1
-	1,  // 14: elitea.runtime.v1.WorkerEgressPolicyV1.mode:type_name -> elitea.runtime.v1.WorkerEgressModeV1
-	2,  // 15: elitea.runtime.v1.WorkerDelegationPolicyV1.mode:type_name -> elitea.runtime.v1.WorkerDelegationModeV1
-	16, // [16:16] is the sub-list for method output_type
-	16, // [16:16] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	8,  // 12: elitea.runtime.v1.WorkerCommandV1.run_caps:type_name -> elitea.runtime.v1.WorkerRunCapsV1
+	9,  // 13: elitea.runtime.v1.WorkerCommandV1.output_contracts:type_name -> elitea.runtime.v1.WorkerOutputContractsV1
+	7,  // 14: elitea.runtime.v1.WorkerCommandV1.content_controls:type_name -> elitea.runtime.v1.WorkerContentControlsV1
+	1,  // 15: elitea.runtime.v1.WorkerEgressPolicyV1.mode:type_name -> elitea.runtime.v1.WorkerEgressModeV1
+	2,  // 16: elitea.runtime.v1.WorkerDelegationPolicyV1.mode:type_name -> elitea.runtime.v1.WorkerDelegationModeV1
+	17, // [17:17] is the sub-list for method output_type
+	17, // [17:17] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_command_proto_init() }
@@ -1111,7 +1233,7 @@ func file_elitea_runtime_v1_command_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_command_proto_rawDesc), len(file_elitea_runtime_v1_command_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   6,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

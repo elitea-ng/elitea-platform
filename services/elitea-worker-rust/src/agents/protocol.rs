@@ -238,6 +238,10 @@ pub fn request_from(
                     })
                 })
                 .transpose()?,
+            platform_preamble: message
+                .platform_preamble
+                .map(platform_preamble_snapshot)
+                .transpose()?,
             project_context: message.project_context.map(|context| {
                 super::request::ProjectContextSnapshot {
                     id: context.id,
@@ -735,4 +739,37 @@ impl<'a> JsonLimits<'a> {
 
 const fn malformed_json() -> AgentProtocolError {
     AgentProtocolError::InvalidInput("the agent JSON input is malformed")
+}
+
+/// The platform preamble the input carries (ADR-0043 decision 3): a
+/// revision, a text of at most 8 KiB without NUL, and the lowercase hex
+/// SHA-256 of that text. A text that does not have its digest fails the
+/// input closed.
+fn platform_preamble_snapshot(
+    snapshot: crate::protocol::elitea::runtime::v1::PlatformPreambleSnapshotV1,
+) -> Result<super::request::PlatformPreambleSnapshot, AgentProtocolError> {
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(snapshot.text.as_bytes());
+    let digest = digest
+        .iter()
+        .fold(String::with_capacity(64), |mut out, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(out, "{byte:02x}");
+            out
+        });
+    if snapshot.revision == 0
+        || snapshot.text.is_empty()
+        || snapshot.text.len() > elitea_agent_runtime::preamble::MAX_PLATFORM_PREAMBLE_BYTES
+        || snapshot.text.contains('\0')
+        || snapshot.sha256 != digest
+    {
+        return Err(AgentProtocolError::InvalidInput(
+            "the agent platform preamble is malformed",
+        ));
+    }
+    Ok(super::request::PlatformPreambleSnapshot {
+        revision: snapshot.revision,
+        sha256: snapshot.sha256,
+        text: snapshot.text,
+    })
 }

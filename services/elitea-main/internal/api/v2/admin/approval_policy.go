@@ -79,6 +79,7 @@ func approvalPolicySection() map[string]any {
 		"default":  []any{},
 		"maxItems": len(agentlifecycle.Tiers),
 	})
+	fields = append(fields, untrustedReadThenActField())
 	return map[string]any{
 		"id":    section,
 		"title": "Approval Policy",

@@ -39,6 +39,13 @@ func (p *AgentExecutionProducer) WithOutputContracts(resolver OutputContractsRes
 	return p
 }
 
+// WithContentControls makes the agent execution commands carry their
+// content controls (ADR-0043 decisions 3 and 4).
+func (p *AgentExecutionProducer) WithContentControls(resolver ContentControlsResolver) *AgentExecutionProducer {
+	p.producer.WithContentControls(resolver)
+	return p
+}
+
 // WithEgressPolicy makes the index ingest commands carry their policy.
 func (p *IndexIngestProducer) WithEgressPolicy(resolver EgressPolicyResolver) *IndexIngestProducer {
 	p.producer.WithEgressPolicy(resolver)

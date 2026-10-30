@@ -144,6 +144,7 @@ fn bound_resume_payload(session: &dyn Session) -> AgentExecutionPayload {
         project_context: None,
         model_context_limits: None,
         summary_model: None,
+        platform_preamble: None,
     }
 }
 

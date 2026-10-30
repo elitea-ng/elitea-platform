@@ -25,7 +25,8 @@ func (h *Handler) projectSettingsWriteForbidden(ctx context.Context, projectID s
 	guarded := false
 	for _, name := range typeNames {
 		switch strings.TrimSpace(name) {
-		case configurationapp.CloudExecutorConfigurationType, configurationapp.WorkerEgressConfigurationType:
+		case configurationapp.CloudExecutorConfigurationType, configurationapp.WorkerEgressConfigurationType,
+			configurationapp.AIDisclosureConfigurationType:
 			guarded = true
 		}
 	}
