@@ -84,6 +84,9 @@ func appendConfigurationLifecycleEventTx(
 	if actorID <= 0 || actorID > math.MaxInt32 {
 		return errors.New("configuration lifecycle: the event needs the acting user")
 	}
+	if err := forgetRemovedProjectEgressSightings(ctx, tx, before, after); err != nil {
+		return err
+	}
 	var operation configurationapp.CurrentConfigurationLifecycleOperation
 	var identity *configurationapp.CurrentConfigurationLifecycleSnapshot
 	switch {

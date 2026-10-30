@@ -8133,7 +8133,9 @@ components:
           type: string
           description: >
             invalid_request, not_found, credential_not_revocable,
-            not_removable, forbidden, unavailable or internal_error.
+            not_removable, trim_item_unknown, trim_item_too_new,
+            trim_item_used, trim_item_not_removable, forbidden, unavailable or
+            internal_error.
         message: { type: string }
     CredentialInventoryAgent:
       type: object
@@ -19399,7 +19401,14 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
         '409':
-          description: (code not_removable) The item cannot be removed (published version or the last selected tool)
+          description: >
+            Not a removable candidate now: Remove re-judges the item with the
+            current evidence and policy window inside its transaction.
+            trim_item_unknown (not in the report, e.g. already removed or on a
+            published version), trim_item_too_new (granted for less than the
+            window), trim_item_used (used in the window),
+            trim_item_not_removable (e.g. the last selected tool) or
+            not_removable (refused by the item's own mutation path).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
@@ -25715,7 +25724,14 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
         '409':
-          description: (code not_removable) The item cannot be removed
+          description: >
+            Not a removable candidate now: Remove re-judges the item with the
+            current evidence and policy window inside its transaction.
+            trim_item_unknown (not in the report, e.g. already removed or on a
+            published version), trim_item_too_new (granted for less than the
+            window), trim_item_used (used in the window),
+            trim_item_not_removable (e.g. the last selected tool) or
+            not_removable (refused by the item's own mutation path).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }

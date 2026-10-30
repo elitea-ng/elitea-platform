@@ -243,7 +243,7 @@ A weekly routine, `main.permission_trimming`, recomputes the report and notifies
 
 ### Evidence
 
-Each removal is an audit event `permission.trimmed` with the agent, the item and who removed it. Owner notifications are `permission_trimming_candidates`.
+A removal re-checks the item when it runs: an item that has since been used, is too new, or is no longer granted is refused (`trim_item_used`, `trim_item_too_new`, `trim_item_unknown`) rather than removed from a stale report. Taking an egress host off an allowlist on the settings page also resets its age, so a host added back waits a full window again. Each removal is an audit event `permission.trimmed` with the agent, the item and who removed it. Owner notifications are `permission_trimming_candidates`.
 
 ### Customer responsibility
 

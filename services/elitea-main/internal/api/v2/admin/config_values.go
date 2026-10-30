@@ -110,6 +110,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -526,6 +527,13 @@ func (h *Handler) storeSectionValues(
 			return err
 		}
 	}
+	// An entry taken off the platform egress allowlist starts its permission
+	// trimming window over if it is added back (ADR-0044 decision 5).
+	if list, ok := values[platformconfig.KeyWorkerEgressAllowlist]; ok && section == platformconfig.SectionWorkerEgress {
+		if err := repos.ForgetPlatformEgressSightingsTx(ctx, tx, stringList(list)); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
 }
 
@@ -873,4 +881,20 @@ func validateLinks(key string, value any) string {
 		}
 	}
 	return ""
+}
+
+// stringList reads a JSON list of strings; anything else is left out.
+func stringList(value any) []string {
+	var out []string
+	switch list := value.(type) {
+	case []any:
+		for _, item := range list {
+			if text, ok := item.(string); ok {
+				out = append(out, text)
+			}
+		}
+	case []string:
+		out = append(out, list...)
+	}
+	return out
 }

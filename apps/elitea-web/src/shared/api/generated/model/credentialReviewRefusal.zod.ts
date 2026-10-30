@@ -46,7 +46,7 @@ export const CredentialReviewRefusal = zod.object({
   code: zod
     .string()
     .describe(
-      "invalid_request, not_found, credential_not_revocable, not_removable, forbidden, unavailable or internal_error.\n",
+      "invalid_request, not_found, credential_not_revocable, not_removable, trim_item_unknown, trim_item_too_new, trim_item_used, trim_item_not_removable, forbidden, unavailable or internal_error.\n",
     ),
   message: zod.string(),
 });

@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -377,9 +378,29 @@ SELECT selected_tools::text FROM p_1.entity_tool_mapping WHERE entity_version_id
 	if selected != `["list_products"]` {
 		t.Fatalf("selected_tools = %s", selected)
 	}
-	// The last selected tool is not removable: an empty selection is every tool.
+	// list_products ran in the window: not a candidate.
+	var refusal *TrimRefusal
 	if _, err := trimming.Remove(t.Context(), RemoveRequest{ProjectID: 1, ApplicationID: 31, Kind: TrimTool,
-		Key: "41/51/list_products", ActorID: 11}); err == nil || !strings.Contains(err.Error(), "last selected tool") {
+		Key: "41/51/list_products", ActorID: 11}); !errors.As(err, &refusal) || refusal.Code != TrimRefusalUsed {
+		t.Fatalf("removing a used tool = %v, want %s", err, TrimRefusalUsed)
+	}
+	// 40 days on it is unused, but the last selected tool is not removable:
+	// an empty selection is every tool. (The removal above edited the
+	// selection, so the tool is dated by the routine's sighting.)
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO elitea_lifecycle.permission_trimming_observed
+    (tenant_project_id, application_id, item_kind, item_key, first_seen_at, last_seen_at)
+VALUES (1, 31, 'tool', '41/51/list_products', now() - interval '60 days', now())`); err != nil {
+		t.Fatal(err)
+	}
+	later, err := NewPermissionTrimming(newCredentialReviewTestStore(t, pool, now.Add(40*24*time.Hour),
+		platformconfig.DefaultCredentialReviewPolicy()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := later.Remove(t.Context(), RemoveRequest{ProjectID: 1, ApplicationID: 31, Kind: TrimTool,
+		Key: "41/51/list_products", ActorID: 11}); !errors.As(err, &refusal) || refusal.Code != TrimRefusalNotRemovable ||
+		!strings.Contains(err.Error(), "last selected tool") {
 		t.Fatalf("removing the last tool = %v", err)
 	}
 	// A published version is refused by the shared relation guard.
@@ -393,7 +414,18 @@ SELECT selected_tools::text FROM p_1.entity_tool_mapping WHERE entity_version_id
 	if _, err := pool.Exec(t.Context(), `UPDATE p_1.application_versions SET status = 'draft' WHERE id = 41`); err != nil {
 		t.Fatal(err)
 	}
+	// The toolkit's list_products ran two days ago: it is not a candidate,
+	// and Remove re-judges the item rather than trusting the caller.
 	if _, err := trimming.Remove(t.Context(), RemoveRequest{ProjectID: 1, ApplicationID: 31, Kind: TrimToolkit,
+		Key: "41/51", ActorID: 11}); !errors.As(err, &refusal) || refusal.Code != TrimRefusalUsed {
+		t.Fatalf("removing a used toolkit = %v, want %s", err, TrimRefusalUsed)
+	}
+	if _, err := trimming.Remove(t.Context(), RemoveRequest{ProjectID: 1, ApplicationID: 31, Kind: TrimToolkit,
+		Key: "41/99", ActorID: 11}); err == nil {
+		t.Fatal("an unknown toolkit was removed")
+	}
+	// 40 days on the run is outside the window: the toolkit is a candidate.
+	if _, err := later.Remove(t.Context(), RemoveRequest{ProjectID: 1, ApplicationID: 31, Kind: TrimToolkit,
 		Key: "41/51", ActorID: 11}); err != nil {
 		t.Fatal(err)
 	}
@@ -520,6 +552,16 @@ VALUES ('70000000-0000-4000-8000-000000001501', 1, 'Egress', 'worker_egress', 'w
 	}
 	if egress == nil || egress.Candidate || !egress.TooNew || egress.GrantedAt != nil {
 		t.Fatalf("egress entry never seen = %+v, want too new and undated", egress)
+	}
+
+	var refusal *TrimRefusal
+	if _, err := trimming.Remove(ctx, RemoveRequest{ProjectID: 1, Kind: TrimEgressHost,
+		Key: "project:api.unused.example", ActorID: 11}); !errors.As(err, &refusal) || refusal.Code != TrimRefusalTooNew {
+		t.Fatalf("removing a too-new egress entry = %v, want %s", err, TrimRefusalTooNew)
+	}
+	if _, err := trimming.Remove(ctx, RemoveRequest{ProjectID: 1, Kind: TrimEgressHost,
+		Key: "project:never.listed.example", ActorID: 11}); !errors.As(err, &refusal) || refusal.Code != TrimRefusalUnknown {
+		t.Fatalf("removing an unlisted entry = %v, want %s", err, TrimRefusalUnknown)
 	}
 
 	// The routine sees them now: still too new, nothing notified.

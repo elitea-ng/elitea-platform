@@ -85,3 +85,15 @@ func TestProjectEgressRemovalNeedsTheSettingsPermission(t *testing.T) {
 		t.Fatalf("status %d body %s", recorder.Code, recorder.Body)
 	}
 }
+
+// A removal of an item that is not a removable candidate now answers 409
+// with the refusal's own code.
+func TestTrimRefusalIs409WithItsCode(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeStoreError(recorder, httptest.NewRequest(http.MethodPost, "/", nil),
+		&repos.TrimRefusal{Code: repos.TrimRefusalTooNew, Reason: "the item was granted for less than the window"})
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), `"code":"trim_item_too_new"`) ||
+		strings.Contains(recorder.Body.String(), "permission trimming:") {
+		t.Fatalf("status %d body %s", recorder.Code, recorder.Body)
+	}
+}

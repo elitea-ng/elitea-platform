@@ -38,6 +38,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1079,5 +1080,53 @@ func TestEntitlementExportSCIMClientsRoundTrip(t *testing.T) {
 	settings, err = platformconfig.LoadEntitlementExportSettings(context.Background(), pool)
 	if err != nil || !settings.AllowsSCIMClient(3) || !settings.AllowsSCIMClient(11) || settings.AllowsSCIMClient(4) {
 		t.Fatalf("stored = %v, %v; want [3 11]", settings, err)
+	}
+}
+
+// TestWorkerEgressSaveForgetsTheSightingsOfRemovedEntries: the platform
+// allowlist has no per-entry timestamp, so the permission trimming routine
+// dates an entry by its first sighting (ADR-0044 decision 5). Saving the
+// list without an entry forgets that entry's sighting in the same
+// transaction, so adding it back starts its window over; the kept entry's
+// sighting stays.
+func TestWorkerEgressSaveForgetsTheSightingsOfRemovedEntries(t *testing.T) {
+	pool := newConfigPool(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+CREATE SCHEMA IF NOT EXISTS elitea_lifecycle;
+CREATE TABLE elitea_lifecycle.permission_trimming_observed (
+    tenant_project_id bigint NOT NULL, application_id bigint NOT NULL, item_kind text NOT NULL,
+    item_key text NOT NULL, first_seen_at timestamptz NOT NULL, last_seen_at timestamptz NOT NULL,
+    PRIMARY KEY (tenant_project_id, application_id, item_kind, item_key));
+INSERT INTO elitea_lifecycle.permission_trimming_observed VALUES
+    (0, 0, 'egress_host', 'platform:kept.example', now() - interval '40 days', now()),
+    (0, 0, 'egress_host', 'platform:dropped.example', now() - interval '40 days', now()),
+    (4, 0, 'egress_host', 'project:dropped.example', now() - interval '40 days', now());`); err != nil {
+		t.Fatal(err)
+	}
+	principal := auth.User{ID: "7", UserID: "7", Email: "operator@example.com"}
+	router := configRouter(admin.NewHandler(pool, admin.WithPermissionResolver(
+		grantingResolver("configuration.governance"))), &principal)
+	if recorder := configDo(t, router, http.MethodPut, "/admin/plugin_config_values/administration/worker_egress",
+		map[string]any{"values": map[string]any{"allowlist": []any{"kept.example"}}}); recorder.Code != http.StatusOK {
+		t.Fatalf("PUT = %d, want 200 (body %s)", recorder.Code, recorder.Body.String())
+	}
+	rows, err := pool.Query(ctx, `SELECT tenant_project_id, item_key FROM elitea_lifecycle.permission_trimming_observed ORDER BY 1, 2`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var left []string
+	for rows.Next() {
+		var project int64
+		var key string
+		if err := rows.Scan(&project, &key); err != nil {
+			t.Fatal(err)
+		}
+		left = append(left, fmt.Sprintf("%d %s", project, key))
+	}
+	// A project's sighting is the project's own list's business.
+	if strings.Join(left, ",") != "0 platform:kept.example,4 project:dropped.example" {
+		t.Fatalf("sightings after the save = %v", left)
 	}
 }

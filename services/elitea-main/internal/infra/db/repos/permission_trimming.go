@@ -69,6 +69,26 @@ var (
 	ErrTrimItemNotRemovable = errors.New("permission trimming: the item cannot be removed")
 )
 
+// The codes of a TrimRefusal: Remove takes out only a current removable
+// candidate, re-judged when it runs, never what an old report showed.
+const (
+	TrimRefusalUnknown      = "trim_item_unknown"
+	TrimRefusalTooNew       = "trim_item_too_new"
+	TrimRefusalUsed         = "trim_item_used"
+	TrimRefusalNotRemovable = "trim_item_not_removable"
+)
+
+// TrimRefusal refuses a removal of an item that is not a removable
+// candidate now: not in the report (unknown, or on a published version),
+// granted for less than the window, used in the window, or not removable
+// (the last selected tool).
+type TrimRefusal struct {
+	Code   string
+	Reason string
+}
+
+func (e *TrimRefusal) Error() string { return "permission trimming: " + e.Reason }
+
 // TrimmingItem is one granted permission in the report.
 type TrimmingItem struct {
 	Kind            string     `json:"kind"`
@@ -146,16 +166,10 @@ func NewPermissionTrimming(review *CredentialReview) (*PermissionTrimming, error
 
 // Report computes the report.
 func (t *PermissionTrimming) Report(ctx context.Context, filter TrimmingFilter) (TrimmingReport, error) {
-	window := filter.WindowDays
-	if window <= 0 {
-		policy, err := t.review.policy(ctx)
-		if err != nil {
-			return TrimmingReport{}, fmt.Errorf("permission trimming: read the policy: %w", err)
-		}
-		window = policy.TrimmingWindowDays
+	window, since, err := t.window(ctx, filter.WindowDays)
+	if err != nil {
+		return TrimmingReport{}, err
 	}
-	window = min(max(window, platformconfig.MinTrimmingWindowDays), platformconfig.MaxTrimmingWindowDays)
-	since := t.review.now().Add(-time.Duration(window) * 24 * time.Hour)
 	report := TrimmingReport{WindowDays: window, Since: since.UTC(), Items: []TrimmingItem{}}
 
 	projects, err := t.projects(ctx, filter.ProjectID)
@@ -192,6 +206,70 @@ func (t *PermissionTrimming) Report(ctx context.Context, filter TrimmingFilter) 
 		report.Items = kept
 	}
 	return report, nil
+}
+
+// window resolves the window (the policy's when days is 0) and its start.
+func (t *PermissionTrimming) window(ctx context.Context, days int) (int, time.Time, error) {
+	if days <= 0 {
+		policy, err := t.review.policy(ctx)
+		if err != nil {
+			return 0, time.Time{}, fmt.Errorf("permission trimming: read the policy: %w", err)
+		}
+		days = policy.TrimmingWindowDays
+	}
+	days = min(max(days, platformconfig.MinTrimmingWindowDays), platformconfig.MaxTrimmingWindowDays)
+	return days, t.review.now().Add(-time.Duration(days) * 24 * time.Hour), nil
+}
+
+// requireCandidate re-judges the one item a removal names, with the
+// policy's window and the evidence as it is now: a removal takes out only a
+// current removable candidate. Callers run it inside their transaction,
+// after locking the row the removal rewrites.
+func (t *PermissionTrimming) requireCandidate(ctx context.Context, request RemoveRequest) error {
+	_, since, err := t.window(ctx, 0)
+	if err != nil {
+		return err
+	}
+	var items []TrimmingItem
+	switch {
+	case request.Kind == TrimEgressHost && request.Platform:
+		items, err = t.platformEgressItems(ctx, since)
+	case request.Kind == TrimEgressHost:
+		// Only the project's allowlist: a project with no agents has an
+		// allowlist all the same.
+		var schema string
+		if schema, err = tenantSchema(strconv.FormatInt(request.ProjectID, 10)); err != nil {
+			return &TrimRefusal{Code: TrimRefusalUnknown, Reason: "the project is not valid"}
+		}
+		items, err = t.projectEgressItems(ctx, request.ProjectID, schema, since)
+	default:
+		items, err = t.projectItems(ctx, request.ProjectID, request.ApplicationID, since)
+	}
+	if err != nil {
+		return err
+	}
+	if err := t.applyGrantAge(ctx, items, since); err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.Kind != request.Kind || item.Key != request.Key {
+			continue
+		}
+		switch {
+		case item.Used:
+			return &TrimRefusal{Code: TrimRefusalUsed, Reason: "the item was used in the window"}
+		case item.TooNew:
+			return &TrimRefusal{Code: TrimRefusalTooNew, Reason: "the item was granted for less than the window; too new to judge"}
+		case item.NotRemovable == "last_selected_tool":
+			return &TrimRefusal{Code: TrimRefusalNotRemovable,
+				Reason: "it is the last selected tool of the toolkit; remove the toolkit instead"}
+		case !item.Candidate || !item.Removable:
+			return &TrimRefusal{Code: TrimRefusalNotRemovable, Reason: "the item is not a removable candidate"}
+		}
+		return nil
+	}
+	return &TrimRefusal{Code: TrimRefusalUnknown,
+		Reason: "the item is not in the report (removed already, or on a published version)"}
 }
 
 func (t *PermissionTrimming) projects(ctx context.Context, projectID int64) ([]int64, error) {
@@ -877,6 +955,12 @@ FOR UPDATE OF m`, schema), versionID, toolkitID).Scan(&applicationID, &entityTyp
 		if err := toolrelation.CheckVersionEditable(ctx, tx, schema, versionID); err != nil {
 			return fmt.Errorf("%w: %v", ErrTrimItemNotRemovable, err)
 		}
+		// The mapping row is locked: re-judge the item under the lock.
+		judged := request
+		judged.ApplicationID = applicationID
+		if err := t.requireCandidate(ctx, judged); err != nil {
+			return err
+		}
 		if request.Kind == TrimToolkit {
 			if _, err := toolrelation.Detach(ctx, tx, schema, versionID, toolkitID); err != nil {
 				return err
@@ -944,6 +1028,12 @@ WHERE g.tenant_project_id = $1 AND g.agent_binding_id::text = $2 AND g.toolkit_i
 	if request.ApplicationID > 0 && applicationID != request.ApplicationID {
 		return RemoveResult{}, ErrTrimItemNotFound
 	}
+	// The grant service revokes in its own transaction (with its audit and
+	// epoch invalidation), so the re-judgement runs right before it.
+	request.ApplicationID = applicationID
+	if err := t.requireCandidate(ctx, request); err != nil {
+		return RemoveResult{}, err
+	}
 	actor := "system:permission_trimming"
 	if request.ActorID > 0 {
 		actor = strconv.FormatInt(request.ActorID, 10)
@@ -951,7 +1041,6 @@ WHERE g.tenant_project_id = $1 AND g.agent_binding_id::text = $2 AND g.toolkit_i
 	if err := t.review.grants(ctx, request.ProjectID, grantID, actor); err != nil {
 		return RemoveResult{}, fmt.Errorf("permission trimming: revoke the use grant: %w", err)
 	}
-	request.ApplicationID = applicationID
 	var result RemoveResult
 	err = pgx.BeginTxFunc(ctx, t.review.pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		at, err := t.recordTrimmed(ctx, tx, request)
@@ -971,11 +1060,25 @@ func (t *PermissionTrimming) removeEgress(ctx context.Context, request RemoveReq
 	err := pgx.BeginTxFunc(ctx, t.review.pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		switch {
 		case level == "project" && request.ProjectID > 0:
+			if err := lockProjectEgress(ctx, tx, request.ProjectID); err != nil {
+				return err
+			}
+			if err := t.requireCandidate(ctx, request); err != nil {
+				return err
+			}
 			if err := removeProjectEgressEntry(ctx, tx, request.ProjectID, entry, request.ActorID); err != nil {
 				return err
 			}
 		case level == "platform" && request.Platform:
 			request.ProjectID = 0
+			if _, err := tx.Exec(ctx, `
+SELECT 1 FROM centry.platform_config WHERE section = $1 AND key = $2 FOR UPDATE`,
+				platformconfig.SectionWorkerEgress, platformconfig.KeyWorkerEgressAllowlist); err != nil {
+				return err
+			}
+			if err := t.requireCandidate(ctx, request); err != nil {
+				return err
+			}
 			if err := removePlatformEgressEntry(ctx, tx, entry, request.ActorID); err != nil {
 				return err
 			}
@@ -987,6 +1090,17 @@ func (t *PermissionTrimming) removeEgress(ctx context.Context, request RemoveReq
 		return err
 	})
 	return result, err
+}
+
+// lockProjectEgress locks the project's worker_egress row for the removal.
+func lockProjectEgress(ctx context.Context, tx pgx.Tx, projectID int64) error {
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return ErrTrimItemNotFound
+	}
+	_, err = tx.Exec(ctx, fmt.Sprintf(`
+SELECT 1 FROM %s.configuration WHERE type = 'worker_egress' FOR UPDATE`, schema))
+	return err
 }
 
 func withoutEntry(entries []string, entry string) ([]string, bool) {

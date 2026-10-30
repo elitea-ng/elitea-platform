@@ -94,6 +94,13 @@ func (h *Handler) unavailable(w http.ResponseWriter) bool {
 }
 
 func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
+	var refusal *repos.TrimRefusal
+	if errors.As(err, &refusal) {
+		// Not a removable candidate now: the code says why (unknown, too
+		// new, used in the window, not removable).
+		refuse(w, http.StatusConflict, refusal.Code, strings.TrimPrefix(refusal.Error(), "permission trimming: "))
+		return
+	}
 	switch {
 	case errors.Is(err, repos.ErrCredentialReviewInvalid):
 		refuse(w, http.StatusBadRequest, "invalid_request", "The request is not valid.")
