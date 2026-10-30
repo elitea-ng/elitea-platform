@@ -167,7 +167,7 @@ An agent with fewer ended runs than the window since its last resume is not judg
 
 #### Limits
 
-- The breaker acts once a minute, on runs that ended. It does not stop a run in the middle of its first failures. Use the [whole-run time cap](#whole-run-time-cap) and project budgets for limits inside one run.
+- The breaker acts once a minute, on runs that ended. It does not stop a run in the middle of its first failures. Use [run caps](#run-caps) and project budgets for limits inside one run.
 - `tool_failure_streak` reads the run step records. A run whose worker records no tool steps is not checked on that rule.
 - `spend_per_hour` reads the gateway request log. Spend that the gateway does not attribute to a run is not counted.
 - An agent's limits apply to the agent in all its runs. The breaker has no limit per user.
