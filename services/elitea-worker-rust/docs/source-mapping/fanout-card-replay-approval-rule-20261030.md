@@ -60,6 +60,12 @@
 
 - The card identity contract holds across this upgrade: a restore or a wake re-derives the same card bytes, so a
   decision survives both (fanout-interrupt-decisions-v1 §3.1).
+- **Accepted unreleased window (REVIEW-1543 D1).** Only main builds from #1540 (`f9891dfe3`) up to this merge are
+  affected. A run parked by one of them, on a pipeline sensitive-tool card whose pause recorded no rule, raised a card
+  that carried `{"source":"platform"}`. After this fix that card is raised without the rule, so its digest changes, Main
+  refuses it (`ErrRaiseConflict`), and the run stops.
+  - This is accepted: no release tag contains #1540, so only unreleased main builds can hold such a run.
+  - No dual-digest mechanism is added.
 
 ## Resilience
 
@@ -79,6 +85,7 @@
 | Component × phase | Class | Enforcing code | Proof |
 |---|---|---|---|
 | Worker × fixed Parallel HITL pause spanning the approval-rule upgrade (wake or restore re-raises the open cards) | R (the same card bytes; Main replays) | `src/agents/events.rs` `fanout_card_parts` | the Worker card test, the Main real-PG replay test, browser (below) |
+| Worker × the same pause parked by an unreleased main build containing #1540 but not this fix (`f9891dfe3` up to this merge), with no policy rule | F (the run stops with `ErrRaiseConflict`); accepted because no release tag contains #1540 | `src/agents/events.rs` `fanout_card_parts` | REVIEW-1543 D1; by construction (that build's card carries `{"source":"platform"}`) |
 
 ## Browser evidence (fanpar)
 
