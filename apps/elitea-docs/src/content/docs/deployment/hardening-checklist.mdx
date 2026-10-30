@@ -28,7 +28,7 @@ A default install favours getting started. A deployment that will be assessed ag
 - [ ] Review **Admin › Credential inventory**, set the stale threshold to your policy, and consider `stale_action: revoke` once the flagged list is clean.
 - [ ] Have agent owners act on the **Permission trimming** report, and connect your IGA tool to the [entitlement export](/admin/enterprise-controls/least-privilege-and-trust#entitlement-export-for-access-reviews).
 - [ ] Set a maximum idle timeout and session lifetime under **Configuration › Session Policy**. See [Authentication](/admin/authentication#session-policy).
-- [ ] Keep **Configuration › Delegation** in `enforce` mode, and set **Maximum Delegation Depth** to the lowest value your agents need. Set data classes on the registry record of each agent that delegates. See [Delegation narrowing](/admin/enterprise-controls/least-privilege-and-trust#delegation-narrowing).
+- [ ] After every worker runs the release, save **Configuration › Delegation** in `enforce` mode, with **Maximum Delegation Depth** at the lowest value your agents need. Saving the section starts data class narrowing. Set data classes on the registry record of each agent that delegates. See [Delegation narrowing](/admin/enterprise-controls/least-privilege-and-trust#delegation-narrowing).
 - [ ] Set **Maximum Run Time** under **Configuration › Run Caps** above your longest legitimate run. See [Runtime safety](/admin/enterprise-controls/runtime-safety#whole-run-time-cap).
 
 ## Runtime safety

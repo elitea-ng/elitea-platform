@@ -194,7 +194,7 @@ An agent can delegate work: it calls a saved agent or a saved pipeline as a tool
   - **Toolkits.** A toolkit is one configured toolkit, by its id. A built-in toolkit with no configuration is identified by its type.
   - **Tools.** When the callee selects all tools of a toolkit and the caller selects only some, the callee gets only the caller's tools. When the callee selects a specific tool that the caller does not hold, the delegation is refused.
   - **Credentials.** A callee toolkit that uses a credential reference (ADR-0039) can use it only when the caller holds the same reference. The governed credential checks still apply to each use.
-  - **Data classes.** The callee can declare only the data classes that its caller declares. A callee that declares no data classes gets the caller's data classes.
+  - **Data classes.** The callee can declare only the data classes that its caller declares. A callee that declares no data classes gets the caller's data classes. This check starts when an administrator saves **Configuration › Delegation**, as described in **Configure and use** below.
   - **Egress hosts.** Each host that a callee toolkit is configured to reach must be on the run's [worker egress allowlist](#worker-egress-allowlist). The refusal names the host.
 - **A missing grant refuses the delegation.** The callee does not run. The call returns a tool result with the code `DELEGATION_GRANT_MISSING`, the kind of grant (`toolkit`, `tool`, `credential`, `data_class` or `egress_host`) and its name. The model reads the result and can tell the user. The run does not fail.
 - **The depth is limited.** The root agent is depth 0. Each delegation adds 1. Saved agents, saved pipelines, pipeline nodes and sub-agents count together. A delegation deeper than the maximum is refused with `DELEGATION_DEPTH_EXCEEDED`. The existing limits on agent nesting and on the number of pipeline participants still apply.
@@ -227,6 +227,10 @@ Open **Configuration › Delegation** in the admin console (permission `configur
 | --- | --- | --- | --- |
 | **Maximum Delegation Depth** (`max_depth`) | 1 to 16 | 4 | The deepest delegation a run can make. |
 | **Mode** (`mode`) | `enforce`, `report` | `enforce` | `enforce` refuses a delegation that needs a missing grant. `report` records the missing grant on the delegation step and lets the callee run. The depth limit applies in both modes. Runs under the governed credential profile always use `enforce`. |
+
+Until an administrator saves this section, the main service does not send it to the workers. The workers then use the defaults in the table, and they do not compare data classes. Narrowing of toolkits, tools, credentials and egress hosts, and the depth limit, apply from the time that a worker runs the release.
+
+**Save the section only after every worker runs the release.** The main service is upgraded first and the workers after it (the default order of the Helm chart). A worker from an earlier release refuses a command that carries this section. When you save the section, also with the default values, data class narrowing starts.
 
 Each replica of the main service reads the section again after at most 15 seconds. The setting applies to runs that start after that. A run keeps the policy that it started with.
 

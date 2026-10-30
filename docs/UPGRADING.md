@@ -21,25 +21,31 @@ Both are recorded on the `delegation` run step, which also carries
   `configuration.governance`): `max_depth` 1..16 (default 4) and `mode` =
   `enforce` (default) or `report`. Governed runs always enforce. The depth is
   enforced in both modes.
-- **Upgrade the workers before Main.** Main sends the policy on the new
-  `WorkerCommandV1.delegation_policy` field (67) and the child's declared
-  data classes on the private application-version envelope
-  (`data_classes`). A worker from an earlier release rejects both (unknown
-  fields are refused at the wire layer and by the strict envelope decoder).
-  Main omits the field when the section has its defaults and the root agent
-  declares no data classes, and omits `data_classes` for a child that
-  declares none, so an old worker keeps working until then.
+- **Upgrade order: Main, then the workers** (the chart's default order:
+  Argo CD sync wave 0 for Main, wave 1 for the workers). Main sends the
+  policy on the new `WorkerCommandV1.delegation_policy` field (67), and a
+  child's declared data classes on the private application-version envelope
+  (`data_classes`), **only after an administrator saves Configuration ›
+  Delegation**. A worker from an earlier release rejects both (unknown fields
+  are refused at the wire layer and by the strict envelope decoder), so do
+  not save the section until every worker runs this release. Until the
+  section is saved, a new worker applies its compiled-in defaults: `enforce`,
+  depth 4, and no data class narrowing. Narrowing of toolkits, tools,
+  credentials and egress hosts, and the depth cap, are on from the moment a
+  worker runs this release.
 - **Behaviour change: existing compositions can be refused.** A composition
   deeper than 4 delegations (agent tiers and pipeline limits allowed more)
   is refused at the fifth level. A callee whose toolkits, explicitly selected
   tools, credential references or configured hosts its caller does not hold
-  is refused. Before the upgrade, or right after it, set `mode` to `report`,
-  look for `delegation` steps with `delegation_enforced: false`, and grant the
-  missing toolkit to the calling agent (or remove it from the callee). Then
-  set `mode` back to `enforce`.
+  is refused. After every worker runs this release, look for `delegation`
+  steps with `delegation_refusal`. To find the rest without refusing them,
+  save the section with `mode` = `report`, look for steps with
+  `delegation_enforced: false`, and grant the missing toolkit to the calling
+  agent (or remove it from the callee). Then set `mode` back to `enforce`.
 - **Data classes** come from `elitea_lifecycle.agent_registry.data_classes`.
-  They are declared metadata, not classifier output. A root agent with no
-  registry row or no data classes imposes no data class limit.
+  They are declared metadata, not classifier output. Data class narrowing
+  starts when the section is saved. A root agent with no registry row or no
+  data classes imposes no data class limit.
 - An ad hoc conversation root (no saved agent) imposes no toolkit limit;
   narrowing starts at the first saved agent or pipeline.
 
@@ -50,14 +56,16 @@ ADR-0044 decision 4. Shared migration **0210_remote_agent_assertions** adds
 inbound assertions, bound to the credential that first presented each one;
 rows are deleted after they expire). No permission and no data.
 
-- **Upgrade order: the workers, then Main** (the order that the delegation
-  narrowing entry above also needs). The runtime control service has a new
-  RPC, `MintDelegationAssertion`. A new worker asks Main for an assertion
-  before each remote MCP call. Until Main is upgraded it answers
-  `UNIMPLEMENTED`: a governed run then refuses its remote MCP calls
+- **Upgrade order: Main, then the workers** (the chart's default order, and
+  the order the delegation narrowing entry above also uses). The runtime
+  control service has a new RPC, `MintDelegationAssertion`. A new worker asks
+  Main for an assertion before each remote MCP call; with Main upgraded first,
+  the RPC is there when the first new worker starts. While the workers roll
+  out, an older worker never asks, so its calls carry no assertion. A worker
+  upgraded before Main (outside the chart's order) gets `UNIMPLEMENTED`: a
+  governed run then refuses its remote MCP calls
   (`agent_assertion_unavailable`), and any other run calls without an
-  assertion. Keep that window short. An older worker never asks, so its
-  calls carry no assertion.
+  assertion.
 - **Signing key.** Assertions are signed with the agent assertion key ring of
   `ELITEA_AGENT_ASSERTION_CONFIG`. Main now loads that ring whenever the
   variable is set, also with no relying parties (it still does not in a

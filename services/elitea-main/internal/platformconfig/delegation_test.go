@@ -8,8 +8,19 @@ import (
 func TestDelegationSettingsDefaults(t *testing.T) {
 	t.Parallel()
 	settings := DelegationSettingsFromValues(Values{})
-	if settings.MaxDepth != 4 || settings.Mode != DelegationEnforce || !settings.IsDefault() {
+	if settings != DefaultDelegationSettings() || settings.MaxDepth != 4 || settings.Mode != DelegationEnforce || settings.Stored {
 		t.Fatalf("defaults = %+v", settings)
+	}
+}
+
+// A section an administrator saved is stored even when every value equals
+// the default: Main sends the policy only then (the chart rolls Main out
+// before the workers, and an older worker rejects the field).
+func TestDelegationSettingsStoredOnlyWhenSaved(t *testing.T) {
+	t.Parallel()
+	saved := DelegationSettingsFromValues(Values{"max_depth": float64(4), "mode": "enforce"})
+	if !saved.Stored || saved.MaxDepth != 4 || saved.Mode != DelegationEnforce {
+		t.Fatalf("saved defaults = %+v", saved)
 	}
 }
 
@@ -20,12 +31,12 @@ func TestDelegationSettingsFromValues(t *testing.T) {
 		values Values
 		want   DelegationSettings
 	}{
-		{"saved", Values{"max_depth": float64(2), "mode": "report"}, DelegationSettings{MaxDepth: 2, Mode: DelegationReport}},
-		{"highest", Values{"max_depth": float64(16)}, DelegationSettings{MaxDepth: 16, Mode: DelegationEnforce}},
-		{"clamped low", Values{"max_depth": float64(0)}, DelegationSettings{MaxDepth: 1, Mode: DelegationEnforce}},
-		{"clamped high", Values{"max_depth": float64(99)}, DelegationSettings{MaxDepth: 16, Mode: DelegationEnforce}},
-		{"unreadable depth tightens", Values{"max_depth": "deep"}, DelegationSettings{MaxDepth: 1, Mode: DelegationEnforce}},
-		{"unknown mode enforces", Values{"mode": "off"}, DelegationSettings{MaxDepth: 4, Mode: DelegationEnforce}},
+		{"saved", Values{"max_depth": float64(2), "mode": "report"}, DelegationSettings{MaxDepth: 2, Mode: DelegationReport, Stored: true}},
+		{"highest", Values{"max_depth": float64(16)}, DelegationSettings{MaxDepth: 16, Mode: DelegationEnforce, Stored: true}},
+		{"clamped low", Values{"max_depth": float64(0)}, DelegationSettings{MaxDepth: 1, Mode: DelegationEnforce, Stored: true}},
+		{"clamped high", Values{"max_depth": float64(99)}, DelegationSettings{MaxDepth: 16, Mode: DelegationEnforce, Stored: true}},
+		{"unreadable depth tightens", Values{"max_depth": "deep"}, DelegationSettings{MaxDepth: 1, Mode: DelegationEnforce, Stored: true}},
+		{"unknown mode enforces", Values{"mode": "off"}, DelegationSettings{MaxDepth: 4, Mode: DelegationEnforce, Stored: true}},
 	} {
 		if got := DelegationSettingsFromValues(test.values); got != test.want {
 			t.Errorf("%s: got %+v, want %+v", test.name, got, test.want)

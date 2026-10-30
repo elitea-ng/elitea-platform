@@ -46,17 +46,20 @@ const (
 type DelegationSettings struct {
 	MaxDepth int            `json:"max_depth"`
 	Mode     DelegationMode `json:"mode"`
+	// Stored reports that the section has a stored value: an administrator
+	// saved it. Only then does Main send the policy (WorkerCommandV1 field
+	// 67) and a child's data classes. The chart rolls Main out before the
+	// workers, and a worker from an earlier release rejects both, so a
+	// deployment that never saved the section sends neither; the new worker
+	// then applies its compiled-in defaults (enforce, depth 4, no data class
+	// narrowing). An administrator saves the section once every worker runs
+	// the release.
+	Stored bool `json:"-"`
 }
 
 // DefaultDelegationSettings is a deployment that never saved the section.
 func DefaultDelegationSettings() DelegationSettings {
 	return DelegationSettings{MaxDepth: DefaultDelegationMaxDepth, Mode: DelegationEnforce}
-}
-
-// IsDefault reports whether the settings equal the defaults: Main then omits
-// the field from the command.
-func (s DelegationSettings) IsDefault() bool {
-	return s == DefaultDelegationSettings()
 }
 
 // DelegationSettingsFromValues is the overlay. A depth out of range is
@@ -65,6 +68,7 @@ func (s DelegationSettings) IsDefault() bool {
 // silently loosen it.
 func DelegationSettingsFromValues(values Values) DelegationSettings {
 	settings := DefaultDelegationSettings()
+	settings.Stored = len(values) > 0
 	if raw, present := values[KeyDelegationMaxDepth]; present {
 		number, ok := raw.(float64)
 		switch {

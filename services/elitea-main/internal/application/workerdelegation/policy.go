@@ -62,9 +62,11 @@ func NewResolver(settings SettingsReader, inputs InputReader, classes DataClassR
 	return &Resolver{settings: settings, inputs: inputs, classes: classes}, nil
 }
 
-// WorkerDelegationPolicy answers the command's policy, or nil when every
-// value is the default (depth 4, enforced, no root data class), so such a
-// command is unchanged byte for byte. Only an agent execution command carries
+// WorkerDelegationPolicy answers the command's policy, or nil when no
+// administrator saved the `delegation` section, so such a command is
+// unchanged byte for byte and a worker from an earlier release still accepts
+// it (the chart rolls Main out first). The new worker then applies its
+// compiled-in defaults: enforce, depth 4, no data class narrowing. Only an agent execution command carries
 // one. A governed command (one with a security context) is always enforced.
 // An error is a source that could not be read; the dispatch is retried.
 func (r *Resolver) WorkerDelegationPolicy(ctx context.Context, command *runtimev1.WorkerCommandV1) (*runtimev1.WorkerDelegationPolicyV1, error) {
@@ -74,6 +76,9 @@ func (r *Resolver) WorkerDelegationPolicy(ctx context.Context, command *runtimev
 	settings, err := r.settings.Get(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("worker delegation: read the platform setting: %w", err)
+	}
+	if !settings.Stored {
+		return nil, nil
 	}
 	if command.GetSecurityContextRef() != nil {
 		settings.Mode = platformconfig.DelegationEnforce
@@ -86,9 +91,9 @@ func (r *Resolver) WorkerDelegationPolicy(ctx context.Context, command *runtimev
 }
 
 // Policy is the command field for settings and the root's data classes:
-// nil when every value is the default.
+// nil when the section was never saved.
 func Policy(settings platformconfig.DelegationSettings, rootDataClasses []string) *runtimev1.WorkerDelegationPolicyV1 {
-	if settings.IsDefault() && len(rootDataClasses) == 0 {
+	if !settings.Stored {
 		return nil
 	}
 	mode := runtimev1.WorkerDelegationModeV1_WORKER_DELEGATION_MODE_V1_ENFORCE
@@ -167,4 +172,34 @@ func ApplicationID(content []byte) int64 {
 		return 0
 	}
 	return id
+}
+
+// SavedSectionDataClasses reads a child's declared data classes only once an
+// administrator saved the `delegation` section, and none before. A served
+// child version then carries `data_classes` only when the workers can read
+// it (see DelegationSettings.Stored).
+type SavedSectionDataClasses struct {
+	settings SettingsReader
+	classes  DataClassReader
+}
+
+// NewSavedSectionDataClasses builds the gated reader.
+func NewSavedSectionDataClasses(settings SettingsReader, classes DataClassReader) (*SavedSectionDataClasses, error) {
+	if settings == nil || classes == nil {
+		return nil, errors.New("worker delegation: the settings and data class readers are required")
+	}
+	return &SavedSectionDataClasses{settings: settings, classes: classes}, nil
+}
+
+// AgentDataClasses answers the registry row's classes, or none while the
+// section was never saved.
+func (g *SavedSectionDataClasses) AgentDataClasses(ctx context.Context, projectID, applicationID int64) ([]string, error) {
+	settings, err := g.settings.Get(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("worker delegation: read the platform setting: %w", err)
+	}
+	if !settings.Stored {
+		return nil, nil
+	}
+	return g.classes.AgentDataClasses(ctx, projectID, applicationID)
 }

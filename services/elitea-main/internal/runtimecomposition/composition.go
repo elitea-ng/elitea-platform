@@ -375,6 +375,18 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, fmt.Errorf("construct worker egress sources: %w", err)
 	}
+	// The platform's delegation section (ADR-0044 decision 3). Main sends the
+	// policy and a child's data classes only once an administrator saved it.
+	delegationSettings := dependencies.DelegationSettings
+	if delegationSettings == nil {
+		delegationSettings = platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.DelegationSettings, error) {
+			return platformconfig.LoadDelegationSettings(ctx, dependencies.AdmissionPool)
+		}, 0)
+	}
+	delegationDataClasses, err := workerdelegationapp.NewSavedSectionDataClasses(delegationSettings, egressSources)
+	if err != nil {
+		return nil, err
+	}
 	// The platform section is read at most once per PlatformSettingsTTL (5s)
 	// per replica: an administrator's save reaches new commands within it.
 	egressPolicy, err := workeregressapp.NewResolver(workeregressapp.NewCachedPlatformReader(egressSources),
@@ -722,14 +734,8 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 		agentProducer.WithEgressPolicy(commandPolicy).WithDispatchRefusals(dispatchRefusals)
 		// Every agent execution command carries its delegation policy
-		// (ADR-0044 decision 3): absent while every value is the default, so
-		// those commands are unchanged byte for byte.
-		delegationSettings := dependencies.DelegationSettings
-		if delegationSettings == nil {
-			delegationSettings = platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.DelegationSettings, error) {
-				return platformconfig.LoadDelegationSettings(ctx, dependencies.AdmissionPool)
-			}, 0)
-		}
+		// (ADR-0044 decision 3) once the section was saved; before that the
+		// command is unchanged byte for byte, so an older worker accepts it.
 		delegationPolicy, err := workerdelegationapp.NewResolver(delegationSettings, egressSources, egressSources)
 		if err != nil {
 			return nil, err
@@ -1789,8 +1795,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		nestedApplicationVersions.WithFrozenSavedChildVersionCapture(codeSources)
 	}
 	// A served child carries its declared data classes (ADR-0044 decision 3),
-	// read from the same agent registry as the root's.
-	nestedApplicationVersions.WithDataClasses(egressSources)
+	// read from the same agent registry as the root's, once the delegation
+	// section was saved.
+	nestedApplicationVersions.WithDataClasses(delegationDataClasses)
 	// attachmentObjects is what lets an attached DOCUMENT reach the model as
 	// text rather than as a filename. The native runtime has no other channel
 	// to object storage (no vault, no `artifact` toolkit family, and an egress
