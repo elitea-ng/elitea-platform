@@ -2075,7 +2075,9 @@ impl ClaimLeaseHandle {
         }
     }
 
-    fn delegation_request(&self, audience: String) -> MintDelegationAssertionRequestV1 {
+    /// The mint request of this claim for `audience`: built under the lease
+    /// actor, sent from a separate task (the actor never awaits a mint).
+    pub(crate) fn delegation_request(&self, audience: String) -> MintDelegationAssertionRequestV1 {
         MintDelegationAssertionRequestV1 {
             identity: Some(self.identity.clone()),
             fence: Some(self.fence.clone()),
@@ -2764,13 +2766,9 @@ impl<R: ControlRpc> AgentControlClient<R> {
     /// Returns a typed transport, runtime rejection, or response-shape failure.
     pub(crate) async fn mint_delegation_assertion(
         &self,
-        lease: &ClaimLeaseHandle,
-        audience: String,
+        request: MintDelegationAssertionRequestV1,
     ) -> Result<elitea_agent_runtime::remote_assertion::MintedAssertion, AgentControlError> {
-        let response = self
-            .control
-            .mint_delegation_assertion(lease.delegation_request(audience))
-            .await?;
+        let response = self.control.mint_delegation_assertion(request).await?;
         parse_mint_delegation_assertion_response(response).map_err(Into::into)
     }
 

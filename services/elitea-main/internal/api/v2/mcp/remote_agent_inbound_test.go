@@ -187,3 +187,65 @@ func TestScopeRefusalNamesTheToolkit(t *testing.T) {
 		t.Fatal("another error was taken for a scope refusal")
 	}
 }
+
+// The untrusted framing applies only to an OAuth caller of a governed
+// deployment with the policy composed; a verified caller is never framed.
+func TestUntrustedFramingNeedsTheGovernedPolicy(t *testing.T) {
+	tool := Tool{Name: "researcher"}
+	ungoverned := &Handler{remoteAgents: newInbound(t, &assertionVerifierStub{}, &remoteAuditStub{}, false)}
+	if got := ungoverned.admitAgentInvocation(oauthContext(), 9, tool, "do it"); got.task != "do it" {
+		t.Fatalf("ungoverned oauth framed: %q", got.task)
+	}
+	if got := (&Handler{}).admitAgentInvocation(oauthContext(), 9, tool, "do it"); got.task != "do it" {
+		t.Fatalf("no policy, oauth framed: %q", got.task)
+	}
+	governed := &Handler{remoteAgents: newInbound(t, &assertionVerifierStub{}, &remoteAuditStub{}, true)}
+	verified := remoteagent.ContextWithVerified(oauthContext(), remoteagent.Verified{Scope: eliteanative.DelegationScope{Toolkits: []string{"github"}}})
+	if got := governed.admitAgentInvocation(verified, 9, tool, "do it"); got.task != "do it" || got.scope == nil {
+		t.Fatalf("verified oauth framed: %+v", got)
+	}
+}
+
+// A verified assertion bounds toolkit tools and platform-internal tools
+// too, with the same check as agent admission.
+func TestToolScopeRefusalBoundsEveryToolPath(t *testing.T) {
+	audit := &remoteAuditStub{}
+	h := &Handler{remoteAgents: newInbound(t, &assertionVerifierStub{}, audit, false)}
+	verified := remoteagent.ContextWithVerified(patContext(), remoteagent.Verified{
+		Scope: eliteanative.DelegationScope{Toolkits: []string{"github"}}})
+	github := Tool{Name: "gh_list", toolkitID: 3, toolkitToolName: "list", toolkitType: "github"}
+	jira := Tool{Name: "jira_search", toolkitID: 4, toolkitToolName: "search", toolkitType: "jira"}
+	untyped := Tool{Name: "odd_tool", toolkitID: 5, toolkitToolName: "x"}
+	internal := Tool{Name: "secrets_list"}
+	agent := Tool{Name: "researcher", applicationID: 1, applicationVersionID: 2}
+
+	if got := h.toolScopeRefusal(verified, 9, github); got != nil {
+		t.Fatalf("in scope refused: %v", got)
+	}
+	if got := h.toolScopeRefusal(verified, 9, agent); got != nil {
+		t.Fatalf("an agent is bounded at admission, not here: %v", got)
+	}
+	for tool, want := range map[string]Tool{"'jira'": jira, "'" + internalScopeToolkit + "'": untyped} {
+		got := h.toolScopeRefusal(verified, 9, want)
+		if got == nil || !strings.Contains(fmt.Sprint(got), tool) || !strings.Contains(fmt.Sprint(got), remoteagent.CodeScopeExceeded) {
+			t.Fatalf("%s: %v", tool, got)
+		}
+	}
+	if got := h.toolScopeRefusal(verified, 9, internal); got == nil || !strings.Contains(fmt.Sprint(got), internalScopeToolkit) {
+		t.Fatalf("internal: %v", got)
+	}
+	if len(audit.events) != 3 {
+		t.Fatalf("audit = %+v", audit.events)
+	}
+	// Without an assertion nothing is bounded.
+	if got := h.toolScopeRefusal(patContext(), 9, jira); got != nil {
+		t.Fatalf("no assertion: %v", got)
+	}
+	// The toolkit paths refuse before anything is dispatched.
+	if got := h.runToolkitTool(verified, 9, 1, jira, nil); !strings.Contains(fmt.Sprint(got), remoteagent.CodeScopeExceeded) {
+		t.Fatalf("runToolkitTool: %v", got)
+	}
+	if got := h.runReadToolkitToolWithObserver(verified, 9, 1, jira, nil, nil); !strings.Contains(fmt.Sprint(got), remoteagent.CodeScopeExceeded) {
+		t.Fatalf("runReadToolkitToolWithObserver: %v", got)
+	}
+}

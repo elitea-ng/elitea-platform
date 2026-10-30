@@ -117,7 +117,9 @@ type Disposition int
 const (
 	// Issued: Token holds the assertion.
 	Issued Disposition = iota + 1
-	// Disabled: outbound assertions are off and the run is not governed.
+	// Disabled: the run is not governed, and no assertion goes to this
+	// audience (outbound assertions off, the audience not on the allowlist,
+	// or no agent assertion key). The worker calls without one.
 	Disabled
 )
 
@@ -140,9 +142,13 @@ type MintService struct {
 	audit    Auditor
 }
 
-// NewMintService builds the service. signer may be nil (no key ring): every
-// mint for a run that wants one is then ErrSignerUnavailable. nested may be
-// nil: only the run's own toolkits are admitted audiences.
+// NewMintService builds the service. signer may be nil (no key ring): a
+// run that is not governed is then answered Disabled at the cost of one run
+// read (no settings read, no toolkit walk, no audit row), and a governed
+// run is refused with ErrSignerUnavailable. nested may be nil: only the
+// run's own toolkits are admitted audiences. settings should be cached by
+// the caller (platformconfig.CachedSection): it is read on each mint of a
+// run that is not governed.
 func NewMintService(runs RunReader, nested NestedTools, signer Signer, settings Settings, audit Auditor) (*MintService, error) {
 	if runs == nil || settings == nil || audit == nil {
 		return nil, errors.New("remote agent: the mint service needs a run reader, settings and an auditor")
@@ -164,17 +170,22 @@ func (s *MintService) Mint(ctx context.Context, executionID string, generation u
 		}
 		return result, cause
 	}
+	// The worker sends the endpoint as configured; this is the only place
+	// it is normalized, with the same function as the admitted URLs.
+	normalized, ok := eliteanative.NormalizeAudience(audience)
 	if !run.Governed {
+		if s.signer == nil {
+			return MintResult{Disposition: Disabled}, nil
+		}
 		settings, err := s.settings(ctx)
 		if err != nil {
 			return result, fmt.Errorf("%w: %v", ErrSettingsUnavailable, err)
 		}
-		if settings.OutboundAssertions == platformconfig.OutboundAssertionsOff {
+		if !outboundAllowed(settings, normalized, ok) {
 			return MintResult{Disposition: Disabled}, nil
 		}
 	}
-	normalized, ok := eliteanative.NormalizeAudience(audience)
-	if !ok || normalized != audience {
+	if !ok {
 		return refuse(ErrAudienceNotAdmitted, "audience_malformed")
 	}
 	admitted, err := s.admittedAudiences(ctx, run)
@@ -203,6 +214,9 @@ func (s *MintService) Mint(ctx context.Context, executionID string, generation u
 		request.UserID = run.ActorUserID
 	}
 	token, claims, err := s.signer.Sign(ctx, request)
+	if errors.Is(err, eliteanative.ErrDelegationAudienceReserved) {
+		return refuse(ErrAudienceNotAdmitted, "audience_reserved")
+	}
 	if err != nil {
 		return refuse(fmt.Errorf("remote agent: sign: %w", err), "sign_failed")
 	}
@@ -212,6 +226,37 @@ func (s *MintService) Mint(ctx context.Context, executionID string, generation u
 		return result, fmt.Errorf("remote agent: audit the mint: %w", err)
 	}
 	return MintResult{Disposition: Issued, Token: token, ExpiresAt: time.Unix(claims.Expiry, 0).UTC(), Required: run.Governed}, nil
+}
+
+// outboundAllowed applies outbound_assertions to the audience of a run
+// that is not governed: "on" sends to every admitted endpoint, "allowlist"
+// to the listed origins, "off" (and any other value) to none.
+func outboundAllowed(settings platformconfig.RemoteAgentSettings, normalized string, ok bool) bool {
+	switch settings.OutboundAssertions {
+	case platformconfig.OutboundAssertionsOn:
+		return true
+	case platformconfig.OutboundAssertionsAllowlist:
+		if !ok {
+			return false
+		}
+		origin := eliteanative.AudienceOrigin(normalized)
+		for _, entry := range settings.AssertionAudiences {
+			if listed, valid := AudienceOrigin(entry); valid && listed == origin {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// AudienceOrigin normalizes an entry of assertion_audiences: an https
+// origin with no path. ok is false for anything else.
+func AudienceOrigin(entry string) (string, bool) {
+	normalized, ok := eliteanative.NormalizeAudience(strings.TrimSpace(entry))
+	if !ok || eliteanative.AudienceOrigin(normalized) != normalized {
+		return "", false
+	}
+	return normalized, true
 }
 
 func (s *MintService) event(run Run, action string, effect securityaudit.Effect, reason, audience, jti string) securityaudit.SecurityEvent {

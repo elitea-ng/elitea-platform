@@ -396,3 +396,33 @@ fn delegation_narrows_a_callee_to_the_run_allowlist() {
         .delegate(&mut vec![jira("acme")], &BTreeSet::new(), &policy)
         .expect("a bare label is not read");
 }
+
+// ADR-0044 decision 4: a RunEgress reused for a new claim of the same
+// command binds that claim's assertions; the released claim's binding is
+// not kept.
+#[test]
+fn a_new_claim_replaces_the_assertion_binding() {
+    use crate::remote_assertion::{
+        DelegationAssertionError, DelegationAssertionSource, DelegationAssertions, MintedAssertion,
+    };
+
+    struct Never;
+
+    #[async_trait]
+    impl DelegationAssertionSource for Never {
+        async fn mint(&self, _: &str) -> Result<MintedAssertion, DelegationAssertionError> {
+            Err(DelegationAssertionError::Unavailable)
+        }
+    }
+
+    let egress = RunEgress::open();
+    assert!(egress.assertions().is_none());
+    let first = DelegationAssertions::new(Arc::new(Never), false);
+    egress.bind_assertions(Arc::clone(&first));
+    let second = DelegationAssertions::new(Arc::new(Never), true);
+    egress.bind_assertions(Arc::clone(&second));
+    let bound = egress.assertions().expect("bound");
+    assert!(Arc::ptr_eq(&bound, &second));
+    assert!(!Arc::ptr_eq(&bound, &first));
+    assert!(bound.required());
+}

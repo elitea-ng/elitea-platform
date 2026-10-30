@@ -74,9 +74,11 @@ func (e *AssertedScopeError) Error() string {
 
 func (e *AssertedScopeError) Unwrap() error { return ErrAssertedScopeExceeded }
 
-// checkAssertedScope intersects the run's toolkit types with the asserted
-// scope; every type of the run must be in it.
-func checkAssertedScope(scope *AssertedScope, toolkitTypes []string) error {
+// CheckAssertedScope intersects toolkit types with the asserted scope:
+// every type must be in it. It is the one scope check of ADR-0044
+// decision 4: the agent admission and the MCP endpoint's toolkit path both
+// call it. A nil scope allows everything.
+func CheckAssertedScope(scope *AssertedScope, toolkitTypes []string) error {
 	if scope == nil {
 		return nil
 	}
@@ -264,7 +266,7 @@ func (s *AdmissionService) Submit(
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, err
 	}
-	if err := checkAssertedScope(request.AssertedScope, toolkitTypes); err != nil {
+	if err := CheckAssertedScope(request.AssertedScope, toolkitTypes); err != nil {
 		return executionapp.AdmissionOutcome{}, err
 	}
 	outcome, err := s.store.AdmitAgentExecution(ctx, Admission{

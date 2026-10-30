@@ -1011,6 +1011,10 @@ async fn run_lease_actor<R, K>(
     // A Main without the steering RPC answers the same way every time: stop
     // asking for the rest of this claim.
     let mut steering_served = true;
+    // Mints run beside the actor, so a slow Main never delays a renewal.
+    // Dropped with the actor: an unfinished mint is aborted, and its probe
+    // gets no assertion.
+    let mut mints = tokio::task::JoinSet::new();
 
     loop {
         if *shutdown.borrow() {
@@ -1067,10 +1071,9 @@ async fn run_lease_actor<R, K>(
                 let _ = call.reply.send(claimed);
             }
             Some(call) = assertions.recv() => {
-                if !mint_assertion(&control, &lease, call, &mut shutdown).await {
-                    return;
-                }
+                spawn_mint(&control, &lease, call, &mut mints);
             }
+            Some(_) = mints.join_next(), if !mints.is_empty() => {}
             _ = ticker.tick() => {
                 let Some(result) = poll_or_shutdown(
                     &control,
@@ -1095,34 +1098,39 @@ async fn run_lease_actor<R, K>(
     }
 }
 
-/// One delegation assertion mint (ADR-0044 decision 4), answered to the
-/// probe; `None` when Main refused or did not answer. `false` when shutdown
-/// interrupted it.
-async fn mint_assertion<R>(
-    control: &AgentControlClient<R>,
+/// At most this many mints of one claim run at once; another is answered
+/// with no assertion at once (the run's cache backs off and asks again).
+const MAX_PENDING_MINTS: usize = 8;
+
+/// Start one delegation assertion mint (ADR-0044 decision 4) in its own
+/// task. The request is built from the claim now; the task sends it and
+/// answers the probe (`None` when Main refused or did not answer). The
+/// lease actor never awaits it.
+fn spawn_mint<R>(
+    control: &Arc<AgentControlClient<R>>,
     lease: &ClaimLeaseHandle,
     call: AssertionClaim,
-    shutdown: &mut watch::Receiver<bool>,
-) -> bool
-where
+    mints: &mut tokio::task::JoinSet<()>,
+) where
     R: ControlRpc + 'static,
 {
     let AssertionClaim { audience, reply } = call;
-    let minted = tokio::select! {
-        biased;
-        changed = shutdown.changed() => {
-            let _ = changed;
-            return false;
-        }
-        minted = control.mint_delegation_assertion(lease, audience) => minted,
-    };
-    let minted = minted
-        .map_err(|error| {
-            tracing::warn!(error = %error, "the delegation assertion was not minted");
-        })
-        .ok();
-    let _ = reply.send(minted);
-    true
+    if mints.len() >= MAX_PENDING_MINTS {
+        let _ = reply.send(None);
+        return;
+    }
+    let request = lease.delegation_request(audience);
+    let control = Arc::clone(control);
+    mints.spawn(async move {
+        let minted = control
+            .mint_delegation_assertion(request)
+            .await
+            .map_err(|error| {
+                tracing::warn!(error = %error, "the delegation assertion was not minted");
+            })
+            .ok();
+        let _ = reply.send(minted);
+    });
 }
 
 /// The answer of one steering call, or `None`. A refusal never ends the

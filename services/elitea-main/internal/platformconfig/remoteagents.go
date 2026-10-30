@@ -14,10 +14,17 @@ import (
 // SectionRemoteAgents governs calls between the platform and agents outside
 // a run (ADR-0044 decision 4, #1501).
 //
-//   - outbound_assertions: whether a run's calls to remote MCP servers carry
-//     a signed delegation assertion (header Elitea-Agent-Assertion). "on" is
-//     the default: an extra header is harmless to a server that ignores it.
-//     A governed run always carries one, whatever this says.
+//   - outbound_assertions: which of a run's calls to remote MCP servers
+//     carry a signed delegation assertion (header Elitea-Agent-Assertion).
+//     The assertion names the user, the project, the run, the mandate and
+//     the run's toolkit types, so it is sent to no third party unless an
+//     administrator says so: "off" (the default) sends none, "allowlist"
+//     sends one only to the endpoints whose origin is in
+//     assertion_audiences, and "on" sends one to every remote MCP server. A
+//     governed run always carries one (governance means every call is
+//     attributable), whatever this says.
+//   - assertion_audiences: the origins ("https://host[:port]") that
+//     "allowlist" sends assertions to.
 //   - trusted_issuers: the issuers whose delegation assertions the
 //     platform's MCP endpoint accepts. Empty (the default) accepts none. The
 //     composition root adds the entries of ELITEA_REMOTE_AGENT_TRUSTED_ISSUERS
@@ -27,6 +34,7 @@ const SectionRemoteAgents = "remote_agents"
 // Field keys of SectionRemoteAgents.
 const (
 	KeyRemoteAgentsOutboundAssertions = "outbound_assertions"
+	KeyRemoteAgentsAssertionAudiences = "assertion_audiences"
 	KeyRemoteAgentsTrustedIssuers     = "trusted_issuers"
 )
 
@@ -34,14 +42,25 @@ const (
 type OutboundAssertionsMode string
 
 const (
-	OutboundAssertionsOn  OutboundAssertionsMode = "on"
-	OutboundAssertionsOff OutboundAssertionsMode = "off"
+	OutboundAssertionsOff       OutboundAssertionsMode = "off"
+	OutboundAssertionsAllowlist OutboundAssertionsMode = "allowlist"
+	OutboundAssertionsOn        OutboundAssertionsMode = "on"
 )
+
+// ValidOutboundAssertionsMode reports a mode the section accepts.
+func ValidOutboundAssertionsMode(mode OutboundAssertionsMode) bool {
+	switch mode {
+	case OutboundAssertionsOff, OutboundAssertionsAllowlist, OutboundAssertionsOn:
+		return true
+	}
+	return false
+}
 
 // Bounds of the trusted issuer list.
 const (
 	MaxRemoteAgentTrustedIssuers   = 32
 	MaxRemoteAgentTrustedIssuerLen = 1024
+	MaxRemoteAgentAudiences        = 256
 )
 
 // EliteaAgentJWKSPath is where an Elitea deployment publishes its agent
@@ -52,13 +71,16 @@ const EliteaAgentJWKSPath = "/.well-known/elitea-agent-jwks.json"
 // RemoteAgentSettings is the section.
 type RemoteAgentSettings struct {
 	OutboundAssertions OutboundAssertionsMode `json:"outbound_assertions"`
+	// AssertionAudiences are the stored origins of "allowlist", as written
+	// (the mint normalizes each with eliteanative.NormalizeAudience).
+	AssertionAudiences []string `json:"assertion_audiences"`
 	// TrustedIssuers is the stored list, each "<issuer> [<jwks_url>]".
 	TrustedIssuers []string `json:"trusted_issuers"`
 }
 
 // DefaultRemoteAgentSettings is a deployment that never saved the section.
 func DefaultRemoteAgentSettings() RemoteAgentSettings {
-	return RemoteAgentSettings{OutboundAssertions: OutboundAssertionsOn, TrustedIssuers: []string{}}
+	return RemoteAgentSettings{OutboundAssertions: OutboundAssertionsOff, AssertionAudiences: []string{}, TrustedIssuers: []string{}}
 }
 
 // LoadRemoteAgentSettings reads the section over the defaults. A query
@@ -76,28 +98,38 @@ func LoadRemoteAgentSettings(ctx context.Context, pool *pgxpool.Pool) (RemoteAge
 	return RemoteAgentSettingsFromValues(values), nil
 }
 
-// RemoteAgentSettingsFromValues is the overlay. Only "off" turns outbound
-// assertions off; any other stored value is "on". A stored issuer list is
+// RemoteAgentSettingsFromValues is the overlay. A stored mode that is not
+// one of the three reads as "off" (nothing is sent to a third party by
+// mistake). A stored issuer list is
 // kept as written; ParseTrustedIssuer refuses a malformed entry where it is
 // read, so a bad entry trusts nothing.
 func RemoteAgentSettingsFromValues(values Values) RemoteAgentSettings {
 	settings := DefaultRemoteAgentSettings()
 	if raw, present := values[KeyRemoteAgentsOutboundAssertions]; present {
 		mode, _ := raw.(string)
-		if OutboundAssertionsMode(strings.TrimSpace(mode)) == OutboundAssertionsOff {
-			settings.OutboundAssertions = OutboundAssertionsOff
+		if parsed := OutboundAssertionsMode(strings.TrimSpace(mode)); ValidOutboundAssertionsMode(parsed) {
+			settings.OutboundAssertions = parsed
 		}
 	}
-	if raw, present := values[KeyRemoteAgentsTrustedIssuers].([]any); present {
-		entries := make([]string, 0, len(raw))
-		for _, item := range raw {
-			if entry, ok := item.(string); ok {
-				entries = append(entries, entry)
-			}
-		}
-		settings.TrustedIssuers = entries
-	}
+	settings.AssertionAudiences = stringList(values[KeyRemoteAgentsAssertionAudiences], settings.AssertionAudiences)
+	settings.TrustedIssuers = stringList(values[KeyRemoteAgentsTrustedIssuers], settings.TrustedIssuers)
 	return settings
+}
+
+// stringList answers the strings of a stored array, or fallback when the
+// value is not an array.
+func stringList(raw any, fallback []string) []string {
+	items, ok := raw.([]any)
+	if !ok {
+		return fallback
+	}
+	entries := make([]string, 0, len(items))
+	for _, item := range items {
+		if entry, ok := item.(string); ok {
+			entries = append(entries, entry)
+		}
+	}
+	return entries
 }
 
 // TrustedIssuer is one parsed entry: an issuer and the JWKS URL its keys

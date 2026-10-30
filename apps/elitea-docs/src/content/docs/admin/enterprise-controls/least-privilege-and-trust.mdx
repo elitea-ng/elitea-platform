@@ -438,25 +438,37 @@ An agent can call an MCP server that another system runs, and that server can be
 
 ### What is enforced
 
-**Outbound.** When a run calls a remote MCP server, the worker adds the header `Elitea-Agent-Assertion: <jwt>` to each request. The value is a delegation assertion: a JWT that the main service signs with the platform's agent assertion key (the same key ring as [Elitea-native agent assertions](/deployment/credential-governance#elitea-native-agent-assertions)). The assertion is not the credential of the MCP server. The server's own OAuth token or key is sent as before.
+**Outbound.** When outbound assertions apply to a call, the worker adds the header `Elitea-Agent-Assertion: <jwt>` to each request to the remote MCP server. The value is a delegation assertion: a JWT that the main service signs with the platform's agent assertion key (the same key ring as [Elitea-native agent assertions](/deployment/credential-governance#elitea-native-agent-assertions)). The assertion is not the credential of the MCP server. The server's own OAuth token or key is sent as before.
 
-- The worker asks the main service for each assertion over the runtime control connection (gRPC over mTLS, `MintDelegationAssertion`). The worker never holds the key.
-- The main service signs only for a run that is still live (its lease fence is current), and only for an audience that is the URL of an MCP toolkit admitted in that run or in one of its sub-agents. Any other audience is refused.
-- An assertion lives at most 5 minutes. The worker keeps one assertion per endpoint and gets a new one 1 minute before it expires, so a long MCP session always sends a valid one.
+**What the remote server receives.** The assertion tells the remote server the calling agent, the user who started the run, the project, the run, the run's mandate and the toolkit types of the run (see [Assertion claims](#assertion-claims)). This is data about your deployment, so the platform sends it to no third party unless you say so:
+
+| `outbound_assertions` | Which calls carry an assertion |
+| --- | --- |
+| `off` (the default) | None |
+| `allowlist` | Only calls to an endpoint whose origin is in `assertion_audiences` |
+| `on` | Every call to a remote MCP server |
+
+A governed run (one with a security context) always sends an assertion, whatever the setting is. Governance means that every call that a governed agent makes is attributable to the agent, the run and the user, also on the receiving side.
+
+- The worker asks the main service for each assertion over the runtime control connection (gRPC over mTLS, `MintDelegationAssertion`). The worker never holds the key. The mint runs beside the worker's lease renewal, so a slow answer never delays the renewal.
+- The worker sends the endpoint URL as configured. The main service normalizes it with the same function that it applies to the run's admitted MCP toolkit URLs, and signs `aud` in that normalized form.
+- The main service signs only for a run that is still live (its lease fence is current), and only for an audience that is the URL of an MCP toolkit admitted in that run or in one of its sub-agents. Any other audience is refused. It also refuses the audience of a configured federation relying party, so a delegation assertion can never stand in for a federation assertion.
+- An assertion lives at most 5 minutes. The worker keeps one assertion per endpoint and gets a new one 1 minute before it expires, so a long MCP session always sends a valid one. When the main service answers that no assertion goes to an endpoint, the worker does not ask again for that endpoint during the run. After a failed mint, it does not ask again for 30 seconds.
+- Without the agent assertion key, no assertion is signed. For a run that is not governed, the worker then calls without one, and the main service only reads the run to give that answer.
 - MCP toolkits that the platform runs itself do not get an assertion.
-- A governed run (one with a security context) always sends an assertion. If the worker cannot get one, the call is refused: the agent gets the tool error `agent_assertion_unavailable`, and the MCP server is not called. Any other run that cannot get an assertion logs a warning and calls without it.
+- If a governed run cannot get an assertion, the call is refused: the agent gets the tool error `agent_assertion_unavailable`, and the MCP server is not called. Any other run that cannot get an assertion logs a warning and calls without it.
 
 **Inbound.** The platform's MCP endpoint (`/app/<project id>/mcp…`) reads the `Elitea-Agent-Assertion` header after it has authenticated the caller:
 
-- The issuer (`iss`) must be on the trusted issuer list. The signature must verify against that issuer's JWKS. The header `typ` must be `elitea-agent+jwt`, and `elitea_purpose` must be `delegation`.
+- The issuer (`iss`) must be on the trusted issuer list. The signature must verify against that issuer's JWKS. The header `typ` must be `elitea-delegation+jwt` (a federation assertion, `elitea-agent+jwt`, is refused), and `elitea_purpose` must be `delegation`. If the issuer's JWKS cannot be fetched (network, timeout, a `5xx` answer), the answer is `503` with `agent_assertion_unavailable`, not a signature refusal.
 - The audience (`aud`) must be this endpoint: this deployment's origin and the request path, for example `https://elitea.example.com/app/12/mcp`.
 - `exp` must be in the future, and `exp` must be at most 5 minutes after `iat`. A clock difference of 30 seconds is tolerated.
 - Each `jti` is recorded until the assertion expires, with a digest of the credential that first presented it. The same credential can send the same assertion again in one MCP session. A different credential that sends it is refused as a replay. After `exp`, the assertion is refused as expired.
-- When the assertion is valid, the toolkit list in its `elitea_scope` claim limits the agent that the caller invokes. If that agent (or one of its sub-agents) uses a toolkit type that is not in the list, the call is refused with `agent_invocation_scope_exceeded`, and the error names the toolkit. Nothing runs.
+- When the assertion is valid, the toolkit list in its `elitea_scope` claim limits every tool that the caller calls through the endpoint. An agent (or one of its sub-agents) that uses a toolkit type outside the list, and a toolkit tool whose type is not in the list, are refused with `agent_invocation_scope_exceeded`, and the error names the toolkit. Platform tools that have no toolkit type (for example, the toolkit builder and the secret tools) are never in a scope, so a caller with an assertion cannot call them; the error names `elitea_internal`. Nothing runs.
 - In the governed profile, a call that invokes an agent must come with an OAuth access token or a verified assertion. A personal access token or a browser session alone is refused with `agent_invocation_requires_agent_credential`. Humans can continue to use their personal access tokens for tools that are not agents.
-- A call from an OAuth client without a verified assertion still runs, but its task is given to the agent as untrusted data (ADR-0043 decision 4): the text is JSON-escaped inside an `<untrusted_remote_task>` block, after an instruction to the agent to not follow it where it conflicts with its own instructions.
+- In the governed profile, an agent invocation from an OAuth client without a verified assertion still runs, but its task is given to the agent as untrusted data (ADR-0043 decision 4): the text is JSON-escaped inside an `<untrusted_remote_task>` block, after an instruction to the agent to not follow it where it conflicts with its own instructions. A caller with a verified assertion is never framed, and outside the governed profile no task is framed.
 
-A request without the header is not changed by these checks, except for the governed rule and the untrusted framing above.
+A request without the header is not changed by these checks, except in the governed profile (the two rules above).
 
 #### Assertion claims
 
@@ -466,7 +478,7 @@ A decoded example:
 {
   "alg": "ES256",
   "kid": "agent-es-2026-10",
-  "typ": "elitea-agent+jwt"
+  "typ": "elitea-delegation+jwt"
 }
 {
   "iss": "https://elitea.example.com/agent-issuer",
@@ -495,7 +507,7 @@ A decoded example:
 | --- | --- |
 | `iss` | The issuer: this deployment's origin and `/agent-issuer` |
 | `sub` | The calling agent: `agent:binding:<id>` for an agent with a native identity, `agent:application:<project>:<agent id>` otherwise |
-| `aud` | The remote endpoint: `https`, the host in lower case, the port when it is not 443, and the path without a trailing slash |
+| `aud` | The remote endpoint, normalized: `https`, the host in lower-case ASCII (an international host name in punycode, an IPv6 address in brackets), the port when it is not 443, and the path with `.` and `..` segments resolved and no trailing slash |
 | `exp` | At most 5 minutes after `iat` |
 | `jti` | A new random id for each assertion |
 | `elitea_run` | The execution id of the calling run. `agent_instance_id` adds the run's generation. |
@@ -511,7 +523,7 @@ A receiver that is not Elitea verifies the assertion as a JWT:
 
 1. Get the keys from `https://<issuer host>/.well-known/elitea-agent-jwks.json`. The issuer metadata is at `<iss>/.well-known/openid-configuration`.
 2. Find the key by `kid`, and verify the signature with `ES256` or `RS256`.
-3. Make sure that `iss` is an issuer that you trust, `typ` is `elitea-agent+jwt`, `elitea_purpose` is `delegation`, and `aud` is exactly the URL that was called.
+3. Make sure that `iss` is an issuer that you trust, `typ` is `elitea-delegation+jwt`, `elitea_purpose` is `delegation`, and `aud` is the URL that was called, normalized as the table above says.
 4. Refuse the assertion when `exp` has passed or when `exp - iat` is more than 300 seconds.
 5. Record `jti` until `exp`, and refuse a second use by a different caller.
 6. Limit what you do for the caller to `elitea_scope`, and log `sub`, `elitea_run` and `elitea_user` with the call.
@@ -529,24 +541,25 @@ An inbound assertion that is refused answers HTTP `401` with `{"error": "agent_a
 | `agent_assertion_expired` | `exp` has passed, or `iat` or `nbf` is in the future |
 | `agent_assertion_lifetime_too_long` | `exp` is more than 5 minutes after `iat` |
 | `agent_assertion_replayed` | A different caller already presented this assertion |
-| `agent_assertion_unavailable` | The check could not be done (`503`). On the worker, the tool error of a governed run that could not get an assertion. |
+| `agent_assertion_unavailable` | The check could not be done (`503`): the database, or the issuer's JWKS could not be fetched. On the worker, the tool error of a governed run that could not get an assertion. |
 | `agent_invocation_requires_agent_credential` | Governed profile: an agent was invoked with a personal access token or a browser session alone (a tool error, not an HTTP error) |
-| `agent_invocation_scope_exceeded` | The invoked agent uses a toolkit that the assertion's scope does not allow; the error names the toolkit (a tool error) |
+| `agent_invocation_scope_exceeded` | The called agent or tool uses a toolkit that the assertion's scope does not allow; the error names the toolkit, or `elitea_internal` for a platform tool (a tool error) |
 
 #### Not covered
 
 - **A2A.** The platform has no Agent2Agent (A2A) client. Outbound assertions cover remote MCP servers only, including the MCP endpoint of another Elitea deployment.
 - **Other agent endpoints.** The inbound checks apply to the MCP endpoint. Other APIs that start an agent keep their own authentication.
+- **A separate key.** Delegation assertions are signed with the same key ring as federation assertions. The separate token type and the refusal of relying-party audiences keep the two apart.
 - **External secrets.** The rotation of the credentials that a remote MCP server uses (its OAuth client or API key) stays with the owner of that credential.
 
 ### Configure and use
 
 <Steps>
   <Step title="Configure the signing key">
-    Outbound assertions need the agent assertion key ring. Set `main.env.ELITEA_AGENT_ASSERTION_CONFIG` with at least one key (see [Elitea-native agent assertions](/deployment/credential-governance#elitea-native-agent-assertions)). Relying parties are not necessary for delegation assertions. Without the key ring, no assertion is signed: a governed run then refuses its remote MCP calls, and any other run calls without an assertion.
+    Outbound assertions need the agent assertion key ring. Set `main.env.ELITEA_AGENT_ASSERTION_CONFIG` with at least one key (see [Elitea-native agent assertions](/deployment/credential-governance#elitea-native-agent-assertions)). Relying parties are not necessary for delegation assertions. Without the key ring, no assertion is signed: a governed run then refuses its remote MCP calls, and any other run calls without an assertion, as before.
   </Step>
   <Step title="Set the outbound switch">
-    Open **Configuration › Remote Agents** (permission `configuration.governance`). **Outbound Assertions** (`outbound_assertions`) is `on` by default. Set it to `off` only if a remote MCP server refuses the extra header. A governed run always sends an assertion, whatever this setting is.
+    Open **Configuration › Remote Agents** (permission `configuration.governance`). **Outbound Assertions** (`outbound_assertions`) is `off` by default. To send assertions to the remote MCP servers that verify them (for example, another Elitea deployment), set it to `allowlist` and add each server's origin (`https://host` or `https://host:port`, at most 256) to **Assertion Audiences** (`assertion_audiences`). Use `on` only when every remote MCP server that your agents call may receive the claims. A governed run always sends an assertion, whatever this setting is.
   </Step>
   <Step title="Allowlist the issuers that you trust">
     Add one entry to **Trusted Issuers** (`trusted_issuers`) for each deployment whose agents may call this platform's MCP endpoint. Each entry is `<issuer>` for an Elitea deployment (its keys are at the issuer host's `/.well-known/elitea-agent-jwks.json`), or `<issuer> <jwks_url>` for another issuer. Both must be `https` URLs. The list holds at most 32 entries and is empty by default, so no assertion is accepted until you add an issuer. To bootstrap the list at install time, set `main.env.ELITEA_REMOTE_AGENT_TRUSTED_ISSUERS` (entries separated by a comma or a new line). These entries are added to the stored list, and a malformed entry stops the main service from starting.
@@ -565,6 +578,7 @@ An inbound assertion that is refused answers HTTP `401` with `{"error": "agent_a
 
 ### Customer responsibility
 
+- Decide which remote MCP servers may receive the claims of your runs (user, project, run, mandate and toolkit types), and keep **Assertion Audiences** to those servers.
 - Decide which issuers you trust, and keep the trusted issuer list short. An issuer on the list can make its agents act on this platform within the scope it asserts.
 - Configure and rotate the agent assertion keys of your deployment, and tell the operators of the remote MCP servers that you call to trust your issuer.
 - Run agents that call or are called by remote agents in the governed profile.

@@ -152,6 +152,9 @@ func (h *Handler) runReadToolkitToolWithObserver(ctx context.Context, projectID,
 		tool.toolkitID <= 0 || tool.toolkitID > math.MaxInt32 || !tool.runnableToolkitTool() {
 		return errorResult("the toolkit invocation identity is invalid, so nothing was executed")
 	}
+	if refused := h.toolScopeRefusal(ctx, projectID, tool); refused != nil {
+		return refused
+	}
 
 	deadline, cancel := context.WithTimeout(ctx, mcpRunDeadline)
 	defer cancel()

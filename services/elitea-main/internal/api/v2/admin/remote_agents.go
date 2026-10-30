@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/remoteagent"
 )
 
 // remoteAgentsSection is the remote agent policy (ADR-0044 decision 4,
@@ -17,20 +18,28 @@ func remoteAgentsSection() map[string]any {
 	return map[string]any{
 		"id":    section,
 		"title": "Remote Agents",
-		"description": "How agents authenticate calls to agents outside the run. Outbound: each call a run makes to a " +
-			"remote MCP server carries a short-lived assertion signed with the agent assertion key " +
-			"(header Elitea-Agent-Assertion; keys at /.well-known/elitea-agent-jwks.json). Inbound: the MCP endpoint " +
-			"accepts an assertion only from the issuers listed below. Runs under the governed credential profile " +
-			"always send an assertion.",
+		"description": "How agents authenticate calls to agents outside the run. Outbound: a call a run makes to a " +
+			"remote MCP server can carry a short-lived assertion signed with the agent assertion key " +
+			"(header Elitea-Agent-Assertion; keys at /.well-known/elitea-agent-jwks.json). The assertion tells the " +
+			"remote server the user, the project, the run, the mandate and the run's toolkit types. Runs under the " +
+			"governed credential profile always send one. Inbound: the MCP endpoint accepts an assertion only from " +
+			"the issuers listed below.",
 		"order":               6,
 		"icon":                "hub",
 		"always_visible":      true,
 		"required_permission": "configuration.governance",
 		"fields": []map[string]any{
 			{"key": platformconfig.KeyRemoteAgentsOutboundAssertions, "type": "string", "title": "Outbound Assertions",
-				"description": "on (the default) or off. Off sends no assertion, except from governed runs.",
-				"section":     section, "default": string(defaults.OutboundAssertions),
-				"enum": []string{string(platformconfig.OutboundAssertionsOn), string(platformconfig.OutboundAssertionsOff)}},
+				"description": "off (the default) sends no assertion; allowlist sends one only to the origins listed in " +
+					"Assertion Audiences; on sends one to every remote MCP server. Governed runs always send one.",
+				"section": section, "default": string(defaults.OutboundAssertions),
+				"enum": []string{string(platformconfig.OutboundAssertionsOff), string(platformconfig.OutboundAssertionsAllowlist),
+					string(platformconfig.OutboundAssertionsOn)}},
+			{"key": platformconfig.KeyRemoteAgentsAssertionAudiences, "type": "array", "items": map[string]any{"type": "string"},
+				"title": "Assertion Audiences",
+				"description": fmt.Sprintf("With allowlist: the origins (https://host or https://host:port) that "+
+					"receive assertions. At most %d.", platformconfig.MaxRemoteAgentAudiences),
+				"section": section, "default": []any{}, "maxItems": platformconfig.MaxRemoteAgentAudiences},
 			{"key": platformconfig.KeyRemoteAgentsTrustedIssuers, "type": "array", "items": map[string]any{"type": "string"},
 				"title": "Trusted Issuers",
 				"description": fmt.Sprintf("Issuers whose assertions the MCP endpoint accepts. Each entry is the issuer "+
@@ -48,11 +57,12 @@ func remoteAgentsSection() map[string]any {
 func validateRemoteAgentsValues(values map[string]any) string {
 	if raw, present := values[platformconfig.KeyRemoteAgentsOutboundAssertions]; present {
 		mode, _ := raw.(string)
-		switch platformconfig.OutboundAssertionsMode(mode) {
-		case platformconfig.OutboundAssertionsOn, platformconfig.OutboundAssertionsOff:
-		default:
-			return fmt.Sprintf("%q must be on or off", platformconfig.KeyRemoteAgentsOutboundAssertions)
+		if !platformconfig.ValidOutboundAssertionsMode(platformconfig.OutboundAssertionsMode(mode)) {
+			return fmt.Sprintf("%q must be off, allowlist or on", platformconfig.KeyRemoteAgentsOutboundAssertions)
 		}
+	}
+	if reason := validateAssertionAudiences(values); reason != "" {
+		return reason
 	}
 	raw, present := values[platformconfig.KeyRemoteAgentsTrustedIssuers]
 	if !present {
@@ -72,6 +82,30 @@ func validateRemoteAgentsValues(values map[string]any) string {
 	}
 	if _, err := platformconfig.ParseTrustedIssuers(entries); err != nil {
 		return fmt.Sprintf("%q: %v", platformconfig.KeyRemoteAgentsTrustedIssuers, err)
+	}
+	return ""
+}
+
+// validateAssertionAudiences refuses an entry that is not an https origin:
+// the mint compares origins, so a path or a typo would never match.
+func validateAssertionAudiences(values map[string]any) string {
+	raw, present := values[platformconfig.KeyRemoteAgentsAssertionAudiences]
+	if !present {
+		return ""
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return fmt.Sprintf("%q must be an array", platformconfig.KeyRemoteAgentsAssertionAudiences)
+	}
+	if len(items) > platformconfig.MaxRemoteAgentAudiences {
+		return fmt.Sprintf("%q holds at most %d entries", platformconfig.KeyRemoteAgentsAssertionAudiences, platformconfig.MaxRemoteAgentAudiences)
+	}
+	for index, item := range items {
+		entry, _ := item.(string)
+		if _, ok := remoteagent.AudienceOrigin(entry); !ok {
+			return fmt.Sprintf("%q[%d] must be an https origin (https://host or https://host:port)",
+				platformconfig.KeyRemoteAgentsAssertionAudiences, index)
+		}
 	}
 	return ""
 }

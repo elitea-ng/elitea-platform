@@ -45,6 +45,9 @@ struct FakeState {
     /// `None`: this Main does not serve `MintDelegationAssertion`.
     mint: Mutex<Option<MintDelegationAssertionResponseV1>>,
     mint_requests: Mutex<Vec<MintDelegationAssertionRequestV1>>,
+    /// While set, a mint waits for `mint_release`.
+    stall_mint: AtomicBool,
+    mint_release: Notify,
 }
 
 impl Default for FakeState {
@@ -72,6 +75,8 @@ impl Default for FakeState {
             steering_failures: AtomicUsize::new(0),
             mint: Mutex::new(None),
             mint_requests: Mutex::new(Vec::new()),
+            stall_mint: AtomicBool::new(false),
+            mint_release: Notify::new(),
         }
     }
 }
@@ -156,6 +161,9 @@ impl ControlRpc for FakeRpc {
             .lock()
             .expect("mint requests")
             .push(request.into_inner());
+        if self.0.stall_mint.load(Ordering::SeqCst) {
+            self.0.mint_release.notified().await;
+        }
         self.0
             .mint
             .lock()
@@ -1138,4 +1146,52 @@ async fn state_probe_mints_a_delegation_assertion_under_the_claim() {
         probe.mint("https://partner.example/mcp").await,
         Err(DelegationAssertionError::Unavailable)
     );
+}
+
+// ADR-0044 decision 4: a mint runs beside the lease actor. While Main has
+// not answered it, the lease is still renewed on schedule.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn a_pending_mint_never_stalls_lease_renewal() {
+    use elitea_agent_runtime::remote_assertion::{DelegationAssertionSource as _, MintedAssertion};
+    let state = Arc::new(FakeState::default());
+    state.stall_mint.store(true, Ordering::SeqCst);
+    *state.mint.lock().expect("mint") = Some(MintDelegationAssertionResponseV1 {
+        disposition: DelegationAssertionDispositionV1::Disabled as i32,
+        ..MintDelegationAssertionResponseV1::default()
+    });
+    let monitor = ClaimLeaseMonitor::start(
+        client(Arc::clone(&state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        // Two renewals fit inside the client deadline (1 s), so the mint is
+        // still pending, not timed out, when they happen.
+        config(Duration::from_millis(100)),
+    );
+    let probe = monitor.state_probe();
+    let pending = tokio::spawn(async move { probe.mint("https://partner.example/mcp").await });
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(*state.calls.lock().expect("calls"), ["mint"]);
+    assert!(!pending.is_finished());
+
+    for _ in 0..2 {
+        tokio::time::advance(Duration::from_millis(100)).await;
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+    }
+    assert_eq!(
+        state.renew_requests.lock().expect("renew requests").len(),
+        2,
+        "the lease was not renewed while a mint was pending"
+    );
+    assert!(!pending.is_finished());
+
+    state.mint_release.notify_one();
+    assert_eq!(
+        pending.await.expect("mint task"),
+        Ok(MintedAssertion::Disabled)
+    );
+    monitor.close().await.expect("close");
 }

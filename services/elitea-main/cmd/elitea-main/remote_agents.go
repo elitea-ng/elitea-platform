@@ -26,11 +26,23 @@ import (
 )
 
 // remoteAgentSettings reads the remote_agents section on each call (the
-// mint and the allowlist cache it themselves).
+// issuer allowlist caches it itself).
 func remoteAgentSettings(pool *pgxpool.Pool) remoteagent.Settings {
 	return func(ctx context.Context) (platformconfig.RemoteAgentSettings, error) {
 		return platformconfig.LoadRemoteAgentSettings(ctx, pool)
 	}
+}
+
+// remoteAgentSettingsTTL is how long a replica's mint keeps the section: a
+// worker asks before each remote MCP request it has no assertion for.
+const remoteAgentSettingsTTL = 5 * time.Second
+
+// cachedRemoteAgentSettings is remoteAgentSettings read at most once per
+// remoteAgentSettingsTTL per replica, like the other platform-config
+// readers on hot paths.
+func cachedRemoteAgentSettings(pool *pgxpool.Pool) remoteagent.Settings {
+	cache := platformconfig.NewCachedSection(remoteAgentSettings(pool), remoteAgentSettingsTTL)
+	return cache.Get
 }
 
 func remoteAgentAudit(pool *pgxpool.Pool) (*repos.RemoteAgentAudit, error) {
@@ -44,8 +56,9 @@ func remoteAgentAudit(pool *pgxpool.Pool) (*repos.RemoteAgentAudit, error) {
 // remoteAgentMint builds the mint the runtime control service serves.
 // runtimePool reads the run; pool reads the settings and takes the audit.
 // A nil signer (no agent assertion key ring) still builds the service: it
-// answers DISABLED with outbound assertions off and refuses otherwise, so a
-// governed run refuses its remote call instead of making it unsigned.
+// answers DISABLED to a run that is not governed (one run read, nothing
+// else) and refuses a governed run, so that run refuses its remote call
+// instead of making it unsigned.
 func remoteAgentMint(runtimePool, pool *pgxpool.Pool, signer *eliteanative.DelegationSigner) (control.DelegationAssertions, error) {
 	runs, err := repos.NewRemoteAgentRuns(runtimePool)
 	if err != nil {
@@ -63,7 +76,7 @@ func remoteAgentMint(runtimePool, pool *pgxpool.Pool, signer *eliteanative.Deleg
 	if signer != nil {
 		sign = signer
 	}
-	return remoteagent.NewMintService(runs, nested, sign, remoteAgentSettings(pool), audit)
+	return remoteagent.NewMintService(runs, nested, sign, cachedRemoteAgentSettings(pool), audit)
 }
 
 // remoteAgentJWKSTimeout bounds one fetch of a trusted issuer's JWKS.

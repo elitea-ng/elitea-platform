@@ -17,11 +17,16 @@ package mcp
 //     OAuth access token or a verified assertion: a bare PAT or API key
 //     is refused for it (agent_invocation_requires_agent_credential).
 //     People keep their PATs for every other tool.
-//   - A verified assertion's scope bounds the invoked agent: a run whose
-//     toolkits are not all in it is refused, naming the toolkit
-//     (agent_invocation_scope_exceeded).
-//   - The task of an OAuth client without a verified assertion is framed as
-//     untrusted data (ADR-0043 decision 4) before it reaches the model.
+//   - A verified assertion's scope bounds every tool called with it: an
+//     invoked agent whose toolkits (sub-agents included) are not all in it,
+//     a toolkit tool whose type is not in it, and every platform-internal
+//     tool (no toolkit type) are refused, naming the toolkit
+//     (agent_invocation_scope_exceeded). One check decides all of them
+//     (agentexecution.CheckAssertedScope).
+//   - In the governed profile, the task of an OAuth client without a
+//     verified assertion is framed as untrusted data (ADR-0043 decision 4)
+//     before it reaches the model. A verified caller is never framed, and
+//     nothing is framed outside the governed profile.
 
 import (
 	"context"
@@ -243,10 +248,37 @@ func (h *Handler) admitAgentInvocation(ctx context.Context, projectID int64, too
 		return agentInvocation{refusal: errorResult(remoteagent.CodeAgentCallerNeeded + ": the agent behind '" + tool.Name +
 			"' needs an OAuth access token or a verified agent assertion in the governed profile; nothing was executed")}
 	}
-	if oauth {
+	if oauth && h.remoteAgents != nil && h.remoteAgents.governed {
 		return agentInvocation{task: untrustedCallerTask(task)}
 	}
 	return agentInvocation{task: task}
+}
+
+// internalScopeToolkit is the toolkit name a scope refusal gives a
+// platform-internal MCP tool, which has no toolkit type: no asserted scope
+// lists it, so a verified remote agent cannot call one.
+const internalScopeToolkit = "elitea_internal"
+
+// toolScopeRefusal bounds a toolkit tool or a platform-internal tool by the
+// verified assertion of the request (agents are bounded at admission, with
+// their sub-agents). nil when the request has no verified assertion or the
+// tool is in its scope.
+func (h *Handler) toolScopeRefusal(ctx context.Context, projectID int64, tool Tool) map[string]any {
+	verified, asserted := remoteagent.VerifiedFromContext(ctx)
+	if !asserted || tool.runnableAgent() {
+		return nil
+	}
+	toolkitType := internalScopeToolkit
+	if tool.runnableToolkitTool() && tool.toolkitType != "" {
+		toolkitType = tool.toolkitType
+	}
+	err := agentexecutionapp.CheckAssertedScope(&agentexecutionapp.AssertedScope{ToolkitTypes: verified.Scope.Toolkits},
+		[]string{toolkitType})
+	if err == nil {
+		return nil
+	}
+	refused, _ := h.scopeRefusal(ctx, projectID, tool, err)
+	return refused
 }
 
 // scopeRefusal answers the refusal of a run outside the asserted scope.
@@ -262,7 +294,11 @@ func (h *Handler) scopeRefusal(ctx context.Context, projectID int64, tool Tool, 
 			i.logger.ErrorContext(ctx, "remote agent scope refusal not audited", "err", auditErr)
 		}
 	}
-	return errorResult(remoteagent.CodeScopeExceeded + ": the agent behind '" + tool.Name + "' uses the toolkit '" +
+	subject := "the agent behind '" + tool.Name + "' uses"
+	if !tool.runnableAgent() {
+		subject = "the tool '" + tool.Name + "' belongs to"
+	}
+	return errorResult(remoteagent.CodeScopeExceeded + ": " + subject + " the toolkit '" +
 		exceeded.ToolkitType + "', which the caller's agent assertion does not allow; nothing was executed"), true
 }
 

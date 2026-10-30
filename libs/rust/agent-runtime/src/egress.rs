@@ -31,7 +31,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::future::Future;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, RetryHint};
 use async_trait::async_trait;
@@ -183,7 +183,7 @@ impl Ledger {
 pub struct RunEgress {
     policy: PublicPolicy,
     ledger: Mutex<Ledger>,
-    assertions: OnceLock<Arc<crate::remote_assertion::DelegationAssertions>>,
+    assertions: RwLock<Option<Arc<crate::remote_assertion::DelegationAssertions>>>,
 }
 
 impl fmt::Debug for RunEgress {
@@ -201,22 +201,30 @@ impl RunEgress {
         Arc::new(Self {
             policy,
             ledger: Mutex::new(Ledger::default()),
-            assertions: OnceLock::new(),
+            assertions: RwLock::new(None),
         })
     }
 
-    /// Bind the run's delegation assertions, once. A second bind is
-    /// ignored: the first one holds the run's cache. The host binds them
-    /// before it materializes the run's toolkits.
+    /// Bind the delegation assertions of the current claim. A later bind
+    /// replaces an earlier one: a `RunEgress` reused for a new claim of the
+    /// same command mints under the new claim's lease, never the released
+    /// one. The host binds them before it materializes the run's toolkits;
+    /// a session materialized earlier keeps the assertions it was given.
     pub fn bind_assertions(&self, assertions: Arc<crate::remote_assertion::DelegationAssertions>) {
-        let _ = self.assertions.set(assertions);
+        *self
+            .assertions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(assertions);
     }
 
-    /// The run's delegation assertions; `None` when the host bound none
-    /// (remote calls then carry no assertion).
+    /// The delegation assertions of the current claim; `None` when the host
+    /// bound none (remote calls then carry no assertion).
     #[must_use]
     pub fn assertions(&self) -> Option<Arc<crate::remote_assertion::DelegationAssertions>> {
-        self.assertions.get().cloned()
+        self.assertions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// An open run: every public host, today's behaviour.

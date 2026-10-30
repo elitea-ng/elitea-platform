@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/net/idna"
 )
 
 // Delegation assertions (ADR-0044 decision 4, #1501). A run that calls an
@@ -17,14 +19,20 @@ import (
 // deployment's MCP endpoint) attaches a short-lived assertion signed with
 // this ring. The audience is the remote endpoint; the claims name the run,
 // the agent, the delegating user or mandate, and the run's effective scope.
-// It is the same token type as a federation assertion (typ
-// elitea-agent+jwt) and is verified against the same JWKS; the
-// elitea_purpose claim tells the two apart.
+// It is verified against the same JWKS as a federation assertion, but has
+// its own token type (typ elitea-delegation+jwt), which no federation
+// relying party accepts, and it is never signed for the audience of a
+// configured relying party. So neither kind can stand in for the other.
 
 // Bounds of a delegation assertion.
 const (
 	// DelegationMaxTTL is the longest delegation assertion: exp - iat.
 	DelegationMaxTTL = 5 * time.Minute
+	// DelegationTokenType is the JWS `typ` header of a delegation
+	// assertion. It differs from TokenType (federation), so a federation
+	// relying party that checks typ refuses a delegation assertion and an
+	// inbound verifier refuses a federation assertion.
+	DelegationTokenType = "elitea-delegation+jwt"
 	// DelegationPurpose is the elitea_purpose claim of a delegation
 	// assertion. A federation assertion has no elitea_purpose.
 	DelegationPurpose = "delegation"
@@ -42,6 +50,10 @@ const (
 // ErrInvalidDelegation refuses a delegation request before anything is
 // signed. The text names the field, never a value.
 var ErrInvalidDelegation = errors.New("elitea-native agent identity: invalid delegation assertion request")
+
+// ErrDelegationAudienceReserved refuses a delegation assertion for the
+// audience of a configured federation relying party.
+var ErrDelegationAudienceReserved = errors.New("elitea-native agent identity: the audience is a federation relying party")
 
 // DelegationScope is the elitea_scope claim: the effective scope of the
 // calling run. Toolkits are the canonical toolkit types the run was
@@ -103,6 +115,9 @@ type DelegationSigner struct {
 	algorithm Algorithm
 	now       func() time.Time
 	newID     func() (string, error)
+	// reserved are the audiences of the federation relying parties, raw
+	// and normalized: never a delegation audience.
+	reserved map[string]bool
 }
 
 // NewDelegationSigner builds the signer over a loaded ring. cfg must be
@@ -124,9 +139,16 @@ func NewDelegationSigner(cfg Config, ring *KeyRing, opts ...Option) (*Delegation
 	for _, opt := range opts {
 		opt(clock)
 	}
+	reserved := make(map[string]bool, 2*len(cfg.RelyingParties))
+	for _, party := range cfg.RelyingParties {
+		reserved[party.Audience] = true
+		if normalized, ok := NormalizeAudience(party.Audience); ok {
+			reserved[normalized] = true
+		}
+	}
 	return &DelegationSigner{
 		issuer: cfg.Issuer(), jwksURI: cfg.JWKSURI(), tenant: cfg.Tenant, ring: ring,
-		algorithm: algorithms[0], now: clock.now,
+		algorithm: algorithms[0], now: clock.now, reserved: reserved,
 		newID: func() (string, error) {
 			id, err := uuid.NewRandom()
 			return id.String(), err
@@ -150,6 +172,9 @@ func (s *DelegationSigner) Sign(ctx context.Context, in DelegationRequest) (stri
 	audience, ok := NormalizeAudience(in.Audience)
 	if !ok || audience != in.Audience {
 		return "", DelegationClaims{}, delegationInvalid("audience")
+	}
+	if s.reserved[audience] || s.reserved[in.Audience] {
+		return "", DelegationClaims{}, ErrDelegationAudienceReserved
 	}
 	switch {
 	case !validRef(in.Agent, 160):
@@ -199,7 +224,7 @@ func (s *DelegationSigner) Sign(ctx context.Context, in DelegationRequest) (stri
 			Algorithm string `json:"alg"`
 			KeyID     string `json:"kid"`
 			Type      string `json:"typ"`
-		}{string(s.algorithm), kid, TokenType})
+		}{string(s.algorithm), kid, DelegationTokenType})
 	}, payload)
 	if err != nil {
 		return "", DelegationClaims{}, err
@@ -210,12 +235,17 @@ func (s *DelegationSigner) Sign(ctx context.Context, in DelegationRequest) (stri
 	return token, claims, nil
 }
 
-// NormalizeAudience is the audience of a remote endpoint URL: "https://",
-// the lower-case host, the port when it is not 443, and the path without a
-// trailing slash. A URL with credentials, a query or a fragment, or not
-// https, has none. The worker and every receiver compute the same value.
+// NormalizeAudience is the audience of a remote endpoint URL. It is the
+// only normalization of an audience: Main applies it to the admitted
+// toolkit URLs, to the endpoint a worker asks for, and to its own MCP
+// endpoint when it verifies, and compares only its results. The form is
+// "https://", the host in lower-case ASCII (an IDN host in punycode, an IPv6
+// host in brackets and canonical form, one trailing dot dropped), the port
+// when it is not 443, and the path with dot segments resolved (also when
+// percent-encoded) and no trailing slash. A URL that is not https, or that
+// has credentials, a query, a fragment or an IPv6 zone, has no audience.
 func NormalizeAudience(raw string) (string, bool) {
-	if raw == "" || len(raw) > MaxDelegationAudienceBytes || strings.ContainsAny(raw, " \t\r\n\x00") {
+	if raw == "" || len(raw) > MaxDelegationAudienceBytes || strings.ContainsAny(raw, " \t\r\n\x00\\") {
 		return "", false
 	}
 	u, err := url.Parse(raw)
@@ -223,18 +253,83 @@ func NormalizeAudience(raw string) (string, bool) {
 		u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
 		return "", false
 	}
-	host := strings.ToLower(u.Hostname())
-	if host == "" {
+	host, ok := audienceHost(u.Hostname())
+	if !ok {
 		return "", false
 	}
-	if strings.Contains(host, ":") {
-		host = "[" + host + "]"
+	if port := u.Port(); port != "" {
+		number, err := strconv.Atoi(port)
+		if err != nil || number < 1 || number > 65535 {
+			return "", false
+		}
+		if number != 443 {
+			host += ":" + strconv.Itoa(number)
+		}
+	} else if strings.HasSuffix(u.Host, ":") {
+		return "", false
 	}
-	if port := u.Port(); port != "" && port != "443" {
-		host += ":" + port
+	return "https://" + host + audiencePath(u.EscapedPath()), true
+}
+
+func audienceHost(hostname string) (string, bool) {
+	if hostname == "" || strings.Contains(hostname, "%") {
+		return "", false
 	}
-	path := strings.TrimRight(u.EscapedPath(), "/")
-	return "https://" + host + path, true
+	if strings.Contains(hostname, ":") {
+		ip := net.ParseIP(hostname)
+		if ip == nil || ip.To4() != nil {
+			return "", false
+		}
+		return "[" + ip.String() + "]", true
+	}
+	if ip := net.ParseIP(hostname); ip != nil {
+		return ip.String(), true
+	}
+	hostname = strings.TrimSuffix(hostname, ".")
+	ascii, err := idna.Lookup.ToASCII(hostname)
+	if err != nil || ascii == "" {
+		return "", false
+	}
+	return strings.ToLower(ascii), true
+}
+
+// audiencePath resolves dot segments (RFC 3986 section 5.2.4), plain or
+// percent-encoded, and drops a trailing slash; "/" is the empty path.
+func audiencePath(escaped string) string {
+	segments := strings.Split(escaped, "/")
+	out := make([]string, 0, len(segments))
+	for index, segment := range segments {
+		if index == 0 {
+			continue
+		}
+		switch strings.ToLower(segment) {
+		case ".", "%2e":
+			continue
+		case "..", "%2e%2e", ".%2e", "%2e.":
+			if len(out) > 0 {
+				out = out[:len(out)-1]
+			}
+			continue
+		}
+		out = append(out, segment)
+	}
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return "/" + strings.Join(out, "/")
+}
+
+// AudienceOrigin answers the origin of a normalized audience: everything
+// before its path.
+func AudienceOrigin(audience string) string {
+	rest := strings.TrimPrefix(audience, "https://")
+	if index := strings.IndexByte(rest, '/'); index >= 0 {
+		rest = rest[:index]
+	}
+	return "https://" + rest
 }
 
 // ValidScope checks the scope claim's bounds and shape.

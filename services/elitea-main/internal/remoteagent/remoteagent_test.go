@@ -10,13 +10,17 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
 	coreoidc "github.com/coreos/go-oidc/v3/oidc"
+	jose "github.com/go-jose/go-jose/v4"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity/eliteanative"
+	identityoidc "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/oidc"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/remoteagent"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore"
@@ -31,11 +35,17 @@ const (
 var fixedNow = time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 
 type ring struct {
-	signer *eliteanative.DelegationSigner
-	public crypto.PublicKey
+	signer  *eliteanative.DelegationSigner
+	public  crypto.PublicKey
+	private *ecdsa.PrivateKey
 }
 
 func newRing(t *testing.T, origin string, now *time.Time) ring {
+	t.Helper()
+	return newRingWithParties(t, origin, now)
+}
+
+func newRingWithParties(t *testing.T, origin string, now *time.Time, parties ...eliteanative.RelyingParty) ring {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -55,12 +65,13 @@ func newRing(t *testing.T, origin string, now *time.Time) ring {
 		t.Fatal(err)
 	}
 	cfg := eliteanative.Config{Origin: origin, RotationOverlap: eliteanative.DefaultRotationOverlap,
-		Keys: []eliteanative.KeySpec{{KeyID: "es-1", Algorithm: eliteanative.ES256, File: "/keys/es-1.pem"}}}
+		Keys:           []eliteanative.KeySpec{{KeyID: "es-1", Algorithm: eliteanative.ES256, File: "/keys/es-1.pem"}},
+		RelyingParties: parties}
 	signer, err := eliteanative.NewDelegationSigner(cfg, keyRing, eliteanative.WithClock(func() time.Time { return *now }))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return ring{signer: signer, public: key.Public()}
+	return ring{signer: signer, public: key.Public(), private: key}
 }
 
 type runsStub struct{ run remoteagent.Run }
@@ -69,10 +80,16 @@ func (r runsStub) ReadRun(context.Context, string, uint64) (remoteagent.Run, err
 	return r.run, nil
 }
 
-type nestedStub map[[3]int64]json.RawMessage
+type nestedStub struct {
+	tools map[[3]int64]json.RawMessage
+	calls *int
+}
 
 func (n nestedStub) NestedApplicationTools(_ context.Context, project, app, version int64) (json.RawMessage, error) {
-	return n[[3]int64{project, app, version}], nil
+	if n.calls != nil {
+		*n.calls++
+	}
+	return n.tools[[3]int64{project, app, version}], nil
 }
 
 type auditStub struct {
@@ -122,7 +139,13 @@ func agentRun(governed bool) remoteagent.Run {
 
 func mintService(t *testing.T, run remoteagent.Run, signer remoteagent.Signer, settings remoteagent.Settings, audit *auditStub) *remoteagent.MintService {
 	t.Helper()
-	nested := nestedStub{{7, 11, 12}: json.RawMessage(`[{"type":"mcp_github","settings":{"url":"https://nested.example/mcp"}}]`)}
+	return mintServiceCounting(t, run, signer, settings, audit, nil)
+}
+
+func mintServiceCounting(t *testing.T, run remoteagent.Run, signer remoteagent.Signer, settings remoteagent.Settings, audit *auditStub, nestedCalls *int) *remoteagent.MintService {
+	t.Helper()
+	nested := nestedStub{tools: map[[3]int64]json.RawMessage{
+		{7, 11, 12}: json.RawMessage(`[{"type":"mcp_github","settings":{"url":"https://nested.example/mcp"}}]`)}, calls: nestedCalls}
 	service, err := remoteagent.NewMintService(runsStub{run: run}, nested, signer, settings, audit)
 	if err != nil {
 		t.Fatal(err)
@@ -160,9 +183,9 @@ func TestMintRefusesAnAudienceNotAdmitted(t *testing.T) {
 	audit := &auditStub{}
 	service := mintService(t, agentRun(false), r.signer, settingsOf(platformconfig.OutboundAssertionsOn), audit)
 	for audience, reason := range map[string]string{
-		"https://evil.example/mcp":          "audience_not_admitted",
-		"https://partner.example/other":     "audience_not_admitted",
-		"https://PARTNER.example/app/9/mcp": "audience_malformed",
+		"https://evil.example/mcp":         "audience_not_admitted",
+		"https://partner.example/other":    "audience_not_admitted",
+		"http://partner.example/app/9/mcp": "audience_malformed",
 	} {
 		if _, err := service.Mint(context.Background(), "exec-1", 1, audience); !errors.Is(err, remoteagent.ErrAudienceNotAdmitted) {
 			t.Fatalf("%s: err = %v", audience, err)
@@ -193,6 +216,100 @@ func TestMintSettingAndGovernedProfile(t *testing.T) {
 		t.Fatalf("no ring: %+v, %v", result, err)
 	}
 	if got := audit.actions(); len(got) != 1 || got[0] != remoteagent.ActionMintRefused+"/signer_unavailable" {
+		t.Fatalf("audit = %v", got)
+	}
+}
+
+// The worker sends the endpoint as configured; Main normalizes it with the
+// same function as the admitted URLs and signs the normalized form.
+func TestMintNormalizesTheRawEndpoint(t *testing.T) {
+	now := fixedNow
+	r := newRing(t, issuerOrigin, &now)
+	service := mintService(t, agentRun(false), r.signer, settingsOf(platformconfig.OutboundAssertionsOn), &auditStub{})
+	for _, raw := range []string{
+		"https://Partner.example/app/9/mcp/", "https://partner.example:443/app/9/mcp",
+		"https://partner.example/app/x/../9/./mcp", "https://PARTNER.EXAMPLE./app/9/mcp",
+	} {
+		result, err := service.Mint(context.Background(), "exec-1", 1, raw)
+		if err != nil || result.Disposition != remoteagent.Issued {
+			t.Fatalf("%s: %+v, %v", raw, result, err)
+		}
+		var claims struct {
+			Audience string `json:"aud"`
+		}
+		payload, err := (&coreoidc.StaticKeySet{PublicKeys: []crypto.PublicKey{r.public}}).VerifySignature(context.Background(), result.Token)
+		if err != nil || json.Unmarshal(payload, &claims) != nil || claims.Audience != endpoint {
+			t.Fatalf("%s: aud %q, %v", raw, claims.Audience, err)
+		}
+	}
+}
+
+// No key and no governance: Disabled for the price of one run read. No
+// settings read, no toolkit walk, no audit row.
+func TestMintWithoutAKeyCostsNothing(t *testing.T) {
+	audit := &auditStub{}
+	settingsRead := 0
+	settings := func(context.Context) (platformconfig.RemoteAgentSettings, error) {
+		settingsRead++
+		return platformconfig.RemoteAgentSettings{OutboundAssertions: platformconfig.OutboundAssertionsOn}, nil
+	}
+	walked := 0
+	result, err := mintServiceCounting(t, agentRun(false), nil, settings, audit, &walked).Mint(context.Background(), "exec-1", 1, endpoint)
+	if err != nil || result.Disposition != remoteagent.Disabled || result.Required {
+		t.Fatalf("%+v, %v", result, err)
+	}
+	if settingsRead != 0 || walked != 0 || len(audit.events) != 0 {
+		t.Fatalf("settings %d, walk %d, audit %v", settingsRead, walked, audit.events)
+	}
+}
+
+// off (the default) sends nothing; allowlist sends only to listed origins;
+// on sends to every admitted endpoint. A governed run always mints.
+func TestMintOutboundModes(t *testing.T) {
+	now := fixedNow
+	r := newRing(t, issuerOrigin, &now)
+	if platformconfig.DefaultRemoteAgentSettings().OutboundAssertions != platformconfig.OutboundAssertionsOff {
+		t.Fatal("outbound assertions are not off by default")
+	}
+	allowlist := func(context.Context) (platformconfig.RemoteAgentSettings, error) {
+		return platformconfig.RemoteAgentSettings{OutboundAssertions: platformconfig.OutboundAssertionsAllowlist,
+			AssertionAudiences: []string{"https://PARTNER.example:443", "not an origin"}}, nil
+	}
+	for _, test := range []struct {
+		name     string
+		settings remoteagent.Settings
+		governed bool
+		audience string
+		want     remoteagent.Disposition
+	}{
+		{"off", settingsOf(platformconfig.OutboundAssertionsOff), false, endpoint, remoteagent.Disabled},
+		{"allowlist listed", allowlist, false, endpoint, remoteagent.Issued},
+		{"allowlist not listed", allowlist, false, "https://nested.example/mcp", remoteagent.Disabled},
+		{"on", settingsOf(platformconfig.OutboundAssertionsOn), false, "https://nested.example/mcp", remoteagent.Issued},
+		{"governed forces on", settingsOf(platformconfig.OutboundAssertionsOff), true, endpoint, remoteagent.Issued},
+	} {
+		result, err := mintService(t, agentRun(test.governed), r.signer, test.settings, &auditStub{}).Mint(context.Background(), "exec-1", 1, test.audience)
+		if err != nil || result.Disposition != test.want {
+			t.Fatalf("%s: %+v, %v", test.name, result, err)
+		}
+	}
+	if origin, ok := remoteagent.AudienceOrigin("https://partner.example/app"); ok {
+		t.Fatalf("an origin with a path was accepted: %q", origin)
+	}
+}
+
+// The audience of a federation relying party is never a delegation
+// audience, even when a run admits it as an MCP endpoint.
+func TestMintRefusesARelyingPartyAudience(t *testing.T) {
+	now := fixedNow
+	r := newRingWithParties(t, issuerOrigin, &now, eliteanative.RelyingParty{
+		ID: "partner", Audience: endpoint, Algorithm: eliteanative.ES256, MaxTTL: 5 * time.Minute, ClaimsProfile: eliteanative.ProfileMCP})
+	audit := &auditStub{}
+	_, err := mintService(t, agentRun(true), r.signer, settingsOf(platformconfig.OutboundAssertionsOn), audit).Mint(context.Background(), "exec-1", 1, endpoint)
+	if !errors.Is(err, remoteagent.ErrAudienceNotAdmitted) {
+		t.Fatalf("err = %v", err)
+	}
+	if got := audit.actions(); len(got) != 1 || got[0] != remoteagent.ActionMintRefused+"/audience_reserved" {
 		t.Fatalf("audit = %v", got)
 	}
 }
@@ -290,8 +407,7 @@ func TestVerifierAcceptsAnAllowlistedAssertion(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Issuer != issuer || got.Subject != "agent:binding:binding-1" || got.Run != "exec-1" || got.User != "user:42" ||
-		len(got.Scope.Toolkits) != 2 || remoteagent.ScopeAllows(got.Scope, []string{"github"}) != "" ||
-		remoteagent.ScopeAllows(got.Scope, []string{"github", "jira"}) != "jira" {
+		len(got.Scope.Toolkits) != 2 {
 		t.Fatalf("verified = %+v", got)
 	}
 	// The same presenter may present it again (one MCP session); another
@@ -345,6 +461,79 @@ func TestVerifierRefusals(t *testing.T) {
 	clock = now.Add(eliteanative.DelegationMaxTTL + time.Minute)
 	if _, err := verifier.Verify(context.Background(), token, endpoint, "token:9"); remoteagent.RefusalCode(err) != remoteagent.CodeExpired {
 		t.Fatalf("replay after expiry: %v", err)
+	}
+}
+
+// A federation assertion (typ elitea-agent+jwt) signed by a trusted key is
+// not a delegation assertion.
+func TestVerifierRefusesAFederationTokenType(t *testing.T) {
+	now := fixedNow
+	r := newRing(t, issuerOrigin, &now)
+	issuer := issuerOrigin + eliteanative.IssuerPath
+	verifier, err := remoteagent.NewVerifier(keysStub{issuer: &coreoidc.StaticKeySet{PublicKeys: []crypto.PublicKey{r.public}}},
+		&memReplays{}, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Re-sign the claims of a real delegation assertion with the federation typ.
+	payload, err := (&coreoidc.StaticKeySet{PublicKeys: []crypto.PublicKey{r.public}}).VerifySignature(context.Background(), signed(t, r, endpoint))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: r.private},
+		(&jose.SignerOptions{}).WithType(eliteanative.TokenType).WithHeader("kid", "es-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := signer.Sign(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	federation, err := object.CompactSerialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifier.Verify(context.Background(), federation, endpoint, "token:1"); remoteagent.RefusalCode(err) != remoteagent.CodeMalformed {
+		t.Fatalf("federation typ: %v", err)
+	}
+}
+
+// A JWKS that cannot be fetched is "unavailable" (503), not a bad
+// signature; a JWKS that does not hold the signing key is a bad signature.
+func TestVerifierTellsAnUnreachableJWKSFromABadSignature(t *testing.T) {
+	now := fixedNow
+	r := newRing(t, issuerOrigin, &now)
+	other := newRing(t, issuerOrigin, &now)
+	issuer := issuerOrigin + eliteanative.IssuerPath
+	status := http.StatusServiceUnavailable
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
+			Key: other.public, KeyID: "es-1", Algorithm: string(jose.ES256), Use: "sig"}}})
+	}))
+	defer server.Close()
+	keys, err := identityoidc.NewRemoteKeySet(identityoidc.RemoteKeySetConfig{
+		JWKSURL: server.URL + "/jwks.json", SupportedSigningAlgorithms: []string{"ES256"}, RequestTimeout: 2 * time.Second,
+	}, server.Client().Transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := remoteagent.NewVerifier(keysStub{issuer: keys}, &memReplays{}, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = verifier.Verify(context.Background(), signed(t, r, endpoint), endpoint, "token:1")
+	if !errors.Is(err, remoteagent.ErrKeysUnavailable) || remoteagent.RefusalCode(err) != remoteagent.CodeUnavailable {
+		t.Fatalf("5xx: %v", err)
+	}
+	status = http.StatusOK
+	_, err = verifier.Verify(context.Background(), signed(t, r, endpoint), endpoint, "token:1")
+	if remoteagent.RefusalCode(err) != remoteagent.CodeSignatureInvalid {
+		t.Fatalf("other key: %v", err)
 	}
 }
 

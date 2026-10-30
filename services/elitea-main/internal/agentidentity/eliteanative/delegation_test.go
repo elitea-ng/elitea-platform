@@ -56,7 +56,7 @@ func TestDelegationAssertionVerifiesAgainstTheJWKS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if typ := parsed.Headers[0].ExtraHeaders[jose.HeaderType]; typ != eliteanative.TokenType {
+	if typ := parsed.Headers[0].ExtraHeaders[jose.HeaderType]; typ != eliteanative.DelegationTokenType || typ == eliteanative.TokenType {
 		t.Fatalf("typ = %v", typ)
 	}
 	keys := set.Key(parsed.Headers[0].KeyID)
@@ -112,7 +112,7 @@ func TestDelegationAssertionRefusesInvalidRequests(t *testing.T) {
 	now := fixedNow
 	signer, es := delegationSigner(t, &now)
 	for name, mutate := range map[string]func(*eliteanative.DelegationRequest){
-		"audience not normalized": func(r *eliteanative.DelegationRequest) { r.Audience = "https://MCP.partner.example/app/9/mcp/" },
+		"audience not normalized": func(r *eliteanative.DelegationRequest) { r.Audience = "https://MCP.partner.example/app/9/./mcp/" },
 		"http audience":           func(r *eliteanative.DelegationRequest) { r.Audience = "http://mcp.partner.example/mcp" },
 		"no agent":                func(r *eliteanative.DelegationRequest) { r.Agent = "" },
 		"no project":              func(r *eliteanative.DelegationRequest) { r.TenantProjectID = 0 },
@@ -132,17 +132,60 @@ func TestDelegationAssertionRefusesInvalidRequests(t *testing.T) {
 	}
 }
 
+// A delegation assertion is never signed for the audience of a federation
+// relying party, so it cannot stand in for a federation assertion.
+func TestDelegationAssertionRefusesARelyingPartyAudience(t *testing.T) {
+	now := fixedNow
+	esPEM, _ := ecPEM(t)
+	es := &countingSigner{KeySigner: localSigner(t, "es-1", eliteanative.ES256, esPEM)}
+	cfg := baseConfig()
+	cfg.Keys = cfg.Keys[:1]
+	cfg.RelyingParties = cfg.RelyingParties[:0]
+	party := baseConfig().RelyingParties[0]
+	party.Algorithm = eliteanative.ES256
+	party.ID = "partner-mcp"
+	party.Audience = "https://MCP.partner.example/app/9/mcp/"
+	cfg.RelyingParties = append(cfg.RelyingParties, party)
+	ring, err := eliteanative.NewKeyRing([]eliteanative.RingKey{{Signer: es}}, cfg.RotationOverlap, 16*time.Minute, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := eliteanative.NewDelegationSigner(cfg, ring, eliteanative.WithClock(func() time.Time { return now }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := signer.Sign(context.Background(), delegationRequest()); !errors.Is(err, eliteanative.ErrDelegationAudienceReserved) {
+		t.Fatalf("err = %v", err)
+	}
+	if es.calls.Load() != 0 {
+		t.Fatal("signed for a relying party audience")
+	}
+}
+
 func TestNormalizeAudience(t *testing.T) {
 	for raw, want := range map[string]string{
-		"https://MCP.Example.com/app/1/mcp/":   "https://mcp.example.com/app/1/mcp",
-		"https://mcp.example.com:443/mcp":      "https://mcp.example.com/mcp",
-		"https://mcp.example.com:8443/mcp":     "https://mcp.example.com:8443/mcp",
-		"https://mcp.example.com":              "https://mcp.example.com",
-		"http://mcp.example.com/mcp":           "",
-		"https://user:pw@mcp.example.com/mcp":  "",
-		"https://mcp.example.com/mcp?x=1":      "",
-		"https://mcp.example.com/mcp#fragment": "",
-		"not a url":                            "",
+		"https://mcp.example.com/":                  "https://mcp.example.com",
+		"https://mcp.example.com/a/./b/../mcp":      "https://mcp.example.com/a/mcp",
+		"https://mcp.example.com/a/%2E%2e/mcp/%2e/": "https://mcp.example.com/mcp",
+		"https://mcp.example.com/../../mcp":         "https://mcp.example.com/mcp",
+		"https://bücher.example/mcp":                "https://xn--bcher-kva.example/mcp",
+		"https://XN--BCHER-KVA.example/mcp":         "https://xn--bcher-kva.example/mcp",
+		"https://mcp.example.com./mcp":              "https://mcp.example.com/mcp",
+		"https://[::1]:9443/mcp":                    "https://[::1]:9443/mcp",
+		"https://[2001:DB8:0:0::1]:443/mcp":         "https://[2001:db8::1]/mcp",
+		"https://[fe80::1%25eth0]/mcp":              "",
+		"https://203.0.113.7:0443/mcp":              "https://203.0.113.7/mcp",
+		"https://mcp.example.com:99999/mcp":         "",
+		"https://mcp.example.com:/mcp":              "",
+		"https://MCP.Example.com/app/1/mcp/":        "https://mcp.example.com/app/1/mcp",
+		"https://mcp.example.com:443/mcp":           "https://mcp.example.com/mcp",
+		"https://mcp.example.com:8443/mcp":          "https://mcp.example.com:8443/mcp",
+		"https://mcp.example.com":                   "https://mcp.example.com",
+		"http://mcp.example.com/mcp":                "",
+		"https://user:pw@mcp.example.com/mcp":       "",
+		"https://mcp.example.com/mcp?x=1":           "",
+		"https://mcp.example.com/mcp#fragment":      "",
+		"not a url":                                 "",
 	} {
 		got, ok := eliteanative.NormalizeAudience(raw)
 		if (want == "") == ok || got != want {

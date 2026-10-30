@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -46,6 +47,20 @@ func RefusalCode(err error) string {
 		return refusal.Code
 	}
 	return CodeUnavailable
+}
+
+// ErrKeysUnavailable: the issuer's JWKS could not be fetched or refreshed
+// (network, timeout, a non-2xx answer, an unusable document). RefusalCode
+// answers CodeUnavailable for it.
+var ErrKeysUnavailable = errors.New("remote agent: the issuer's keys cannot be fetched")
+
+// keysUnavailable tells a key set that could not get its keys from one
+// whose keys do not verify the signature. go-oidc's RemoteKeySet has no
+// sentinel: it wraps every fetch failure as "fetching keys ...", and
+// answers a mismatch as "failed to verify id token signature".
+func keysUnavailable(ctx context.Context, err error) bool {
+	return errors.Is(err, ErrKeysUnavailable) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) || ctx.Err() != nil || strings.HasPrefix(err.Error(), "fetching keys")
 }
 
 // clockSkew is the tolerance for exp, nbf and iat between deployments.
@@ -137,7 +152,7 @@ func (v *Verifier) Verify(ctx context.Context, raw, audience, presenter string) 
 		return Verified{}, refused(CodeMalformed)
 	}
 	var head header
-	if !decodeSegment(parts[0], &head) || head.Type != eliteanative.TokenType ||
+	if !decodeSegment(parts[0], &head) || head.Type != eliteanative.DelegationTokenType ||
 		(head.Algorithm != string(eliteanative.ES256) && head.Algorithm != string(eliteanative.RS256)) {
 		return Verified{}, refused(CodeMalformed)
 	}
@@ -156,6 +171,11 @@ func (v *Verifier) Verify(ctx context.Context, raw, audience, presenter string) 
 	}
 	payload, err := keys.VerifySignature(ctx, raw)
 	if err != nil {
+		if keysUnavailable(ctx, err) {
+			// Not the caller's fault: answered 503 and audited as
+			// agent_assertion_unavailable, never as a bad signature.
+			return Verified{}, fmt.Errorf("%w: %v", ErrKeysUnavailable, err)
+		}
 		return Verified{}, refused(CodeSignatureInvalid)
 	}
 	var claims inboundClaims
@@ -212,22 +232,6 @@ func singleAudience(raw json.RawMessage) (string, bool) {
 		return many[0], many[0] != ""
 	}
 	return "", false
-}
-
-// ScopeAllows answers the first toolkit type of want that the asserted
-// scope does not list ("" when every one is listed). The receiving
-// platform calls it with the toolkit types of the agent it is asked to run.
-func ScopeAllows(scope eliteanative.DelegationScope, want []string) string {
-	allowed := make(map[string]bool, len(scope.Toolkits))
-	for _, t := range scope.Toolkits {
-		allowed[t] = true
-	}
-	for _, t := range want {
-		if !allowed[t] {
-			return t
-		}
-	}
-	return ""
 }
 
 type verifiedKey struct{}
