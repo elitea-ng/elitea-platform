@@ -33,14 +33,14 @@ elitea-pg-migrate = { path = "../../libs/rust/pg-migrate" }
 elitea-vector-index = { path = "../../libs/rust/vector-index", default-features = false, features = ["tls-aws-lc"] }
 # elitea-vector's status codes (`storage::dense`); the sidecar tests read
 # the refusals' codes too. Already in the tree through the gRPC clients.
-tonic = { version = "=0.14.7", default-features = false }
+tonic = { version = "=0.14.8", default-features = false }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 # The Mermaid sanitizer is ~150 transcribed Python regular expressions,
 # several with look-around, which `regex` lacks. A backtracking engine
 # with `sre`'s match preference. Already in the tree (tiktoken-rs uses it);
 # this pins the same version as a direct dependency.
 fancy-regex = "=0.20.0"
-globset = "=0.4.20"
+globset = "=0.4.21"
 indexmap = "=2.14.2"
 rayon = "=1.12.0"
 regex = "=1.13.1"
