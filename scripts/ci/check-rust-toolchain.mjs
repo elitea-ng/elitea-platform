@@ -44,11 +44,16 @@ const RUST_IMAGE_FILES = {
   "services/elitea-worker-rust/Containerfile": 2,
 };
 
-// Cargo.toml files no Rust toolchain of ours builds as a crate with an MSRV.
+// Cargo.toml files no Rust toolchain of ours builds as a crate with an MSRV,
+// plus a vendored crate whose UPSTREAM states no rust-version: there is no
+// upstream value to compare against the pin, and inventing one would put a
+// claim upstream never made into a vendored file. Every other vendored crate
+// states one, and the generic vendored rule below still demands it.
 const EXEMPT_CRATES = {
   "libs/rust/office-core/fuzz/Cargo.toml": "cargo-fuzz harness built only by nightly cargo-fuzz, never by CI or an image",
   "services/elitea-code-runner/adapters/rust/Cargo.toml": "template compiled inside the sandbox for user code (include_str! in src/rust_profile.rs); not a crate of ours",
   "scripts/runtime/fixtures/code-data-processing/Cargo.toml": "locked acceptance fixture of user code; its manifest is a test input",
+  "libs/rust/vendor/zavora-xlsx/Cargo.toml": "vendored crate whose upstream states no rust-version (Cargo.toml.orig has none), so there is no upstream value to hold to the pin; its edition 2024 already implies 1.85 or later, and it builds and passes its suite on the pin",
 };
 
 // (e) Each validator's COMPARISON line, which must carry the pinned release.
