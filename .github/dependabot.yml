@@ -154,6 +154,17 @@ updates:
       # Repeated in all three cargo entries: every workspace that path-depends
       # on libs/rust carries zavora-* in its own lock.
       - dependency-name: "zavora-*"
+      # calamine is a patched copy in libs/rust/vendor too, applied through
+      # [patch.crates-io] (libs/rust/vendor/README.md). Cargo DROPS a patch
+      # whose version no dependant accepts, and it only warns: nothing fails.
+      # `xberg` requires `calamine ^0.36.1` and the copy is 0.36.2, so a
+      # scanner bump to calamine 0.37.0 would leave the patch unused. The
+      # lockfiles would then resolve the registry calamine and its `zip ^8.6`
+      # again, and that restores CVE-2026-115905, CVE-2026-115907,
+      # CVE-2026-115908 and CVE-2026-115909. A re-vendor is a reviewed diff.
+      # Lift when xberg accepts calamine 0.37, whose upstream already moved to
+      # zip 9. In all three cargo entries, like zavora-* above.
+      - dependency-name: "calamine"
       # adk-agent, adk-runner and adk-sandbox are patched copies in
       # libs/rust/vendor applied through [patch.crates-io]; Dependabot cannot
       # move a path crate, so a bump of their pins resolves the unpatched
@@ -184,6 +195,17 @@ updates:
       # Repeated in all three cargo entries: every workspace that path-depends
       # on libs/rust carries zavora-* in its own lock.
       - dependency-name: "zavora-*"
+      # calamine is a patched copy in libs/rust/vendor too, applied through
+      # [patch.crates-io] (libs/rust/vendor/README.md). Cargo DROPS a patch
+      # whose version no dependant accepts, and it only warns: nothing fails.
+      # `xberg` requires `calamine ^0.36.1` and the copy is 0.36.2, so a
+      # scanner bump to calamine 0.37.0 would leave the patch unused. The
+      # lockfiles would then resolve the registry calamine and its `zip ^8.6`
+      # again, and that restores CVE-2026-115905, CVE-2026-115907,
+      # CVE-2026-115908 and CVE-2026-115909. A re-vendor is a reviewed diff.
+      # Lift when xberg accepts calamine 0.37, whose upstream already moved to
+      # zip 9. In all three cargo entries, like zavora-* above.
+      - dependency-name: "calamine"
 
   - package-ecosystem: cargo
     directories:
@@ -201,6 +223,17 @@ updates:
       # Repeated in all three cargo entries: every workspace that path-depends
       # on libs/rust carries zavora-* in its own lock.
       - dependency-name: "zavora-*"
+      # calamine is a patched copy in libs/rust/vendor too, applied through
+      # [patch.crates-io] (libs/rust/vendor/README.md). Cargo DROPS a patch
+      # whose version no dependant accepts, and it only warns: nothing fails.
+      # `xberg` requires `calamine ^0.36.1` and the copy is 0.36.2, so a
+      # scanner bump to calamine 0.37.0 would leave the patch unused. The
+      # lockfiles would then resolve the registry calamine and its `zip ^8.6`
+      # again, and that restores CVE-2026-115905, CVE-2026-115907,
+      # CVE-2026-115908 and CVE-2026-115909. A re-vendor is a reviewed diff.
+      # Lift when xberg accepts calamine 0.37, whose upstream already moved to
+      # zip 9. In all three cargo entries, like zavora-* above.
+      - dependency-name: "calamine"
       # adk-agent, adk-runner and adk-sandbox are patched copies in
       # libs/rust/vendor applied through [patch.crates-io]; Dependabot cannot
       # move a path crate, so a bump of their pins resolves the unpatched

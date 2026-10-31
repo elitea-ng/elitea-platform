@@ -1,0 +1,59 @@
+[package]
+name = "zavora-xlsx"
+version = "0.1.2"
+edition = "2024"
+license = "Apache-2.0"
+description = "High-performance Excel xlsx reader, writer, and editor"
+keywords = ["excel", "xlsx", "spreadsheet", "ooxml"]
+categories = ["parser-implementations", "encoding"]
+repository = "https://github.com/zavora-ai/zavora-xlsx"
+homepage = "https://zavora.ai"
+authors = ["James Karanja Maina"]
+readme = "README.md"
+exclude = [
+    "output/",
+    ".kiro/",
+    ".DS_Store",
+    "*.xlsx",
+    "*.xls",
+    "target/",
+]
+
+[dependencies]
+quick-xml = { version = "0.41", features = ["encoding"] }
+zip = { version = "=9.1.3", default-features = false, features = ["deflate"] }
+atoi_simd = "0.16"
+fast-float2 = "0.2"
+memmap2 = { version = "0.9", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+tokio = { version = "1", features = ["rt", "fs"], optional = true }
+
+[features]
+default = []
+## Memory-mapped file I/O via `memmap2`
+mmap = ["dep:memmap2"]
+## XLSB format reading (experimental)
+xlsb = []
+## Legacy XLS format reading (experimental)
+xls = []
+## ODS format support (experimental)
+ods = []
+## Encrypted workbook support (experimental)
+crypto = []
+## Serialize/deserialize rows via `serde`
+serde-support = ["dep:serde"]
+## Async file I/O via `tokio`
+async-tokio = ["dep:tokio"]
+## WASM target support
+wasm = []
+## C FFI bindings
+cffi = []
+
+[dev-dependencies]
+calamine = "0.36"
+tempfile = "3"
+serde = { version = "1", features = ["derive"] }
+zavora-xlsx-derive = { path = "zavora-xlsx-derive", version = "0.1.1" }
+
+[workspace]
+members = ["zavora-xlsx-cli", "zavora-xlsx-node", "zavora-xlsx-derive", "zavora-xlsx-python"]

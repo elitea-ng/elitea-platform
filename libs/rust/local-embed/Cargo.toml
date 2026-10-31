@@ -24,8 +24,8 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 thiserror = "2.0.21"
-candle-core = { version = "0.11.0", optional = true }
-candle-nn = { version = "0.11.0", optional = true }
+candle-core = { version = "0.11.1", optional = true }
+candle-nn = { version = "0.11.1", optional = true }
 # `onig` only: no progress bars, no hf-hub (the manager downloads), and its
 # serde_json is default-features (checked by the desktop's
 # `serde_json_preserve_order_is_off` test).
@@ -37,15 +37,15 @@ tokenizers = { version = "0.23.2", default-features = false, features = ["onig"]
 tokio = { version = "1.54.1", features = ["time"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-candle-core = { version = "0.11.0", optional = true, features = ["metal"] }
-candle-nn = { version = "0.11.0", optional = true, features = ["metal"] }
+candle-core = { version = "0.11.1", optional = true, features = ["metal"] }
+candle-nn = { version = "0.11.1", optional = true, features = ["metal"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.5", features = ["fs", "process"] }
 
 [dev-dependencies]
 # The reference BERT the fused-attention one is checked against.
-candle-transformers = "0.11.0"
+candle-transformers = "0.11.1"
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["macros", "rt", "time"] }
 

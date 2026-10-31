@@ -43,6 +43,29 @@ jobs:
       - name: Check dependabot coverage
         run: bash scripts/ci/check-dependabot-coverage.sh
 
+  # PR #1546 moved every Rust build graph onto zip 9.1.3, which clears
+  # CVE-2026-115905 (CRITICAL) and CVE-2026-115907/115908/115909 (HIGH). The
+  # fix rests on five `[patch.crates-io]` path entries. Cargo DROPS a patch
+  # that no dependant accepts and only prints a warning, so the fix can undo
+  # itself with every test still green, and the nightly image scan is the next
+  # thing that notices. This gate reads every tracked Cargo.lock and fails on a
+  # zip that is not the pin, on a patched crate that resolved from the registry
+  # and on a run that read nothing.
+  #
+  # Unfiltered, like the job above: the change that breaks this is a manifest
+  # or a lock anywhere in the tree. scripts/ci/check-zip-pin-test.sh proves the
+  # gate red, case by case, in no-binaries.yml.
+  zip-pin:
+    name: The zip CVE pin holds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The script reads git ls-files, so it needs the index, not history. It
+      # needs no cargo, no node and no network.
+      - name: One zip everywhere, and the zip-9 patches applied
+        run: bash scripts/ci/check-zip-pin.sh
+
   # Dependabot cannot see `azure/setup-helm`'s `version:` input, so it never
   # proposes a newer Helm. This compares the pins (scripts/ci/check-helm-version.mjs)
   # with the newest Helm 4 and Helm 3 releases and fails when either is behind.

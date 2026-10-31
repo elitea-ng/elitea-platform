@@ -53,6 +53,14 @@ jobs:
         run: |
           bash scripts/ci/check-rust-toolchain.sh
           bash scripts/ci/check-rust-toolchain-test.sh
+      # One zip everywhere (PR #1546): the zip-9 CVE pin, and the five
+      # `[patch.crates-io]` entries that carry it, held across every tracked
+      # Cargo.lock. dependency-scanning.yml runs the gate itself; the self-test
+      # runs here, beside the toolchain one, because it needs no network and
+      # this workflow has no path filter. It breaks one input per case and
+      # requires the gate to name it.
+      - name: The zip pin gate is proved red
+        run: bash scripts/ci/check-zip-pin-test.sh
       # One Helm in CI (v4, every azure/setup-helm step) plus the one Helm 3
       # render Argo CD needs (helm-lint.yml, id helm3). Dependabot bumps the
       # action but never its `version:` input; dependency-scanning.yml runs
