@@ -115,10 +115,17 @@ fn error_and_limit_enums_carry_no_vendor_error() {
 /// `workspace.*` forms, and a `[dependencies.<name>]` subtable. Line comments
 /// are removed first.
 ///
+/// The header of a dependency table is collected with the lines inside it,
+/// because a subtable carries the crate name in the header and nowhere else:
+/// `[dependencies.zavora-xlsx]` holds only `version = "=0.1.2"` in its body.
+/// A plain header, like `[dependencies]` or `[target.'cfg(unix)'.dependencies]`,
+/// names no crate, so it can match no crate name.
+///
 /// `[patch.crates-io]` is not a dependency table. A patch redirects a crate
 /// that something else already requires, and `libs/rust/Cargo.toml` and
 /// `services/elitea-worker-rust/Cargo.toml` carry zavora patch entries on
-/// purpose (vendor/README.md). A comment is not a dependency either.
+/// purpose (vendor/README.md). Its header is therefore not collected either.
+/// A comment is not a dependency.
 fn dependency_lines(manifest: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut inside = false;
@@ -136,6 +143,9 @@ fn dependency_lines(manifest: &str) -> Vec<String> {
                     "dependencies" | "dev-dependencies" | "build-dependencies"
                 )
             });
+            if inside {
+                out.push(line.to_owned());
+            }
         } else if inside && !line.is_empty() {
             out.push(line.to_owned());
         }
@@ -164,12 +174,15 @@ fn only_this_crate_depends_on_the_zavora_crates() {
     // the false-green class of issue #423.
     let own = fs::canonicalize(crate_dir()).unwrap();
     let root = fs::canonicalize(crate_dir().join("../../..")).unwrap();
+    // Walk the whole repository. A fixed list of roots was the guard's real
+    // coverage boundary: it held `desktop`, which does not exist, and it
+    // missed `scripts/runtime/fixtures/code-data-processing`. `collect` skips
+    // `target`, `node_modules`, `.git` and `vendor` by name.
     let mut manifests: Vec<PathBuf> = Vec::new();
-    for dir in ["libs/rust", "services", "apps", "desktop"] {
-        collect(&root.join(dir), &mut manifests, 0);
-    }
+    collect(&root, &mut manifests, 0);
+    // Non-vacuity floor. The walk found 39 manifests when this was written.
     assert!(
-        manifests.len() > 10,
+        manifests.len() > 36,
         "found {} manifests: the walk is broken",
         manifests.len()
     );
@@ -193,8 +206,12 @@ fn only_this_crate_depends_on_the_zavora_crates() {
             );
         }
     }
+    // Non-vacuity floors, close to the real counts: the scan read 37 other
+    // manifests and 684 dependency entries when this was written. A walk that
+    // stopped finding most of the tree must fail, not report a pass
+    // (scripts/ci/check-rust-toolchain.sh, point (d)).
     assert!(
-        foreign > 10 && entries > 100,
+        foreign > 34 && entries > 600,
         "the scan read {foreign} other manifests and {entries} dependency entries: it is checking nothing"
     );
 }
@@ -215,12 +232,52 @@ fn the_dependency_scan_catches_a_leak() {
             .iter()
             .any(|l| l.contains("zavora"))
     );
+    // A subtable names the crate in the header only. A collected line must
+    // contain the name. `!is_empty()` proved nothing here: the body line
+    // `version = "=0.1.2"` satisfied it while the crate name escaped.
     let sub = "[dependencies.zavora-xlsx]\nversion = \"=0.1.2\"\n";
-    assert!(!dependency_lines(sub).is_empty());
+    assert!(
+        dependency_lines(sub).iter().any(|l| l.contains("zavora")),
+        "a subtable dependency must be found: {:?}",
+        dependency_lines(sub)
+    );
+    let sub_dev = "[dev-dependencies.zavora-docx]\nversion = \"=0.1.4\"\n";
+    assert!(
+        dependency_lines(sub_dev)
+            .iter()
+            .any(|l| l.contains("zavora")),
+        "a dev subtable dependency must be found"
+    );
+    let sub_target = "[target.'cfg(unix)'.dependencies.zavora-slide]\nversion = \"=0.1.1\"\n";
+    assert!(
+        dependency_lines(sub_target)
+            .iter()
+            .any(|l| l.contains("zavora")),
+        "a target subtable dependency must be found"
+    );
+
+    // A plain dependency table header names no crate, so it is no false
+    // positive. The header is collected; it carries no crate name.
+    for plain in [
+        "[dependencies]\nserde = \"1\"\n",
+        "[dev-dependencies]\nserde = \"1\"\n",
+        "[target.'cfg(unix)'.dependencies]\nserde = \"1\"\n",
+    ] {
+        assert!(
+            !dependency_lines(plain).iter().any(|l| l.contains("zavora")),
+            "a plain header must name no crate: {:?}",
+            dependency_lines(plain)
+        );
+    }
 
     // The three things that are not a dependency.
     let patch = "[patch.crates-io]\nzavora-slide = { path = \"vendor/zavora-slide\" }\n";
     assert!(dependency_lines(patch).is_empty(), "a patch is not a dep");
+    let patch_sub = "[patch.crates-io.zavora-slide]\npath = \"vendor/zavora-slide\"\n";
+    assert!(
+        dependency_lines(patch_sub).is_empty(),
+        "a patch subtable is not a dep"
+    );
     let comment = "[dependencies]\n# zavora-xlsx moved to elitea-office-core\nserde = \"1\"\n";
     assert!(
         !dependency_lines(comment)
@@ -243,7 +300,12 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
         let p = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
         if p.is_dir() {
-            if depth < 4 && !matches!(name.as_str(), "target" | "node_modules" | ".git" | "vendor")
+            // The walk starts at the repository root, so the limit counts from
+            // there. The deepest manifest is
+            // `libs/rust/local-tools/tests/fixtures/projects/cargo/Cargo.toml`,
+            // 7 directories down; `depth < 8` reaches it and keeps one level
+            // of headroom. The old limit of 4 missed it.
+            if depth < 8 && !matches!(name.as_str(), "target" | "node_modules" | ".git" | "vendor")
             {
                 collect(&p, out, depth + 1);
             }
