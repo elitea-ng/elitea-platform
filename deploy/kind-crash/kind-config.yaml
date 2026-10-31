@@ -1,0 +1,43 @@
+# kind cluster for the Kubernetes crash-rehearsal profile (T1+, prepared, not run).
+#
+#   kind create cluster --config deploy/kind-crash/kind-config.yaml
+#
+# Nodes are Docker containers named elitea-crash-control-plane and
+# elitea-crash-worker. KX-04 kills the second with `docker kill`.
+#
+# Node roles (applied by `crash-stack.sh up`, because a kind config cannot label
+# nodes portably across kubeadm API versions):
+#   elitea-crash-control-plane  elitea.ai/crash-role=platform   Main, gateway, NATS, PostgreSQL
+#   elitea-crash-worker         elitea.ai/crash-role=execution  Worker, Supervisor, sandbox pods
+# The script also removes the control-plane NoSchedule taint so platform pods
+# can run there.
+#
+# Image digest pinned. Pulled and approved by the owner; preflight checks it is
+# present locally.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: elitea-crash
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    kubeadmConfigPatches:
+      # deploy/runtime/sandbox-deployment.md requires a kubelet pids limit.
+      - |
+        kind: KubeletConfiguration
+        podPidsLimit: 128
+  - role: worker
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    kubeadmConfigPatches:
+      - |
+        kind: KubeletConfiguration
+        podPidsLimit: 128
+
+# Default CNI (kindnet) is kept. NetworkPolicy enforcement by kindnet is
+# UNVERIFIED for this node image; KX-06 must probe it first (faults/README.md).
+# If the probe shows no enforcement, KX-06 needs Calico, which pulls images and
+# needs owner approval. To use Calico, replace the line above this comment block
+# with the following and run `ELITEA_CRASH_CNI=calico crash-stack.sh up`:
+#
+# networking:
+#   disableDefaultCNI: true
+#   podSubnet: 192.168.0.0/16

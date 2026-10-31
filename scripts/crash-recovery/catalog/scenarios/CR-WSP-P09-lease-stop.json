@@ -1,0 +1,63 @@
+{
+  "id": "CR-WSP-P09-lease-stop",
+  "cell": "Worker + Supervisor frozen past the leases x P09, user Stop while frozen",
+  "matrix_cell": "Worker (container restart) x P09",
+  "now": "L (finding: preparation failure on a recovery visit never settles; fix in #1084, pending)",
+  "target": "R",
+  "fixture": "python-prepared-sleep-50",
+  "trigger": {
+    "kind": "obs",
+    "until": "preparation_resolving",
+    "timeout_s": 180,
+    "params": {
+      "min_age_s": 1
+    }
+  },
+  "faults": [
+    {
+      "action": "pause",
+      "target": "supervisor"
+    },
+    {
+      "action": "pause",
+      "target": "worker"
+    },
+    {
+      "action": "wait",
+      "seconds": 40
+    },
+    {
+      "action": "user_stop"
+    },
+    {
+      "action": "wait",
+      "seconds": 60
+    },
+    {
+      "action": "unpause",
+      "target": "worker"
+    },
+    {
+      "action": "unpause",
+      "target": "supervisor"
+    }
+  ],
+  "expect": {
+    "takeovers": [
+      1
+    ],
+    "settlement": "CANCELLED",
+    "error_codes": [],
+    "budget_s": 480,
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    }
+  },
+  "notes": "Stop variant of CR-WSP-P09-lease: the user's Stop (public API) lands while the Worker is frozen past its claim lease. Expected: CANCELLED once, NATS drained. Before #1084 the run is expected to hang like CR-WSP-P09-lease (Stop recorded, never settled). Run it alone and last.",
+  "gap": "#1084 (pending): a preparation failure seen on a recovery visit becomes an unknown-effect node-recovery receipt that Main rejects; the delivery loops and Stop does not settle",
+  "expected_gap_class": "L",
+  "repeat": 1,
+  "browser": false,
+  "tier": "T0b-gap"
+}
