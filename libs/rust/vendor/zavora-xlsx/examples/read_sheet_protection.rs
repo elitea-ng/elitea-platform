@@ -2,6 +2,8 @@
 use zavora_xlsx::Workbook;
 
 fn main() {
+    // Elitea patch: the crate does not create `target/` when CARGO_TARGET_DIR points elsewhere, so create it.
+    std::fs::create_dir_all("target").unwrap();
     let path = "target/example_read_sheet_protection.xlsx";
 
     // Create a workbook with a protected sheet

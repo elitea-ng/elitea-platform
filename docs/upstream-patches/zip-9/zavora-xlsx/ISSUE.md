@@ -10,7 +10,7 @@ as an issue, or fold it into the same pull request.
 
 ## Title
 
-Four test suites fail on a clean checkout, because no test creates `output/`
+Five test suites fail on a clean checkout, because no test creates `output/` or `target/`
 
 ## Body
 
@@ -52,6 +52,23 @@ there, or add one shared helper that each of the four suites calls. The
 A `tempfile::TempDir` is better still. It gives each test its own directory and
 removes the shared-state coupling between suites.
 
+### A second instance: relative `target/` paths
+
+`tests/read_sheet_protection_tests.rs` has four tests that write to a relative
+`target/` path, and `examples/read_sheet_protection.rs` does the same. They pass
+only because cargo creates `target/` inside the crate directory by default.
+When `CARGO_TARGET_DIR` points outside the crate, which is a common CI
+configuration, that directory does not exist. The four tests then fail with:
+
+```
+Io(NotFound)
+```
+
+A relative `target/` path is fragile in the same way as `output/`. The
+`CARGO_TARGET_DIR` setting exposes it. The correction is the same: call
+`std::fs::create_dir_all("target")` before the first write, or use a
+`tempfile::TempDir`.
+
 ### Reproduction
 
 ```bash
@@ -61,3 +78,11 @@ cd /tmp/z/zavora-xlsx-0.1.2 && cargo test --no-fail-fast
 ```
 
 Expect ten failures with `Io(NotFound)`.
+
+To see the `target/` failures, set the target directory outside the crate:
+
+```bash
+CARGO_TARGET_DIR=/tmp/xt cargo test --test read_sheet_protection_tests
+```
+
+Expect four failures with `Io(NotFound)`.

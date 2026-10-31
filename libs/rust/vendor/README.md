@@ -523,7 +523,7 @@ version bump cannot remove them. This copy links the platform's own `zip`
 | Source | `https://static.crates.io/crates/zavora-xlsx/zavora-xlsx-0.1.2.crate` |
 | Archive SHA-256 | `c5e2a142df28712030b103d2ac9dad6d127ed026a2d9053852c799bff7b63e67` (equals the crates.io index `cksum`) |
 | Upstream commit | `6e47878cc5631c48fd5cf411785a78a458dca2cb` (`.cargo_vcs_info.json`), `https://github.com/zavora-ai/zavora-xlsx` |
-| Tree digest | `c31c311e183e1c3b3c09f4165bf4bdf66220c3426ec1f1e94326cdd523cc1e00` (242 files; command below) |
+| Tree digest | `60d7fdf69b94d5e183111f23c73efbfb8194a0ed65781c8250a2044bdd66f611` (242 files; command below) |
 | Licence | `Apache-2.0` (its `Cargo.toml`); the text is in the directory (`LICENSE`) |
 | Version | `0.1.2`, unchanged. `office-core/tests/isolation.rs` asserts the exact `=0.1.2` pin and the locked version. A patch crate must keep the version it replaces. |
 
@@ -536,6 +536,7 @@ version bump cannot remove them. This copy links the platform's own `zip`
 | `src/workbook/mod.rs` | Two entry-name scans (the pass-through part list and `pictures`) use `.and_then(\|e\| e.name().ok().map(Cow::into_owned))`. | The same signature change. Both scans already dropped an entry that `by_index_raw` refused, so they now drop an undecodable name the same way. |
 | 10 files under `tests/` | 37 call sites add one `unwrap()` after `name()` or `name_for_index(i).unwrap()`. | The same signature change. `grep -rn '\.name()\.unwrap()\|name_for_index(i)\.unwrap()\.unwrap()' tests/` lists every one. |
 | 4 files under `tests/` | 10 tests get one `std::fs::create_dir_all("output")` call, each marked `// Elitea patch`. The files are `format_variants_tests.rs` (4 tests), `named_ranges_crud_tests.rs` (2), `streaming_perf_tests.rs` (3) and `theme_color_tests.rs` (1). | The tests write to a relative `output/` path that nothing creates, so they failed with `Io(NotFound)` on a clean checkout. `tests/demo_integration.rs` already creates its directory this way. The call makes the suite pass without a prepared directory. |
+| `tests/read_sheet_protection_tests.rs`, `examples/read_sheet_protection.rs` | 4 tests and 1 example get one `std::fs::create_dir_all("target")` call, each marked `// Elitea patch`. | They write to a relative `target/` path. Cargo creates `target/` inside the crate only when `CARGO_TARGET_DIR` is unset, so the 4 tests failed with `Io(NotFound)` when it points elsewhere, a common CI setting. The call makes them pass with any target directory. |
 | `Cargo.lock` | Removed (see "Why no `Cargo.lock`" above). | Cargo ignores a path dependency's lockfile, and GitHub's dependency graph reads every lockfile in the repository. |
 | `AGENTS.md` | Removed. | The archive ships the upstream project's own agent instructions. An agent that works here finds the file and follows it, and it prescribes a five-crate workspace and `cargo test --workspace`, which do not exist in this repository. |
 
@@ -555,7 +556,7 @@ call it.
 curl -sL https://static.crates.io/crates/zavora-xlsx/zavora-xlsx-0.1.2.crate -o /tmp/x.crate
 shasum -a 256 /tmp/x.crate                     # the archive SHA-256 above
 tar xzf /tmp/x.crate -C /tmp && rm /tmp/zavora-xlsx-0.1.2/Cargo.lock
-diff -r /tmp/zavora-xlsx-0.1.2 vendor/zavora-xlsx   # the 18 files in the table,
+diff -r /tmp/zavora-xlsx-0.1.2 vendor/zavora-xlsx   # the 20 files in the table,
                                                    # and `Only in ...: AGENTS.md`
 (cd vendor/zavora-xlsx && find . -type f | LC_ALL=C sort | xargs shasum -a 256) | shasum -a 256
 (cd vendor/zavora-xlsx && cargo check --all-features && cargo test --all-features)

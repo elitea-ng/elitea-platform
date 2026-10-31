@@ -2,6 +2,8 @@ use zavora_xlsx::Workbook;
 
 #[test]
 fn test_protection_roundtrip_no_password() {
+    // Elitea patch: the crate does not create `target/` when CARGO_TARGET_DIR points elsewhere, so create it.
+    std::fs::create_dir_all("target").unwrap();
     let path = "target/test_protection_roundtrip_no_pw.xlsx";
     {
         let mut wb = Workbook::new();
@@ -37,6 +39,8 @@ fn test_protection_roundtrip_no_password() {
 
 #[test]
 fn test_protection_roundtrip_with_password() {
+    // Elitea patch: the crate does not create `target/` when CARGO_TARGET_DIR points elsewhere, so create it.
+    std::fs::create_dir_all("target").unwrap();
     let path = "target/test_protection_roundtrip_pw.xlsx";
     {
         let mut wb = Workbook::new();
@@ -61,6 +65,8 @@ fn test_protection_roundtrip_with_password() {
 
 #[test]
 fn test_no_protection_returns_none() {
+    // Elitea patch: the crate does not create `target/` when CARGO_TARGET_DIR points elsewhere, so create it.
+    std::fs::create_dir_all("target").unwrap();
     let path = "target/test_no_protection.xlsx";
     {
         let mut wb = Workbook::new();
@@ -79,6 +85,8 @@ fn test_no_protection_returns_none() {
 
 #[test]
 fn test_protection_roundtrip_edit_mode() {
+    // Elitea patch: the crate does not create `target/` when CARGO_TARGET_DIR points elsewhere, so create it.
+    std::fs::create_dir_all("target").unwrap();
     let path = "target/test_protection_edit_mode.xlsx";
     {
         let mut wb = Workbook::new();
