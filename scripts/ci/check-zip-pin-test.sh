@@ -13,7 +13,8 @@
 # zip, a lock on zip 8.6.0 (the CVE version), a lock on a later 9.x (what a
 # caret resolves), a lock with two zip versions, a patched crate that resolved
 # from the registry (a DROPPED [patch.crates-io] entry), a patched crate at the
-# wrong version, and every non-vacuity floor.
+# wrong version, and every non-vacuity floor. One more case gives the gate a
+# large lockfile, to hold the reader-pipe fix. Read its own comment below.
 #
 #   bash scripts/ci/check-zip-pin-test.sh
 set -euo pipefail
@@ -51,11 +52,11 @@ expect() {
   if [ "$want" = pass ] && [ "$status" -eq 0 ]; then
     echo "ok   ${name}"; passed=$((passed + 1)); return
   fi
-  if [ "$want" = fail ] && [ "$status" -ne 0 ] && printf '%s' "$output" | grep -qF -- "$needle"; then
+  if [ "$want" = fail ] && [ "$status" -ne 0 ] && grep -qF -- "$needle" <<< "$output"; then
     echo "ok   ${name}"; passed=$((passed + 1)); return
   fi
   echo "FAIL ${name}: wanted ${want} (message: ${needle:-none}), got exit ${status}:" >&2
-  printf '%s\n' "$output" | grep '^ERROR' | head -4 | sed 's/^/       /' >&2
+  awk '/^ERROR/ && n++ < 4' <<< "$output" | sed 's/^/       /' >&2
   failed=$((failed + 1))
 }
 
@@ -97,7 +98,36 @@ set_pkg() {
   git -C "$WORK/tree" add -A
 }
 
+# grow_lock <lock> <blocks>: append <blocks> filler `[[package]]` blocks to a
+# Cargo.lock of the copy. It makes the lockfile large; it changes no verdict,
+# because no filler block names `zip` or a patched crate.
+grow_lock() {
+  awk -v n="$2" 'BEGIN {
+    for (i = 0; i < n; i++)
+      printf "\n[[package]]\nname = \"zzz-pipe-filler-%05d\"\nversion = \"0.1.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n", i
+  }' >> "$WORK/tree/$1"
+  git -C "$WORK/tree" add -A
+}
+
 fresh; expect "the unbroken tree passes" pass ""
+
+# A LARGE LOCKFILE. Do not remove this case, and do not make its fixture
+# small. The gate reads each lockfile into a shell variable, then matches it
+# with awk. The first version of the gate piped that variable into awk, and the
+# awk program called `exit` on its first match. `exit` closes the read end of
+# the pipe. The kernel pipe buffer holds only 65536 bytes, so a bigger variable
+# made the writer block, then receive EPIPE, and `set -euo pipefail` turned
+# that into a red run. The gate was 636 bytes below the buffer on the real
+# tree: `lock_packages libs/rust/Cargo.lock` gave 64900 bytes. Every case below
+# passed, and the gate still failed on CI, where the merge commit held a
+# larger lockfile. This case grows libs/rust/Cargo.lock far past the buffer.
+# `calamine`, the first patched crate the gate looks for, stays near the start
+# of that lockfile, so awk stops after about 5700 bytes while most of the data
+# is unwritten. The fixture is about 1 MiB, much more than the buffer, because
+# an awk implementation reads ahead and can hide a smaller overrun. The gate
+# must still pass: the data is only bigger, not wrong.
+fresh; grow_lock libs/rust/Cargo.lock 12000
+expect "a large lockfile does not break the reader pipe" pass ""
 
 # (a) the pin in the manifests
 fresh; edit libs/rust/vendor/calamine/Cargo.toml 's/^version = "=9\.1\.3"$/version = "9.1.3"/'
@@ -149,7 +179,7 @@ expect "(d) an empty tree is refused" fail "found no tracked Cargo.lock at all"
 total=$((passed + failed))
 expected_cases="$(grep -cE '^fresh(;|$)' "$0")"
 echo "${passed}/${total} gate cases behave (${expected_cases} declared)"
-if [ "$failed" -ne 0 ] || [ "$total" -ne "$expected_cases" ] || [ "$total" -lt 17 ]; then
+if [ "$failed" -ne 0 ] || [ "$total" -ne "$expected_cases" ] || [ "$total" -lt 18 ]; then
   echo "ERROR: the zip pin gate did not behave in every case" >&2
   exit 1
 fi

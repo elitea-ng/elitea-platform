@@ -80,6 +80,18 @@
 # then the assertion (a) list and the lockfile assertions (b) and (c) cover
 # every path a zip version can take.
 #
+# NO PIPE INTO AN EARLY-EXIT READER. This script reads a variable with a bash
+# here-string (`awk ... <<< "$var"`), never with `printf | awk`. A here-string
+# is backed by a temporary file, so the reader can `exit` on its first match at
+# no risk. A pipe cannot: the kernel pipe buffer holds 65536 bytes, `awk ...
+# exit` or `grep -q` closes the read end on the first match, and a writer with
+# more data then gets EPIPE. `set -euo pipefail` turns that into a red run.
+# That defect shipped in this gate: `lock_packages libs/rust/Cargo.lock` gave
+# 64900 bytes, 636 bytes below the buffer, so it passed on the branch and
+# failed on the merge commit, where the lockfile was larger. Keep the
+# here-strings. check-zip-pin-test.sh case "a large lockfile does not break the
+# reader pipe" holds the line.
+#
 # It needs no network, no toolchain and no cargo:
 #   bash scripts/ci/check-zip-pin.sh
 # Point it at another tree (the self-test does) with ZIP_PIN_ROOT.
@@ -235,7 +247,7 @@ done
 
 # Any other tracked manifest that declares zip must join the list above.
 for manifest in $(git ls-files -- '*Cargo.toml'); do
-  printf '%s\n' "$manifests" | grep -qxF "$manifest" && continue
+  grep -qxF "$manifest" <<< "$manifests" && continue
   other="$(zip_requirements "$manifest" "$(skip_dev_for "$manifest")")"
   [ -z "$other" ] && continue
   note "$manifest: declares zip ($(printf '%s' "$other" | cut -f2 | tr '\n' ' ')) but is not in ZIP_PIN_MANIFESTS in this script; add it there, with an exact pin"
@@ -262,7 +274,7 @@ for crate in $PATCHED_CRATES; do
 done
 
 vendored_version_of() {
-  printf '%s\n' "$vendored_versions" | awk -v c="$1" '$1 == c { print $2; exit }'
+  awk -v c="$1" '$1 == c { print $2; exit }' <<< "$vendored_versions"
 }
 
 # ── (b) and (c) the lockfiles ────────────────────────────────────────────────
@@ -301,7 +313,7 @@ for lock in $lockfiles; do
   fi
 
   for crate in $PATCHED_CRATES; do
-    entry="$(printf '%s\n' "$packages" | awk -F'\t' -v c="$crate" '$1 == c { print $2 "\t" $3; exit }')"
+    entry="$(awk -F'\t' -v c="$crate" '$1 == c { print $2 "\t" $3; exit }' <<< "$packages")"
     [ -z "$entry" ] && continue
     patched_entries=$((patched_entries + 1))
     version="$(printf '%s' "$entry" | cut -f1)"
