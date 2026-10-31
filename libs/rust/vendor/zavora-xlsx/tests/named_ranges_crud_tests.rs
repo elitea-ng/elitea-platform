@@ -122,6 +122,8 @@ fn test_remove_named_range_not_found() {
 /// Test that CRUD operations serialize correctly to XML (round-trip).
 #[test]
 fn test_named_ranges_crud_roundtrip() {
+    // Elitea patch: the published archive excludes `output/`, so create it.
+    std::fs::create_dir_all("output").unwrap();
     let path = "output/test_named_ranges_crud.xlsx";
 
     // Create workbook, add names, update one, remove one, save
@@ -187,6 +189,8 @@ fn test_named_ranges_crud_roundtrip() {
 /// Test that the XML output contains correct definedName elements with localSheetId.
 #[test]
 fn test_named_ranges_xml_serialization() {
+    // Elitea patch: the published archive excludes `output/`, so create it.
+    std::fs::create_dir_all("output").unwrap();
     let path = "output/test_named_ranges_xml.xlsx";
 
     let mut wb = Workbook::new();

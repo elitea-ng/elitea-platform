@@ -523,7 +523,7 @@ version bump cannot remove them. This copy links the platform's own `zip`
 | Source | `https://static.crates.io/crates/zavora-xlsx/zavora-xlsx-0.1.2.crate` |
 | Archive SHA-256 | `c5e2a142df28712030b103d2ac9dad6d127ed026a2d9053852c799bff7b63e67` (equals the crates.io index `cksum`) |
 | Upstream commit | `6e47878cc5631c48fd5cf411785a78a458dca2cb` (`.cargo_vcs_info.json`), `https://github.com/zavora-ai/zavora-xlsx` |
-| Tree digest | `910e137a8e8245ad50e9279ddca462eaf7df1471a3c2add5772b3bb67ab35107` (243 files; command below) |
+| Tree digest | `c31c311e183e1c3b3c09f4165bf4bdf66220c3426ec1f1e94326cdd523cc1e00` (242 files; command below) |
 | Licence | `Apache-2.0` (its `Cargo.toml`); the text is in the directory (`LICENSE`) |
 | Version | `0.1.2`, unchanged. `office-core/tests/isolation.rs` asserts the exact `=0.1.2` pin and the locked version. A patch crate must keep the version it replaces. |
 
@@ -535,7 +535,9 @@ version bump cannot remove them. This copy links the platform's own `zip`
 | `src/zip/zip_reader.rs` | `ZipReader::new` reads each entry name through `let Ok(name) = entry.name()`. | `zip` 9 returns `Result<Cow<str>, ZipError>` from `ZipFile::name`, not `&str`: a name is decoded on demand and can fail. An entry whose name does not decode stays out of the case-insensitive path cache, exactly as an entry that does not open already did. |
 | `src/workbook/mod.rs` | Two entry-name scans (the pass-through part list and `pictures`) use `.and_then(\|e\| e.name().ok().map(Cow::into_owned))`. | The same signature change. Both scans already dropped an entry that `by_index_raw` refused, so they now drop an undecodable name the same way. |
 | 10 files under `tests/` | 37 call sites add one `unwrap()` after `name()` or `name_for_index(i).unwrap()`. | The same signature change. `grep -rn '\.name()\.unwrap()\|name_for_index(i)\.unwrap()\.unwrap()' tests/` lists every one. |
+| 4 files under `tests/` | 10 tests get one `std::fs::create_dir_all("output")` call, each marked `// Elitea patch`. The files are `format_variants_tests.rs` (4 tests), `named_ranges_crud_tests.rs` (2), `streaming_perf_tests.rs` (3) and `theme_color_tests.rs` (1). | The tests write to a relative `output/` path that nothing creates, so they failed with `Io(NotFound)` on a clean checkout. `tests/demo_integration.rs` already creates its directory this way. The call makes the suite pass without a prepared directory. |
 | `Cargo.lock` | Removed (see "Why no `Cargo.lock`" above). | Cargo ignores a path dependency's lockfile, and GitHub's dependency graph reads every lockfile in the repository. |
+| `AGENTS.md` | Removed. | The archive ships the upstream project's own agent instructions. An agent that works here finds the file and follows it, and it prescribes a five-crate workspace and `cargo test --workspace`, which do not exist in this repository. |
 
 The two library changes carry an "Elitea patch (zip 9)" comment. Nothing else
 in the crate names `zip`: the reader and the writer wrap it in
@@ -547,21 +549,15 @@ library call site changes. `ZipArchive::name_for_index` returns
 `Option<Result<Cow<str>, ZipError>>` in `zip` 9, not `Option<&str>`; only tests
 call it.
 
-**One file needs a decision.** The archive ships its own `AGENTS.md`, which
-describes the upstream workspace and its build commands. It is kept, so that
-`diff -r` stays clean. It is not instructions for this repository: an agent that
-works in this directory follows the root `AGENTS.md`. Delete it if that is too
-fragile, and record the deletion in the table above.
-
 **Verify** (from `libs/rust`).
 
 ```bash
 curl -sL https://static.crates.io/crates/zavora-xlsx/zavora-xlsx-0.1.2.crate -o /tmp/x.crate
 shasum -a 256 /tmp/x.crate                     # the archive SHA-256 above
 tar xzf /tmp/x.crate -C /tmp && rm /tmp/zavora-xlsx-0.1.2/Cargo.lock
-diff -r /tmp/zavora-xlsx-0.1.2 vendor/zavora-xlsx   # the 14 files in the table
+diff -r /tmp/zavora-xlsx-0.1.2 vendor/zavora-xlsx   # the 18 files in the table,
+                                                   # and `Only in ...: AGENTS.md`
 (cd vendor/zavora-xlsx && find . -type f | LC_ALL=C sort | xargs shasum -a 256) | shasum -a 256
-mkdir -p vendor/zavora-xlsx/output              # four suites write relative paths
 (cd vendor/zavora-xlsx && cargo check --all-features && cargo test --all-features)
 rm -rf vendor/zavora-xlsx/output vendor/zavora-xlsx/target vendor/zavora-xlsx/Cargo.lock
 ```
@@ -580,10 +576,12 @@ them, and reads the parts back. `edit_tests`, `formatting_survives_an_edit` and
 crate writes through `zip` 9 are proven readable by something other than
 `zip` 9.
 
-Ten tests in four suites fail on a clean checkout because they write to a
+Ten tests in four suites failed on a clean checkout because they write to a
 relative `output/` directory, and the published archive excludes `output/`
-(`exclude` in its `Cargo.toml`). Create the directory and they pass. This is an
-upstream packaging gap, not a `zip` 9 effect. Do not commit the directory.
+(`exclude` in its `Cargo.toml`). Each test now creates the directory, as the
+table above records, so 602 of 602 tests pass with no prepared directory. This
+was an upstream packaging gap, not a `zip` 9 effect. Do not commit the
+directory; the suites create it and `.gitignore` holds it.
 
 **Review (2026-10-31).**
 
@@ -603,6 +601,14 @@ upstream packaging gap, not a `zip` 9 effect. Do not commit the directory.
   `elitea-office-core` maps it with `e.to_string()` into
   `OfficeError::Malformed`, so a test that asserts the exact message needs a
   new expectation.
+- `tests/serde_tests.rs:154` warns `dead_code`: the fields of `NumRecord` are
+  never read. The warning is correct and it is kept. The struct declares the
+  schema that `test_serde_type_mismatch_error` deserializes into, and that test
+  asserts the read fails, so the success path never writes the fields. The
+  field names map to the header cells `name` and `value`, so a rename breaks
+  the test, and a read of the fields turns a negative test into a positive one.
+  An `#[allow(dead_code)]` would hide an upstream signal. `elitea-office-core`
+  never compiles this suite, so the warning does not reach a platform build.
 
 Updating: replace the directory with the new archive's contents, remove its
 `Cargo.lock`, re-apply the changes in the table, update the table and the

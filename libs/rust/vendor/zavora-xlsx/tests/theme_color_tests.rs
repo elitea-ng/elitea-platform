@@ -191,6 +191,8 @@ fn test_theme_color_read_back() {
 
 #[test]
 fn test_theme_color_example_output() {
+    // Elitea patch: the published archive excludes `output/`, so create it.
+    std::fs::create_dir_all("output").unwrap();
     let mut wb = Workbook::new();
     let ws = wb.worksheet(0).unwrap();
 
