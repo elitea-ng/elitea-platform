@@ -11,6 +11,15 @@
 # exact pin in a shared crate would force every consumer to move together.
 # The services' own manifests keep their exact pins.
 #
+# One exception: a requirement that IS a security fix stays exact everywhere.
+# This applies to the shared crates here and to the vendored copies as well.
+# Every manifest that declares `zip` pins `=9.1.3` (vendor/README.md). The
+# exact version clears CVE-2026-115905 and the three HIGH advisories beside
+# it, so here the consumers move together on purpose. A caret lets a
+# workspace that reaches zip only through vendored `calamine` resolve a later,
+# unvetted 9.x on the next `cargo update`. scripts/ci/check-zip-pin.sh holds
+# every such manifest, and every Cargo.lock, to that pin.
+#
 # This lock file exists for this workspace's own tests; it is not what any
 # service builds against.
 [workspace]

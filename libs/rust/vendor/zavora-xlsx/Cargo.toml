@@ -560,7 +560,7 @@ features = [
 optional = true
 
 [dependencies.zip]
-version = "9.1.3"
+version = "=9.1.3"
 features = ["deflate"]
 default-features = false
 

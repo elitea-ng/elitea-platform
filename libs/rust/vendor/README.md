@@ -268,7 +268,7 @@ lock holds `zavora-docx-opc` 0.1.4. A different version fails that test.
 
 | File | Change | Why |
 | --- | --- | --- |
-| `Cargo.toml` | `zip` moves from `8.1` to `9.1.3`. | zip 8.6.0 carries the four CVEs above. |
+| `Cargo.toml` | `zip` moves from `8.1` to `=9.1.3`. | zip 8.6.0 carries the four CVEs above. The requirement is exact, not a caret: `^9.1.3` lets a workspace that reaches zip only through this crate resolve a later, unvetted 9.x on the next `cargo update` (scripts/ci/check-zip-pin.sh). |
 | `Cargo.toml` | `zip` takes `default-features = false` and `features = ["deflate"]`. | This is the feature set `office-core` already declares, so the lock gains no package. The published crate took the `zip` defaults, which also add `aes-crypto`, `bzip2`, `deflate64`, `lzma`, `ppmd`, `time`, `zstd` and `xz`. An OOXML package stores each part with Store or Deflate, so the reader still opens every conforming file. A part that uses another method now fails with an unsupported-method error. |
 | `src/package.rs` | `OpcPackage::from_reader` calls `entry.name()?` in place of `entry.name()`. | zip 9 returns `ZipResult<Cow<'_, str>>` from `ZipFile::name`. zip 8 returned `&str`. `?` maps the error through `OpcError::Zip`. The name value does not change. |
 
@@ -328,7 +328,7 @@ lock holds `zavora-slide-opc` 0.1.1. A different version fails that test.
 
 | File | Change | Why |
 | --- | --- | --- |
-| `Cargo.toml` | `zip` moves from `8.1` to `9.1.3`. | zip 8.6.0 carries the four CVEs above. |
+| `Cargo.toml` | `zip` moves from `8.1` to `=9.1.3`. | zip 8.6.0 carries the four CVEs above. The requirement is exact, not a caret: `^9.1.3` lets a workspace that reaches zip only through this crate resolve a later, unvetted 9.x on the next `cargo update` (scripts/ci/check-zip-pin.sh). |
 | `src/package.rs` | `OpcPackage::from_reader` calls `entry.name()?` in place of `entry.name()`. | zip 9 returns `ZipResult<Cow<'_, str>>` from `ZipFile::name`. zip 8 returned `&str`. `?` maps the error through `OpcError::Zip`. The name value does not change. |
 
 The published crate already declares `default-features = false` and
@@ -385,7 +385,7 @@ lock holds `zavora-slide-xlsx` 0.1.1. A different version fails that test.
 
 | File | Change | Why |
 | --- | --- | --- |
-| `Cargo.toml` | `zip` moves from `8.1` to `9.1.3`. | zip 8.6.0 carries the four CVEs above. |
+| `Cargo.toml` | `zip` moves from `8.1` to `=9.1.3`. | zip 8.6.0 carries the four CVEs above. The requirement is exact, not a caret: `^9.1.3` lets a workspace that reaches zip only through this crate resolve a later, unvetted 9.x on the next `cargo update` (scripts/ci/check-zip-pin.sh). |
 
 No source file changes. The crate uses the writer API only
 (`ZipWriter::new`, `start_file`, `finish`, `SimpleFileOptions`), and that API is
@@ -438,7 +438,7 @@ version every direct declaration in this repository already pins.
 | Source | `https://static.crates.io/crates/calamine/calamine-0.36.1.crate` |
 | Archive SHA-256 | `5fa68281b1a76b54a62156474adb06bb380a67e07dd60656e3217152b42183f3` (equals the crates.io index `cksum`) |
 | Upstream commit | `0a24c2a9f1e38c0932c1299e633270dc730db505` (`.cargo_vcs_info.json`), `https://github.com/tafia/calamine` |
-| Tree digest | `05c46f86ddb64d171f6164977aab2d6df2ba244e165f7b1441dbe7a730e07f5c` (44 files; command below) |
+| Tree digest | `0a267a73dd43fc74394dd8283e00eb8178848d7880d6cbafce58d5becdaeb128` (44 files; command below) |
 | Licence | `MIT`; the text is in the directory (`LICENSE-MIT.md`) |
 
 **The version is 0.36.2.** The patch must satisfy `xberg`'s `^0.36.1` range,
@@ -457,7 +457,7 @@ archive's, byte for byte.
 
 | File | Change | Why |
 | --- | --- | --- |
-| `Cargo.toml`, `Cargo.toml.orig` | `zip` moves from `8.6` to `9.1.3`. | zip 8.6.0 carries the four CVEs above. The feature set is unchanged: `default-features = false`, `features = ["deflate"]`. |
+| `Cargo.toml`, `Cargo.toml.orig` | `zip` moves from `8.6` to `=9.1.3`. | zip 8.6.0 carries the four CVEs above. The feature set is unchanged: `default-features = false`, `features = ["deflate"]`. The requirement is exact, not a caret: `^9.1.3` let elitea-inventory-engine and the desktop doc-extract-sidecar, which reach zip only through this crate, resolve a later, unvetted 9.x on the next `cargo update` (scripts/ci/check-zip-pin.sh). |
 | `Cargo.toml`, `Cargo.toml.orig` | `version` moves from `0.36.1` to `0.36.2`. | The patch must stay inside `^0.36.1`. The new patch level marks the copy in `cargo tree` and in each lock. |
 | `src/utils.rs` | `build_zip_path_cache` returns `ZipResult<HashMap<String, String>>`. It applies `?` to each `file_names()` item and returns `Ok(cache)`. A `use zip::result::ZipResult;` line is added. | zip 9 returns `ZipResult<Cow<'_, str>>` for each entry name. zip 8 returned `&str`. |
 | `src/xlsx/mod.rs` | `Reader::new` calls `build_zip_path_cache(&zip)?`. The shared-strings unit test calls `build_zip_path_cache(&zip).unwrap()`. `read_pictures` calls `zfile.name()?`. | The cache builder is now fallible. `ZipFile::name` is now fallible. `?` maps the error through `XlsxError::Zip`. |
@@ -523,7 +523,7 @@ version bump cannot remove them. This copy links the platform's own `zip`
 | Source | `https://static.crates.io/crates/zavora-xlsx/zavora-xlsx-0.1.2.crate` |
 | Archive SHA-256 | `c5e2a142df28712030b103d2ac9dad6d127ed026a2d9053852c799bff7b63e67` (equals the crates.io index `cksum`) |
 | Upstream commit | `6e47878cc5631c48fd5cf411785a78a458dca2cb` (`.cargo_vcs_info.json`), `https://github.com/zavora-ai/zavora-xlsx` |
-| Tree digest | `60d7fdf69b94d5e183111f23c73efbfb8194a0ed65781c8250a2044bdd66f611` (242 files; command below) |
+| Tree digest | `23d880c5ba01c7800b9f14b20a707580c060b54752e18a9655f20d37289b224d` (242 files; command below) |
 | Licence | `Apache-2.0` (its `Cargo.toml`); the text is in the directory (`LICENSE`) |
 | Version | `0.1.2`, unchanged. `office-core/tests/isolation.rs` asserts the exact `=0.1.2` pin and the locked version. A patch crate must keep the version it replaces. |
 
@@ -531,7 +531,7 @@ version bump cannot remove them. This copy links the platform's own `zip`
 
 | File | Change | Why |
 | --- | --- | --- |
-| `Cargo.toml`, `Cargo.toml.orig` | The `zip` requirement becomes `9.1.3`. `default-features = false` and `features = ["deflate"]` stay as upstream set them, which is what `libs/rust/office-core/Cargo.toml` takes for its own `zip`. | This is the whole point of the copy. Both manifests change so the generated and the original agree. |
+| `Cargo.toml`, `Cargo.toml.orig` | The `zip` requirement becomes `=9.1.3`, exact and not a caret (scripts/ci/check-zip-pin.sh holds every manifest to it). `default-features = false` and `features = ["deflate"]` stay as upstream set them, which is what `libs/rust/office-core/Cargo.toml` takes for its own `zip`. | This is the whole point of the copy. Both manifests change so the generated and the original agree. |
 | `src/zip/zip_reader.rs` | `ZipReader::new` reads each entry name through `let Ok(name) = entry.name()`. | `zip` 9 returns `Result<Cow<str>, ZipError>` from `ZipFile::name`, not `&str`: a name is decoded on demand and can fail. An entry whose name does not decode stays out of the case-insensitive path cache, exactly as an entry that does not open already did. |
 | `src/workbook/mod.rs` | Two entry-name scans (the pass-through part list and `pictures`) use `.and_then(\|e\| e.name().ok().map(Cow::into_owned))`. | The same signature change. Both scans already dropped an entry that `by_index_raw` refused, so they now drop an undecodable name the same way. |
 | 10 files under `tests/` | 37 call sites add one `unwrap()` after `name()` or `name_for_index(i).unwrap()`. | The same signature change. `grep -rn '\.name()\.unwrap()\|name_for_index(i)\.unwrap()\.unwrap()' tests/` lists every one. |
