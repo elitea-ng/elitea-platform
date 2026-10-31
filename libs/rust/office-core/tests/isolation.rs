@@ -110,9 +110,60 @@ fn error_and_limit_enums_carry_no_vendor_error() {
     }
 }
 
+/// The dependency entries of a manifest: the lines inside `[dependencies]`,
+/// `[dev-dependencies]`, `[build-dependencies]`, their `target.*` and
+/// `workspace.*` forms, and a `[dependencies.<name>]` subtable. Line comments
+/// are removed first.
+///
+/// `[patch.crates-io]` is not a dependency table. A patch redirects a crate
+/// that something else already requires, and `libs/rust/Cargo.toml` and
+/// `services/elitea-worker-rust/Cargo.toml` carry zavora patch entries on
+/// purpose (vendor/README.md). A comment is not a dependency either.
+fn dependency_lines(manifest: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut inside = false;
+    for raw in manifest.lines() {
+        let line = strip_comment(raw);
+        if line.starts_with('[') {
+            let header = line
+                .trim_start_matches('[')
+                .split(']')
+                .next()
+                .unwrap_or_default();
+            inside = header.split('.').any(|seg| {
+                matches!(
+                    seg.trim(),
+                    "dependencies" | "dev-dependencies" | "build-dependencies"
+                )
+            });
+        } else if inside && !line.is_empty() {
+            out.push(line.to_owned());
+        }
+    }
+    out
+}
+
+/// `line` without its trailing TOML comment: a `#` at the start of the line,
+/// or one after whitespace. A `#` inside a value keeps its line.
+fn strip_comment(line: &str) -> &str {
+    let t = line.trim();
+    if t.starts_with('#') {
+        return "";
+    }
+    match t.find(" #") {
+        Some(i) => t[..i].trim_end(),
+        None => t,
+    }
+}
+
 #[test]
 fn only_this_crate_depends_on_the_zavora_crates() {
-    let root = crate_dir().join("../../..");
+    // Canonical paths. `Path::starts_with` compares components and does not
+    // resolve `..`, so an unnormalised root made every manifest start with
+    // this crate's own components and the assertion below never ran. That is
+    // the false-green class of issue #423.
+    let own = fs::canonicalize(crate_dir()).unwrap();
+    let root = fs::canonicalize(crate_dir().join("../../..")).unwrap();
     let mut manifests: Vec<PathBuf> = Vec::new();
     for dir in ["libs/rust", "services", "apps", "desktop"] {
         collect(&root.join(dir), &mut manifests, 0);
@@ -122,17 +173,68 @@ fn only_this_crate_depends_on_the_zavora_crates() {
         "found {} manifests: the walk is broken",
         manifests.len()
     );
+    let mut foreign = 0;
+    let mut entries = 0;
     for m in manifests {
+        // `collect` skips `vendor/`: the vendored crates ARE the zavora
+        // crates, and they name each other legitimately. `own` covers
+        // `office-core/fuzz`, which is part of this crate.
+        if m.starts_with(&own) {
+            continue;
+        }
+        foreign += 1;
         let text = fs::read_to_string(&m).unwrap();
-        let own = m.starts_with(crate_dir());
-        if !own && !text.contains("name = \"elitea-office-core-fuzz\"") {
+        for line in dependency_lines(&text) {
+            entries += 1;
             assert!(
-                !text.contains("zavora"),
-                "{} names a zavora crate",
+                !line.contains("zavora"),
+                "{} depends on a zavora crate: {line}",
                 m.display()
             );
         }
     }
+    assert!(
+        foreign > 10 && entries > 100,
+        "the scan read {foreign} other manifests and {entries} dependency entries: it is checking nothing"
+    );
+}
+
+#[test]
+fn the_dependency_scan_catches_a_leak() {
+    // Canary for the check above. It replaces a guard that asserted nothing.
+    let leak = "[package]\nname = \"x\"\n\n[dependencies]\nzavora-xlsx = \"=0.1.2\"\n";
+    assert!(
+        dependency_lines(leak).iter().any(|l| l.contains("zavora")),
+        "a real dependency must be found"
+    );
+    let dev = "[dev-dependencies]\nzavora-docx = \"=0.1.4\"\n";
+    assert!(dependency_lines(dev).iter().any(|l| l.contains("zavora")));
+    let target = "[target.'cfg(unix)'.build-dependencies]\nzavora-slide = \"=0.1.1\"\n";
+    assert!(
+        dependency_lines(target)
+            .iter()
+            .any(|l| l.contains("zavora"))
+    );
+    let sub = "[dependencies.zavora-xlsx]\nversion = \"=0.1.2\"\n";
+    assert!(!dependency_lines(sub).is_empty());
+
+    // The three things that are not a dependency.
+    let patch = "[patch.crates-io]\nzavora-slide = { path = \"vendor/zavora-slide\" }\n";
+    assert!(dependency_lines(patch).is_empty(), "a patch is not a dep");
+    let comment = "[dependencies]\n# zavora-xlsx moved to elitea-office-core\nserde = \"1\"\n";
+    assert!(
+        !dependency_lines(comment)
+            .iter()
+            .any(|l| l.contains("zavora")),
+        "a comment is not a dep"
+    );
+    let trailing = "[dependencies]\nserde = \"1\" # not zavora\n";
+    assert!(
+        !dependency_lines(trailing)
+            .iter()
+            .any(|l| l.contains("zavora")),
+        "a trailing comment is not a dep"
+    );
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
