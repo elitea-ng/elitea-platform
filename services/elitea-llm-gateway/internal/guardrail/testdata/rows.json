@@ -1,0 +1,34 @@
+{
+  "about": "Guardrail row cases. The gateway (ParseRow, internal/guardrail) and elitea-main (validateGuardrailData, internal/api/gateway) must both accept every valid case and both refuse every invalid one. Each side's test reads this file.",
+  "cases": [
+    {"name": "secrets mask", "valid": true, "data": {"guardrail": {"stage": "output", "detectors": [{"type": "secrets", "action": "mask"}]}}},
+    {"name": "full row", "valid": true, "data": {"guardrail": {"stage": "input", "timeout_ms": 1500, "fail_mode": "open", "apply_to_embeddings": true, "stream_window_bytes": 512, "detectors": [
+      {"name": "ids", "type": "regex", "action": "mask", "label": "employee_id", "patterns": ["\\bEMP-\\d{6}\\b"], "terms": ["Project Falcon"]},
+      {"type": "secrets", "action": "block", "rules": ["github-token", "jwt"]},
+      {"name": "classifier", "type": "http", "action": "flag", "url": "https://classifier.example.com/v1/check", "auth_header": "X-Api-Key", "auth_secret": "{{secret.CLASSIFIER_KEY}}", "labels": ["toxicity"], "min_score": 0.7}
+    ]}}},
+    {"name": "top-level shape is refused", "valid": false, "data": {"stage": "output", "detectors": [{"type": "secrets", "action": "flag"}]}},
+    {"name": "top-level detectors only", "valid": false, "data": {"guardrail": null, "detectors": [{"type": "secrets", "action": "flag"}]}},
+    {"name": "guardrail not an object", "valid": false, "data": {"guardrail": "output"}},
+    {"name": "no guardrail object", "valid": false, "data": {"scope": {"project_ids": [1]}}},
+    {"name": "no stage", "valid": false, "data": {"guardrail": {"detectors": [{"type": "secrets", "action": "mask"}]}}},
+    {"name": "bad stage", "valid": false, "data": {"guardrail": {"stage": "both", "detectors": [{"type": "secrets", "action": "mask"}]}}},
+    {"name": "no detectors", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": []}}},
+    {"name": "bad action", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": [{"type": "secrets", "action": "drop"}]}}},
+    {"name": "bad type", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": [{"type": "presidio", "action": "flag"}]}}},
+    {"name": "lookbehind is not RE2", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": [{"type": "regex", "action": "flag", "patterns": ["(?<=a)b"]}]}}},
+    {"name": "pattern matches empty", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": [{"type": "regex", "action": "flag", "patterns": ["x*"]}]}}},
+    {"name": "regex without pattern or term", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": [{"type": "regex", "action": "flag"}]}}},
+    {"name": "bad label", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": [{"type": "regex", "action": "flag", "label": "Has Space", "terms": ["x"]}]}}},
+    {"name": "unknown secret rule", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": [{"type": "secrets", "action": "mask", "rules": ["nope"]}]}}},
+    {"name": "raw auth secret", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": [{"type": "http", "action": "flag", "url": "https://c.example.com", "auth_secret": "sk-raw-value"}]}}},
+    {"name": "url with userinfo", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": [{"type": "http", "action": "flag", "url": "https://u:p@c.example.com"}]}}},
+    {"name": "url not http", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": [{"type": "http", "action": "flag", "url": "ftp://c.example.com"}]}}},
+    {"name": "min_score above 1", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": [{"type": "http", "action": "flag", "url": "https://c.example.com", "min_score": 2}]}}},
+    {"name": "timeout too short", "valid": false, "data": {"guardrail": {"stage": "input", "timeout_ms": 10, "detectors": [{"type": "secrets", "action": "mask"}]}}},
+    {"name": "bad fail mode", "valid": false, "data": {"guardrail": {"stage": "input", "fail_mode": "maybe", "detectors": [{"type": "secrets", "action": "mask"}]}}},
+    {"name": "embeddings on output", "valid": false, "data": {"guardrail": {"stage": "output", "apply_to_embeddings": true, "detectors": [{"type": "secrets", "action": "mask"}]}}},
+    {"name": "window too small", "valid": false, "data": {"guardrail": {"stage": "output", "stream_window_bytes": 8, "detectors": [{"type": "secrets", "action": "mask"}]}}},
+    {"name": "duplicate detector name", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": [{"type": "secrets", "action": "mask"}, {"type": "secrets", "action": "flag"}]}}}
+  ]
+}

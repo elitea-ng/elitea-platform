@@ -148,7 +148,8 @@ func (a AgentRef) Known() bool { return a.ApplicationID > 0 && a.ProjectID > 0 }
 // Scope is a definition's selector. Every dimension is "empty means all".
 //
 // AgentIDs and UserIDs are the throttle dimensions (ADR-0041 decision 4). Only
-// a rate_limit row may carry them; Compile rejects them on every other type.
+// a rate_limit row may carry them, and a guardrail row may carry AgentIDs
+// (ADR-0043 decision 1); Compile rejects them on every other type.
 // An agent id is an application id of the ONE project the row names in
 // ProjectIDs, because application ids are per project.
 type Scope struct {
@@ -393,6 +394,7 @@ type Snapshot struct {
 	mcpLists     []MCPAllowlistDef
 	egressLists  []EgressAllowlistDef
 	routing      []RoutingRuleDef
+	guardrails   []GuardrailDef
 
 	// LoadedAt is when the rows were read. A caller that must not act on a
 	// stale definition set compares it against its own freshness bound.
@@ -687,6 +689,7 @@ type Diagnostics struct {
 	CredentialPolicy int           `json:"credential_policies"`
 	RoutingRules     int           `json:"routing_rules"`
 	EgressAllowlists int           `json:"egress_allowlists"`
+	Guardrails       int           `json:"guardrails"`
 	Rejected         []RejectedRow `json:"rejected"`
 	Inert            []InertRow    `json:"inert"`
 }
@@ -714,6 +717,7 @@ func (s *Snapshot) Diagnostics() Diagnostics {
 		CredentialPolicy: len(s.credPolicies),
 		RoutingRules:     len(s.routing),
 		EgressAllowlists: len(s.egressLists),
+		Guardrails:       len(s.guardrails),
 		Rejected:         s.Rejected,
 		Inert:            s.Inert,
 	}

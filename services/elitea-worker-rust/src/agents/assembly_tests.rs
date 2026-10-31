@@ -200,6 +200,7 @@ pub(crate) fn ordinary_request(kind: AgentExecutionKind) -> AgentExecutionReques
             project_context: None,
             model_context_limits: None,
             summary_model: None,
+            platform_preamble: None,
         },
     }
 }

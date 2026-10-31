@@ -369,7 +369,10 @@ async fn post_comment_is_one_effect_with_the_sdk_payload() {
     assert!(request.effect);
     assert_eq!(
         request.body,
-        Some(json!({"message":"Looks good","client_meta":{"x":1,"y":2}}))
+        // The AI disclosure marker (ADR-0043 decision 3).
+        Some(
+            json!({"message":"Looks good\n\nGenerated with Elitea AI","client_meta":{"x":1,"y":2}})
+        )
     );
 
     let ambiguous = FixtureTransport::new(|_| {

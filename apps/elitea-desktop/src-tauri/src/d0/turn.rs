@@ -5012,6 +5012,7 @@ fn execution_request(
             project_context,
             model_context_limits: None,
             summary_model: None,
+            platform_preamble: None,
         },
     }
 }

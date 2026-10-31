@@ -69,8 +69,48 @@ type Producer struct {
 	approval ApprovalPolicyResolver
 	// runCaps answers an agent execution command's run caps (ADR-0041
 	// decision 3); nil leaves the field absent (the worker's defaults).
-	runCaps  RunCapsResolver
+	runCaps RunCapsResolver
+	// outputContracts marks an agent execution command whose frozen
+	// definition holds an output contract (ADR-0043 decision 2); nil never
+	// marks one.
+	outputContracts OutputContractsResolver
+	// content answers an agent execution command's content controls
+	// (ADR-0043 decisions 3 and 4); nil leaves the field absent (the
+	// worker's defaults).
+	content  ContentControlsResolver
 	refusals DispatchRefusalRecorder
+}
+
+// OutputContractsResolver answers field 70 of an agent execution command
+// (ADR-0043 decision 2; workeroutputcontract.Resolver): present only when the
+// frozen definition holds an output contract, so a worker that cannot
+// enforce one refuses the command. An error refuses the command and the
+// dispatch is retried.
+type OutputContractsResolver interface {
+	WorkerOutputContracts(ctx context.Context, command *runtimev1.WorkerCommandV1) (*runtimev1.WorkerOutputContractsV1, error)
+}
+
+// WithOutputContracts makes every agent execution command this producer
+// prepares carry field 70 when its definition holds an output contract.
+func (p *Producer) WithOutputContracts(resolver OutputContractsResolver) *Producer {
+	p.outputContracts = resolver
+	return p
+}
+
+// ContentControlsResolver answers the content controls an agent execution
+// command carries (ADR-0043 decisions 3 and 4; workercontentcontrols.Resolver).
+// Nil leaves the field absent. An error refuses the command: it is never
+// signed without the controls it should carry, and the dispatch is retried
+// within the run's deadline.
+type ContentControlsResolver interface {
+	WorkerContentControls(ctx context.Context, command *runtimev1.WorkerCommandV1) (*runtimev1.WorkerContentControlsV1, error)
+}
+
+// WithContentControls makes every agent execution command this producer
+// prepares carry its content controls.
+func (p *Producer) WithContentControls(resolver ContentControlsResolver) *Producer {
+	p.content = resolver
+	return p
 }
 
 // RunCapsResolver answers the run caps an agent execution command carries
@@ -238,6 +278,20 @@ func (p *Producer) prepareCommand(ctx context.Context, command *runtimev1.Worker
 			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker run caps: %w", err)
 		}
 		command.RunCaps = caps
+	}
+	if p.outputContracts != nil && command.GetAgentExecution() != nil {
+		contracts, err := p.outputContracts.WorkerOutputContracts(ctx, command)
+		if err != nil {
+			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker output contracts: %w", err)
+		}
+		command.OutputContracts = contracts
+	}
+	if p.content != nil && command.GetAgentExecution() != nil {
+		controls, err := p.content.WorkerContentControls(ctx, command)
+		if err != nil {
+			return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("assemble the worker content controls: %w", err)
+		}
+		command.ContentControls = controls
 	}
 	if err := validateBoundedStrings(command, p.config.Limits.MaxStringBytes); err != nil {
 		return executionapp.PreparedCommandEnvelope{}, err

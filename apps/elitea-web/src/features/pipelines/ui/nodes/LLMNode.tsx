@@ -34,6 +34,7 @@ import type { AiAssistantLlmSettings } from '../../api/aiAssistantPredict';
 import type { FlowNode } from '../../lib/flow-editor/reactFlowTypes';
 import type { VersionTool } from '../../lib/flow-editor/hooks/useFunctionInputMapping';
 import { CommonInterruptSettings } from '../settings/CommonInterruptSettings';
+import { LlmOutputContractSettings } from '../settings/LlmOutputContractSettings';
 import { SimpleLLMInputs } from '../settings/SimpleLLMInputs';
 import { InputSelect } from '../select/InputSelect';
 import { LLMToolsSelect } from '../select/LLMToolsSelect';
@@ -113,6 +114,10 @@ export const LLMNode = memo(function LLMNode(props: LLMNodeProps): ReactNode {
           disabled={model.isFieldsDisabled}
         />
       ))}
+      <LlmOutputContractSettings
+        id={id}
+        disabled={model.isFieldsDisabled}
+      />
       <CommonInterruptSettings
         id={id}
         type={FlowEditorConstants.PipelineNodeTypes.LLM}

@@ -30,13 +30,16 @@ const MAX_CONFIRMED_TOOLS: usize = 1_024;
 /// take effect on the next run without mutating process-global state.
 ///
 /// The generation is bound to the execution's public egress policy (#1490),
-/// so every tool it admits and every client built under it uses that policy.
+/// so every tool it admits and every client built under it uses that policy,
+/// and to its content controls (ADR-0043): the disclosure marker, the
+/// preamble and the run's untrusted reads.
 pub(crate) fn policy_for_guardrails(
     guardrails: Option<&Map<String, Value>>,
     fallback: &Arc<ToolAdmissionPolicy>,
     egress: &Arc<elitea_agent_runtime::egress::RunEgress>,
     approval: &Arc<elitea_agent_runtime::approval_policy::ApprovalPolicy>,
     run_caps: &Arc<elitea_agent_runtime::run_caps::RunCapsMeter>,
+    content: &Arc<elitea_agent_runtime::preamble::ContentControls>,
 ) -> Result<Arc<ToolAdmissionPolicy>, NativeAgentAssemblyError> {
     let Some(guardrails) = guardrails else {
         return Ok(Arc::new(
@@ -45,7 +48,8 @@ pub(crate) fn policy_for_guardrails(
                 .clone()
                 .with_egress(Arc::clone(egress))
                 .with_approval_policy(Arc::clone(approval))
-                .with_run_caps(Arc::clone(run_caps)),
+                .with_run_caps(Arc::clone(run_caps))
+                .with_content_controls(Arc::clone(content)),
         ));
     };
     let runtime = Map::from_iter([(
@@ -58,7 +62,8 @@ pub(crate) fn policy_for_guardrails(
                 policy
                     .with_egress(Arc::clone(egress))
                     .with_approval_policy(Arc::clone(approval))
-                    .with_run_caps(Arc::clone(run_caps)),
+                    .with_run_caps(Arc::clone(run_caps))
+                    .with_content_controls(Arc::clone(content)),
             )
         })
         .map_err(|error| match error.code() {
@@ -69,6 +74,25 @@ pub(crate) fn policy_for_guardrails(
                 resource_exhausted()
             }
         })
+}
+
+/// Record the earlier untrusted reads of a continued turn (ADR-0043
+/// decision 4): a resumed approval, an answered question or an output
+/// continuation carries the turn's earlier tool results in its history, so
+/// the "read untrusted, then act" rule treats the turn as having read
+/// untrusted content from its first call.
+pub(crate) fn seed_continued_turn(
+    payload: &elitea_agent_runtime::request::AgentExecutionPayload,
+    content: &elitea_agent_runtime::preamble::ContentControls,
+) {
+    if payload.should_continue
+        || payload.hitl_resume
+        || payload.hitl_action.is_some()
+        || payload.hitl_value.is_some()
+        || !payload.hitl_decisions.is_empty()
+    {
+        content.untrusted().record_read();
+    }
 }
 
 /// Sensitive concrete tools attached to one direct `LlmAgent` invocation.
@@ -87,6 +111,9 @@ pub(crate) struct SensitiveToolCatalog {
     read_only_provider_names: BTreeSet<Box<str>>,
     /// Provider names of every `other_tools` entry, read-only or not.
     other_provider_names: BTreeSet<Box<str>>,
+    /// The run's untrusted reads (ADR-0043 decision 4), when the catalog
+    /// holds "read untrusted, then act" candidates.
+    untrusted: Option<Arc<elitea_agent_runtime::untrusted::UntrustedReads>>,
     /// Test-only: how often the unqualified names were rebuilt (budget test).
     #[cfg(test)]
     rebuilds: usize,
@@ -109,7 +136,44 @@ struct SensitiveToolEntry {
     conditional: bool,
 }
 
+impl SensitiveToolEntry {
+    /// A "read untrusted, then act" candidate (ADR-0043 decision 4): a
+    /// conditional entry whose call has an effect outside the run, so an
+    /// approved call that may have started is never run again.
+    const fn is_untrusted_act(&self) -> bool {
+        matches!(
+            self.policy.rule(),
+            elitea_agent_runtime::approval_policy::ApprovalRule::UntrustedReadThenAct { .. }
+        )
+    }
+}
+
 impl SensitiveToolCatalog {
+    /// The provider names of the "read untrusted, then act" candidates.
+    pub(crate) fn untrusted_act_tool_names(&self) -> impl Iterator<Item = &str> {
+        self.provider_entries
+            .iter()
+            .filter(|(_, entry)| entry.is_untrusted_act())
+            .map(|(name, _)| name.as_ref())
+    }
+
+    /// `next` composed with the "read untrusted, then act" gate of this
+    /// catalog's candidates (ADR-0043 decision 4); `next` itself when the
+    /// catalog has none.
+    pub(crate) fn untrusted_act_gate(
+        &self,
+        next: Option<Arc<dyn adk_rust::agent::ToolCallConfirmation>>,
+    ) -> Option<Arc<dyn adk_rust::agent::ToolCallConfirmation>> {
+        match &self.untrusted {
+            Some(reads) => super::untrusted_gate::UntrustedActGate::compose(
+                self.untrusted_act_tool_names(),
+                reads,
+                next,
+            ),
+            None => next,
+        }
+    }
+
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
         self.scoped_entries.is_empty()
@@ -138,7 +202,7 @@ impl SensitiveToolCatalog {
     pub(crate) fn reruns_after_dispatch(&self, tool_name: &str) -> Option<bool> {
         self.provider_entries
             .get(tool_name)
-            .map(|entry| entry.read_only || entry.conditional)
+            .map(|entry| entry.read_only || (entry.conditional && !entry.is_untrusted_act()))
             .or_else(|| {
                 self.read_only_provider_names
                     .contains(tool_name)
@@ -271,6 +335,9 @@ impl SensitiveToolCatalog {
         }
         for (identity, read_only) in other.other_tools {
             self.insert_other_identity(identity, read_only);
+        }
+        if self.untrusted.is_none() {
+            self.untrusted = other.untrusted;
         }
         self.rebuild_unqualified_provider_entries();
         Ok(())
@@ -488,12 +555,24 @@ pub(crate) async fn sensitive_tools_for_kind(
             return Err(resource_exhausted());
         }
         for tool in tools {
-            let Some(sensitive) = policy.sensitive_tool_in(
+            let sensitive = policy.sensitive_tool_in(
                 reference.tool_type(),
                 reference.toolkit_name(),
                 reference.settings(),
                 tool.name(),
-            ) else {
+            );
+            let (sensitive, conditional) = if let Some(sensitive) = sensitive {
+                (sensitive, false)
+            } else if let Some(candidate) = policy.untrusted_act_tool_in(
+                reference.tool_type(),
+                reference.toolkit_name(),
+                reference.settings(),
+                tool.name(),
+            ) {
+                // ADR-0043 decision 4: asks only after an untrusted read.
+                catalog.untrusted = Some(Arc::clone(policy.content_controls().untrusted()));
+                (candidate, true)
+            } else {
                 catalog.insert_other(reference.toolkit_name(), tool.name(), tool.is_read_only())?;
                 continue;
             };
@@ -503,7 +582,7 @@ pub(crate) async fn sensitive_tools_for_kind(
                 SensitiveToolEntry {
                     policy: sensitive,
                     read_only: tool.is_read_only(),
-                    conditional: false,
+                    conditional,
                 },
             )?;
         }
@@ -612,6 +691,7 @@ mod tests {
             &open,
             &ApprovalPolicy::none(),
             &RunCapsMeter::unlimited(),
+            &elitea_agent_runtime::preamble::ContentControls::worker_default(),
         )
         .expect("absent policy");
         assert!(Arc::ptr_eq(absent.egress(), &open), "bound to the run");
@@ -628,6 +708,7 @@ mod tests {
             &open,
             &ApprovalPolicy::none(),
             &RunCapsMeter::unlimited(),
+            &elitea_agent_runtime::preamble::ContentControls::worker_default(),
         )
         .expect("empty policy");
         assert!(!Arc::ptr_eq(&resolved, &fallback));
@@ -660,6 +741,7 @@ mod tests {
             &egress,
             &ApprovalPolicy::none(),
             &meter,
+            &elitea_agent_runtime::preamble::ContentControls::worker_default(),
         )
         .expect("command policy");
         assert!(Arc::ptr_eq(resolved.run_caps(), &meter), "bound to the run");

@@ -73,6 +73,7 @@ fn request(kind: AgentExecutionKind, tools: Vec<Value>) -> AgentExecutionRequest
             project_context: None,
             model_context_limits: None,
             summary_model: None,
+            platform_preamble: None,
         },
     }
 }

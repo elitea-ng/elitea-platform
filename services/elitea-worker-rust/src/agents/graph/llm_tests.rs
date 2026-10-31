@@ -529,3 +529,46 @@ fn a_frozen_parallel_llm_input_is_bounded_at_its_limit_and_limit_plus_one() {
         "{message}"
     );
 }
+
+const CONTRACT_NODE: &str = r"
+id: extract
+type: llm
+output: [answer]
+output_contract:
+  type: json_schema
+  schema:
+    type: object
+    required: [total]
+transition: END
+";
+
+/// ADR-0043 decision 2: a node admits a bounded contract, refuses one this
+/// worker cannot enforce, and refuses a contract on a structured node.
+#[test]
+fn llm_node_output_contract_is_admitted_and_bounded() {
+    let node = LlmNodeDefinition::from_yaml(CONTRACT_NODE).expect("contract node");
+    let contract = node.output_contract().expect("contract");
+    assert_eq!(contract.contract_type().as_str(), "json_schema");
+    assert!(contract.validate(r#"{"total": 1}"#).is_ok());
+    assert!(contract.validate("prose").is_err());
+
+    let plain = LlmNodeDefinition::from_yaml(&CONTRACT_NODE.replace(
+        "output_contract:\n  type: json_schema\n  schema:\n    type: object\n    required: [total]\n",
+        "",
+    ))
+    .expect("plain node");
+    assert!(plain.output_contract().is_none());
+    // A node without a contract keeps the digest it had before contracts.
+    assert_ne!(plain.config_digest(), node.config_digest());
+
+    for invalid in [
+        "output_contract:\n  type: regex\n  pattern: '(a)\\1'\n",
+        "output_contract:\n  type: format\n  format: xml\n",
+        "output_contract:\n  type: json_schema\n  schema: {}\n  extra: 1\n",
+    ] {
+        let yaml = format!("id: extract\ntype: llm\noutput: [answer]\n{invalid}transition: END\n");
+        assert!(LlmNodeDefinition::from_yaml(&yaml).is_err(), "{invalid}");
+    }
+    let structured = format!("{CONTRACT_NODE}structured_output: true\n");
+    assert!(LlmNodeDefinition::from_yaml(&structured).is_err());
+}

@@ -593,6 +593,40 @@ async fn server_search_paginates_by_start_at_under_the_context_path_with_basic_a
     assert!(output.contains("https://jira.example.test/jira/browse/OPS-0"));
 }
 
+/// API v3 takes an ADF description only: a string one (for example the AI
+/// disclosure marker that the worker adds to an issue without a description)
+/// is sent as one paragraph per block.
+#[tokio::test]
+async fn create_issue_on_api_v3_sends_a_string_description_as_adf() {
+    let (client, transport) = client_after_probe(
+        &cloud_settings(),
+        vec![
+            JiraHttpResponse::fixture(
+                StatusCode::CREATED,
+                Some(json!({"id": "10051", "key": "PROJ-51"})),
+            ),
+            JiraHttpResponse::fixture(StatusCode::NO_CONTENT, None),
+        ],
+    );
+    run(
+        &client,
+        JiraOperation::CreateIssue {
+            issue_json: r#"{"fields": {"project": {"key": "PROJ"}, "summary": "New", "issuetype": {"name": "Task"}, "description": "Steps.\n\nGenerated with Elitea AI"}}"#,
+        },
+    )
+    .await;
+    assert_eq!(
+        transport.requests()[1].body,
+        Some(
+            json!({"fields": {"project": {"key": "PROJ"}, "summary": "New", "issuetype": {"name": "Task"},
+            "description": {"type": "doc", "version": 1, "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "Steps."}]},
+                {"type": "paragraph", "content": [{"type": "text", "text": "Generated with Elitea AI"}]}
+            ]}}})
+        )
+    );
+}
+
 #[tokio::test]
 async fn create_issue_posts_fields_then_applies_default_labels() {
     let (client, transport) = client_after_probe(
@@ -1325,4 +1359,59 @@ async fn a_refused_setting_is_named_to_the_user_not_silently_skipped() {
             .contains("verify_ssl=false is not supported by the Rust worker"),
         "{error}"
     );
+}
+
+/// ADR-0043 verification (decision 3): a Jira comment tool call writes the
+/// AI disclosure marker. The call goes through the admitted tool, as a run's
+/// call does, and the result is recorded as an untrusted read (decision 4).
+#[tokio::test]
+async fn a_jira_comment_tool_call_writes_the_disclosure_marker() {
+    use crate::disclosure::DisclosurePolicy;
+    use crate::preamble::ContentControls;
+    use crate::untrusted::UntrustedReads;
+
+    let (client, transport) = client_after_probe(
+        &cloud_settings(),
+        vec![JiraHttpResponse::fixture(
+            StatusCode::CREATED,
+            Some(json!({"id": "10200"})),
+        )],
+    );
+    let api: Arc<dyn JiraApi> = Arc::new(client);
+    let reads = UntrustedReads::new(true);
+    let content = Arc::new(ContentControls::new(
+        "",
+        0,
+        DisclosurePolicy::new("Written with ACME AI", Vec::<String>::new()).with_run_id("exec-1"),
+        Arc::clone(&reads),
+    ));
+    let policy = Arc::new(
+        ToolAdmissionPolicy::new(&[], &BTreeMap::<String, Vec<String>>::new())
+            .expect("policy")
+            .with_content_controls(content),
+    );
+    let toolset =
+        test_build_with_api("tracker", &["add_comments"], &policy, &api).expect("toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("tools");
+    let add_comments = tools
+        .iter()
+        .find(|tool| tool.name() == "add_comments")
+        .expect("add_comments");
+    assert!(!reads.has_read());
+    add_comments
+        .execute(
+            context(),
+            json!({"issue_key": "PROJ-1", "comment": "Looks good"}),
+        )
+        .await
+        .expect("comment added");
+    assert_eq!(
+        transport.requests()[1].body,
+        Some(
+            json!({"body": {"type": "doc", "version": 1, "content": [{"type": "paragraph",
+            "content": [{"type": "text", "text": "Looks good\n\nWritten with ACME AI"}]}]}})
+        )
+    );
+    assert!(reads.has_read(), "the tool result is an untrusted read");
 }

@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react';
 import { useCreateApplicationDraft, type ApplicationDraftInput } from '@/entities/application-form';
 import { LATEST_VERSION_NAME } from '@/entities/version';
 import type { ApplicationCreatedResponse } from '@/shared/api/generated/model';
+import { readOutputContract } from '@/shared/ui/OutputContractField';
 
 import { setFieldValueAtPath } from './agentFieldChange';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
@@ -147,6 +148,17 @@ function draftConversationStarters(versionDetails: AgentDraftValues['version_det
   return [...(versionDetails?.conversation_starters ?? [])];
 }
 
+/**
+ * The output contract the form's field wrote (#1500, ADR-0043 decision 2),
+ * read through the same guard the Advanced panel uses. Spread, so a create
+ * with no contract sends no key. Its own function for the oxlint complexity
+ * budget, like the helpers above.
+ */
+function draftOutputContract(meta: NonNullable<AgentDraftValues['version_details']>['meta']) {
+  const contract = readOutputContract(meta?.['output_contract']);
+  return contract === null ? {} : { output_contract: contract };
+}
+
 /** `submit`'s request-body construction, extracted purely to keep `useAgentEditorCreate` under the oxlint complexity budget. */
 function buildCreateDraft(values: AgentDraftValues): ApplicationDraftInput {
   const versionDetails = values.version_details;
@@ -166,7 +178,7 @@ function buildCreateDraft(values: AgentDraftValues): ApplicationDraftInput {
       ...optionalCreateVersionFields(versionDetails),
       conversationStarters: draftConversationStarters(versionDetails),
       variables: (versionDetails?.variables ?? []).map((variable) => ({ name: variable.name, value: variable.value })),
-      meta: { step_limit: meta?.step_limit ?? 25, internal_tools: resolveInternalTools(meta) },
+      meta: { step_limit: meta?.step_limit ?? 25, internal_tools: resolveInternalTools(meta), ...draftOutputContract(meta) },
       // Whatever the model picker wrote into the form, or `undefined` when
       // the user left it alone — `toVersionWriteRequest` then omits the key
       // and the new agent runs on the project's catalogue default.

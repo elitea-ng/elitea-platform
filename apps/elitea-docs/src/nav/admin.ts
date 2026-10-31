@@ -30,6 +30,7 @@ export const adminTab: NavTab = {
         { kind: 'page', slug: 'admin/enterprise-controls/overview', title: 'Control catalogue' },
         { kind: 'page', slug: 'admin/enterprise-controls/shared-responsibility', title: 'Shared responsibility' },
         { kind: 'page', slug: 'admin/enterprise-controls/runtime-safety', title: 'Runtime safety' },
+        { kind: 'page', slug: 'admin/enterprise-controls/content-controls', title: 'Content controls' },
         { kind: 'page', slug: 'admin/enterprise-controls/audit-evidence-and-retention', title: 'Audit evidence and retention' },
         { kind: 'page', slug: 'admin/enterprise-controls/least-privilege-and-trust', title: 'Least privilege and trust' },
         { kind: 'page', slug: 'admin/enterprise-controls/agent-lifecycle', title: 'Agent lifecycle' },

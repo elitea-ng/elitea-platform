@@ -108,6 +108,19 @@ pub struct AgentExecutionPayload {
     pub project_context: Option<ProjectContextSnapshot>,
     pub model_context_limits: Option<ModelContextLimits>,
     pub summary_model: Option<SummaryModelSnapshot>,
+    /// The administrator's platform preamble (ADR-0043 decision 3), frozen
+    /// at admission. The command's content controls name its revision and
+    /// digest; the text travels only here, in the input bundle.
+    pub platform_preamble: Option<PlatformPreambleSnapshot>,
+}
+
+/// One revision of the platform preamble, as admission froze it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlatformPreambleSnapshot {
+    pub revision: u32,
+    /// Lowercase hex SHA-256 of the text, checked when the input is read.
+    pub sha256: String,
+    pub text: String,
 }
 
 /// Main resolves this model and its limits before execution admission.

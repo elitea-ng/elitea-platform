@@ -41,6 +41,10 @@ type Store struct {
 	// metered tool row is written WITHOUT the shared migration 0174 columns.
 	// Zero means "write them". See WriteBatch.
 	meteredUntil atomic.Int64
+	// verdictsUntil is the unix-nano time before which the guardrail
+	// verdicts are not written, because the database has no
+	// gateway.guardrail_verdicts table yet (shared 0214). See writeVerdicts.
+	verdictsUntil atomic.Int64
 }
 
 // NewStore returns a sink over the pool. A nil pool returns nil, which New()
@@ -114,19 +118,31 @@ func (s *Store) WriteBatch(ctx context.Context, records []Record) error {
 	}
 	if hasMetered(records) && !s.legacyColumns() && !s.latched(&s.meteredUntil) {
 		err := s.writeMeteredBatch(ctx, records)
-		if err == nil || !isUndefinedColumn(err) {
+		if err == nil {
+			s.writeVerdictsAfterLog(ctx, records)
+			return nil
+		}
+		if !isUndefinedColumn(err) {
 			return err
 		}
 		s.meteredUntil.Store(s.now().Add(legacyColumnsRetry).UnixNano())
 	}
 	if !s.legacyColumns() {
 		err := s.writeBatch(ctx, records, false)
-		if err == nil || !isUndefinedColumn(err) {
+		if err == nil {
+			s.writeVerdictsAfterLog(ctx, records)
+			return nil
+		}
+		if !isUndefinedColumn(err) {
 			return err
 		}
 		s.legacyUntil.Store(s.now().Add(legacyColumnsRetry).UnixNano())
 	}
-	return s.writeBatch(ctx, records, true)
+	if err := s.writeBatch(ctx, records, true); err != nil {
+		return err
+	}
+	s.writeVerdictsAfterLog(ctx, records)
+	return nil
 }
 
 // legacyColumns reports whether the pre-0139 column list is latched.
@@ -265,24 +281,64 @@ func (s *Store) RetentionPolicy(ctx context.Context) (time.Duration, bool, error
 
 // Prune deletes expired rows.
 //
-// Bounded by `ctid IN (SELECT … LIMIT)` rather than an open-ended DELETE: on a
-// table that has grown for a month, one unbounded statement takes a long lock
-// and a large amount of WAL. The prune runs hourly, so removing a bounded slice
-// each time keeps up with any rate that does not already exceed the write path.
+// Each DELETE is bounded by `ctid IN (SELECT … LIMIT)` rather than open-ended:
+// on a table that has grown for a month, one unbounded statement takes a long
+// lock and a large amount of WAL. One prune runs the bounded DELETE again and
+// again until no expired row is left, within the per-prune caps of
+// pruneBatches, so the table cannot outgrow the retention window at any write
+// rate the caps allow.
 func (s *Store) Prune(ctx context.Context, olderThan time.Time) (int64, error) {
 	if s == nil {
 		return 0, nil
 	}
-	tag, err := s.db.Exec(ctx, `
+	removed, err := s.pruneBatches(ctx, `
 		DELETE FROM gateway.llm_request_logs
 		 WHERE ctid IN (
 		       SELECT ctid FROM gateway.llm_request_logs
 		        WHERE occurred_at < $1
-		        LIMIT 10000)`, olderThan)
+		        LIMIT $2)`, olderThan)
 	if err != nil {
-		return 0, fmt.Errorf("prune request logs: %w", err)
+		return removed, fmt.Errorf("prune request logs: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	verdicts, err := s.pruneVerdicts(ctx, olderThan)
+	return removed + verdicts, err
+}
+
+// Bounds of one prune of one table.
+const (
+	// pruneBatchRows is the LIMIT of each DELETE statement.
+	pruneBatchRows = 10000
+	// pruneMaxBatches caps the statements of one prune of one table (one
+	// million rows per hour). A backlog larger than that clears over the next
+	// prunes.
+	pruneMaxBatches = 100
+	// pruneMaxDuration caps the time one prune of one table runs, so the
+	// hourly prune never holds the writer goroutine for long.
+	pruneMaxDuration = 10 * time.Second
+)
+
+// pruneBatches runs statement (a DELETE with olderThan as $1 and the row
+// bound pruneBatchRows as $2) until a statement removes fewer rows than that,
+// until pruneMaxBatches statements ran, until pruneMaxDuration passed, or
+// until ctx ends. It returns the rows removed and the first error.
+func (s *Store) pruneBatches(ctx context.Context, statement string, olderThan time.Time) (int64, error) {
+	started := s.now()
+	var removed int64
+	for batch := 0; batch < pruneMaxBatches; batch++ {
+		if ctx.Err() != nil {
+			return removed, nil
+		}
+		tag, err := s.db.Exec(ctx, statement, olderThan, pruneBatchRows)
+		if err != nil {
+			return removed, err
+		}
+		n := tag.RowsAffected()
+		removed += n
+		if n < pruneBatchRows || s.now().Sub(started) >= pruneMaxDuration {
+			return removed, nil
+		}
+	}
+	return removed, nil
 }
 
 // nullableID turns the header string into an integer or NULL.

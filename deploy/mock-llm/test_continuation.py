@@ -36,6 +36,14 @@ class ToolCallFixtureTest(unittest.TestCase):
                 self.assertNotIn("swarm", script.reply)
                 self.assertTrue(script.reply.endswith("MOCKCALLTOOLEND"))
 
+    def test_result_is_quoted_without_the_untrusted_envelope(self):
+        wrapped = '<untrusted source="elitea_agent_4_v_5">\n{"error":"tool.unavailable"}\n</untrusted>'
+        completed = {"role": "tool", "tool_call_id": self.call["id"], "content": wrapped}
+        script = _script_for([self.user, completed])
+        self.assertEqual(script.mode, "call_tool_resumed")
+        self.assertIn('said {"error":"tool.unavailable"}', script.reply)
+        self.assertNotIn("untrusted", script.reply)
+
     def test_legacy_function_results_match_the_requested_name(self):
         completed = {"role": "function", "name": "elitea_agent_4_v_5", "content": "legacy completion"}
         self.assertEqual(_script_for([self.user, completed]).mode, "call_tool_resumed")

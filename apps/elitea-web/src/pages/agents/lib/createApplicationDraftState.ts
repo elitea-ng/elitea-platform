@@ -1,5 +1,7 @@
 import { areAgentLlmSettingsEqual, type AgentLlmSettings } from '@/shared/api/agentLlmSettings';
+import type { OutputContract } from '@/shared/api/generated/model';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
+import { areOutputContractsEqual } from '@/shared/ui/OutputContractField';
 
 /**
  * The draft state `pages/agents/CreateApplication.tsx` holds outside its RHF
@@ -38,6 +40,8 @@ export interface CreateAgentFormExtraFields {
    * still runs on.
    */
   readonly llmSettings: AgentLlmSettings | undefined;
+  /** `meta.output_contract` (#1500). `null` is no contract and is not sent. */
+  readonly outputContract: OutputContract | null;
 }
 
 /**
@@ -57,6 +61,7 @@ export function areExtraFieldsEqual(a: CreateAgentFormExtraFields, b: CreateAgen
   if (a.instructions !== b.instructions) return false;
   if (a.welcomeMessage !== b.welcomeMessage) return false;
   if (a.stepLimit !== b.stepLimit) return false;
+  if (!areOutputContractsEqual(a.outputContract, b.outputContract)) return false;
   // Key by key, never by identity: the picker hands back a fresh object on
   // every change, so an identity check would report "dirty" forever.
   if (!areAgentLlmSettingsEqual(a.llmSettings, b.llmSettings)) return false;

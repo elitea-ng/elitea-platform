@@ -3716,6 +3716,32 @@ export interface components {
         OkResponse: {
             ok: boolean;
         };
+        /** @description The output contract of an agent version or of a pipeline LLM node (ADR-0043 decision 2). The worker sends a JSON Schema to the model provider as its response format where the provider takes one, validates the final answer, retries once with the validation error as feedback, and ends the run with OUTPUT_CONTRACT_VIOLATION when the second answer fails too. Set exactly the one field that the type names. */
+        OutputContract: {
+            /**
+             * @description format only.
+             * @enum {string}
+             */
+            format?: "json" | "markdown" | "csv";
+            /** @description regex only. An RE2 expression that must match the whole answer (no back references or look-around). */
+            pattern?: string;
+            /** @description json_schema only. A JSON Schema (draft 2020-12 unless it names another draft) of at most 32 KiB and 32 levels of nesting. Only local references (#/...) are allowed. */
+            schema?: {
+                [key: string]: unknown;
+            };
+            /** @enum {string} */
+            type: "json_schema" | "regex" | "format";
+        };
+        /** @description The 422 of a save whose output contract is not valid (OUTPUT_CONTRACT_INVALID). */
+        OutputContractRefusal: {
+            /** @enum {string} */
+            code: "OUTPUT_CONTRACT_INVALID";
+            error: string;
+            /** @description The pipeline LLM node of the refused contract; absent for an agent. */
+            node_id?: string;
+            /** @enum {string} */
+            reason: "shape" | "schema_too_large" | "schema_invalid" | "pattern_too_long" | "pattern_invalid" | "format_unknown" | "structured_output" | "pipeline_contract_on_node";
+        };
         /** @description A project member. NOTE(W2): internal/api/v2/conversations/candidates.go:40 (`ParticipantCandidate`). */
         ParticipantCandidate: {
             already_participant: boolean;
@@ -4186,6 +4212,8 @@ export interface components {
             internal_tools?: string[];
             /** @description NOTE(#898): the editor's free-text "Editor Notes". It has no column of its own on `application_versions` and is not meant to: the legacy runtime stores it inside this same jsonb (elitea_issues issue 5410 chose the blob over a per-tenant schema migration), folding the top-level `notes` write field in (legacy/plugins/elitea_core/utils/application_utils.py:191-211) and lifting it back out on read (models/pd/version.py:297-307). This service does the same, and additionally leaves the key in place here — the agent editor round-trips `meta` wholesale, so deleting it from the read would make an ordinary save of any other field erase the notes. Documentation only: never sent to the model, to chat, or to execution. */
             notes?: string;
+            /** @description The shape the agent's final answer must have (ADR-0043 decision 2). Null or absent is no contract. A save with an invalid contract is refused with 422 OUTPUT_CONTRACT_INVALID. */
+            output_contract?: components["schemas"]["OutputContract"] | null;
             parent_author_id?: string;
             parent_entity_id?: string;
             parent_project_id?: string;
@@ -5017,13 +5045,13 @@ export interface operations {
             400: components["responses"]["400"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
-            /** @description (RUN_CAP_ABOVE_TIER, RUN_CAP_INVALID) meta.run_caps raises a platform run cap or is not a valid cap */
+            /** @description (RUN_CAP_ABOVE_TIER, RUN_CAP_INVALID) meta.run_caps raises a platform run cap or is not a valid cap; (OUTPUT_CONTRACT_INVALID) meta.output_contract or the output_contract of a pipeline LLM node is not a valid contract */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RunCapRefusal"];
+                    "application/json": components["schemas"]["RunCapRefusal"] | components["schemas"]["OutputContractRefusal"];
                 };
             };
         };

@@ -45,3 +45,19 @@ describe('GovernanceDialog id lists', () => {
     expect(screen.getByTestId('governance-save')).toBeEnabled();
   });
 });
+
+describe('GovernanceDialog guardrail', () => {
+  it('shows the guardrail fields and the agent scope, but not the user throttle', () => {
+    renderDialog({ type: 'guardrail' });
+    expect(screen.getByTestId('governance-guardrail-detectors')).toBeInTheDocument();
+    expect(screen.getByTestId('governance-scope-agents')).toBeInTheDocument();
+    expect(screen.queryByTestId('governance-scope-users')).toBeNull();
+    expect(screen.getByTestId('governance-save')).toBeEnabled();
+  });
+
+  it('disables Save when the detectors are not valid JSON', () => {
+    renderDialog({ type: 'guardrail', guardrailDetectors: '[{"type":' });
+    expect(screen.getByTestId('governance-save')).toBeDisabled();
+    expect(screen.getByText('The detectors must be valid JSON.')).toBeInTheDocument();
+  });
+});

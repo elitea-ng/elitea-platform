@@ -3567,6 +3567,13 @@ impl ApplicationAssemblyState<'_> {
             .tool_names()
             .map(str::to_owned)
             .collect::<Vec<_>>();
+        // ADR-0043 decision 4: the nested agent's "read untrusted, then
+        // act" candidates ask after the run's untrusted reads.
+        let untrusted_act_tool_names = sensitive_tools
+            .untrusted_act_tool_names()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let untrusted_act_gate = sensitive_tools.untrusted_act_gate(None);
         let agent = Arc::new(LazyNestedAgent {
             name: application_tool_name(reference.identity),
             description,
@@ -3576,6 +3583,8 @@ impl ApplicationAssemblyState<'_> {
             elitea_context: self.elitea_context.clone(),
             sub_agents: Vec::new(),
             sensitive_tool_names,
+            untrusted_act_tool_names,
+            untrusted_act_gate,
             delegated_authorization: delegated_authorization.clone(),
             internal_tools,
             parallel_applications,
@@ -3585,6 +3594,7 @@ impl ApplicationAssemblyState<'_> {
                 .map(|scopes| scopes.with_application_tools(child_tools.agent_tool_names())),
             egress: Arc::clone(self.policy.egress()),
             run_caps: Arc::clone(self.policy.run_caps()),
+            preamble: Arc::clone(self.policy.content_controls().preamble()),
         });
         Ok(AssembledApplication::Built(Arc::new(BuiltApplication {
             saved_agent_fingerprint,
@@ -4279,6 +4289,10 @@ struct LazyNestedAgent {
     elitea_context: Arc<ClaimScopedEliteaContext>,
     sub_agents: Vec<Arc<dyn Agent>>,
     sensitive_tool_names: Vec<String>,
+    /// The "read untrusted, then act" candidates (ADR-0043 decision 4):
+    /// confirmed by `untrusted_act_gate` only after an untrusted read.
+    untrusted_act_tool_names: Vec<String>,
+    untrusted_act_gate: Option<Arc<dyn adk_rust::agent::ToolCallConfirmation>>,
     delegated_authorization: DelegatedAuthorizationCatalog,
     internal_tools: InternalToolCatalog,
     parallel_applications: bool,
@@ -4288,6 +4302,9 @@ struct LazyNestedAgent {
     /// The run's caps meter (ADR-0041 decision 3): a nested agent's model
     /// turns count toward the run's.
     run_caps: Arc<elitea_agent_runtime::run_caps::RunCapsMeter>,
+    /// The platform preamble (ADR-0043): a nested agent's model calls get it
+    /// like the root agent's.
+    preamble: Arc<str>,
 }
 
 #[async_trait]
@@ -4327,7 +4344,10 @@ struct PreparedChildApplicationResume {
 impl LazyNestedAgent {
     fn bind_model(&self) -> adk_rust::Result<BoundModelFacade> {
         let invocation = ModelInvocation {
-            response_schema: None,
+            response_schema: self
+                .profile
+                .output_contract()
+                .and_then(|contract| contract.response_schema().cloned()),
             allow_text_continuation: false,
             context_budget: self.profile.context_budget(),
             model_name: self.profile.model_name().to_owned(),
@@ -4340,6 +4360,7 @@ impl LazyNestedAgent {
             max_model_turns: self.profile.step_limit()
                 + crate::agents::request::MAX_OUTPUT_CONTINUATION_CALLS,
             run_caps: Some(Arc::clone(&self.run_caps)),
+            preamble: Some(Arc::clone(&self.preamble)),
         };
         let adapter = match self.profile.model_provider() {
             OrdinaryModelProvider::OpenAiChat => ModelAdapterKind::OpenAiCompatible,
@@ -4353,6 +4374,17 @@ impl LazyNestedAgent {
                 invocation,
                 self.profile.summary_model(),
             )
+            .map(|bound| {
+                // The child's own contract (ADR-0043 decision 2): a violation
+                // ends the child's call as a typed failure.
+                bound.with_output_contract(
+                    self.profile.output_contract().cloned(),
+                    crate::agents::output_contract_model::ContractStepScope {
+                        execution_id: self.elitea_context.execution_id().to_owned(),
+                        node_id: String::new(),
+                    },
+                )
+            })
             .map_err(model_error)
     }
 
@@ -4396,6 +4428,7 @@ impl LazyNestedAgent {
                 let guarded = self
                     .sensitive_tool_names
                     .iter()
+                    .chain(&self.untrusted_act_tool_names)
                     .map(String::as_str)
                     .chain(authorization.tool_names())
                     .chain([ASK_USER_TOOL_NAME])
@@ -4452,6 +4485,9 @@ impl LazyNestedAgent {
         }
         if self.internal_tools.ask_user_enabled() {
             builder = builder.require_tool_confirmation(ASK_USER_TOOL_NAME);
+        }
+        if let Some(gate) = &self.untrusted_act_gate {
+            builder = builder.tool_call_confirmation(Arc::clone(gate));
         }
         if self.parallel_applications && self.profile.instruction_plan().is_empty() {
             builder = builder.tool_execution_strategy(ToolExecutionStrategy::Parallel);

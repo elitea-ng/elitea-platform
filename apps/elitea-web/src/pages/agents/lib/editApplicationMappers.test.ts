@@ -192,6 +192,7 @@ describe('toVersionWriteBody', () => {
       llmSettings: { model_name: 'qwen3.5', model_project_id: 17, max_tokens: -1, temperature: 0.6 },
       tags: [],
       notes: '',
+      outputContract: null,
     };
 
     expect(toVersionWriteBody(version, [], edits).llm_settings).toEqual({
@@ -221,6 +222,7 @@ describe('toVersionWriteBody', () => {
       llmSettings: toVersionDraft(version, []).llmSettings,
       tags: [],
       notes: '',
+      outputContract: null,
     };
 
     expect(toVersionWriteBody(version, [], edits).llm_settings).toEqual({
@@ -248,6 +250,7 @@ describe('toVersionWriteBody', () => {
       llmSettings: undefined,
       tags: [],
       notes: '',
+      outputContract: null,
     };
 
     expect(toVersionWriteBody(version, [], edits).llm_settings).toEqual({ model_name: 'gpt' });
@@ -289,6 +292,7 @@ describe('toVersionSaveBody', () => {
         { id: -1712000000000, name: 'fresh', data: null },
       ],
       notes: 'Ask the design team before changing the tone.',
+      outputContract: null,
     };
 
     const body = toVersionSaveBody(version, [], edits);
@@ -327,10 +331,54 @@ describe('toVersionSaveBody', () => {
       llmSettings: undefined,
       tags: [],
       notes: '',
+      outputContract: null,
     });
 
     expect(body.tags).toEqual([]);
     expect(Object.hasOwn(body, 'tags')).toBe(true);
+  });
+});
+
+describe('output contract on save (#1500)', () => {
+  const baseEdits: EditApplicationVersionFields = {
+    instructions: '',
+    welcomeMessage: '',
+    variables: [],
+    stepLimit: undefined,
+    internalTools: [],
+    llmSettings: undefined,
+    tags: [],
+    notes: '',
+    outputContract: null,
+  };
+
+  it('sends the edited contract inside meta and keeps the other stored keys', () => {
+    const version = { name: 'base', meta: { category: 'sales' } } as unknown as ApplicationVersionDetail;
+    const outputContract = { type: 'json_schema' as const, schema: { type: 'object', required: ['answer'] } };
+
+    const parsed = VersionWriteRequest.parse(toVersionSaveBody(version, [], { ...baseEdits, outputContract }));
+
+    expect(parsed.meta?.output_contract).toEqual(outputContract);
+    expect(parsed.meta?.category).toBe('sales');
+  });
+
+  it('sends null when the contract is cleared, so the stored one goes', () => {
+    const version = {
+      name: 'base',
+      meta: { output_contract: { type: 'regex', pattern: 'a' } },
+    } as unknown as ApplicationVersionDetail;
+
+    const body = toVersionSaveBody(version, [], baseEdits);
+
+    expect(Object.hasOwn(body.meta ?? {}, 'output_contract')).toBe(true);
+    expect(body.meta?.output_contract).toBeNull();
+  });
+
+  it('a Save-As-Version with no edits keeps the stored contract', () => {
+    const outputContract = { type: 'format', format: 'csv' };
+    const version = { name: 'base', meta: { output_contract: outputContract } } as unknown as ApplicationVersionDetail;
+
+    expect(toVersionWriteBody(version, []).meta?.output_contract).toEqual(outputContract);
   });
 });
 

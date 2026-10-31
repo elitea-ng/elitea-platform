@@ -20,6 +20,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/outputcontract"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -71,7 +72,7 @@ func Refusal(err error) *apierr.APIError {
 		return nil
 	}
 	switch api.Code {
-	case CodeNodeTypeUnsupported, CodeToolkitNotAttached, CodeParallelBranchUnsupported:
+	case CodeNodeTypeUnsupported, CodeToolkitNotAttached, CodeParallelBranchUnsupported, outputcontract.Code:
 		return api
 	}
 	if errors.Is(err, ErrInstructionsTooLarge) || errors.Is(err, ErrTooManyNodes) || errors.Is(err, ErrExpansionTooLarge) {
@@ -155,6 +156,12 @@ func check(instructions string, attached *[]string) error {
 		if err := checkParallelBranches(declared); err != nil {
 			return err
 		}
+	}
+	// ADR-0043 decision 2: the output contract of every LLM node. The
+	// version save answers a typed 422 before this (applications
+	// checkOutputContracts); this covers every other writer (imports, MCP).
+	if err := outputcontract.CheckPipeline(instructions); err != nil {
+		return &apierr.APIError{Status: http.StatusUnprocessableEntity, Code: outputcontract.Code, Message: err.Error()}
 	}
 	return nil
 }

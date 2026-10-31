@@ -1882,6 +1882,42 @@ export const getListRunStepsResponseMock = (
     ]),
   })),
   next_after_seq: faker.helpers.arrayElement([faker.number.int(), null]),
+  guardrail_verdicts: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      occurred_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      route: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      stage: faker.helpers.arrayElement(["input", "output"] as const),
+      row: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      detector: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      detector_type: faker.helpers.arrayElement([
+        "regex",
+        "secrets",
+        "http",
+      ] as const),
+      action: faker.helpers.arrayElement(["block", "mask", "flag"] as const),
+      outcome: faker.helpers.arrayElement([
+        "pass",
+        "flagged",
+        "masked",
+        "blocked",
+        "error_open",
+        "error_closed",
+      ] as const),
+      fail_mode: faker.helpers.arrayElement(["open", "closed"] as const),
+      labels: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      findings: faker.number.int(),
+      max_score: faker.number.float({ fractionDigits: 2 }),
+      latency_ms: faker.number.int(),
+      runs: faker.number.int(),
+    })),
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -2704,6 +2740,32 @@ export const getCreateApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            output_contract: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  type: faker.helpers.arrayElement([
+                    "json_schema",
+                    "regex",
+                    "format",
+                  ] as const),
+                  schema: faker.helpers.arrayElement([{}, undefined]),
+                  pattern: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 1024 } }),
+                    undefined,
+                  ]),
+                  format: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      "json",
+                      "markdown",
+                      "csv",
+                    ] as const),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
           },
           null,
         ]),
@@ -2979,6 +3041,32 @@ export const getCreateApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            output_contract: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  type: faker.helpers.arrayElement([
+                    "json_schema",
+                    "regex",
+                    "format",
+                  ] as const),
+                  schema: faker.helpers.arrayElement([{}, undefined]),
+                  pattern: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 1024 } }),
+                    undefined,
+                  ]),
+                  format: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      "json",
+                      "markdown",
+                      "csv",
+                    ] as const),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
           },
           null,
         ]),
@@ -3209,6 +3297,32 @@ export const getListPublicApplicationsResponseMock = (
           ]),
           undefined,
         ]),
+        output_contract: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              type: faker.helpers.arrayElement([
+                "json_schema",
+                "regex",
+                "format",
+              ] as const),
+              schema: faker.helpers.arrayElement([{}, undefined]),
+              pattern: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 1024 } }),
+                undefined,
+              ]),
+              format: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  "json",
+                  "markdown",
+                  "csv",
+                ] as const),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
       },
       null,
     ]),
@@ -3351,6 +3465,32 @@ export const getGetApplicationResponseMock = (
                     }),
                     null,
                   ]),
+                  undefined,
+                ]),
+              },
+              null,
+            ]),
+            undefined,
+          ]),
+          output_contract: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                type: faker.helpers.arrayElement([
+                  "json_schema",
+                  "regex",
+                  "format",
+                ] as const),
+                schema: faker.helpers.arrayElement([{}, undefined]),
+                pattern: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 1024 } }),
+                  undefined,
+                ]),
+                format: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    "json",
+                    "markdown",
+                    "csv",
+                  ] as const),
                   undefined,
                 ]),
               },
@@ -3529,6 +3669,32 @@ export const getGetApplicationResponseMock = (
                       }),
                       null,
                     ]),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
+            output_contract: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  type: faker.helpers.arrayElement([
+                    "json_schema",
+                    "regex",
+                    "format",
+                  ] as const),
+                  schema: faker.helpers.arrayElement([{}, undefined]),
+                  pattern: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 1024 } }),
+                    undefined,
+                  ]),
+                  format: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      "json",
+                      "markdown",
+                      "csv",
+                    ] as const),
                     undefined,
                   ]),
                 },
@@ -3820,6 +3986,32 @@ export const getEditApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            output_contract: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  type: faker.helpers.arrayElement([
+                    "json_schema",
+                    "regex",
+                    "format",
+                  ] as const),
+                  schema: faker.helpers.arrayElement([{}, undefined]),
+                  pattern: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 1024 } }),
+                    undefined,
+                  ]),
+                  format: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      "json",
+                      "markdown",
+                      "csv",
+                    ] as const),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
           },
           null,
         ]),
@@ -4090,6 +4282,32 @@ export const getGetPublicApplicationResponseMock = (
                     }),
                     null,
                   ]),
+                  undefined,
+                ]),
+              },
+              null,
+            ]),
+            undefined,
+          ]),
+          output_contract: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                type: faker.helpers.arrayElement([
+                  "json_schema",
+                  "regex",
+                  "format",
+                ] as const),
+                schema: faker.helpers.arrayElement([{}, undefined]),
+                pattern: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 1024 } }),
+                  undefined,
+                ]),
+                format: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    "json",
+                    "markdown",
+                    "csv",
+                  ] as const),
                   undefined,
                 ]),
               },
@@ -4591,6 +4809,32 @@ export const getGetApplicationVersionDetailResponseMock = (
           ]),
           undefined,
         ]),
+        output_contract: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              type: faker.helpers.arrayElement([
+                "json_schema",
+                "regex",
+                "format",
+              ] as const),
+              schema: faker.helpers.arrayElement([{}, undefined]),
+              pattern: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 1024 } }),
+                undefined,
+              ]),
+              format: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  "json",
+                  "markdown",
+                  "csv",
+                ] as const),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
       },
       null,
     ]),
@@ -4848,6 +5092,32 @@ export const getUpdateApplicationVersionResponseMock = (
                   }),
                   null,
                 ]),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
+        output_contract: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              type: faker.helpers.arrayElement([
+                "json_schema",
+                "regex",
+                "format",
+              ] as const),
+              schema: faker.helpers.arrayElement([{}, undefined]),
+              pattern: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 1024 } }),
+                undefined,
+              ]),
+              format: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  "json",
+                  "markdown",
+                  "csv",
+                ] as const),
                 undefined,
               ]),
             },
@@ -5115,6 +5385,32 @@ export const getGetApplicationVersionDetailExpandedResponseMock =
                       }),
                       null,
                     ]),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
+            output_contract: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  type: faker.helpers.arrayElement([
+                    "json_schema",
+                    "regex",
+                    "format",
+                  ] as const),
+                  schema: faker.helpers.arrayElement([{}, undefined]),
+                  pattern: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 1024 } }),
+                    undefined,
+                  ]),
+                  format: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      "json",
+                      "markdown",
+                      "csv",
+                    ] as const),
                     undefined,
                   ]),
                 },
@@ -5404,6 +5700,32 @@ export const getSaveApplicationNewVersionResponseMock = (
                   }),
                   null,
                 ]),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
+        output_contract: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              type: faker.helpers.arrayElement([
+                "json_schema",
+                "regex",
+                "format",
+              ] as const),
+              schema: faker.helpers.arrayElement([{}, undefined]),
+              pattern: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 1024 } }),
+                undefined,
+              ]),
+              format: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  "json",
+                  "markdown",
+                  "csv",
+                ] as const),
                 undefined,
               ]),
             },
@@ -5804,6 +6126,34 @@ export const getImportWizardResponseMock = (
                       ]),
                       undefined,
                     ]),
+                    output_contract: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          type: faker.helpers.arrayElement([
+                            "json_schema",
+                            "regex",
+                            "format",
+                          ] as const),
+                          schema: faker.helpers.arrayElement([{}, undefined]),
+                          pattern: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 1024 },
+                            }),
+                            undefined,
+                          ]),
+                          format: faker.helpers.arrayElement([
+                            faker.helpers.arrayElement([
+                              "json",
+                              "markdown",
+                              "csv",
+                            ] as const),
+                            undefined,
+                          ]),
+                        },
+                        null,
+                      ]),
+                      undefined,
+                    ]),
                   },
                   null,
                 ]),
@@ -6149,6 +6499,34 @@ export const getImportWizardResponseMock = (
                               }),
                               null,
                             ]),
+                            undefined,
+                          ]),
+                        },
+                        null,
+                      ]),
+                      undefined,
+                    ]),
+                    output_contract: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          type: faker.helpers.arrayElement([
+                            "json_schema",
+                            "regex",
+                            "format",
+                          ] as const),
+                          schema: faker.helpers.arrayElement([{}, undefined]),
+                          pattern: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 1024 },
+                            }),
+                            undefined,
+                          ]),
+                          format: faker.helpers.arrayElement([
+                            faker.helpers.arrayElement([
+                              "json",
+                              "markdown",
+                              "csv",
+                            ] as const),
                             undefined,
                           ]),
                         },
@@ -6673,6 +7051,32 @@ export const getForkAgentResponseMock = (
                           }),
                           null,
                         ]),
+                        undefined,
+                      ]),
+                    },
+                    null,
+                  ]),
+                  undefined,
+                ]),
+                output_contract: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    {
+                      type: faker.helpers.arrayElement([
+                        "json_schema",
+                        "regex",
+                        "format",
+                      ] as const),
+                      schema: faker.helpers.arrayElement([{}, undefined]),
+                      pattern: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 1024 } }),
+                        undefined,
+                      ]),
+                      format: faker.helpers.arrayElement([
+                        faker.helpers.arrayElement([
+                          "json",
+                          "markdown",
+                          "csv",
+                        ] as const),
                         undefined,
                       ]),
                     },

@@ -209,4 +209,35 @@ describe('ApplicationAdvanceSettings', () => {
       expect(notCancelled).toBe(true);
     });
   });
+
+  describe('output contract (#1500)', () => {
+    it('is not shown unless the caller opts in', () => {
+      renderWithProviders(
+        <ApplicationAdvanceSettings
+          stepLimit={25}
+          onStepLimitChange={vi.fn()}
+          outputContract={{ type: 'regex', pattern: 'a' }}
+          onOutputContractChange={vi.fn()}
+        />,
+      );
+      expect(screen.queryByTestId('agent-output-contract')).not.toBeInTheDocument();
+    });
+
+    it('shows the stored contract and writes an edit', () => {
+      const onOutputContractChange = vi.fn();
+      renderWithProviders(
+        <ApplicationAdvanceSettings
+          stepLimit={25}
+          onStepLimitChange={vi.fn()}
+          outputContract={{ type: 'regex', pattern: 'a' }}
+          onOutputContractChange={onOutputContractChange}
+          showOutputContract
+        />,
+      );
+      const pattern = screen.getByTestId('agent-output-contract-pattern');
+      expect(pattern).toHaveValue('a');
+      fireEvent.change(pattern, { target: { value: '^b$' } });
+      expect(onOutputContractChange).toHaveBeenCalledWith({ type: 'regex', pattern: '^b$' });
+    });
+  });
 });

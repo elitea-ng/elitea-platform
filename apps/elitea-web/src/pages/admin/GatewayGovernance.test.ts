@@ -367,3 +367,65 @@ describe('draftFieldErrors', () => {
     expect(draftFieldErrors(draft({ type: 'budget', scopeAgentIds: 'x', scopeUserIds: 'y' }))).toEqual({});
   });
 });
+
+describe('guardrail rows (ADR-0043 decision 1)', () => {
+  const detectors = '[{"type":"secrets","action":"mask"},{"type":"regex","action":"block","terms":["project x"]}]';
+
+  it('writes the payload the gateway compiles, with agents but not users', () => {
+    const data = draftToData(
+      draft({
+        type: 'guardrail',
+        scopeProjectIds: '7',
+        scopeAgentIds: '3',
+        scopeUserIds: '11',
+        guardrailStage: 'output',
+        guardrailDetectors: detectors,
+        guardrailTimeoutMs: '500',
+        guardrailFailMode: 'open',
+        guardrailApplyToEmbeddings: true,
+        guardrailStreamWindow: '512',
+      }),
+    );
+    expect(data.scope).toEqual({ project_ids: [7], agent_ids: [3] });
+    expect(data.guardrail).toEqual({
+      stage: 'output',
+      detectors: JSON.parse(detectors) as unknown,
+      timeout_ms: 500,
+      fail_mode: 'open',
+      stream_window_bytes: 512,
+    });
+  });
+
+  it('omits the defaults the operator left empty', () => {
+    const data = draftToData(draft({ type: 'guardrail', guardrailApplyToEmbeddings: true }));
+    expect(data.guardrail).toEqual({
+      stage: 'input',
+      detectors: [{ type: 'secrets', action: 'mask' }],
+      apply_to_embeddings: true,
+    });
+  });
+
+  it('refuses detectors that are not a JSON array of objects', () => {
+    expect(draftFieldErrors(draft({ type: 'guardrail', guardrailDetectors: '[{' })).guardrailDetectors).toBeDefined();
+    expect(draftFieldErrors(draft({ type: 'guardrail', guardrailDetectors: '[]' })).guardrailDetectors).toBeDefined();
+    expect(draftFieldErrors(draft({ type: 'guardrail', guardrailDetectors: '["x"]' })).guardrailDetectors).toBeDefined();
+    expect(draftFieldErrors(draft({ type: 'guardrail', guardrailDetectors: detectors }))).toEqual({});
+    // Another type ignores the field.
+    expect(draftFieldErrors(draft({ type: 'budget', guardrailDetectors: '[{' }))).toEqual({});
+  });
+
+  it('round-trips a stored row', () => {
+    const stored = row({
+      type: 'guardrail',
+      data: {
+        scope: { project_ids: [7], agent_ids: [3] },
+        guardrail: { stage: 'output', detectors: JSON.parse(detectors) as unknown, timeout_ms: 500, stream_window_bytes: 512 },
+      },
+    });
+    const back = rowToDraft(stored);
+    expect(back.guardrailStage).toBe('output');
+    expect(back.scopeAgentIds).toBe('3');
+    expect(draftToData(back)).toEqual(stored.data);
+    expect(GOVERNANCE_TYPES).toContain('guardrail');
+  });
+});

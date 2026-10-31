@@ -79,7 +79,11 @@ jobs:
   desktop:
     name: Host (fmt, clippy, tests) + desktop web build
     runs-on: macos-latest
-    timeout-minutes: 40
+    # The same commit takes 18 to 35 minutes on macOS runners, and a cold
+    # rust-cache (a pull request that changes Cargo.lock) takes longer. A 40
+    # minute cap cancelled a green run mid-compile (PR #1545). The cap costs
+    # nothing on a fast run.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 

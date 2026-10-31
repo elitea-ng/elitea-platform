@@ -24,6 +24,7 @@ mod model_scope;
 pub(crate) mod native_runtime;
 pub(crate) mod node_recovery_checkpoint;
 pub(crate) mod ordinary;
+pub(crate) mod output_contract_model;
 pub(crate) mod pipeline;
 pub mod protocol;
 mod replay_history;
@@ -35,6 +36,7 @@ pub(crate) mod sensitive_tools;
 pub(crate) mod session;
 pub(crate) mod skipped_capabilities;
 pub(crate) mod subagents;
+pub(crate) mod untrusted_gate;
 pub(crate) use elitea_agent_runtime::tool_namespacing;
 pub(crate) mod variables;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

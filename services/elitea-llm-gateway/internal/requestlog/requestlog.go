@@ -42,6 +42,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/guardrail"
 )
 
 // Record is one served request, as the gateway saw it.
@@ -100,6 +102,12 @@ type Record struct {
 	// units, their unit and the billed cost. Nil for every other request, whose
 	// row the table records as operation "llm". Shared migration 0174.
 	Metered *MeteredFields
+	// Guardrails are the guardrail verdicts of the request (ADR-0043
+	// decision 1). A verdict names the detector, the labels, the action and
+	// the outcome, never the inspected content, so it keeps this struct's
+	// rule. The store writes them to gateway.guardrail_verdicts (shared
+	// migration 0214).
+	Guardrails []guardrail.Verdict
 }
 
 // MeteredFields are the request-log columns of a metered tool settlement.

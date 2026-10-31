@@ -18,6 +18,7 @@ import {
 import { CreateAgentForm } from '@/features/agents';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { t } from '@/shared/i18n';
+import { readOutputContract } from '@/shared/ui/OutputContractField';
 import { AgentModelSettings } from '@/widgets/agent-model-settings';
 import { disarmUnsavedChangesNavBlocker, useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
 
@@ -26,6 +27,7 @@ import {
   mapCreateErrorToFieldErrors,
   type CreateAgentFormExtraFields,
 } from './lib/createApplicationDraftState';
+import { agentSaveErrorMessage } from './lib/agentSaveErrorMessage';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 
 const pageSx: SxProps<Theme> = {
@@ -151,6 +153,7 @@ export function CreateApplication(): ReactNode {
     variables: draftDefaults.versionDetails.variables.map((variable) => ({ ...variable })),
     stepLimit: draftDefaults.versionDetails.meta.step_limit,
     llmSettings: draftDefaults.versionDetails.llmSettings,
+    outputContract: null,
   });
 
   /*
@@ -186,7 +189,7 @@ export function CreateApplication(): ReactNode {
       instructions: extraFields.instructions,
       welcome_message: extraFields.welcomeMessage,
       variables: extraFields.variables,
-      meta: { step_limit: extraFields.stepLimit },
+      meta: { step_limit: extraFields.stepLimit, output_contract: extraFields.outputContract },
       llm_settings: extraFields.llmSettings,
     },
   };
@@ -231,6 +234,9 @@ export function CreateApplication(): ReactNode {
             stepLimit: typeof value === 'number' ? value : undefined,
           }));
           return;
+        case 'version_details.meta.output_contract':
+          setExtraFields((previous) => ({ ...previous, outputContract: readOutputContract(value) }));
+          return;
         // No `version_details.llm_settings` case, deliberately: model settings
         // reach `extraFields.llmSettings` through `handleModelSettingsChange`
         // below, straight off the `AgentModelSettings` slot. The create form's
@@ -264,7 +270,11 @@ export function CreateApplication(): ReactNode {
             (entry): entry is string => typeof entry === 'string',
           ),
           variables: extraFields.variables,
-          meta: { ...draftDefaults.versionDetails.meta, step_limit: extraFields.stepLimit ?? draftDefaults.versionDetails.meta.step_limit },
+          meta: {
+            ...draftDefaults.versionDetails.meta,
+            step_limit: extraFields.stepLimit ?? draftDefaults.versionDetails.meta.step_limit,
+            ...(extraFields.outputContract === null ? {} : { output_contract: extraFields.outputContract }),
+          },
           llmSettings: extraFields.llmSettings,
         },
       });
@@ -327,7 +337,7 @@ export function CreateApplication(): ReactNode {
               )}
               {!hasCreateFieldError && (
                 <Typography variant="bodyMedium">
-                  {t('pages.agents.createApplication.error', 'Failed to create the agent.')}
+                  {agentSaveErrorMessage(createDraftError, t('pages.agents.createApplication.error', 'Failed to create the agent.'))}
                 </Typography>
               )}
             </Box>
@@ -336,6 +346,7 @@ export function CreateApplication(): ReactNode {
             values={agentDraftValues}
             onFieldChange={handleAgentFieldChange}
             disabled={isCreating}
+            showOutputContract
             modelSettingsSlot={
               <AgentModelSettings
                 projectId={projectId}

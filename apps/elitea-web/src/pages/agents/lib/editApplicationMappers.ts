@@ -221,6 +221,8 @@ function toVersionMetaBody(
        * `notesMetaKey` in the Go handler) — there is no `notes` column.
        */
       notes: edits.notes,
+      // #1500 — always sent: `null` clears a stored contract (an omitted key keeps it through the merge).
+      output_contract: edits.outputContract,
     },
   };
 }

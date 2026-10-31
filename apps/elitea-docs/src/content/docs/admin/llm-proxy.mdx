@@ -79,6 +79,12 @@ Under **Models**, each platform model carries a share scope:
 `credential_resolves = false` on a model means it names a provider this platform does not currently publish (or none). That, like `status_ok = false`, means the model is stored and listed but never actually served — this screen is where you see why.
 </Note>
 
+## Content guardrails
+
+The gateway also checks model content. **Content guardrail** entries under **Admin › LLM Governance** run detectors on each request before the provider call, and on each answer, streamed or not. A detector blocks, masks or flags what it finds. A blocked request gets HTTP 400 with `error.type` `guardrail_error` and `error.code` `guardrail_blocked`. A detector that fails under a closed fail mode gives HTTP 503 with `error.code` `guardrail_unavailable`. A blocked stream ends with an error event of the same shape. A mask entry delays a streamed answer by its look-behind window (256 bytes by default).
+
+Each check is a verdict without content in `gateway.guardrail_verdicts`. The verdicts have the same retention as the request log. See [Guardrail pipeline](/admin/enterprise-controls/content-controls#guardrail-pipeline).
+
 ## Read status, usage, logs, and alerts
 
 <Accordion title="Status">

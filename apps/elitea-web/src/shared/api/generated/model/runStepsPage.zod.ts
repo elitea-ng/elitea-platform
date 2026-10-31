@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { RunGuardrailVerdict } from "./runGuardrailVerdict.zod";
 import { RunStep } from "./runStep.zod";
 import { RunStepRun } from "./runStepRun.zod";
 
@@ -51,6 +52,12 @@ export const RunStepsPage = zod.object({
     .int()
     .nullable()
     .describe("The after_seq of the next page; null on the last."),
+  guardrail_verdicts: zod
+    .array(RunGuardrailVerdict)
+    .optional()
+    .describe(
+      "The guardrail checks the LLM gateway made on the requests of the run (ADR-0043 decision 1), oldest first, at most 1000. Only the first page (no after_seq) has them. They are not part of the hash chain.\n",
+    ),
 });
 
 export type RunStepsPage = zod.input<typeof RunStepsPage>;

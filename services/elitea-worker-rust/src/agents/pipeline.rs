@@ -16,6 +16,7 @@ use std::time::Duration;
 use adk_rust::agent::LlmAgentBuilder;
 use adk_rust::{Agent, GenerateContentConfig, ReadonlyContext, Tool, Toolset};
 use async_trait::async_trait;
+use elitea_agent_runtime::approval_policy::ApprovalRule;
 use elitea_agent_runtime::delegation::{
     Delegation, DelegationEvidence, DelegationScope, RefusedDelegation,
 };
@@ -270,12 +271,25 @@ impl PipelineExecutionProfile {
                 {
                     return Err(unsupported_pipeline_tool_scope());
                 }
-                if let Some(sensitive) = policy.sensitive_tool_in(
-                    reference.tool_type(),
-                    reference.toolkit_name(),
-                    reference.settings(),
-                    tool_name,
-                ) {
+                // ADR-0043 decision 4: a "read untrusted, then act"
+                // candidate is a guard the node's gate confirms only after
+                // an untrusted read.
+                if let Some(sensitive) = policy
+                    .sensitive_tool_in(
+                        reference.tool_type(),
+                        reference.toolkit_name(),
+                        reference.settings(),
+                        tool_name,
+                    )
+                    .or_else(|| {
+                        policy.untrusted_act_tool_in(
+                            reference.tool_type(),
+                            reference.toolkit_name(),
+                            reference.settings(),
+                            tool_name,
+                        )
+                    })
+                {
                     self.sensitive_llm_tools.insert(
                         (selection.alias().to_owned(), tool_name.to_owned()),
                         sensitive,
@@ -868,6 +882,8 @@ impl PipelineNativeAgentAssembler {
                 node_events: node_event_sender.clone(),
                 model_scopes,
                 run_caps: Arc::clone(tool_policy.run_caps()),
+                content: Arc::clone(tool_policy.content_controls()),
+                untrusted: Arc::clone(tool_policy.content_controls().untrusted()),
             }) as Arc<dyn PipelineLlmAgentFactory>
         });
         let mut nodes =
@@ -1171,6 +1187,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             command.egress(),
             command.approval_policy(),
             command.run_caps(),
+            command.content_controls(),
         )?;
         let (profile, plan, _, _) = super::runtime::admit_pipeline_plan(
             request,
@@ -1206,6 +1223,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             command.egress(),
             command.approval_policy(),
             command.run_caps(),
+            command.content_controls(),
         )?;
         let (profile, plan, toolsets, start) = super::runtime::admit_pipeline_plan(
             request,
@@ -1301,7 +1319,15 @@ impl PipelineNativeAgentAssembler {
                 assembly.egress(),
                 assembly.approval_policy(),
                 assembly.run_caps(),
+                assembly.content_controls(),
             )?;
+            super::sensitive_tools::seed_continued_turn(
+                &assembly.request().payload,
+                assembly.content_controls(),
+            );
+            if recovery {
+                assembly.content_controls().untrusted().record_read();
+            }
             // #606, the pipeline twin of the ordinary path's read. `platform`
             // is optional here only because the injected-state test constructor
             // has none; a stored pipeline that runs for real always does, and a
@@ -1489,6 +1515,10 @@ struct NativePipelineLlmAgentFactory {
     /// The run's caps meter (ADR-0041 decision 3): an llm node's model turns
     /// count toward the run's.
     run_caps: Arc<elitea_agent_runtime::run_caps::RunCapsMeter>,
+    /// The run's content controls (ADR-0043): the preamble of the node's
+    /// model calls and the untrusted reads its gate reads.
+    content: Arc<elitea_agent_runtime::preamble::ContentControls>,
+    untrusted: Arc<elitea_agent_runtime::untrusted::UntrustedReads>,
 }
 
 struct NativePipelineDirectToolResolver {
@@ -1810,6 +1840,7 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             max_model_turns: self.profile.step_limit()
                 + crate::agents::request::MAX_OUTPUT_CONTINUATION_CALLS,
             run_caps: Some(Arc::clone(&self.run_caps)),
+            preamble: Some(Arc::clone(self.content.preamble())),
         };
         let adapter = match self.profile.model_provider() {
             OrdinaryModelProvider::OpenAiChat => ModelAdapterKind::OpenAiCompatible,
@@ -1824,7 +1855,14 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
                 invocation,
                 self.profile.summary_model(),
             )
-            .map_err(|_| LlmExecutionError::Unavailable)?;
+            .map_err(|_| LlmExecutionError::Unavailable)?
+            .with_output_contract(
+                definition.output_contract().cloned(),
+                crate::agents::output_contract_model::ContractStepScope {
+                    execution_id: self.context.execution_id().to_owned(),
+                    node_id: definition.id().to_owned(),
+                },
+            );
         let plan = match self.profile.context_management() {
             ContextManagementPlan::Disabled => None,
             ContextManagementPlan::Summarize(plan) => Some(plan),
@@ -1924,8 +1962,22 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
         for toolset in selected_toolsets {
             builder = builder.toolset(toolset);
         }
-        for tool_name in guards.keys() {
-            builder = builder.require_tool_confirmation(tool_name);
+        let mut untrusted_act = Vec::new();
+        for (tool_name, guard) in &guards {
+            if matches!(
+                guard,
+                PipelineToolGuard::Sensitive(policy)
+                    if matches!(policy.rule(), ApprovalRule::UntrustedReadThenAct { .. })
+            ) {
+                untrusted_act.push(tool_name.as_str());
+            } else {
+                builder = builder.require_tool_confirmation(tool_name);
+            }
+        }
+        if let Some(gate) =
+            super::untrusted_gate::UntrustedActGate::compose(untrusted_act, &self.untrusted, None)
+        {
+            builder = builder.tool_call_confirmation(gate);
         }
         let agent = builder
             .build()
@@ -2717,6 +2769,8 @@ async fn bind_saved_pipeline_runtimes(
             node_events: runtime.node_events.clone(),
             model_scopes: runtime.model_scopes.clone(),
             run_caps: Arc::clone(runtime.tool_policy.run_caps()),
+            content: Arc::clone(runtime.tool_policy.content_controls()),
+            untrusted: Arc::clone(runtime.tool_policy.content_controls().untrusted()),
         }) as Arc<dyn PipelineLlmAgentFactory>
     });
     let mut runtimes = PipelineNodeRuntimes::new(llm_factory, direct_tool_resolver, application)

@@ -17,6 +17,12 @@ pub(in crate::agents) struct OutputContinuation {
     pub failure: Option<ContinuationFailure>,
 }
 
+/// The start of the prompt of a continuation after an empty answer.
+const EMPTY_CONTINUATION_PROMPT: &str =
+    "The previous response exhausted its output allowance before producing visible text.";
+/// The start of the prompt of a continuation after a part of an answer.
+const TEXT_CONTINUATION_PROMPT: &str = "The previous answer reached its output allowance.";
+
 impl OutputContinuation {
     pub(in crate::agents) fn validate(&self) -> adk_rust::Result<()> {
         if (self.repair_used && self.round < 2)
@@ -53,10 +59,12 @@ impl OutputContinuation {
             });
         }
         let mut prompt = if self.prefix.is_empty() {
-            "The previous response exhausted its output allowance before producing visible text. Complete the original task now. Return the answer without referring to this retry.".to_owned()
+            format!(
+                "{EMPTY_CONTINUATION_PROMPT} Complete the original task now. Return the answer without referring to this retry."
+            )
         } else {
             format!(
-                "The previous answer reached its output allowance. Complete only the missing portion of the original task. Return only the exact anchor below followed immediately by new text. Copy the anchor character-for-character, decoded from JSON, before continuing. The anchor can start or end inside a word; do not complete, skip, revise, or explain the anchor. Preserve whitespace. Do not add a preamble or a new tool call. Exact anchor: {}",
+                "{TEXT_CONTINUATION_PROMPT} Complete only the missing portion of the original task. Return only the exact anchor below followed immediately by new text. Copy the anchor character-for-character, decoded from JSON, before continuing. The anchor can start or end inside a word; do not complete, skip, revise, or explain the anchor. Preserve whitespace. Do not add a preamble or a new tool call. Exact anchor: {}",
                 serde_json::json!(self.anchor())
             )
         };

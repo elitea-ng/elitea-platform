@@ -52,6 +52,10 @@ on:
       - "libs/proto/gen/go/**"
       # The shipped DDL the gateway's Postgres integration tests apply.
       - "services/elitea-main/migrations/shared/**"
+      # The guardrail secrets detector embeds a pinned copy of this rule set,
+      # and the http adapter's structs are pinned to these schemas (#1500).
+      - "libs/rust/local-tools/src/handoff/secret_rules.json"
+      - "libs/jsonschema/guardrail/**"
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the caches pull requests
   # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the

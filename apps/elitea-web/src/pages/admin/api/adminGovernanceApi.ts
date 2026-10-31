@@ -68,6 +68,7 @@ export const GOVERNANCE_TYPES = [
   'credential_policy',
   'routing_rule',
   'egress_allowlist',
+  'guardrail',
 ] as const;
 
 export type GovernanceType = (typeof GOVERNANCE_TYPES)[number];

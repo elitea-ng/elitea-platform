@@ -1537,7 +1537,11 @@ async fn assert_inline_cards(
             .find(|branch| rendered.contains(&format!("Work on {branch}")))
             .unwrap_or_else(|| panic!("an unknown branch request: {rendered}"));
         assert_eq!(
-            body["messages"][0]["content"],
+            crate::test_content::without_preamble(
+                body["messages"][0]["content"]
+                    .as_str()
+                    .expect("system content")
+            ),
             format!("INLINE-BRANCH-SYSTEM {branch}"),
             "{rendered}"
         );

@@ -38,8 +38,15 @@ A default install favours getting started. A deployment that will be assessed ag
 - [ ] Keep **Configuration › Circuit Breaker** on. Review the error-rate and tool-failure limits per tier, and set **Spend per Hour** and **Runs per Hour** for the tiers of agents that spend money or send messages (they are off by default). Tighten the limits of individual agents on their registry record. See [Agent circuit breaker](/admin/enterprise-controls/runtime-safety#agent-circuit-breaker).
 - [ ] Route the runtime safety alerts (`EliteaPlatformExecutionSuspended`, `EliteaAgentBreakerStorm`, `EliteaAgentBreakerTripped`, `EliteaExecutionSuspensionsActive`) to your on-call. They need the Prometheus Operator, or a scrape of elitea-main's port 9464.
 - [ ] Keep **Configuration › Approvals › Unattended Default** at `fail`, so a scheduled or triggered run that needs an approval stops instead of continuing. Set `skip` or `notify_and_wait` only on the schedules and triggers that need it. See [Approval evidence and unattended runs](/admin/enterprise-controls/runtime-safety#approval-evidence-and-unattended-runs).
+- [ ] Create **Content guardrail** entries under **Admin › LLM Governance**: a `secrets` detector with `mask` on the input and output stages, and the patterns, terms or classifier adapter that your policy needs. Keep `fail_mode: closed` on entries that block or mask. Store adapter credentials as `{{secret.NAME}}` and add the adapter host to the egress allowlist. See [Guardrail pipeline](/admin/enterprise-controls/content-controls#guardrail-pipeline).
 - [ ] Set project budgets. A reached budget refuses further model calls. See [Budgets and LLM governance](/admin/budgets-and-governance).
 - [ ] After every worker runs the release, review and save **Configuration › Approval Policy**, so tools in the `delete`, `external_send` and `payment` categories pause for approval at the high and critical tiers. Select `high` and `critical` under **Tiers That Require a HITL Node in Pipelines**. See [Tool categories and approval policy](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+- [ ] Keep **Configuration › Approval Policy › Tiers With the Read Untrusted, Then Act Rule** at `high` and `critical` or more, so an agent that reads a tool result and then deletes, sends or pays asks a person first. See [Untrusted content](/admin/enterprise-controls/content-controls#untrusted-content).
+
+## Content
+
+- [ ] After every worker runs the release, save **Configuration › AI Disclosure** with the marker text that your legal function approves. Keep **Toolkit Types a Project Can Opt Out Of** empty unless a contract requires otherwise. See [AI disclosure](/admin/enterprise-controls/content-controls#ai-disclosure).
+- [ ] Write the organisation's rules for every agent in **Configuration › Platform Preamble**. Keep it short, and keep secrets and personal data out of it. Review the revisions and their `config.changed` audit events. See [Platform preamble](/admin/enterprise-controls/content-controls#platform-preamble).
 
 ## Change control
 

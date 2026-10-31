@@ -13,7 +13,8 @@ package gateway
 //
 //   - The fields are lists of positive whole-number ids, at most
 //     maxThrottleScopeIDs long. The gateway uses the same bound.
-//   - Only a rate_limit entry may carry them. No other type reads them, so on
+//   - Only a rate_limit entry may carry them, and a guardrail entry may carry
+//     `scope.agent_ids` (ADR-0043 decision 1). No other type reads them, so on
 //     another type they would apply the entry more widely than authored.
 //   - `scope.agent_ids` needs exactly one `scope.project_ids` entry. Agent ids
 //     are application ids, and application ids are per project.
@@ -126,8 +127,11 @@ func validateThrottleScope(rowType string, data map[string]any) error {
 	if len(ts.agentIDs) == 0 && len(ts.userIDs) == 0 {
 		return nil
 	}
-	if rowType != "rate_limit" {
-		return errors.New("scope.agent_ids and scope.user_ids apply to rate_limit entries only")
+	// A guardrail entry may be scoped to agents (ADR-0043 decision 1), but
+	// not to users.
+	if rowType != "rate_limit" && (rowType != guardrailType || len(ts.userIDs) > 0) {
+		return errors.New("scope.user_ids applies to rate_limit entries only, and scope.agent_ids to " +
+			"rate_limit and guardrail entries only")
 	}
 	if len(ts.agentIDs) > 0 && len(ts.projectIDs) != 1 {
 		return errors.New("scope.agent_ids needs exactly one entry in scope.project_ids: the project " +

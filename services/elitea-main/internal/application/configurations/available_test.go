@@ -50,6 +50,7 @@ func TestPinnedCurrentAvailableCatalogMatchesCurrentFixedRegistry(t *testing.T) 
 		"cloud_executor",
 		// Registered in Go: the worker egress project setting (ADR-0044).
 		"worker_egress",
+		"ai_disclosure",
 	}
 	gotTypes := make([]string, len(entries))
 	for index, entry := range entries {

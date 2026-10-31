@@ -94,9 +94,10 @@ where
                 .map_err(|_| "node_recovery.input_invalid")?;
             let request = crate::agents::request_from(message, kind, binding)
                 .map_err(|_| "node_recovery.input_invalid")?;
-            let command =
-                crate::agents::session::AuthorizedNativeCommandBinding::from_verified(&verified)
-                    .map_err(|_| "node_recovery.command_invalid")?;
+            let command = crate::agents::session::AuthorizedNativeCommandBinding::from_verified(
+                &verified, &request,
+            )
+            .map_err(|_| "node_recovery.command_invalid")?;
             let visit = self
                 .authorized
                 .inspect_node_recovery(

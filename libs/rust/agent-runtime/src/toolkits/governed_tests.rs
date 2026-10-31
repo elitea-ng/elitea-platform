@@ -226,8 +226,15 @@ fn toolset(client: &Arc<GovernedOperationClient>, family: &Family) -> Arc<dyn To
 /// redeemed exactly once, and served by the family's own tool on a client
 /// built from the envelope (the call's malformed arguments are the family's
 /// own refusal, not a governed one, and nothing reaches the network).
+///
+/// Strict (`crate::egress::strict`): the per-call client is built after
+/// materialization, so a build outside the run's egress scope fails here.
 #[tokio::test]
 async fn each_reference_family_redeems_once_and_runs_on_the_envelope_client() {
+    crate::egress::strict(each_reference_family_redeems_once()).await;
+}
+
+async fn each_reference_family_redeems_once() {
     for family in families() {
         let (kind, material, target) = (family.kind, family.material, family.target);
         let (client, redeemer) = governed(answering(kind, material, target));
@@ -853,4 +860,57 @@ fn canonical_target_matches_the_shared_vectors() {
             "{input}"
         );
     }
+}
+
+/// A governed call builds its provider client at call time, after
+/// materialization's egress scope has ended (#1490). The client must still be
+/// bound to the RUN's egress policy: a host off the run's allowlist is refused
+/// as `egress_host_not_allowed` before anything is dialled, and counted in the
+/// run's summary. (Outside every scope a test build is open, so without the
+/// binding this call would go to the network instead of being refused.)
+#[tokio::test]
+async fn a_governed_call_builds_its_client_under_the_runs_egress_policy() {
+    use crate::egress::{EGRESS_HOST_NOT_ALLOWED, PublicPolicy, RunEgress};
+
+    let egress = RunEgress::new(PublicPolicy::allowlist(["api.example.com"]).expect("allowlist"));
+    let policy = Arc::new(
+        ToolAdmissionPolicy::new(&[], &BTreeMap::new())
+            .expect("policy")
+            .with_egress(Arc::clone(&egress)),
+    );
+    let settings = object(&json!({"jira_configuration": {
+        "base_url": "https://jira.example.test/jira/", "token": CLAIM_TIME_SECRET}}));
+    let (client, redeemer) = governed(answering(
+        EnvelopeKind::OauthAccess,
+        &[("access_token", "envelope-jira")],
+        "https://jira.example.test/jira",
+    ));
+    let toolset = client
+        .toolset(&GovernedToolkitSpec::new(
+            "governed",
+            "jira",
+            Some(31),
+            &settings,
+            &policy,
+        ))
+        .expect("governed jira toolset");
+    let error = tool(&toolset, "list_projects")
+        .await
+        .execute(context(), json!({}))
+        .await
+        .expect_err("the host is off the run's allowlist");
+    assert_eq!(error.code, EGRESS_HOST_NOT_ALLOWED, "{error:?}");
+    assert!(
+        error.message.contains("jira.example.test:443"),
+        "{}",
+        error.message
+    );
+    assert_eq!(
+        redeemer.calls().len(),
+        1,
+        "redeemed once, before the refusal"
+    );
+    let summary = egress.summary();
+    assert_eq!(summary.refused.len(), 1, "{summary:?}");
+    assert_eq!(summary.refused[0].host, "jira.example.test");
 }

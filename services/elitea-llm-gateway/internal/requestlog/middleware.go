@@ -38,6 +38,8 @@ import (
 	"sync"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/guardrail"
 )
 
 // Identity headers, mirrored from internal/llmproxy. They are read rather than
@@ -87,6 +89,7 @@ type Enrichment struct {
 	cacheWrite int64
 	owner      string
 	metered    *MeteredFields
+	guardrails []guardrail.Verdict
 }
 
 // FromContext returns the enrichment handle for this request, or nil when the
@@ -182,6 +185,20 @@ func (e *Enrichment) SetCacheTokens(read, write int64) {
 	e.cacheRead, e.cacheWrite = read, write
 }
 
+// SetGuardrailVerdicts records the request's guardrail verdicts (ADR-0043
+// decision 1). The handler sets them once, after the last stage ran.
+func (e *Enrichment) SetGuardrailVerdicts(verdicts []guardrail.Verdict) {
+	if e == nil || len(verdicts) == 0 {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sealed {
+		return
+	}
+	e.guardrails = verdicts
+}
+
 // SetCredentialOwner records who owns the credential that served the request:
 // CredentialOwnerProject or CredentialOwnerPlatform. An empty owner is ignored,
 // so a later call that knows nothing cannot erase an earlier one that did.
@@ -210,6 +227,7 @@ type snapshot struct {
 	cacheWrite int64
 	owner      string
 	metered    *MeteredFields
+	guardrails []guardrail.Verdict
 }
 
 // seal takes the final values and closes the handle to further writes.
@@ -231,6 +249,7 @@ func (e *Enrichment) seal() snapshot {
 		cacheWrite: e.cacheWrite,
 		owner:      e.owner,
 		metered:    e.metered,
+		guardrails: e.guardrails,
 	}
 }
 
@@ -369,6 +388,7 @@ func Middleware(recorder *Recorder) func(http.Handler) http.Handler {
 					CacheReadToks:   final.cacheRead,
 					CacheWriteToks:  final.cacheWrite,
 					Metered:         final.metered,
+					Guardrails:      final.guardrails,
 				})
 			}()
 

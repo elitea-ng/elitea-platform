@@ -571,6 +571,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			if !h.checkRunCaps(w, r, projectID, "", vBody) {
 				return
 			}
+			if !checkOutputContracts(w, vBody, bodyAgentType(vBody, "")) {
+				return
+			}
 			req.InitialVersion = versionFromBody(vBody, ownerID)
 			initialVariables, _ = vBody["variables"].([]any)
 			initialTags, _ = vBody["tags"].([]any)
@@ -1212,6 +1215,9 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 	if !h.checkRunCaps(w, r, projectID, applicationID, body) {
 		return
 	}
+	if !checkOutputContracts(w, body, bodyAgentType(body, h.storedApplicationAgentType(r.Context(), projectID, applicationID, body))) {
+		return
+	}
 
 	input := versionFromBody(body, ownerID)
 	input.CopySkillsFromVersionID = optionalSkillSourceVersionID(body["copy_skills_from_version_id"])
@@ -1267,13 +1273,15 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Guard: block update of published/embedded versions
+	// Guard: block update of published/embedded versions. The stored
+	// agent_type also decides whether meta may hold an output contract.
+	var storedAgentType string
 	if h.pool != nil {
 		s, _ := tenantSchema(projectID)
 		var status string
 		err := h.pool.QueryRow(r.Context(), fmt.Sprintf(
-			`SELECT status FROM %s.application_versions WHERE application_id = $1 AND id = $2`, s),
-			applicationID, versionID).Scan(&status)
+			`SELECT status, agent_type FROM %s.application_versions WHERE application_id = $1 AND id = $2`, s),
+			applicationID, versionID).Scan(&status, &storedAgentType)
 		if err == nil && (status == "published" || status == "embedded") {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"error": "Published version can not be updated. Unpublish first.",
@@ -1368,6 +1376,11 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	// `step_limit` included, which is one of the gates the Rust runtime
 	// admits a stored agent on, so an agent could be edited into being
 	// unrunnable by a request that answered 201.
+	// ADR-0043 decision 2: an invalid output contract (meta or a pipeline
+	// LLM node) is refused before anything is written.
+	if !checkOutputContracts(w, body, bodyAgentType(body, storedAgentType)) {
+		return
+	}
 	if meta, ok := body["meta"].(map[string]any); ok {
 		if !h.checkRunCaps(w, r, projectID, applicationID, body) {
 			return

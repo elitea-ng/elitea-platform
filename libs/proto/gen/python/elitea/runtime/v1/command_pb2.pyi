@@ -59,7 +59,7 @@ WORKER_DELEGATION_MODE_V1_ENFORCE: WorkerDelegationModeV1
 WORKER_DELEGATION_MODE_V1_REPORT: WorkerDelegationModeV1
 
 class WorkerCommandV1(_message.Message):
-    __slots__ = ("protocol_revision", "command_id", "idempotency_key", "command_type", "execution_id", "generation", "dispatch_ordinal", "root_execution_id", "parent_execution_id", "parent_call_id", "tenant_id", "resource_project_id", "projection_project_id", "principal_ref", "input_bundle_ref", "capability_id", "capability_version", "resource_class", "isolation_class", "priority", "deadline_unix_millis", "traceparent", "tracestate", "limits_revision", "configuration_validation", "toolkit_available_tools", "index_ingest", "agent_execution", "toolkit_call_tool", "toolkit_execute_read", "security_context_ref", "egress_policy", "delegation_policy", "approval_policy", "run_caps")
+    __slots__ = ("protocol_revision", "command_id", "idempotency_key", "command_type", "execution_id", "generation", "dispatch_ordinal", "root_execution_id", "parent_execution_id", "parent_call_id", "tenant_id", "resource_project_id", "projection_project_id", "principal_ref", "input_bundle_ref", "capability_id", "capability_version", "resource_class", "isolation_class", "priority", "deadline_unix_millis", "traceparent", "tracestate", "limits_revision", "configuration_validation", "toolkit_available_tools", "index_ingest", "agent_execution", "toolkit_call_tool", "toolkit_execute_read", "security_context_ref", "egress_policy", "delegation_policy", "approval_policy", "run_caps", "output_contracts", "content_controls")
     PROTOCOL_REVISION_FIELD_NUMBER: _ClassVar[int]
     COMMAND_ID_FIELD_NUMBER: _ClassVar[int]
     IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
@@ -95,6 +95,8 @@ class WorkerCommandV1(_message.Message):
     DELEGATION_POLICY_FIELD_NUMBER: _ClassVar[int]
     APPROVAL_POLICY_FIELD_NUMBER: _ClassVar[int]
     RUN_CAPS_FIELD_NUMBER: _ClassVar[int]
+    OUTPUT_CONTRACTS_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_CONTROLS_FIELD_NUMBER: _ClassVar[int]
     protocol_revision: str
     command_id: str
     idempotency_key: str
@@ -130,7 +132,9 @@ class WorkerCommandV1(_message.Message):
     delegation_policy: WorkerDelegationPolicyV1
     approval_policy: WorkerApprovalPolicyV1
     run_caps: WorkerRunCapsV1
-    def __init__(self, protocol_revision: _Optional[str] = ..., command_id: _Optional[str] = ..., idempotency_key: _Optional[str] = ..., command_type: _Optional[_Union[WorkerCommandTypeV1, str]] = ..., execution_id: _Optional[str] = ..., generation: _Optional[int] = ..., dispatch_ordinal: _Optional[int] = ..., root_execution_id: _Optional[str] = ..., parent_execution_id: _Optional[str] = ..., parent_call_id: _Optional[str] = ..., tenant_id: _Optional[str] = ..., resource_project_id: _Optional[str] = ..., projection_project_id: _Optional[str] = ..., principal_ref: _Optional[str] = ..., input_bundle_ref: _Optional[_Union[_input_pb2.ExecutionInputBundleReferenceV1, _Mapping]] = ..., capability_id: _Optional[str] = ..., capability_version: _Optional[str] = ..., resource_class: _Optional[str] = ..., isolation_class: _Optional[str] = ..., priority: _Optional[int] = ..., deadline_unix_millis: _Optional[int] = ..., traceparent: _Optional[str] = ..., tracestate: _Optional[str] = ..., limits_revision: _Optional[str] = ..., configuration_validation: _Optional[_Union[_validation_pb2.ConfigurationValidationCommandV1, _Mapping]] = ..., toolkit_available_tools: _Optional[_Union[_toolkit_pb2.ToolkitAvailableToolsCommandV1, _Mapping]] = ..., index_ingest: _Optional[_Union[_indexing_pb2.IndexIngestCommandV1, _Mapping]] = ..., agent_execution: _Optional[_Union[_agent_pb2.AgentExecutionCommandV1, _Mapping]] = ..., toolkit_call_tool: _Optional[_Union[_toolkit_pb2.ToolkitCallToolCommandV1, _Mapping]] = ..., toolkit_execute_read: _Optional[_Union[_toolkit_pb2.ToolkitExecuteReadCommandV1, _Mapping]] = ..., security_context_ref: _Optional[_Union[_security_context_pb2.ExecutionSecurityContextReferenceV1, _Mapping]] = ..., egress_policy: _Optional[_Union[WorkerEgressPolicyV1, _Mapping]] = ..., delegation_policy: _Optional[_Union[WorkerDelegationPolicyV1, _Mapping]] = ..., approval_policy: _Optional[_Union[WorkerApprovalPolicyV1, _Mapping]] = ..., run_caps: _Optional[_Union[WorkerRunCapsV1, _Mapping]] = ...) -> None: ...
+    output_contracts: WorkerOutputContractsV1
+    content_controls: WorkerContentControlsV1
+    def __init__(self, protocol_revision: _Optional[str] = ..., command_id: _Optional[str] = ..., idempotency_key: _Optional[str] = ..., command_type: _Optional[_Union[WorkerCommandTypeV1, str]] = ..., execution_id: _Optional[str] = ..., generation: _Optional[int] = ..., dispatch_ordinal: _Optional[int] = ..., root_execution_id: _Optional[str] = ..., parent_execution_id: _Optional[str] = ..., parent_call_id: _Optional[str] = ..., tenant_id: _Optional[str] = ..., resource_project_id: _Optional[str] = ..., projection_project_id: _Optional[str] = ..., principal_ref: _Optional[str] = ..., input_bundle_ref: _Optional[_Union[_input_pb2.ExecutionInputBundleReferenceV1, _Mapping]] = ..., capability_id: _Optional[str] = ..., capability_version: _Optional[str] = ..., resource_class: _Optional[str] = ..., isolation_class: _Optional[str] = ..., priority: _Optional[int] = ..., deadline_unix_millis: _Optional[int] = ..., traceparent: _Optional[str] = ..., tracestate: _Optional[str] = ..., limits_revision: _Optional[str] = ..., configuration_validation: _Optional[_Union[_validation_pb2.ConfigurationValidationCommandV1, _Mapping]] = ..., toolkit_available_tools: _Optional[_Union[_toolkit_pb2.ToolkitAvailableToolsCommandV1, _Mapping]] = ..., index_ingest: _Optional[_Union[_indexing_pb2.IndexIngestCommandV1, _Mapping]] = ..., agent_execution: _Optional[_Union[_agent_pb2.AgentExecutionCommandV1, _Mapping]] = ..., toolkit_call_tool: _Optional[_Union[_toolkit_pb2.ToolkitCallToolCommandV1, _Mapping]] = ..., toolkit_execute_read: _Optional[_Union[_toolkit_pb2.ToolkitExecuteReadCommandV1, _Mapping]] = ..., security_context_ref: _Optional[_Union[_security_context_pb2.ExecutionSecurityContextReferenceV1, _Mapping]] = ..., egress_policy: _Optional[_Union[WorkerEgressPolicyV1, _Mapping]] = ..., delegation_policy: _Optional[_Union[WorkerDelegationPolicyV1, _Mapping]] = ..., approval_policy: _Optional[_Union[WorkerApprovalPolicyV1, _Mapping]] = ..., run_caps: _Optional[_Union[WorkerRunCapsV1, _Mapping]] = ..., output_contracts: _Optional[_Union[WorkerOutputContractsV1, _Mapping]] = ..., content_controls: _Optional[_Union[WorkerContentControlsV1, _Mapping]] = ...) -> None: ...
 
 class WorkerEgressPolicyV1(_message.Message):
     __slots__ = ("mode", "allow")
@@ -158,6 +162,20 @@ class WorkerApprovalPolicyV1(_message.Message):
     approval_categories: _containers.RepeatedScalarFieldContainer[str]
     def __init__(self, risk_tier: _Optional[str] = ..., approval_categories: _Optional[_Iterable[str]] = ...) -> None: ...
 
+class WorkerContentControlsV1(_message.Message):
+    __slots__ = ("disclosure_text", "disclosure_opt_out_toolkit_types", "platform_preamble_sha256", "platform_preamble_revision", "untrusted_read_then_act")
+    DISCLOSURE_TEXT_FIELD_NUMBER: _ClassVar[int]
+    DISCLOSURE_OPT_OUT_TOOLKIT_TYPES_FIELD_NUMBER: _ClassVar[int]
+    PLATFORM_PREAMBLE_SHA256_FIELD_NUMBER: _ClassVar[int]
+    PLATFORM_PREAMBLE_REVISION_FIELD_NUMBER: _ClassVar[int]
+    UNTRUSTED_READ_THEN_ACT_FIELD_NUMBER: _ClassVar[int]
+    disclosure_text: str
+    disclosure_opt_out_toolkit_types: _containers.RepeatedScalarFieldContainer[str]
+    platform_preamble_sha256: str
+    platform_preamble_revision: int
+    untrusted_read_then_act: bool
+    def __init__(self, disclosure_text: _Optional[str] = ..., disclosure_opt_out_toolkit_types: _Optional[_Iterable[str]] = ..., platform_preamble_sha256: _Optional[str] = ..., platform_preamble_revision: _Optional[int] = ..., untrusted_read_then_act: _Optional[bool] = ...) -> None: ...
+
 class WorkerRunCapsV1(_message.Message):
     __slots__ = ("max_tool_calls", "max_model_turns", "max_records_read")
     MAX_TOOL_CALLS_FIELD_NUMBER: _ClassVar[int]
@@ -167,3 +185,9 @@ class WorkerRunCapsV1(_message.Message):
     max_model_turns: int
     max_records_read: int
     def __init__(self, max_tool_calls: _Optional[int] = ..., max_model_turns: _Optional[int] = ..., max_records_read: _Optional[int] = ...) -> None: ...
+
+class WorkerOutputContractsV1(_message.Message):
+    __slots__ = ("revision",)
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    revision: int
+    def __init__(self, revision: _Optional[int] = ...) -> None: ...

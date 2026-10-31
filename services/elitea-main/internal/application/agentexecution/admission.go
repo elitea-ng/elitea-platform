@@ -156,6 +156,9 @@ type AdmissionService struct {
 	nested NestedApplicationTools
 	// governed freezes governed credential references (WithGovernedCredentials).
 	governed *GovernedCredentials
+	// preamble freezes the platform preamble into the input
+	// (WithPlatformPreamble, ADR-0043 decision 3).
+	preamble PlatformPreambleSource
 }
 
 func NewAdmissionService(
@@ -216,6 +219,14 @@ func (s *AdmissionService) Submit(
 		}
 		request.Input, governed = input, freeze
 	}
+	// Before the bundle is built, after the request digest: the frozen
+	// preamble is part of the request entry, and a retry of the same request
+	// stays the same request when the preamble changed in between.
+	stamped, err := s.stampPlatformPreamble(ctx, request.Input)
+	if err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
+	request.Input = stamped
 	bundle, binding, err := s.factory.Build(
 		ctx, request.Input, request.ClientStreamID, request.ClientMessageID,
 		request.SIOEvent,

@@ -403,11 +403,36 @@ fn unscoped(open: bool) -> Arc<RunEgress> {
 /// The run in scope. Outside any run a client reaches NO public host
 /// (fail-closed): a path that sends on behalf of a run must put it in scope
 /// or hand it over explicitly.
+///
+/// # Panics
+///
+/// Only in this crate's unit tests, inside `strict`, when no run is in
+/// scope.
 #[must_use]
 pub fn current() -> Arc<RunEgress> {
-    CURRENT
-        .try_with(Arc::clone)
-        .unwrap_or_else(|_| unscoped(UNSCOPED_IS_OPEN))
+    CURRENT.try_with(Arc::clone).unwrap_or_else(|_| {
+        #[cfg(test)]
+        assert!(
+            STRICT.try_with(|()| ()).is_err(),
+            "an HTTP client was built outside any run's egress scope (#1490)"
+        );
+        unscoped(UNSCOPED_IS_OPEN)
+    })
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    /// Set by [`strict`]: a client built outside every run fails the test.
+    static STRICT: ();
+}
+
+/// Run a test body in which a client built outside any run's egress scope
+/// panics, instead of getting the open policy unit tests otherwise get. A
+/// path that builds its client after materialization (a governed call) then
+/// fails its test even when the call never reaches the network.
+#[cfg(test)]
+pub(crate) async fn strict<F: Future>(future: F) -> F::Output {
+    STRICT.scope((), future).await
 }
 
 /// Run `future` with `egress` as the run in scope: every client built inside

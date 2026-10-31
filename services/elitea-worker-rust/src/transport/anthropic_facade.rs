@@ -457,6 +457,14 @@ fn encode_anthropic_body(
         Model::Custom(invocation.model_name.clone()),
     );
     let mut system_blocks = Vec::new();
+    // ADR-0043: the platform preamble comes before the agent's instructions.
+    if let Some(preamble) = invocation
+        .preamble
+        .as_deref()
+        .filter(|preamble| !preamble.is_empty())
+    {
+        system_blocks.push(TextBlock::new(preamble));
+    }
     if !invocation.system_instruction.is_empty() {
         system_blocks.push(TextBlock::new(&invocation.system_instruction));
     }
@@ -477,10 +485,13 @@ fn encode_anthropic_body(
     params.temperature = generation.temperature;
     params.thinking = generation.thinking;
     params.output_config = generation.output_config;
+    // An output contract schema that does not meet the strict rules
+    // (ADR-0043 decision 2) is not sent: the worker validates the answer.
     if let Some(schema) = request
         .config
         .as_ref()
         .and_then(|config| config.response_schema.as_ref())
+        .filter(|schema| elitea_agent_runtime::output_contract::is_strict_compatible(schema))
     {
         let config = params.output_config.get_or_insert(OutputConfig {
             effort: None,
@@ -581,6 +592,9 @@ fn anthropic_message(content: &Content, is_last: bool) -> Result<MessageParam, A
             } => {
                 let result = serde_json::to_string(&function_response.response)
                     .map_err(|_| invalid_anthropic_request())?;
+                // ADR-0043 decision 4: tool content is data.
+                let result =
+                    elitea_agent_runtime::untrusted::envelope(&function_response.name, &result);
                 Ok(ContentBlock::ToolResult(ToolResultBlock {
                     tool_use_id: id.clone(),
                     cache_control: None,

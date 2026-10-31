@@ -145,6 +145,11 @@ pub(crate) struct ModelFacadeInvocation {
     /// calls count toward the run's model turns. `None` for a call outside
     /// the agent loop (summaries, single-use steps).
     pub(crate) run_caps: Option<Arc<elitea_agent_runtime::run_caps::RunCapsMeter>>,
+    /// The platform preamble (ADR-0043 decisions 3 and 4): the built-in
+    /// text and the administrator's, put before the agent's instructions in
+    /// the one system message. `None` for a call outside the agent loop
+    /// (summaries, single-use steps).
+    pub(crate) preamble: Option<Arc<str>>,
 }
 
 impl ModelFacadeInvocation {
@@ -764,7 +769,11 @@ fn encode_request_body(
     // catalogue from `agents/instruction_authority.rs`, checkpoint authority,
     // context notes) therefore merge into the leading message, in order. The
     // Anthropic facade applies the same rule through its `system` blocks.
-    let system = leading_system_text(&invocation.system_instruction, contents)?;
+    let system = leading_system_text(
+        invocation.preamble.as_deref(),
+        &invocation.system_instruction,
+        contents,
+    )?;
     if !system.is_empty() {
         messages.push(serde_json::json!({
             "role": instruction_role(&invocation.model_name),
@@ -803,7 +812,7 @@ fn encode_request_body(
             "response_format".to_owned(),
             serde_json::json!({
                 "type": "json_schema",
-                "json_schema": {"name": "continuation_summary", "strict": true, "schema": schema}
+                "json_schema": response_format_schema(schema)
             }),
         );
     }
@@ -855,6 +864,19 @@ fn encode_request_body(
         }
     }
     Ok(encoded)
+}
+
+/// The `json_schema` of a `response_format`. A schema that meets the strict
+/// rules (the compaction summary, a structured pipeline node, a strict output
+/// contract) keeps `strict: true`. An author's output contract that does not
+/// (ADR-0043 decision 2) is sent without `strict`; the worker validates the
+/// answer against it either way.
+fn response_format_schema(schema: &serde_json::Value) -> serde_json::Value {
+    if elitea_agent_runtime::output_contract::is_strict_compatible(schema) {
+        serde_json::json!({"name": "continuation_summary", "strict": true, "schema": schema})
+    } else {
+        serde_json::json!({"name": "output_contract", "strict": false, "schema": schema})
+    }
 }
 
 pub(super) fn validate_llm_request<'a>(
@@ -1006,8 +1028,15 @@ fn validate_tool_declaration(name: &str, declaration: &serde_json::Value) -> Res
 /// the text of each system `Content` in request order, with a blank line
 /// between sections. A system `Content` with a non-text part refuses the
 /// request.
-fn leading_system_text(instruction: &str, contents: &[Content]) -> Result<String, AdkError> {
+fn leading_system_text(
+    preamble: Option<&str>,
+    instruction: &str,
+    contents: &[Content],
+) -> Result<String, AdkError> {
     let mut sections = Vec::new();
+    if let Some(preamble) = preamble.filter(|preamble| !preamble.is_empty()) {
+        sections.push(preamble.to_owned());
+    }
     if !instruction.is_empty() {
         sections.push(instruction.to_owned());
     }
@@ -1085,6 +1114,11 @@ fn append_openai_messages(
                     } => {
                         let result = serde_json::to_string(&function_response.response)
                             .map_err(|_| invalid_llm_request())?;
+                        // ADR-0043 decision 4: tool content is data.
+                        let result = elitea_agent_runtime::untrusted::envelope(
+                            &function_response.name,
+                            &result,
+                        );
                         messages.push(serde_json::json!({
                             "role": "tool",
                             "tool_call_id": id,
@@ -2169,6 +2203,7 @@ pub(super) fn test_model_facade_invocation() -> ModelFacadeInvocation {
         temperature: None,
         max_model_turns: 25,
         run_caps: None,
+        preamble: None,
     }
 }
 

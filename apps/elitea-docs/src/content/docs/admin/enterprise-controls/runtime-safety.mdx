@@ -548,6 +548,7 @@ A tool call needs a human approval when one of these rules applies:
 
 - **Platform rule.** The administrator's sensitive action tools name the tool. This is the list under [Sensitive action authorization](/how-tos/chat-conversations/sensitive-action-authorization-guardrail). It applies at every tier.
 - **Policy rule.** The approval policy names the tool's category for the risk tier of the run's agent.
+- **Read untrusted, then act.** The tool's category is `delete`, `external_send` or `payment`, the rule is on for the risk tier of the run's agent, and a tool returned a result earlier in the same turn. A tool result can contain an injected instruction, so an action after a read stops at a person. The rule is on by default at the `high` and `critical` tiers. See [Untrusted content](/admin/enterprise-controls/content-controls#untrusted-content).
 
 The rules only add approvals. An agent author cannot remove an approval that a rule requires. A toolkit setting cannot move a declared tool to another category.
 
@@ -573,6 +574,8 @@ The default policy is the ADR default:
 
 Under **Configuration › Approval Policy**, a platform administrator (permission `configuration.governance`) sets, for each tier, the categories whose tools need approval. The defaults are the table above.
 
+In the same section, **Tiers With the Read Untrusted, Then Act Rule** selects the tiers whose runs use the "read untrusted, then act" rule. The default is `high` and `critical`. With the default policy, these tiers already ask for an approval of each `delete`, `external_send` and `payment` call, so the default adds no approval. The rule adds approvals only at a tier where you remove these categories from the policy, or where you add the tier to the rule. An empty list turns the rule off.
+
 ### Evidence
 
 When a tool call pauses because of a rule, the pause carries the field `approval_rule`:
@@ -581,7 +584,7 @@ When a tool call pauses because of a rule, the pause carries the field `approval
 { "source": "policy", "risk_tier": "high", "category": "external_send" }
 ```
 
-The `source` is `platform` for the platform rule, `policy` for the policy rule, and `builtin` for the cloud workspace's own approvals (destructive commands, push and pull request). The platform rule is named when both rules apply. The field is on the `hitl_interrupt` and `hitl_interrupts` of the chat frame, so the decision record of the pause can name the rule.
+The `source` is `platform` for the platform rule, `policy` for the policy rule, `untrusted_read_then_act` for the "read untrusted, then act" rule (with the `category`), and `builtin` for the cloud workspace's own approvals (destructive commands, push and pull request). The platform rule is named when both rules apply. The field is on the `hitl_interrupt` and `hitl_interrupts` of the chat frame, so the decision record of the pause can name the rule.
 
 ### Customer responsibility
 

@@ -38,6 +38,8 @@ func TestMainWiring(t *testing.T) {
 		call string
 		why  string
 	}{
+		{"llmproxy.WithAgentResolver(", "agent-scoped guardrail rows cannot know the agent of a request — every such row applies its fail mode to every run instead of selecting by agent (ADR-0043 decision 1)"},
+		{"llmproxy.WithGuardrailSecrets(", "the guardrail http adapters cannot resolve their auth_secret — every adapter that names one fails, and its row's fail mode refuses or skips the check (ADR-0043 decision 1)"},
 		{"llmproxy.WithBudgetGate(", "the budget gate is never attached to the handler — every /llm request would be admitted unconditionally (enforcement silently off)"},
 		{"llmproxy.WithModelResolver(", "the model resolver is never attached to the handler — /llm/v1/models advertises nothing AND the inference path stops mapping the advertised model id onto the provider's own model name, so a caller that picks a model from the list sends the provider a name it does not know (issue #317)"},
 		{"account.New(", "the vault-backed Account is never constructed — the gateway runs the zero-provider bootstrap account and cannot resolve ANY provider credential (BFF.6)"},

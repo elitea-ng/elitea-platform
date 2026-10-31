@@ -936,7 +936,10 @@ async fn tool_history_round_trip(retire_tool: bool) {
     assert_eq!(second_body["messages"][2]["tool_calls"][0]["id"], "call_1");
     assert_eq!(second_body["messages"][3]["role"], "tool");
     assert_eq!(second_body["messages"][3]["tool_call_id"], "call_1");
-    assert_eq!(second_body["messages"][3]["content"], "{\"value\":42}");
+    assert_eq!(
+        second_body["messages"][3]["content"],
+        "<untrusted source=\"double\">\n{\"value\":42}\n</untrusted>"
+    );
 }
 
 /// #866/#882: `seed_skipped_internal_tools_notice` (agents/session.rs) seeds
