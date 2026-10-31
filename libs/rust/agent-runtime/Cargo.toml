@@ -98,7 +98,7 @@ hyper-util = { version = "0.1.21", default-features = false, features = ["client
 # Output contracts (ADR-0043 decision 2): validates a JSON Schema contract.
 # No remote or file `$ref` resolution (the default features); the version
 # adk-agent already locks.
-jsonschema = { version = "0.47.0", default-features = false }
+jsonschema = { version = "0.60.2", default-features = false }
 md-5 = "0.11.0"
 minijinja = { version = "3.0.4", default-features = false, features = ["builtins", "fuel", "serde"] }
 percent-encoding = "2.3.2"
