@@ -42,6 +42,17 @@ adk-runner = { path = "vendor/adk-runner" }
 zavora-slide = { path = "vendor/zavora-slide" }
 zavora-slide-render = { path = "vendor/zavora-slide-render" }
 zavora-slide-pdf = { path = "vendor/zavora-slide-pdf" }
+# Zip 9 security fixes (vendor/README.md). The published crates require zip 2
+# or zip 8. Those ranges resolve zip 2.4.2 and zip 8.6.0, which carry
+# CVE-2026-115905, CVE-2026-115907, CVE-2026-115908 and CVE-2026-115909. Each
+# copy moves to zip 9.1.3, the version every direct declaration here pins.
+# Keep the versions: the office-core isolation test asserts them. `calamine`
+# is 0.36.2, which stays inside the `^0.36.1` range that xberg requires.
+calamine = { path = "vendor/calamine" }
+zavora-xlsx = { path = "vendor/zavora-xlsx" }
+zavora-docx-opc = { path = "vendor/zavora-docx-opc" }
+zavora-slide-opc = { path = "vendor/zavora-slide-opc" }
+zavora-slide-xlsx = { path = "vendor/zavora-slide-xlsx" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

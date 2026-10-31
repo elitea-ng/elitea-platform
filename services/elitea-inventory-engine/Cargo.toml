@@ -110,3 +110,11 @@ lto = "thin"
 codegen-units = 1
 panic = "abort"
 incremental = false
+
+# Zip 9 security fix (../../libs/rust/vendor/README.md). `xberg` pulls
+# `calamine` 0.36.1, which requires zip 8 and resolves zip 8.6.0. That version
+# carries CVE-2026-115905, CVE-2026-115907, CVE-2026-115908 and
+# CVE-2026-115909. The copy moves to zip 9.1.3. `xberg` requires
+# `calamine ^0.36.1`, so the copy keeps version 0.36.2.
+[patch.crates-io]
+calamine = { path = "../../libs/rust/vendor/calamine" }
