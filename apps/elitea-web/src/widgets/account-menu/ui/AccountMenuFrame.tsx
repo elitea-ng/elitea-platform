@@ -23,6 +23,7 @@ import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
+import { visuallyHidden } from '@/shared/lib/visuallyHidden';
 import { t } from '@/shared/i18n';
 import { handleCopy } from '@/shared/lib/clipboard';
 import { MenuDivider, MenuHeader, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText, pressToOpen } from '@/shared/ui/native-menu';
@@ -80,15 +81,16 @@ interface AccountButtonProps {
 function AccountButton({ identity, tenant, collapsed, label, expanded, selected, testId, onOpen }: AccountButtonProps): React.JSX.Element {
   // An SSO account may carry only an email.
   const name = identity.name || identity.email || '';
-  // The visible text leads the name (WCAG 2.5.3, axe `label-content-name-mismatch`):
-  // a bare "Account menu" hid the name and tenant a sighted voice-control user reads.
-  const visible = tenant === undefined || collapsed ? name : `${name} · ${tenant}`;
+  // Named by its own content, not an aria-label (WCAG 2.5.3, axe
+  // `label-content-name-mismatch`): an aria-label never matched the text a
+  // sighted voice-control user reads, avatar initials included. The initials
+  // are hidden; the shown name (or, collapsed, a hidden one) and a hidden
+  // "Account menu" make up the name.
   const button = (
     <ButtonBase
       data-testid={testId}
       aria-haspopup="menu"
       aria-expanded={expanded}
-      aria-label={visible === '' ? label : `${visible}, ${label}`}
       {...pressToOpen(onOpen)}
       sx={(theme: Theme) => ({
         flex: collapsed ? '0 0 auto' : 1,
@@ -112,6 +114,11 @@ function AccountButton({ identity, tenant, collapsed, label, expanded, selected,
       >
         {initials(name)}
       </Avatar>
+      {collapsed && name !== '' && (
+        <Box component="span" sx={visuallyHidden}>
+          {name}
+        </Box>
+      )}
       {!collapsed && (
         <>
           <Typography variant="labelSmall" component="span" noWrap sx={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
@@ -129,10 +136,13 @@ function AccountButton({ identity, tenant, collapsed, label, expanded, selected,
           <ExpandMoreIcon sx={{ width: '1rem', height: '1rem', flexShrink: 0 }} />
         </>
       )}
+      <Box component="span" sx={visuallyHidden}>
+        {`, ${label}`}
+      </Box>
     </ButtonBase>
   );
   return collapsed ? (
-    <Tooltip title={name} placement="right">
+    <Tooltip title={name} placement="right" describeChild>
       {button}
     </Tooltip>
   ) : (

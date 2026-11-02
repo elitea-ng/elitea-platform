@@ -171,7 +171,11 @@ describe('AccountMenu', () => {
     mount('web', true);
     const button = screen.getByTestId('shell-account');
     await waitFor(() => expect(button).toHaveTextContent('AK'));
-    expect(button).not.toHaveTextContent('Alex K');
+    // Only the avatar shows; the name is there for assistive tech alone, and
+    // the button is named by its content (axe label-content-name-mismatch).
+    expect(button).not.toHaveAttribute('aria-label');
+    expect(button).toHaveAccessibleName('Alex K, Account menu');
+    expect(within(button).getByText('Alex K')).toHaveStyle({ position: 'absolute', overflow: 'hidden' });
     expect(screen.queryByTestId('shell-report-bug')).not.toBeInTheDocument();
     await user.click(button);
     expect(await screen.findByRole('menu', { name: 'Account menu' })).toBeInTheDocument();
