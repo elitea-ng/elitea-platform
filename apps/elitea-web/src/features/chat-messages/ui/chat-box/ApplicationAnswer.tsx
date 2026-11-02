@@ -140,6 +140,9 @@ export function ApplicationAnswer({
   // otherwise render as an empty bubble. Which of `content` and the text items
   // actually carries the words is `./AnswerContent`'s subject.
   const hasTextContent = !!answer.content || items.length > 0;
+  // #1098: a regeneration keeps the canvas and clears the words, so the
+  // loader waits for WORDS, not for any item.
+  const hasWords = !!answer.content || items.some((item) => item.kind === 'text');
 
   /*
    * "Open as document" (issue #879) — the WHOLE answer carved into a
@@ -331,7 +334,7 @@ export function ApplicationAnswer({
           />
 
           {isLoadingOrRegenerating &&
-            !hasTextContent &&
+            !hasWords &&
             !exception &&
             nonSwarmChildActions.length === 0 &&
             visibleHitlInterrupts.length === 0 && (

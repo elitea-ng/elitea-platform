@@ -1855,11 +1855,14 @@ WHERE response.uuid = sqlc.arg(response_message_id)::uuid
         -- (events/message_stream.py:107-120), and that is genuinely unported.
         AND unsupported_question_item.item_type NOT IN ('text_message', 'context_message', 'attachment_message')
   )
+  -- #1098: a `canvas_message` on the answer does not block a regeneration.
+  -- The canvas is the user's work, so ResetCurrentAgentResponse keeps it (and
+  -- its versions) on the answer and replaces only the text around it.
   AND NOT EXISTS (
       SELECT 1
       FROM chat_message_items AS unsupported_response_item
       WHERE unsupported_response_item.message_group_id = response.id
-        AND unsupported_response_item.item_type <> 'text_message'
+        AND unsupported_response_item.item_type NOT IN ('text_message', 'canvas_message')
   );
 
 -- name: LockCurrentAgentConversation :one
@@ -2573,11 +2576,13 @@ WITH resolved AS MATERIALIZED (
             -- made every turn that carried a file unregeneratable.
             AND unsupported_question_item.item_type NOT IN ('text_message', 'context_message', 'attachment_message')
       )
+      -- #1098: see ResolveCurrentRegeneration. A canvas is admitted here and
+      -- kept below.
       AND NOT EXISTS (
           SELECT 1
           FROM chat_message_items AS unsupported_response_item
           WHERE unsupported_response_item.message_group_id = response.id
-            AND unsupported_response_item.item_type <> 'text_message'
+            AND unsupported_response_item.item_type NOT IN ('text_message', 'canvas_message')
       )
     FOR UPDATE OF response
 ), removed_trace AS (
@@ -2586,9 +2591,34 @@ WITH resolved AS MATERIALIZED (
     WHERE trace.message_group_id = resolved.id
     RETURNING trace.id
 ), removed_items AS (
+    -- A regeneration replaces the answer IN PLACE: there is no older answer
+    -- version for the user to switch back to. So the text goes, but a canvas
+    -- stays (#1098). A canvas holds what the user edited, and its
+    -- chat_canvas_versions rows hold every saved edit. Deleting the item would
+    -- delete that work. The kept canvas stays on this answer, where the
+    -- conversation shows it and the canvas routes open it.
     DELETE FROM chat_message_items AS item
     USING resolved
     WHERE item.message_group_id = resolved.id
+      AND item.item_type <> 'canvas_message'
+    RETURNING item.id
+), kept_canvases AS (
+    -- Put the kept canvases first, at order 0..n-1. The new answer's text
+    -- items then take order n and higher (InsertCurrentAgentTextItem uses the
+    -- item count), so they come after the canvases and never share an order
+    -- with one. CreateCanvas can leave a canvas at any order (it shifts older
+    -- items by 100), so the old order is not kept.
+    UPDATE chat_message_items AS item
+    SET order_index = ranked.new_order_index
+    FROM (
+        SELECT canvas_item.id,
+               (row_number() OVER (ORDER BY canvas_item.order_index, canvas_item.id) - 1)::integer
+                   AS new_order_index
+        FROM chat_message_items AS canvas_item
+        JOIN resolved ON resolved.id = canvas_item.message_group_id
+        WHERE canvas_item.item_type = 'canvas_message'
+    ) AS ranked
+    WHERE item.id = ranked.id
     RETURNING item.id
 ), updated AS (
     UPDATE chat_message_group AS response
@@ -2629,6 +2659,7 @@ WITH resolved AS MATERIALIZED (
     WHERE response.id = resolved.id
       AND (SELECT count(*) FROM removed_trace) >= 0
       AND (SELECT count(*) FROM removed_items) >= 0
+      AND (SELECT count(*) FROM kept_canvases) >= 0
     RETURNING response.id, response.uuid
 )
 SELECT updated.id AS response_message_group_id,

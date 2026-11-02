@@ -363,6 +363,20 @@ describe('regeneratingPatch', () => {
     expect(patched.toolActions).toEqual([]);
     expect(patched.references).toEqual([]);
   });
+
+  // #1098: the server keeps a canvas when it regenerates the answer, so the
+  // optimistic patch keeps it too and drops only the old words.
+  it('keeps the canvas items and drops the old text items', () => {
+    const canvas = { item_type: 'canvas_message', item_details: { latest_version: { canvas_content: 'edited' } } };
+    const text = { item_type: 'text_message', item_details: { content: 'old words' } };
+    const item = { id: 'a1', content: 'old', messageItems: [text, canvas] } as unknown as ChatMessage;
+    expect(regeneratingPatch(item).messageItems).toEqual([canvas]);
+  });
+
+  it('adds no message items to an answer that had none', () => {
+    const item = { id: 'a1', content: 'old' } as unknown as ChatMessage;
+    expect(regeneratingPatch(item)).not.toHaveProperty('messageItems');
+  });
 });
 
 describe('buildRegeneratePayload', () => {

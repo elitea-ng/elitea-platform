@@ -375,9 +375,7 @@ export function findQuestionForAnswer(chatHistory: readonly ChatMessage[], answe
   if (answer?.questionId === undefined) return undefined;
   return chatHistory.find((item) => item.id === answer.questionId);
 }
-export const regeneratingPatch = (item: ChatMessage): ChatMessage => ({
-  ...item, content: '', toolActions: [], exception: undefined, references: [], isLoading: true, isStreaming: true, createdAt: new Date().toISOString(),
-});
+export { regeneratingPatch } from './regeneratingPatch';
 export function buildRegeneratePayload(deps: ChatBoxHandlerDeps, messageId: string, questionMessage: ChatMessage | undefined, updatedItems: readonly UpdatedMessageItem[] | undefined): Record<string, unknown> {
   return {
     projectId: toProjectIdString(deps.projectId),
