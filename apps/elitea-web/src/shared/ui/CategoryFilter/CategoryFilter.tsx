@@ -37,6 +37,10 @@ export interface CategoryFilterProps {
  * content area. Ported from
  * `apps/elitea-ui/src/[fsd]/shared/ui/filter/CategoryFilter.jsx`.
  *
+ * The search box renders only for a caller that handles it
+ * (`onSearchChange`): without one it was a box that took typing and filtered
+ * nothing — the stray empty search field on the credentials list.
+ *
  * Deviations (R-C1 fixes, not in the baseline):
  *  - The search `TextField` gets an `aria-label` (falling back to a
  *    translated default) — the baseline relies on `placeholder` alone, which
@@ -87,28 +91,30 @@ export function CategoryFilter({
         data-category-filter-controls=""
         sx={controlsContainerSx}
       >
-        <Box sx={showCategories ? searchContainerWithChipsSx : searchContainerSx}>
-          <TextField
-            placeholder={searchPlaceholder}
-            value={searchQuery}
-            onChange={onSearchChange}
-            sx={searchFieldSx}
-            variant="outlined"
-            size="small"
-            slotProps={{
-              htmlInput: { 'aria-label': searchLabel },
-              input: {
-                sx: searchInputSx,
-                startAdornment: (
-                  <SearchIcon
-                    sx={searchIconSx}
-                    aria-hidden
-                  />
-                ),
-              },
-            }}
-          />
-        </Box>
+        {onSearchChange !== undefined && (
+          <Box sx={showCategories ? searchContainerWithChipsSx : searchContainerSx}>
+            <TextField
+              placeholder={searchPlaceholder}
+              value={searchQuery}
+              onChange={onSearchChange}
+              sx={searchFieldSx}
+              variant="outlined"
+              size="small"
+              slotProps={{
+                htmlInput: { 'aria-label': searchLabel },
+                input: {
+                  sx: searchInputSx,
+                  startAdornment: (
+                    <SearchIcon
+                      sx={searchIconSx}
+                      aria-hidden
+                    />
+                  ),
+                },
+              }}
+            />
+          </Box>
+        )}
 
         {showCategories && (
           <Box sx={combineSx(categoryFilterContainerSx, categoryListSx)}>

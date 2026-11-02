@@ -2,9 +2,8 @@ import type { ReactNode } from 'react';
 import { useCallback, useMemo } from 'react';
 
 // The baseline's `ClearIcon` (`@/components/Icons/ClearIcon`) is not in S2's
-// ported `shared/ui/icons/` set — same interim-icon note
-// `features/toolkits`' `ToolkitTypesPanel.tsx` already records for the same
-// glyph. `Clear` is the standard R-I1-compliant single-icon import.
+// ported `shared/ui/icons/` set. `Clear` is the standard R-I1-compliant
+// single-icon import.
 import ClearIcon from '@mui/icons-material/Clear';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
@@ -55,12 +54,14 @@ export interface RailTagsPanelViewProps {
   readonly isError: boolean;
   /** @default t('shared.ui.entityRail.tags.title', 'Tags') */
   readonly title?: string;
+  /** What the panel says when there is nothing to filter by. @default t('shared.ui.entityRail.tags.empty', 'No tags to display.') */
+  readonly emptyText?: string;
 }
 
 const SKELETON_CHIP_COUNT = 10;
 
 /** Presentational half — no data source, so a test can drive every state directly. */
-export function RailTagsPanelView({ tags, selectedTags, onToggleTag, onClearTags, isLoading, isError, title }: RailTagsPanelViewProps): ReactNode {
+export function RailTagsPanelView({ tags, selectedTags, onToggleTag, onClearTags, isLoading, isError, title, emptyText }: RailTagsPanelViewProps): ReactNode {
   const heading = title ?? t('shared.ui.entityRail.tags.title', 'Tags');
   const clearLabel = t('shared.ui.entityRail.tags.clearAll', 'Clear all');
   const sorted = useMemo(() => sortTagsSelectedFirst(tags, selectedTags), [tags, selectedTags]);
@@ -122,7 +123,7 @@ export function RailTagsPanelView({ tags, selectedTags, onToggleTag, onClearTags
         */}
         {isError && !isLoading && <Typography variant="bodyMedium">{t('shared.ui.entityRail.tags.loadError', 'Failed to load.')}</Typography>}
         {!isLoading && !isError && sorted.length === 0 && (
-          <Typography variant="bodyMedium">{t('shared.ui.entityRail.tags.empty', 'No tags to display.')}</Typography>
+          <Typography variant="bodyMedium">{emptyText ?? t('shared.ui.entityRail.tags.empty', 'No tags to display.')}</Typography>
         )}
         {!isLoading &&
           !isError &&

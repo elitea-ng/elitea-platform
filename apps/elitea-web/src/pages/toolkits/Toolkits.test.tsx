@@ -177,8 +177,8 @@ describe('Toolkits', () => {
 
     renderToolkitsPage(<Toolkits />, '/toolkits/all', 'proj-1');
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Toolkits' })).toBeInTheDocument();
     expect(await screen.findByText('My GitHub')).toBeInTheDocument();
+    expect(screen.getByTestId('page-toolbar-summary')).toHaveTextContent('1 toolkits');
     expect(screen.getByTestId('toolkit-card')).toBeInTheDocument();
   });
 
@@ -206,9 +206,9 @@ describe('Toolkits', () => {
 
     renderToolkitsPage(<Toolkits isMCP />, '/mcps/all', 'proj-1');
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'MCPs' })).toBeInTheDocument();
     expect(await screen.findByText('My MCP Server')).toBeInTheDocument();
     expect(screen.queryByText('My GitHub')).not.toBeInTheDocument();
+    expect(screen.getByTestId('page-toolbar-summary')).toHaveTextContent('1 MCPs');
   });
 
   it('navigates to the toolkit detail route when a card is clicked', async () => {
@@ -240,23 +240,42 @@ describe('Toolkits', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/toolkits/create'));
   });
 
-  it('renders the MCPs title and list-panel test hook when isMCP is true', async () => {
+  it('renders the MCPs search and list-panel test hook when isMCP is true', async () => {
     server.use(getListToolkitInstancesMockHandler({ rows: [], total: 0 }));
     setPublicProjectConfig('proj-1');
 
     renderToolkitsPage(<Toolkits isMCP />, '/mcps/all', 'proj-1');
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'MCPs' })).toBeInTheDocument();
+    expect(await screen.findByRole('textbox', { name: 'Search MCPs' })).toBeInTheDocument();
     expect(screen.getByTestId('mcps-list-panel')).toBeInTheDocument();
   });
 
-  /** COMPOSITION ROOT — see `pages/agents/Applications.test.tsx` (issue 841). */
-  it('renders its one tab inside the shared page header, on both surfaces', async () => {
+  /**
+   * COMPOSITION ROOT — one surface, so no tab: the toolbar carries a count
+   * and the search, and the shell's breadcrumb names the page.
+   */
+  it('renders a summary and search in the page toolbar, and no tab or heading of its own', async () => {
     server.use(getListToolkitInstancesMockHandler({ rows: [], total: 0 }));
+    setPublicProjectConfig('proj-1');
     renderToolkitsPage(<Toolkits />, '/toolkits/all', 'proj-1');
 
-    const header = await screen.findByTestId('page-header');
-    expect(header).toContainElement(screen.getByTestId('toolkits-tab-all'));
-    expect(screen.getByRole('tablist', { name: 'Toolkits' })).toBeInTheDocument();
+    const toolbar = await screen.findByTestId('page-toolbar');
+    expect(toolbar).toContainElement(screen.getByTestId('page-toolbar-summary'));
+    expect(toolbar).toContainElement(screen.getByRole('textbox', { name: 'Search toolkits' }));
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  });
+
+  it('narrows the cards to the URL search', async () => {
+    server.use(
+      getListToolkitInstancesMockHandler({
+        rows: [toolkitRow({ id: 'tk-1', name: 'My GitHub', type: 'github' }), toolkitRow({ id: 'tk-2', name: 'Team Jira', type: 'jira' })],
+        total: 2,
+      }),
+    );
+    renderToolkitsPage(<Toolkits />, '/toolkits/all?query=jira', 'proj-1');
+
+    expect(await screen.findByText('Team Jira')).toBeInTheDocument();
+    expect(screen.queryByText('My GitHub')).not.toBeInTheDocument();
   });
 });

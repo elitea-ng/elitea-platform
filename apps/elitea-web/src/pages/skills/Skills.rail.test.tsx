@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { getListTagsMockHandler } from '@/shared/api/generated/tags/tags.msw';
 import { server } from '@/test/setup';
+import { SidePanelHarness } from '@/test/sidePanelHarness';
 
 import { Skills, filterSkillsByTags } from './Skills';
 import { renderSkillsRoute } from './__tests__/testRouter';
@@ -73,21 +74,20 @@ describe('filterSkillsByTags', () => {
   });
 });
 
-describe('Skills right-hand rail', () => {
-  it('renders the rail with the project tags and hoists the search bar into it', async () => {
-    renderSkillsRoute(<Skills />);
+describe('Skills Filters tab', () => {
+  it('offers the project tags in the side panel and keeps the one search box in the toolbar', async () => {
+    renderSkillsRoute(<SidePanelHarness><Skills /></SidePanelHarness>);
 
-    const rail = await screen.findByTestId('entity-rail');
-    expect(rail).toContainElement(await screen.findByPlaceholderText('Search skills'));
+    const filters = await screen.findByTestId('entity-list-filters');
+    expect(screen.getByTestId('side-panel-tab-filters')).toContainElement(filters);
     expect(await screen.findByTestId('tags-panel-chip-alpha')).toBeInTheDocument();
-    // Exactly one search box on the page — the page-body copy is replaced by
-    // the rail's, not duplicated alongside it.
+    expect(screen.getByTestId('page-toolbar')).toContainElement(screen.getByPlaceholderText('Search skills'));
     expect(screen.getAllByPlaceholderText('Search skills')).toHaveLength(1);
   });
 
   it('filters the skill list down to the selected tag', async () => {
     const user = userEvent.setup();
-    const { router } = renderSkillsRoute(<Skills />);
+    const { router } = renderSkillsRoute(<SidePanelHarness><Skills /></SidePanelHarness>);
 
     expect(await screen.findByText('Reviewer')).toBeInTheDocument();
     expect(screen.getByText('Summariser')).toBeInTheDocument();

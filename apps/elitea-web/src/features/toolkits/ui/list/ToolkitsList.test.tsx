@@ -227,12 +227,6 @@ const items: ToolkitListItem[] = [
   { id: '1', name: 'Jira', type: 'jira' },
   { id: '2', name: 'Confluence', type: 'confluence' },
 ];
-const tagList = [{ id: 1, name: 'Jira' }];
-
-function baseTypeFilter() {
-  return { tagList, selectedTypes: [] as string[], onSelectType: vi.fn(), onClearTypes: vi.fn() };
-}
-
 function baseListState() {
   return { isLoading: false, hasMore: false, onLoadMore: vi.fn(), totalCount: 2 };
 }
@@ -241,7 +235,6 @@ function baseProps() {
   return {
     data: items,
     renderCard: (item: ToolkitListItem) => <div data-testid={`card-${item.id}`}>{item.name}</div>,
-    typeFilter: baseTypeFilter(),
     listState: baseListState(),
   };
 }
@@ -273,20 +266,6 @@ describe('ToolkitsList (component)', () => {
     renderWithProviders(<ToolkitsList {...baseProps()} />);
     expect(screen.getByTestId('card-1')).toHaveTextContent('Jira');
     expect(screen.getByTestId('card-2')).toHaveTextContent('Confluence');
-  });
-
-  it('renders the right-panel ToolkitTypesPanel and the injected rightPanelExtra slot', () => {
-    renderWithProviders(
-      <ToolkitsList
-        {...baseProps()}
-        rightPanelExtra={<div data-testid="extra-panel" />}
-      />,
-    );
-    // "Jira" itself is ambiguous here (it appears both in the rendered card
-    // AND as a ToolkitTypesPanel chip) — "Types" (the panel's own title) is
-    // the unambiguous signal that ToolkitTypesPanel rendered.
-    expect(screen.getByText('Types')).toBeInTheDocument();
-    expect(screen.getByTestId('extra-panel')).toBeInTheDocument();
   });
 
   it('renders the custom emptyListPlaceHolder when the list is empty and a query is present', () => {

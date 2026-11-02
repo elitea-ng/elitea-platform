@@ -1,15 +1,16 @@
 /**
  * The chat's participants panel — participants, agents, toolkits and the
- * context budget — in one of two places:
+ * context budget — as the Conversation tab of the shell's right panel
+ * (`shared/ui/side-panel`): the desktop frame's inspector, which owns the
+ * width, the show / hide toggle (⌘⌥\), the tab's group and its own window,
+ * or the web shell's side panel, which owns the width and the toggle in the
+ * title row. The same `ParticipantsWrapper` renders there with
+ * `appearance="inspector"`, through a portal, so every handler and query
+ * below is the page's own wherever the tab is shown.
  *
- *  - the web build: the right rail of the chat page, collapsible, default
- *    collapsed (the baseline, `NewChat.jsx:166`);
- *  - inside the desktop frame (`shared/desktop/inspectorSlot` has a slot):
- *    the Conversation tab of the frame's inspector, which owns the width,
- *    the show / hide toggle (⌘⌥\), the tab's group and its own window. The
- *    same `ParticipantsWrapper` renders there with `appearance="inspector"`,
- *    through a portal, so every handler and query below is the page's own
- *    wherever the tab is shown.
+ * Without a shell panel (the chat page mounted alone in a test) it falls
+ * back to the baseline's inline rail, collapsible and default collapsed
+ * (`NewChat.jsx:166`).
  *
  * Split out of `index.tsx` (the page is at its §3.5 complexity ceiling).
  */
@@ -17,7 +18,7 @@ import type { ComponentProps, ReactNode } from 'react';
 import { useState } from 'react';
 
 import { ParticipantsWrapper } from '@/features/chat-participants';
-import { InspectorTab, useInspectorSlot } from '@/shared/desktop/inspectorSlot';
+import { SidePanelTab, useSidePanelSlot } from '@/shared/ui/side-panel';
 import { t } from '@/shared/i18n';
 import type { ChatBoxProps } from '@/widgets/chat-box';
 import { ContextBudget } from '@/widgets/context-budget';
@@ -40,7 +41,7 @@ export interface ChatParticipantsPanelProps {
 }
 
 export function ChatParticipantsPanel({ activeConversation, activeParticipant, projectId, isMcpVisible, handlers }: ChatParticipantsPanelProps): ReactNode {
-  const inspector = useInspectorSlot() !== null;
+  const inspector = useSidePanelSlot() !== null;
   // Baseline default: collapsed (`NewChat.jsx:166`). The inspector never collapses.
   const [collapsed, setCollapsed] = useState(true);
 
@@ -77,9 +78,9 @@ export function ChatParticipantsPanel({ activeConversation, activeParticipant, p
   );
 
   return inspector ? (
-    <InspectorTab id="conversation" title={t('desktop.inspector.chat', 'Conversation')} subject={activeConversation?.name ?? ''}>
+    <SidePanelTab id="conversation" title={t('desktop.inspector.chat', 'Conversation')} subject={activeConversation?.name ?? ''}>
       {panel}
-    </InspectorTab>
+    </SidePanelTab>
   ) : (
     panel
   );

@@ -39,6 +39,12 @@ describe('usePipelineTabs', () => {
     expect(admin?.hidden).toBe(true);
   });
 
+  it('hides the My liked and Trending placeholders, which have no data source yet', () => {
+    const { result } = renderHook(() => usePipelineTabs(true, TOTALS, true), { wrapper });
+    const hidden = result.current.filter((tab) => tab.hidden === true).map((tab) => tab.value);
+    expect(hidden).toEqual(['my-liked', 'trending']);
+  });
+
   it('shows the Admin tab when the caller has admin permission', () => {
     const { result } = renderHook(() => usePipelineTabs(true, TOTALS, true), { wrapper });
     const admin = result.current.find((tab) => tab.value === 'admin');
