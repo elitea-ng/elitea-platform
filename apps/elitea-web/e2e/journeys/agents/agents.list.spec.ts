@@ -17,7 +17,7 @@
  *
  * `agents.editor.spec.ts` used to record all four as unportable product gaps:
  * the list carried no search control and `ViewToggle` had no port. Both exist
- * now — `widgets/page-header`'s `ListSearchField` and `ListViewToggle`,
+ * now — `widgets/page-header`'s `PageSearch` and `ListViewToggle`,
  * mounted by `pages/agents/Applications.tsx` — so the use cases are journeys
  * rather than disclosures.
  *
@@ -46,7 +46,7 @@ function uniqueName(stem: string): string {
   return `${AUTOTEST_PREFIX}${stem}-${String(Date.now()).slice(-7)}`;
 }
 
-/** The header's search field — `ListSearchField`, mounted with this test id by `Applications.tsx`. */
+/** The header's search field — `PageSearch`, mounted with this test id by `Applications.tsx`. */
 function searchBox(page: Page) {
   return page.getByTestId('agent-search-input');
 }

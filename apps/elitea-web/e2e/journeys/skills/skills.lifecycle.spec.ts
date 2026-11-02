@@ -69,9 +69,9 @@ test('SKILL-1: a skill is created on the form, opens on its own page, and is del
   try {
     await page.goto(BASE_URL + '/app/skills/all');
 
-    // The list header's own create control, not the sidebar's: this is the
+    // The list toolbar's own "+ New skill", not the sidebar's: this is the
     // path a person on the skills page takes.
-    await page.getByRole('button', { name: 'Create skill' }).click();
+    await page.getByTestId('skills-create').click();
     await page.waitForURL(/\/skills\/create/, { timeout: 15_000 });
 
     const nameInput = page.getByTestId('skill-name-input');

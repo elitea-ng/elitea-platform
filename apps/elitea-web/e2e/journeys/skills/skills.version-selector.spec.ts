@@ -51,7 +51,7 @@ function uniqueName(stem: string): string {
 /** Creates a skill on the form, the same path SKILL-1/SKILL-2 drive. Returns its id. */
 async function createSkillViaForm(page: Page, name: string, instructions: string): Promise<string> {
   await page.goto(BASE_URL + '/app/skills/all');
-  await page.getByRole('button', { name: 'Create skill' }).click();
+  await page.getByTestId('skills-create').click();
   await page.waitForURL(/\/skills\/create/, { timeout: 15_000 });
   await page.getByTestId('skill-name-input').fill(name);
   await page.getByTestId('skill-description-input').fill(`${AUTOTEST_PREFIX}skill version selector fixture`);
