@@ -8923,7 +8923,7 @@ components:
         A secret version that `:rotate` wrote for an active reference and
         that is not activated yet (issue 1505). The broker still reads the
         reference's own locator and generation. Absent when no rotation is
-        pending. It never holds a value.
+        pending or the reference is not active. It never holds a value.
       required: [locator, generation, staged_by, staged_at]
       properties:
         locator:
@@ -21586,9 +21586,14 @@ paths:
         `{}`. On an `active` reference with a `pending_rotation`
         (issue 1505), it moves the reference to the pending locator and
         generation instead. The caller must then not be the operator who
-        called `:rotate`. Replicas drop what they cached for the old secret. Gated on `models.agent_identity.bindings.approve`. Appends a
-        security audit decision in the same transaction. Mounted only when
-        the enterprise credential governance flag is on.
+        called `:rotate`. Replicas drop what they cached for the old secret.
+        Then the old secret version is retired through the secret write
+        ledger (Vault: the version is destroyed; pgvault: the old name is
+        deleted when a governed write created it), with a
+        `credential_reference.secret_retire` audit decision. Gated on
+        `models.agent_identity.bindings.approve`. Appends a security audit
+        decision in the same transaction. Mounted only when the enterprise
+        credential governance flag is on.
       tags: [admin]
       responses:
         '200':
@@ -21634,8 +21639,11 @@ paths:
         1505). Vault gets a new version at the same path (check-and-set on
         the current version). pgvault gets a new secret name, because a
         pgvault secret has one version only. The broker still reads the
-        current value until another operator calls `:activate`. A second
-        `:rotate` replaces a pending rotation and retires its version.
+        current value until another operator calls `:activate`. One
+        rotation can be pending at a time. A second `:rotate` is 409 before
+        anything is written, because each Vault rotation adds a KV v2
+        version and destroyed versions still count toward `max_versions`.
+        Call `:activate` or `:cancel_rotation` first.
         Gated on `models.agent_identity.bindings.manage`. Appends a security
         audit decision. Mounted only when the enterprise credential
         governance flag is on.
@@ -21664,12 +21672,58 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '409':
-          description: The reference is not an active static_secret, or its backend is not configured
+          description: The reference is not an active static_secret, a rotation is already pending, or its backend is not configured
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '503':
           description: Rotation is not configured, or the secret store did not take the value
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/credential_references/{id}:cancel_rotation:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The credential reference id (uuid).
+        schema: { type: string }
+    post:
+      operationId: cancelCredentialReferenceRotation
+      summary: Cancel the pending secret rotation of a credential reference
+      description: >
+        Clears `pending_rotation` (issue 1505). The reference keeps its
+        locator and generation, so the broker still reads the current
+        value. The pending secret version is retired through the secret
+        write ledger (Vault: the version is destroyed; pgvault: the new name
+        is deleted), with a `credential_reference.secret_retire` audit
+        decision. Any operator with the permission can cancel, the one who
+        called `:rotate` too. The body is empty or `{}`. Gated on
+        `models.agent_identity.bindings.manage`. Appends a security audit
+        decision in the same transaction. Mounted only when the enterprise
+        credential governance flag is on.
+      tags: [admin]
+      responses:
+        '200':
+          description: The reference without a pending rotation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReference' }
+        '400':
+          description: A body that is not empty or `{}`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such credential reference
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: No rotation is pending
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -21689,8 +21743,10 @@ paths:
         governed run that froze the reference is denied at its next
         credential redemption (`authority_revoked`), because the revocation
         epoch check treats a reference outside `active` and `retiring` as
-        revoked. `generation` (the secret version) does not change. The
-        body is empty or `{}`. Gated on
+        revoked. `generation` (the secret version) does not change. A
+        pending rotation is cancelled: its secret version is retired through
+        the secret write ledger, and a retired reference never shows
+        `pending_rotation`. The body is empty or `{}`. Gated on
         `models.agent_identity.bindings.manage`. Mounted only when the
         enterprise credential governance flag is on.
       tags: [admin]

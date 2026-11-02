@@ -541,7 +541,7 @@ impl GovernedMcpTool {
         drop(bounded);
         if result.is_err() {
             // The next call dials afresh: a broken session is not reused.
-            self.server.sessions.evict(&session).await;
+            self.server.sessions.evict(&session);
         }
         result
     }

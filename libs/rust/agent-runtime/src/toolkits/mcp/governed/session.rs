@@ -17,9 +17,15 @@
 //!   dials afresh.
 //!
 //! A call already in flight keeps the session until it returns.
+//!
+//! No lock is held across a dial. The slot holds one cell per token
+//! generation; the first call of a generation dials and lists in that cell,
+//! and calls of the same generation wait for that one dial only. A call
+//! with another token replaces the cell at once and dials in parallel, so a
+//! slow dial never blocks it (#1474 review).
 
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
 use adk_core::Tool;
@@ -81,16 +87,68 @@ impl CachedSession {
     }
 }
 
+/// The cell of one token generation: empty while its session is dialled,
+/// set once it is open.
+struct GenerationCell {
+    generation: TokenGeneration,
+    cell: Arc<tokio::sync::OnceCell<Arc<CachedSession>>>,
+}
+
 /// The reusable session of one governed server.
 #[derive(Default)]
 pub(super) struct SessionSlot {
-    entry: tokio::sync::Mutex<Option<Arc<CachedSession>>>,
+    /// Held only to read or swap the cell; never across an `.await`.
+    entry: Mutex<Option<GenerationCell>>,
 }
 
 impl SessionSlot {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<GenerationCell>> {
+        self.entry.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The cell for `generation`: the current one when it is for the same
+    /// generation and its session (if open) is still usable, else a new
+    /// empty cell. Replacing a cell drops the slot's hold on the old session.
+    fn cell_for(
+        &self,
+        generation: &TokenGeneration,
+        now_unix_millis: i64,
+    ) -> Arc<tokio::sync::OnceCell<Arc<CachedSession>>> {
+        let mut entry = self.lock();
+        if let Some(current) = entry.as_ref()
+            && current.generation == *generation
+            && current
+                .cell
+                .get()
+                .is_none_or(|session| session.usable(generation, now_unix_millis))
+        {
+            return Arc::clone(&current.cell);
+        }
+        let cell = Arc::new(tokio::sync::OnceCell::new());
+        *entry = Some(GenerationCell {
+            generation: *generation,
+            cell: Arc::clone(&cell),
+        });
+        cell
+    }
+
+    /// Drop `cell` when it is still the slot's and holds no session (its
+    /// dial failed).
+    fn forget_empty(&self, cell: &Arc<tokio::sync::OnceCell<Arc<CachedSession>>>) {
+        let mut entry = self.lock();
+        if entry
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(&current.cell, cell) && current.cell.get().is_none())
+        {
+            *entry = None;
+        }
+    }
+
     /// The session for `generation`: the cached one when it is still usable,
     /// else the one `open` builds. A cached session of another generation, or
-    /// an expired one, is dropped first. A failed `open` leaves the slot empty.
+    /// an expired one, is dropped first. Calls of one generation share one
+    /// dial; calls of another generation do not wait for it. A failed `open`
+    /// leaves the slot empty.
     ///
     /// # Errors
     ///
@@ -106,33 +164,42 @@ impl SessionSlot {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<CachedSession, E>>,
     {
-        let mut entry = self.entry.lock().await;
-        if let Some(cached) = entry.as_ref()
-            && cached.usable(&generation, clock())
-        {
-            // The latest redemption of the same token sets its expiry.
-            cached
+        let cell = self.cell_for(&generation, clock());
+        let mut opened_here = false;
+        let outcome = cell
+            .get_or_try_init(|| {
+                opened_here = true;
+                async move { open().await.map(Arc::new) }
+            })
+            .await;
+        let session = match outcome {
+            Ok(session) => Arc::clone(session),
+            Err(error) => {
+                self.forget_empty(&cell);
+                return Err(error);
+            }
+        };
+        if opened_here {
+            self.expire_at_not_after(&session, clock);
+        } else {
+            // A session of the same token: this call's redemption is the
+            // latest one, so it sets the expiry.
+            session
                 .not_after_unix_millis
-                .store(not_after_unix_millis, Ordering::Release);
-            return Ok(Arc::clone(cached));
+                .fetch_max(not_after_unix_millis, Ordering::AcqRel);
         }
-        // Another token, or an expired one: its session is dropped before a
-        // new one is dialled.
-        *entry = None;
-        let opened = Arc::new(open().await?);
-        *entry = Some(Arc::clone(&opened));
-        drop(entry);
-        self.expire_at_not_after(&opened, clock);
-        Ok(opened)
+        Ok(session)
     }
 
     /// Drop `session` when it is still the cached one (a failed call).
-    pub(super) async fn evict(&self, session: &Arc<CachedSession>) {
-        let mut entry = self.entry.lock().await;
-        if entry
-            .as_ref()
-            .is_some_and(|cached| Arc::ptr_eq(cached, session))
-        {
+    pub(super) fn evict(&self, session: &Arc<CachedSession>) {
+        let mut entry = self.lock();
+        if entry.as_ref().is_some_and(|current| {
+            current
+                .cell
+                .get()
+                .is_some_and(|cached| Arc::ptr_eq(cached, session))
+        }) {
             *entry = None;
         }
     }
@@ -156,7 +223,7 @@ impl SessionSlot {
                     .saturating_sub(clock());
                 if remaining <= 0 {
                     if let Some(slot) = slot.upgrade() {
-                        slot.evict(&session).await;
+                        slot.evict(&session);
                     }
                     return;
                 }

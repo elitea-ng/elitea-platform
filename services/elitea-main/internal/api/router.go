@@ -3138,6 +3138,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(referencesApprove).Post("/credential_references/{id}:activate", references.Activate)
 					r.With(referencesManage).Post("/credential_references/{id}:retire", references.Retire)
 					r.With(referencesManage).Post("/credential_references/{id}:rotate", references.Rotate)
+					r.With(referencesManage).Post("/credential_references/{id}:cancel_rotation", references.CancelRotation)
 					r.With(referencesManage).Post("/credential_references/{id}:attach", references.Attach)
 					r.With(referencesManage).Post("/credential_references/{id}:detach", references.Detach)
 					r.With(referencesManage).Put("/agent_identities/{id}/toolkits/{toolkitID}", references.PinToolkit)

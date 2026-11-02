@@ -1,11 +1,14 @@
 package auth
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"golang.org/x/oauth2"
 
 	identityoidc "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/oidc"
 )
@@ -31,14 +34,64 @@ func TestMergeEntraClaims(t *testing.T) {
 	}
 }
 
-// Only prompt=login or prompt=consent passes; claims pass only in Entra mode.
-func TestReconsentOptions(t *testing.T) {
-	q := url.Values{"prompt": {"none"}, "claims": {`{"access_token":{"acrs":{"essential":true}}}`}}
-	if got := reconsentOptions(httptest.NewRequest("GET", "/auth/oidc/login?"+q.Encode(), nil), nil); len(got) != 0 {
-		t.Fatalf("options without Entra: %d", len(got))
+// A base64 claims challenge (the WWW-Authenticate form) is read like raw
+// JSON, padded or not, standard or URL alphabet.
+func TestMergeEntraClaimsReadsBase64(t *testing.T) {
+	challenge := `{"access_token":{"nbf":{"essential":true,"value":"1700000000"}}}`
+	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		merged, ok := mergeEntraClaims(identityoidc.EntraClientCapabilities, encoding.EncodeToString([]byte(challenge)))
+		if !ok {
+			t.Fatalf("refused a base64 challenge")
+		}
+		var got map[string]map[string]any
+		if err := json.Unmarshal([]byte(merged), &got); err != nil || got["access_token"]["nbf"] == nil || got["access_token"]["xms_cc"] == nil {
+			t.Fatalf("merged %s", merged)
+		}
 	}
-	q.Set("prompt", "login")
-	if got := reconsentOptions(httptest.NewRequest("GET", "/auth/oidc/login?"+q.Encode(), nil), &entraRuntime{}); len(got) != 2 {
-		t.Fatalf("options with Entra: %d", len(got))
+	if _, ok := mergeEntraClaims(identityoidc.EntraClientCapabilities, base64.StdEncoding.EncodeToString([]byte(`["x"]`))); ok {
+		t.Fatal("accepted base64 that is not an object of objects")
+	}
+}
+
+// loginURL renders the options the way Login does.
+func loginURL(t *testing.T, query url.Values, entra *entraRuntime) url.Values {
+	t.Helper()
+	cfg := oauth2.Config{ClientID: "c", Endpoint: oauth2.Endpoint{AuthURL: "https://idp.example/authorize"}}
+	raw := cfg.AuthCodeURL("s", reconsentOptions(httptest.NewRequest("GET", "/auth/oidc/login?"+query.Encode(), nil), entra)...)
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed.Query()
+}
+
+// Only prompt=login or prompt=consent passes. Claims pass only in Entra
+// mode. Claims that cannot be used fall back to prompt=login, so a
+// re-consent never ends in a silent single sign-on.
+func TestReconsentOptions(t *testing.T) {
+	challenge := `{"access_token":{"acrs":{"essential":true}}}`
+	for _, tc := range []struct {
+		name         string
+		query        url.Values
+		entra        *entraRuntime
+		prompt       string
+		claimsIsSent bool
+	}{
+		{"no re-consent", url.Values{}, &entraRuntime{}, "", false},
+		{"prompt none is dropped", url.Values{"prompt": {"none"}}, &entraRuntime{}, "", false},
+		{"prompt login", url.Values{"prompt": {"login"}}, nil, "login", false},
+		{"raw claims", url.Values{"claims": {challenge}}, &entraRuntime{}, "", true},
+		{"base64 claims", url.Values{"claims": {base64.StdEncoding.EncodeToString([]byte(challenge))}}, &entraRuntime{}, "", true},
+		{"claims and prompt", url.Values{"prompt": {"login"}, "claims": {challenge}}, &entraRuntime{}, "login", true},
+		{"claims without Entra", url.Values{"claims": {challenge}}, nil, "login", false},
+		{"claims that do not decode", url.Values{"claims": {"%%not-claims"}}, &entraRuntime{}, "login", false},
+		{"claims too large", url.Values{"claims": {`{"a":{"b":"` + strings.Repeat("x", maxReconsentClaimsBytes) + `"}}`}}, &entraRuntime{}, "login", false},
+		{"bad claims keep consent", url.Values{"prompt": {"consent"}, "claims": {"[]"}}, &entraRuntime{}, "consent", false},
+		{"bad claims and prompt none", url.Values{"prompt": {"none"}, "claims": {"[]"}}, &entraRuntime{}, "login", false},
+	} {
+		got := loginURL(t, tc.query, tc.entra)
+		if got.Get("prompt") != tc.prompt || (got.Get("claims") != "") != tc.claimsIsSent {
+			t.Errorf("%s: prompt %q, claims %q", tc.name, got.Get("prompt"), got.Get("claims"))
+		}
 	}
 }
