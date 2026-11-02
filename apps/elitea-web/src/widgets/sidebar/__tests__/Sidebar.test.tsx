@@ -1,10 +1,12 @@
 import userEvent from '@testing-library/user-event';
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
+import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Project } from '@/entities/project';
 import { resetConfigForTests } from '@/shared/config/get-config';
-import { PERMISSION_GROUPS } from '@/shared/lib/permissions';
+import { PERMISSION_GROUPS, PERMISSIONS } from '@/shared/lib/permissions';
+import { server } from '@/test/setup';
 import { installWebStorageShim } from '@/test/webstorage';
 
 import { useSidebarCollapsedStore } from '../model/sidebarCollapsed.store';
@@ -18,7 +20,8 @@ const projects: readonly Project[] = [
   { id: 2, name: 'Alpha Co', suspended: false },
 ];
 
-const allPermissions = new Set(Object.values(PERMISSION_GROUPS).flat());
+const viewPermissions: readonly string[] = Object.values(PERMISSION_GROUPS).flat();
+const allPermissions = new Set([...viewPermissions, PERMISSIONS.chat.create, PERMISSIONS.applications.create, PERMISSIONS.toolkits.create]);
 
 beforeEach(() => {
   resetConfigForTests();
@@ -27,6 +30,12 @@ beforeEach(() => {
   vi.stubEnv('VITE_PUBLIC_PROJECT_ID', '11');
   useSidebarCollapsedStore.setState({ collapsed: false });
   window.localStorage.clear();
+  // The Chats list reads the project's listing.
+  server.use(
+    http.get('*/social/author', () => HttpResponse.json({ id: 3, name: 'Me' })),
+    http.get('*/elitea_core/folder/prompt_lib/:projectId', () => HttpResponse.json({ pinned: { conversations: [] }, folders: [], date_groups: [], total_folders: 0 })),
+    http.get('*/elitea_core/conversations/prompt_lib/:projectId', () => HttpResponse.json({ rows: [], total: 0 })),
+  );
 });
 
 afterEach(() => {
@@ -47,20 +56,24 @@ function renderSidebar(permissions: ReadonlySet<string> = allPermissions) {
 }
 
 describe('Sidebar', () => {
-  it('renders all 9 nav entries when every permission is granted (SHELL-001..009)', async () => {
+  it('renders the Chats, every place and Credentials when every permission is granted (SHELL-001..009)', async () => {
     await renderSidebar();
-    for (const label of ['Chats', 'Agents', 'Pipelines', 'Skills', 'Toolkits & Indexes', 'MCPs', 'Credentials', 'Applications', 'Artifacts']) {
+    expect(screen.getByTestId('shell-chats-caption')).toHaveTextContent('Chats');
+    for (const label of ['Agents', 'Pipelines', 'Skills', 'Toolkits & Indexes', 'MCPs', 'Credentials', 'Applications', 'Artifacts']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
   });
 
   it('hides permission-gated entries when their permission is missing (SHELL-010)', async () => {
+    const user = userEvent.setup();
     await renderSidebar(new Set());
-    expect(screen.queryByText('Chats')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('shell-chats-caption')).not.toBeInTheDocument();
     expect(screen.queryByText('Credentials')).not.toBeInTheDocument();
-    // Ungated entries still render.
-    expect(screen.getByText('Skills')).toBeInTheDocument();
+    expect(screen.queryByText('Agents')).not.toBeInTheDocument();
+    // Ungated entries still render; Skills sits in the Workshop.
     expect(screen.getByText('Applications')).toBeInTheDocument();
+    await user.click(within(screen.getByTestId('shell-elitea-workshop')).getByRole('button'));
+    expect(screen.getByText('Skills')).toBeInTheDocument();
   });
 
   it('renders the project switcher showing the selected project name', async () => {
@@ -68,28 +81,44 @@ describe('Sidebar', () => {
     expect(screen.getByText('Alpha Co')).toBeInTheDocument();
   });
 
-  it('renders the global create button', async () => {
+  it('offers a "+" on each place the person may create in, and none without the right', async () => {
     await renderSidebar();
-    expect(screen.getByTestId('sidebar-create-button')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New agent' })).toBeInTheDocument();
+    expect(screen.getByTestId('shell-create-toolkits')).toHaveAccessibleName('New toolkit');
+    expect(screen.getByTestId('shell-create-artifacts')).toHaveAccessibleName('New bucket');
+    expect(screen.getByTestId('shell-chats-new')).toBeInTheDocument();
   });
 
-  it('toggles collapsed state on the collapse button and persists it', async () => {
+  it('leaves the "+" out where the person may not create', async () => {
+    await renderSidebar(new Set(viewPermissions));
+    expect(screen.queryByTestId('shell-create-agents')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('shell-create-toolkits')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('shell-chats-new')).not.toBeInTheDocument();
+    // Artifacts needs no create permission of its own.
+    expect(screen.getByTestId('shell-create-artifacts')).toBeInTheDocument();
+  });
+
+  it('toggles collapsed state from the header\'s collapse button and persists it', async () => {
     const user = userEvent.setup();
     await renderSidebar();
+    const toggle = screen.getByTestId('sidebar-collapse-toggle');
+    // In the header row, not pinned over the rail's edge.
+    expect(getComputedStyle(toggle).position).not.toBe('fixed');
     expect(useSidebarCollapsedStore.getState().collapsed).toBe(false);
-    await user.click(screen.getByTestId('sidebar-collapse-toggle'));
+    await user.click(toggle);
     expect(useSidebarCollapsedStore.getState().collapsed).toBe(true);
     expect(window.localStorage.getItem('el.sidebar.collapsed')).toBe('1');
   });
 
-  it('collapsing hides nav labels but keeps the underlying links', async () => {
+  it('collapsed: icons only, one "New chat", no chat list', async () => {
     // Set the PERSISTED value, not the store directly — Sidebar hydrates
-    // from storage on every mount (`readPersistedCollapsed()`), which would
-    // otherwise immediately overwrite a direct `setState` call.
+    // from storage on every mount (`readPersistedCollapsed()`).
     window.localStorage.setItem('el.sidebar.collapsed', '1');
     const { container } = await renderSidebar();
-    expect(screen.queryByText('Chats')).not.toBeInTheDocument();
+    expect(screen.queryByText('Agents')).not.toBeInTheDocument();
     expect(container.querySelector('a[href="/agents"]')).not.toBeNull();
+    expect(screen.getByTestId('sidebar-new-chat')).toHaveAccessibleName('New chat');
+    expect(screen.queryByTestId('shell-chats-caption')).not.toBeInTheDocument();
   });
 
   it('the Agents nav link points at /agents', async () => {

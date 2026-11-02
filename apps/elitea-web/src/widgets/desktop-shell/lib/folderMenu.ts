@@ -9,9 +9,9 @@
 import type { AppIpc } from '@/shared/desktop/appEvents';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
+import { copyText } from '@/widgets/chat-rail';
 
 import type { ContextAction } from '../model/useContextMenu';
-import { copyText } from './conversationLink';
 
 /** Projects listed in the submenu before "More projects…". */
 const SUBMENU_PROJECTS = 20;

@@ -9,12 +9,10 @@ import Snackbar from '@mui/material/Snackbar';
 import Typography from '@mui/material/Typography';
 
 import ChatPage from '@/pages/chat';
-import { useInspectorSlot } from '@/shared/desktop/inspectorSlot';
 import { t } from '@/shared/i18n';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { useSelectedProject } from '@/widgets/app-shell';
 
-import { ChatConversationSidebar } from './ChatConversationSidebar';
 import { ChatPlayback } from './ChatPlayback';
 import { usePlaybackConversationId } from './usePlaybackConversationId';
 import { usePlusMenuEntities } from '../model/usePlusMenuEntities';
@@ -200,12 +198,6 @@ export function ChatWithEditors(): ReactNode {
    */
   const isAnyEditorOpen = isEditingAgent || isEditingPipeline || isEditingToolkit;
 
-  // Inside the desktop frame (it provides the inspector slot) the conversations
-  // are rows of the frame's own sidebar, the one list: the page never shows its
-  // in-page list there, also while the sidebar is hidden (as in Mail).
-  const inDesktopFrame = useInspectorSlot() !== null;
-  const showInPageList = !inDesktopFrame;
-
   /*
    * The pipeline editor's EDIT-mode Configuration tab and its Save
    * (#940 A12, ELITEA-0928). Both deps come from one hook because they share
@@ -220,21 +212,11 @@ export function ChatWithEditors(): ReactNode {
   return (
     <>
       {/*
-        * Two columns: the conversation/folder rail and the chat itself.
-        * `ChatConversationSidebar` is the mount `features/chat-conversation-
-        * list` never had (issue #128 residual) — see that file's own module
-        * doc for why the mount belongs at this layer. Baseline shape:
-        * `NewChat.jsx:1360-1412` renders `<Conversations>` in the left Grid
-        * column of the same row as the conversation pane.
+        * The chat, inset from the rail and the window edges. The
+        * conversations are the sidebar's (`widgets/chat-rail`) on the web and
+        * the desktop alike; the page has no list of its own.
         *
-        * The row padding is that layout's own container padding
-        * (`NewChat.jsx:1736-1743`, desktop `1rem 0rem 1rem 1.5rem`): the
-        * chat surface is inset from the nav rail and the window edges, not
-        * flush against them. There is deliberately no right padding — the
-        * conversation column supplies the gutter on its side, and the chat
-        * column runs to the edge so the participants rail can dock there.
-        *
-        * A THIRD column appears while an entity editor is open (#940 A12).
+        * A SECOND column appears while an entity editor is open (#940 A12).
         * Before that, `<AgentEditor>`/`<PipelineEditor>`/`<ToolkitEditor>`
         * were siblings of this row inside the same fragment, so each one
         * rendered its own `height: 100%` block BELOW the chat inside a
@@ -255,8 +237,7 @@ export function ChatWithEditors(): ReactNode {
         * it was always written for this, it was simply never given a parent
         * with a height.
         */}
-      <Box sx={{ display: 'flex', height: '100%', minHeight: 0, width: '100%', boxSizing: 'border-box', py: 2, pl: 3, pr: inDesktopFrame ? 3 : 0 }}>
-        {showInPageList && <ChatConversationSidebar />}
+      <Box sx={{ display: 'flex', height: '100%', minHeight: 0, width: '100%', boxSizing: 'border-box', py: 2, px: 3 }}>
         <Box
           sx={{
             flexGrow: 1,
@@ -339,7 +320,7 @@ export function ChatWithEditors(): ReactNode {
       {/* The FILE canvas (issue #878) — a message attachment opened for editing. See `FileCanvasDrawer`'s own doc for why it is a second, independent drawer. */}
       <FileCanvasDrawer fileCanvas={fileCanvas} projectId={projectId} viewerId={viewerId} />
 
-      {/* A refused canvas create, in the server's words — the local-Snackbar pattern `ChatConversationSidebar` uses, as this app has no global toast host. */}
+      {/* A refused canvas create, in the server's words — a local Snackbar, as this app has no global toast host. */}
       <Snackbar
         open={canvasCreation.createError !== undefined}
         autoHideDuration={8000}

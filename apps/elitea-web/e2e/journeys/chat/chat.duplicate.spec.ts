@@ -2,9 +2,9 @@
  * Chat "Duplicate" action (issue 940/A6, onetest folder
  * `chat-interface/chat_duplicate`, ELITEA-2616..2624).
  *
- * The row menu (`ConversationItem.menu.tsx`) gained a "Duplicate" item that
+ * The sidebar row's "⋯" menu (`widgets/chat-rail/lib/conversationMenu.ts`) has a "Duplicate" item that
  * composes a copy client-side (no dedicated Go clone route exists — see
- * `processes/chat/model/useDuplicateConversation.ts`'s own module doc):
+ * `features/chat-conversation-list/lib/hooks/useDuplicateConversation.hooks.ts`'s own module doc):
  * `GET` the original's details, `POST` a new conversation, re-`POST` its
  * participants, and (for a public original) a follow-up `PUT is_private:
  * false` — the same route "Make public" already uses.
@@ -53,24 +53,27 @@ function uniqueName(tag: string): string {
   return `${AUTOTEST_PREFIX}${tag}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${SUFFIX}`;
 }
 
-/** Same shape/reasoning as `chat.sharing.spec.ts`'s own `openTodayGroup` — the rail's "Today" group starts collapsed. */
+/** Same shape as `chat.sharing.spec.ts`'s own `openTodayGroup`: Today is open by default, a remembered close is undone. */
 async function openTodayGroup(page: Page): Promise<void> {
-  const sidebar = page.getByTestId('chat-conversation-sidebar');
-  await expect(sidebar).toBeVisible({ timeout: 20_000 });
-  const today = sidebar.getByRole('button', { name: 'Today' });
+  const list = page.getByTestId('shell-chats');
+  await expect(list).toBeVisible({ timeout: 20_000 });
+  const today = list
+    .getByTestId('shell-chats-group')
+    .filter({ has: page.locator('.shell-group-caption', { hasText: /^Today$/ }) })
+    .locator('.shell-row-main');
   await expect(today).toBeVisible({ timeout: 20_000 });
   if ((await today.getAttribute('aria-expanded')) !== 'true') await today.click();
 }
 
 /** Same gesture-retry shape as `chat.sharing.spec.ts`'s own `openRowMenu` — see that file's doc comment for why the hover and the click are one retried unit. */
 async function openRowMenu(page: Page, conversationId: string): Promise<void> {
-  const row = page.getByTestId(`conversation-item-${conversationId}`);
+  const row = page.locator(`[data-conversation-id="${conversationId}"]`);
   await expect(row).toBeVisible({ timeout: 20_000 });
   const menu = page.getByRole('menu');
   await expect(async () => {
     if ((await menu.count()) === 0) {
       await row.hover();
-      await row.getByRole('button', { name: 'More actions' }).click({ timeout: 5_000 });
+      await row.getByTestId('shell-conversation-more').click({ timeout: 5_000 });
     }
     await expect(menu).toBeVisible({ timeout: 5_000 });
   }).toPass({ timeout: 40_000 });
@@ -155,14 +158,14 @@ test('D1: Duplicate creates an independent copy that lands the user in it, leavi
     // Lands the user in the copy: the URL follows the newly created id.
     await expect(page).toHaveURL(new RegExp(`/chat/${duplicateId}$`), { timeout: 15_000 });
 
-    // The original is untouched — read from the SERVER, not the rail.
+    // The original is untouched — read from the SERVER, not the sidebar.
     const original = await readConversationDetails(page.request, originalId);
     expect(original.is_private, 'the original conversation must remain unchanged by duplicating it').not.toBe(false);
 
     // Both survive a reload as separate, independent rows.
     await openChat(page);
-    await expect(page.getByTestId(`conversation-item-${originalId}`)).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId(`conversation-item-${duplicateId}`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(`[data-conversation-id="${originalId}"]`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(`[data-conversation-id="${duplicateId}"]`)).toBeVisible({ timeout: 15_000 });
   } finally {
     await removeConversation(page.request, duplicateId);
     await removeConversation(page.request, originalId);
@@ -224,7 +227,7 @@ test('D3: Duplicate of a pinned chat is itself unpinned; the original stays pinn
   try {
     await openChat(page);
     await openRowMenu(page, originalId);
-    await page.getByRole('menuitem', { name: 'Pin on top' }).click();
+    await page.getByRole('menuitem', { name: 'Pin', exact: true }).click();
     await expect
       .poll(async () => readPinnedIds(page), { timeout: 20_000, message: 'the original must be pinned before duplicating it' })
       .toContain(originalId);

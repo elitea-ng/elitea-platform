@@ -3,13 +3,10 @@ import { useCallback, useEffect } from 'react';
 
 import Box from '@mui/material/Box';
 import Drawer from '@mui/material/Drawer';
-import type { Theme } from '@mui/material/styles';
-
-import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 
 import type { Project } from '@/entities/project';
 import { t } from '@/shared/i18n';
+import { ChatRailProvider } from '@/widgets/chat-rail';
 
 import { readPersistedCollapsed, writePersistedCollapsed } from '../lib/collapsedPersistence';
 import { useSidebarCollapsedStore } from '../model/sidebarCollapsed.store';
@@ -32,9 +29,10 @@ export interface SidebarProps {
 }
 
 /**
- * SHELL-001..012 — the sidebar's outer chrome: the permanent `Drawer` +
- * collapse toggle. Ported from `[fsd]/widgets/sidebar-root/ui/Sidebar.jsx` /
- * `[fsd]/app/layout/MainSidebar.jsx`. Consumed by `widgets/app-shell`, which
+ * SHELL-001..012 — the sidebar's outer chrome: the permanent `Drawer`, and
+ * the chat list's data (`ChatRailProvider`, read while the rail is open —
+ * collapsed, it shows no chats). Ported from
+ * `[fsd]/widgets/sidebar-root/ui/Sidebar.jsx` / `[fsd]/app/layout/MainSidebar.jsx`. Consumed by `widgets/app-shell`, which
  * supplies the four data props (project list, selected project, and
  * permission set — none of which this widget fetches itself beyond its own
  * `usePermissionSet`/`useProjectOptions` used by callers that pass a
@@ -79,53 +77,17 @@ export function Sidebar({ permissions, projects, selectedProjectId, onSelectProj
           paper: { sx: { boxSizing: 'border-box', width: `${width}px`, background: 'transparent' } },
         }}
       >
-        <SidebarBody
-          collapsed={collapsed}
-          onToggleCollapsed={toggle}
-          permissions={permissions}
-          projects={projects}
-          selectedProjectId={selectedProjectId}
-          onSelectProject={onSelectProject}
-          onToggleAssistant={onToggleAssistant}
-        />
-        <Box
-          component="button"
-          type="button"
-          data-testid="sidebar-collapse-toggle"
-          aria-label={
-            collapsed
-              ? t('widgets.sidebar.expand', 'Expand sidebar')
-              : t('widgets.sidebar.collapse', 'Collapse sidebar')
-          }
-          onClick={toggle}
-          sx={(theme: Theme) => ({
-            position: 'fixed',
-            top: '3rem',
-            // `Sidebar.jsx`'s `collapseButton.left` is `12.75rem` = 204px
-            // against a 216px rail, i.e. the 24px circle STRADDLES the rail's
-            // right edge (204 + 24/2 === 216). The port's `- 24` tucked the
-            // whole button inside the rail, 12px adrift.
-            left: collapsed ? '3.25rem' : `${SIDE_BAR_WIDTH_PX - 12}px`,
-            width: '1.5rem',
-            height: '1.5rem',
-            borderRadius: theme.vars.shape.radiusPill,
-            border: `0.0625rem solid ${theme.vars.palette.border.lines}`,
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            cursor: 'pointer',
-            background: theme.vars.palette.background.secondary,
-            zIndex: 2101,
-            padding: 0,
-            appearance: 'none',
-          })}
-        >
-          {collapsed ? (
-            <ChevronRightIcon sx={{ width: '1rem', height: '1rem' }} />
-          ) : (
-            <ChevronLeftIcon sx={{ width: '1rem', height: '1rem' }} />
-          )}
-        </Box>
+        <ChatRailProvider projectId={selectedProjectId} enabled={!collapsed}>
+          <SidebarBody
+            collapsed={collapsed}
+            onToggleCollapsed={toggle}
+            permissions={permissions}
+            projects={projects}
+            selectedProjectId={selectedProjectId}
+            onSelectProject={onSelectProject}
+            onToggleAssistant={onToggleAssistant}
+          />
+        </ChatRailProvider>
       </Drawer>
     </Box>
   );

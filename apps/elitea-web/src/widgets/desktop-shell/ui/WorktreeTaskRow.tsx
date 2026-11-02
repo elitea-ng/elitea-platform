@@ -17,13 +17,12 @@ import { readThreads, threadsQueryKey } from '@/features/workspace';
 import type { WorktreeRowParts } from '@/features/workspace-worktrees';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
+import { CHILD_INDENT, RowMenu, ShellRow } from '@/widgets/chat-rail';
 
 import type { ShellAction } from '../lib/shellActions';
 import { useContextMenu, type ContextAction } from '../model/useContextMenu';
 import { lifecycleActions, useThreadLifecycle } from '../model/useThreadLifecycle';
 import type { ShellLocation } from '../model/useShellLocation';
-import { RowMenu } from './ConversationRow';
-import { CHILD_INDENT, ShellRow } from './rows';
 import { ThreadLifecycleDialog } from './ThreadLifecycleDialog';
 
 interface WorktreeTaskRowProps extends WorktreeRowParts {

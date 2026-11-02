@@ -1,19 +1,12 @@
 /**
- * The mount point `features/chat-messages`' `PlaybackChatBox` never had.
+ * The mount point of `features/chat-messages`' `PlaybackChatBox`.
  *
- * `PlaybackChatBox` was a complete, tested component that no route rendered
- * — `useConversationSidebar.ts` said so in its own doc comment ("is not
- * mounted by any route either"), and the sidebar's per-row Play button was
- * therefore wired to plain selection. Swapping the box's internals for the
- * real `ChatMessageList` would have shipped nothing without this file.
- *
- * **Why `processes/chat/ui/`** — the same reason `ChatConversationSidebar`
- * and `ChatWithEditors` live here: this needs `features/chat-messages` AND
+ * **Why `processes/chat/ui/`** — the same reason `ChatWithEditors` lives here: this needs `features/chat-messages` AND
  * `widgets/app-shell`'s selected project at once, and `.dependency-
  * cruiser.cjs` puts `processes/` above both.
  *
- * **Why the URL and not component state.** Playback is entered from a row in
- * a sidebar that `ChatWithEditors` renders as a SIBLING of the chat column;
+ * **Why the URL and not component state.** Playback is entered from a row
+ * of the sidebar's chat list (`widgets/chat-rail`), outside this page;
  * routing the signal through `?playback=1` on the conversation the user is
  * already navigating to keeps the two columns from having to share a store,
  * and makes the surface linkable, reloadable and testable. A playback view
@@ -88,7 +81,7 @@ export function ChatPlayback({ conversationId }: ChatPlaybackProps): ReactNode {
         {...(projectId !== undefined ? { projectId } : {})}
         toastError={setErrorMessage}
       />
-      {/* Same local-Snackbar seam `ChatConversationSidebar` documents: this app has no global toast host. */}
+      {/* A local Snackbar: this app has no global toast host. */}
       <Snackbar
         open={errorMessage !== undefined}
         autoHideDuration={6000}

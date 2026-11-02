@@ -133,44 +133,34 @@ async function readShareLinks(page: Page, conversationId: string): Promise<reado
 }
 
 /**
- * Opens the rail's "Today" group, which starts collapsed.
+ * Opens the sidebar's "Today" group.
  *
- * Driven off `aria-expanded` rather than clicked unconditionally, so a future
- * default of "expanded" closes nothing. (Same helper and same reasoning as the
- * management and list journeys next door.)
+ * Today is open by default, but the open state is remembered per viewer, so
+ * this is driven off `aria-expanded` rather than assumed.
  */
 async function openTodayGroup(page: Page): Promise<void> {
-  const sidebar = page.getByTestId('chat-conversation-sidebar');
-  await expect(sidebar).toBeVisible({ timeout: 20_000 });
-  const today = sidebar.getByRole('button', { name: 'Today' });
+  const list = page.getByTestId('shell-chats');
+  await expect(list).toBeVisible({ timeout: 20_000 });
+  const today = list
+    .getByTestId('shell-chats-group')
+    .filter({ has: page.locator('.shell-group-caption', { hasText: /^Today$/ }) })
+    .locator('.shell-row-main');
   await expect(today).toBeVisible({ timeout: 20_000 });
   if ((await today.getAttribute('aria-expanded')) !== 'true') await today.click();
 }
 
 /**
- * Opens one row's ⋮ menu.
+ * Opens one sidebar row's "⋯" menu.
  *
- * The trigger is mounted only while the row is HOVERED (`menuWrapper` is
- * `display: none` otherwise), so the hover is part of the gesture rather than
- * decoration — without it the click fails on an invisible element, which reads
- * like a missing control.
- */
-/**
- * Opens one rail row's action menu.
- *
- * THE HOVER AND THE CLICK ARE ONE RETRIED GESTURE, deliberately. The trigger
- * is `display: none` until its row is hovered
- * (`ConversationItem.styles.ts`'s `menuWrapper`), and the rail re-orders
- * under a resting pointer: a listing that lands between the hover and the
- * click moves this row out from under the cursor, the browser hands the row
- * its `mouseleave`, the trigger goes back to `display: none` — and a
- * `click()` carrying no timeout of its own then waits for it for the whole
- * remaining test budget. That is a 120 s hang whose report names whichever
- * teardown call was running when the clock ran out, not the click; the
- * screenshot showed the trigger open on the row the pointer had drifted onto.
+ * THE HOVER AND THE CLICK ARE ONE RETRIED GESTURE, deliberately. The "⋯"
+ * (`shell-conversation-more`) is `visibility: hidden` until its row is
+ * hovered, and the list re-orders under a resting pointer: a listing that
+ * lands between the hover and the click moves this row out from under the
+ * cursor and hides the button again — and a `click()` with no timeout of its
+ * own would then wait for it for the whole remaining test budget.
  */
 async function openRowMenu(page: Page, conversationId: string): Promise<void> {
-  const row = page.getByTestId(`conversation-item-${conversationId}`);
+  const row = page.locator(`[data-conversation-id="${conversationId}"]`);
   await expect(row).toBeVisible({ timeout: 20_000 });
   const menu = page.getByRole('menu');
   await expect(async () => {
@@ -178,7 +168,7 @@ async function openRowMenu(page: Page, conversationId: string): Promise<void> {
     // hover a row the open menu's own surface now covers.
     if ((await menu.count()) === 0) {
       await row.hover();
-      await row.getByRole('button', { name: 'More actions' }).click({ timeout: 5_000 });
+      await row.getByTestId('shell-conversation-more').click({ timeout: 5_000 });
     }
     await expect(menu).toBeVisible({ timeout: 5_000 });
   }).toPass({ timeout: 40_000 });
@@ -189,7 +179,7 @@ async function closeRowMenu(page: Page): Promise<void> {
   await expect(page.getByRole('menu')).toHaveCount(0, { timeout: 10_000 });
 }
 
-/** Opens the chat surface with the rail's today group expanded. */
+/** Opens the chat surface with the sidebar's Today group expanded. */
 async function openChat(page: Page, projectName?: string): Promise<void> {
   await page.goto(BASE_URL + '/app/chat');
   if (projectName !== undefined) await ensureProjectSelected(page, projectName);
@@ -222,14 +212,13 @@ test('S1: "Make public" publishes the conversation on the server, and the menu s
     await openChat(page, PUBLISH_AUTHOR_PROJECT_NAME);
     await openRowMenu(page, conversationId);
 
-    // The item, then its inline confirmation. The confirm REPLACES the row it
-    // belongs to, so the second locator resolves to the confirm button rather
-    // than to the item that opened it.
+    // The item, then its confirmation dialog.
     await page.getByRole('menuitem', { name: 'Make public' }).click();
-    await expect(page.getByText('Are you sure to make your conversation public?')).toBeVisible({ timeout: 10_000 });
-    await page.getByRole('menuitem', { name: 'Make public' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('Everyone in the project can open this conversation.')).toBeVisible({ timeout: 10_000 });
+    await dialog.getByRole('button', { name: 'Make public' }).click();
 
-    // THE SERVER, not the rail. The client patches its own list either way,
+    // THE SERVER, not the sidebar. The client patches its own list either way,
     // so a UI-only assertion here passes on the defect this closes.
     await expect
       .poll(async () => readIsPrivate(page, conversationId, projectId), {
@@ -349,7 +338,7 @@ test('S2: a share link opens for a reader with no session, and dies when it is r
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// legacy use case: pin a conversation to the top of the rail, and unpin it
+// legacy use case: pin a conversation to the top of the sidebar list, and unpin it
 // ─────────────────────────────────────────────────────────────────────────────
 test('S3: pin moves the conversation into the sidebar\'s pinned group on the server, and unpin takes it out', async ({ page }) => {
   // The same arithmetic S1 states: a chat page load and two 20 s server polls
@@ -361,9 +350,9 @@ test('S3: pin moves the conversation into the sidebar\'s pinned group on the ser
 
     await openChat(page);
     await openRowMenu(page, conversationId);
-    await page.getByRole('menuitem', { name: 'Pin on top' }).click();
+    await page.getByRole('menuitem', { name: 'Pin', exact: true }).click();
 
-    // The rail moves the row optimistically whatever happens, so the listing
+    // The list moves the row optimistically whatever happens, so the listing
     // the NEXT reader gets is the only honest measurement.
     await expect
       .poll(async () => readPinnedIds(page), {

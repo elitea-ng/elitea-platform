@@ -1,8 +1,8 @@
 /**
- * DEFECT: `"+ Create -> Chat"` navigated to `/chat` with `?create=1`, and no
+ * DEFECT: "New chat" navigated to `/chat` with `?create=1`, and no
  * component read the flag.
  *
- * `widgets/create-button/lib/command.ts`'s `COMMAND_TARGETS.chat` builds
+ * `widgets/chat-rail`'s `useStartChat` builds
  * `{ to: '/chat', search: { create: '1' } }`. A user already on `/chat` who
  * clicked it stayed on the same pathname. The route did not remount. The
  * previous conversation, its attachments and its streaming state all stayed on

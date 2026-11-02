@@ -11,8 +11,8 @@
  * WHAT "CREATE A CONVERSATION" IS IN THIS APP
  * ─────────────────────────────────────────────────────────────────────────────
  * There is no route that creates an empty conversation from a button. The
- * shell's "+ Create" resolves `chat` to `/chat?create=1`
- * (`widgets/create-button`'s `COMMAND_TARGETS`), and `useCreateChatReset` reads
+ * sidebar Chats caption's "+" (`shell-chats-new`, "New chat") navigates to
+ * `/chat?create=1`, and `useCreateChatReset` reads
  * that flag, calls the composition root's reset and REMOUNTS the chat subtree
  * through a key. The row in the database is written later, by the first send
  * (`resolveConversationForSend`). Both halves are asserted below, because the
@@ -54,11 +54,14 @@ function uniqueName(tag: string): string {
   return `${AUTOTEST_PREFIX}${tag}-${Date.now()}${SUFFIX}`;
 }
 
-/** See `chat.management.spec.ts`'s M1: `DateGroup` starts collapsed, so its rows are mounted but not visible. */
+/** Opens the sidebar's Today group (open by default; a remembered close is undone). */
 async function openTodayGroup(page: Page): Promise<void> {
-  const sidebar = page.getByTestId('chat-conversation-sidebar');
-  await expect(sidebar).toBeVisible({ timeout: 20_000 });
-  const today = sidebar.getByRole('button', { name: 'Today' });
+  const list = page.getByTestId('shell-chats');
+  await expect(list).toBeVisible({ timeout: 20_000 });
+  const today = list
+    .getByTestId('shell-chats-group')
+    .filter({ has: page.locator('.shell-group-caption', { hasText: /^Today$/ }) })
+    .locator('.shell-row-main');
   await expect(today).toBeVisible({ timeout: 20_000 });
   if ((await today.getAttribute('aria-expanded')) !== 'true') await today.click();
 }
@@ -130,10 +133,10 @@ test('the Create control leaves the open conversation for a blank one, and the n
     )
     .toContain(String(body.id));
 
-  // It reaches the rail beside the one it was created from.
+  // It reaches the sidebar list beside the one it was created from.
   await openTodayGroup(page);
-  await expect(page.getByTestId(`conversation-item-${body.id}`)).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByTestId(`conversation-item-${existing}`)).toBeVisible();
+  await expect(page.locator(`[data-conversation-id="${String(body.id)}"]`)).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator(`[data-conversation-id="${existing}"]`)).toBeVisible();
 
   await deleteConversation(page.request, body.id as string);
   await deleteConversation(page.request, existing);

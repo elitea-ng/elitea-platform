@@ -53,30 +53,21 @@ The dropdown lists all projects you have access to, in a fixed order:
 Click the dropdown and select any project to switch to it. If you switch while unsaved work is open or a response is streaming, a confirmation dialog will appear before navigating away.`,
   },
   {
-    id: 'create-button',
-    target: SIDEBAR_TOUR_TARGETS.createButton,
+    id: 'new-chat',
+    target: SIDEBAR_TOUR_TARGETS.newChat,
     placement: 'right',
-    title: '+ Create Button',
-    content: `The **+ Create** button is a context-aware shortcut that creates a new item for whichever section you are currently viewing. Its action updates automatically as you navigate — so you never need to find a separate "New" button inside each page.
+    title: 'Create from the sidebar',
+    content: `The **+** beside **Chats** starts a new chat. Every place in the sidebar that you can add to has its own **+**, shown when you point at the row or move to it with the keyboard:
 
-When the sidebar is collapsed, only the **+** icon is shown. Hover over it to see a tooltip confirming what will be created.
+- **Agents** — opens the new agent form
+- **Pipelines** — opens the new pipeline form
+- **Skills** — opens the new skill form
+- **Toolkits & Indexes** — opens the new toolkit form
+- **MCPs** — opens the new MCP form
+- **Applications** — opens the application catalog
+- **Artifacts** — opens the new bucket form
 
-The button detects your current page and adjusts its action accordingly:
-
-- **Chats** — starts a new chat
-- **Agents** — opens the new agent creation form
-- **Pipelines** — opens the new pipeline creation form
-- **Skills** — opens the new skill creation form
-- **Toolkits** — opens the new toolkit creation form
-- **MCPs** — opens the new MCP creation form
-- **Credentials** — opens the new credential creation form
-- **Artifacts** — opens the new bucket creation form
-- **Settings → AI Configuration** — opens the new model integration creation form
-- **Settings → Personal Tokens** — opens the new personal token creation form
-- **Settings → Secrets** — adds a new secret row inline in the secrets table
-- **Settings → Users** — opens the Invite Users dialog
-
-The button is disabled when you do not have permission to create the item for the current section.`,
+Each list page also has its own **New** button. A **+** is left out where you do not have permission to create that item. When the sidebar is collapsed, a single **+** starts a new chat.`,
   },
   {
     id: 'chat',

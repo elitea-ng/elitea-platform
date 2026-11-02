@@ -8,6 +8,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import { GearIcon } from '@/shared/ui/icons/gear-icon';
+import { KeyIcon } from '@/shared/ui/icons/key-icon';
 import { ResourcesIcon } from '@/shared/ui/icons/resources-icon';
 import agentHubIconUrl from '@/shared/ui/icons/svg/agent-hub-icon.svg?url';
 import { t } from '@/shared/i18n';
@@ -50,15 +51,26 @@ const agentHubIconMask = `url("${agentHubIconUrl}")`;
 
 export interface SidebarBottomLinksProps {
   collapsed: boolean;
+  /** Credentials, when the person may open them (`visibleNavSections`); the account things sit down here, as on the desktop. */
+  credentials?: boolean;
 }
 
-/** Block 1 — Settings + full-bleed divider + Catalog, pinned to the bottom of the nav column. */
-export function SidebarBottomLinks({ collapsed }: SidebarBottomLinksProps): ReactNode {
+/** Block 1 — Credentials and Settings + full-bleed divider + Catalog, pinned to the bottom of the nav column. */
+export function SidebarBottomLinks({ collapsed, credentials = false }: SidebarBottomLinksProps): ReactNode {
   const pathname = useRouterState({ select: (routerState) => routerState.location.pathname });
 
   return (
     <Box sx={bottomSectionSx}>
       <Box sx={sectionSx}>
+        {credentials && (
+          <FooterLink
+            to="/credentials"
+            icon={<KeyIcon style={{ width: '1rem', height: '1rem' }} />}
+            label={t('widgets.sidebar.nav.credentials', 'Credentials')}
+            collapsed={collapsed}
+            active={pathname.startsWith('/credentials')}
+          />
+        )}
         <FooterLink
           to="/settings/model-configuration"
           icon={<GearIcon style={{ width: '1rem', height: '1rem' }} />}

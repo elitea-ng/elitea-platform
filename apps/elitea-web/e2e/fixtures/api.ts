@@ -84,16 +84,37 @@ export async function describeRefusal(response: APIResponse): Promise<string> {
   return `\nauth refusal: code=${code} — ${hint}`;
 }
 
+/** The sidebar row whose "+" creates what the page lists; `/chat` (and anything else) starts a chat. */
+const CREATE_ROW_BY_PATH: readonly (readonly [RegExp, string])[] = [
+  [/\/agents(\/|$)/, 'agents'],
+  [/\/pipelines(\/|$)/, 'pipelines'],
+  [/\/skills(\/|$)/, 'skills'],
+  [/\/toolkits(\/|$)/, 'toolkits'],
+  [/\/mcps(\/|$)/, 'mcps'],
+  [/\/artifacts(\/|$)/, 'artifacts'],
+  [/\/apps(\/|$)/, 'applications'],
+];
+
 /**
- * Wait for the sidebar create button to become enabled, then click it.
- * The button stays disabled until the permission query resolves, which
- * requires the project store to hydrate from localStorage. This can take
- * up to ~3 s on a cold page load in the E2E stack.
+ * Create what the current page lists from the sidebar: the "+" of its row
+ * (New agent, New pipeline, …), or the Chats caption's New chat. The "+"
+ * appears once the permission query resolves (the project store hydrates
+ * from storage first, up to ~3 s on a cold load); it shows on hover and
+ * focus, and is in the DOM throughout.
  */
 export async function clickCreateButton(page: Page): Promise<void> {
-  const btn = page.getByTestId('sidebar-create-button');
-  await expect(btn).toBeEnabled({ timeout: 15_000 });
-  await btn.click();
+  const path = new URL(page.url()).pathname;
+  const value = CREATE_ROW_BY_PATH.find(([pattern]) => pattern.test(path))?.[1];
+  if (value === undefined) {
+    const newChat = page.getByTestId('shell-chats-new');
+    await expect(newChat).toBeVisible({ timeout: 15_000 });
+    await newChat.click();
+    return;
+  }
+  const create = page.getByTestId(`shell-create-${value}`);
+  await expect(create).toBeAttached({ timeout: 15_000 });
+  await page.getByTestId(`shell-elitea-${value}`).hover();
+  await create.click();
 }
 
 /** API base from env (matches the app's VITE_SERVER_URL). */

@@ -57,16 +57,21 @@ test('the sidebar and Agents list render the PUBLIC-project state, not the priva
   await page.goto(BASE_URL + '/app/chat', { waitUntil: 'domcontentloaded' });
   await ensureProjectSelected(page, PUBLIC_PROJECT_NAME);
 
+  // Skills, Agents and Pipelines sit in the Workshop group: open it, so an
+  // absent Skills row means hidden, not merely folded away.
+  const workshop = page.getByTestId('shell-elitea-workshop').getByRole('button').first();
+  if ((await workshop.getAttribute('aria-expanded')) !== 'true') await workshop.click();
+
+  // The rest of the rail still renders — this is a DIFFERENT state, not a
+  // broken one.
+  await expect(page.getByTestId('shell-chats-caption')).toBeVisible();
+  await expect(rail(page).getByRole('link', { name: 'Agents', exact: true })).toBeVisible();
+  await expect(rail(page).getByRole('link', { name: 'Pipelines', exact: true })).toBeVisible();
+
   // The Skills row is gone from the nav rail — `navSections.ts`'s
   // `computeIsSelectedProjectPublic` gate, the one real "public project"
   // branch this shell's sidebar has.
   await expect(rail(page).getByRole('link', { name: 'Skills', exact: true })).toHaveCount(0);
-
-  // The rest of the rail still renders — this is a DIFFERENT state, not a
-  // broken one.
-  await expect(rail(page).getByRole('link', { name: 'Chats', exact: true })).toBeVisible();
-  await expect(rail(page).getByRole('link', { name: 'Agents', exact: true })).toBeVisible();
-  await expect(rail(page).getByRole('link', { name: 'Pipelines', exact: true })).toBeVisible();
 
   // Agents: the four PUBLIC tabs render (Latest/My liked/Trending), not the
   // six private ones (All/Drafts/Published/…) — `useApplicationTabs.tsx`'s

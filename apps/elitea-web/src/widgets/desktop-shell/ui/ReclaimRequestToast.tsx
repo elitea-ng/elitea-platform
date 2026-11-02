@@ -5,30 +5,25 @@
  * back, so the shell shows it as a banner under the toolbar with a Take back action. The action
  * opens the thread and starts the take back dialog there.
  *
- * It listens like the bell does (the notifications stream signals, the list
- * says what) and shows each request once.
+ * It reads the latest unread notifications from the desktop's one
+ * notifications subscription (`useDesktopNotifications`), which the frame
+ * holds through this component, and shows each request once.
  */
-import { useCallback, useEffect, useState } from 'react';
-
-import { useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 
 import Button from '@mui/material/Button';
 
 import { readThreads, useWorkspaceIpc } from '@/features/workspace';
 import { readThreadUuids, useTakeBackRequests } from '@/features/workspace-handoff';
-import { NOTIFICATIONS_QUERY_ROOT, useNotificationsList, useNotificationsSSE, useReadNotification, type NormalizedNotification } from '@/features/notifications';
-import type { SocialAuthorProfile } from '@/shared/api/generated/model';
-import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
-import { unwrapBody } from '@/shared/api/unwrap';
+import { useReadNotification, type NormalizedNotification } from '@/features/notifications';
 import { t } from '@/shared/i18n';
 
 import type { ShellAction } from '../lib/shellActions';
+import { useDesktopNotifications, type DesktopNotificationsFeed } from '../model/useDesktopNotifications';
 import { NoticeBanner } from './NoticeBanner';
 
 /** The notification kind the server raises for a web Take back request (ADR-0034, decision 7). */
 const RECLAIM_REQUESTED = 'workspace_reclaim_requested';
-
-const SLOW_POLL_MS = 60_000;
 
 /** The folder and thread on this computer a request names: by conversation id, or by the UUID the thread list remembered. */
 async function locate(
@@ -44,22 +39,19 @@ async function locate(
   return null;
 }
 
+/** The frame's notifications: the one subscription, and the Take back banner it feeds. */
 export function ReclaimRequestToast({ run }: { run: (action: ShellAction) => void }): React.JSX.Element | null {
-  const queryClient = useQueryClient();
+  const feed = useDesktopNotifications();
+  return <ReclaimRequestBanner feed={feed} run={run} />;
+}
+
+function ReclaimRequestBanner({ feed, run }: { feed: DesktopNotificationsFeed; run: (action: ShellAction) => void }): React.JSX.Element | null {
+  const { projectId, rows } = feed;
   const workspaces = useWorkspaceIpc();
-  const author = useGetCurrentAuthor();
-  const projectId = (unwrapBody(author.data) as SocialAuthorProfile | undefined)?.personal_project_id;
   const markRead = useReadNotification();
   const [handled, setHandled] = useState<ReadonlySet<string>>(new Set());
 
-  const onNotify = useCallback(() => void queryClient.invalidateQueries({ queryKey: NOTIFICATIONS_QUERY_ROOT }), [queryClient]);
-  const { streamDead } = useNotificationsSSE(projectId === undefined ? undefined : String(projectId), onNotify);
-  const list = useNotificationsList(
-    { projectId: projectId ?? '', pageSize: 10, params: { only_new: true } },
-    { enabled: projectId !== undefined && workspaces !== undefined, refetchInterval: streamDead ? SLOW_POLL_MS : false },
-  );
-
-  const request = list.data?.rows.find((row: NormalizedNotification) => String(row.eventType) === RECLAIM_REQUESTED && !handled.has(row.id));
+  const request = workspaces === undefined ? undefined : rows.find((row: NormalizedNotification) => String(row.eventType) === RECLAIM_REQUESTED && !handled.has(row.id));
   const reference = request?.meta?.conversationId;
 
   // A request for a thread this computer does not hold is not ours to show.

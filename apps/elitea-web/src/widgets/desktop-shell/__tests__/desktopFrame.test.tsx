@@ -359,7 +359,7 @@ describe('DesktopFrame sidebar layout', () => {
 
   it('opens the Local work page from its caption, and a new chat from the Chats caption', async () => {
     const user = userEvent.setup();
-    const { router } = mount({ path: '/skills', permissions: new Set(['models.chat.folders.get']) });
+    const { router } = mount({ path: '/skills', permissions: new Set(['models.chat.folders.get', 'models.chat.conversations.create']) });
     await user.click(await screen.findByTestId('shell-local-work'));
     await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces'));
     await user.click(screen.getByTestId('shell-chats-caption'));

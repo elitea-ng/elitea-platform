@@ -2,11 +2,11 @@
  * The chat surface inside the desktop frame (the composition root the desktop
  * app mounts) against the same surface on the web.
  *
- * In the frame, the conversations are the sidebar's (its Chats rows), so the
- * page drops its in-page list; the participants, agents and context budget
+ * The conversations are the sidebar's (its Chats rows) on both; in the
+ * frame the participants, agents and context budget
  * move to the frame's full-height inspector, which the title bar toggles (and
- * ⌘⌥\), remembered per viewer. On the web nothing moves: the list column and
- * the participants rail stay in the page.
+ * ⌘⌥\), remembered per viewer. On the web the participants rail stays in the
+ * page.
  */
 import type { ReactNode } from 'react';
 
@@ -122,7 +122,7 @@ afterEach(() => {
 const persistedLayout = (): unknown => JSON.parse(window.localStorage.getItem('el.desktop.layout') ?? 'null');
 
 describe('the chat surface in the desktop frame', () => {
-  it('drops the in-page conversation list and hosts the participants in the inspector', async () => {
+  it('hosts the participants in the inspector, the conversations in the sidebar', async () => {
     mount(inDesktopFrame);
 
     const inspector = await screen.findByTestId('desktop-inspector', {}, { timeout: 10_000 });
@@ -131,7 +131,6 @@ describe('the chat surface in the desktop frame', () => {
     expect(within(inspector).getByText('Conversation')).toBeInTheDocument();
     // The conversations are the sidebar's now.
     expect(await screen.findByTestId('shell-chats')).toBeInTheDocument();
-    expect(screen.queryByTestId('chat-conversation-sidebar')).not.toBeInTheDocument();
   });
 
   it('hides and shows the inspector from its own button, the title bar and ⌘⌥\\, and remembers it', async () => {
@@ -155,10 +154,9 @@ describe('the chat surface in the desktop frame', () => {
 });
 
 describe('the chat surface on the web', () => {
-  it('keeps the in-page conversation list and the participants rail', async () => {
+  it('keeps the participants rail in the page', async () => {
     mount((children) => children);
 
-    expect(await screen.findByTestId('chat-conversation-sidebar', {}, { timeout: 10_000 })).toBeInTheDocument();
     const participants = await screen.findByTestId('participants-wrapper', {}, { timeout: 10_000 });
     expect(participants).not.toHaveAttribute('data-appearance', 'inspector');
     expect(screen.queryByTestId('desktop-inspector')).not.toBeInTheDocument();

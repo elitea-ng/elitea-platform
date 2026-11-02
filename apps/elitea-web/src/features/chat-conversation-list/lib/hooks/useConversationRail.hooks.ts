@@ -1,22 +1,22 @@
 /**
- * The conversation list as a model, for a list that is not `Conversations`:
- * the desktop sidebar's chats (`widgets/desktop-shell`). It owns the same
- * three state containers `processes/chat/model/useConversationSidebar.ts`
- * owns for the web rail and fills them through the SAME hooks — the grouped
+ * The conversation list as a model: the sidebar's Chats on the web and the
+ * desktop (`widgets/chat-rail`). It owns the three state containers (pinned,
+ * folders, date groups) and fills them through the slice's hooks — the grouped
  * listing (`useQueryFoldersList`, so one `['folder', 'list', …]` cache entry
  * serves both lists), the optimistic pin (`usePinConversation`), the per-bucket
  * pages (`mergeLoadMorePage`), the folders (`useCreateFolder`,
- * `useMoveToFolderConversation`, see `useConversationRailFolders`) — plus
- * rename and delete through `entities/conversation`'s API, the calls the web
- * rail makes.
+ * `useMoveToFolderConversation`, see `useConversationRailFolders`), the rest
+ * of the row and folder menus (`useConversationRailExtras`) — plus rename and
+ * delete through `entities/conversation`'s API.
  *
- * There is no second cache: the listing is the folders query, and every
- * change is applied to the containers the way the web rail applies it. Each
- * change also marks the cached listing stale (`invalidate`), so the other
- * list (the chat page's own, which the desktop shows while the sidebar's is
- * hidden) and a remount read the change instead of the old rows. The chat
- * page does the same for a conversation it creates, renames or deletes, so
- * this list learns of those through the same refetch.
+ * There is no second cache: the listing is the folders query. Each change
+ * also marks the cached listing stale (`invalidate`), so a remount reads the
+ * change instead of the old rows. The chat page does the same for a
+ * conversation it creates, renames or deletes, so this list learns of those
+ * through the same refetch.
+ *
+ * `searchQuery` narrows the listing to matching titles (the server's `query`)
+ * and `localWorkOnly` to the Local work threads (`source`).
  */
 import { useCallback, useRef, useState } from 'react';
 
@@ -27,11 +27,13 @@ import { conversationApi } from '@/entities/conversation';
 import { folderApi } from '@/entities/folder';
 import type { SocialAuthorProfile } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
+import { LOCAL_WORK_SOURCE } from '@/shared/lib/localWork';
 
-import { mergeLoadMorePage, type LoadMorePage } from '../../ui/conversations/Conversations.helpers';
+import { mergeLoadMorePage, type LoadMorePage } from '../helpers/loadMorePage';
 import { conversationListErrorMessage } from '../errorMessage';
 import type { DateGroupListItem, FolderListItem } from './conversationListState.types';
 import { useArchiveConversation } from './useArchiveConversation.hooks';
+import { useConversationRailExtras, type RailExtras } from './useConversationRailExtras.hooks';
 import { useConversationRailFolders } from './useConversationRailFolders.hooks';
 import { usePinConversation } from './usePinConversation.hooks';
 import { useQueryFoldersList } from './useQueryFoldersList.hooks';
@@ -39,7 +41,7 @@ import { useQueryFoldersList } from './useQueryFoldersList.hooks';
 const PAGE_SIZE = 10;
 const FOLDER_LIST_KEY = ['folder', 'list'] as const;
 
-export interface ConversationRail {
+export interface ConversationRail extends RailExtras {
   readonly pinned: readonly Conversation[];
   readonly folders: readonly FolderListItem[];
   readonly dateGroups: readonly DateGroupListItem[];
@@ -49,6 +51,8 @@ export interface ConversationRail {
   readonly dismissError: () => void;
   /** Delete and rename are the author's (the web rail's guard, fail-closed on an unknown identity). */
   readonly canModify: (conversation: Conversation) => boolean;
+  /** Rename, pin and delete of a folder are its owner's (fail-closed as `canModify`). */
+  readonly canModifyFolder: (folder: FolderListItem) => boolean;
   readonly pin: (conversation: Conversation, shouldPin: boolean) => void;
   readonly rename: (conversation: Conversation, name: string) => void;
   readonly remove: (conversation: Conversation) => Promise<boolean>;
@@ -166,7 +170,15 @@ function useEdits(projectId: string | undefined, transform: Containers['transfor
   return { rename, remove };
 }
 
-export function useConversationRail({ projectId }: { readonly projectId: string | undefined }): ConversationRail {
+export interface ConversationRailOptions {
+  readonly projectId: string | undefined;
+  /** Only the conversations whose title matches (the listing's `query`). */
+  readonly searchQuery?: string;
+  /** Only the Local work threads. */
+  readonly localWorkOnly?: boolean;
+}
+
+export function useConversationRail({ projectId, searchQuery, localWorkOnly = false }: ConversationRailOptions): ConversationRail {
   const containers = useContainers();
   const [error, setError] = useState<string | undefined>(undefined);
   const toastError = useCallback((message: string) => setError(message), []);
@@ -183,6 +195,8 @@ export function useConversationRail({ projectId }: { readonly projectId: string 
     setPinnedConversations: containers.setPinned,
     // The route says which conversation is open; the listing's own pick would only highlight the last one used.
     skipSetConversation: true,
+    ...(searchQuery !== undefined && searchQuery !== '' ? { searchQuery } : {}),
+    ...(localWorkOnly ? { source: LOCAL_WORK_SOURCE } : {}),
   });
 
   // The rail has no "active conversation" state of its own (the route is the selection).
@@ -200,12 +214,23 @@ export function useConversationRail({ projectId }: { readonly projectId: string 
   const { rename, remove } = useEdits(projectId, containers.transform, toastError, invalidate);
   const { createFolder, moveToFolder } = useConversationRailFolders(projectId, containers, toastError, invalidate);
   const { loadMoreInGroup, loadMoreInFolder } = useLoadMore(projectId, containers, toastError);
+  const extras = useConversationRailExtras(projectId, containers, toastError, invalidate);
   const { transform } = containers;
   const removeRow = useCallback((conversationId: string) => transform((items) => items.filter((item) => item.id !== conversationId)), [transform]);
   const { archive: archiveRequest } = useArchiveConversation({ projectId, removeRow, toastError });
   const archive = useCallback((conversation: Conversation) => void archiveRequest(conversation), [archiveRequest]);
   const canModify = useCallback(
     (conversation: Conversation) => currentUserId !== undefined && conversation.authorId !== undefined && String(conversation.authorId) === currentUserId,
+    [currentUserId],
+  );
+
+  const canModifyFolder = useCallback(
+    (folder: FolderListItem) => {
+      // The listing names a folder's owner `owner_id` (the folder entity, `authorId`).
+      const raw = folder as { readonly authorId?: string; readonly owner_id?: string | number };
+      const owner = raw.authorId ?? raw.owner_id;
+      return currentUserId !== undefined && owner !== undefined && String(owner) === currentUserId;
+    },
     [currentUserId],
   );
 
@@ -217,6 +242,7 @@ export function useConversationRail({ projectId }: { readonly projectId: string 
     error,
     dismissError,
     canModify,
+    canModifyFolder,
     pin,
     rename,
     remove,
@@ -226,5 +252,6 @@ export function useConversationRail({ projectId }: { readonly projectId: string 
     loadMoreInGroup,
     loadMoreInFolder,
     hasMore,
+    ...extras,
   };
 }

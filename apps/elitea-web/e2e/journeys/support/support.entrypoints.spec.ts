@@ -144,7 +144,7 @@ test('the sidebar entry is present, distinct from the nav group, and survives co
 
     // Standard nav items are unaffected — the entry is a footer element, not
     // inserted into the nav list itself.
-    await expect(page.getByRole('link', { name: 'Chats' }).first()).toBeVisible();
+    await expect(page.getByTestId('shell-chats-caption')).toBeVisible();
 
     const collapseToggle = page.getByTestId('sidebar-collapse-toggle');
     await collapseToggle.click();

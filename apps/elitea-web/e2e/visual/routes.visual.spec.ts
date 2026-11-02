@@ -66,8 +66,7 @@
  *   resolved project name      loaded YES  stalled no
  *   "No projects" fallback     loaded no   stalled YES
  *   Applications nav link      loaded YES  stalled YES  ← ungated, no good
- *   sidebar-create-button      loaded YES  stalled YES  ← always present
- * The first two are the landmark; the last two are why the obvious choices are
+ * The first two are the landmark; the last is why the obvious choice is
  * not.
  */
 import { test, expect, type Page } from '@playwright/test';

@@ -6,10 +6,11 @@
  * the web sidebar keeps in its footer follow them.
  *
  * The sidebar lists all but {@link ACCOUNT_MENU_ITEMS}, which the account
- * menu at its foot carries, and keeps the things a person builds with
- * ({@link WORKSHOP_ITEMS}) in one collapsible "Workshop" group, so the list
+ * menu at its foot carries, and keeps the things a person builds with in one
+ * collapsible "Workshop" group (`NavRows`, `widgets/chat-rail`), so the list
  * shows the everyday places first; the command palette and the page title
- * still know every item.
+ * still know every item. An item that can create carries its create page
+ * (`create`), for the row's "+".
  */
 import { t } from '@/shared/i18n';
 import { navSections, visibleNavSections, type NavItemValue } from '@/widgets/sidebar';
@@ -20,13 +21,14 @@ export interface EliteaItem {
   value: EliteaItemValue;
   label: string;
   url: string;
+  create?: { readonly url: string; readonly label: string };
 }
 
 export function eliteaItems(permissions: ReadonlySet<string>, isSelectedProjectPublic: boolean): EliteaItem[] {
   const nav = visibleNavSections(navSections(), permissions, { isSelectedProjectPublic })
     .flatMap((section) => section.items)
     .filter((item): item is typeof item & { value: Exclude<NavItemValue, 'workspaces'> } => item.value !== 'workspaces')
-    .map((item) => ({ value: item.value, label: item.label, url: item.url }));
+    .map((item) => ({ value: item.value, label: item.label, url: item.url, ...(item.create !== undefined ? { create: item.create } : {}) }));
   return [
     ...nav,
     { value: 'catalog', label: t('desktop.shell.catalog', 'Catalog'), url: '/elitea-catalog' },
@@ -36,9 +38,6 @@ export function eliteaItems(permissions: ReadonlySet<string>, isSelectedProjectP
 
 /** The items the account menu carries instead of the sidebar's Elitea list. */
 export const ACCOUNT_MENU_ITEMS: ReadonlySet<EliteaItemValue> = new Set(['credentials', 'catalog', 'help']);
-
-/** The items the sidebar's "Workshop" group holds: the project's agents, pipelines and what they use. */
-export const WORKSHOP_ITEMS: ReadonlySet<EliteaItemValue> = new Set(['agents', 'pipelines', 'skills', 'toolkits', 'mcps']);
 
 /** Which row a pathname belongs to (`undefined` on the folders and on settings). */
 export function selectedEliteaItem(pathname: string, items: readonly EliteaItem[]): EliteaItemValue | undefined {

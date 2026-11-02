@@ -3,9 +3,8 @@
  * composition root the desktop app mounts: `DesktopFrame` around
  * `ChatWithEditors`).
  *
- * The sidebar's Chats rows are the one list: the page never shows its own
- * list in the frame, also while the sidebar is hidden or Chats is collapsed.
- * Opening the chat expands the Elitea section and the Chats disclosure. The
+ * The sidebar's Chats rows are the one list (the page has none of its own).
+ * Opening the chat expands the Chats disclosure. The
  * sidebar manages folders with the web list's hooks (New folder, Move to
  * folder…). The title row names the open conversation (`Chats ▸ folder ▸
  * name`) from the same rows, and renames it on a double-click. A message
@@ -217,22 +216,19 @@ afterEach(() => {
 // The waits below allow 10 s each (the whole shell boots); the test
 // timeout has to cover them, not the 5 s default.
 describe('the desktop chat: the sidebar is the one list', { timeout: 30_000 }, () => {
-  it('never shows the page list in the frame, also with the sidebar hidden', async () => {
+  it('keeps the chat when the sidebar is hidden', async () => {
     mount();
     expect(await screen.findByTestId('shell-chats', {}, { timeout: 10_000 })).toBeInTheDocument();
     await screen.findByPlaceholderText('Type your message...', {}, { timeout: 10_000 });
-    expect(screen.queryByTestId('chat-conversation-sidebar')).not.toBeInTheDocument();
 
     act(() => useDesktopLayout.getState().setSidebarOpen(false));
     await waitFor(() => expect(screen.queryByTestId('shell-chats')).not.toBeInTheDocument());
     // The chat stays; no list takes the sidebar's place (as in Mail: ⌘\\ shows the sidebar again).
     expect(screen.getByPlaceholderText('Type your message...')).toBeInTheDocument();
-    expect(screen.queryByTestId('chat-conversation-sidebar')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Show sidebar' })).toBeInTheDocument();
   });
 
-  it('expands a collapsed Elitea section and Chats disclosure on opening the chat; collapsing Chats there shows no page list', async () => {
-    window.localStorage.setItem('el.desktop.eliteaOpen', 'false');
+  it('expands a collapsed Chats disclosure on opening the chat, and collapses it from its caption', async () => {
     window.localStorage.setItem('el.desktop.chatsOpen', 'false');
     const user = userEvent.setup();
     mount();
@@ -242,7 +238,6 @@ describe('the desktop chat: the sidebar is the one list', { timeout: 30_000 }, (
 
     await user.click(screen.getByTestId('shell-chats-toggle'));
     await waitFor(() => expect(screen.queryByTestId('shell-chats')).not.toBeInTheDocument());
-    expect(screen.queryByTestId('chat-conversation-sidebar')).not.toBeInTheDocument();
   });
 });
 

@@ -1,9 +1,9 @@
 /**
- * Reader for the `?create=1` flag that "+ Create -> Chat" writes.
+ * Reader for the `?create=1` flag that the sidebar's "New chat" writes.
  *
- * DEFECT this closes. `widgets/create-button`'s `COMMAND_TARGETS.chat`
+ * DEFECT this closes. "New chat" (`widgets/chat-rail`'s `useStartChat`)
  * navigates to `/chat` with `search: { create: '1' }`. Nothing read that flag.
- * A user already on `/chat` who clicked "+ Create -> Chat" stayed on the same
+ * A user already on `/chat` who clicked "New chat" stayed on the same
  * pathname. The route did not remount. The previous transcript, attachments,
  * model choice and streaming state all stayed on screen. Only a manual page
  * reload started a second chat.
@@ -41,7 +41,7 @@ interface CreateChatFlagSearch {
  * @param onReset runs before the remount — the composition root closes its
  *   open editors here, the same way the reference app did on this trigger.
  *   A new function identity does not re-trigger the reset.
- * @returns a counter that increases once per "+ Create -> Chat" click.
+ * @returns a counter that increases once per "New chat" click.
  */
 export function useCreateChatReset(onReset: () => void): number {
   const navigate = useNavigate();

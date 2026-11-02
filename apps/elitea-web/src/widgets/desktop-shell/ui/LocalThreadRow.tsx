@@ -16,14 +16,12 @@ import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { activityGlyph, activityTitleBold } from '@/shared/lib/conversationActivity';
 import { ConversationActivityGlyph } from '@/shared/ui/ConversationActivity';
+import { CHILD_INDENT, conversationLink, copyText, RowMenu, ShellRow } from '@/widgets/chat-rail';
 
-import { conversationLink, copyText } from '../lib/conversationLink';
 import type { ShellAction } from '../lib/shellActions';
 import { useLocalThreadActivity } from '../model/localThreadActivity';
 import { useContextMenu, type ContextAction } from '../model/useContextMenu';
 import { lifecycleActions, useThreadLifecycle } from '../model/useThreadLifecycle';
-import { RowMenu } from './ConversationRow';
-import { CHILD_INDENT, ShellRow } from './rows';
 import { ThreadCloudBadge } from './ThreadCloudBadge';
 import { ThreadLifecycleDialog } from './ThreadLifecycleDialog';
 
