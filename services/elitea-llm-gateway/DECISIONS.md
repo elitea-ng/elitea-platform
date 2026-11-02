@@ -156,7 +156,7 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   for the caller-disconnect exits only (`write_error`, `client_disconnected`).
   *Finding:* the grace kept the upstream generating after the caller left. On a
   self-hosted model (vLLM) that held a model slot for a generation nobody read
-  (~14 s measured). *Decision (lead, on the owner's direction):* free the slot
+  (~14 s measured). *Decision (owner approved 2026-11-02):* free the slot
   AND keep the bill. `settleDisconnect` (`stream_disconnect.go`) cancels the
   provider stream at once, waits at most `disconnectCloseWait` (1 s) for the
   channel to close, and bills: the terminal trailer if it already arrived;
