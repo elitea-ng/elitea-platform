@@ -1,125 +1,69 @@
 /**
- * The admin nav's user footer: avatar + name, opening a menu whose only entry
- * is Logout — the reference's shape.
+ * The admin nav's foot: the same account menu as the user app
+ * (`widgets/account-menu`'s frame), with the admin console's own rows.
+ *
+ * Back to Elitea comes first, the way out to the app this console serves.
+ * Then the version line (this build, and the server's) and Sign out.
+ *
+ * There is no theme control here. The theme is a user preference that is set
+ * in the app (Settings › Personalization, or the account menu's Appearance).
+ * The console reads the same stored choice (`el-mode` on this origin, and the
+ * server copy through `ThemePreferenceSync`, `entries/admin/AdminApp.tsx`),
+ * so it always matches the app.
+ *
+ * Sign out is `performLogout()`, not the reference's raw
+ * `location.href = "/auth/logout"`: the same handoff plus the `el.`
+ * storage-namespace sweep and the `target_to` that lands the browser on the
+ * login screen (`shared/api/auth/logout.ts`).
  */
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 
-import LogoutOutlinedIcon from '@mui/icons-material/LogoutOutlined';
-import Avatar from '@mui/material/Avatar';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import Box from '@mui/material/Box';
-import ListItemIcon from '@mui/material/ListItemIcon';
-import ListItemText from '@mui/material/ListItemText';
-import Menu from '@mui/material/Menu';
-import MenuItem from '@mui/material/MenuItem';
-import Typography from '@mui/material/Typography';
-import type { Theme } from '@mui/material/styles';
 
 import { performLogout } from '@/shared/api/auth';
+import { appVersion } from '@/shared/config/appVersion';
 import { t } from '@/shared/i18n';
+import { MenuRow, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
+import { AccountMenuFrame, useServerVersion, versionLine } from '@/widgets/account-menu';
 
-import { focusRing } from './AdminNavChrome';
-import { adminUiUserName } from './adminUiConfig';
-import ThemeModeToggle from '@/shared/ui/ThemeModeToggle';
+import { adminUiUserEmail, adminUiUserName } from './adminUiConfig';
+
+/** The user app's base: the SPA image's default `vite_base_uri`. */
+const USER_APP_PATH = '/app/';
 
 export interface AdminNavFooterProps {
   readonly collapsed: boolean;
 }
 
-/**
- * The reference's user row: avatar + name, opening a menu whose only entry is
- * Logout.
- *
- * The reference assigns `window.location.origin + "/auth/logout"`
- * directly. This calls `performLogout()` instead — the same handoff plus the
- * `el.` storage-namespace sweep and the `target_to` that lands the browser on
- * the login screen (see `shared/api/auth/logout.ts`). Re-implementing the raw
- * assignment here would reintroduce the leak §5.4 exists to close, in the one
- * bundle whose sessions are administrative.
- */
 export function AdminNavFooter({ collapsed }: AdminNavFooterProps): ReactNode {
-  const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
-  const name = adminUiUserName();
+  const [opened, setOpened] = useState(false);
+  const serverVersion = useServerVersion(opened);
+  const version = versionLine(appVersion(), serverVersion, {
+    client: t('widgets.accountMenu.version', 'Version'),
+    server: t('widgets.accountMenu.server', 'Server'),
+  });
 
   return (
     <Box sx={{ padding: '0.5rem 0.75rem 1rem' }}>
-      {/*
-        * The theme toggle lives here, not in the header. At ~7rem it took most
-        * of the 13.75rem rail's header row and squeezed "Elitea Admin" down to
-        * "El…". The footer is the rail's other chrome slot and has the width.
-        * Hidden while collapsed, like every other label in this nav.
-        */}
-      {!collapsed && (
-        <Box sx={{ display: 'flex', minWidth: 0, paddingBottom: '0.5rem' }}>
-          <ThemeModeToggle fullWidth />
-        </Box>
-      )}
-      <Box
-        component="button"
-        type="button"
-        data-testid="admin-nav-user-button"
-        aria-haspopup="menu"
-        aria-expanded={anchorEl !== null}
-        onClick={(event) => setAnchorEl(event.currentTarget)}
-        sx={(theme: Theme) => ({
-          width: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: collapsed ? 'center' : 'flex-start',
-          gap: '0.5rem',
-          padding: '0.5rem',
-          border: 'none',
-          appearance: 'none',
-          background: 'transparent',
-          borderRadius: theme.vars.shape.radiusMd,
-          cursor: 'pointer',
-          color: theme.vars.palette.text.metrics,
-          '&:hover': { background: theme.vars.palette.background.button.drawerMenu.hover },
-          ...focusRing(theme),
-        })}
+      <AccountMenuFrame
+        identity={{ name: adminUiUserName(), email: adminUiUserEmail() }}
+        collapsed={collapsed}
+        version={version}
+        onOpen={() => setOpened(true)}
+        onSignOut={performLogout}
+        testIds={{ button: 'admin-nav-user-button', signOut: 'admin-nav-logout' }}
       >
-        <Avatar
-          sx={(theme: Theme) => ({
-            width: '1.5rem',
-            height: '1.5rem',
-            background: theme.vars.palette.background.avatar,
-            color: theme.vars.palette.text.secondary,
-          })}
-        >
-          <Typography variant="labelSmall">{name.slice(0, 1).toUpperCase()}</Typography>
-        </Avatar>
-        {!collapsed && (
-          <Typography
-            variant="labelSmall"
-            sx={{ color: 'inherit', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-          >
-            {name}
-          </Typography>
-        )}
-      </Box>
-      <Menu
-        anchorEl={anchorEl}
-        open={anchorEl !== null}
-        onClose={() => setAnchorEl(null)}
-        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
-        transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-      >
-        <MenuItem
-          data-testid="admin-nav-logout"
-          onClick={() => {
-            setAnchorEl(null);
-            performLogout();
-          }}
-        >
-          <ListItemIcon sx={{ minWidth: '1rem', marginRight: '0.75rem' }}>
-            <LogoutOutlinedIcon sx={{ width: '1rem', height: '1rem' }} />
-          </ListItemIcon>
-          <ListItemText
-            primary={t('pages.admin.nav.logout', 'Logout')}
-            slotProps={{ primary: { variant: 'bodyMedium' } }}
-          />
-        </MenuItem>
-      </Menu>
+        {(close) => [
+          <MenuRow key="back" component="a" href={USER_APP_PATH} data-testid="admin-nav-back-to-app" onClick={close}>
+            <MenuRowIcon>
+              <ArrowBackIcon />
+            </MenuRowIcon>
+            <MenuRowText>{t('pages.admin.nav.backToApp', 'Back to Elitea')}</MenuRowText>
+          </MenuRow>,
+        ]}
+      </AccountMenuFrame>
     </Box>
   );
 }

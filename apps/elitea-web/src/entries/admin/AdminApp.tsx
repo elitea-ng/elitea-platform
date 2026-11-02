@@ -24,15 +24,24 @@
  * access is granted, so a refused caller never even constructs the route
  * tree.
  */
-import { Suspense, useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 
 import { RouterProvider } from '@tanstack/react-router';
 
 import { AppProviders } from '@/app/providers';
 import { hasAnyAdminNavAccess } from '@/pages/admin/adminNavItems';
 import { AdminRefusalLazy } from '@/pages/admin/AdminRefusalLazy';
-import { adminUiAccess } from '@/pages/admin/adminUiConfig';
+import { adminUiAccess, adminUiUserId } from '@/pages/admin/adminUiConfig';
 import { createAdminRouter } from '@/pages/admin/router';
+
+/**
+ * The console has no theme control of its own: it follows the user's stored
+ * preference, as the app does (`app/App.tsx`). The local copy (`el-mode`) is
+ * shared already, the console being on the app's origin; this reads and
+ * follows the server copy, so a choice made on another device applies here
+ * too. A lazy chunk, as in the app.
+ */
+const ThemePreferenceSync = lazy(() => import('@/app/ThemePreferenceSync'));
 
 /**
  * What the boot gate shows. The handler's `access` reason decides when it was
@@ -48,10 +57,12 @@ function resolveGate(): 'router' | 'denied' | 'unauthenticated' | 'unavailable' 
 export function AdminApp() {
   const [gate] = useState(resolveGate);
   const [router] = useState(() => (gate === 'router' ? createAdminRouter() : null));
+  const [userId] = useState(adminUiUserId);
 
   return (
     <AppProviders>
       <Suspense fallback={null}>
+        {router && userId !== undefined && <ThemePreferenceSync key={userId} userId={userId} />}
         {router ? <RouterProvider router={router} /> : <AdminRefusalLazy gate={gate === 'router' ? 'denied' : gate} />}
       </Suspense>
     </AppProviders>
