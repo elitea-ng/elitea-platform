@@ -1,0 +1,2750 @@
+{
+  "park": [
+    {
+      "type": "agent_start",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "invoked_skills": [],
+        "should_continue": false
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.541+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_fanout_member",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "fanout_member_status_v1": {
+          "fanout_v1": {
+            "activation": "b23f081cb41be5cc",
+            "kind": "parallel",
+            "member": "one",
+            "node": "gather",
+            "ordinal": 1,
+            "total": 2
+          },
+          "open_interrupts": 0,
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "name": "FP child direct",
+              "sibling_ordinal": 1
+            }
+          ],
+          "schema": "elitea.pipeline.fanout-member-status.v1",
+          "status": "start"
+        },
+        "fanout_v1": {
+          "activation": "b23f081cb41be5cc",
+          "kind": "parallel",
+          "member": "one",
+          "node": "gather",
+          "ordinal": 1,
+          "total": 2
+        },
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ]
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.572864127+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_fanout_member",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "fanout_member_status_v1": {
+          "fanout_v1": {
+            "activation": "b23f081cb41be5cc",
+            "kind": "parallel",
+            "member": "two",
+            "node": "gather",
+            "ordinal": 2,
+            "total": 2
+          },
+          "open_interrupts": 0,
+          "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+              "name": "FP child direct",
+              "sibling_ordinal": 2
+            }
+          ],
+          "schema": "elitea.pipeline.fanout-member-status.v1",
+          "status": "start"
+        },
+        "fanout_v1": {
+          "activation": "b23f081cb41be5cc",
+          "kind": "parallel",
+          "member": "two",
+          "node": "gather",
+          "ordinal": 2,
+          "total": 2
+        },
+        "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "name": "FP child direct",
+            "sibling_ordinal": 2
+          }
+        ]
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.572881960+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_llm_start",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "metadata": {
+          "ls_model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+        },
+        "model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "timestamp_start": "2026-11-02T18:31:40.580890085+00:00",
+        "tool_name": "Thinking step",
+        "tool_run_id": "90cf2532-fc38-43f9-ac21-fa460e17c0ef"
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.580890085+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_llm_end",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "thinking_steps": [
+          {
+            "message": {
+              "response_metadata": {
+                "metadata": {},
+                "model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "tool_name": null
+              }
+            },
+            "text": "",
+            "thinking": "",
+            "timestamp_finish": "2026-11-02T18:31:40.580890085+00:00",
+            "timestamp_start": "2026-11-02T18:31:40.580890085+00:00",
+            "tool_run_id": "90cf2532-fc38-43f9-ac21-fa460e17c0ef",
+            "type": "ChatGeneration"
+          }
+        ],
+        "tool_run_id": "90cf2532-fc38-43f9-ac21-fa460e17c0ef"
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.580890085+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "partial_message",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "additional_response_meta": {},
+        "chat_project_id": 118,
+        "invoked_skills": [],
+        "project_id": 118,
+        "thinking_steps": [
+          {
+            "message": {
+              "response_metadata": {
+                "metadata": {},
+                "model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "tool_name": null
+              }
+            },
+            "text": "",
+            "thinking": "",
+            "timestamp_finish": "2026-11-02T18:31:40.580890085+00:00",
+            "timestamp_start": "2026-11-02T18:31:40.580890085+00:00",
+            "tool_run_id": "90cf2532-fc38-43f9-ac21-fa460e17c0ef",
+            "type": "ChatGeneration"
+          }
+        ],
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+        "tool_calls": {}
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.580890085+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_tool_start",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "error": null,
+        "finish_reason": null,
+        "metadata": {
+          "agent_type": "pipeline",
+          "display_name": "FP child direct",
+          "original_name": "FP child direct",
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_path": [],
+          "sibling_ordinal": 1,
+          "toolkit_type": "pipeline"
+        },
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_path": [],
+        "run_id": "pipeline-v2:one_call:02bb01aae187c29c8500bdf4148b192d86ff5d2daa2724f3e30a17eb4b96c3fe:0",
+        "sibling_ordinal": 1,
+        "timestamp_finish": null,
+        "timestamp_start": "2026-11-02T18:31:40.580890085+00:00",
+        "tool_inputs": {
+          "task": "fu264 deep member approve"
+        },
+        "tool_meta": {
+          "display_name": "FP child direct",
+          "metadata": {
+            "agent_type": "pipeline",
+            "display_name": "FP child direct",
+            "original_name": "FP child direct",
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_path": [],
+            "sibling_ordinal": 1,
+            "toolkit_type": "pipeline"
+          },
+          "name": "FP child direct"
+        },
+        "tool_name": "FP child direct",
+        "tool_output": null,
+        "tool_run_id": "pipeline-v2:one_call:02bb01aae187c29c8500bdf4148b192d86ff5d2daa2724f3e30a17eb4b96c3fe:0"
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.580890085+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "partial_message",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "additional_response_meta": {},
+        "chat_project_id": 118,
+        "invoked_skills": [],
+        "project_id": 118,
+        "thinking_steps": [],
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+        "tool_calls": {
+          "pipeline-v2:one_call:02bb01aae187c29c8500bdf4148b192d86ff5d2daa2724f3e30a17eb4b96c3fe:0": {
+            "error": null,
+            "finish_reason": null,
+            "metadata": {
+              "agent_type": "pipeline",
+              "display_name": "FP child direct",
+              "original_name": "FP child direct",
+              "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "parent_agent_path": [],
+              "sibling_ordinal": 1,
+              "toolkit_type": "pipeline"
+            },
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_path": [],
+            "run_id": "pipeline-v2:one_call:02bb01aae187c29c8500bdf4148b192d86ff5d2daa2724f3e30a17eb4b96c3fe:0",
+            "sibling_ordinal": 1,
+            "timestamp_finish": null,
+            "timestamp_start": "2026-11-02T18:31:40.580890085+00:00",
+            "tool_inputs": {
+              "task": "fu264 deep member approve"
+            },
+            "tool_meta": {
+              "display_name": "FP child direct",
+              "metadata": {
+                "agent_type": "pipeline",
+                "display_name": "FP child direct",
+                "original_name": "FP child direct",
+                "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "parent_agent_path": [],
+                "sibling_ordinal": 1,
+                "toolkit_type": "pipeline"
+              },
+              "name": "FP child direct"
+            },
+            "tool_name": "FP child direct",
+            "tool_output": null,
+            "tool_run_id": "pipeline-v2:one_call:02bb01aae187c29c8500bdf4148b192d86ff5d2daa2724f3e30a17eb4b96c3fe:0"
+          }
+        }
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.580890085+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_llm_start",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "metadata": {
+          "ls_model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+        },
+        "model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "timestamp_start": "2026-11-02T18:31:40.583648002+00:00",
+        "tool_name": "Thinking step",
+        "tool_run_id": "17ccf2aa-9db8-4a1e-96e5-2775652b1415"
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.583648002+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_llm_end",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "thinking_steps": [
+          {
+            "message": {
+              "response_metadata": {
+                "metadata": {},
+                "model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "tool_name": null
+              }
+            },
+            "text": "",
+            "thinking": "",
+            "timestamp_finish": "2026-11-02T18:31:40.583648002+00:00",
+            "timestamp_start": "2026-11-02T18:31:40.583648002+00:00",
+            "tool_run_id": "17ccf2aa-9db8-4a1e-96e5-2775652b1415",
+            "type": "ChatGeneration"
+          }
+        ],
+        "tool_run_id": "17ccf2aa-9db8-4a1e-96e5-2775652b1415"
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.583648002+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "partial_message",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "additional_response_meta": {},
+        "chat_project_id": 118,
+        "invoked_skills": [],
+        "project_id": 118,
+        "thinking_steps": [
+          {
+            "message": {
+              "response_metadata": {
+                "metadata": {},
+                "model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "tool_name": null
+              }
+            },
+            "text": "",
+            "thinking": "",
+            "timestamp_finish": "2026-11-02T18:31:40.583648002+00:00",
+            "timestamp_start": "2026-11-02T18:31:40.583648002+00:00",
+            "tool_run_id": "17ccf2aa-9db8-4a1e-96e5-2775652b1415",
+            "type": "ChatGeneration"
+          }
+        ],
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+        "tool_calls": {}
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.583648002+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_tool_start",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "error": null,
+        "finish_reason": null,
+        "metadata": {
+          "agent_type": "pipeline",
+          "display_name": "FP child direct",
+          "original_name": "FP child direct",
+          "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+          "parent_agent_path": [],
+          "sibling_ordinal": 2,
+          "toolkit_type": "pipeline"
+        },
+        "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+        "parent_agent_path": [],
+        "run_id": "pipeline-v2:two_call:4f90d9a46c24f41348950e21df91b830360d184361116dd84ebec0e8eac85b61:0",
+        "sibling_ordinal": 2,
+        "timestamp_finish": null,
+        "timestamp_start": "2026-11-02T18:31:40.583648002+00:00",
+        "tool_inputs": {
+          "task": "fu264 deep member approve"
+        },
+        "tool_meta": {
+          "display_name": "FP child direct",
+          "metadata": {
+            "agent_type": "pipeline",
+            "display_name": "FP child direct",
+            "original_name": "FP child direct",
+            "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "parent_agent_path": [],
+            "sibling_ordinal": 2,
+            "toolkit_type": "pipeline"
+          },
+          "name": "FP child direct"
+        },
+        "tool_name": "FP child direct",
+        "tool_output": null,
+        "tool_run_id": "pipeline-v2:two_call:4f90d9a46c24f41348950e21df91b830360d184361116dd84ebec0e8eac85b61:0"
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.583648002+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "partial_message",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "additional_response_meta": {},
+        "chat_project_id": 118,
+        "invoked_skills": [],
+        "project_id": 118,
+        "thinking_steps": [],
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+        "tool_calls": {
+          "pipeline-v2:two_call:4f90d9a46c24f41348950e21df91b830360d184361116dd84ebec0e8eac85b61:0": {
+            "error": null,
+            "finish_reason": null,
+            "metadata": {
+              "agent_type": "pipeline",
+              "display_name": "FP child direct",
+              "original_name": "FP child direct",
+              "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+              "parent_agent_path": [],
+              "sibling_ordinal": 2,
+              "toolkit_type": "pipeline"
+            },
+            "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "parent_agent_path": [],
+            "run_id": "pipeline-v2:two_call:4f90d9a46c24f41348950e21df91b830360d184361116dd84ebec0e8eac85b61:0",
+            "sibling_ordinal": 2,
+            "timestamp_finish": null,
+            "timestamp_start": "2026-11-02T18:31:40.583648002+00:00",
+            "tool_inputs": {
+              "task": "fu264 deep member approve"
+            },
+            "tool_meta": {
+              "display_name": "FP child direct",
+              "metadata": {
+                "agent_type": "pipeline",
+                "display_name": "FP child direct",
+                "original_name": "FP child direct",
+                "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+                "parent_agent_path": [],
+                "sibling_ordinal": 2,
+                "toolkit_type": "pipeline"
+              },
+              "name": "FP child direct"
+            },
+            "tool_name": "FP child direct",
+            "tool_output": null,
+            "tool_run_id": "pipeline-v2:two_call:4f90d9a46c24f41348950e21df91b830360d184361116dd84ebec0e8eac85b61:0"
+          }
+        }
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.583648002+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_llm_start",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "metadata": {
+          "ls_model_name": "nested-model",
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "name": "FP child direct",
+              "sibling_ordinal": 1
+            }
+          ]
+        },
+        "model_name": "nested-model",
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ],
+        "timestamp_start": "2026-11-02T18:31:40.588623752+00:00",
+        "tool_name": "Thinking step",
+        "tool_run_id": "cb182ddb-f0ee-45f5-8b20-03db8badea41"
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.588623752+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_llm_end",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ],
+        "thinking_steps": [
+          {
+            "message": {
+              "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "parent_agent_name": "FP child direct",
+              "parent_agent_path": [
+                {
+                  "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                  "name": "FP child direct",
+                  "sibling_ordinal": 1
+                }
+              ],
+              "response_metadata": {
+                "metadata": {},
+                "model_name": "nested-model",
+                "tool_name": null
+              }
+            },
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_name": "FP child direct",
+            "parent_agent_path": [
+              {
+                "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "name": "FP child direct",
+                "sibling_ordinal": 1
+              }
+            ],
+            "text": "",
+            "thinking": "",
+            "timestamp_finish": "2026-11-02T18:31:40.588623752+00:00",
+            "timestamp_start": "2026-11-02T18:31:40.588623752+00:00",
+            "tool_run_id": "cb182ddb-f0ee-45f5-8b20-03db8badea41",
+            "type": "ChatGeneration"
+          }
+        ],
+        "tool_run_id": "cb182ddb-f0ee-45f5-8b20-03db8badea41"
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.588623752+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "partial_message",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "additional_response_meta": {},
+        "chat_project_id": 118,
+        "invoked_skills": [],
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ],
+        "project_id": 118,
+        "thinking_steps": [
+          {
+            "message": {
+              "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "parent_agent_name": "FP child direct",
+              "parent_agent_path": [
+                {
+                  "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                  "name": "FP child direct",
+                  "sibling_ordinal": 1
+                }
+              ],
+              "response_metadata": {
+                "metadata": {},
+                "model_name": "nested-model",
+                "tool_name": null
+              }
+            },
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_name": "FP child direct",
+            "parent_agent_path": [
+              {
+                "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "name": "FP child direct",
+                "sibling_ordinal": 1
+              }
+            ],
+            "text": "",
+            "thinking": "",
+            "timestamp_finish": "2026-11-02T18:31:40.588623752+00:00",
+            "timestamp_start": "2026-11-02T18:31:40.588623752+00:00",
+            "tool_run_id": "cb182ddb-f0ee-45f5-8b20-03db8badea41",
+            "type": "ChatGeneration"
+          }
+        ],
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+        "tool_calls": {}
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.588623752+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_tool_start",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "error": null,
+        "finish_reason": null,
+        "metadata": {
+          "agent_type": "pipeline",
+          "display_name": "FP direct reverse",
+          "original_name": "FP direct reverse",
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "name": "FP child direct",
+              "sibling_ordinal": 1
+            }
+          ],
+          "sibling_ordinal": 1,
+          "toolkit_type": "pipeline"
+        },
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ],
+        "run_id": "pipeline-v2:child_call:99b2d5b93f6c486009fc4cbc6da81a242814f3e5f6a5e0a3c6b51b11ac898d68:1",
+        "sibling_ordinal": 1,
+        "timestamp_finish": null,
+        "timestamp_start": "2026-11-02T18:31:40.588623752+00:00",
+        "tool_inputs": {
+          "task": "fu264 deep member approve"
+        },
+        "tool_meta": {
+          "display_name": "FP direct reverse",
+          "metadata": {
+            "agent_type": "pipeline",
+            "display_name": "FP direct reverse",
+            "original_name": "FP direct reverse",
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_name": "FP child direct",
+            "parent_agent_path": [
+              {
+                "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "name": "FP child direct",
+                "sibling_ordinal": 1
+              }
+            ],
+            "sibling_ordinal": 1,
+            "toolkit_type": "pipeline"
+          },
+          "name": "FP direct reverse",
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "name": "FP child direct",
+              "sibling_ordinal": 1
+            }
+          ]
+        },
+        "tool_name": "FP direct reverse",
+        "tool_output": null,
+        "tool_run_id": "pipeline-v2:child_call:99b2d5b93f6c486009fc4cbc6da81a242814f3e5f6a5e0a3c6b51b11ac898d68:1"
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.588623752+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "partial_message",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "additional_response_meta": {},
+        "chat_project_id": 118,
+        "invoked_skills": [],
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ],
+        "project_id": 118,
+        "thinking_steps": [],
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+        "tool_calls": {
+          "pipeline-v2:child_call:99b2d5b93f6c486009fc4cbc6da81a242814f3e5f6a5e0a3c6b51b11ac898d68:1": {
+            "error": null,
+            "finish_reason": null,
+            "metadata": {
+              "agent_type": "pipeline",
+              "display_name": "FP direct reverse",
+              "original_name": "FP direct reverse",
+              "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "parent_agent_name": "FP child direct",
+              "parent_agent_path": [
+                {
+                  "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                  "name": "FP child direct",
+                  "sibling_ordinal": 1
+                }
+              ],
+              "sibling_ordinal": 1,
+              "toolkit_type": "pipeline"
+            },
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_name": "FP child direct",
+            "parent_agent_path": [
+              {
+                "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "name": "FP child direct",
+                "sibling_ordinal": 1
+              }
+            ],
+            "run_id": "pipeline-v2:child_call:99b2d5b93f6c486009fc4cbc6da81a242814f3e5f6a5e0a3c6b51b11ac898d68:1",
+            "sibling_ordinal": 1,
+            "timestamp_finish": null,
+            "timestamp_start": "2026-11-02T18:31:40.588623752+00:00",
+            "tool_inputs": {
+              "task": "fu264 deep member approve"
+            },
+            "tool_meta": {
+              "display_name": "FP direct reverse",
+              "metadata": {
+                "agent_type": "pipeline",
+                "display_name": "FP direct reverse",
+                "original_name": "FP direct reverse",
+                "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "parent_agent_name": "FP child direct",
+                "parent_agent_path": [
+                  {
+                    "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                    "name": "FP child direct",
+                    "sibling_ordinal": 1
+                  }
+                ],
+                "sibling_ordinal": 1,
+                "toolkit_type": "pipeline"
+              },
+              "name": "FP direct reverse",
+              "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "parent_agent_name": "FP child direct",
+              "parent_agent_path": [
+                {
+                  "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                  "name": "FP child direct",
+                  "sibling_ordinal": 1
+                }
+              ]
+            },
+            "tool_name": "FP direct reverse",
+            "tool_output": null,
+            "tool_run_id": "pipeline-v2:child_call:99b2d5b93f6c486009fc4cbc6da81a242814f3e5f6a5e0a3c6b51b11ac898d68:1"
+          }
+        }
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.588623752+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_llm_start",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "metadata": {
+          "ls_model_name": "nested-model",
+          "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+              "name": "FP child direct",
+              "sibling_ordinal": 2
+            }
+          ]
+        },
+        "model_name": "nested-model",
+        "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "name": "FP child direct",
+            "sibling_ordinal": 2
+          }
+        ],
+        "timestamp_start": "2026-11-02T18:31:40.590378752+00:00",
+        "tool_name": "Thinking step",
+        "tool_run_id": "23e363cf-3bbe-4c6c-b7f8-3bfcbda5e3a9"
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.590378752+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_llm_end",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "name": "FP child direct",
+            "sibling_ordinal": 2
+          }
+        ],
+        "thinking_steps": [
+          {
+            "message": {
+              "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+              "parent_agent_name": "FP child direct",
+              "parent_agent_path": [
+                {
+                  "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+                  "name": "FP child direct",
+                  "sibling_ordinal": 2
+                }
+              ],
+              "response_metadata": {
+                "metadata": {},
+                "model_name": "nested-model",
+                "tool_name": null
+              }
+            },
+            "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "parent_agent_name": "FP child direct",
+            "parent_agent_path": [
+              {
+                "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+                "name": "FP child direct",
+                "sibling_ordinal": 2
+              }
+            ],
+            "text": "",
+            "thinking": "",
+            "timestamp_finish": "2026-11-02T18:31:40.590378752+00:00",
+            "timestamp_start": "2026-11-02T18:31:40.590378752+00:00",
+            "tool_run_id": "23e363cf-3bbe-4c6c-b7f8-3bfcbda5e3a9",
+            "type": "ChatGeneration"
+          }
+        ],
+        "tool_run_id": "23e363cf-3bbe-4c6c-b7f8-3bfcbda5e3a9"
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.590378752+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "partial_message",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "additional_response_meta": {},
+        "chat_project_id": 118,
+        "invoked_skills": [],
+        "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "name": "FP child direct",
+            "sibling_ordinal": 2
+          }
+        ],
+        "project_id": 118,
+        "thinking_steps": [
+          {
+            "message": {
+              "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+              "parent_agent_name": "FP child direct",
+              "parent_agent_path": [
+                {
+                  "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+                  "name": "FP child direct",
+                  "sibling_ordinal": 2
+                }
+              ],
+              "response_metadata": {
+                "metadata": {},
+                "model_name": "nested-model",
+                "tool_name": null
+              }
+            },
+            "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "parent_agent_name": "FP child direct",
+            "parent_agent_path": [
+              {
+                "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+                "name": "FP child direct",
+                "sibling_ordinal": 2
+              }
+            ],
+            "text": "",
+            "thinking": "",
+            "timestamp_finish": "2026-11-02T18:31:40.590378752+00:00",
+            "timestamp_start": "2026-11-02T18:31:40.590378752+00:00",
+            "tool_run_id": "23e363cf-3bbe-4c6c-b7f8-3bfcbda5e3a9",
+            "type": "ChatGeneration"
+          }
+        ],
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+        "tool_calls": {}
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.590378752+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_tool_start",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "error": null,
+        "finish_reason": null,
+        "metadata": {
+          "agent_type": "pipeline",
+          "display_name": "FP direct reverse",
+          "original_name": "FP direct reverse",
+          "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+              "name": "FP child direct",
+              "sibling_ordinal": 2
+            }
+          ],
+          "sibling_ordinal": 2,
+          "toolkit_type": "pipeline"
+        },
+        "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "name": "FP child direct",
+            "sibling_ordinal": 2
+          }
+        ],
+        "run_id": "pipeline-v2:child_call:f0110810601f10f6c790d448f5ea0209ca5bff4ef3ff922c1840bbec1c7cf145:1",
+        "sibling_ordinal": 2,
+        "timestamp_finish": null,
+        "timestamp_start": "2026-11-02T18:31:40.590378752+00:00",
+        "tool_inputs": {
+          "task": "fu264 deep member approve"
+        },
+        "tool_meta": {
+          "display_name": "FP direct reverse",
+          "metadata": {
+            "agent_type": "pipeline",
+            "display_name": "FP direct reverse",
+            "original_name": "FP direct reverse",
+            "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "parent_agent_name": "FP child direct",
+            "parent_agent_path": [
+              {
+                "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+                "name": "FP child direct",
+                "sibling_ordinal": 2
+              }
+            ],
+            "sibling_ordinal": 2,
+            "toolkit_type": "pipeline"
+          },
+          "name": "FP direct reverse",
+          "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+              "name": "FP child direct",
+              "sibling_ordinal": 2
+            }
+          ]
+        },
+        "tool_name": "FP direct reverse",
+        "tool_output": null,
+        "tool_run_id": "pipeline-v2:child_call:f0110810601f10f6c790d448f5ea0209ca5bff4ef3ff922c1840bbec1c7cf145:1"
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.590378752+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "partial_message",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "additional_response_meta": {},
+        "chat_project_id": 118,
+        "invoked_skills": [],
+        "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "name": "FP child direct",
+            "sibling_ordinal": 2
+          }
+        ],
+        "project_id": 118,
+        "thinking_steps": [],
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+        "tool_calls": {
+          "pipeline-v2:child_call:f0110810601f10f6c790d448f5ea0209ca5bff4ef3ff922c1840bbec1c7cf145:1": {
+            "error": null,
+            "finish_reason": null,
+            "metadata": {
+              "agent_type": "pipeline",
+              "display_name": "FP direct reverse",
+              "original_name": "FP direct reverse",
+              "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+              "parent_agent_name": "FP child direct",
+              "parent_agent_path": [
+                {
+                  "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+                  "name": "FP child direct",
+                  "sibling_ordinal": 2
+                }
+              ],
+              "sibling_ordinal": 2,
+              "toolkit_type": "pipeline"
+            },
+            "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "parent_agent_name": "FP child direct",
+            "parent_agent_path": [
+              {
+                "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+                "name": "FP child direct",
+                "sibling_ordinal": 2
+              }
+            ],
+            "run_id": "pipeline-v2:child_call:f0110810601f10f6c790d448f5ea0209ca5bff4ef3ff922c1840bbec1c7cf145:1",
+            "sibling_ordinal": 2,
+            "timestamp_finish": null,
+            "timestamp_start": "2026-11-02T18:31:40.590378752+00:00",
+            "tool_inputs": {
+              "task": "fu264 deep member approve"
+            },
+            "tool_meta": {
+              "display_name": "FP direct reverse",
+              "metadata": {
+                "agent_type": "pipeline",
+                "display_name": "FP direct reverse",
+                "original_name": "FP direct reverse",
+                "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+                "parent_agent_name": "FP child direct",
+                "parent_agent_path": [
+                  {
+                    "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+                    "name": "FP child direct",
+                    "sibling_ordinal": 2
+                  }
+                ],
+                "sibling_ordinal": 2,
+                "toolkit_type": "pipeline"
+              },
+              "name": "FP direct reverse",
+              "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+              "parent_agent_name": "FP child direct",
+              "parent_agent_path": [
+                {
+                  "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+                  "name": "FP child direct",
+                  "sibling_ordinal": 2
+                }
+              ]
+            },
+            "tool_name": "FP direct reverse",
+            "tool_output": null,
+            "tool_run_id": "pipeline-v2:child_call:f0110810601f10f6c790d448f5ea0209ca5bff4ef3ff922c1840bbec1c7cf145:1"
+          }
+        }
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.590378752+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_interrupt_pending",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "fanout_v1": {
+          "activation": "b23f081cb41be5cc",
+          "kind": "parallel",
+          "member": "one",
+          "node": "gather",
+          "ordinal": 1,
+          "total": 2
+        },
+        "interrupt_card_v1": {
+          "available_actions": [
+            "approve",
+            "reject",
+            "block_with_comment"
+          ],
+          "display": {
+            "action_label": "fpmockmcp.reverse",
+            "argument_digest": "sha256:0ba51a4ba2412e168ddf1f69bda29bde0ed0a131073a3474d57fbd18bb7e9417",
+            "guardrail_type": "sensitive_tool",
+            "message": "Your organization requires approval before running the sensitive action 'fpmockmcp.reverse'.",
+            "node_name": "rev",
+            "policy_message": "Your organization requires approval before running the sensitive action 'fpmockmcp.reverse'.",
+            "tool_args_json": "{\"text\":\"FP-DIRECT-REVERSE\"}",
+            "tool_call_id": "pipeline:rev:1",
+            "tool_name": "reverse",
+            "toolkit_name": "fpmockmcp",
+            "toolkit_type": "mcp"
+          },
+          "fanout_v1": {
+            "activation": "b23f081cb41be5cc",
+            "kind": "parallel",
+            "member": "one",
+            "node": "gather",
+            "ordinal": 1,
+            "total": 2
+          },
+          "interrupt_id": "hitl_gt1:CrHZSAF45XkFFNHGngZO9fKlSjHHgRp8fq4OcS6EM74",
+          "interrupt_key": "5ed2cc5b821a1d4965ceea16aa6fddbb97a9c8012559582561ae4cb1f2c21483",
+          "kind": "tool_guard",
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "name": "FP child direct",
+              "sibling_ordinal": 1
+            }
+          ],
+          "payload_sha256": "8fcbc47722d24b35b9fd5ce830b199f38b326dcef8fe248720b107cf08830b9d",
+          "schema": "elitea.pipeline.fanout-interrupt-card.v1"
+        },
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ],
+        "pause_progress": true
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.612393627+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_fanout_member",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "fanout_member_status_v1": {
+          "fanout_v1": {
+            "activation": "b23f081cb41be5cc",
+            "kind": "parallel",
+            "member": "one",
+            "node": "gather",
+            "ordinal": 1,
+            "total": 2
+          },
+          "open_interrupts": 1,
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "name": "FP child direct",
+              "sibling_ordinal": 1
+            }
+          ],
+          "schema": "elitea.pipeline.fanout-member-status.v1",
+          "status": "paused"
+        },
+        "fanout_v1": {
+          "activation": "b23f081cb41be5cc",
+          "kind": "parallel",
+          "member": "one",
+          "node": "gather",
+          "ordinal": 1,
+          "total": 2
+        },
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ]
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.612414919+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_interrupt_pending",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "fanout_v1": {
+          "activation": "b23f081cb41be5cc",
+          "kind": "parallel",
+          "member": "two",
+          "node": "gather",
+          "ordinal": 2,
+          "total": 2
+        },
+        "interrupt_card_v1": {
+          "available_actions": [
+            "approve",
+            "reject",
+            "block_with_comment"
+          ],
+          "display": {
+            "action_label": "fpmockmcp.reverse",
+            "argument_digest": "sha256:0ba51a4ba2412e168ddf1f69bda29bde0ed0a131073a3474d57fbd18bb7e9417",
+            "guardrail_type": "sensitive_tool",
+            "message": "Your organization requires approval before running the sensitive action 'fpmockmcp.reverse'.",
+            "node_name": "rev",
+            "policy_message": "Your organization requires approval before running the sensitive action 'fpmockmcp.reverse'.",
+            "tool_args_json": "{\"text\":\"FP-DIRECT-REVERSE\"}",
+            "tool_call_id": "pipeline:rev:1",
+            "tool_name": "reverse",
+            "toolkit_name": "fpmockmcp",
+            "toolkit_type": "mcp"
+          },
+          "fanout_v1": {
+            "activation": "b23f081cb41be5cc",
+            "kind": "parallel",
+            "member": "two",
+            "node": "gather",
+            "ordinal": 2,
+            "total": 2
+          },
+          "interrupt_id": "hitl_gt1:PrxIaJOwJHqLyY1eNAF-oV4VS8MRvRoLMXD6R-yEoak",
+          "interrupt_key": "84504f7db4127b427d206f92a7a3a1a538f9e04b3d2d66f77c5aef48af96fb59",
+          "kind": "tool_guard",
+          "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+              "name": "FP child direct",
+              "sibling_ordinal": 2
+            }
+          ],
+          "payload_sha256": "063982641699e6e50fb4cd2e00863e5273dbf6f83beb43372673778c6e894f41",
+          "schema": "elitea.pipeline.fanout-interrupt-card.v1"
+        },
+        "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "name": "FP child direct",
+            "sibling_ordinal": 2
+          }
+        ],
+        "pause_progress": true
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.615819002+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_fanout_member",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "fanout_member_status_v1": {
+          "fanout_v1": {
+            "activation": "b23f081cb41be5cc",
+            "kind": "parallel",
+            "member": "two",
+            "node": "gather",
+            "ordinal": 2,
+            "total": 2
+          },
+          "open_interrupts": 1,
+          "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+              "name": "FP child direct",
+              "sibling_ordinal": 2
+            }
+          ],
+          "schema": "elitea.pipeline.fanout-member-status.v1",
+          "status": "paused"
+        },
+        "fanout_v1": {
+          "activation": "b23f081cb41be5cc",
+          "kind": "parallel",
+          "member": "two",
+          "node": "gather",
+          "ordinal": 2,
+          "total": 2
+        },
+        "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "name": "FP child direct",
+            "sibling_ordinal": 2
+          }
+        ]
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.615836919+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_hitl_interrupt",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": "Parallel branches paused.",
+      "thinking": null,
+      "response_metadata": {
+        "chat_project_id": 118,
+        "fanout_parked_v1": {
+          "decision_revision_seen": 0,
+          "pending": [
+            {
+              "interrupt_id": "hitl_gt1:CrHZSAF45XkFFNHGngZO9fKlSjHHgRp8fq4OcS6EM74",
+              "interrupt_key": "5ed2cc5b821a1d4965ceea16aa6fddbb97a9c8012559582561ae4cb1f2c21483"
+            },
+            {
+              "interrupt_id": "hitl_gt1:PrxIaJOwJHqLyY1eNAF-oV4VS8MRvRoLMXD6R-yEoak",
+              "interrupt_key": "84504f7db4127b427d206f92a7a3a1a538f9e04b3d2d66f77c5aef48af96fb59"
+            }
+          ],
+          "schema": "elitea.pipeline.fanout-parked.v1"
+        },
+        "pause_progress": true,
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95"
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.628633835+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_hitl_interrupt",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": "Parallel branches paused.",
+      "thinking": null,
+      "response_metadata": {
+        "chat_project_id": 118,
+        "fanout_parked_v1": {
+          "decision_revision_seen": 0,
+          "pending": [
+            {
+              "interrupt_id": "hitl_gt1:CrHZSAF45XkFFNHGngZO9fKlSjHHgRp8fq4OcS6EM74",
+              "interrupt_key": "5ed2cc5b821a1d4965ceea16aa6fddbb97a9c8012559582561ae4cb1f2c21483"
+            },
+            {
+              "interrupt_id": "hitl_gt1:PrxIaJOwJHqLyY1eNAF-oV4VS8MRvRoLMXD6R-yEoak",
+              "interrupt_key": "84504f7db4127b427d206f92a7a3a1a538f9e04b3d2d66f77c5aef48af96fb59"
+            }
+          ],
+          "schema": "elitea.pipeline.fanout-parked.v1"
+        },
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95"
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": "2026-11-02T18:31:40.628633835+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_hitl_resolved",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "interrupt_resolved_v1": {
+          "action": "approve",
+          "interrupt_id": "hitl_gt1:CrHZSAF45XkFFNHGngZO9fKlSjHHgRp8fq4OcS6EM74",
+          "interrupt_key": "5ed2cc5b821a1d4965ceea16aa6fddbb97a9c8012559582561ae4cb1f2c21483",
+          "revision": 2,
+          "schema": "elitea.pipeline.fanout-interrupt-resolved.v1",
+          "state": "DECIDED"
+        }
+      },
+      "references": [],
+      "sio_event": "chat_predict",
+      "created_at": null,
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    }
+  ],
+  "wake": [
+    {
+      "type": "agent_start",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "invoked_skills": [],
+        "should_continue": true
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:32:04.958+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_interrupt_pending",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "fanout_v1": {
+          "activation": "b23f081cb41be5cc",
+          "kind": "parallel",
+          "member": "two",
+          "node": "gather",
+          "ordinal": 2,
+          "total": 2
+        },
+        "interrupt_card_v1": {
+          "available_actions": [
+            "approve",
+            "reject",
+            "block_with_comment"
+          ],
+          "display": {
+            "action_label": "fpmockmcp.reverse",
+            "argument_digest": "sha256:0ba51a4ba2412e168ddf1f69bda29bde0ed0a131073a3474d57fbd18bb7e9417",
+            "guardrail_type": "sensitive_tool",
+            "message": "Your organization requires approval before running the sensitive action 'fpmockmcp.reverse'.",
+            "node_name": "rev",
+            "policy_message": "Your organization requires approval before running the sensitive action 'fpmockmcp.reverse'.",
+            "tool_args_json": "{\"text\":\"FP-DIRECT-REVERSE\"}",
+            "tool_call_id": "pipeline:rev:1",
+            "tool_name": "reverse",
+            "toolkit_name": "fpmockmcp",
+            "toolkit_type": "mcp"
+          },
+          "fanout_v1": {
+            "activation": "b23f081cb41be5cc",
+            "kind": "parallel",
+            "member": "two",
+            "node": "gather",
+            "ordinal": 2,
+            "total": 2
+          },
+          "interrupt_id": "hitl_gt1:PrxIaJOwJHqLyY1eNAF-oV4VS8MRvRoLMXD6R-yEoak",
+          "interrupt_key": "84504f7db4127b427d206f92a7a3a1a538f9e04b3d2d66f77c5aef48af96fb59",
+          "kind": "tool_guard",
+          "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+              "name": "FP child direct",
+              "sibling_ordinal": 2
+            }
+          ],
+          "payload_sha256": "063982641699e6e50fb4cd2e00863e5273dbf6f83beb43372673778c6e894f41",
+          "schema": "elitea.pipeline.fanout-interrupt-card.v1"
+        },
+        "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "name": "FP child direct",
+            "sibling_ordinal": 2
+          }
+        ],
+        "pause_progress": true
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:32:04.977083347+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_fanout_member",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "fanout_member_status_v1": {
+          "fanout_v1": {
+            "activation": "b23f081cb41be5cc",
+            "kind": "parallel",
+            "member": "one",
+            "node": "gather",
+            "ordinal": 1,
+            "total": 2
+          },
+          "open_interrupts": 0,
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "name": "FP child direct",
+              "sibling_ordinal": 1
+            }
+          ],
+          "schema": "elitea.pipeline.fanout-member-status.v1",
+          "status": "start"
+        },
+        "fanout_v1": {
+          "activation": "b23f081cb41be5cc",
+          "kind": "parallel",
+          "member": "one",
+          "node": "gather",
+          "ordinal": 1,
+          "total": 2
+        },
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ]
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:32:04.977109722+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_llm_start",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "metadata": {
+          "ls_model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+        },
+        "model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "timestamp_start": "2026-11-02T18:32:04.981293305+00:00",
+        "tool_name": "Thinking step",
+        "tool_run_id": "e1460144-930f-4d7f-a94a-3395db8af0d1"
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:32:04.981293305+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_llm_end",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "thinking_steps": [
+          {
+            "message": {
+              "response_metadata": {
+                "metadata": {},
+                "model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "tool_name": null
+              }
+            },
+            "text": "",
+            "thinking": "",
+            "timestamp_finish": "2026-11-02T18:32:04.981293305+00:00",
+            "timestamp_start": "2026-11-02T18:32:04.981293305+00:00",
+            "tool_run_id": "e1460144-930f-4d7f-a94a-3395db8af0d1",
+            "type": "ChatGeneration"
+          }
+        ],
+        "tool_run_id": "e1460144-930f-4d7f-a94a-3395db8af0d1"
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:32:04.981293305+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "partial_message",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "additional_response_meta": {},
+        "chat_project_id": 118,
+        "invoked_skills": [],
+        "project_id": 118,
+        "thinking_steps": [
+          {
+            "message": {
+              "response_metadata": {
+                "metadata": {},
+                "model_name": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "tool_name": null
+              }
+            },
+            "text": "",
+            "thinking": "",
+            "timestamp_finish": "2026-11-02T18:32:04.981293305+00:00",
+            "timestamp_start": "2026-11-02T18:32:04.981293305+00:00",
+            "tool_run_id": "e1460144-930f-4d7f-a94a-3395db8af0d1",
+            "type": "ChatGeneration"
+          }
+        ],
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+        "tool_calls": {}
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:32:04.981293305+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_tool_start",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "error": null,
+        "finish_reason": null,
+        "metadata": {
+          "agent_type": "pipeline",
+          "display_name": "FP child direct",
+          "original_name": "FP child direct",
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_path": [],
+          "sibling_ordinal": 1,
+          "toolkit_type": "pipeline"
+        },
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_path": [],
+        "run_id": "pipeline-v2:one_call:02bb01aae187c29c8500bdf4148b192d86ff5d2daa2724f3e30a17eb4b96c3fe:0",
+        "sibling_ordinal": 1,
+        "timestamp_finish": null,
+        "timestamp_start": "2026-11-02T18:32:04.981293305+00:00",
+        "tool_inputs": {
+          "task": "fu264 deep member approve"
+        },
+        "tool_meta": {
+          "display_name": "FP child direct",
+          "metadata": {
+            "agent_type": "pipeline",
+            "display_name": "FP child direct",
+            "original_name": "FP child direct",
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_path": [],
+            "sibling_ordinal": 1,
+            "toolkit_type": "pipeline"
+          },
+          "name": "FP child direct"
+        },
+        "tool_name": "FP child direct",
+        "tool_output": null,
+        "tool_run_id": "pipeline-v2:one_call:02bb01aae187c29c8500bdf4148b192d86ff5d2daa2724f3e30a17eb4b96c3fe:0"
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:32:04.981293305+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "partial_message",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "additional_response_meta": {},
+        "chat_project_id": 118,
+        "invoked_skills": [],
+        "project_id": 118,
+        "thinking_steps": [],
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+        "tool_calls": {
+          "pipeline-v2:one_call:02bb01aae187c29c8500bdf4148b192d86ff5d2daa2724f3e30a17eb4b96c3fe:0": {
+            "error": null,
+            "finish_reason": null,
+            "metadata": {
+              "agent_type": "pipeline",
+              "display_name": "FP child direct",
+              "original_name": "FP child direct",
+              "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "parent_agent_path": [],
+              "sibling_ordinal": 1,
+              "toolkit_type": "pipeline"
+            },
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_path": [],
+            "run_id": "pipeline-v2:one_call:02bb01aae187c29c8500bdf4148b192d86ff5d2daa2724f3e30a17eb4b96c3fe:0",
+            "sibling_ordinal": 1,
+            "timestamp_finish": null,
+            "timestamp_start": "2026-11-02T18:32:04.981293305+00:00",
+            "tool_inputs": {
+              "task": "fu264 deep member approve"
+            },
+            "tool_meta": {
+              "display_name": "FP child direct",
+              "metadata": {
+                "agent_type": "pipeline",
+                "display_name": "FP child direct",
+                "original_name": "FP child direct",
+                "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "parent_agent_path": [],
+                "sibling_ordinal": 1,
+                "toolkit_type": "pipeline"
+              },
+              "name": "FP child direct"
+            },
+            "tool_name": "FP child direct",
+            "tool_output": null,
+            "tool_run_id": "pipeline-v2:one_call:02bb01aae187c29c8500bdf4148b192d86ff5d2daa2724f3e30a17eb4b96c3fe:0"
+          }
+        }
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:32:04.981293305+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_llm_start",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "metadata": {
+          "ls_model_name": "nested-model",
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "name": "FP child direct",
+              "sibling_ordinal": 1
+            }
+          ]
+        },
+        "model_name": "nested-model",
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ],
+        "timestamp_start": "2026-11-02T18:31:40.588623752+00:00",
+        "tool_name": "Thinking step",
+        "tool_run_id": "cb182ddb-f0ee-45f5-8b20-03db8badea41"
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:31:40.588623752+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_llm_end",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ],
+        "thinking_steps": [
+          {
+            "message": {
+              "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "parent_agent_name": "FP child direct",
+              "parent_agent_path": [
+                {
+                  "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                  "name": "FP child direct",
+                  "sibling_ordinal": 1
+                }
+              ],
+              "response_metadata": {
+                "metadata": {},
+                "model_name": "nested-model",
+                "tool_name": null
+              }
+            },
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_name": "FP child direct",
+            "parent_agent_path": [
+              {
+                "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "name": "FP child direct",
+                "sibling_ordinal": 1
+              }
+            ],
+            "text": "",
+            "thinking": "",
+            "timestamp_finish": "2026-11-02T18:31:40.588623752+00:00",
+            "timestamp_start": "2026-11-02T18:31:40.588623752+00:00",
+            "tool_run_id": "cb182ddb-f0ee-45f5-8b20-03db8badea41",
+            "type": "ChatGeneration"
+          }
+        ],
+        "tool_run_id": "cb182ddb-f0ee-45f5-8b20-03db8badea41"
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:31:40.588623752+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "partial_message",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "additional_response_meta": {},
+        "chat_project_id": 118,
+        "invoked_skills": [],
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ],
+        "project_id": 118,
+        "thinking_steps": [
+          {
+            "message": {
+              "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "parent_agent_name": "FP child direct",
+              "parent_agent_path": [
+                {
+                  "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                  "name": "FP child direct",
+                  "sibling_ordinal": 1
+                }
+              ],
+              "response_metadata": {
+                "metadata": {},
+                "model_name": "nested-model",
+                "tool_name": null
+              }
+            },
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_name": "FP child direct",
+            "parent_agent_path": [
+              {
+                "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "name": "FP child direct",
+                "sibling_ordinal": 1
+              }
+            ],
+            "text": "",
+            "thinking": "",
+            "timestamp_finish": "2026-11-02T18:31:40.588623752+00:00",
+            "timestamp_start": "2026-11-02T18:31:40.588623752+00:00",
+            "tool_run_id": "cb182ddb-f0ee-45f5-8b20-03db8badea41",
+            "type": "ChatGeneration"
+          }
+        ],
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+        "tool_calls": {}
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:31:40.588623752+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_tool_start",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "error": null,
+        "finish_reason": null,
+        "metadata": {
+          "agent_type": "pipeline",
+          "display_name": "FP direct reverse",
+          "original_name": "FP direct reverse",
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "name": "FP child direct",
+              "sibling_ordinal": 1
+            }
+          ],
+          "sibling_ordinal": 1,
+          "toolkit_type": "pipeline"
+        },
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ],
+        "run_id": "pipeline-v2:child_call:99b2d5b93f6c486009fc4cbc6da81a242814f3e5f6a5e0a3c6b51b11ac898d68:1",
+        "sibling_ordinal": 1,
+        "timestamp_finish": null,
+        "timestamp_start": "2026-11-02T18:31:40.588623752+00:00",
+        "tool_inputs": {
+          "task": "fu264 deep member approve"
+        },
+        "tool_meta": {
+          "display_name": "FP direct reverse",
+          "metadata": {
+            "agent_type": "pipeline",
+            "display_name": "FP direct reverse",
+            "original_name": "FP direct reverse",
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_name": "FP child direct",
+            "parent_agent_path": [
+              {
+                "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "name": "FP child direct",
+                "sibling_ordinal": 1
+              }
+            ],
+            "sibling_ordinal": 1,
+            "toolkit_type": "pipeline"
+          },
+          "name": "FP direct reverse",
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "name": "FP child direct",
+              "sibling_ordinal": 1
+            }
+          ]
+        },
+        "tool_name": "FP direct reverse",
+        "tool_output": null,
+        "tool_run_id": "pipeline-v2:child_call:99b2d5b93f6c486009fc4cbc6da81a242814f3e5f6a5e0a3c6b51b11ac898d68:1"
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:31:40.588623752+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "partial_message",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "additional_response_meta": {},
+        "chat_project_id": 118,
+        "invoked_skills": [],
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ],
+        "project_id": 118,
+        "thinking_steps": [],
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+        "tool_calls": {
+          "pipeline-v2:child_call:99b2d5b93f6c486009fc4cbc6da81a242814f3e5f6a5e0a3c6b51b11ac898d68:1": {
+            "error": null,
+            "finish_reason": null,
+            "metadata": {
+              "agent_type": "pipeline",
+              "display_name": "FP direct reverse",
+              "original_name": "FP direct reverse",
+              "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "parent_agent_name": "FP child direct",
+              "parent_agent_path": [
+                {
+                  "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                  "name": "FP child direct",
+                  "sibling_ordinal": 1
+                }
+              ],
+              "sibling_ordinal": 1,
+              "toolkit_type": "pipeline"
+            },
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_name": "FP child direct",
+            "parent_agent_path": [
+              {
+                "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "name": "FP child direct",
+                "sibling_ordinal": 1
+              }
+            ],
+            "run_id": "pipeline-v2:child_call:99b2d5b93f6c486009fc4cbc6da81a242814f3e5f6a5e0a3c6b51b11ac898d68:1",
+            "sibling_ordinal": 1,
+            "timestamp_finish": null,
+            "timestamp_start": "2026-11-02T18:31:40.588623752+00:00",
+            "tool_inputs": {
+              "task": "fu264 deep member approve"
+            },
+            "tool_meta": {
+              "display_name": "FP direct reverse",
+              "metadata": {
+                "agent_type": "pipeline",
+                "display_name": "FP direct reverse",
+                "original_name": "FP direct reverse",
+                "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "parent_agent_name": "FP child direct",
+                "parent_agent_path": [
+                  {
+                    "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                    "name": "FP child direct",
+                    "sibling_ordinal": 1
+                  }
+                ],
+                "sibling_ordinal": 1,
+                "toolkit_type": "pipeline"
+              },
+              "name": "FP direct reverse",
+              "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "parent_agent_name": "FP child direct",
+              "parent_agent_path": [
+                {
+                  "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                  "name": "FP child direct",
+                  "sibling_ordinal": 1
+                }
+              ]
+            },
+            "tool_name": "FP direct reverse",
+            "tool_output": null,
+            "tool_run_id": "pipeline-v2:child_call:99b2d5b93f6c486009fc4cbc6da81a242814f3e5f6a5e0a3c6b51b11ac898d68:1"
+          }
+        }
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:31:40.588623752+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_tool_end",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "error": null,
+        "finish_reason": "stop",
+        "metadata": {
+          "agent_type": "pipeline",
+          "display_name": "FP direct reverse",
+          "original_name": "FP direct reverse",
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "name": "FP child direct",
+              "sibling_ordinal": 1
+            }
+          ],
+          "sibling_ordinal": 1,
+          "toolkit_type": "pipeline"
+        },
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ],
+        "run_id": "pipeline-v2:child_call:99b2d5b93f6c486009fc4cbc6da81a242814f3e5f6a5e0a3c6b51b11ac898d68:1",
+        "sibling_ordinal": 1,
+        "timestamp_finish": "2026-11-02T18:32:05.046566430+00:00",
+        "timestamp_start": "2026-11-02T18:31:40.588623752+00:00",
+        "tool_inputs": {
+          "task": "fu264 deep member approve"
+        },
+        "tool_meta": {
+          "display_name": "FP direct reverse",
+          "metadata": {
+            "agent_type": "pipeline",
+            "display_name": "FP direct reverse",
+            "original_name": "FP direct reverse",
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_name": "FP child direct",
+            "parent_agent_path": [
+              {
+                "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "name": "FP child direct",
+                "sibling_ordinal": 1
+              }
+            ],
+            "sibling_ordinal": 1,
+            "toolkit_type": "pipeline"
+          },
+          "name": "FP direct reverse",
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "name": "FP child direct",
+              "sibling_ordinal": 1
+            }
+          ]
+        },
+        "tool_name": "FP direct reverse",
+        "tool_output": "{\"response\":\"```json\\n{\\n  \\\"output\\\": \\\"ESREVER-TCERID-PF\\\"\\n}\\n```\",\"values\":{}}",
+        "tool_run_id": "pipeline-v2:child_call:99b2d5b93f6c486009fc4cbc6da81a242814f3e5f6a5e0a3c6b51b11ac898d68:1"
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:32:05.046566430+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "partial_message",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "additional_response_meta": {},
+        "chat_project_id": 118,
+        "invoked_skills": [],
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ],
+        "project_id": 118,
+        "thinking_steps": [],
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+        "tool_calls": {
+          "pipeline-v2:child_call:99b2d5b93f6c486009fc4cbc6da81a242814f3e5f6a5e0a3c6b51b11ac898d68:1": {
+            "error": null,
+            "finish_reason": "stop",
+            "metadata": {
+              "agent_type": "pipeline",
+              "display_name": "FP direct reverse",
+              "original_name": "FP direct reverse",
+              "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "parent_agent_name": "FP child direct",
+              "parent_agent_path": [
+                {
+                  "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                  "name": "FP child direct",
+                  "sibling_ordinal": 1
+                }
+              ],
+              "sibling_ordinal": 1,
+              "toolkit_type": "pipeline"
+            },
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_name": "FP child direct",
+            "parent_agent_path": [
+              {
+                "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "name": "FP child direct",
+                "sibling_ordinal": 1
+              }
+            ],
+            "run_id": "pipeline-v2:child_call:99b2d5b93f6c486009fc4cbc6da81a242814f3e5f6a5e0a3c6b51b11ac898d68:1",
+            "sibling_ordinal": 1,
+            "timestamp_finish": "2026-11-02T18:32:05.046566430+00:00",
+            "timestamp_start": "2026-11-02T18:31:40.588623752+00:00",
+            "tool_inputs": {
+              "task": "fu264 deep member approve"
+            },
+            "tool_meta": {
+              "display_name": "FP direct reverse",
+              "metadata": {
+                "agent_type": "pipeline",
+                "display_name": "FP direct reverse",
+                "original_name": "FP direct reverse",
+                "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "parent_agent_name": "FP child direct",
+                "parent_agent_path": [
+                  {
+                    "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                    "name": "FP child direct",
+                    "sibling_ordinal": 1
+                  }
+                ],
+                "sibling_ordinal": 1,
+                "toolkit_type": "pipeline"
+              },
+              "name": "FP direct reverse",
+              "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "parent_agent_name": "FP child direct",
+              "parent_agent_path": [
+                {
+                  "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                  "name": "FP child direct",
+                  "sibling_ordinal": 1
+                }
+              ]
+            },
+            "tool_name": "FP direct reverse",
+            "tool_output": "{\"response\":\"```json\\n{\\n  \\\"output\\\": \\\"ESREVER-TCERID-PF\\\"\\n}\\n```\",\"values\":{}}",
+            "tool_run_id": "pipeline-v2:child_call:99b2d5b93f6c486009fc4cbc6da81a242814f3e5f6a5e0a3c6b51b11ac898d68:1"
+          }
+        }
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:32:05.046566430+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_tool_end",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "error": null,
+        "finish_reason": "stop",
+        "metadata": {
+          "agent_type": "pipeline",
+          "display_name": "FP child direct",
+          "original_name": "FP child direct",
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_path": [],
+          "sibling_ordinal": 1,
+          "toolkit_type": "pipeline"
+        },
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_path": [],
+        "run_id": "pipeline-v2:one_call:02bb01aae187c29c8500bdf4148b192d86ff5d2daa2724f3e30a17eb4b96c3fe:0",
+        "sibling_ordinal": 1,
+        "timestamp_finish": "2026-11-02T18:32:05.108621972+00:00",
+        "timestamp_start": "2026-11-02T18:32:04.981293305+00:00",
+        "tool_inputs": {
+          "task": "fu264 deep member approve"
+        },
+        "tool_meta": {
+          "display_name": "FP child direct",
+          "metadata": {
+            "agent_type": "pipeline",
+            "display_name": "FP child direct",
+            "original_name": "FP child direct",
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_path": [],
+            "sibling_ordinal": 1,
+            "toolkit_type": "pipeline"
+          },
+          "name": "FP child direct"
+        },
+        "tool_name": "FP child direct",
+        "tool_output": "{\"response\":\"```json\\n{\\n  \\\"output\\\": \\\"FU248-ROOT-ECHO\\\"\\n}\\n```\",\"values\":{}}",
+        "tool_run_id": "pipeline-v2:one_call:02bb01aae187c29c8500bdf4148b192d86ff5d2daa2724f3e30a17eb4b96c3fe:0"
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:32:05.108621972+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "partial_message",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "additional_response_meta": {},
+        "chat_project_id": 118,
+        "invoked_skills": [],
+        "project_id": 118,
+        "thinking_steps": [],
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+        "tool_calls": {
+          "pipeline-v2:one_call:02bb01aae187c29c8500bdf4148b192d86ff5d2daa2724f3e30a17eb4b96c3fe:0": {
+            "error": null,
+            "finish_reason": "stop",
+            "metadata": {
+              "agent_type": "pipeline",
+              "display_name": "FP child direct",
+              "original_name": "FP child direct",
+              "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "parent_agent_path": [],
+              "sibling_ordinal": 1,
+              "toolkit_type": "pipeline"
+            },
+            "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "parent_agent_path": [],
+            "run_id": "pipeline-v2:one_call:02bb01aae187c29c8500bdf4148b192d86ff5d2daa2724f3e30a17eb4b96c3fe:0",
+            "sibling_ordinal": 1,
+            "timestamp_finish": "2026-11-02T18:32:05.108621972+00:00",
+            "timestamp_start": "2026-11-02T18:32:04.981293305+00:00",
+            "tool_inputs": {
+              "task": "fu264 deep member approve"
+            },
+            "tool_meta": {
+              "display_name": "FP child direct",
+              "metadata": {
+                "agent_type": "pipeline",
+                "display_name": "FP child direct",
+                "original_name": "FP child direct",
+                "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+                "parent_agent_path": [],
+                "sibling_ordinal": 1,
+                "toolkit_type": "pipeline"
+              },
+              "name": "FP child direct"
+            },
+            "tool_name": "FP child direct",
+            "tool_output": "{\"response\":\"```json\\n{\\n  \\\"output\\\": \\\"FU248-ROOT-ECHO\\\"\\n}\\n```\",\"values\":{}}",
+            "tool_run_id": "pipeline-v2:one_call:02bb01aae187c29c8500bdf4148b192d86ff5d2daa2724f3e30a17eb4b96c3fe:0"
+          }
+        }
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:32:05.108621972+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_fanout_member",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "fanout_member_status_v1": {
+          "fanout_v1": {
+            "activation": "b23f081cb41be5cc",
+            "kind": "parallel",
+            "member": "one",
+            "node": "gather",
+            "ordinal": 1,
+            "total": 2
+          },
+          "open_interrupts": 0,
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "name": "FP child direct",
+              "sibling_ordinal": 1
+            }
+          ],
+          "schema": "elitea.pipeline.fanout-member-status.v1",
+          "status": "end"
+        },
+        "fanout_v1": {
+          "activation": "b23f081cb41be5cc",
+          "kind": "parallel",
+          "member": "one",
+          "node": "gather",
+          "ordinal": 1,
+          "total": 2
+        },
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "name": "FP child direct",
+            "sibling_ordinal": 1
+          }
+        ]
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:32:05.116838722+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_hitl_interrupt",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": "Parallel branches paused.",
+      "thinking": null,
+      "response_metadata": {
+        "chat_project_id": 118,
+        "fanout_parked_v1": {
+          "decision_revision_seen": 1,
+          "pending": [
+            {
+              "interrupt_id": "hitl_gt1:PrxIaJOwJHqLyY1eNAF-oV4VS8MRvRoLMXD6R-yEoak",
+              "interrupt_key": "84504f7db4127b427d206f92a7a3a1a538f9e04b3d2d66f77c5aef48af96fb59"
+            }
+          ],
+          "schema": "elitea.pipeline.fanout-parked.v1"
+        },
+        "pause_progress": true,
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95"
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:32:05.121156722+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_hitl_interrupt",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": "Parallel branches paused.",
+      "thinking": null,
+      "response_metadata": {
+        "chat_project_id": 118,
+        "fanout_parked_v1": {
+          "decision_revision_seen": 1,
+          "pending": [
+            {
+              "interrupt_id": "hitl_gt1:PrxIaJOwJHqLyY1eNAF-oV4VS8MRvRoLMXD6R-yEoak",
+              "interrupt_key": "84504f7db4127b427d206f92a7a3a1a538f9e04b3d2d66f77c5aef48af96fb59"
+            }
+          ],
+          "schema": "elitea.pipeline.fanout-parked.v1"
+        },
+        "thread_id": "ce98a755-347c-4373-8d1a-980ef969eb95"
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": "2026-11-02T18:32:05.121156722+00:00",
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    },
+    {
+      "type": "agent_hitl_resolved",
+      "stream_id": "ce98a755-347c-4373-8d1a-980ef969eb95",
+      "message_id": "f25617a6-209f-5355-a5e7-0f68a14a0aa6",
+      "question_id": null,
+      "content": null,
+      "thinking": null,
+      "response_metadata": {
+        "interrupt_resolved_v1": {
+          "action": "approve",
+          "interrupt_id": "hitl_gt1:PrxIaJOwJHqLyY1eNAF-oV4VS8MRvRoLMXD6R-yEoak",
+          "interrupt_key": "84504f7db4127b427d206f92a7a3a1a538f9e04b3d2d66f77c5aef48af96fb59",
+          "revision": 2,
+          "schema": "elitea.pipeline.fanout-interrupt-resolved.v1",
+          "state": "DECIDED"
+        }
+      },
+      "references": [],
+      "sio_event": "chat_continue_predict",
+      "created_at": null,
+      "parent_message_id": null,
+      "agent_name": null,
+      "execution_generation": "e11db505-aaee-479b-a017-05827350cdbb"
+    }
+  ]
+}
