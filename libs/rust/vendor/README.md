@@ -658,3 +658,15 @@ A `zip` bump is a re-vendor, in one reviewed PR:
 3. For each vendored copy, run its **Verify** block above, refresh its tree
    digest, and record any API change in its table.
 4. Run `cargo test --locked -p elitea-office-core` from `libs/rust`.
+
+## A vendored manifest needs its note
+
+A pull request that changes `<crate>/Cargo.toml` or `<crate>/Cargo.toml.orig`
+here must also add a line to this file that names `<crate>`.
+`scripts/ci/check-vendor-manifest-notes.mjs` (dependency-scanning.yml) fails it
+otherwise. PR #1547, a Dependabot group, bumped `quick-xml` inside
+`calamine/Cargo.toml` through a path dependency, and the copy stopped
+compiling. `.github/dependabot.yml` excludes this directory in every cargo
+entry, and the gate holds even if Dependabot reaches a vendored manifest anyway.
+Revert such a scanner change. A dependency of a copy moves in a re-vendor, as
+described in "Moving zip" above.

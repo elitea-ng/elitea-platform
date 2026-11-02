@@ -146,6 +146,20 @@ updates:
       - /services/elitea-code-runner/adapters/rust
     multi-ecosystem-group: nightly
     patterns: ["*"]
+    # The vendored crates in libs/rust/vendor are reviewed copies, and each
+    # one moves only in a re-vendor that libs/rust/vendor/README.md records.
+    # PR #1547 bumped quick-xml inside vendor/calamine/Cargo.toml, which
+    # Dependabot reached through a path dependency of the desktop
+    # doc-extract-sidecar. The copy stopped compiling, and the other
+    # workspaces' lockfiles broke. An `ignore` entry cannot express "not in
+    # this file": quick-xml is also a host dependency that must keep moving.
+    # Both patterns are listed, because a pattern is relative to the entry's
+    # directory and a path dependency sits outside it. The CI gate
+    # scripts/ci/check-vendor-manifest-notes.mjs (dependency-scanning.yml)
+    # fails such a PR even when Dependabot ignores this list.
+    exclude-paths:
+      - "libs/rust/vendor/**"
+      - "**/vendor/**"
     ignore:
       # libs/rust/office-core pins zavora-slide, zavora-docx and zavora-xlsx
       # exactly, and its sub-crates move only with them (ADR-0032 decision 5):
@@ -196,6 +210,20 @@ updates:
       - /services/elitea-doc-extractor
     multi-ecosystem-group: nightly
     patterns: ["*"]
+    # The vendored crates in libs/rust/vendor are reviewed copies, and each
+    # one moves only in a re-vendor that libs/rust/vendor/README.md records.
+    # PR #1547 bumped quick-xml inside vendor/calamine/Cargo.toml, which
+    # Dependabot reached through a path dependency of the desktop
+    # doc-extract-sidecar. The copy stopped compiling, and the other
+    # workspaces' lockfiles broke. An `ignore` entry cannot express "not in
+    # this file": quick-xml is also a host dependency that must keep moving.
+    # Both patterns are listed, because a pattern is relative to the entry's
+    # directory and a path dependency sits outside it. The CI gate
+    # scripts/ci/check-vendor-manifest-notes.mjs (dependency-scanning.yml)
+    # fails such a PR even when Dependabot ignores this list.
+    exclude-paths:
+      - "libs/rust/vendor/**"
+      - "**/vendor/**"
     ignore:
       # libs/rust/office-core pins zavora-slide, zavora-docx and zavora-xlsx
       # exactly, and its sub-crates move only with them (ADR-0032 decision 5):
@@ -233,6 +261,20 @@ updates:
       - /services/elitea-vector
     multi-ecosystem-group: nightly
     patterns: ["*"]
+    # The vendored crates in libs/rust/vendor are reviewed copies, and each
+    # one moves only in a re-vendor that libs/rust/vendor/README.md records.
+    # PR #1547 bumped quick-xml inside vendor/calamine/Cargo.toml, which
+    # Dependabot reached through a path dependency of the desktop
+    # doc-extract-sidecar. The copy stopped compiling, and the other
+    # workspaces' lockfiles broke. An `ignore` entry cannot express "not in
+    # this file": quick-xml is also a host dependency that must keep moving.
+    # Both patterns are listed, because a pattern is relative to the entry's
+    # directory and a path dependency sits outside it. The CI gate
+    # scripts/ci/check-vendor-manifest-notes.mjs (dependency-scanning.yml)
+    # fails such a PR even when Dependabot ignores this list.
+    exclude-paths:
+      - "libs/rust/vendor/**"
+      - "**/vendor/**"
     ignore:
       # libs/rust/office-core pins zavora-slide, zavora-docx and zavora-xlsx
       # exactly, and its sub-crates move only with them (ADR-0032 decision 5):
