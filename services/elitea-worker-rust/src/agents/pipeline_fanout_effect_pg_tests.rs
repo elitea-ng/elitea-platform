@@ -5246,3 +5246,455 @@ member_direct_case!(
     "2",
     "committed"
 );
+
+// ---------------------------------------------------------------------------
+// FU-273: a member's approved sensitive call lost inside the call on its
+// wake. The reclaim must never raise a new card for the decided call: the
+// call's journal decides it (Started -> may have started, 0 calls).
+// ---------------------------------------------------------------------------
+
+/// The member child's MCP tool, which hangs once called (its journal's
+/// Started record is durable by then): the wake is lost inside the call.
+struct HangingConnector {
+    reached: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl McpConnector for HangingConnector {
+    async fn connect(
+        &self,
+        _config: &RemoteMcpConfig,
+    ) -> Result<Arc<dyn Toolset>, McpMaterializationError> {
+        Ok(Arc::new(BasicToolset::new(
+            "fixture_mcp",
+            vec![Arc::new(HangingTool {
+                inner: PipelineMcpTool {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    read_only: false,
+                },
+                reached: Arc::clone(&self.reached),
+            })],
+        )))
+    }
+}
+
+struct HangingTool {
+    inner: PipelineMcpTool,
+    reached: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl Tool for HangingTool {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn description(&self) -> &str {
+        self.inner.description()
+    }
+    fn parameters_schema(&self) -> Option<Value> {
+        self.inner.parameters_schema()
+    }
+    fn is_read_only(&self) -> bool {
+        false
+    }
+    async fn execute(
+        &self,
+        _context: Arc<dyn ToolContext>,
+        _arguments: Value,
+    ) -> adk_rust::Result<Value> {
+        self.reached.notify_one();
+        std::future::pending::<()>().await;
+        unreachable!("the wake is lost inside the call")
+    }
+}
+
+/// One row of the parked member's branch thread: its checkpoint, its receipt
+/// status, and whether the row owns that receipt (a receipt carried from an
+/// earlier row, or none, is not the row's own).
+#[derive(Debug)]
+struct MemberBranchRow {
+    checkpoint_id: String,
+    receipt: Option<String>,
+    owned: bool,
+}
+
+/// The rows, oldest first, of the branch thread that saved a pause receipt.
+async fn member_branch_rows(pool: &sqlx::PgPool) -> Vec<MemberBranchRow> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT checkpoint_id, metadata FROM elitea_runtime.agent_graph_checkpoints \
+         WHERE thread_id = (SELECT thread_id FROM elitea_runtime.agent_graph_checkpoints \
+           WHERE metadata LIKE '%branch-receipt.v1%' AND metadata LIKE '%\"status\":\"paused\"%' \
+           LIMIT 1) \
+         ORDER BY save_ordinal",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("read the member branch rows");
+    rows.into_iter()
+        .map(|(checkpoint_id, metadata)| {
+            let metadata: Value = serde_json::from_str(&metadata).expect("metadata JSON");
+            let receipt = metadata["elitea.graph.parallel.branch-receipt.v1"]["status"]
+                .as_str()
+                .map(str::to_owned);
+            let owned = metadata["elitea.graph.parallel.branch-receipt-checkpoint.v1"].as_str()
+                == Some(checkpoint_id.as_str());
+            MemberBranchRow {
+                checkpoint_id,
+                receipt,
+                owned,
+            }
+        })
+        .collect()
+}
+
+/// Main admits each fan-out wake as its own execution; its node journals are
+/// keyed by it (`node_attempts.rs` journal identity).
+const MEMBER_WAKE_EXECUTION: &str = "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d";
+
+/// What the reclaim of a lost member wake must do with the approved call.
+struct MemberWakeOutcome {
+    cards: Vec<Value>,
+    second: Option<Value>,
+    /// Tool calls the reclaim made.
+    calls: usize,
+    /// Model requests the reclaim made.
+    model_requests: usize,
+}
+
+/// FU-273 at `depth`: park the member's sensitive call, approve it, lose the
+/// wake under its own execution, reclaim it. `mode` is where it was lost:
+/// - `started`: inside the approved call, its journal's Started record durable;
+/// - `undispatched`: as `started`, with the journal removed (lost before the
+///   Started append);
+/// - `committed`: at the model step after the call; the member child's row
+///   saved after the call is removed (lost between the journal's commit and
+///   the child's save).
+async fn member_wake_lost_on_the_approved_call(
+    url: &str,
+    depth: &str,
+    mode: &str,
+) -> MemberWakeOutcome {
+    let db = IsolatedPostgres::create(url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let rig = MemberWakeRig {
+        pool: db.pool.clone(),
+        ledger: crate::agents::graph::fanout_test_ledger::TestLedger::new(),
+        depth,
+        committed: mode == "committed",
+    };
+    let request = mixed_request("continue");
+    let (parking, _) = rig.assembler(
+        1,
+        counting_connector(&Arc::new(AtomicUsize::new(0))),
+        Vec::new(),
+    );
+    let invocation = parking
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| panic!("assemble: {error}"));
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .unwrap_or_else(|error| panic!("the member's card parks the run: {error}"));
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    let key = cards[0]["interrupt_key"]
+        .as_str()
+        .expect("card key")
+        .to_owned();
+    rig.ledger.decide(&key, "approve", None);
+    let wake = member_wake_request(request);
+    rig.lose(&wake).await;
+    assert_eq!(
+        journal_threads(&db.pool).await.len(),
+        1,
+        "the call's journal"
+    );
+    let pause_checkpoint = lost_attempt_pause(&db.pool).await;
+    narrow_lost_wake(&db.pool, mode).await;
+    // The reclaim of the wake.
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let outcomes = if rig.committed {
+        vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+            "summarized",
+        ))]
+    } else {
+        Vec::new()
+    };
+    let (reclaim, captured) = rig.assembler(3, counting_connector(&tool_calls), outcomes);
+    let invocation = recovered(&reclaim, &wake, MEMBER_WAKE_EXECUTION, 3)
+        .await
+        .unwrap_or_else(|error| panic!("the lost wake recovers: {error}"));
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .unwrap_or_else(|error| panic!("the recovered wake ends: {error}"));
+    let second = joined(&db.pool).await.and_then(|entries| {
+        entries
+            .into_iter()
+            .find(|entry| entry["branch_id"] == "second")
+    });
+    let settled = if mode == "started" {
+        "failed"
+    } else {
+        "completed"
+    };
+    assert_settled_once(&db.pool, &rig.ledger, key, &pause_checkpoint, settled).await;
+    db.pool.close().await;
+    MemberWakeOutcome {
+        cards,
+        second,
+        calls: tool_calls.load(Ordering::Acquire),
+        model_requests: model_requests(&captured),
+    }
+}
+
+/// The FU-273 run's fixed parts.
+struct MemberWakeRig<'a> {
+    pool: sqlx::PgPool,
+    ledger: Arc<crate::agents::graph::fanout_test_ledger::TestLedger>,
+    depth: &'a str,
+    /// The member child runs a model step after the call (`committed`).
+    committed: bool,
+}
+
+impl MemberWakeRig<'_> {
+    fn assembler(
+        &self,
+        claim: u64,
+        connector: Arc<dyn McpConnector>,
+        outcomes: Vec<TestModelGatewayOutcome>,
+    ) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
+        let (platform, model_facade, captured) =
+            member_child_runtime(self.depth, outcomes, self.committed);
+        let assembler = PipelineNativeAgentAssembler::postgres(
+            self.pool.clone(),
+            SessionLimits::default(),
+            CheckpointLimits::default(),
+            sensitive_pipeline_mcp_policy(),
+            platform,
+            model_facade,
+        )
+        .with_mcp_connector(connector)
+        .with_fixed_parallel_for_tests()
+        .with_fanout_decisions_for_tests(self.ledger.client(claim));
+        (assembler, captured)
+    }
+
+    /// The wake, under its own execution, lost inside the approved call or,
+    /// `committed`, at the member child's model step after it.
+    async fn lose(&self, wake: &super::super::request::AgentExecutionRequest) {
+        if self.committed {
+            let lost_calls = Arc::new(AtomicUsize::new(0));
+            let (lost, lost_requests) = self.assembler(
+                2,
+                counting_connector(&lost_calls),
+                vec![TestModelGatewayOutcome::Pending],
+            );
+            let invocation = lost
+                .assemble(claim_for(wake, MEMBER_WAKE_EXECUTION, 2, false))
+                .await
+                .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
+            lose_at_first_model_request(invocation, &lost_requests).await;
+            assert_eq!(lost_calls.load(Ordering::Acquire), 1, "the call ran once");
+            return;
+        }
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let (lost, _) = self.assembler(
+            2,
+            Arc::new(HangingConnector {
+                reached: Arc::clone(&reached),
+            }),
+            Vec::new(),
+        );
+        let invocation = lost
+            .assemble(claim_for(wake, MEMBER_WAKE_EXECUTION, 2, false))
+            .await
+            .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
+        let run = run_collecting(invocation);
+        tokio::pin!(run);
+        tokio::select! {
+            outcome = &mut run => panic!("the wake ended before its call: {outcome:?}"),
+            () = reached.notified() => {}
+            () = tokio::time::sleep(Duration::from_secs(30)) => panic!("the call never started"),
+        }
+    }
+}
+
+fn counting_connector(tool_calls: &Arc<AtomicUsize>) -> Arc<dyn McpConnector> {
+    Arc::new(PipelineMcpConnector {
+        connections: Arc::new(AtomicUsize::new(0)),
+        tool_calls: Arc::clone(tool_calls),
+        read_only: false,
+    })
+}
+
+/// The fan-out wake of the parked `request`.
+fn member_wake_request(
+    request: super::super::request::AgentExecutionRequest,
+) -> super::super::request::AgentExecutionRequest {
+    let mut wake = request;
+    wake.payload.user_input = super::super::request::UserInput::Text(String::new());
+    wake.payload.meta.insert(
+        crate::agents::graph::fanout_wake::FANOUT_WAKE_META_KEY.to_owned(),
+        json!({"schema": "elitea.pipeline.fanout-wake.v1",
+            "response_message_id": "10000000-0000-4000-8000-000000000043",
+            "decision_revision": 1,
+            "parked_execution_id": EXECUTION,
+            "parked_generation": GENERATION}),
+    );
+    wake
+}
+
+/// E3: the lost attempt saved rows after the member's pause, none with a
+/// receipt of its own. The reclaim keeps the member parked at that pause and
+/// re-delivers its decision; those rows are never a frontier it continues
+/// from without the decision. Returns the pause row.
+async fn lost_attempt_pause(pool: &sqlx::PgPool) -> String {
+    let before = member_branch_rows(pool).await;
+    let pause = before
+        .iter()
+        .rposition(|row| row.owned)
+        .expect("the member's own pause row");
+    assert_eq!(
+        before[pause].receipt.as_deref(),
+        Some("paused"),
+        "{before:?}"
+    );
+    assert!(
+        pause + 1 < before.len(),
+        "the lost attempt's rows: {before:?}"
+    );
+    before[pause].checkpoint_id.clone()
+}
+
+/// Narrow the loss to `mode`, as FU-248's crash matrix does.
+async fn narrow_lost_wake(pool: &sqlx::PgPool, mode: &str) {
+    match mode {
+        "committed" => {
+            let removed = sqlx::query(
+                "DELETE FROM elitea_runtime.agent_graph_checkpoints \
+                 WHERE thread_id LIKE 'p1:%/%' AND pending_nodes LIKE '%\"after\"%'",
+            )
+            .execute(pool)
+            .await
+            .expect("remove the row saved after the call")
+            .rows_affected();
+            assert_eq!(removed, 1, "the member child saved one row after the call");
+        }
+        "undispatched" => {
+            let removed = sqlx::query(
+                "DELETE FROM elitea_runtime.agent_graph_checkpoints WHERE thread_id LIKE 'n1:%'",
+            )
+            .execute(pool)
+            .await
+            .expect("remove the journal")
+            .rows_affected();
+            assert_ne!(removed, 0, "the call's journal existed");
+        }
+        _ => {}
+    }
+}
+
+/// E3: no pause after the decided one; the member ends on its own `settled`
+/// receipt. E2: the decision is acknowledged once, only with that proof from the
+/// member's own rows.
+async fn assert_settled_once(
+    pool: &sqlx::PgPool,
+    ledger: &crate::agents::graph::fanout_test_ledger::TestLedger,
+    key: String,
+    pause_checkpoint: &str,
+    settled: &str,
+) {
+    let after = member_branch_rows(pool).await;
+    let owned = after.iter().filter(|row| row.owned).collect::<Vec<_>>();
+    assert_eq!(
+        owned.len(),
+        2,
+        "the pause and the settlement only: {after:?}"
+    );
+    assert_eq!(owned[0].checkpoint_id, pause_checkpoint, "{after:?}");
+    assert_eq!(owned[1].receipt.as_deref(), Some(settled), "{after:?}");
+    assert_eq!(
+        ledger.acks(),
+        vec![(
+            key,
+            elitea_agent_runtime::graph::fanout::runner::AckResult::Applied {
+                child_checkpoint_id: owned[1].checkpoint_id.clone(),
+            }
+        )],
+        "{after:?}"
+    );
+    assert_eq!(ledger.open_decisions(), 0);
+}
+
+macro_rules! member_wake_case {
+    ($name:ident, $depth:literal, $mode:literal) => {
+        #[tokio::test(flavor = "current_thread")]
+        async fn $name() {
+            let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+                eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-273 proof");
+                return;
+            };
+            let outcome = member_wake_lost_on_the_approved_call(&url, $depth, $mode).await;
+            assert!(
+                outcome.cards.is_empty(),
+                "no card raised again: {:?}",
+                outcome.cards
+            );
+            let second = outcome.second.expect("the member's joined entry");
+            match $mode {
+                // C -> F: the call may have run; never repeated, typed.
+                "started" => {
+                    assert_eq!(outcome.calls, 0, "the approved call is never repeated");
+                    assert_eq!(second["status"], "failed", "{second}");
+                    assert_eq!(second["error"]["code"], MAY_HAVE_STARTED, "{second}");
+                }
+                // I: no Started record; the call runs once.
+                "undispatched" => {
+                    assert_eq!(outcome.calls, 1, "runs once");
+                    assert_eq!(second["status"], "succeeded", "{second}");
+                }
+                // R: the committed result replays; only the next step runs.
+                "committed" => {
+                    assert_eq!(outcome.calls, 0, "replayed, never called again");
+                    assert_eq!(outcome.model_requests, 1, "only the next step");
+                    assert_eq!(second["status"], "succeeded", "{second}");
+                }
+                other => panic!("unknown mode {other}"),
+            }
+        }
+    };
+}
+
+member_wake_case!(
+    postgres_a_member_wake_lost_inside_its_approved_call_never_asks_again,
+    "1",
+    "started"
+);
+member_wake_case!(
+    postgres_two_levels_below_a_member_a_wake_lost_inside_its_approved_call_never_asks_again,
+    "2",
+    "started"
+);
+member_wake_case!(
+    postgres_a_member_wake_lost_before_its_approved_call_runs_it_once,
+    "1",
+    "undispatched"
+);
+member_wake_case!(
+    postgres_two_levels_below_a_member_a_wake_lost_before_its_approved_call_runs_it_once,
+    "2",
+    "undispatched"
+);
+member_wake_case!(
+    postgres_a_member_wake_lost_after_its_approved_call_committed_replays_it,
+    "1",
+    "committed"
+);
+member_wake_case!(
+    postgres_two_levels_below_a_member_a_wake_lost_after_its_approved_call_committed_replays_it,
+    "2",
+    "committed"
+);
