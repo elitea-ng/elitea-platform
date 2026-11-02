@@ -66,6 +66,29 @@ jobs:
       - name: One zip everywhere, and the zip-9 patches applied
         run: bash scripts/ci/check-zip-pin.sh
 
+  # PR #1547 (a Dependabot nightly group) bumped quick-xml inside the vendored
+  # libs/rust/vendor/calamine/Cargo.toml, reached through a path dependency.
+  # The copy no longer compiled. A vendored manifest moves only in a re-vendor
+  # that records the change in libs/rust/vendor/README.md. This gate fails a
+  # pull request that edits one without a README line naming the crate.
+  # dependabot.yml excludes the vendor directory; this is the check that
+  # does not depend on Dependabot honouring that for a path dependency.
+  # Scenarios: scripts/ci/check-vendor-manifest-notes.test.mjs, run in
+  # no-binaries.yml.
+  vendor-manifest-notes:
+    name: A vendored manifest changes only with its patch note
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The three-dot diff needs the merge base.
+          fetch-depth: 0
+      - name: Each changed vendored manifest has a README note
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: node scripts/ci/check-vendor-manifest-notes.mjs "origin/${BASE_REF}"
+
   # Dependabot cannot see `azure/setup-helm`'s `version:` input, so it never
   # proposes a newer Helm. This compares the pins (scripts/ci/check-helm-version.mjs)
   # with the newest Helm 4 and Helm 3 releases and fails when either is behind.
