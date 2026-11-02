@@ -28,29 +28,43 @@ function hasKeyboardFocus(element: HTMLElement): boolean {
  * panel's close button). MUI closes a tooltip on `mouseleave`, and an element
  * that moves away from a still pointer never gets one, so the tooltip stayed
  * on screen over whatever the pointer went to next. Here, any pointer move
- * that is not over the anchor closes it, unless the anchor has keyboard focus.
+ * that is not over the anchor closes it, unless the anchor has keyboard focus,
+ * and a click closes it until the pointer has left the anchor.
  * Non-interactive, so the open tooltip never takes a click meant for the
  * control under it.
  */
 export function useAnchoredTooltip<E extends HTMLElement>(): AnchoredTooltip<E> {
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<E | null>(null);
-  const close = useCallback(() => setOpen(false), []);
+  // Set by the click: MUI's enter-delay timer, started by the `mouseover` that
+  // preceded the click, still fires after it, and the moved button's tooltip
+  // then opened with nothing under the pointer. Ignored until the pointer has
+  // been somewhere else.
+  const suppressed = useRef(false);
+  const close = useCallback(() => {
+    suppressed.current = true;
+    setOpen(false);
+  }, []);
+  const onOpen = useCallback(() => {
+    if (!suppressed.current) setOpen(true);
+  }, []);
+  const onClose = useCallback(() => setOpen(false), []);
 
   useEffect(() => {
-    if (!open) return undefined;
     const onMove = (event: PointerEvent): void => {
       const anchor = anchorRef.current;
       const overAnchor = anchor !== null && event.target instanceof Node && anchor.contains(event.target);
-      if (overAnchor || (anchor !== null && hasKeyboardFocus(anchor))) return;
+      if (overAnchor) return;
+      suppressed.current = false;
+      if (anchor !== null && hasKeyboardFocus(anchor)) return;
       setOpen(false);
     };
     document.addEventListener('pointermove', onMove, true);
     return () => document.removeEventListener('pointermove', onMove, true);
-  }, [open]);
+  }, []);
 
   return {
-    tooltipProps: { open, onOpen: () => setOpen(true), onClose: close, disableInteractive: true },
+    tooltipProps: { open, onOpen, onClose, disableInteractive: true },
     anchorRef,
     close,
   };

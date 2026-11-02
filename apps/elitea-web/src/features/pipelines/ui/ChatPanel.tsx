@@ -77,9 +77,17 @@ export interface ChatPanelHandle {
   readonly stopRun: () => void;
 }
 
+/*
+ * Beside the flow editor the pane is exactly 20rem, not its content's width:
+ * the editor is `flex: 1` (a zero basis), so a pane sized by a long unwrapped
+ * line ("Save the pipeline to test it…") took ~440px and crushed the canvas
+ * to ~125px in the shell's 1032px page at a 1280px window. 20rem is also what
+ * `ConfigurationTab`'s editor `maxWidth` already reserves for it.
+ */
 const chatContainerSx = (isSmallWindow: boolean, collapsed: boolean, display: string | undefined): SxProps<Theme> => ({
   minWidth: isSmallWindow ? '100%' : collapsed ? '1.75rem' : '20rem',
-  width: isSmallWindow ? '100%' : collapsed ? '1.75rem' : undefined,
+  width: isSmallWindow ? '100%' : collapsed ? '1.75rem' : '20rem',
+  flexShrink: 0,
   maxWidth: '100%',
   position: 'relative',
   height: '100%',

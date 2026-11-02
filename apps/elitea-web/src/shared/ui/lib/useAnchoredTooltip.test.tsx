@@ -4,11 +4,11 @@ import { describe, expect, it } from 'vitest';
 
 import { useAnchoredTooltip } from './useAnchoredTooltip';
 
-function Harness() {
+function Harness({ enterDelay = 0 }: { readonly enterDelay?: number }) {
   const tip = useAnchoredTooltip<HTMLButtonElement>();
   return (
     <>
-      <Tooltip title="Expand sidebar" enterDelay={0} {...tip.tooltipProps}>
+      <Tooltip title="Expand sidebar" enterDelay={enterDelay} {...tip.tooltipProps}>
         <button ref={tip.anchorRef} type="button" onClick={tip.close}>
           toggle
         </button>
@@ -43,6 +43,20 @@ describe('useAnchoredTooltip', () => {
     expect(screen.getByRole('tooltip')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
     await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+  });
+
+  it('stays shut when the enter delay that the pre-click hover started runs out after the click', async () => {
+    render(<Harness enterDelay={30} />);
+    fireEvent.mouseOver(screen.getByRole('button', { name: 'Expand sidebar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(screen.queryByRole('tooltip')).toBeNull();
+
+    // Once the pointer has been elsewhere, a fresh hover opens it again.
+    fireEvent.pointerMove(screen.getByTestId('elsewhere'));
+    fireEvent.mouseLeave(screen.getByRole('button', { name: 'Expand sidebar' }));
+    fireEvent.mouseOver(screen.getByRole('button', { name: 'Expand sidebar' }));
+    expect(await screen.findByRole('tooltip')).toBeInTheDocument();
   });
 });
 
