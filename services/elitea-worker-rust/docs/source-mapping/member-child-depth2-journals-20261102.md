@@ -50,13 +50,16 @@
   a "paused at a newer checkpoint" view and acknowledged the decision as applied without the member ever passing its
   pause.
 - **The rule** (`unproven_resume`, `src/agents/graph/parallel.rs:1013`): when the branch's latest rows have no receipt
-  of their own (`resumed_without_receipt`, `:1127`) and none of the pipelines the pause names
+  of their own (`resumed_without_receipt`, `:1131`) and none of the pipelines the pause names
   (`nested_pause_checkpoints`, `src/agents/graph/parallel_cards.rs:149`) saved past its own paused checkpoint, the
   branch's truth is its pause row. It applies to:
-  - the restore (`restored_replay`, `:1113`, called at `:829`): the member is restored parked at its pause;
-  - the apply proof (`view`, `:1293`): the decided card is open and classifies `Apply`;
-  - the child run (`run_child`, `:1514`): the decision is resolved against the pause row through a read-only view of
-    the branch's checkpoints (`PauseRowView`, `:1069`).
+  - the restore (`restored_replay`, `:1117`, called at `:829`): the member is restored parked at its pause;
+  - the apply proof (`view`, `:1297`): the decided card is open and classifies `Apply`;
+  - the child run (`run_child`, `:1518`): the decision is resolved against the pause row through a read-only view of
+    the branch's checkpoints (`PauseRowView`, `:1073`).
+- **A named pipeline with no row (R1).** A pipeline the pause names that has no checkpoint at all is a broken state,
+  not progress: the reclaim ends typed `graph.parallel.corrupt_receipt` (`:1057-1063`), with 0 calls and the decision
+  left DECIDED. It never falls back to the latest row (the pre-fix path that re-asks).
 - **E2.** The decision is acknowledged only by the settlement that follows the re-delivery, naming the member's own
   receipt row. If any named pipeline saved past its pause, the existing path applies (that row is the proof).
 - **E3, which row the re-delivery resumes from.** The resume controls bind to the pause row; the branch graph then
@@ -123,6 +126,8 @@ orchestrator accepted this in place of a journal key change.
     `postgres_a_member_child_sensitive_direct_call_pauses_then_runs_once_or_never` (`:4258`), now at depth 1 and 2.
   - Two-process crash cases (`member_direct_case!`, `:5234-5248`): a started call at depth 1 (FU-267) and 2 ends the
     member `graph.fanout.may_have_started`; a committed call at depth 2 replays with 0 calls.
+  - `postgres_a_member_whose_paused_pipeline_has_no_row_is_refused_typed` (`:5706`, R1): the member's pipeline rows
+    removed after the loss; the reclaim ends `graph.parallel.corrupt_receipt`, 0 calls, the decision not consumed.
   - FU-273 (`member_wake_case!`, `:5671-5700`), the wake under its own execution, depth 1 and 2: lost inside the call
     (C → F, 0 calls), before it (I, 1 call), after its commit (R, 0 calls, 1 model request). Each asserts no card raised
     again, one ACK `Applied` naming the member's own settlement row, 0 open decisions, and no pause row after the
@@ -136,8 +141,11 @@ orchestrator accepted this in place of a journal key change.
 
 - **Rebind:** one `Arc` clone per saved-pipeline level at assembly, bounded by the composition depth (3).
 - **FU-273 rule:** nothing on the normal path. Only when a restored branch's latest row has no receipt of its own does
-  it list the branch's history (bounded by `MAX_ANSWERED_PAUSE_SCAN`, 64) and load each pipeline the pause names (at
-  most the composition depth). That happens on reclaim only.
+  it list the branch's history and inspect at most its last `MAX_ANSWERED_PAUSE_SCAN` (64) rows, then load each pipeline
+  the pause names (at most the composition depth). That happens on reclaim only.
+- **Follow-up (performance pass):** that history read loads the whole thread before keeping its last 64 rows, as
+  `answered_pause` already does; the inspection is bounded, the load is not. A bounded "last N rows" read would serve
+  both.
 
 ## Durability
 
@@ -174,7 +182,7 @@ orchestrator accepted this in place of a journal key change.
 |---|---|---|---|
 | Worker × an effectful direct node in a fan-out member's saved child, one or two Agent-node levels down: first run, sensitive pause and decision | I (runs once), R (card, decision, one call) | `compiler.rs:429`, `parallel_application_resolver.rs:67` | `:1851`, `:4258` at depth 1 and 2; browser chats 45 and 47 |
 | Worker × crash inside that call (the run's own claim) | C → F (`graph.fanout.may_have_started`), R (committed: replayed) | the branch family's node journals | `member_direct_case!` (depth 1 started, depth 2 started and committed) |
-| Worker × a member's wake lost inside / before / after its approved call (FU-273) | C → F / I / R; never re-asked | `parallel.rs:1013,1113,1293,1514` | `member_wake_case!` depth 1 and 2; browser chats 45 and 47 |
+| Worker × a member's wake lost inside / before / after its approved call (FU-273) | C → F / I / R; never re-asked | `parallel.rs:1013,1117,1297,1518` | `member_wake_case!` depth 1 and 2; browser chats 45 and 47 |
 | Main × a decision while a wake runs | I (queues nothing; the running wake's reclaim delivers it) | `execution_interrupts.go:447`, `execution_interrupts_wiring.go:465` | `TestASecondDecisionWaitsForTheRunningWake` |
 | Web × a member's inner Agent node, live and reload | R | no change | `chatStreamMemberDepth2.test.ts`; browser reload |
 
@@ -197,14 +205,34 @@ orchestrator accepted this in place of a journal key change.
   1. Two member cards. Card (1) approved: one `tools/call` (19:54:33).
   2. Card (2) approved with a streamed kill on the MCP `tools/list`: `tools/call` at 19:55:00.877, Worker killed at
      19:55:01, started at 19:55:04.
-  3. The reclaim (19:56:00): member 2 failed `agent.recovery_refused`, the fan-out joined, then the root `echo`
-     `tools/call` (19:56:00.921). The wake job SUCCEEDED.
+  3. The reclaim (19:56:00): member 2 ended `graph.fanout.may_have_started`, the fan-out joined, then the root `echo`
+     `tools/call` (19:56:00.921). The wake job SUCCEEDED. The Worker log's `agent.recovery_refused` is the inner direct
+     node's journal refusal (`RECOVERY_REFUSED_UPSTREAM_CODE`); inside a fixed Parallel branch the member's scoped
+     runtime maps it to the member's `graph.fanout.may_have_started` (`src/agents/pipeline/scoped_runtime.rs:398-406,
+     464-468`), which is what the member's receipt records.
   4. Main's ledger for the response: 2 cards, both CONSUMED (card 2 at 19:56:00.914, after the member settled). No third
      card. After a reload: no card, the member tier shows `FP direct reverse` error, and the answer is the `echo` output.
 - **Depth 2, chat 47:** the same: member 1's `reverse` and its child's `echo` (20:01:30), member 2's `reverse`
   (20:01:55.35), kill at 20:01:55, the reclaim joined at 20:02:55.443 and only the root `echo` followed (20:02:55.451).
   2 cards, both CONSUMED; both wake jobs SUCCEEDED. After a reload: two member tiers, member (2) shows
   `FP direct reverse` and `FP child direct` as errors, no card.
+- **The FU-273 path, from durable rows** (the Worker container was recreated for the restore, so its logs are gone;
+  these are fanpar's PostgreSQL rows for depth 1, member 2, branch thread `p1:FYlo…`):
+  - branch rows: ordinal 3 `07de4c34` (19:54:08.939) with its own Paused receipt (the card's pause); ordinal 4
+    `4cc4eb9c` (19:55:00.832, the lost wake) with the receipt carried from row 3; ordinal 5 `5f5ced25` (19:56:00.908, the
+    reclaim) with its own Failed receipt `graph.fanout.may_have_started`;
+  - the member's pipeline thread `p1:FYlo…/two_call`: its latest row is still its paused row `9e1ab000` (pending
+    `rev`), so the rule held the member at row 3;
+  - the call's node journal `n1:kmrG…`: `start` at 19:55:00.834 (the lost wake), then, under the same journal identity
+    (same wake execution), `unknown_external_effect` at 19:56:00.906: the re-delivered decision reached the paused call's
+    journal, which found its Started record and did not dispatch;
+  - Main's ledger: card 2 decided 19:55:00.397, consumed 19:56:00.914 with ACK `applied`, `child_checkpoint_id`
+    `5f5ced25` (row 5, the member's own settlement). The pre-fix path would have answered it at a paused view and raised a
+    new card.
+- **What users see.** The member's tier shows `FP direct reverse` (depth 2 also `FP child direct`) as "error": the stored
+  trace step for the member's call has `is_error` set and no text (FU-274). That is a separate cause from FU-273: the
+  member's typed outcome is in its receipt and join entry, but its failure step is persisted without the readable
+  sentence. Not changed here.
 - **Before (main's Worker, chat 45 earlier):** the same kill re-raised a card, and approving it called `reverse` again.
 - **Where the files are:** `handoffs/point5-wave1-20261008/fu264/evidence/`, outside git.
 
@@ -217,7 +245,8 @@ orchestrator accepted this in place of a journal key change.
 
 ## Follow-ups
 
-- The member tier shows a bare "error" for a member that ended `graph.fanout.may_have_started`; the readable sentence
-  the root path shows is not rendered for a member. Candidate follow-up.
+- **FU-274:** the member tier shows a bare "error" for a member that ended `graph.fanout.may_have_started`; its trace
+  step is stored with `is_error` and no text. A separate cause from FU-273 (above).
+- **Performance pass:** a bounded "last N rows" history read for `unproven_resume` and `answered_pause`.
 - fanpar's Main exits on "runtime outbox publisher stopped" under heavy host load and is not restarted (compose restart
   policy `no`). Observed, not investigated here.
