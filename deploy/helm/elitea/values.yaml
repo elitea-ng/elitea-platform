@@ -4906,14 +4906,14 @@ llmGateway:
     # probe again after the open-duration. Mirror config.go defaults.
     LLM_BUDGET_CB_FAILURE_THRESHOLD: "3"
     LLM_BUDGET_CB_OPEN_DURATION_SEC: "10"
-    # Stream-disconnect billing (issue #9, DECISIONS.md 2026-08-05). When a
-    # streaming client vanishes mid-response the gateway keeps the PROVIDER
-    # stream alive this long so the authoritative usage trailer can still arrive
-    # and be billed; if it does not arrive nothing is billed and a
-    # budget.unbilled_stream event is emitted. Clamped to 15000 in code; "0"
-    # disables the mechanism (early exits then bill nothing at all).
-    # The trade-off: a client that hits Stop may be billed for up to this much
-    # further generation, charged to its own project credential.
+    # Stream grace (issue #9, DECISIONS.md 2026-08-05). When a stream ends
+    # early for a reason OTHER than a caller disconnect (provider error,
+    # guardrail block, failed stream setup), the gateway keeps the PROVIDER
+    # stream alive this long so the authoritative usage trailer can still
+    # arrive and be billed. Clamped to 15000 in code; "0" disables it.
+    # A caller disconnect does not use the grace (issue #1201): the gateway
+    # cancels the provider at once and bills an estimate (prompt + relayed
+    # output), marked on the request log and on budget.unbilled_stream.
     LLM_STREAM_GRACE_MS: "5000"
     # Ceiling on concurrently-detained streams; each holds a goroutine and an
     # open provider socket for up to LLM_STREAM_GRACE_MS.

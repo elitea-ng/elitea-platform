@@ -29,6 +29,11 @@ package llmproxy
 //     (streamSettler.settleEarly) which waits up to the grace period for the
 //     authoritative usage chunk, then cancels.
 //
+// Since issue #1201 a CALLER disconnect does not come here: settleDisconnect
+// (stream_disconnect.go) cancels the provider at once and bills an estimate.
+// The grace drain below settles the other early exits (provider error,
+// guardrail block, failed stream setup).
+//
 // What is deliberately NOT here: any estimate. An observed-output-bytes
 // estimate on the money path was the second rejected attempt: it contradicts
 // the standing "no estimate ever reaches a billed amount" rule, over-bills
@@ -367,6 +372,14 @@ type streamSettler struct {
 	gotCache              bool
 	observedOutBytes      int64
 	settled               bool
+	// promptEstimate, seenPrompt, relayedChunks and relayedBytes feed the
+	// estimate billed when the CALLER disconnects (stream_disconnect.go,
+	// issue #1201). They reach the money path only there.
+	promptEstimate              func() int64
+	seenPrompt                  int64
+	relayedChunks, relayedBytes int64
+	// estimated is true when in/out are an estimate (settleDisconnect).
+	estimated bool
 	// logUsage is the request log's enrichment handle, captured while the
 	// request context still carries it.
 	//
@@ -407,8 +420,9 @@ func (h *Handler) newChatSettler(
 		userID:      identityUserFromCtx(ctx),
 		executionID: identityExecutionFromCtx(ctx),
 		ctx:         ctx, sc: sc, ch: ch,
-		logUsage:  requestlog.FromContext(ctx),
-		usageFrom: chatUsageFromChunk, deltaFrom: chatDeltaBytes,
+		logUsage:       requestlog.FromContext(ctx),
+		promptEstimate: promptEstimateFrom(ctx),
+		usageFrom:      chatUsageFromChunk, deltaFrom: chatDeltaBytes,
 	}
 }
 
@@ -427,8 +441,9 @@ func (h *Handler) newResponsesSettler(
 		userID:      identityUserFromCtx(ctx),
 		executionID: identityExecutionFromCtx(ctx),
 		ctx:         ctx, sc: sc, ch: ch,
-		logUsage:  requestlog.FromContext(ctx),
-		usageFrom: responsesUsageFromChunk, deltaFrom: responsesDeltaBytes,
+		logUsage:       requestlog.FromContext(ctx),
+		promptEstimate: promptEstimateFrom(ctx),
+		usageFrom:      responsesUsageFromChunk, deltaFrom: responsesDeltaBytes,
 	}
 }
 
@@ -445,6 +460,9 @@ func (s *streamSettler) observe(c *schemas.BifrostStreamChunk) {
 		// same chunk the extractor accepted — for the Responses dialect that is
 		// the terminal event, never message_start.
 		s.cacheRead, s.cacheWrite, s.gotCache = cacheTokensFromChunk(c)
+	}
+	if p := chunkPromptTokens(c); p > s.seenPrompt {
+		s.seenPrompt = p
 	}
 	if s.deltaFrom != nil {
 		s.observedOutBytes += s.deltaFrom(c)
@@ -498,8 +516,9 @@ func (s *streamSettler) accumulatedUsage() (int64, int64, bool) {
 // here: the trailer if one arrived, and otherwise the provider's accumulated
 // count, which is readable as soon as the channel closed.
 //
-// A stream that the client cut still records 0. That is honest — the gateway
-// answered before it knew the count — and the money is not lost with it: the
+// A stream that the client cut records the estimate settleDisconnect billed
+// (issue #1201), so the per-agent spend cap, which reads this row, sees it. A
+// stream cut on another early exit records 0 when no count was known yet: the
 // drain still bills, and a refused increment still publishes
 // `budget.unbilled_stream`.
 func (s *streamSettler) recordLogTokens() {
@@ -756,7 +775,9 @@ func (s *streamSettler) drain(grace time.Duration) string {
 }
 
 // report settles the stream: bill the provider's numbers, or meter the loss.
-// There is no third option — an estimate never reaches this path.
+// The one exception is a caller disconnect: settleDisconnect sets an estimate
+// (estimated=true) before it calls report, and report bills it and publishes
+// estimated_on_disconnect (issue #1201).
 //
 // Precedence of billable evidence is strict, and it only ever moves UP:
 //
@@ -788,6 +809,11 @@ func (s *streamSettler) report(reason, outcome string) {
 		// (gateway-review blocker 1, reproduced on the deploy path).
 		switch s.h.updateUsage(s.billingContext(), s.provider, s.model, s.in, s.out, s.projectID, s.userID) {
 		case billBilled:
+			if s.estimated {
+				// Billed from an estimate (caller disconnect, issue #1201).
+				s.reportEstimatedBill(reason, outcome)
+				return
+			}
 			if partial {
 				// Billed, and STILL reported. A partial count is a floor on
 				// the real usage, so the remainder is an underbill of unknown
@@ -809,15 +835,17 @@ func (s *streamSettler) report(reason, outcome string) {
 			"reason", reason, "drain_outcome", outcome, "partial", partial,
 			"input_tokens", s.in, "output_tokens", s.out)
 		s.h.publishStreamLossEvent(unbilledStreamPayload{
-			ProjectID:           s.projectID,
-			Provider:            s.provider,
-			Model:               s.model,
-			Reason:              lossReasonBillingRefused,
-			DrainOutcome:        outcome,
-			ObservedOutputBytes: s.observedOutBytes,
-			ExitReason:          reason,
-			PartialInputTokens:  partialOnly(partial, s.in),
-			PartialOutputTokens: partialOnly(partial, s.out),
+			ProjectID:             s.projectID,
+			Provider:              s.provider,
+			Model:                 s.model,
+			Reason:                lossReasonBillingRefused,
+			DrainOutcome:          outcome,
+			ObservedOutputBytes:   s.observedOutBytes,
+			ExitReason:            reason,
+			PartialInputTokens:    partialOnly(partial, s.in),
+			PartialOutputTokens:   partialOnly(partial, s.out),
+			EstimatedInputTokens:  partialOnly(s.estimated, s.in),
+			EstimatedOutputTokens: partialOnly(s.estimated, s.out),
 		})
 		return
 	}
@@ -972,6 +1000,11 @@ type unbilledStreamPayload struct {
 	// necessary even on a stream that WAS billed. Zero on every other event.
 	PartialInputTokens  int64 `json:"partial_input_tokens,omitempty"`
 	PartialOutputTokens int64 `json:"partial_output_tokens,omitempty"`
+	// EstimatedInputTokens and EstimatedOutputTokens are the estimate a
+	// stream was billed from after a caller disconnect (issue #1201). Zero on
+	// every other event.
+	EstimatedInputTokens  int64 `json:"estimated_input_tokens,omitempty"`
+	EstimatedOutputTokens int64 `json:"estimated_output_tokens,omitempty"`
 }
 
 // publishUnbilledStreamEvent emits budget.unbilled_stream onto gateway.events.*
