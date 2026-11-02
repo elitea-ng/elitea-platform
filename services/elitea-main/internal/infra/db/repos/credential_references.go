@@ -73,6 +73,10 @@ type CredentialReferenceRecord struct {
 	UpdatedAt        time.Time
 	// Rotation is the pending secret rotation (#1505); nil when none.
 	Rotation *PendingRotation
+	// Superseded is the secret version the transition that answered this
+	// record took out of use; nil when none. Transition sets it; it is not
+	// stored. The caller retires it through the secret write ledger.
+	Superseded *SupersededSecret
 }
 
 // CredentialReferenceFilter selects a page of one tenant project's
@@ -89,6 +93,8 @@ type CredentialReferenceAction string
 const (
 	CredentialReferenceActivate CredentialReferenceAction = "activate"
 	CredentialReferenceRetire   CredentialReferenceAction = "retire"
+	// CredentialReferenceCancelRotation clears a pending rotation (#1505).
+	CredentialReferenceCancelRotation CredentialReferenceAction = "cancel_rotation"
 )
 
 // ToolkitAttachment names one toolkit of a tenant project.
@@ -284,6 +290,8 @@ func (s *CredentialReferences) Transition(ctx context.Context, id string, action
 			return CredentialReferenceRecord{}, ErrCredentialReferenceIncomplete
 		}
 		next, activatedBy = credentialgrant.ReferenceActive, &actorID
+	case CredentialReferenceCancelRotation:
+		return s.cancelRotation(ctx, tx, current, actorID, actor)
 	case CredentialReferenceRetire:
 		if current.State == credentialgrant.ReferenceRetired {
 			return CredentialReferenceRecord{}, ErrCredentialReferenceTransition
@@ -292,11 +300,17 @@ func (s *CredentialReferences) Transition(ctx context.Context, id string, action
 	default:
 		return CredentialReferenceRecord{}, ErrCredentialReferenceTransition
 	}
+	// A retire also cancels a pending rotation (#1505): nobody can activate
+	// it any more, and its secret version is retired after the commit.
 	tag, err := tx.Exec(ctx, `
 UPDATE elitea_identity.credential_references
-SET state = $2, activated_by = $3, last_transition_by = $4, updated_at = $5
+SET state = $2, activated_by = $3, last_transition_by = $4, updated_at = $5,
+    rotation_locator = CASE WHEN $7::boolean THEN NULL ELSE rotation_locator END,
+    rotation_generation = CASE WHEN $7::boolean THEN NULL ELSE rotation_generation END,
+    rotation_staged_by = CASE WHEN $7::boolean THEN NULL ELSE rotation_staged_by END,
+    rotation_staged_at = CASE WHEN $7::boolean THEN NULL ELSE rotation_staged_at END
 WHERE id = $1::uuid AND state = $6`,
-		id, string(next), activatedBy, actorID, s.now().UTC(), string(current.State))
+		id, string(next), activatedBy, actorID, s.now().UTC(), string(current.State), next == credentialgrant.ReferenceRetired)
 	if err != nil {
 		return CredentialReferenceRecord{}, mapCredentialReferenceWriteError(err)
 	}
@@ -308,8 +322,11 @@ WHERE id = $1::uuid AND state = $6`,
 	if err != nil {
 		return CredentialReferenceRecord{}, err
 	}
-	event := credentialReferenceEvent(written, "credential_reference."+string(action), actor,
-		"state."+string(written.State), "from."+string(current.State))
+	reasons := []string{"state." + string(written.State), "from." + string(current.State)}
+	if next == credentialgrant.ReferenceRetired && current.Rotation != nil {
+		reasons = append(reasons, "cancels.generation."+strconv.FormatInt(current.Rotation.Generation, 10))
+	}
+	event := credentialReferenceEvent(written, "credential_reference."+string(action), actor, reasons...)
 	if err := s.audit.Append(ctx, tx, event); err != nil {
 		return CredentialReferenceRecord{}, fmt.Errorf("audit credential reference transition: %w", err)
 	}
@@ -321,6 +338,10 @@ WHERE id = $1::uuid AND state = $6`,
 			Epoch:     epoch.SecurityEpoch{Kind: epoch.KindCredentialRef, ID: written.ID, Value: written.Generation},
 			ChangedAt: written.UpdatedAt,
 		})
+	}
+	if next == credentialgrant.ReferenceRetired && current.Rotation != nil {
+		written.Superseded = &SupersededSecret{Locator: current.Rotation.Locator, Generation: current.Rotation.Generation,
+			Reason: "reference_retired"}
 	}
 	return written, nil
 }

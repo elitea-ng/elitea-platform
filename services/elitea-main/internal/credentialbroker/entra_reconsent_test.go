@@ -92,6 +92,17 @@ func (c *reconsentCustody) Delegate(_ context.Context, r delegationstore.Delegat
 	return delegationstore.Delegation{ID: tDelegation2, TenantProjectID: r.TenantProjectID, AgentBindingID: r.AgentBindingID}, nil
 }
 
+// Revoke marks a delegation revoked, as the store does when a resume fails.
+func (c *reconsentCustody) Revoke(_ context.Context, id, _ string) (int64, error) {
+	d, ok := c.w.delegations.delegations[id]
+	if !ok {
+		return 0, mandate.ErrDelegationNotUsable
+	}
+	d.State = mandate.StateRevoked
+	c.w.delegations.delegations[id] = d
+	return 1, nil
+}
+
 // rerunContinuer continues the paused turn the way the runtime does: the
 // new run binds the newest active delegation of the user and binding.
 type rerunContinuer struct {

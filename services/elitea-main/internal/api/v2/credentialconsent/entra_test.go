@@ -27,6 +27,8 @@ type entraStore struct {
 	reads     int
 	delegates int
 	noSignIn  bool
+	resolved  bool
+	revoked   []string
 }
 
 func (s *entraStore) RequirementFor(_ context.Context, reference string, project, user int64) (delegationstore.Requirement, error) {
@@ -35,7 +37,13 @@ func (s *entraStore) RequirementFor(_ context.Context, reference string, project
 		return delegationstore.Requirement{}, delegationstore.ErrRequirementNotFound
 	}
 	return delegationstore.Requirement{Reference: entraRef, TenantProjectID: 7, ActorUserID: 11,
-		DelegationID: "d-1", Reason: delegationstore.ReasonInteractionRequired, CreatedAt: time.Unix(100, 0)}, nil
+		DelegationID: "d-1", Reason: delegationstore.ReasonInteractionRequired, CreatedAt: time.Unix(100, 0),
+		Resolved: s.resolved}, nil
+}
+
+func (s *entraStore) Revoke(_ context.Context, id, _ string) (int64, error) {
+	s.revoked = append(s.revoked, id)
+	return 1, nil
 }
 
 func (s *entraStore) Delegation(context.Context, string) (mandate.Delegation, error) {
@@ -50,10 +58,25 @@ func (s *entraStore) Delegate(context.Context, delegationstore.DelegateRequest) 
 	return delegationstore.Delegation{ID: "d-2"}, nil
 }
 
-type entraResumer struct{ resumes int }
+// entraResumer resolves the store's requirement on its first resume, as
+// CredentialAuthorizations.Resume does; a second resume is refused.
+type entraResumer struct {
+	resumes int
+	store   *entraStore
+	err     error
+}
 
 func (r *entraResumer) Resume(context.Context, agentexecutionapp.CredentialAuthorizationResume) (agentexecutionapp.CurrentApplicationStartOutcome, error) {
 	r.resumes++
+	if r.err != nil {
+		return agentexecutionapp.CurrentApplicationStartOutcome{}, r.err
+	}
+	if r.store != nil {
+		if r.store.resolved {
+			return agentexecutionapp.CurrentApplicationStartOutcome{}, delegationstore.ErrRequirementResolved
+		}
+		r.store.resolved = true
+	}
 	return agentexecutionapp.CurrentApplicationStartOutcome{ExecutionID: "e-2"}, nil
 }
 
@@ -140,5 +163,46 @@ func TestEntraCallbackRefusals(t *testing.T) {
 	}
 	if rec := entraServe(h, use, http.MethodGet, callback, "", cookie, session); rec.Code != http.StatusOK || resumer.resumes != 1 {
 		t.Fatalf("callback: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// Two tabs started consent for one reference. The first callback resumes
+// the run. The second is 409 before any delegation. A resume that loses the
+// race after the delegation was created revokes that delegation.
+func TestEntraCallbackInTwoTabs(t *testing.T) {
+	session := &http.Cookie{Name: browsersession.CookieName,
+		Value: browsersession.CookieValue(base64.RawURLEncoding.EncodeToString(make([]byte, browsersession.IDRandomBytes)))}
+	use := fakeResolver{perms: []string{credentialgrant.PermissionUse}}
+	store := &entraStore{}
+	resumer := &entraResumer{store: store}
+	h := entraHandler(t, store, resumer)
+	start := func() (*http.Cookie, string) {
+		rec := entraServe(h, use, http.MethodPost, "/credential_consent/entra:start", `{"project_id":7,"authorization_reference":"`+entraRef+`"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("start: %d %s", rec.Code, rec.Body)
+		}
+		cookie := rec.Result().Cookies()[0]
+		return cookie, "/credential_consent/entra:callback?state=" + strings.SplitN(cookie.Value, "|", 2)[0]
+	}
+	firstCookie, firstCallback := start()
+	secondCookie, secondCallback := start()
+
+	if rec := entraServe(h, use, http.MethodGet, firstCallback, "", firstCookie, session); rec.Code != http.StatusOK {
+		t.Fatalf("first tab: %d %s", rec.Code, rec.Body)
+	}
+	rec := entraServe(h, use, http.MethodGet, secondCallback, "", secondCookie, session)
+	if rec.Code != http.StatusConflict || store.delegates != 1 || resumer.resumes != 1 || len(store.revoked) != 0 {
+		t.Fatalf("second tab: %d %s, delegates %d, resumes %d, revoked %v", rec.Code, rec.Body, store.delegates, resumer.resumes, store.revoked)
+	}
+
+	// The race: the read saw the reference open, the resume finds it
+	// resolved. The delegation made for it is revoked.
+	store = &entraStore{}
+	resumer = &entraResumer{err: delegationstore.ErrRequirementResolved}
+	h = entraHandler(t, store, resumer)
+	cookie, callback := start()
+	rec = entraServe(h, use, http.MethodGet, callback, "", cookie, session)
+	if rec.Code != http.StatusConflict || store.delegates != 1 || len(store.revoked) != 1 || store.revoked[0] != "d-2" {
+		t.Fatalf("race: %d %s, delegates %d, revoked %v", rec.Code, rec.Body, store.delegates, store.revoked)
 	}
 }

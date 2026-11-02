@@ -6,6 +6,8 @@
 //	GET    /api/v2/admin/credential_references/{id}
 //	POST   /api/v2/admin/credential_references/{id}:activate   {}
 //	POST   /api/v2/admin/credential_references/{id}:retire     {}
+//	POST   /api/v2/admin/credential_references/{id}:rotate     {"material"}
+//	POST   /api/v2/admin/credential_references/{id}:cancel_rotation {}
 //	POST   /api/v2/admin/credential_references/{id}:attach     {"project_id", "toolkit_id"}
 //	POST   /api/v2/admin/credential_references/{id}:detach     {"project_id", "toolkit_id"}
 //	PUT    /api/v2/admin/agent_identities/{id}/toolkits/{toolkit_id}  {"project_id"}
@@ -61,6 +63,18 @@ type Handler struct {
 	ids       func() string
 	// rotator serves Rotate (WithRotate).
 	rotator Rotator
+	// retirer retires the secret version a transition superseded
+	// (WithSecretRetire). Without it the version stays in the store.
+	retirer SecretRetirer
+}
+
+// WithSecretRetire makes :activate, :retire and :cancel_rotation retire
+// the secret version they take out of use (#1505).
+func (h *Handler) WithSecretRetire(retirer SecretRetirer) *Handler {
+	if h != nil {
+		h.retirer = retirer
+	}
+	return h
 }
 
 // New builds the handler. A nil store is refused.
@@ -122,8 +136,17 @@ func view(r repos.CredentialReferenceRecord) referenceView {
 		StagedBy: optional(r.StagedBy), ActivatedBy: optional(r.ActivatedBy),
 		LastTransitionBy: optional(r.LastTransitionBy), MigratedFrom: optional(r.MigratedFrom),
 		CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: r.UpdatedAt.UTC().Format(time.RFC3339Nano),
-		PendingRotation: rotationOf(r.Rotation),
+		PendingRotation: pendingOf(r),
 	}
+}
+
+// pendingOf shows a pending rotation on an active reference only. Retire
+// clears it; this also hides one that a row written before that rule kept.
+func pendingOf(r repos.CredentialReferenceRecord) *rotationView {
+	if r.State != credentialgrant.ReferenceActive {
+		return nil
+	}
+	return rotationOf(r.Rotation)
 }
 
 // List serves GET /admin/credential_references.
@@ -190,6 +213,11 @@ func (h *Handler) transition(action repos.CredentialReferenceAction) http.Handle
 			writeStoreError(w, err)
 			return
 		}
+		if rec.Superseded != nil && h.retirer != nil {
+			// After the commit and the cache invalidation: the broker no
+			// longer reads this version.
+			h.retirer.RetireSuperseded(r.Context(), rec, who)
+		}
 		writeJSON(w, http.StatusOK, view(rec))
 	}
 }
@@ -199,9 +227,15 @@ func (h *Handler) Activate(w http.ResponseWriter, r *http.Request) {
 	h.transition(repos.CredentialReferenceActivate)(w, r)
 }
 
-// Retire serves POST …/{id}:retire.
+// Retire serves POST …/{id}:retire. It also cancels a pending rotation.
 func (h *Handler) Retire(w http.ResponseWriter, r *http.Request) {
 	h.transition(repos.CredentialReferenceRetire)(w, r)
+}
+
+// CancelRotation serves POST …/{id}:cancel_rotation: it clears a pending
+// rotation and retires its secret version (#1505).
+func (h *Handler) CancelRotation(w http.ResponseWriter, r *http.Request) {
+	h.transition(repos.CredentialReferenceCancelRotation)(w, r)
 }
 
 type toolkitBody struct {
@@ -376,7 +410,8 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	case errors.Is(err, repos.ErrCredentialReferenceSelfActive), errors.Is(err, repos.ErrCredentialReferenceActor),
 		errors.Is(err, repos.ErrCredentialReferenceSelfRotation):
 		writeError(w, http.StatusForbidden, err.Error())
-	case errors.Is(err, repos.ErrCredentialReferenceNotRotatable):
+	case errors.Is(err, repos.ErrCredentialReferenceNotRotatable), errors.Is(err, repos.ErrCredentialReferenceRotationPending),
+		errors.Is(err, repos.ErrCredentialReferenceNoRotation):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, repos.ErrCredentialReferenceTransition), errors.Is(err, repos.ErrCredentialReferenceNoStager),
 		errors.Is(err, repos.ErrCredentialReferenceRetired), errors.Is(err, repos.ErrCredentialReferenceTenant),

@@ -881,7 +881,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 462 -> 463 (issue 1505, ADR-0039): rotateCredentialReference, the
 // secret rotation of an active credential reference (an admin route, not in
 // the manifest).
-const GENERATED_OPERATION_COUNT = 463;
+// 463 -> 464 (issue 1505 review): cancelCredentialReferenceRotation, which
+// clears a pending rotation and retires its secret version (an admin route,
+// not in the manifest).
+const GENERATED_OPERATION_COUNT = 464;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

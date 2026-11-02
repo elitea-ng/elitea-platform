@@ -17,10 +17,13 @@ package credentialconsent
 //  2. The user signs in again. The OIDC callback keeps the new Entra
 //     assertion for the browser session and redirects to the callback.
 //  3. GET /credential_consent/entra:callback?state=… checks the state
-//     against the cookie, opens the reference again for the caller, checks
-//     the permission in the project, creates a delegation from an assertion
+//     against the cookie, opens the reference again for the caller, refuses
+//     a resolved reference (409, before any delegation), checks the
+//     permission in the project, creates a delegation from an assertion
 //     stored AFTER the run paused, and resumes the run
-//     (CredentialAuthorizations.Resume).
+//     (CredentialAuthorizations.Resume). If the resume fails (another tab
+//     resolved the reference first, for example), the new delegation is
+//     revoked, so no active delegation is left without a run.
 //
 // No response holds an assertion or a token.
 
@@ -68,6 +71,7 @@ type EntraCustody interface {
 	RequirementFor(ctx context.Context, reference string, tenantProjectID, actorUserID int64) (delegationstore.Requirement, error)
 	Delegation(ctx context.Context, id string) (mandate.Delegation, error)
 	Delegate(ctx context.Context, r delegationstore.DelegateRequest) (delegationstore.Delegation, error)
+	Revoke(ctx context.Context, delegationID, actor string) (int64, error)
 }
 
 var _ EntraCustody = (*delegationstore.Store)(nil)
@@ -227,6 +231,11 @@ func (h *Handler) callbackEntra(w http.ResponseWriter, r *http.Request, user aut
 		h.logger.ErrorContext(ctx, "credential consent: read the authorization requirement", "error", err)
 		writeError(w, http.StatusInternalServerError, "credential consent: internal error")
 		return
+	case requirement.Resolved:
+		// A second callback (two tabs): the run already resumed. Nothing is
+		// delegated.
+		writeError(w, http.StatusConflict, "the authorization reference is already resolved")
+		return
 	}
 	if !permitted(ctx, resolver, user, mode, saved.projectID) {
 		h.refusal(ctx, user, EntraProvider, "consent.permission_missing")
@@ -273,6 +282,13 @@ func (h *Handler) callbackEntra(w http.ResponseWriter, r *http.Request, user aut
 		AuthorizationReference: requirement.Reference, TenantProjectID: saved.projectID, ActorUserID: userID,
 		DelegationID: delegation.ID, TriggerOrigin: executiondomain.TriggerOriginManual,
 	})
+	if err != nil {
+		// No run uses the new delegation. Revoke it, so it does not stay
+		// active with nothing to answer for it.
+		if _, revokeErr := e.custody.Revoke(context.WithoutCancel(ctx), delegation.ID, "consent.resume_failed"); revokeErr != nil {
+			h.logger.ErrorContext(ctx, "credential consent: revoke the unused delegation", "error", revokeErr)
+		}
+	}
 	switch {
 	case err == nil:
 	case errors.Is(err, delegationstore.ErrRequirementResolved):

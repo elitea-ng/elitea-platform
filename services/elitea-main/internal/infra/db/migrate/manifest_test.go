@@ -1003,7 +1003,9 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 220: shared/0220_credential_reference_rotation.sql, a pending secret
 	// rotation on a credential reference (ADR-0039, #1505): nullable
 	// rotation_locator, rotation_generation, rotation_staged_by and
-	// rotation_staged_at, all set or all NULL. No data, no permission.
+	// rotation_staged_at, all set or all NULL; and the secret write ledger
+	// state 'retired' for a version the reference no longer uses. No data,
+	// no permission.
 	require.EqualValues(t, 220, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)

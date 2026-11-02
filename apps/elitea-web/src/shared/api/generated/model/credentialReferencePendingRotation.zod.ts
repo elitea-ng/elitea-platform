@@ -52,7 +52,7 @@ export const CredentialReferencePendingRotation = zod
     staged_at: zod.iso.datetime({ offset: true }),
   })
   .describe(
-    "A secret version that `:rotate` wrote for an active reference and that is not activated yet (issue 1505). The broker still reads the reference's own locator and generation. Absent when no rotation is pending. It never holds a value.\n",
+    "A secret version that `:rotate` wrote for an active reference and that is not activated yet (issue 1505). The broker still reads the reference's own locator and generation. Absent when no rotation is pending or the reference is not active. It never holds a value.\n",
   );
 
 export type CredentialReferencePendingRotation = zod.input<

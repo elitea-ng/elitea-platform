@@ -15228,7 +15228,7 @@ export const getActivateCredentialReferenceUrl = (id: string) => {
 };
 
 /**
- * Moves a `staged` reference to `active`. Two-person rule: the caller must not be the operator who staged it (`staged_by`); a reference that records no stager cannot be activated. The body is empty or `{}`. On an `active` reference with a `pending_rotation` (issue 1505), it moves the reference to the pending locator and generation instead. The caller must then not be the operator who called `:rotate`. Replicas drop what they cached for the old secret. Gated on `models.agent_identity.bindings.approve`. Appends a security audit decision in the same transaction. Mounted only when the enterprise credential governance flag is on.
+ * Moves a `staged` reference to `active`. Two-person rule: the caller must not be the operator who staged it (`staged_by`); a reference that records no stager cannot be activated. The body is empty or `{}`. On an `active` reference with a `pending_rotation` (issue 1505), it moves the reference to the pending locator and generation instead. The caller must then not be the operator who called `:rotate`. Replicas drop what they cached for the old secret. Then the old secret version is retired through the secret write ledger (Vault: the version is destroyed; pgvault: the old name is deleted when a governed write created it), with a `credential_reference.secret_retire` audit decision. Gated on `models.agent_identity.bindings.approve`. Appends a security audit decision in the same transaction. Mounted only when the enterprise credential governance flag is on.
  * @summary Activate a staged credential reference
  */
 export const activateCredentialReference = async (
@@ -15457,7 +15457,7 @@ export const getRotateCredentialReferenceUrl = (id: string) => {
 };
 
 /**
- * Writes a new value for an active static_secret reference through the secret write ledger and records it as `pending_rotation` (issue 1505). Vault gets a new version at the same path (check-and-set on the current version). pgvault gets a new secret name, because a pgvault secret has one version only. The broker still reads the current value until another operator calls `:activate`. A second `:rotate` replaces a pending rotation and retires its version. Gated on `models.agent_identity.bindings.manage`. Appends a security audit decision. Mounted only when the enterprise credential governance flag is on.
+ * Writes a new value for an active static_secret reference through the secret write ledger and records it as `pending_rotation` (issue 1505). Vault gets a new version at the same path (check-and-set on the current version). pgvault gets a new secret name, because a pgvault secret has one version only. The broker still reads the current value until another operator calls `:activate`. One rotation can be pending at a time. A second `:rotate` is 409 before anything is written, because each Vault rotation adds a KV v2 version and destroyed versions still count toward `max_versions`. Call `:activate` or `:cancel_rotation` first. Gated on `models.agent_identity.bindings.manage`. Appends a security audit decision. Mounted only when the enterprise credential governance flag is on.
  * @summary Rotate the secret of an active credential reference
  */
 export const rotateCredentialReference = async (
@@ -15674,6 +15674,235 @@ export function useRotateCredentialReference<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type cancelCredentialReferenceRotationResponse200 = {
+  data: CredentialReference;
+  status: 200;
+};
+
+export type cancelCredentialReferenceRotationResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type cancelCredentialReferenceRotationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type cancelCredentialReferenceRotationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type cancelCredentialReferenceRotationResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type cancelCredentialReferenceRotationResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type cancelCredentialReferenceRotationResponseSuccess =
+  cancelCredentialReferenceRotationResponse200 & {
+    headers: Headers;
+  };
+export type cancelCredentialReferenceRotationResponseError = (
+  | cancelCredentialReferenceRotationResponse400
+  | cancelCredentialReferenceRotationResponse401
+  | cancelCredentialReferenceRotationResponse403
+  | cancelCredentialReferenceRotationResponse404
+  | cancelCredentialReferenceRotationResponse409
+) & {
+  headers: Headers;
+};
+
+export type cancelCredentialReferenceRotationResponse =
+  | cancelCredentialReferenceRotationResponseSuccess
+  | cancelCredentialReferenceRotationResponseError;
+
+export const getCancelCredentialReferenceRotationUrl = (id: string) => {
+  return `/admin/credential_references/${id}:cancel_rotation`;
+};
+
+/**
+ * Clears `pending_rotation` (issue 1505). The reference keeps its locator and generation, so the broker still reads the current value. The pending secret version is retired through the secret write ledger (Vault: the version is destroyed; pgvault: the new name is deleted), with a `credential_reference.secret_retire` audit decision. Any operator with the permission can cancel, the one who called `:rotate` too. The body is empty or `{}`. Gated on `models.agent_identity.bindings.manage`. Appends a security audit decision in the same transaction. Mounted only when the enterprise credential governance flag is on.
+ * @summary Cancel the pending secret rotation of a credential reference
+ */
+export const cancelCredentialReferenceRotation = async (
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<cancelCredentialReferenceRotationResponse> => {
+  return eliteaFetch<cancelCredentialReferenceRotationResponse>(
+    getCancelCredentialReferenceRotationUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getCancelCredentialReferenceRotationQueryKey = (id: string) => {
+  return [
+    "POST",
+    `/admin/credential_references/${id}:cancel_rotation`,
+  ] as const;
+};
+
+export const getCancelCredentialReferenceRotationQueryOptions = <
+  TData = Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getCancelCredentialReferenceRotationQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>
+  > = ({ signal }) =>
+    cancelCredentialReferenceRotation(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CancelCredentialReferenceRotationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>
+>;
+export type CancelCredentialReferenceRotationQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useCancelCredentialReferenceRotation<
+  TData = Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>,
+          TError,
+          Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCancelCredentialReferenceRotation<
+  TData = Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>,
+          TError,
+          Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCancelCredentialReferenceRotation<
+  TData = Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Cancel the pending secret rotation of a credential reference
+ */
+
+export function useCancelCredentialReferenceRotation<
+  TData = Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof cancelCredentialReferenceRotation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCancelCredentialReferenceRotationQueryOptions(
+    id,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type retireCredentialReferenceResponse200 = {
   data: CredentialReference;
   status: 200;
@@ -15727,7 +15956,7 @@ export const getRetireCredentialReferenceUrl = (id: string) => {
 };
 
 /**
- * Moves any reference that is not already retired to `retired`. A governed run that froze the reference is denied at its next credential redemption (`authority_revoked`), because the revocation epoch check treats a reference outside `active` and `retiring` as revoked. `generation` (the secret version) does not change. The body is empty or `{}`. Gated on `models.agent_identity.bindings.manage`. Mounted only when the enterprise credential governance flag is on.
+ * Moves any reference that is not already retired to `retired`. A governed run that froze the reference is denied at its next credential redemption (`authority_revoked`), because the revocation epoch check treats a reference outside `active` and `retiring` as revoked. `generation` (the secret version) does not change. A pending rotation is cancelled: its secret version is retired through the secret write ledger, and a retired reference never shows `pending_rotation`. The body is empty or `{}`. Gated on `models.agent_identity.bindings.manage`. Mounted only when the enterprise credential governance flag is on.
  * @summary Retire a credential reference
  */
 export const retireCredentialReference = async (

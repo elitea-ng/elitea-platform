@@ -12,6 +12,15 @@ package credentialreferences
 //   - A second operator calls :activate. The reference then moves to the new
 //     locator and generation, with its audit event (the same two-person rule
 //     as a new reference).
+//   - One rotation can be pending at a time. A second :rotate is 409 before
+//     anything is written: each Vault rotation adds a KV v2 version, and
+//     destroyed versions still count toward max_versions. :cancel_rotation
+//     clears a pending rotation.
+//   - A version that the reference no longer uses (the replaced value after
+//     :activate, a cancelled rotation, the pending value of a retired
+//     reference) is retired through the secret write ledger after the
+//     commit (RetireSuperseded), with a credential_reference.secret_retire
+//     audit decision.
 //
 // The value is in the request body only. It is never returned, logged or
 // stored outside the secret store.
@@ -22,6 +31,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -119,7 +129,8 @@ func clearMaterial(material map[string]string) {
 // (*repos.CredentialReferences).
 type RotationStore interface {
 	Get(ctx context.Context, id string) (repos.CredentialReferenceRecord, error)
-	StageRotation(ctx context.Context, stage repos.RotationStage) (repos.CredentialReferenceRecord, *repos.PendingRotation, error)
+	StageRotation(ctx context.Context, stage repos.RotationStage) (repos.CredentialReferenceRecord, error)
+	RecordSecretRetire(ctx context.Context, rec repos.CredentialReferenceRecord, retire repos.SecretRetire) error
 }
 
 var _ RotationStore = (*repos.CredentialReferences)(nil)
@@ -128,6 +139,8 @@ var _ RotationStore = (*repos.CredentialReferences)(nil)
 type SecretWriter interface {
 	StagedWrite(ctx context.Context, store secretstore.SecretStore, sc secretstore.StoreContext, ref secretstore.SecretRef,
 		value secretstore.RuntimeSecret, casVersion int64) (int64, error)
+	RetireSuperseded(ctx context.Context, store secretstore.SecretStore, sc secretstore.StoreContext, ref secretstore.SecretRef,
+		version int64) (secretstore.RetireOutcome, error)
 }
 
 var _ SecretWriter = (*secretstore.Ledger)(nil)
@@ -168,6 +181,12 @@ func (s *SecretRotator) Rotate(ctx context.Context, r RotateRequest) (repos.Cred
 	}
 	if current.State != credentialgrant.ReferenceActive || current.Class != credentialgrant.ClassStaticSecret {
 		return repos.CredentialReferenceRecord{}, repos.ErrCredentialReferenceNotRotatable
+	}
+	if current.Rotation != nil {
+		// Refused before any write: a new Vault version would count toward
+		// max_versions even after it is destroyed. StageRotation refuses
+		// again under the row lock.
+		return repos.CredentialReferenceRecord{}, repos.ErrCredentialReferenceRotationPending
 	}
 	descriptor, ok := s.providers.Descriptor(current.ProviderType)
 	if !ok {
@@ -221,27 +240,76 @@ func (s *SecretRotator) Rotate(ctx context.Context, r RotateRequest) (repos.Cred
 	if err != nil {
 		return repos.CredentialReferenceRecord{}, ErrRotationWrite
 	}
-	staged, replaced, err := s.store.StageRotation(ctx, repos.RotationStage{
+	staged, err := s.store.StageRotation(ctx, repos.RotationStage{
 		ReferenceID: current.ID, Locator: ref.Path, Generation: version, DecisionID: decisionID, StagedBy: r.Actor,
 	})
 	if err != nil {
-		// The version stays unreferenced; retire it so the store does not
-		// keep a value nobody can activate.
-		s.retire(ctx, store, sc, current.Backend, ref.Mount, ref.Path, version)
+		// The version stays unreferenced (a concurrent :rotate won the row
+		// lock, or the reference changed); retire it so the store does not
+		// keep a value nobody can activate. Best effort: the broker never
+		// reads it.
+		_, _ = s.ledger.RetireSuperseded(context.WithoutCancel(ctx), store, sc, ref, version)
 		return repos.CredentialReferenceRecord{}, err
-	}
-	if replaced != nil && (replaced.Locator != ref.Path || replaced.Generation != version) {
-		// The rotation this one replaces will never be activated.
-		s.retire(ctx, store, sc, current.Backend, ref.Mount, replaced.Locator, replaced.Generation)
 	}
 	return staged, nil
 }
 
-// retire is best effort: a version left behind is unreferenced, and the
-// broker never reads it.
-func (s *SecretRotator) retire(ctx context.Context, store secretstore.SecretStore, sc secretstore.StoreContext,
-	backend, mount, path string, version int64) {
-	_ = store.Retire(context.WithoutCancel(ctx), sc, secretstore.SecretRef{Backend: backend, Mount: mount, Path: path}, version)
+// SecretRetirer retires the secret version a transition superseded.
+type SecretRetirer interface {
+	RetireSuperseded(ctx context.Context, rec repos.CredentialReferenceRecord, actor string)
+}
+
+// RetireSuperseded implements SecretRetirer. It runs after the transition
+// committed and the replicas were told to drop their caches. It retires
+// rec.Superseded through the secret write ledger and records the outcome
+// as a credential_reference.secret_retire audit decision. A failure does
+// not undo the transition: it is audited and logged with the locator, so
+// an operator can retire the version by hand.
+func (s *SecretRotator) RetireSuperseded(ctx context.Context, rec repos.CredentialReferenceRecord, actor string) {
+	if rec.Superseded == nil {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	secret := *rec.Superseded
+	decisionID, err := s.token(16)
+	if err != nil {
+		slog.Default().Warn("credential reference: could not retire a superseded secret version",
+			"credential_reference_id", rec.ID, "locator", secret.Locator, "generation", secret.Generation, "error", err)
+		return
+	}
+	decisionID = uuidOf(decisionID)
+	outcome := repos.SecretRetireNoBackend
+	if store, ok := s.stores[rec.Backend]; ok && store != nil {
+		sc := secretstore.StoreContext{
+			TenantProjectID: rec.TenantProjectID, CredentialRefID: rec.ID, DecisionID: decisionID,
+			WorkloadScope: repos.CredentialReferenceStagingScope, PolicyRevisionID: s.policyRevisionID,
+		}
+		ref := secretstore.SecretRef{Backend: rec.Backend, Path: secret.Locator}
+		if m, ok := store.(mounted); ok {
+			ref.Mount = m.KVMount()
+		}
+		done, err := s.ledger.RetireSuperseded(ctx, store, sc, ref, secret.Generation)
+		switch {
+		case err != nil:
+			outcome = repos.SecretRetireFailed
+		case done == secretstore.RetireNotOwned:
+			outcome = repos.SecretRetireNotOwned
+		default:
+			outcome = repos.SecretRetireDone
+		}
+	}
+	if outcome != repos.SecretRetireDone {
+		// The locator is a path or a name, never a value.
+		slog.Default().Warn("credential reference: a superseded secret version was not retired",
+			"credential_reference_id", rec.ID, "backend", rec.Backend, "locator", secret.Locator,
+			"generation", secret.Generation, "outcome", outcome)
+	}
+	if err := s.store.RecordSecretRetire(ctx, rec, repos.SecretRetire{
+		Secret: secret, Outcome: outcome, DecisionID: decisionID, Actor: actor,
+	}); err != nil {
+		slog.Default().Warn("credential reference: could not audit a secret retire",
+			"credential_reference_id", rec.ID, "outcome", outcome, "error", err)
+	}
 }
 
 func (s *SecretRotator) token(n int) (string, error) {

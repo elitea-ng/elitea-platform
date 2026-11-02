@@ -64,5 +64,5 @@ func credentialReferencesAdmin(admission profile.Admission, revision profile.Pol
 	if err != nil {
 		return nil, err
 	}
-	return handler.WithCreate(locators, registry).WithRotate(rotator), nil
+	return handler.WithCreate(locators, registry).WithRotate(rotator).WithSecretRetire(rotator), nil
 }

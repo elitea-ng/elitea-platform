@@ -42,6 +42,8 @@ struct MockServers {
     barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
     /// Sessions closed (dropped), by server (#1474).
     closed: Mutex<Vec<String>>,
+    /// Listings sleep this long, so concurrent calls overlap a dial.
+    list_delay: Mutex<Option<std::time::Duration>>,
 }
 
 impl MockServers {
@@ -131,6 +133,10 @@ impl Toolset for Listed {
         let barrier = self.servers.barrier.lock().expect("barrier").clone();
         if let Some(barrier) = barrier {
             barrier.wait().await;
+        }
+        let delay = *self.servers.list_delay.lock().expect("delay");
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
         }
         if self
             .servers
@@ -996,4 +1002,74 @@ async fn no_session_outlives_its_redeemed_token() {
     })
     .await
     .expect("the expired session was closed");
+}
+
+/// #1474 review: no lock is held across a dial. Two concurrent calls that
+/// redeem different tokens dial and list in parallel: each listing waits at
+/// a barrier of two, so a dial that held the slot's lock would block the
+/// other call and time out.
+#[tokio::test]
+async fn concurrent_calls_with_new_tokens_dial_in_parallel() {
+    let answers = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&answers);
+    let (built, servers, _) = build(
+        vec![mcp_tool(Some(41), "alpha", SERVER_A, &json!({}))],
+        Box::new(move |_| {
+            let token = format!("token-{}", counter.fetch_add(1, Ordering::SeqCst));
+            Ok(RedeemOutcome::Envelope(envelope(
+                EnvelopeKind::OauthAccess,
+                &[("access_token", token.as_str())],
+                &canonical_resource_uri(SERVER_A).expect("canonical"),
+            )))
+        }),
+    )
+    .await;
+    let dialled = servers.sessions().len();
+    *servers.barrier.lock().expect("barrier") = Some(Arc::new(tokio::sync::Barrier::new(2)));
+    let toolset = &built.toolsets[0];
+    let (first, second) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(call(toolset), call(toolset))
+    })
+    .await
+    .expect("the two dials overlapped");
+    assert_eq!(first, json!({"server": SERVER_A}));
+    assert_eq!(second, json!({"server": SERVER_A}));
+    let sessions = servers.sessions();
+    assert_eq!(sessions.len(), dialled + 2, "{sessions:?}");
+    let mut tokens: Vec<_> = sessions[dialled..]
+        .iter()
+        .map(|(server, token)| {
+            assert_eq!(server, SERVER_A, "{sessions:?}");
+            token.clone().expect("token")
+        })
+        .collect();
+    tokens.sort();
+    tokens.dedup();
+    assert_eq!(tokens.len(), 2, "each session carries its own token");
+}
+
+/// #1474 review: concurrent calls that redeem the same token share one dial
+/// and one listing, and all run on that session.
+#[tokio::test]
+async fn concurrent_calls_with_the_same_token_share_one_dial() {
+    let (built, servers, _) = build(
+        vec![mcp_tool(Some(41), "alpha", SERVER_A, &json!({}))],
+        per_server(),
+    )
+    .await;
+    let dialled = servers.sessions().len();
+    let listed = servers.listings().len();
+    *servers.list_delay.lock().expect("delay") = Some(std::time::Duration::from_millis(50));
+    let toolset = &built.toolsets[0];
+    let results = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(call(toolset), call(toolset), call(toolset))
+    })
+    .await
+    .expect("the calls finished");
+    assert_eq!(results.0, json!({"server": SERVER_A}));
+    assert_eq!(results.1, json!({"server": SERVER_A}));
+    assert_eq!(results.2, json!({"server": SERVER_A}));
+    assert_eq!(servers.sessions().len(), dialled + 1, "one shared dial");
+    assert_eq!(servers.listings().len(), listed + 1, "one shared listing");
+    assert_eq!(servers.calls(), [SERVER_A, SERVER_A, SERVER_A]);
 }
