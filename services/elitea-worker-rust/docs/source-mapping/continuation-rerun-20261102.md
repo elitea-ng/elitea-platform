@@ -281,11 +281,11 @@ fixture, because this fixture's root saves right after its only node. Its class 
 - **What production showed about the window.** B's first root save comes right after the child call returns, so in
   production FU-269's window is the child call itself. A kill landing later, inside the root `echo_tail` call, is an
   `Own`-frontier reclaim. That ends `INTERNAL` on the main images too (`pm-8c7e1bb75`, checked after the restore), so
-  it is a pre-existing gap, proposed as a follow-up. It is not changed here.
+  it is a pre-existing gap, registered as FU-271. It is not changed here.
 - **Other observations:**
   - **Not a double dispatch:** one approval makes two MCP calls, the child's `reverse` and the root `echo_tail`.
   - **Web:** the older Web image (`pm-07757110d`) threw React error #185 while streaming the new pause; a reload shows
-    the card. Not investigated here.
+    the card. Registered as FU-272 (unverified on main's Web image).
 
 ## Fixtures
 
@@ -300,7 +300,8 @@ fixture, because this fixture's root saves right after its only node. Its class 
 ## Follow-ups
 
 - FU-270 (a fresh turn re-run from its input) is unchanged.
-- **Proposed:** a root effectful direct node lost mid-call on an `Own` frontier ends `INTERNAL` on a
-  model-checkpoint reclaim (`recovery_frontier_supported` refuses it untyped). It is pre-existing; seen in the browser
-  above.
-- **Not investigated:** React error #185 in Web `pm-07757110d` while streaming a pause.
+- **FU-271:** a root effectful direct node lost mid-call on an `Own` frontier ends `INTERNAL` on a model-checkpoint
+  reclaim (`recovery_frontier_supported` refuses it untyped). It is pre-existing: it reproduces on main's images
+  `pm-8c7e1bb75` (browser, above).
+- **FU-272 (unverified):** React error #185 while streaming the new pause. Seen only on the older Web image
+  `pm-07757110d`; not checked on main's Web image.
