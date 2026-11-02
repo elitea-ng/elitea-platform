@@ -22,6 +22,11 @@ type mounted interface{ KVMount() string }
 
 type acquired struct{ envelope *Envelope }
 
+// MaterialKeyAPIBase is the optional second oauth_delegated material key of
+// a provider whose OAuth token is valid only at an API gateway (Atlassian
+// 3LO, #1464): the base URL the worker must call. Not a secret.
+const MaterialKeyAPIBase = "api_base"
+
 // acquire reads or exchanges the material of a permitted use and keeps only
 // the catalogue's keys. Every failure is a typed denial; nothing is logged
 // but codes.
@@ -56,7 +61,9 @@ func (b *Broker) acquire(ctx context.Context, req RedeemRequest, facts requestFa
 		}
 		return acquired{envelope: &Envelope{Kind: KindStatic, Material: material, NotAfter: notAfter}}, nil
 	case credentialgrant.ClassOAuthDelegated:
-		if len(keys) != 1 {
+		// One token key, and optionally the API base key a gateway
+		// provider names (Atlassian 3LO, #1464).
+		if len(keys) != 1 && (len(keys) != 2 || keys[1] != MaterialKeyAPIBase) {
 			return acquired{}, &Denial{Code: CodeDenied, reason: "material_shape"}
 		}
 		// The descriptor names who issued the consent: the user's Entra
@@ -75,12 +82,13 @@ func (b *Broker) acquire(ctx context.Context, req RedeemRequest, facts requestFa
 			}
 		}
 		var token obo.AccessToken
+		var apiBase string
 		var denial *Denial
 		switch authority {
 		case credentialgrant.OAuthAuthorityEntraOBO:
 			token, denial = b.exchange(ctx, req, facts)
 		case credentialgrant.OAuthAuthorityProvider:
-			token, denial = b.providerToken(ctx, req, facts)
+			token, apiBase, denial = b.providerToken(ctx, req, facts)
 		default:
 			denial = &Denial{Code: CodeClassNotSupported, reason: "oauth_authority_unknown"}
 		}
@@ -93,8 +101,16 @@ func (b *Broker) acquire(ctx context.Context, req RedeemRequest, facts requestFa
 		if !notAfter.After(now) {
 			return acquired{}, &Denial{Code: CodeBackendUnavailable, reason: "material_expired"}
 		}
+		// The catalogue names an API base: a token without one is never
+		// released, because the provider refuses it at the site URL.
+		if len(keys) == 2 && apiBase == "" {
+			return acquired{}, &Denial{Code: CodeDenied, reason: "provider_oauth_api_base_missing"}
+		}
 		// A Go string cannot be zeroed; the copy below can.
 		material := map[string][]byte{keys[0]: []byte(token.Token)}
+		if len(keys) == 2 {
+			material[keys[1]] = []byte(apiBase)
+		}
 		if cacheable && !token.ExpiresAt.IsZero() {
 			// Cached until the token's own expiry; served until that minus
 			// the skew.
@@ -185,13 +201,23 @@ func shapeMaterial(raw []byte, keys []string) (map[string][]byte, bool) {
 // binding. A run with no user subject has no such grant and is denied, and
 // so is a decision subject that is not the run's own user (an autonomous
 // mandate's approver).
-func (b *Broker) providerToken(ctx context.Context, req RedeemRequest, facts requestFacts) (obo.AccessToken, *Denial) {
+//
+// It also answers the grant's provider API base (#1464); empty when none.
+func (b *Broker) providerToken(ctx context.Context, req RedeemRequest, facts requestFacts) (obo.AccessToken, string, *Denial) {
+	token, denial := b.providerAccessToken(ctx, req, facts)
+	if denial != nil {
+		return obo.AccessToken{}, "", denial
+	}
+	return obo.AccessToken{Token: token.Token, ExpiresAt: token.ExpiresAt}, token.APIBase, nil
+}
+
+func (b *Broker) providerAccessToken(ctx context.Context, req RedeemRequest, facts requestFacts) (provideroauth.AccessToken, *Denial) {
 	if b.cfg.ProviderTokens == nil {
-		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "provider_oauth_not_configured"}
+		return provideroauth.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "provider_oauth_not_configured"}
 	}
 	r := facts.request
 	if facts.runSubjectUser <= 0 || r.Subject.UserID != facts.runSubjectUser {
-		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "provider_oauth_no_user_subject"}
+		return provideroauth.AccessToken{}, &Denial{Code: CodeDenied, reason: "provider_oauth_no_user_subject"}
 	}
 	key := provideroauth.GrantKey{
 		TenantProjectID: r.Context.TenantProjectID, Provider: facts.reference.ProviderType,
@@ -202,18 +228,18 @@ func (b *Broker) providerToken(ctx context.Context, req RedeemRequest, facts req
 	switch {
 	case err == nil:
 	case errors.Is(err, provideroauth.ErrConsentRequired):
-		return obo.AccessToken{}, b.providerConsentRequired(ctx, req, key)
+		return provideroauth.AccessToken{}, b.providerConsentRequired(ctx, req, key)
 	case errors.Is(err, provideroauth.ErrInvalid):
-		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "provider_oauth_key_invalid"}
+		return provideroauth.AccessToken{}, &Denial{Code: CodeDenied, reason: "provider_oauth_key_invalid"}
 	case errors.Is(err, provideroauth.ErrProviderNotConfigured):
-		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "provider_oauth_not_configured"}
+		return provideroauth.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "provider_oauth_not_configured"}
 	default:
-		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "provider_oauth_unavailable"}
+		return provideroauth.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "provider_oauth_unavailable"}
 	}
 	if token.Token == "" {
-		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "oauth_empty_token"}
+		return provideroauth.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "oauth_empty_token"}
 	}
-	return obo.AccessToken{Token: token.Token, ExpiresAt: token.ExpiresAt}, nil
+	return token, nil
 }
 
 // providerConsentRequired answers a provider grant the user has not

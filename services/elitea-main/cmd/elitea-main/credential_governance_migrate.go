@@ -917,7 +917,9 @@ func (m *referenceMigration) writeMaterial(ctx context.Context, item migrateItem
 		}
 		defer written.Value.Destroy()
 		if !bytes.Equal(written.Value.UnsafeBytes(), value.UnsafeBytes()) {
-			return 0, fmt.Errorf("the %s destination already holds a different secret; nothing was overwritten", rec.Backend)
+			return 0, fmt.Errorf("the %s destination already holds a different secret; nothing was overwritten. "+
+				"To replace the value of reference %s, call POST /api/v2/admin/credential_references/%s:rotate, then :activate as a second operator",
+				rec.Backend, rec.ID, rec.ID)
 		}
 		return meta.CurrentVersion, nil
 	}

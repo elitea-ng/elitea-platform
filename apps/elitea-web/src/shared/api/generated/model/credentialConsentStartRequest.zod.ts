@@ -59,7 +59,7 @@ export const CredentialConsentStartRequest = zod
       .max(credentialConsentStartRequestAuthorizationReferenceMax)
       .optional()
       .describe(
-        "The opaque reference of an AUTHORIZATION_REQUIRED denial for a remote MCP server (`mar_` prefix), in place of the two binding ids.\n",
+        "The opaque reference of an AUTHORIZATION_REQUIRED denial, in place of the two binding ids: a remote MCP server (`mar_` prefix), or an Entra exchange that needs the user (`car_` prefix, provider `entra`, issue 1477).\n",
       ),
   })
   .describe(

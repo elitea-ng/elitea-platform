@@ -878,7 +878,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // run cap override that the chat answer's CapOverrideAction calls.
 // 461 -> 462 (PR 1553, the account menu): administrationPermissionList, the
 // caller's own administration-mode permissions that gate "Admin portal".
-const GENERATED_OPERATION_COUNT = 462;
+// 462 -> 463 (issue 1505, ADR-0039): rotateCredentialReference, the
+// secret rotation of an active credential reference (an admin route, not in
+// the manifest).
+const GENERATED_OPERATION_COUNT = 463;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

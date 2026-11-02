@@ -131,7 +131,14 @@ fn families() -> Vec<Family> {
                 "base_url": "https://jira.example.test/jira/", "token": CLAIM_TIME_SECRET}})),
             target: "https://jira.example.test/jira",
             kind: EnvelopeKind::OauthAccess,
-            material: &[("access_token", "envelope-jira")],
+            // An Atlassian 3LO token goes through the API gateway (#1464).
+            material: &[
+                ("access_token", "envelope-jira"),
+                (
+                    "api_base",
+                    "https://api.atlassian.com/ex/jira/11223344-a1b2-c3d4-e5f6-77889900aabb",
+                ),
+            ],
             tool: "list_comments",
             arguments: json!({"issue_key": "ENG-7", "unexpected": {"bad": true}}),
             operation: "jira.issue.read",
@@ -880,9 +887,11 @@ async fn a_governed_call_builds_its_client_under_the_runs_egress_policy() {
     );
     let settings = object(&json!({"jira_configuration": {
         "base_url": "https://jira.example.test/jira/", "token": CLAIM_TIME_SECRET}}));
+    // A static token: it calls the site URL (an OAuth one calls the
+    // Atlassian gateway, #1464).
     let (client, redeemer) = governed(answering(
-        EnvelopeKind::OauthAccess,
-        &[("access_token", "envelope-jira")],
+        EnvelopeKind::Static,
+        &[("token", "envelope-jira")],
         "https://jira.example.test/jira",
     ));
     let toolset = client

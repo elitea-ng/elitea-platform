@@ -71,6 +71,8 @@ type CredentialReferenceRecord struct {
 	MigratedFrom     string
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+	// Rotation is the pending secret rotation (#1505); nil when none.
+	Rotation *PendingRotation
 }
 
 // CredentialReferenceFilter selects a page of one tenant project's
@@ -153,7 +155,8 @@ func (s *CredentialReferences) writeReady() error {
 const credentialReferenceColumns = `r.id::text, r.tenant_project_id, r.class, r.backend, r.locator, r.provider_type,
        r.target_binding_id::text, r.generation, r.state, t.target_identity,
        COALESCE(r.staged_by::text, ''), COALESCE(r.activated_by::text, ''), COALESCE(r.last_transition_by::text, ''),
-       COALESCE(r.migrated_from, ''), r.created_at, r.updated_at`
+       COALESCE(r.migrated_from, ''), r.created_at, r.updated_at,
+       r.rotation_locator, r.rotation_generation, r.rotation_staged_by::text, r.rotation_staged_at`
 
 const credentialReferenceFrom = `elitea_identity.credential_references AS r
 JOIN elitea_identity.target_bindings AS t
@@ -163,10 +166,12 @@ func scanCredentialReference(row pgx.Row) (CredentialReferenceRecord, error) {
 	var (
 		rec          CredentialReferenceRecord
 		class, state string
+		rotation     scannedRotation
 	)
 	err := row.Scan(&rec.ID, &rec.TenantProjectID, &class, &rec.Backend, &rec.Locator, &rec.ProviderType,
 		&rec.TargetBindingID, &rec.Generation, &state, &rec.TargetIdentity,
-		&rec.StagedBy, &rec.ActivatedBy, &rec.LastTransitionBy, &rec.MigratedFrom, &rec.CreatedAt, &rec.UpdatedAt)
+		&rec.StagedBy, &rec.ActivatedBy, &rec.LastTransitionBy, &rec.MigratedFrom, &rec.CreatedAt, &rec.UpdatedAt,
+		&rotation.locator, &rotation.generation, &rotation.stagedBy, &rotation.stagedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CredentialReferenceRecord{}, credentialgrant.ErrReferenceNotFound
 	}
@@ -175,6 +180,7 @@ func scanCredentialReference(row pgx.Row) (CredentialReferenceRecord, error) {
 	}
 	rec.Class, rec.State = credentialgrant.CredentialClass(class), credentialgrant.ReferenceState(state)
 	rec.CreatedAt, rec.UpdatedAt = rec.CreatedAt.UTC(), rec.UpdatedAt.UTC()
+	rec.Rotation = rotation.pending()
 	return rec, nil
 }
 
@@ -256,6 +262,11 @@ func (s *CredentialReferences) Transition(ctx context.Context, id string, action
 	}
 	switch action {
 	case CredentialReferenceActivate:
+		if current.State == credentialgrant.ReferenceActive && current.Rotation != nil {
+			// An active reference with a pending rotation: :activate moves
+			// it to the new secret (#1505).
+			return s.activateRotation(ctx, tx, current, actorID, actor)
+		}
 		if current.State != credentialgrant.ReferenceStaged {
 			return CredentialReferenceRecord{}, ErrCredentialReferenceTransition
 		}

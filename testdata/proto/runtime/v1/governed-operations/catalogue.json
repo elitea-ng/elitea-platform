@@ -15,7 +15,8 @@
           "username"
         ],
         "oauth_delegated": [
-          "access_token"
+          "access_token",
+          "api_base"
         ]
       },
       "qualification": {
@@ -59,7 +60,8 @@
           "username"
         ],
         "oauth_delegated": [
-          "access_token"
+          "access_token",
+          "api_base"
         ]
       },
       "qualification": {

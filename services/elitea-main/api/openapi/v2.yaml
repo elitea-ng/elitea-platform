@@ -2282,9 +2282,10 @@ components:
           type: string
           maxLength: 2048
           description: >
-            The opaque reference of an AUTHORIZATION_REQUIRED denial for a
-            remote MCP server (`mar_` prefix), in place of the two binding
-            ids.
+            The opaque reference of an AUTHORIZATION_REQUIRED denial, in
+            place of the two binding ids: a remote MCP server (`mar_`
+            prefix), or an Entra exchange that needs the user (`car_`
+            prefix, provider `entra`, issue 1477).
       example:
         project_id: 7
         agent_binding_id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f11
@@ -2314,17 +2315,30 @@ components:
       description: >
         A stored provider OAuth grant. Names the grant's key only; no field
         holds a token, a code or a verifier.
-      required: [status, provider, project_id, agent_binding_id, target_binding_id]
+      required: [status, provider, project_id, agent_binding_id]
       properties:
         status:
           type: string
-          description: Always connected.
+          description: >
+            `connected` for a provider grant. `resumed` for an Entra
+            re-consent (provider `entra`, issue 1477) that continued the
+            paused run.
         provider:
           type: string
-          description: The provider adapter id, for example jira.
+          description: The provider adapter id, for example jira, or entra.
         project_id: { type: integer, format: int64 }
         agent_binding_id: { type: string, format: uuid }
-        target_binding_id: { type: string, format: uuid }
+        target_binding_id:
+          type: string
+          format: uuid
+          description: The target binding of a provider grant. Absent for entra.
+        conversation_uuid:
+          type: string
+          format: uuid
+          description: The conversation of the run an Entra re-consent resumed.
+        execution_id:
+          type: string
+          description: The execution that continues the run an Entra re-consent resumed.
       example:
         status: connected
         provider: jira
@@ -8898,8 +8912,52 @@ components:
           type: string
           nullable: true
           description: The migrate-references source key, when the migration helper staged it.
+        pending_rotation:
+          $ref: '#/components/schemas/CredentialReferencePendingRotation'
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    CredentialReferencePendingRotation:
+      type: object
+      description: >
+        A secret version that `:rotate` wrote for an active reference and
+        that is not activated yet (issue 1505). The broker still reads the
+        reference's own locator and generation. Absent when no rotation is
+        pending. It never holds a value.
+      required: [locator, generation, staged_by, staged_at]
+      properties:
+        locator:
+          type: string
+          description: The backend-relative locator of the new version.
+        generation:
+          type: integer
+          format: int64
+          description: The new secret version.
+        staged_by:
+          type: string
+          description: The operator who called `:rotate`.
+        staged_at: { type: string, format: date-time }
+
+    CredentialReferenceRotate:
+      type: object
+      additionalProperties: false
+      description: >
+        The new value of an active static_secret reference (issue 1505).
+        `material` maps the provider's static_secret material keys to
+        their new values, for example `token` and `username` for a basic
+        auth Jira or Confluence secret. The first key of the provider is
+        required. An unknown key is refused. The value is written to the
+        secret store and is never returned.
+      required: [material]
+      properties:
+        material:
+          type: object
+          description: Material key to new value. Each value is a non-empty string of at most 16 KiB.
+          additionalProperties: { type: string }
+      example:
+        material:
+          token: new-api-token
+          username: svc-elitea@example.com
 
     CredentialReferenceCreate:
       type: object
@@ -21525,7 +21583,10 @@ paths:
         Moves a `staged` reference to `active`. Two-person rule: the caller
         must not be the operator who staged it (`staged_by`); a reference
         that records no stager cannot be activated. The body is empty or
-        `{}`. Gated on `models.agent_identity.bindings.approve`. Appends a
+        `{}`. On an `active` reference with a `pending_rotation`
+        (issue 1505), it moves the reference to the pending locator and
+        generation instead. The caller must then not be the operator who
+        called `:rotate`. Replicas drop what they cached for the old secret. Gated on `models.agent_identity.bindings.approve`. Appends a
         security audit decision in the same transaction. Mounted only when
         the enterprise credential governance flag is on.
       tags: [admin]
@@ -21552,7 +21613,63 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '409':
-          description: The reference is not staged, or records no stager
+          description: The reference is not staged and has no pending rotation, or records no stager
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/credential_references/{id}:rotate:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The credential reference id (uuid).
+        schema: { type: string }
+    post:
+      operationId: rotateCredentialReference
+      summary: Rotate the secret of an active credential reference
+      description: >
+        Writes a new value for an active static_secret reference through the
+        secret write ledger and records it as `pending_rotation` (issue
+        1505). Vault gets a new version at the same path (check-and-set on
+        the current version). pgvault gets a new secret name, because a
+        pgvault secret has one version only. The broker still reads the
+        current value until another operator calls `:activate`. A second
+        `:rotate` replaces a pending rotation and retires its version.
+        Gated on `models.agent_identity.bindings.manage`. Appends a security
+        audit decision. Mounted only when the enterprise credential
+        governance flag is on.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CredentialReferenceRotate' }
+      responses:
+        '200':
+          description: The reference with its pending rotation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReference' }
+        '400':
+          description: A body or material the provider does not accept
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such credential reference
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The reference is not an active static_secret, or its backend is not configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: Rotation is not configured, or the secret store did not take the value
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -34221,7 +34338,7 @@ paths:
       - name: provider
         in: path
         required: true
-        description: The provider adapter id (jira, confluence or aha).
+        description: The provider adapter id (jira, confluence, aha or mcp), or entra for the re-consent of a paused run.
         schema: { type: string }
     post:
       operationId: startCredentialConsent
@@ -34235,8 +34352,19 @@ paths:
         provider authorization URL with the exact configured redirect URI.
         Gated on `models.credentials.governed.use` in `project_id`. Mounted
         only when the enterprise credential governance flag is on and a
-        provider OAuth application is configured; otherwise the path
-        answers like any unknown route.
+        provider OAuth application or Entra governance is configured;
+        otherwise the path answers like any unknown route.
+
+
+        Provider `entra` (issue 1477) takes only `project_id` and a `car_`
+        `authorization_reference`. The reference must be the caller's own,
+        in that project, and not resolved; otherwise the answer is 400 (or
+        409 when resolved) and no identity provider is called. The answer
+        is the platform sign-in URL (`/auth/oidc/login`) with a callback
+        target and a random state. The state and the reference are kept in
+        a short-lived HttpOnly cookie; the reference is never in a URL. An
+        interaction-required pause asks for `prompt=login`; a claims
+        challenge passes its claims.
       tags: [admin]
       requestBody:
         required: true
@@ -34266,7 +34394,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '409':
-          description: The agent binding is not active in the project
+          description: The agent binding is not active in the project, or the entra reference is already resolved
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -34276,7 +34404,7 @@ paths:
       - name: provider
         in: path
         required: true
-        description: The provider adapter id (jira, confluence or aha).
+        description: The provider adapter id (jira, confluence, aha or mcp), or entra for the re-consent of a paused run.
         schema: { type: string }
     get:
       operationId: completeCredentialConsent
@@ -34291,6 +34419,15 @@ paths:
         redirect URI, seals
         the refresh and access tokens and writes a security audit event.
         Mounted on the same condition as startCredentialConsent.
+
+
+        For provider `entra` (issue 1477), the platform sign-in redirects
+        here. The state must match the start cookie, which is then cleared.
+        The server opens the reference again for the caller, checks the
+        permission, creates a delegation from a sign-in assertion of this
+        browser session stored after the run paused, resolves the
+        requirement and continues the paused turn. The answer has status
+        `resumed`.
       tags: [admin]
       parameters:
         - name: state
@@ -34331,7 +34468,10 @@ paths:
         '409':
           description: >
             The agent binding is no longer active, or another consent for the
-            same grant committed first; start consent again
+            same grant committed first; start consent again. For Atlassian
+            (issue 1464), the consent does not cover the target site. For
+            entra, no new sign-in of this browser session, a resolved
+            reference, or a sign-in of another user.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

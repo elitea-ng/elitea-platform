@@ -278,6 +278,8 @@ export * from "./credentialReference.zod";
 export * from "./credentialReferenceAttachment.zod";
 export * from "./credentialReferenceCreate.zod";
 export * from "./credentialReferenceListResponse.zod";
+export * from "./credentialReferencePendingRotation.zod";
+export * from "./credentialReferenceRotate.zod";
 export * from "./credentialReferenceToolkitRequest.zod";
 export * from "./credentialReviewRefusal.zod";
 export * from "./credentialRevokeRequest.zod";

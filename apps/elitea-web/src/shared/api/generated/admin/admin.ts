@@ -87,6 +87,7 @@ import type {
   CredentialReferenceAttachment,
   CredentialReferenceCreate,
   CredentialReferenceListResponse,
+  CredentialReferenceRotate,
   CredentialReferenceToolkitRequest,
   CredentialReviewRefusal,
   CredentialRevokeRequest,
@@ -15227,7 +15228,7 @@ export const getActivateCredentialReferenceUrl = (id: string) => {
 };
 
 /**
- * Moves a `staged` reference to `active`. Two-person rule: the caller must not be the operator who staged it (`staged_by`); a reference that records no stager cannot be activated. The body is empty or `{}`. Gated on `models.agent_identity.bindings.approve`. Appends a security audit decision in the same transaction. Mounted only when the enterprise credential governance flag is on.
+ * Moves a `staged` reference to `active`. Two-person rule: the caller must not be the operator who staged it (`staged_by`); a reference that records no stager cannot be activated. The body is empty or `{}`. On an `active` reference with a `pending_rotation` (issue 1505), it moves the reference to the pending locator and generation instead. The caller must then not be the operator who called `:rotate`. Replicas drop what they cached for the old secret. Gated on `models.agent_identity.bindings.approve`. Appends a security audit decision in the same transaction. Mounted only when the enterprise credential governance flag is on.
  * @summary Activate a staged credential reference
  */
 export const activateCredentialReference = async (
@@ -15388,6 +15389,282 @@ export function useActivateCredentialReference<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getActivateCredentialReferenceQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type rotateCredentialReferenceResponse200 = {
+  data: CredentialReference;
+  status: 200;
+};
+
+export type rotateCredentialReferenceResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type rotateCredentialReferenceResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type rotateCredentialReferenceResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type rotateCredentialReferenceResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type rotateCredentialReferenceResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type rotateCredentialReferenceResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type rotateCredentialReferenceResponseSuccess =
+  rotateCredentialReferenceResponse200 & {
+    headers: Headers;
+  };
+export type rotateCredentialReferenceResponseError = (
+  | rotateCredentialReferenceResponse400
+  | rotateCredentialReferenceResponse401
+  | rotateCredentialReferenceResponse403
+  | rotateCredentialReferenceResponse404
+  | rotateCredentialReferenceResponse409
+  | rotateCredentialReferenceResponse503
+) & {
+  headers: Headers;
+};
+
+export type rotateCredentialReferenceResponse =
+  | rotateCredentialReferenceResponseSuccess
+  | rotateCredentialReferenceResponseError;
+
+export const getRotateCredentialReferenceUrl = (id: string) => {
+  return `/admin/credential_references/${id}:rotate`;
+};
+
+/**
+ * Writes a new value for an active static_secret reference through the secret write ledger and records it as `pending_rotation` (issue 1505). Vault gets a new version at the same path (check-and-set on the current version). pgvault gets a new secret name, because a pgvault secret has one version only. The broker still reads the current value until another operator calls `:activate`. A second `:rotate` replaces a pending rotation and retires its version. Gated on `models.agent_identity.bindings.manage`. Appends a security audit decision. Mounted only when the enterprise credential governance flag is on.
+ * @summary Rotate the secret of an active credential reference
+ */
+export const rotateCredentialReference = async (
+  id: string,
+  credentialReferenceRotate: CredentialReferenceRotate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<rotateCredentialReferenceResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<rotateCredentialReferenceResponse>(
+    getRotateCredentialReferenceUrl(id),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(credentialReferenceRotate),
+    },
+  );
+};
+
+export const getRotateCredentialReferenceQueryKey = (
+  id: string,
+  credentialReferenceRotate?: CredentialReferenceRotate,
+) => {
+  return [
+    "POST",
+    `/admin/credential_references/${id}:rotate`,
+    credentialReferenceRotate,
+  ] as const;
+};
+
+export const getRotateCredentialReferenceQueryOptions = <
+  TData = Awaited<ReturnType<typeof rotateCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  credentialReferenceRotate: CredentialReferenceRotate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotateCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRotateCredentialReferenceQueryKey(id, credentialReferenceRotate);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof rotateCredentialReference>>
+  > = ({ signal }) =>
+    rotateCredentialReference(id, credentialReferenceRotate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof rotateCredentialReference>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RotateCredentialReferenceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof rotateCredentialReference>>
+>;
+export type RotateCredentialReferenceQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useRotateCredentialReference<
+  TData = Awaited<ReturnType<typeof rotateCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  credentialReferenceRotate: CredentialReferenceRotate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotateCredentialReference>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof rotateCredentialReference>>,
+          TError,
+          Awaited<ReturnType<typeof rotateCredentialReference>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRotateCredentialReference<
+  TData = Awaited<ReturnType<typeof rotateCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  credentialReferenceRotate: CredentialReferenceRotate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotateCredentialReference>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof rotateCredentialReference>>,
+          TError,
+          Awaited<ReturnType<typeof rotateCredentialReference>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRotateCredentialReference<
+  TData = Awaited<ReturnType<typeof rotateCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  credentialReferenceRotate: CredentialReferenceRotate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotateCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Rotate the secret of an active credential reference
+ */
+
+export function useRotateCredentialReference<
+  TData = Awaited<ReturnType<typeof rotateCredentialReference>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  id: string,
+  credentialReferenceRotate: CredentialReferenceRotate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rotateCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRotateCredentialReferenceQueryOptions(
+    id,
+    credentialReferenceRotate,
+    options,
+  );
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,
@@ -24803,7 +25080,9 @@ export const getStartCredentialConsentUrl = (provider: string) => {
 };
 
 /**
- * Starts the provider delegated OAuth consent of ADR-0039 decision 3 for one agent binding and one target binding of the provider. The server stores a random state bound to the caller, the project, the agent binding, the target binding and the provider, with a short lifetime and single use, and an S256 PKCE verifier. It answers the provider authorization URL with the exact configured redirect URI. Gated on `models.credentials.governed.use` in `project_id`. Mounted only when the enterprise credential governance flag is on and a provider OAuth application is configured; otherwise the path answers like any unknown route.
+ * Starts the provider delegated OAuth consent of ADR-0039 decision 3 for one agent binding and one target binding of the provider. The server stores a random state bound to the caller, the project, the agent binding, the target binding and the provider, with a short lifetime and single use, and an S256 PKCE verifier. It answers the provider authorization URL with the exact configured redirect URI. Gated on `models.credentials.governed.use` in `project_id`. Mounted only when the enterprise credential governance flag is on and a provider OAuth application or Entra governance is configured; otherwise the path answers like any unknown route.
+ *
+ * Provider `entra` (issue 1477) takes only `project_id` and a `car_` `authorization_reference`. The reference must be the caller's own, in that project, and not resolved; otherwise the answer is 400 (or 409 when resolved) and no identity provider is called. The answer is the platform sign-in URL (`/auth/oidc/login`) with a callback target and a random state. The state and the reference are kept in a short-lived HttpOnly cookie; the reference is never in a URL. An interaction-required pause asks for `prompt=login`; a claims challenge passes its claims.
  * @summary Start provider OAuth consent
  */
 export const startCredentialConsent = async (
@@ -25094,6 +25373,8 @@ export const getCompleteCredentialConsentUrl = (
 
 /**
  * The provider redirects the user's browser here. The server consumes the state once (an unknown, expired, reused or foreign state is refused), checks again that the caller holds `models.credentials.governed.use` in the state's project and that the target binding still exists and the agent binding is still active, exchanges the code with the PKCE verifier and the exact redirect URI, seals the refresh and access tokens and writes a security audit event. Mounted on the same condition as startCredentialConsent.
+ *
+ * For provider `entra` (issue 1477), the platform sign-in redirects here. The state must match the start cookie, which is then cleared. The server opens the reference again for the caller, checks the permission, creates a delegation from a sign-in assertion of this browser session stored after the run paused, resolves the requirement and continues the paused turn. The answer has status `resumed`.
  * @summary Complete provider OAuth consent
  */
 export const completeCredentialConsent = async (

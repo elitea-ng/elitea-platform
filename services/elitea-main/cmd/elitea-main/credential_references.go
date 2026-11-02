@@ -11,6 +11,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/epoch"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
@@ -19,7 +20,9 @@ import (
 // router mounts none of them. With the flag on every write is audited, and
 // a retire signals the replicas' invalidation hub. Creating a reference from
 // scratch (#1482) checks its locator against the same secret stores the
-// broker reads, metadata only, under the active policy revision.
+// broker reads, metadata only, under the active policy revision. Rotating
+// the secret of an active reference (#1505) writes through the secret write
+// ledger into those stores.
 func credentialReferencesAdmin(admission profile.Admission, revision profile.PolicyRevision, secretStores secretStoresAtBoot, pool *pgxpool.Pool, invalidations *epoch.Hub) (*v2credentialreferences.Handler, error) {
 	if !admission.Governed() {
 		return nil, nil
@@ -51,5 +54,15 @@ func credentialReferencesAdmin(admission profile.Admission, revision profile.Pol
 	if err != nil {
 		return nil, fmt.Errorf("credential reference admin provider registry: %w", err)
 	}
-	return handler.WithCreate(locators, registry), nil
+	// Rotation (#1505) writes the new value through the secret write
+	// ledger, into the same stores the broker reads.
+	ledger, err := secretstore.NewLedger(pool)
+	if err != nil {
+		return nil, fmt.Errorf("credential reference admin %w", err)
+	}
+	rotator, err := v2credentialreferences.NewSecretRotator(store, registry, stores, ledger, revision.ID)
+	if err != nil {
+		return nil, err
+	}
+	return handler.WithCreate(locators, registry).WithRotate(rotator), nil
 }

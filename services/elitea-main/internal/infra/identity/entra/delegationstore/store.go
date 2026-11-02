@@ -159,6 +159,10 @@ type DelegateRequest struct {
 	// OBO, the blueprint for Agent ID OBO.
 	Audience string
 	Scopes   []string
+	// SignedInAfter, when set, accepts only a sign-in assertion stored
+	// after it. A re-consent (#1477) sets it to the time the run paused, so
+	// the assertion that already failed is never used again.
+	SignedInAfter time.Time
 }
 
 // Delegation is the metadata of one delegation. It never holds the token.
@@ -212,8 +216,9 @@ SELECT id::text, issuer, tenant_id, subject_object_id, assertion_ciphertext, ass
 FROM elitea_identity.signin_assertions
 WHERE browser_session_digest = $1 AND user_id = $2 AND audience = $3
   AND state = 'active' AND assertion_expires_at > $4
+  AND ($5::timestamptz IS NULL OR created_at > $5)
 ORDER BY created_at DESC LIMIT 1
-FOR SHARE`, digest[:], r.UserID, r.Audience, now).
+FOR SHARE`, digest[:], r.UserID, r.Audience, now, signedInAfter(r.SignedInAfter)).
 			Scan(&assertionID, &issuer, &tid, &oid, &ciphertext, &expires, &consented)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNoSignInAssertion
@@ -250,6 +255,16 @@ VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid, ARRAY[$7::text], $8, $9, $10, 'activ
 		return Delegation{}, err
 	}
 	return delegation, nil
+}
+
+// signedInAfter is the SQL bound of DelegateRequest.SignedInAfter: NULL
+// when unset.
+func signedInAfter(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	utc := t.UTC()
+	return &utc
 }
 
 // LoadRequest scopes a Load to the caller's tenant project and binding.

@@ -90,6 +90,9 @@ type consented struct {
 	Key         GrantKey
 	Tokens      TokenResponse
 	RedirectURI string
+	// APIBase is the provider API base the token must call (Atlassian 3LO,
+	// #1464); empty for a provider with none.
+	APIBase string
 }
 
 // save seals the consented tokens into the key's grant, creating it or
@@ -138,18 +141,18 @@ SELECT id::text FROM elitea_identity.provider_oauth_grants
 INSERT INTO elitea_identity.provider_oauth_grants
     (id, tenant_project_id, provider_type, target_binding_id, subject_user_id, agent_binding_id,
      refresh_token_ciphertext, access_token_ciphertext, access_token_expires_at, granted_scopes,
-     consented_at, consent_redirect_uri, key_label)
-VALUES ($1::uuid, $2, $3, $4::uuid, $5, $6::uuid, $7, $8, $9, $10, $11, $12, $13)`,
+     consented_at, consent_redirect_uri, key_label, api_base_url)
+VALUES ($1::uuid, $2, $3, $4::uuid, $5, $6::uuid, $7, $8, $9, $10, $11, $12, $13, NULLIF($14, ''))`,
 				grantID, k.TenantProjectID, k.Provider, k.TargetBindingID, k.SubjectUserID, k.AgentBindingID,
-				refresh, access, expires, scopes, now, c.RedirectURI, KeyLabel)
+				refresh, access, expires, scopes, now, c.RedirectURI, KeyLabel, c.APIBase)
 		} else {
 			_, err = tx.Exec(ctx, `
 UPDATE elitea_identity.provider_oauth_grants
    SET state = 'active', generation = generation + 1,
        refresh_token_ciphertext = COALESCE($2, refresh_token_ciphertext), access_token_ciphertext = $3, access_token_expires_at = $4,
        granted_scopes = $5, consented_at = $6, consent_redirect_uri = $7, key_label = $8,
-       updated_at = clock_timestamp()
- WHERE id = $1::uuid`, grantID, refresh, access, expires, scopes, now, c.RedirectURI, KeyLabel)
+       api_base_url = NULLIF($9, ''), updated_at = clock_timestamp()
+ WHERE id = $1::uuid`, grantID, refresh, access, expires, scopes, now, c.RedirectURI, KeyLabel, c.APIBase)
 		}
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -192,6 +195,8 @@ type snapshot struct {
 	Generation  int64
 	AccessToken string
 	ExpiresAt   time.Time
+	// APIBase is the stored provider API base; empty when none.
+	APIBase     string
 	refreshSeal []byte
 }
 
@@ -205,12 +210,13 @@ func (g *Grants) load(ctx context.Context, k GrantKey) (snapshot, error) {
 	var access []byte
 	var expires *time.Time
 	err := g.pool.QueryRow(ctx, `
-SELECT id::text, state, generation, access_token_ciphertext, access_token_expires_at, refresh_token_ciphertext
+SELECT id::text, state, generation, access_token_ciphertext, access_token_expires_at, refresh_token_ciphertext,
+       COALESCE(api_base_url, '')
   FROM elitea_identity.provider_oauth_grants
  WHERE tenant_project_id = $1 AND provider_type = $2 AND target_binding_id = $3::uuid
    AND subject_user_id = $4 AND agent_binding_id = $5::uuid`,
 		k.TenantProjectID, k.Provider, k.TargetBindingID, k.SubjectUserID, k.AgentBindingID).
-		Scan(&s.ID, &s.State, &s.Generation, &access, &expires, &s.refreshSeal)
+		Scan(&s.ID, &s.State, &s.Generation, &access, &expires, &s.refreshSeal, &s.APIBase)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return snapshot{}, ErrConsentRequired
 	}

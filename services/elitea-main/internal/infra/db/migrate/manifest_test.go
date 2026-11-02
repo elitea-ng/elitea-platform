@@ -994,7 +994,17 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// paused_execution_id and paused_generation on
 	// elitea_runtime.agent_execution_jobs, written once by the admitting
 	// transaction and served on the claim receipt. No data, no permission.
-	require.EqualValues(t, 218, Head(shared))
+	//
+	// 219: shared/0219_provider_oauth_grant_api_base.sql, the Atlassian 3LO
+	// API base of a provider grant (ADR-0039, #1464): nullable
+	// provider_oauth_grants.api_base_url, resolved once at consent. No data,
+	// no permission.
+	//
+	// 220: shared/0220_credential_reference_rotation.sql, a pending secret
+	// rotation on a credential reference (ADR-0039, #1505): nullable
+	// rotation_locator, rotation_generation, rotation_staged_by and
+	// rotation_staged_at, all set or all NULL. No data, no permission.
+	require.EqualValues(t, 220, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
