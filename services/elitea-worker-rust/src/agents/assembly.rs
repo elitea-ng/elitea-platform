@@ -312,7 +312,7 @@ impl OrdinaryNoToolProfile {
             instruction_plan: super::instruction_authority::InstructionPlan::admit(request)?,
             edit_format: application_edit_format(request),
             output_contract: application_output_contract(request)?,
-            citations: application_citations(request)?,
+            citations: application_citations(request),
         })
     }
 
@@ -844,13 +844,17 @@ fn application_output_contract(
 }
 
 /// An application version's `meta.citations`; an ad-hoc turn has none.
-/// Main checked it on save; a value this worker cannot admit refuses the
-/// turn.
+///
+/// Main checks the value on every write path. A stored value that this worker
+/// cannot read (a row written before that check) turns citations off with a
+/// warning. It does not refuse the turn: citations are a reading aid, and a
+/// refusal would stop every chat turn of the agent. The warning names no
+/// stored value.
 fn application_citations(
     request: &AgentExecutionRequest,
-) -> Result<elitea_agent_runtime::grounding::CitationMode, NativeAgentAssemblyError> {
+) -> elitea_agent_runtime::grounding::CitationMode {
     if request.kind != AgentExecutionKind::Application {
-        return Ok(elitea_agent_runtime::grounding::CitationMode::Off);
+        return elitea_agent_runtime::grounding::CitationMode::Off;
     }
     let meta = match request.payload.application.get("version_details") {
         Some(Value::Object(version)) => version.get("meta").and_then(Value::as_object),
@@ -859,7 +863,13 @@ fn application_citations(
     elitea_agent_runtime::grounding::CitationMode::from_value(
         meta.and_then(|meta| meta.get(elitea_agent_runtime::grounding::META_KEY)),
     )
-    .map_err(|_| invalid_profile())
+    .unwrap_or_else(|_| {
+        tracing::warn!(
+            event = "agent_citations_setting_invalid",
+            "the stored meta.citations is not off, required or null; citations are off for this turn"
+        );
+        elitea_agent_runtime::grounding::CitationMode::Off
+    })
 }
 
 fn version_output_contract(

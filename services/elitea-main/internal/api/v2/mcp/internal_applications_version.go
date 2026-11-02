@@ -15,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/citations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/outputcontract"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -371,6 +373,27 @@ func parseInternalVersionUpdate(
 			meta["notes"] = notes
 		}
 		metaChanged = true
+	}
+	// ADR-0043 (#1500): the meta that this update stores gets the checks of
+	// the REST version save. A meta.citations or an output contract that the
+	// worker cannot admit was stored as is, and every chat turn of the agent
+	// then failed. A switch to a pipeline also checks the stored meta: a
+	// pipeline cannot have a meta output contract.
+	agentType := state.agentType
+	if requested, _ := arguments["agent_type"].(string); requested != "" {
+		agentType = requested
+	}
+	if metaChanged {
+		if err := citations.Check(meta); err != nil {
+			problem, _ := internalApplicationBadRequest(err.Error())
+			return internalVersionUpdate{}, &problem
+		}
+	}
+	if metaChanged || agentType != state.agentType {
+		if err := outputcontract.CheckMeta(agentType, meta); err != nil {
+			problem, _ := internalApplicationBadRequest(err.Error())
+			return internalVersionUpdate{}, &problem
+		}
 	}
 	if metaChanged {
 		if problem := appendJSON("meta", meta); problem != nil {
