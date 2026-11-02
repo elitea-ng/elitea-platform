@@ -57,6 +57,7 @@ import { AUTOTEST_PREFIX, expectStoredAssistantAnswer, fillComposer } from '../f
 import {
   COMPILER_LEGAL_NODE_ID,
   ensureChatPanelExpanded,
+  foldEditorPanes,
   parseStoredGraph,
   readStoredPipelineVersion,
   storedNodeIds,
@@ -323,14 +324,13 @@ test('a pipeline authored on the canvas runs its graph and answers in the editor
   // canvas is a transformed surface, so scrolling cannot move the node out
   // from under an overlay — the panel has to go. Collapsing it also runs the
   // editor's own `fitView`, which is what a user does for the same reason.
-  await page.getByRole('button', { name: 'Collapse the configuration panel' }).click();
-  await expect(page.getByRole('button', { name: 'Expand the configuration panel' })).toBeVisible({ timeout: 10_000 });
   // The chat pane is the other overlay on this row, and it is not needed
-  // until step 4. Collapsing it unmounts the slot (`ChatPanel` renders
+  // until step 4. Folded it unmounts the slot (`ChatPanel` renders
   // `renderChat` only while expanded), which is fine here and is why the
-  // conversation is not created until it is expanded again below.
-  await page.getByRole('button', { name: 'Collapse the chat panel' }).click();
-  await expect(page.getByRole('button', { name: 'Expand the chat panel' })).toBeVisible({ timeout: 10_000 });
+  // conversation is not created until it is expanded again below. At 1280px
+  // the editor already folds it (`useEditorPaneRoom`), so the fold is
+  // idempotent (`foldEditorPanes`).
+  await foldEditorPanes(page);
 
   // ONE `llm` node, added through the editor's own menu, then given the two
   // things it cannot run without — a distinctive id and a task that reads the

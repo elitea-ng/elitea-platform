@@ -55,7 +55,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
 import { AUTOTEST_PREFIX, expectStoredAssistantAnswer, fillComposer } from '../fixtures/api';
-import { COMPILER_LEGAL_NODE_ID, ensureChatPanelExpanded, parseStoredGraph, readStoredPipelineVersion } from '../fixtures/pipelines';
+import { COMPILER_LEGAL_NODE_ID, ensureChatPanelExpanded, foldEditorPanes, parseStoredGraph, readStoredPipelineVersion } from '../fixtures/pipelines';
 
 const APPLICATIONS_RE = /\/elitea_core\/applications\/prompt_lib\/(\d+)/;
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
@@ -327,11 +327,10 @@ test('a two-node graph connected on the canvas runs BOTH nodes, in the order the
   await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 20_000 });
   // With the configuration panel open, a node added at the viewport centre
   // lands under it and every click reports the panel intercepting pointer
-  // events. Collapsing it also runs the editor's own `fitView`.
-  await page.getByRole('button', { name: 'Collapse the configuration panel' }).click();
-  await expect(page.getByRole('button', { name: 'Expand the configuration panel' })).toBeVisible({ timeout: 10_000 });
-  await page.getByRole('button', { name: 'Collapse the chat panel' }).click();
-  await expect(page.getByRole('button', { name: 'Expand the chat panel' })).toBeVisible({ timeout: 10_000 });
+  // events. Collapsing it also runs the editor's own `fitView`. The chat pane
+  // goes too; at 1280px the editor has already folded it, so the fold is
+  // idempotent (`foldEditorPanes`).
+  await foldEditorPanes(page);
 
   // Each node configured while it is the topmost card — see the module header.
   await page.getByRole('button', { name: 'Add node' }).click();
