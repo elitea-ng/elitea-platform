@@ -12,9 +12,10 @@ use super::direct_execution::{
 use super::{
     AdkHttpMcpConnector, ArtifactToolAuthority, DirectToolkitRequest, FrozenToolKind,
     IndexToolSupport, IndexToolsWithheld, McpConnector, McpMaterializationErrorCode,
-    ToolsetMaterializationErrorCode, materialize_configured_toolsets_with_authorities,
-    materialize_mcp_toolsets_with_tokens_and_authorization,
+    ToolsetMaterializationErrorCode, materialize_configured_toolsets_with_authorities_governed,
+    materialize_governed_mcp_toolsets, materialize_mcp_toolsets_with_tokens_and_authorization,
 };
+use elitea_agent_runtime::toolkits::governed::GovernedOperationClient;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DirectToolkitRuntimeErrorCode {
@@ -106,12 +107,16 @@ impl std::error::Error for DirectToolkitRuntimeError {}
 
 pub(crate) struct DirectToolkitRuntime {
     mcp_connector: Arc<dyn McpConnector>,
+    /// The command's governed seam (ADR-0039, #1474); `None` for a legacy
+    /// command, whose toolkit keeps its claim-time settings.
+    governed: Option<Arc<GovernedOperationClient>>,
 }
 
 impl Default for DirectToolkitRuntime {
     fn default() -> Self {
         Self {
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
+            governed: None,
         }
     }
 }
@@ -121,7 +126,23 @@ impl DirectToolkitRuntime {
     /// client identity for the internal MCP builders).
     #[must_use]
     pub(crate) fn new(mcp_connector: Arc<dyn McpConnector>) -> Self {
-        Self { mcp_connector }
+        Self {
+            mcp_connector,
+            governed: None,
+        }
+    }
+
+    /// The same runtime for one command, with that command's governed seam
+    /// (#1474). With `Some`, a credentialed toolkit redeems per invocation
+    /// and an MCP connection redeems its listing and its call; a toolkit or
+    /// connection the run cannot govern is unsupported. `None` is the legacy
+    /// path, unchanged.
+    #[must_use]
+    pub(crate) fn for_command(&self, governed: Option<Arc<GovernedOperationClient>>) -> Self {
+        Self {
+            mcp_connector: Arc::clone(&self.mcp_connector),
+            governed,
+        }
     }
 
     /// Materialize and execute exactly one read-only selected operation.
@@ -240,6 +261,44 @@ impl DirectToolkitRuntime {
         Ok(result)
     }
 
+    /// The one MCP connection of a direct call: governed (#1474) or legacy.
+    /// A governed connection the run cannot govern is unsupported here, as
+    /// the lane has no run notice to name it in.
+    async fn materialize_mcp(
+        &self,
+        admitted: &super::AdmittedToolSnapshot<'_>,
+        request: &DirectToolkitRequest,
+        tokens: &Map<String, Value>,
+    ) -> Result<
+        (
+            Vec<Arc<dyn adk_rust::Toolset>>,
+            super::DelegatedAuthorizationCatalog,
+        ),
+        super::McpMaterializationError,
+    > {
+        let Some(governed) = self.governed.as_ref() else {
+            return materialize_mcp_toolsets_with_tokens_and_authorization(
+                admitted,
+                self.mcp_connector.as_ref(),
+                request.policy(),
+                tokens,
+            )
+            .await;
+        };
+        let built = materialize_governed_mcp_toolsets(
+            admitted,
+            &self.mcp_connector,
+            request.policy(),
+            governed,
+        )
+        .await?;
+        if !built.left_out.is_empty() {
+            // No toolset: the caller answers `UnsupportedToolkit`.
+            return Ok((Vec::new(), built.delegated_authorization));
+        }
+        Ok((built.toolsets, built.delegated_authorization))
+    }
+
     async fn materialize(
         &self,
         request: &DirectToolkitRequest,
@@ -267,28 +326,30 @@ impl DirectToolkitRuntime {
         let tokens = request.tokens();
         let toolsets = match kind {
             FrozenToolKind::Configured => {
-                let (toolsets, authorization) = materialize_configured_toolsets_with_authorities(
-                    &admitted,
-                    request.policy(),
-                    tokens,
-                    artifacts,
-                    index_tools,
-                )
-                .await
-                .map_err(|error| match error.code() {
-                    ToolsetMaterializationErrorCode::InvalidConfiguration => {
-                        failure(DirectToolkitRuntimeErrorCode::InvalidConfiguration, false)
-                    }
-                    ToolsetMaterializationErrorCode::UnsupportedToolkit => {
-                        failure(DirectToolkitRuntimeErrorCode::UnsupportedToolkit, false)
-                    }
-                    ToolsetMaterializationErrorCode::DependencyUnavailable => {
-                        failure(DirectToolkitRuntimeErrorCode::DependencyUnavailable, true)
-                    }
-                    ToolsetMaterializationErrorCode::ResourceExhausted => {
-                        failure(DirectToolkitRuntimeErrorCode::ResourceExhausted, false)
-                    }
-                })?;
+                let (toolsets, authorization) =
+                    materialize_configured_toolsets_with_authorities_governed(
+                        &admitted,
+                        request.policy(),
+                        tokens,
+                        artifacts,
+                        index_tools,
+                        self.governed.as_ref(),
+                    )
+                    .await
+                    .map_err(|error| match error.code() {
+                        ToolsetMaterializationErrorCode::InvalidConfiguration => {
+                            failure(DirectToolkitRuntimeErrorCode::InvalidConfiguration, false)
+                        }
+                        ToolsetMaterializationErrorCode::UnsupportedToolkit => {
+                            failure(DirectToolkitRuntimeErrorCode::UnsupportedToolkit, false)
+                        }
+                        ToolsetMaterializationErrorCode::DependencyUnavailable => {
+                            failure(DirectToolkitRuntimeErrorCode::DependencyUnavailable, true)
+                        }
+                        ToolsetMaterializationErrorCode::ResourceExhausted => {
+                            failure(DirectToolkitRuntimeErrorCode::ResourceExhausted, false)
+                        }
+                    })?;
                 if let Some(requirement) = authorization
                     .requirement_for_direct(request.toolkit_name(), request.tool_name())
                 {
@@ -297,13 +358,8 @@ impl DirectToolkitRuntime {
                 toolsets
             }
             FrozenToolKind::Mcp => {
-                let (toolsets, authorization) =
-                    materialize_mcp_toolsets_with_tokens_and_authorization(
-                        &admitted,
-                        self.mcp_connector.as_ref(),
-                        request.policy(),
-                        tokens,
-                    )
+                let (toolsets, authorization) = self
+                    .materialize_mcp(&admitted, request, tokens)
                     .await
                     .map_err(|error| match error.code() {
                         McpMaterializationErrorCode::InvalidConfiguration => {
