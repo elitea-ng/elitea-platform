@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-platform-notice-show"
+description = "Enables the platform_notice_show command without any pre-configured scope."
+commands.allow = ["platform_notice_show"]
+
+[[permission]]
+identifier = "deny-platform-notice-show"
+description = "Denies the platform_notice_show command without any pre-configured scope."
+commands.deny = ["platform_notice_show"]

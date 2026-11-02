@@ -95,6 +95,8 @@ fn main() {
             "app_menu_labels_set",
             "context_menu_show",
             "activity_cloud_run",
+            "platform_notice_show",
+            "platform_notice_badge",
             "http_fetch",
             "http_read_body",
             "http_cancel",
