@@ -56,6 +56,7 @@ import { BASE_URL } from '../../playwright.config';
 import { AUTOTEST_PREFIX, expectStoredAssistantAnswer, fillComposer } from '../fixtures/api';
 import {
   COMPILER_LEGAL_NODE_ID,
+  ensureChatPanelExpanded,
   parseStoredGraph,
   readStoredPipelineVersion,
   storedNodeIds,
@@ -190,27 +191,6 @@ async function openSelect(select: Locator): Promise<void> {
 /** The portal-rendered listbox a `SingleSelect` opens — anchored off the page, not the select, because MUI renders it at the document root. */
 function page_listbox(select: Locator): Locator {
   return select.page().getByRole('listbox');
-}
-
-/**
- * Leave the chat panel EXPANDED, whichever state the save left it in.
- *
- * Not defensive padding: the save triggers a refetch of the pipeline detail,
- * and if that refetch ever blanks the editor (a spinner in place of the two
- * panels) their collapse state is local component state and does not
- * survive. Asserting on one specific button here made this journey fail with
- * "waiting for Expand the chat panel" while the page was showing
- * "Collapse the chat panel" — a message about the harness, not the feature.
- * What the journey actually needs is the pane open.
- */
-async function ensureChatPanelExpanded(page: Page): Promise<void> {
-  const expand = page.getByRole('button', { name: 'Expand the chat panel' });
-  const collapse = page.getByRole('button', { name: 'Collapse the chat panel' });
-  await expect(expand.or(collapse), 'the editor must still render its chat panel after a save').toBeVisible({
-    timeout: 60_000,
-  });
-  if ((await expand.count()) > 0) await expand.click();
-  await expect(collapse).toBeVisible({ timeout: 10_000 });
 }
 
 /** Click Save and wait for the version PUT to land — not merely for the click. */

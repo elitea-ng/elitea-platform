@@ -15,7 +15,7 @@
  * the API and check it against the runtime's own grammar, which is what
  * these helpers are for.
  */
-import type { APIRequestContext } from '@playwright/test';
+import { expect, type APIRequestContext, type Page } from '@playwright/test';
 
 import { load as loadYaml } from 'js-yaml';
 
@@ -416,4 +416,20 @@ export async function deletePipeline(
   pipeline: Pick<CreatedPipeline, 'id' | 'projectId'>,
 ): Promise<void> {
   await request.delete(`${API_BASE}/elitea_core/application/prompt_lib/${pipeline.projectId}/${pipeline.id}`);
+}
+
+/**
+ * Opens the pipeline editor's test-chat pane if it is folded.
+ *
+ * The editor folds the pane while the canvas would be narrower than 480px
+ * (`useEditorPaneRoom`) — at the default 1280px viewport it starts folded —
+ * and a save re-renders it, so every journey that talks to the pane opens it
+ * first, as a person on a laptop would.
+ */
+export async function ensureChatPanelExpanded(page: Page): Promise<void> {
+  const expand = page.getByRole('button', { name: 'Expand the chat panel' });
+  const collapse = page.getByRole('button', { name: 'Collapse the chat panel' });
+  await expect(expand.or(collapse), 'the editor must render its chat panel').toBeVisible({ timeout: 60_000 });
+  if ((await expand.count()) > 0) await expand.click();
+  await expect(collapse).toBeVisible({ timeout: 10_000 });
 }

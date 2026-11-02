@@ -52,7 +52,7 @@ import { expect, test } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
 import { AUTOTEST_PREFIX, expectStoredAssistantAnswer, fillComposer } from '../fixtures/api';
-import { PIPELINE_STARTER_TEMPLATE } from '../fixtures/pipelines';
+import { ensureChatPanelExpanded, PIPELINE_STARTER_TEMPLATE } from '../fixtures/pipelines';
 
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
 const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
@@ -581,6 +581,7 @@ test('the pipeline editor test chat offers a working Read out on its answer', as
     expect(saved.status(), `the graph must save: ${(await saved.text()).slice(0, 300)}`).toBeLessThan(300);
 
     await page.goto(`${BASE_URL}/app/pipelines/latest/${pipelineId}`);
+    await ensureChatPanelExpanded(page);
     const pane = page.getByTestId('edit-pipeline-test-chat');
     await expect(pane, 'the editor’s test chat must mount').toBeVisible({ timeout: 60_000 });
 

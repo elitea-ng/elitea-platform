@@ -62,7 +62,7 @@ import {
   readCallerPersonalProjectId,
   readStoredTranscript,
 } from '../fixtures/api';
-import { createPipelineThroughApi, deletePipeline, type CreatedPipeline } from '../fixtures/pipelines';
+import { createPipelineThroughApi, deletePipeline, ensureChatPanelExpanded, type CreatedPipeline } from '../fixtures/pipelines';
 import {
   createInboundTrigger,
   deletePipelineSchedule,
@@ -146,6 +146,7 @@ async function conversationsNamed(
  */
 async function openEditorTestChat(page: Page, pipeline: CreatedPipeline): Promise<string> {
   await page.goto(`${BASE_URL}/app/pipelines/latest/${pipeline.id}`);
+  await ensureChatPanelExpanded(page);
   const pane = page.getByTestId('edit-pipeline-test-chat');
   await expect(pane, 'the editor’s test chat must mount').toBeVisible({ timeout: 60_000 });
 

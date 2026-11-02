@@ -66,7 +66,7 @@ import {
   readMockLlmJournal,
   fillComposer,
 } from '../fixtures/api';
-import { createPipelineThroughApi, deletePipeline, type CreatedPipeline } from '../fixtures/pipelines';
+import { createPipelineThroughApi, deletePipeline, ensureChatPanelExpanded, type CreatedPipeline } from '../fixtures/pipelines';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -147,6 +147,7 @@ function marker(stem: string): string {
  */
 async function openTestChat(page: Page, pipeline: CreatedPipeline): Promise<string> {
   await page.goto(`${BASE_URL}/app/pipelines/latest/${pipeline.id}`);
+  await ensureChatPanelExpanded(page);
   const pane = page.getByTestId('edit-pipeline-test-chat');
   await expect(pane, 'the editor’s test chat must mount').toBeVisible({ timeout: 60_000 });
 

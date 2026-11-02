@@ -8,6 +8,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
 
+import { useEditorPaneRoom } from '../lib/hooks/useEditorPaneRoom';
 import { useIsSmallWindow } from '../lib/hooks/useIsSmallWindow';
 import { usePipelineAttachmentYamlSync } from '../lib/hooks/usePipelineAttachmentYamlSync.hooks';
 import { usePipelineChat } from '../lib/hooks/usePipelineChat.hooks';
@@ -145,16 +146,13 @@ export interface ConfigurationTabProps {
  * **DISCLOSED REDESIGN — no `react-split`:** the baseline's `<Split>`
  * (`react-split`) provides a draggable gutter between `EditorPanel` and
  * `ChatPanel`. `react-split` is not a dependency of this app (verified:
- * `grep -n react-split package.json` — zero hits, and `ls node_modules/
- * react-split` confirms it is not installed) — adding a new npm dependency
- * is outside a single Wave-2 sub-unit's scope (a shared `package.json`/
- * lockfile change touching every concurrently-landing sibling). Replaced
+ * no hit in package.json). Replaced
  * with a plain flex `Box` (`flexDirection: row`/`column` by `isSmallWindow`,
  * matching the baseline's own direction logic). The REAL, load-bearing
  * width behaviour survives untouched: both panels' own collapse states
  * still drive their real `minWidth`/`maxWidth` via `GeneralFormPanel.tsx`/
- * `ChatPanel.tsx`'s own `sx`. Only the SECONDARY "drag to fine-tune the
- * 98/2 split ratio" affordance is dropped.
+ * `ChatPanel.tsx`'s own `sx`, and both fold while the canvas lacks room
+ * (`useEditorPaneRoom`). Only the "drag to fine-tune" affordance is dropped.
  *
  * **DISCLOSED REDESIGN — `RunHistoryContainer`/`useShowRunHistoryFromUrl`
  * dropped, matching `features/agents/ui/ConfigurationTab.tsx`'s own
@@ -205,6 +203,7 @@ export function ConfigurationTab(props: ConfigurationTabProps): ReactNode {
   const editorPanelRef = useRef<EditorPanelHandle>(null);
 
   const projectId = useSelectedProjectId();
+  const room = useEditorPaneRoom();
 
   const { isSmallWindow } = useIsSmallWindow(() => {
     setTimeout(() => editorPanelRef.current?.fitView(), 0);
@@ -319,10 +318,11 @@ export function ConfigurationTab(props: ConfigurationTabProps): ReactNode {
   }
 
   return (
-    <Box sx={styles.mainContainer}>
+    <Box ref={room.measureRef} sx={styles.mainContainer}>
       <GeneralFormPanel
         applicationId={applicationId}
         onCollapsed={handleCollapsedGeneralPane}
+        autoFolded={room.foldGeneral}
         viewMode={viewMode}
         renderConfigurationForm={slots.renderConfigurationForm}
       />
@@ -343,6 +343,7 @@ export function ConfigurationTab(props: ConfigurationTabProps): ReactNode {
           settings={settings}
           restore={{ conversationId: restoredConversationID == null ? undefined : String(restoredConversationID), onComplete: onRestoreConversationComplete }}
           onCollapsed={handleCollapsedChatPane}
+          autoFolded={room.foldChat}
           setActiveConversation={chat.setActiveConversation}
           hasRunsInProgress={handleHasRunsInProgress}
           onShowHistory={applicationId !== undefined ? handleShowHistory : undefined}
@@ -369,10 +370,7 @@ function configurationTabStyles(isSmallWindow: boolean, isChatPaneCollapsed: boo
     errorContainer: { display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', width: '100%' },
     spinnerContainer: { height: '100%', width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' },
     mainContainer: {
-      // The page body's height, not the viewport's less a guessed header: under
-      // the shell's title row and the page toolbar a viewport-derived height
-      // overflowed the body, which then scrolled the flow canvas out from under
-      // its own nodes.
+      // The page body's height: a viewport-derived one overflowed the shell's body.
       height: '100%',
       overflow: 'scroll',
       padding: '0.75rem 1.5rem 1.5rem',

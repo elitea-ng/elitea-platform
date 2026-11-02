@@ -1,5 +1,5 @@
 import type { ReactNode, Ref } from 'react';
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef } from 'react';
 
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
@@ -10,6 +10,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 import { ViewRunHistoryButton } from '@/shared/ui/ViewRunHistoryButton';
 
+import { usePaneFold } from '../lib/hooks/useEditorPaneRoom';
 import { useIsSmallWindow } from '../lib/hooks/useIsSmallWindow';
 import { useIsPipelineYamlCodeDirty } from '../lib/hooks/useIsPipelineYamlCodeDirty';
 import type { ChatConversation } from '../lib/hooks/pipelineChat.types';
@@ -56,6 +57,8 @@ export interface ChatPanelProps {
   readonly settings: Readonly<Record<string, unknown>> & { readonly isStreaming?: boolean; readonly activeConversation?: ChatConversation | null };
   readonly display?: string | undefined;
   readonly onCollapsed?: ((collapsed: boolean) => void) | undefined;
+  /** Starts folded while the canvas lacks room (`useEditorPaneRoom`); a click overrides it. */
+  readonly autoFolded?: boolean | undefined;
   readonly setActiveConversation: (
     update: ChatConversation | null | ((prev: ChatConversation | null) => ChatConversation | null),
   ) => void;
@@ -146,29 +149,14 @@ function buildContextBudgetSlotProps(
 }
 
 export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function ChatPanel(props, ref): ReactNode {
-  const { restore, settings, display, onCollapsed, setActiveConversation, hasRunsInProgress, onShowHistory, renderChat, renderClearChatButton, renderContextBudget } = props;
+  const { restore, settings, display, onCollapsed, autoFolded = false, setActiveConversation, hasRunsInProgress, onShowHistory, renderChat, renderClearChatButton, renderContextBudget } = props;
   const { isStreaming, activeConversation } = settings;
   const boxRef = useRef<ChatBoxSlotHandle | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
   const { isSmallWindow } = useIsSmallWindow();
+  const { collapsed, toggle: onClickCollapsed } = usePaneFold(autoFolded, isSmallWindow, onCollapsed);
   const isPipelineDirty = useIsPipelineYamlCodeDirty();
 
   useImperativeHandle(ref, () => ({ stopRun: () => boxRef.current?.stopAll() }), []);
-
-  const onClickCollapsed = useCallback(() => {
-    setCollapsed((prev) => {
-      onCollapsed?.(!prev);
-      return !prev;
-    });
-  }, [onCollapsed]);
-
-  useEffect(() => {
-    if (isSmallWindow) {
-      setCollapsed(false);
-      onCollapsed?.(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSmallWindow]);
 
   const shouldDisableClear = computeShouldDisableClear(activeConversation, isStreaming);
 

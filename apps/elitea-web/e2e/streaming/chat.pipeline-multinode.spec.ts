@@ -55,7 +55,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
 import { AUTOTEST_PREFIX, expectStoredAssistantAnswer, fillComposer } from '../fixtures/api';
-import { COMPILER_LEGAL_NODE_ID, parseStoredGraph, readStoredPipelineVersion } from '../fixtures/pipelines';
+import { COMPILER_LEGAL_NODE_ID, ensureChatPanelExpanded, parseStoredGraph, readStoredPipelineVersion } from '../fixtures/pipelines';
 
 const APPLICATIONS_RE = /\/elitea_core\/applications\/prompt_lib\/(\d+)/;
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
@@ -278,23 +278,6 @@ async function saveAndAwaitPersist(page: Page): Promise<void> {
   await page.getByTestId('pipeline-save-button').click();
   await persisted;
   await expect(page.getByText('Failed to save your changes.')).toHaveCount(0);
-}
-
-/**
- * Leave the chat panel EXPANDED, whichever state the save left it in.
- *
- * Asserting on one specific button here made the sibling journey fail with
- * "waiting for Expand the chat panel" while the page showed "Collapse the chat
- * panel" — a message about the harness. What is needed is the pane open.
- */
-async function ensureChatPanelExpanded(page: Page): Promise<void> {
-  const expand = page.getByRole('button', { name: 'Expand the chat panel' });
-  const collapse = page.getByRole('button', { name: 'Collapse the chat panel' });
-  await expect(expand.or(collapse), 'the editor must still render its chat panel after a save').toBeVisible({
-    timeout: 60_000,
-  });
-  if ((await expand.count()) > 0) await expand.click();
-  await expect(collapse).toBeVisible({ timeout: 10_000 });
 }
 
 /** Every `tool_name` the stored execution trace carries, in the order the rows come back. */
