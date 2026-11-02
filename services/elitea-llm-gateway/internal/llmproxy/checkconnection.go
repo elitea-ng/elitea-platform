@@ -424,26 +424,15 @@ func (h *Handler) CheckConnection(w http.ResponseWriter, r *http.Request) {
 	// refuses every request rather than silently skipping the gate. An empty
 	// target list is refused for the same reason — a probe with no gated
 	// destination is a probe with no gate.
-	if h.egressPolicy == nil || len(targets) == 0 {
-		h.logger.WarnContext(r.Context(), "check_connection: no egress policy or no gated target",
-			"type", req.Type)
-		writeJSON(w, http.StatusOK, checkConnectionResponse{
-			Success: false, Reason: checkConnectionReasonEgress,
-		})
-		return
-	}
+	//
 	// EVERY host the probe touches goes through the allowlist, not just the
 	// first: vertex_ai contacts Google's token endpoint as well as the Vertex
 	// API host, and a gate on one of two hosts is not a gate.
-	for _, target := range targets {
-		if !h.egressPolicy.EgressAllows(target) {
-			h.logger.WarnContext(r.Context(), "check_connection: probe host is not on the egress allowlist",
-				"type", req.Type)
-			writeJSON(w, http.StatusOK, checkConnectionResponse{
-				Success: false, Reason: checkConnectionReasonEgress,
-			})
-			return
-		}
+	if refused, ok := h.egressAllowsAll(r.Context(), req.Type, targets); !ok {
+		writeJSON(w, http.StatusOK, checkConnectionResponse{
+			Success: false, Reason: checkConnectionReasonEgress, Detail: refused,
+		})
+		return
 	}
 
 	allowPrivate := h.probeAllowsPrivateNetwork(req)

@@ -5,6 +5,12 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Clearer egress refusals and an OIDC relink command
+
+**Test connection now names the host that the egress allowlist refused**, and tells where to add it: first a governance entry under **Admin › LLM Governance** (type **Egress allowlist**), then the `GATEWAY_EGRESS_ALLOWLIST` floor of the LLM gateway. The machine-readable reason (`egress_not_allowed`) does not change. A toolkit check names the refused host and `ELITEA_TOOLKIT_CHECK_ALLOWLIST`. Vertex AI needs its regional host, for example `europe-west4-aiplatform.googleapis.com`. See [When the egress allowlist refuses a provider](/admin/llm-proxy#when-the-egress-allowlist-refuses-a-provider).
+
+When an identity provider re-creates a user, the user's OIDC `sub` changes and the login is refused with 409. The new operator command `elitea-main oidc-relink` moves the account to the new subject, or clears the old link so that the next login links again by email. It prints a plan first, refuses ambiguous cases, and writes a security audit event. The 409 message now points to it. The authentication page also states the OIDC sign-in rules: `"email_verified": false` is always refused, whatever `OIDC_REQUIRE_EMAIL_VERIFIED` says. See [Relink an account](/admin/authentication#relink-an-account-after-the-identity-provider-re-created-a-user).
+
 ## Content guardrails at the LLM gateway
 
 A new governance entry type, **Content guardrail**, checks model content at the LLM gateway. An entry runs on the request before the provider call (`input`) or on the answer (`output`), for a platform, project, model or agent scope. Its detectors find bounded RE2 patterns and terms, the platform secret rules (for example AWS keys, GitHub tokens and private keys), or the findings of a classifier that you operate, through a documented HTTP adapter contract. Each detector blocks, masks or flags. **A blocked request gets HTTP 400 `guardrail_blocked`; a blocked stream ends with a typed error event.** A streamed mask holds back a short window of text, so that the client never gets a matched value, also when the value is split across chunks. Each check is recorded as a verdict without the matched text, and the run steps API returns the verdicts of a run. Nothing changes until you create an entry. See [Guardrail pipeline](/admin/enterprise-controls/content-controls#guardrail-pipeline).

@@ -48,7 +48,9 @@ Separate allowlists guard separate outbound paths:
 
 <Tabs>
 <Tab title="LLM gateway — GATEWAY_EGRESS_ALLOWLIST">
-Names the hosts a saved provider credential's `api_base` may point at. It is the **floor**: the gateway also reads `egress_allowlist` rows from `gateway.governance_config` (edit them at **Admin → LLM Proxy → Governance**, no re-sync needed) and enforces the **union**. An authored row can only *add* a destination — nothing an admin authors can withdraw a host the chart named.
+Names the hosts a saved provider credential's `api_base` may point at. It is the **floor**: the gateway also reads `egress_allowlist` rows from `gateway.governance_config` (edit them at **Admin → LLM Governance → New entry**, type **Egress allowlist**, no re-sync needed) and enforces the **union**. An authored row can only *add* a destination — nothing an admin authors can withdraw a host the chart named. For a host that a running deployment needs, add a governance entry first; change this variable for hosts that every deployment of the configuration needs.
+
+When the list refuses a host, **Test connection** names the host and both places to add it. See [When the egress allowlist refuses a provider](/admin/llm-proxy#when-the-egress-allowlist-refuses-a-provider). Vertex AI needs its regional host, `<location>-aiplatform.googleapis.com`, and the token host `oauth2.googleapis.com`.
 
 One grammar for both sources: a bare host, `host:port`, a `*.domain` wildcard, or a CIDR block. **The first entry anywhere turns the restriction on** — with none in either source, a credential may name any public host.
 

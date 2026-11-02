@@ -130,7 +130,6 @@ const (
 	toolkitCheckOKMessage          = "Connection successful"
 	toolkitCheckAuthFailedMessage  = "Authentication failed. The provider rejected this credential."
 	toolkitCheckUnreachableMessage = "Could not reach the provider with this credential."
-	toolkitCheckEgressMessage      = "This provider endpoint is not permitted by the platform's configuration."
 	// toolkitCheckAppKeyMessage is the ONE thing this build says about a GitHub
 	// App credential it cannot sign with. It names the two fields and nothing
 	// else: a parser's error text about a PEM block can quote the material it
@@ -141,6 +140,33 @@ const (
 	// build has no probe for. It is not a verdict on the credential.
 	toolkitCheckUnsupportedAuthMessage = "This credential uses an authentication method this platform cannot test yet."
 )
+
+// toolkitCheckHostRefusedMessage is the answer for a host that the toolkit
+// check allowlist does not name (issue #1460, item 12). It names the host and
+// the setting to change. The host is the hostname of the credential's own
+// base URL, which a reader of the credential card can already see; anything
+// that is not a plain host name or address is left out (safeEgressHost).
+func toolkitCheckHostRefusedMessage(host string) string {
+	subject := "The host of this endpoint"
+	if host = safeEgressHost(host); host != "" {
+		subject = "The host " + host
+	}
+	return subject + " is not on the toolkit connection-check allowlist. " +
+		"An operator can add it to the " + ToolkitCheckAllowlistEnv + " setting of elitea-main."
+}
+
+// toolkitCheckAddressRefusedMessage is the answer when an allowed host name
+// resolves to an address that the egress guard refuses. The address is not
+// named: it is resolver output, not something the credential author wrote.
+func toolkitCheckAddressRefusedMessage(host string) string {
+	subject := "The host of this endpoint"
+	if host = safeEgressHost(host); host != "" {
+		subject = "The host " + host
+	}
+	return subject + " resolves to a private or reserved address, and the egress guard refuses it. " +
+		"For a provider on a private network, an operator can add the address range (CIDR) " +
+		"next to the host name in the " + ToolkitCheckAllowlistEnv + " setting of elitea-main."
+}
 
 // ToolkitCheckOutcome is one probe's verdict.
 //
@@ -675,7 +701,7 @@ func (c *httpToolkitConnectionChecker) CheckToolkit(ctx context.Context, configT
 		}
 	}
 	if !c.allowsHost(target) {
-		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckEgressMessage}
+		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckHostRefusedMessage(target.Hostname())}
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
@@ -704,7 +730,7 @@ func (c *httpToolkitConnectionChecker) CheckToolkit(ctx context.Context, configT
 	if errors.Is(err, egress.ErrDestinationRefused) {
 		// The name resolved to an address the guard refuses: the same
 		// configuration answer as a host off the list, with no address in it.
-		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckEgressMessage}
+		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckAddressRefusedMessage(target.Hostname())}
 	}
 	if err != nil {
 		// The cause is deliberately dropped rather than logged with the

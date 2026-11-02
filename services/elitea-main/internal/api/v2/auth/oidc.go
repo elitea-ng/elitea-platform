@@ -514,9 +514,13 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, errIdentityConflict) {
 			// The subject and the address name two different accounts. Only an
 			// operator can decide which one survives, so the login stops here
-			// rather than picking one.
+			// rather than picking one. The most frequent cause is a user that
+			// the identity provider deleted and created again: the new `sub`
+			// meets an account that still holds the old one. The message
+			// names the operator remedy (`elitea-main oidc-relink`, #1460)
+			// and nothing about either account.
 			slog.Warn("OIDC: refused a login that names two accounts", "sub", claims.Sub)
-			http.Error(w, "this identity is already linked to another account", http.StatusConflict)
+			http.Error(w, oidcIdentityConflictMessage, http.StatusConflict)
 			return
 		}
 		if errors.Is(err, errEmailNotVerified) {
@@ -556,6 +560,12 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 }
 
 var errUserSuspended = errors.New("user account is suspended")
+
+// oidcIdentityConflictMessage is the 409 body for errIdentityConflict. It keeps
+// the old first sentence, so a client that matched it still matches.
+const oidcIdentityConflictMessage = "this identity is already linked to another account. " +
+	"If your identity provider re-created your user, ask an administrator to relink your account " +
+	"(elitea-main oidc-relink)."
 
 // errIdentityConflict means the provider subject and the email claim name two
 // different accounts. The login stops; only an operator can merge them.

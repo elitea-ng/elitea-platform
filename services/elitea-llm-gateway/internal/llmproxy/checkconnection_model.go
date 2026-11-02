@@ -185,9 +185,9 @@ func (h *Handler) checkModelConnection(w http.ResponseWriter, r *http.Request, r
 		})
 		return
 	}
-	if !h.egressAllowsAll(r.Context(), req.Type, targets) {
+	if refused, ok := h.egressAllowsAll(r.Context(), req.Type, targets); !ok {
 		writeJSON(w, http.StatusOK, checkConnectionResponse{
-			Success: false, Reason: checkConnectionReasonEgress, Probe: checkModelProbeKind,
+			Success: false, Reason: checkConnectionReasonEgress, Detail: refused, Probe: checkModelProbeKind,
 		})
 		return
 	}
@@ -246,19 +246,41 @@ func (h *Handler) checkModelConnection(w http.ResponseWriter, r *http.Request, r
 }
 
 // egressAllowsAll is the allowlist gate both probes apply: fail closed with no
-// policy or no target, and refuse when any one target is not allowed.
-func (h *Handler) egressAllowsAll(ctx context.Context, credentialType string, targets []string) bool {
+// policy or no target, and refuse when any one target is not allowed. When a
+// target is refused, refused is its host (egressRefusedHost) for the response
+// Detail. It is empty in the fail-closed case.
+func (h *Handler) egressAllowsAll(ctx context.Context, credentialType string, targets []string) (refused string, ok bool) {
 	if h.egressPolicy == nil || len(targets) == 0 {
 		h.logger.WarnContext(ctx, "check_connection: no egress policy or no gated target", "type", credentialType)
-		return false
+		return "", false
 	}
 	for _, target := range targets {
 		if !h.egressPolicy.EgressAllows(target) {
-			h.logger.WarnContext(ctx, "check_connection: probe host is not on the egress allowlist", "type", credentialType)
-			return false
+			refused = egressRefusedHost(target)
+			h.logger.WarnContext(ctx, "check_connection: probe host is not on the egress allowlist",
+				"type", credentialType, "reason", account.EgressNotAllowedReason, "host", refused)
+			return refused, false
 		}
 	}
-	return true
+	return "", true
+}
+
+// egressRefusedHost reduces a refused dial target to the host an allowlist
+// entry must name: `host` or `host:port`, in lower case. It drops the scheme,
+// user info, path, query and fragment, so no credential in a base URL gets
+// into the response. A target that does not parse gives "".
+//
+// The caller wrote that host: it is the api_base it sent, or the regional
+// endpoint that its region or location selects. Thus the name discloses
+// nothing new to the caller. The runtime request path
+// (account.ErrEgressNotAllowed) still names no host, because its caller is
+// not always the author of the credential.
+func egressRefusedHost(target string) string {
+	u, err := url.Parse(strings.TrimSpace(target))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Host)
 }
 
 // validateModelProbeRequest refuses a model name that cannot be sent safely.

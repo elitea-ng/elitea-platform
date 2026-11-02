@@ -64,7 +64,19 @@ func egressRefusal(t *testing.T) handler.ToolkitCheckOutcome {
 	if outcome.Reason != handler.ToolkitCheckReasonUnreachable || outcome.Message == "" {
 		t.Fatalf("baseline refusal = %+v", outcome)
 	}
+	if !strings.Contains(outcome.Message, "elsewhere.example") ||
+		!strings.Contains(outcome.Message, handler.ToolkitCheckAllowlistEnv) {
+		t.Fatalf("baseline refusal %q must name the host and %s", outcome.Message, handler.ToolkitCheckAllowlistEnv)
+	}
 	return outcome
+}
+
+// isConfigurationRefusal reports whether outcome is a configuration refusal
+// like the baseline: the same reason, and a message that names the setting to
+// change. The messages name the refused host, so they are not compared whole.
+func isConfigurationRefusal(outcome, baseline handler.ToolkitCheckOutcome) bool {
+	return outcome.Reason == baseline.Reason &&
+		strings.Contains(outcome.Message, handler.ToolkitCheckAllowlistEnv)
 }
 
 // Every blocked class, as the address an allowlisted NAME resolves to, is
@@ -107,7 +119,7 @@ func TestToolkitCheckRefusesEveryBlockedAddressClass(t *testing.T) {
 				egress.WithResolver(toolkitCheckResolver{"provider.example": tc.ip}))
 			started := time.Now()
 			outcome := jiraProbe(checker, "https://provider.example")
-			if outcome != refusal {
+			if !isConfigurationRefusal(outcome, refusal) {
 				t.Fatalf("outcome = %+v, want the configuration refusal %+v", outcome, refusal)
 			}
 			if time.Since(started) > time.Second {
@@ -149,7 +161,7 @@ func TestToolkitCheckPrivateProviderNeedsItsRangeNamed(t *testing.T) {
 				}
 				return
 			}
-			if outcome != refusal || hits.Load() != 0 {
+			if !isConfigurationRefusal(outcome, refusal) || hits.Load() != 0 {
 				t.Fatalf("outcome = %+v, hits = %d; want the configuration refusal and no request", outcome, hits.Load())
 			}
 		})
@@ -173,7 +185,7 @@ func TestToolkitCheckIgnoresProxyEnvironment(t *testing.T) {
 	if outcome := jiraProbe(checker, "http://provider.example:"+serverPort(t, provider)); outcome.Reason != handler.ToolkitCheckReasonOK {
 		t.Fatalf("direct probe = %+v", outcome)
 	}
-	if outcome := jiraProbe(checker, "http://metadata.example"); outcome != refusal {
+	if outcome := jiraProbe(checker, "http://metadata.example"); !isConfigurationRefusal(outcome, refusal) {
 		t.Fatalf("refused target = %+v, want the configuration refusal", outcome)
 	}
 	if providerHits.Load() != 1 || proxyHits.Load() != 0 {
