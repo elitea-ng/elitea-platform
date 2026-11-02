@@ -22,6 +22,19 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
+nats-bootstrap.cleanupLabels — the stale-Secret cleanup's labels (cleanup.yaml).
+Not nats-bootstrap: the NATS NetworkPolicy admits that label to 4222, and the
+cleanup pod talks only to the Kubernetes API.
+*/}}
+{{- define "nats-bootstrap.cleanupLabels" -}}
+helm.sh/chart: {{ include "nats-bootstrap.name" . }}-{{ .Chart.Version }}
+app.kubernetes.io/name: nats-bootstrap-cleanup
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
 nats-bootstrap.natsUrl — natsBootstrap.natsUrl, or the URL every component
 dials (natsClient), so the Job and the services cannot name different servers.
 */}}

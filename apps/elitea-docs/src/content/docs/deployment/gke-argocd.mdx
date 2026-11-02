@@ -299,6 +299,7 @@ Everything happens inside the one `elitea` Application, in this order:
 | `PreSync` | the platform and agent-state migrations; a failed migration stops the sync |
 | `PreSync`, wave `10` | the workload-session Job (the worker's row in `elitea_runtime.workload_sessions`) |
 | wave `-15` | the `certManager.issuers` CA chain and Issuers |
+| wave `-11` | the `elitea-nats-bootstrap-cleanup` Job, a `Sync` hook that deletes the bootstrap's expired client certificate Secrets from the previous sync, so that the new certificates do not start as `Expired` |
 | wave `-10` | the NATS server, its CA, server and client certificates, and the `elitea-nats-bootstrap` Job, a `Sync` hook that waits for NATS (up to 300 seconds, then the pod restarts in place, `restartPolicy: OnFailure`) and creates every stream and KV bucket |
 | wave `-5` | elitea-vector and Qdrant (the bundled qdrant chart) with its TLS Certificate |
 | wave `0` | elitea-main, elitea-web, the scheduler, the LLM gateway, DeepWiki, Inventory, the OTel collector, the Ingress, BackendConfig and FrontendConfig |
@@ -338,6 +339,7 @@ Argo CD deletes the bootstrap Job when it succeeds, so `argocd app get` is where
 | Migrations fail with `permission denied to create database` or a missing database | the databases were not prepared by hand | run the three SQL statements of [Cloud SQL](#cloud-sql) |
 | `FATAL: sorry, too many clients already` | `postgresql.maxConnections` is above the instance's flag | set both to the same number; lower `main.autoscaling.maxReplicas` |
 | The bootstrap Job or the NATS pod stays Pending on a Secret | cert-manager has not issued the NATS certificates | `kubectl -n elitea get certificates,certificaterequests`; cert-manager must be running before the sync |
+| The `elitea-nats-bootstrap-cleanup` Job fails | it cannot reach the Kubernetes API, or a Secret it must delete keeps a finalizer | `kubectl -n elitea logs job/elitea-nats-bootstrap-cleanup`; the log names the Secret and the HTTP status |
 | elitea-vector waits for its certificate | the `elitea-runtime-ca` Issuer is not Ready | its Secret comes from the `elitea-runtime-ca` ExternalSecret (`runtime-ca.crt`, `runtime-ca.key`); check that one first |
 | A Certificate names an Issuer that does not exist (`issuer.cert-manager.io "elitea-internal-ca" not found`) | `certManager.issuers.create` is off and the Issuers were not made by hand, or a `kind` does not match what exists | set `create: true`, or make the Issuers and set `certManager.issuers.*.kind` |
 | The render fails with `these values still hold a <...> placeholder` | a value still holds a `<...>` from `values-gke.yaml` | replace each path the message lists |
