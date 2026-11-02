@@ -206,7 +206,7 @@ WHERE event_type = 'ai.elitea.security.v1.identity.link.changed' AND event->'dat
 			t.Fatalf("the relink did not wait for the subject lock: %v", err)
 		case <-time.After(300 * time.Millisecond):
 		}
-		if _, err := login.Exec(ctx, `INSERT INTO public.auth_core__user_provider (user_id, provider_ref) VALUES (910002, 'oidc:raced-sub')`); err != nil {
+		if _, err := login.Exec(ctx, `INSERT INTO public.auth_core__user_provider (user_id, provider_ref) VALUES (910006, 'oidc:raced-sub')`); err != nil {
 			t.Fatal(err)
 		}
 		if err := login.Commit(ctx); err != nil {
