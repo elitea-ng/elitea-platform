@@ -34,8 +34,7 @@ spec:
     algorithm: ECDSA
     size: 256
   issuerRef:
-    name: {{ .Values.llmGateway.mtls.issuerRef.name }}
-    kind: {{ .Values.llmGateway.mtls.issuerRef.kind }}
+    {{- include "elitea.issuerRef" (dict "ctx" $ "ref" .Values.llmGateway.mtls.issuerRef "ca" "internal") | nindent 4 }}
     group: cert-manager.io
 ---
 apiVersion: cert-manager.io/v1
@@ -63,8 +62,7 @@ spec:
     algorithm: ECDSA
     size: 256
   issuerRef:
-    name: {{ .Values.llmGateway.mtls.issuerRef.name }}
-    kind: {{ .Values.llmGateway.mtls.issuerRef.kind }}
+    {{- include "elitea.issuerRef" (dict "ctx" $ "ref" .Values.llmGateway.mtls.issuerRef "ca" "internal") | nindent 4 }}
     group: cert-manager.io
 {{- end }}
 {{- end }}

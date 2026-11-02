@@ -5,6 +5,25 @@ description: "Console and operator settings: identity, e-mail, egress, budgets, 
 
 Once the chart has installed and you have signed in as the first administrator (see [Install with Helm](/deployment/helm-install#first-admin-bootstrap)), most day-to-day configuration moves into the admin console rather than back into a values file. This page is the map of what still lives where.
 
+## Release-wide settings
+
+A few chart values feed many components. Set each once; a component's own value, when you set it, wins.
+
+| Value | Default | What it fills where that value is empty |
+|---|---|---|
+| `global.publicUrl` | empty | The origin browsers open, for example `https://elitea.example.com` (a scheme, a host and an optional port; no path). It fills `main.env.DEPLOYMENT_URL`; `main.env.OIDC_REDIRECT_URI` as `<publicUrl>/auth/oidc/callback`, when `main.env.OIDC_ISSUER_URL` is set; the authentication document's `public_origin`, when the chart renders a document; `llmGateway.env.GATEWAY_SELF_LLM_ORIGINS` as `<publicUrl>/llm,http://elitea-main:8080/llm`; `worker.runtime.publicBaseUrl`; `worker.runtimeSession.expectedIdentity` as `spiffe://<host>/ns/<release namespace>/sa/agent-worker`; and the host of every `main.ingress.hosts` and `tls[].hosts` entry, when that list is empty. |
+| `global.trustedProxyCidrs` | `[]` | The proxies whose `X-Forwarded-For` elitea-main believes. It fills `main.env.ELITEA_TRUSTED_PROXY_CIDRS` (comma-joined) and the authentication document's `trusted_proxy_cidrs`. On GKE: the pod CIDR, `35.191.0.0/16` and `130.211.0.0/22`. |
+| `global.otelEndpoint` | empty | An OTLP/HTTP collector outside the chart. See [Observability](#observability). |
+| `certManager.issuers.internal` | `elitea-internal-ca`, kind empty | The issuer of the LLM gateway's, DeepWiki's and Inventory's mTLS Certificates (`*.mtls.issuerRef`). |
+| `certManager.issuers.runtime` | `elitea-runtime-ca`, kind empty | The issuer of elitea-vector's and Qdrant's Certificates, the DeepWiki and Inventory callback client certificates and the egress proxy's audit certificate. |
+| `certManager.issuers.create` | `false` | `true`: the chart makes both, namespaced (see below). |
+
+An empty `kind` means `ClusterIssuer`, as before, or `Issuer` when `create` is `true`. With `create: true` the chart renders, in Argo CD wave `-15`: a self-signed Issuer, a CA Certificate and the `elitea-internal-ca` Issuer over it (ECDSA P-256, `duration` 43800h, `renewBefore` 8760h); and the `elitea-runtime-ca` Issuer over the **existing** Secret `certManager.issuers.runtime.caSecretName`. The chart never generates the runtime CA: the worker certificate and elitea-main's runtime listeners are signed by it, so a new CA would fail every handshake. With `externalSecrets` on, that Secret is an ExternalSecret too (`<caSecretName>/tls.crt` and `tls.key`, or `runtime-ca.crt` and `runtime-ca.key` with `externalSecrets.sharedProperties`). `create: true` with a `ClusterIssuer` kind is refused.
+
+**Placeholders.** The chart refuses to render while any value still holds a `<...>` placeholder of an example values file (`values-gke.yaml` has several), and the message lists every one by its path.
+
+**Shared secret properties.** With `externalSecrets.remoteKey` (one flat JSON secret), `externalSecrets.sharedProperties: true` reads the values that several Secrets carry from one property each: `runtime-ca.crt`, `runtime-ca.key`, `command-signing-keyring.json` and `gateway-identity-secret`. A key's own `property` still wins. `deploy/scripts/mint-secrets.sh` mints that JSON for a new install; see [Deploy on GKE with Argo CD](/deployment/gke-argocd#steps).
+
 ## Identity: OIDC, SAML, SCIM
 
 Configure identity providers under **Configuration › Authentication** in the admin console — see [Authentication](/admin/authentication) for the click-through. What matters at the deployment level:
@@ -125,7 +144,15 @@ See [DeepWiki and Inventory](/menus/deepwiki-and-inventory) for the product-faci
 
 ## Observability
 
-Traces flow over OpenTelemetry to the chart's own `otelCollector` (on by default, `otel/opentelemetry-collector-contrib`), which receives OTLP from elitea-main, elitea-scheduler and elitea-main's own tracing ingest proxy. The shipped pipeline exports to `debug` (log-only) — swap the `otelCollector.config` exporter for a real sink (an OTLP/HTTP endpoint, a vendor backend) before relying on traces outliving the pod. There is no bundled Langfuse or third-party APM integration; every other component's `OTEL_EXPORTER_OTLP_ENDPOINT` should point at the collector's Service (`http://<fullname>:4318` in-namespace).
+Traces flow over OpenTelemetry to the chart's own `otelCollector` (on by default, `otel/opentelemetry-collector-contrib`). The shipped pipeline exports to `debug` (log-only) — swap the `otelCollector.config` exporter for a real sink (an OTLP/HTTP endpoint, a vendor backend) before relying on traces outliving the pod. There is no bundled Langfuse or third-party APM integration.
+
+The chart sets each component's `OTEL_EXPORTER_OTLP_ENDPOINT` (elitea-main, the scheduler, the LLM gateway, DeepWiki, Inventory, elitea-vector and the worker) where you have not set it or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_SDK_DISABLED`:
+
+1. `global.otelEndpoint`, when set;
+2. else the bundled collector, `http://<collector fullname>:4318`, when `otelCollector.enabled`;
+3. else `OTEL_SDK_DISABLED=true`, so no component exports to `localhost`. The gateway does not read that variable; with no endpoint it exports nothing.
+
+The worker has no free-form env block, so it always gets this value.
 
 ## Export audit evidence to a SIEM
 
@@ -178,4 +205,4 @@ Off by default. `main.env.ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED` pins 
 
 Both are console-editable under **Configuration**, not chart settings: a dismissible banner with its own icon/style/message, and a maintenance mode that answers `503` with a splash screen to every caller without administration access (the admin console and authentication routes stay reachable, so the window is reversible from inside itself). See [Features and configuration](/admin/features-and-configuration#configuration) for the click-through.
 
-{/* source: deploy/README.md:343-388 (SMTP layering), deploy/README.md:766-857 (egress, GATEWAY_NATS_URL); services/elitea-main/internal/api/webhook/ssrf.go:1-90 (webhook allowlist); deploy/helm/elitea/values.yaml:1076, 1120, 1175 (deepwiki/inventory/index-types env keys), 2568-2760 (deepwiki/inventory blocks), 2896-2969 (worker.implementation), 3374-3448 (otelCollector); deploy/helm/elitea/templates/main/configmap.yaml:8,64 (main.env is a free-form map) */}
+{/* source: deploy/helm/elitea/templates/_globals.tpl (global.*, certManager.issuers, OTel defaults, placeholders), templates/certManager/issuers.yaml, templates/externalSecrets/_inventory.tpl (sharedProperties); deploy/helm/tests/render-shared-settings.sh; deploy/README.md:343-388 (SMTP layering), deploy/README.md:766-857 (egress, GATEWAY_NATS_URL); services/elitea-main/internal/api/webhook/ssrf.go:1-90 (webhook allowlist); deploy/helm/elitea/values.yaml:1076, 1120, 1175 (deepwiki/inventory/index-types env keys), 2568-2760 (deepwiki/inventory blocks), 2896-2969 (worker.implementation), 3374-3448 (otelCollector); deploy/helm/elitea/templates/main/configmap.yaml:8,64 (main.env is a free-form map) */}

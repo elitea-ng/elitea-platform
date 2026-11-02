@@ -1,0 +1,92 @@
+{{- $issuers := dig "issuers" dict (.Values.certManager | default dict) }}
+{{- if $issuers.create }}
+{{- $internal := include "elitea.sharedIssuer" (dict "ctx" . "ca" "internal") | fromYaml }}
+{{- $runtime := include "elitea.sharedIssuer" (dict "ctx" . "ca" "runtime") | fromYaml }}
+{{- if eq $internal.name $runtime.name }}
+{{- fail (printf "certManager.issuers.internal.name and certManager.issuers.runtime.name are both %q. They are two CAs: the runtime one must be the CA elitea-main verifies runtime clients against, and the internal one is new and private to this release." $internal.name) }}
+{{- end }}
+{{- if not $issuers.runtime.caSecretName }}
+{{- fail "certManager.issuers.create needs certManager.issuers.runtime.caSecretName: the kubernetes.io/tls Secret with the runtime CA certificate (tls.crt) and key (tls.key). deploy/scripts/mint-secrets.sh writes both values." }}
+{{- end }}
+# The two CA issuers of the in-cluster mTLS hops (#1460), NAMESPACED in the
+# release namespace, the same pattern as the NATS CA (templates/nats/ca.yaml).
+#
+# INTERNAL: a new CA, private to this release, for elitea-main -> LLM gateway,
+# DeepWiki and Inventory. Both ends of each hop are issued here, so nothing
+# outside the release has to trust it. The usual cert-manager bootstrap chain:
+#   selfSigned Issuer -> CA Certificate (isCA) -> CA Issuer
+#
+# Anyone who may create a Certificate in this namespace can obtain any identity
+# these issuers sign, and anyone who may read Secrets here can read the CA keys.
+# Restrict create on certificates/certificaterequests and get/list on secrets.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $internal.name }}-selfsigned
+  labels:
+    {{- include "elitea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ca
+  annotations:
+    # Before every Certificate the issuers sign (the earliest is the vector
+    # stack in -5, and the ExternalSecret of the runtime CA is in -30).
+    argocd.argoproj.io/sync-wave: "-15"
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $internal.name }}
+  labels:
+    {{- include "elitea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ca
+  annotations:
+    argocd.argoproj.io/sync-wave: "-15"
+spec:
+  secretName: {{ $internal.name }}
+  isCA: true
+  commonName: {{ $internal.name }}
+  duration: {{ $issuers.internal.duration | default "43800h" }}
+  renewBefore: {{ $issuers.internal.renewBefore | default "8760h" }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ $internal.name }}-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $internal.name }}
+  labels:
+    {{- include "elitea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ca
+  annotations:
+    argocd.argoproj.io/sync-wave: "-15"
+spec:
+  ca:
+    secretName: {{ $internal.name }}
+---
+# RUNTIME: NOT a new CA. It signs with the runtime CA certificate and key in
+# Secret {{ $issuers.runtime.caSecretName }} (tls.crt, tls.key), the CA whose
+# certificate is runtime-ca.crt in the runtime and worker material.
+# elitea-main's runtime listeners verify elitea-vector, Qdrant, the
+# sub-application callback clients and the egress proxy's audit client against
+# that certificate, so a second CA would fail every handshake.
+# deploy/scripts/mint-secrets.sh writes the Secret's values; with
+# externalSecrets.enabled this chart renders its ExternalSecret.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $runtime.name }}
+  labels:
+    {{- include "elitea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ca
+  annotations:
+    argocd.argoproj.io/sync-wave: "-15"
+spec:
+  ca:
+    secretName: {{ $issuers.runtime.caSecretName }}
+{{- end }}

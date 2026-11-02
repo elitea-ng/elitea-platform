@@ -90,6 +90,8 @@ KEDA and a custom metrics adapter are **cluster-wide**: CRDs, plus an `APIServic
 
 `helm install` and `helm upgrade` refuse `keda.enabled` or `prometheusAdapter.enabled` when they can see one that this release does not own. `helm template` and Argo CD cannot look into the cluster, so the install notes warn instead. Enable the bundled ones only on a cluster that has none.
 
+**Without KEDA.** The defaults need no KEDA. With `worker.autoscaling.enabled` and `source: auto`, the worker falls back to a CPU HorizontalPodAutoscaler when no KEDA is served, bundled or declared, and the install notes (`helm get notes`) say so. CPU rises later than the backlog, because a turn waits on a model. A component with its autoscaler off runs its fixed `replicaCount`. Set `scaling.keda.clusterInstalled: true` only where KEDA runs: it makes the chart render ScaledObjects in place of the CPU fallback.
+
 ### The Prometheus labels
 
 The generated `prometheus` queries select the release's namespace by a label. Its name is `scaling.prometheus.namespaceLabel`:

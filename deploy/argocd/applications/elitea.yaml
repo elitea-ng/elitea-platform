@@ -157,6 +157,9 @@ spec:
         # Example: "https://elitea.example.com/llm/v1,http://elitea-main:8080/llm/v1"
         # Not https://elitea-main:9446: that platform listener carries model
         # calls as gRPC (ModelService, #1359 U2), not an HTTP /llm origin.
+        # Or leave it empty and set global.publicUrl: the chart then derives
+        # "<publicUrl>/llm,http://elitea-main:8080/llm" (and DEPLOYMENT_URL,
+        # the OIDC redirect, the worker's base URL and SPIFFE ID).
         - name: llmGateway.env.GATEWAY_SELF_LLM_ORIGINS
           value: ""
         # egressPosture takes "allowlist" or "public-unrestricted". Read the
