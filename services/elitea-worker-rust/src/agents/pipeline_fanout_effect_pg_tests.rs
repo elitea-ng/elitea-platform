@@ -495,11 +495,23 @@ async fn recovered(
     execution: &str,
     attempt: u8,
 ) -> Result<AssembledNativeAgentInvocation<PipelineAgentCompletion>, String> {
+    recovered_with(assembler, request, execution, attempt, None).await
+}
+
+/// [`recovered`] whose claims carry Main's paused writer (FU-269).
+async fn recovered_with(
+    assembler: &PipelineNativeAgentAssembler,
+    request: &super::super::request::AgentExecutionRequest,
+    execution: &str,
+    attempt: u8,
+    writer: Option<crate::protocol::elitea::runtime::v1::PausedWriterV1>,
+) -> Result<AssembledNativeAgentInvocation<PipelineAgentCompletion>, String> {
     let evidence = crate::agents::runtime::NativeAgentAssembler::inspect_checkpoint(
         assembler,
         request,
         &AuthorizedNativeCommandBinding::fixture_for_execution(execution),
-        test_session_authority_for_reclaim(execution, GENERATION, attempt),
+        test_session_authority_for_reclaim(execution, GENERATION, attempt)
+            .with_paused_writer_for_test(writer.clone()),
         Arc::new(TestStateWriterLease::current()),
     )
     .await
@@ -525,7 +537,8 @@ async fn recovered(
         .assemble_checkpoint(AuthorizedNativeAssembly::from_authorized(
             request,
             test_runtime_context_authority(),
-            test_session_authority_for_reclaim(execution, GENERATION, attempt),
+            test_session_authority_for_reclaim(execution, GENERATION, attempt)
+                .with_paused_writer_for_test(writer),
             Arc::new(TestStateWriterLease::current()),
             AuthorizedNativeCommandBinding::fixture_for_execution(execution),
         ))
@@ -4221,15 +4234,25 @@ const MARKER_ENV: &str = "ELITEA_CONTINUATION_PG_MARKER";
 const PENDING_ENV: &str = "ELITEA_CONTINUATION_PG_PENDING";
 const PENDING_LINE: &str = "FU265_PENDING ";
 
+/// The paused writer Main serves on B's claim (A at [`GENERATION`]).
+fn paused_writer(marker: bool) -> Option<crate::protocol::elitea::runtime::v1::PausedWriterV1> {
+    marker.then(|| crate::protocol::elitea::runtime::v1::PausedWriterV1 {
+        execution_id: EXECUTION.to_owned(),
+        generation: GENERATION,
+    })
+}
+
 fn claim_for<'a>(
     request: &'a super::super::request::AgentExecutionRequest,
     execution: &str,
     attempt: u8,
+    marker: bool,
 ) -> AuthorizedNativeAssembly<'a> {
     AuthorizedNativeAssembly::from_authorized(
         request,
         test_runtime_context_authority(),
-        test_session_authority_for_reclaim(execution, GENERATION, attempt),
+        test_session_authority_for_reclaim(execution, GENERATION, attempt)
+            .with_paused_writer_for_test(paused_writer(marker)),
         Arc::new(TestStateWriterLease::current()),
         AuthorizedNativeCommandBinding::fixture_for_execution(execution),
     )
@@ -4254,8 +4277,8 @@ fn continuation_assembler(
     .with_fixed_parallel_for_tests()
 }
 
-/// The approval of `pending`, as Main admits it; with `marker`, naming A.
-fn approval(pending: &Value, marker: bool) -> super::super::request::AgentExecutionRequest {
+/// The approval of `pending`, as Main admits it.
+fn approval(pending: &Value) -> super::super::request::AgentExecutionRequest {
     let mut request = child_direct_request(false);
     request.binding.request_content_digest = [29; 32];
     request.payload.should_continue = true;
@@ -4267,12 +4290,6 @@ fn approval(pending: &Value, marker: bool) -> super::super::request::AgentExecut
         "tool_call_id": pending["tool_call_id"],
         "action": "approve", "value": ""
     })];
-    if marker {
-        request.payload.meta.insert(
-            crate::agents::graph::continuation_writer::PAUSED_WRITER_META_KEY.to_owned(),
-            json!({"execution_id": EXECUTION, "generation": GENERATION}),
-        );
-    }
     request
 }
 
@@ -4300,7 +4317,7 @@ async fn postgres_continuation_effect_process() {
         "pause" => {
             let request = child_direct_request(false);
             let invocation = continuation_assembler(&pool, counting)
-                .assemble(claim_for(&request, EXECUTION, 1))
+                .assemble(claim_for(&request, EXECUTION, 1, false))
                 .await
                 .unwrap_or_else(|error| panic!("pause: assemble: {error}"));
             let (browser, _) = collect_pipeline_pause_events(invocation).await;
@@ -4315,12 +4332,12 @@ async fn postgres_continuation_effect_process() {
         "crash" => {
             let pending: Value =
                 serde_json::from_str(&std::env::var(PENDING_ENV).expect("pending")).expect("json");
-            let request = approval(&pending, marker);
+            let request = approval(&pending);
             let invocation = continuation_assembler(
                 &pool,
                 Arc::new(JournalCrashingConnector { pool: pool.clone() }),
             )
-            .assemble(claim_for(&request, CONTINUING_EXECUTION, 1))
+            .assemble(claim_for(&request, CONTINUING_EXECUTION, 1, marker))
             .await
             .unwrap_or_else(|error| panic!("crash: assemble the continuation: {error}"));
             let outcome = run_to_end(invocation).await;
@@ -4331,8 +4348,10 @@ async fn postgres_continuation_effect_process() {
     }
 }
 
-/// The reclaim phase of a [`continuation_scenario`]: B ends typed, nothing
-/// runs again, and the refusal log carries ids and generations only (C4).
+/// The reclaim phase of a [`continuation_scenario`]. With the paused writer
+/// B re-runs from A's row and the journal decides the call; without it (an
+/// older Main) B ends typed. Nothing runs again either way, and a refusal log
+/// carries ids and generations only (C4).
 async fn recover_continuation(
     pool: &sqlx::PgPool,
     marker: bool,
@@ -4341,16 +4360,8 @@ async fn recover_continuation(
 ) {
     let pending: Value =
         serde_json::from_str(&std::env::var(PENDING_ENV).expect("pending")).expect("json");
-    let request = approval(&pending, marker);
+    let request = approval(&pending);
     let assembler = continuation_assembler(pool, counting);
-    // Both end typed (RECOVERY_FRONTIER_UNSUPPORTED), never Internal:
-    // with the paused writer the row is proven and the re-run is
-    // FU-269; without it the writer does not match.
-    let cause = if marker {
-        "pipeline.recovery.continuation_rerun_unsupported"
-    } else {
-        "pipeline.recovery.root_writer_mismatch"
-    };
     // This phase runs in its own process, so a global subscriber
     // captures exactly its logs.
     let capture = crate::agents::assembly_tests::CapturedOutput::default();
@@ -4362,8 +4373,36 @@ async fn recover_continuation(
             .finish(),
     )
     .expect("the phase process's subscriber");
-    let Err(error) = recovered(&assembler, &request, CONTINUING_EXECUTION, 2).await else {
-        panic!("recover: a continuation is not re-run before FU-269");
+    let recovered = recovered_with(
+        &assembler,
+        &request,
+        CONTINUING_EXECUTION,
+        2,
+        paused_writer(marker),
+    )
+    .await;
+    if marker {
+        let invocation =
+            recovered.unwrap_or_else(|error| panic!("recover: the continuation re-runs: {error}"));
+        // C → F: the call may have run; it is not repeated and the run ends
+        // with the registered may-have-started reason.
+        let error = run_to_end(invocation)
+            .await
+            .expect_err("recover: a call that may have run ends the run");
+        assert!(
+            error.contains(crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE),
+            "recover: the registered may-have-started reason: {error}"
+        );
+        assert_eq!(
+            tool_calls.load(Ordering::Acquire),
+            0,
+            "recover: not repeated"
+        );
+        return;
+    }
+    let cause = "pipeline.recovery.root_writer_mismatch";
+    let Err(error) = recovered else {
+        panic!("recover: without its paused writer a continuation is not re-run");
     };
     assert!(error.contains(cause), "recover: typed {cause}: {error}");
     // C4: the refusal is logged with ids and generations only.
@@ -4376,12 +4415,6 @@ async fn recover_continuation(
         refusal.contains(cause) && refusal.contains(CONTINUING_EXECUTION),
         "{refusal}"
     );
-    if marker {
-        assert!(
-            refusal.contains(EXECUTION),
-            "the expected writer: {refusal}"
-        );
-    }
     for private in [
         pending["interrupt_id"].as_str().expect("interrupt id"),
         pending["tool_call_id"].as_str().expect("tool call"),
@@ -4399,6 +4432,23 @@ async fn recover_continuation(
         0,
         "recover: not repeated"
     );
+}
+
+/// The root session of the paused pipeline: the session holding B's
+/// `continuing` record. Its `continuing` records and its pipeline resume
+/// markers (user events), counted.
+async fn root_continuation_counts(pool: &sqlx::PgPool) -> (i64, i64) {
+    sqlx::query_as::<_, (i64, i64)>(
+        "WITH records AS (SELECT session_id, event_payload FROM elitea_runtime.agent_session_events \
+             WHERE event_payload LIKE '%elitea.direct_hitl.dispatch.v1%continuing%'), \
+         root AS (SELECT DISTINCT session_id FROM records) \
+         SELECT (SELECT count(*) FROM records), \
+                count(*) FILTER (WHERE e.event_payload LIKE '%elitea:pipeline-resume:v1%') \
+         FROM elitea_runtime.agent_session_events e JOIN root USING (session_id)",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("read the root continuation events")
 }
 
 /// FU-265 two-process proof: A pauses, B's approval dies inside the call,
@@ -4452,6 +4502,14 @@ async fn continuation_scenario(url: &str, marker: bool) {
         1,
         "one journal for the one call: {journals:?}"
     );
+    let before = root_continuation_counts(&db.pool).await;
+    // E3: with the paused writer B records `continuing` once, before its
+    // Runner starts; from an older Main (no writer) it records none, as before.
+    assert_eq!(
+        before.0,
+        i64::from(marker),
+        "B's `continuing` records (E3): {before:?}"
+    );
     let output = run_phase("recover", phase("recover", &pending));
     assert_eq!(
         output.status.code(),
@@ -4461,11 +4519,19 @@ async fn continuation_scenario(url: &str, marker: bool) {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(journal_threads(&db.pool).await, journals, "no new journal");
+    // E3/E4/E6: the re-run wrote no second `continuing` record and no second
+    // resume marker, and B's earlier events are still stored.
+    assert_eq!(
+        root_continuation_counts(&db.pool).await,
+        before,
+        "the re-run duplicates nothing and removes nothing"
+    );
+    assert!(before.1 <= 1, "one resume marker at most: {before:?}");
     db.pool.close().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn postgres_an_approved_child_call_lost_before_the_continuation_saves_ends_typed_and_is_not_repeated()
+async fn postgres_an_approved_child_call_lost_before_the_continuation_saves_re_runs_and_is_not_repeated()
  {
     let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-265 PostgreSQL proof");

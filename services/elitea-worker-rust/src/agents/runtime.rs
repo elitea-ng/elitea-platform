@@ -385,8 +385,13 @@ impl<'a> AuthorizedNativeAssembly<'a> {
         self,
         policy: &ToolAdmissionPolicy,
     ) -> Result<AdmittedPipelineNativeAssembly<'a>, NativeAgentAssemblyError> {
-        let (profile, plan, toolsets, start) =
-            admit_pipeline_plan(self.request, &self.command, &self.attachments, policy)?;
+        let (profile, plan, toolsets, start) = admit_pipeline_plan(
+            self.request,
+            &self.command,
+            &self.attachments,
+            policy,
+            self.session.paused_writer(),
+        )?;
         Ok(AdmittedPipelineNativeAssembly {
             request: self.request,
             runtime_context: self.runtime_context,
@@ -415,12 +420,15 @@ impl<'a> AuthorizedNativeAssembly<'a> {
 }
 
 /// Validate the frozen pipeline without redeeming runtime credentials.
+///
+/// `paused_writer` is the claim's `ClaimReceiptV1.paused_writer` (FU-269).
 #[allow(clippy::type_complexity)]
 pub(super) fn admit_pipeline_plan<'a>(
     request: &'a AgentExecutionRequest,
     command: &AuthorizedNativeCommandBinding,
     attachments: &[serde_json::Value],
     policy: &ToolAdmissionPolicy,
+    paused_writer: Option<&crate::protocol::elitea::runtime::v1::PausedWriterV1>,
 ) -> Result<
     (
         PipelineExecutionProfile,
@@ -458,11 +466,13 @@ pub(super) fn admit_pipeline_plan<'a>(
     profile.validate_tool_snapshot(&frozen_toolsets, policy)?;
     let toolsets = frozen_toolsets.apply_policy(policy);
     tracing::Span::current().record("stage", "execution_plan");
-    // FU-265: the paused writer Main names rides only on a continuation that
-    // re-enters a paused root row; on any other start it is refused.
-    let paused_writer = super::graph::continuation_writer::PausedWriter::from_meta(|key| {
-        request.payload.meta.get(key)
-    })
+    // FU-269: the paused writer Main serves on the claim rides only on a
+    // continuation that re-enters a paused root row; on any other start, or
+    // naming the claimed execution itself, it is refused.
+    let paused_writer = super::graph::continuation_writer::PausedWriter::from_claim(
+        paused_writer,
+        command.execution_id(),
+    )
     .map_err(|_| {
         NativeAgentAssemblyError::new(
             NativeAgentAssemblyErrorCode::InvalidInput,

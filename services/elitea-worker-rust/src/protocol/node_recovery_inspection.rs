@@ -254,6 +254,7 @@ impl NodeRecoveryControlAuthority {
                 .as_ref()
                 .map(super::super::vector_token::VectorClaimToken::duplicate),
             toolkit_typed_refusals: claim.toolkit_typed_refusals,
+            paused_writer: claim.paused_writer.clone(),
             governed: claim.governed.clone(),
             delegation: claim.delegation.clone(),
         }
