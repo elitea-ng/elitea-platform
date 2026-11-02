@@ -1171,10 +1171,13 @@ where
         {
             Ok(Ok(Some(context))) => {
                 execution.attach_security_context(Arc::new(context));
-                // A verified governed toolkit command is still refused
-                // (#1120): a direct call, a validation and an index ingest
-                // would all use claim-time toolkit settings, and none is
-                // wired through the governed operation client yet.
+                // A governed tool call redeems through the governed seam
+                // (#1474), and a governed index run redeems its toolkit's
+                // credential in `governed_index_configuration` (#1473).
+                // Discovery and validation are still refused here.
+                if super::governed_direct::admits_governed(verified.kind()) {
+                    return Ok(());
+                }
                 tracing::warn!(
                     event = "toolkit_delivery_governed_refused",
                     reason_code = "toolkit_not_governable",
@@ -1247,8 +1250,10 @@ where
             record_toolkit_deadline("pre_invocation_deadline");
             return Err(RuntimeFailureKind::DeadlineExceeded);
         }
+        let runtime =
+            super::governed_direct::runtime_for(&self.runtime, &self.platform, authorized);
         let result = match lease
-            .run_pre_invocation(self.runtime.execute(
+            .run_pre_invocation(runtime.execute(
                 request,
                 &verified.command().execution_id,
                 &verified.command().command_id,
@@ -1489,9 +1494,11 @@ where
             self.office_authority(verified, authorized, lease, request)
                 .await?
         };
+        let runtime =
+            super::governed_direct::runtime_for(&self.runtime, &self.platform, authorized);
         let operation = async {
             if is_call {
-                self.runtime
+                runtime
                     .execute_test(
                         request,
                         &command.execution_id,
@@ -1501,7 +1508,7 @@ where
                     )
                     .await
             } else {
-                self.runtime.discover(request, office.as_ref()).await
+                runtime.discover(request, office.as_ref()).await
             }
         };
         let result = lease

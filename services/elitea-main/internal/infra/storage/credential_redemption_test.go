@@ -230,8 +230,8 @@ func TestGovernedRunTokenCarriesNoSecretsHeader(t *testing.T) {
 }
 
 // The redemption claim binding refuses a node-recovery inspection claim and
-// every lane but the agent lanes and the index lane (#1473), as the content
-// reads do for writes.
+// every lane but the agent lanes, the direct tool-call lanes (#1474) and the
+// index lane (#1473).
 func TestCredentialRedemptionBindingGuards(t *testing.T) {
 	identity, err := url.Parse("spiffe://elitea.internal/runtime/worker-1")
 	require.NoError(t, err)
@@ -241,7 +241,8 @@ func TestCredentialRedemptionBindingGuards(t *testing.T) {
 		for _, guard := range []string{
 			"c.released_at IS NULL", "c.lease_expires_at > clock_timestamp()", "ws.revoked_at IS NULL",
 			"j.desired_state = 'RUNNING'", "c.recovery_mode <> 'NODE_RECOVERY'",
-			"j.capability_id IN ('agent.execute.application.v1', 'agent.execute.adhoc.v1', 'index.ingest.v1')",
+			"j.capability_id IN ('agent.execute.application.v1', 'agent.execute.adhoc.v1',\n" +
+				"                          'toolkit.call_tool.v1', 'toolkit.execute.read.v1', 'index.ingest.v1')",
 		} {
 			require.Contains(t, query, guard)
 		}

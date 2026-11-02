@@ -64,8 +64,7 @@ use crate::toolkits::{
     IndexToolAuthority, IndexToolSupport, IndexToolsWithheld, McpConnector, SensitiveToolPolicy,
     ToolAdmissionDecision, ToolAdmissionPolicy, ToolBindingError, ToolBindingPlan,
     bind_frozen_toolsets, freeze_toolsets,
-    materialize_configured_toolsets_with_authorities_governed,
-    materialize_configured_toolsets_with_tokens_and_authorization,
+    materialize_configured_toolsets_with_authorities_governed, materialize_governed_mcp_toolsets,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 use crate::transport::model_facade::{
@@ -757,7 +756,8 @@ impl PipelineNativeAgentAssembler {
             Err(reason) => IndexToolSupport::Withheld(*reason),
         };
         // A governed command (#1120): credentialed toolkits redeem per
-        // invocation; a toolkit no adapter governs, or an MCP connection,
+        // invocation, and MCP connections redeem their listing once and
+        // each call (#1474); a toolkit or connection the run cannot govern
         // refuses the pipeline. `None` (legacy) installs no wrapper.
         let governed = self.platform.as_ref().and_then(|platform| {
             crate::transport::credential_redeemer::governed_client(platform, runtime_context)
@@ -776,14 +776,20 @@ impl PipelineNativeAgentAssembler {
             )
             .await
             .map_err(tool_materialization_error)?;
-        let (mut mcp, mcp_delegated_authorization) = if governed.is_some() {
-            if selected_snapshot
-                .iter()
-                .any(|reference| reference.kind() == FrozenToolKind::Mcp)
-            {
+        let (mut mcp, mcp_delegated_authorization) = if let Some(governed) = governed.as_ref() {
+            let built = materialize_governed_mcp_toolsets(
+                &selected_snapshot,
+                &self.mcp_connector,
+                tool_policy,
+                governed,
+            )
+            .await
+            .map_err(|error| mcp_materialization_error(&error))?;
+            // A pipeline has no run notice to name a left-out connection in.
+            if !built.left_out.is_empty() {
                 return Err(unsupported_pipeline_runtime());
             }
-            (Vec::new(), DelegatedAuthorizationCatalog::default())
+            (built.toolsets, built.delegated_authorization)
         } else {
             materialize_mcp_toolsets_with_tokens_and_authorization(
                 &selected_snapshot,
@@ -825,7 +831,8 @@ impl PipelineNativeAgentAssembler {
                 runtime_context,
                 super::request::AgentExecutionKind::Application,
                 &selected_snapshot,
-            ));
+            ))
+            .with_governed(governed.clone());
         let application_runtime = context
             .clone()
             .zip(model_facade.clone())
@@ -1044,13 +1051,8 @@ impl PipelineNativeAgentAssembler {
             let alias = selection.alias();
             call_owners.insert(node.to_owned(), scopes.graph_call_owner("", node)?);
             let participant = if let Some(child) = composition.children.get(alias) {
-                let bound = bind_admitted_saved_pipeline(
-                    child.as_ref(),
-                    &runtime,
-                    self.mcp_connector.as_ref(),
-                    node.to_owned(),
-                )
-                .await?;
+                let bound =
+                    bind_admitted_saved_pipeline(child.as_ref(), &runtime, node.to_owned()).await?;
                 if let Some(child_scopes) = bound.runtimes.application_scopes() {
                     scopes.merge(child_scopes.clone())?;
                 }
@@ -1124,13 +1126,7 @@ impl PipelineNativeAgentAssembler {
         ),
         NativeAgentAssemblyError,
     > {
-        let bound = bind_admitted_saved_pipeline(
-            admitted.as_ref(),
-            runtime,
-            self.mcp_connector.as_ref(),
-            String::new(),
-        )
-        .await?;
+        let bound = bind_admitted_saved_pipeline(admitted.as_ref(), runtime, String::new()).await?;
         let definition = admitted.profile.definition().clone();
         tracing::debug!(
             application_alias = reference.alias,
@@ -1156,15 +1152,9 @@ impl PipelineNativeAgentAssembler {
         snapshot: AdmittedToolSnapshot<'_>,
         runtime: &PipelineApplicationRuntime<'_>,
     ) -> Result<PipelineNodeRuntimes, NativeAgentAssemblyError> {
-        bind_saved_pipeline_runtimes(
-            profile,
-            snapshot,
-            runtime,
-            self.mcp_connector.as_ref(),
-            None,
-        )
-        .await
-        .map(|bound| bound.runtimes)
+        bind_saved_pipeline_runtimes(profile, snapshot, runtime, None)
+            .await
+            .map(|bound| bound.runtimes)
     }
 }
 
@@ -2148,7 +2138,6 @@ pub(super) async fn materialize_saved_pipeline_tool(
         platform,
         runtime_context,
         &runtime,
-        mcp_connector.as_ref(),
         fallback,
         identity,
         project_id,
@@ -2425,7 +2414,6 @@ async fn admit_saved_pipeline_child(
     platform: &PlatformClient,
     runtime_context: &ClaimBoundRuntimeContextAuthority,
     runtime: &PipelineApplicationRuntime<'_>,
-    mcp_connector: &dyn McpConnector,
     fallback: &OrdinaryNoToolProfile,
     identity: (u64, u64),
     project_id: Option<u64>,
@@ -2454,9 +2442,7 @@ async fn admit_saved_pipeline_child(
     )? {
         return Ok(Err(refused));
     }
-    let bound =
-        bind_admitted_saved_pipeline(admitted.as_ref(), runtime, mcp_connector, String::new())
-            .await?;
+    let bound = bind_admitted_saved_pipeline(admitted.as_ref(), runtime, String::new()).await?;
     Ok(Ok((admitted.profile.definition().clone(), bound)))
 }
 
@@ -2499,7 +2485,6 @@ type PipelineBindingFuture<'a> = std::pin::Pin<
 fn bind_admitted_saved_pipeline<'a>(
     admitted: &'a AdmittedSavedPipeline,
     runtime: &'a PipelineApplicationRuntime<'_>,
-    connector: &'a dyn McpConnector,
     graph_path: String,
 ) -> PipelineBindingFuture<'a> {
     Box::pin(async move {
@@ -2553,8 +2538,7 @@ fn bind_admitted_saved_pipeline<'a>(
                 } else {
                     format!("{graph_path}/{node}")
                 };
-                let bound =
-                    bind_admitted_saved_pipeline(child, runtime, connector, child_path).await?;
+                let bound = bind_admitted_saved_pipeline(child, runtime, child_path).await?;
                 descendant_guards.extend(bound.guarded_interrupt_kinds);
                 pause_height = pause_height.max(bound.pause_height.map(|height| height + 1));
                 if let Some(child_scopes) = bound.runtimes.application_scopes() {
@@ -2616,14 +2600,8 @@ fn bind_admitted_saved_pipeline<'a>(
                 call_owners,
             }) as Arc<dyn PipelineApplicationResolver>
         });
-        let mut bound = bind_saved_pipeline_runtimes(
-            &admitted.profile,
-            snapshot,
-            runtime,
-            connector,
-            application,
-        )
-        .await?;
+        let mut bound =
+            bind_saved_pipeline_runtimes(&admitted.profile, snapshot, runtime, application).await?;
         descendant_guards.extend(bound.guarded_interrupt_kinds);
         bound.guarded_interrupt_kinds = descendant_guards.into_iter().collect();
         bound.pause_height = bound.pause_height.max(pause_height);
@@ -2718,36 +2696,31 @@ async fn bind_saved_pipeline_runtimes(
     profile: &PipelineExecutionProfile,
     snapshot: AdmittedToolSnapshot<'_>,
     runtime: &PipelineApplicationRuntime<'_>,
-    mcp_connector: &dyn McpConnector,
     application: Option<Arc<dyn PipelineApplicationResolver>>,
 ) -> Result<BoundSavedPipeline, NativeAgentAssemblyError> {
     let aliases = profile.definition().runtime_toolkit_aliases();
     let selected = snapshot.retain_toolkit_names(&aliases);
-    // A governed run (#1120): saved pipelines have no governed seam yet.
-    crate::transport::credential_redeemer::refuse_ungoverned_credentials(
-        runtime.authority,
+    // A governed run (#1474): the saved pipeline's own frozen toolkits redeem
+    // through the run's governed seam, as on the root.
+    let super::governed_nested::NestedToolsets {
+        configured: mut materialized,
+        mut mcp,
+        delegated_authorization,
+    } = super::governed_nested::materialize_nested_toolsets(
         &selected,
-    )?;
-    let (mut materialized, mut delegated_authorization) =
-        materialize_configured_toolsets_with_tokens_and_authorization(
-            &selected,
-            &runtime.tool_policy,
-            runtime.mcp_tokens,
-        )
-        .await
-        .map_err(tool_materialization_error)?;
-    let (mut mcp, mcp_delegated_authorization) =
-        materialize_mcp_toolsets_with_tokens_and_authorization(
-            &selected,
-            mcp_connector,
-            &runtime.tool_policy,
-            runtime.mcp_tokens,
-        )
-        .await
-        .map_err(|error| mcp_materialization_error(&error))?;
-    delegated_authorization
-        .merge(mcp_delegated_authorization)
-        .map_err(|()| unsupported_pipeline_runtime())?;
+        super::governed_nested::NestedToolsetInputs {
+            authority: runtime.authority,
+            governed: runtime.materialization.governed(),
+            policy: &runtime.tool_policy,
+            connector: &runtime.connector,
+            mcp_tokens: runtime.mcp_tokens,
+        },
+        &super::governed_nested::NestedErrorMapping {
+            configured: tool_materialization_error,
+            mcp: mcp_materialization_error,
+        },
+    )
+    .await?;
     materialized.append(&mut mcp);
     let mut toolsets = toolsets_by_alias(materialized)?;
     // `None`, for the reason `bind_nested_pipeline_runtimes` states: a nested
