@@ -1031,6 +1031,10 @@ pub(crate) struct AgentEventProjector {
     /// Where this run's step records go (ADR-0042, #1499); sub-agent
     /// projectors share the root's. `None` records nothing.
     run_steps: Option<RunStepSink>,
+    /// The run's source count for the grounding indicator of the final
+    /// message (ADR-0043 decision 5). Only the root projector of a run whose
+    /// agent must cite has it.
+    grounding: Option<crate::agents::grounding_model::GroundingSources>,
 }
 
 /// A projector's step recorder. Only the root records the run's output step.
@@ -1183,6 +1187,7 @@ impl AgentEventProjector {
             checkpoint_recovery: false,
             node_recovery_paused: false,
             run_steps: None,
+            grounding: None,
         })
     }
 

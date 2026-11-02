@@ -1041,7 +1041,7 @@ impl OrdinaryNativeAgentAssembler {
                     node_id: String::new(),
                 },
             )
-            .with_grounding(cites.then(|| context.execution_id().to_owned())))
+            .with_grounding(cites))
     }
 }
 

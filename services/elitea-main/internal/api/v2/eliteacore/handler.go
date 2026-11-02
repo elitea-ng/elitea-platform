@@ -3220,7 +3220,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if err := pipelineLimitRefusal(versions); err != nil {
+		if err := importedVersionsRefusal(versions); err != nil {
 			errorAgents = append(errorAgents, map[string]any{"index": ae.entityIdx, "name": name, "msg": "Import function has been failed: " + err.Error()})
 			importedAgents = append(importedAgents, importedAgentInfo{appID: -1})
 			continue
@@ -4054,7 +4054,7 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 		desc, _ := app["description"].(string)
 
 		forkVersions, _ := app["versions"].([]any)
-		if err := pipelineLimitRefusal(forkVersions); err != nil {
+		if err := importedVersionsRefusal(forkVersions); err != nil {
 			errorAgents = append(errorAgents, map[string]any{
 				"index": entityIdx, "name": name,
 				"msg": "Fork function has been failed: " + err.Error(),

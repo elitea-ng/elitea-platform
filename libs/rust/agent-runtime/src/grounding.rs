@@ -7,13 +7,17 @@
 //! * how many of the run's sources the answer cites;
 //! * which claim spans of the answer have no citation.
 //!
-//! **Sources.** A source is one tool result that the model saw in the request
-//! that produced the answer (toolkit, MCP, retrieval and nested agent results
-//! alike). The worker numbers them 1, 2, 3 in request order and writes the
-//! number in front of the source name of the untrusted-content envelope
-//! ([`numbered_source`], for example `<untrusted source="3:search_index">`).
-//! The citation rule ([`CITATION_RULE`]) asks the model to cite a source with
-//! its number in square brackets, as in `[3]`.
+//! **Sources.** A source is one tool result of the current turn that the
+//! model saw in the request that produced the answer (toolkit, MCP, retrieval
+//! and nested agent results alike). The current turn starts after the last
+//! user message. The worker numbers these results 1, 2, 3 in request order
+//! and writes the number in front of the source name of the untrusted-content
+//! envelope ([`numbered_source`], for example
+//! `<untrusted source="3:search_index">`). A tool result of an earlier turn
+//! keeps a source name without a number. The citation rule
+//! ([`CITATION_RULE`]) asks the model to cite a numbered source with its
+//! number in square brackets, as in `[3]`, and to cite no block without a
+//! number.
 //!
 //! **Claim spans.** [`indicator`] splits the answer into lines, and each line
 //! into sentences. A sentence ends at `.`, `!`, `?`, `。`, `！` or `？`
@@ -58,7 +62,7 @@ const MAX_MARKER_DIGITS: usize = 6;
 
 /// The instruction text that asks the model to cite. The worker adds it
 /// after the agent's instructions when citations are required.
-pub const CITATION_RULE: &str = "Citation rule: Each <untrusted> block has a source that starts with a number, as in source=\"3:search\". When a sentence uses facts from a block, end the sentence with that number in square brackets, as in [3]. Use [2, 5] for more than one block. Do not cite a number that no block has.";
+pub const CITATION_RULE: &str = "Citation rule: Each <untrusted> block of this turn has a source that starts with a number, as in source=\"3:search\". When a sentence uses facts from a numbered block, end the sentence with that number in square brackets, as in [3]. Use [2, 5] for more than one block. A block from an earlier turn has a source without a number: do not cite it. Do not cite a number that no block has.";
 
 /// The citation setting of an agent version (`meta.citations`).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
