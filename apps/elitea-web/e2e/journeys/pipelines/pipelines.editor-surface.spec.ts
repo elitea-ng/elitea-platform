@@ -28,7 +28,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
 import { AUTOTEST_PREFIX, clickCreateButton } from '../../fixtures/api';
-import { createPipelineThroughApi, deletePipeline, type CreatedPipeline } from '../../fixtures/pipelines';
+import { createPipelineThroughApi, deletePipeline, ensureChatPanelExpanded, type CreatedPipeline } from '../../fixtures/pipelines';
 
 const created: CreatedPipeline[] = [];
 
@@ -92,6 +92,9 @@ test('J16e: the pipeline editor shows its configuration panel and its run-histor
   await expect(page.getByTestId('pipeline-config-tab'), 'the always-visible configuration panel').toBeVisible({
     timeout: 20_000,
   });
+  // The run-history control lives in the test-chat pane, which the editor
+  // folds at this 1280px viewport to keep the canvas usable.
+  await ensureChatPanelExpanded(page);
   await expect(page.getByTestId('pipeline-history-tab'), 'the "view run history" control').toBeVisible();
   // Named, not just present: the button is icon-only, so its `aria-label` is
   // the only thing that tells a keyboard or screen-reader user what it does —

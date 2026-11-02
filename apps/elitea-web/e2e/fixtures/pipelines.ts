@@ -433,3 +433,18 @@ export async function ensureChatPanelExpanded(page: Page): Promise<void> {
   if ((await expand.count()) > 0) await expand.click();
   await expect(collapse).toBeVisible({ timeout: 10_000 });
 }
+
+/**
+ * Folds both editor panes so the canvas has the page's width, whichever of
+ * them the editor already folded on its own (`useEditorPaneRoom` folds the
+ * chat pane at the default 1280px viewport).
+ */
+export async function foldEditorPanes(page: Page): Promise<void> {
+  for (const pane of ['configuration', 'chat'] as const) {
+    const collapse = page.getByRole('button', { name: `Collapse the ${pane} panel` });
+    const expand = page.getByRole('button', { name: `Expand the ${pane} panel` });
+    await expect(expand.or(collapse), `the editor must render its ${pane} panel`).toBeVisible({ timeout: 30_000 });
+    if ((await collapse.count()) > 0) await collapse.click();
+    await expect(expand).toBeVisible({ timeout: 10_000 });
+  }
+}
