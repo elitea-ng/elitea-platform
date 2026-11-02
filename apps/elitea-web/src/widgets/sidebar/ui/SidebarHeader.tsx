@@ -54,7 +54,8 @@ export function SidebarHeader({ collapsed, onToggleCollapsed }: SidebarHeaderPro
         <SidebarConnectionDot />
       </IconButton>
       {!collapsed && <Box sx={{ flex: 1 }} />}
-      {!collapsed && <NotificationButton />}
+      {/* Collapsed too: the bell is the only way to the notifications, so the narrow rail keeps it as an icon. */}
+      <NotificationButton />
       <Tooltip title={toggleLabel} placement={collapsed ? 'right' : 'bottom'}>
         <IconButton size="small" data-testid="sidebar-collapse-toggle" aria-label={toggleLabel} aria-expanded={!collapsed} onClick={onToggleCollapsed}>
           {collapsed ? <KeyboardDoubleArrowRightIcon fontSize="small" /> : <KeyboardDoubleArrowLeftIcon fontSize="small" />}

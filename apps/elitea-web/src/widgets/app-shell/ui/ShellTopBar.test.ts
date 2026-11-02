@@ -9,7 +9,7 @@ describe('shellCrumbs', () => {
 
   it('puts the section before the page own crumbs, which end in the heading', () => {
     expect(shellCrumbs('/toolkits/create', [{ label: 'New toolkit' }])).toEqual([
-      { label: 'Toolkits', to: '/toolkits' },
+      { label: 'Toolkits & Indexes', to: '/toolkits' },
       { label: 'New toolkit' },
     ]);
   });

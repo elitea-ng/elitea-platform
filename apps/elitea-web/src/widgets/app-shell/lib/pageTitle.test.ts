@@ -73,6 +73,13 @@ describe('pageSection', () => {
     expect(pageSection('/agents-hub')).toEqual({ label: 'Agent HUB', to: '/agents-hub' });
   });
 
+  it('names the chat and the toolkits as their sidebar rows do', () => {
+    expect(pageSection('/chat/72')).toEqual({ label: 'Chats', to: '/chat' });
+    expect(pageSection('/toolkits/all')).toEqual({ label: 'Toolkits & Indexes', to: '/toolkits' });
+    // The document title keeps the old wording.
+    expect(derivePageTitle('/chat', '', 'P')).toBe('Chat - P');
+  });
+
   it('treats every settings tab as Settings', () => {
     expect(pageSection('/settings/notifications')).toEqual({ label: 'Settings', to: '/settings' });
   });

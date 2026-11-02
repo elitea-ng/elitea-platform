@@ -62,11 +62,11 @@ describe('SidebarHeader — the notification bell sits in the header row', () =>
     expect(headerRow?.contains(bell)).toBe(true);
   });
 
-  it('hides the bell while collapsed — the rail is too narrow for two controls', async () => {
+  it('keeps the bell in the collapsed rail, as an icon', async () => {
     await renderHeader(true);
 
     expect(screen.getByTestId('sidebar-toggle')).toBeInTheDocument();
-    expect(screen.queryByTestId('sidebar-notification-button')).not.toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-notification-button')).toBeInTheDocument();
   });
 
   it('carries the collapse toggle in the header row, named for what it does', async () => {
