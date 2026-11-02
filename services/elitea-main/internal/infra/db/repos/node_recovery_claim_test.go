@@ -22,7 +22,7 @@ func TestNodeRecoveryClaimReusesGenerationWithFreshInspectionFence(t *testing.T)
 	_, receipt, receiptDigest := recoveryFixture(t)
 	expires := time.Date(2030, 7, 16, 13, 0, 0, 0, time.UTC)
 	observed := expires.Add(-executionapp.MaxClaimLeaseTTLMillis.Duration())
-	e := &scriptedExecutor{rowResults: []scriptedRow{claimExecutionRow("SUSPENDED", "RUNNING", true, digest[:], digest[:], true), {err: pgx.ErrNoRows}, {values: []any{receipt, receiptDigest, "SUSPENDED"}}, {values: []any{int64(2)}}, {values: []any{expires, observed, int64(7)}}, {err: pgx.ErrNoRows}, {values: []any{false}}, {values: []any{receipt, receiptDigest, "SUSPENDED"}}}, execTags: []pgconn.CommandTag{pgconn.NewCommandTag("UPDATE 1"), pgconn.NewCommandTag("UPDATE 1")}}
+	e := &scriptedExecutor{rowResults: []scriptedRow{claimExecutionRow("SUSPENDED", "RUNNING", true, digest[:], digest[:], true), {err: pgx.ErrNoRows}, {values: []any{receipt, receiptDigest, "SUSPENDED"}}, {values: []any{int64(2)}}, {values: []any{expires, observed, int64(7)}}, {err: pgx.ErrNoRows}, {values: []any{false}}, {values: []any{receipt, receiptDigest, "SUSPENDED"}}, {err: pgx.ErrNoRows}}, execTags: []pgconn.CommandTag{pgconn.NewCommandTag("UPDATE 1"), pgconn.NewCommandTag("UPDATE 1")}}
 	s := &scriptedStore{scriptedExecutor: e}
 	r, err := newClaimsRepository(s, func() (string, error) { return "recovery-claim-2", nil }, func() (runtime.FenceToken, error) { return token, nil })
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
@@ -96,9 +97,21 @@ type SettlementRecovery struct {
 	Receipt  *SettlementReceipt
 }
 
+// PausedWriter names the execution generation whose paused root checkpoint
+// row an agent continuation re-enters (FU-269). The admitting transaction
+// stores it on the job; a claim only serves it back.
+type PausedWriter struct {
+	ExecutionID string
+	Generation  uint64
+}
+
 type ClaimDecision struct {
 	NodeRecoveryReceipt string
-	Lease               runtimedomain.ActiveLease
+	// PausedWriter is set only on ACCEPTED, RECOVER_AGENT_MODEL_CHECKPOINT and
+	// RECOVER_NODE_VISIT decisions of an agent continuation whose job holds
+	// one.
+	PausedWriter *PausedWriter
+	Lease        runtimedomain.ActiveLease
 	// LeaseObservedAt is the state-owner clock instant used to decide whether
 	// Lease was live. PostgreSQL repositories must author it in the same
 	// statement that creates, loads, or renews the lease; application-host time
@@ -127,6 +140,13 @@ func (d ClaimDecision) validate(request ClaimRequest, leaseTTL ClaimLeaseTTLMill
 			return ErrInvalidClaim
 		}
 	} else if len(d.NodeRecoveryReceipt) != 0 {
+		return ErrInvalidClaim
+	}
+	if d.PausedWriter != nil &&
+		((d.Disposition != ClaimAccepted && d.Disposition != ClaimRecoverAgentModelCheckpoint && d.Disposition != ClaimRecoverNodeVisit) ||
+			(request.CapabilityID != executiondomain.AgentApplicationCapability && request.CapabilityID != executiondomain.AgentAdhocCapability) ||
+			!recoverydomain.ValidExecutionID(d.PausedWriter.ExecutionID) || d.PausedWriter.ExecutionID == request.ExecutionID ||
+			d.PausedWriter.Generation < 1 || d.PausedWriter.Generation > math.MaxInt64) {
 		return ErrInvalidClaim
 	}
 	if d.Disposition == ClaimRecoverAgentModelCheckpoint &&

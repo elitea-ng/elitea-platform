@@ -733,6 +733,10 @@ WHERE execution_id = $1 AND generation = $2`,
 		notices = append(notices, notice)
 	} else if admission.CurrentContinueTurn != nil {
 		turn := *admission.CurrentContinueTurn
+		// FU-269: read before the resume below consumes the pause.
+		if err := recordPausedWriter(ctx, tx, admission.Record.Job.ID, int64(admission.Record.Job.Generation), turn); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, err
+		}
 		var resumeErr error
 		switch turn.ContinuationKind {
 		case agentexecutionapp.CurrentContinuationStatic:

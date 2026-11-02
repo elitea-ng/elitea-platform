@@ -52,11 +52,11 @@ use super::elitea::runtime::v1::{
     ExecutionInputBundleReferenceV1, ExecutionInputBundleV1, ExecutionInputEntryV1,
     ExecutionOutcomeV1, ExecutionOutputFrameV1, MintDelegationAssertionRequestV1,
     MintDelegationAssertionResponseV1, NodeEventV1, ObserveDesiredStateRequestV1,
-    ObserveDesiredStateResponseV1, PrepareSettlementRequestV1, PrepareSettlementResponseV1,
-    RemoveIndexDispositionV1, RemoveIndexRequestV1, RemoveIndexResponseV1, RenewLeaseRequestV1,
-    RenewLeaseResponseV1, ReportEgressSummaryRequestV1, ReportRunStepsRequestV1,
-    RuntimeErrorCodeV1, RuntimeErrorV1, ScopedContentReferenceV1, SettlementProposalV1,
-    SettlementRecoveryV1, worker_command_v1,
+    ObserveDesiredStateResponseV1, PausedWriterV1, PrepareSettlementRequestV1,
+    PrepareSettlementResponseV1, RemoveIndexDispositionV1, RemoveIndexRequestV1,
+    RemoveIndexResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1, ReportEgressSummaryRequestV1,
+    ReportRunStepsRequestV1, RuntimeErrorCodeV1, RuntimeErrorV1, ScopedContentReferenceV1,
+    SettlementProposalV1, SettlementRecoveryV1, worker_command_v1,
 };
 use super::output::{
     AgentTerminalOutput, RuntimeFailureKind, ToolkitExecuteReadTerminalOutput,
@@ -275,6 +275,10 @@ pub struct AcceptedAgentClaim {
     /// `toolkit_typed_refusals`); without it the terminal is downgraded to
     /// the shapes an older Main accepts.
     toolkit_typed_refusals: bool,
+    /// The paused execution this continuation re-enters (`ClaimReceiptV1`
+    /// `paused_writer`, FU-269), as Main served it; the pipeline validates it
+    /// at assembly. `None` from an older Main.
+    paused_writer: Option<PausedWriterV1>,
     /// The command's field 65 (ADR-0039, #1115) and, once preparation
     /// attached it, the verified context. Empty for a legacy command.
     governed: GovernedContext,
@@ -636,6 +640,7 @@ impl AcceptedAgentClaim {
             // Output replay needs no vector access; the bearer is erased here.
             vector_token: _,
             toolkit_typed_refusals: _,
+            paused_writer: _,
             governed: _,
             delegation: _,
         } = self;
@@ -1160,6 +1165,9 @@ pub(crate) struct ClaimBoundSessionAuthority {
     workload_session_id: String,
     producer_id: String,
     fence_token: Zeroizing<Vec<u8>>,
+    /// The claim's paused writer (FU-269). Read before the writer binding
+    /// is taken; the session writer never needs it.
+    paused_writer: Option<PausedWriterV1>,
 }
 
 /// Consuming session-writer material exposed only inside the worker crate.
@@ -1319,7 +1327,22 @@ impl ClaimBoundSessionAuthority {
             workload_session_id: claim.fence.workload_session_id.clone(),
             producer_id: claim.fence.producer_id.clone(),
             fence_token: Zeroizing::new(claim.fence.fence_token.clone()),
+            paused_writer: claim.paused_writer.clone(),
         }
+    }
+
+    /// The paused execution Main named on this claim (FU-269), unvalidated.
+    #[must_use]
+    pub(crate) const fn paused_writer(&self) -> Option<&PausedWriterV1> {
+        self.paused_writer.as_ref()
+    }
+
+    /// Test-only: the same authority with `writer` named on its claim.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_paused_writer_for_test(mut self, writer: Option<PausedWriterV1>) -> Self {
+        self.paused_writer = writer;
+        self
     }
 
     #[must_use]
@@ -1899,6 +1922,7 @@ pub(crate) fn test_lease_monitored_input_execution(
             arguments_entry: None,
             vector_token: None,
             toolkit_typed_refusals: false,
+            paused_writer: None,
             governed: GovernedContext::default(),
             delegation: elitea_agent_runtime::delegation::DelegationPolicy::default(),
             request_entry: ExecutionInputEntryV1 {
@@ -1962,6 +1986,7 @@ pub(crate) fn test_session_authority_for(
         workload_session_id: "workload-session-1".to_owned(),
         producer_id: "worker-1".to_owned(),
         fence_token: Zeroizing::new(vec![b'f'; 32]),
+        paused_writer: None,
     }
 }
 
@@ -3716,6 +3741,7 @@ fn parse_input_claim_binding(
         arguments_entry,
         vector_token: VectorClaimToken::from_receipt(receipt.vector_token),
         toolkit_typed_refusals: receipt.toolkit_typed_refusals,
+        paused_writer: receipt.paused_writer,
         governed: governed_context(verified.command())?,
         delegation: delegation_policy(verified.command())?,
     })

@@ -125,6 +125,8 @@ func nodePrefrontierClaimFixture(t *testing.T, original bool, desired, status st
 		tags = append(tags, pgconn.NewCommandTag("UPDATE 1"))
 	}
 	tags = append(tags, pgconn.NewCommandTag("UPDATE 1"))
+	// The claim's last read: the job's paused writer (FU-269), none here.
+	rows = append(rows, scriptedRow{err: pgx.ErrNoRows})
 	return request, &scriptedExecutor{rowResults: rows, execTags: tags}, token, observed, expires
 }
 

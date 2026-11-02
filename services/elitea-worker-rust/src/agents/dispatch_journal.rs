@@ -289,6 +289,53 @@ pub(crate) fn continuation_pause<'a>(
         .then_some(pause)
 }
 
+/// FU-269 (E5): the owner-proven suffix a continuation lost before its first
+/// root save re-runs behind.
+///
+/// `pause` is the index of the latest pause. The events after it are:
+/// * nothing (`Ok(None)`): the continuation never wrote, it runs as a first
+///   attempt; or
+/// * an owner-proven suffix (`Ok(Some(pause + 1))`, the length of the view the
+///   resolvers read): its FIRST event is a `continuing` record of `owner` (this
+///   execution: Main re-claims a lost execution under the same execution id and
+///   generation) for exactly that pause (`call_id` is the pause's event id);
+///   every other dispatch record in it is `owner`'s; and every other event is
+///   one `is_continuation_event` admits (the continuation's own start-path
+///   events, `ContinuationSuffix`).
+///
+/// Anything else (another execution's record, a record that does not read,
+/// an event outside the set) is not this continuation's (`Err`).
+///
+/// # Errors
+///
+/// The suffix is not owner-proven.
+pub(crate) fn owned_continuation_suffix(
+    events: &[Event],
+    pause: usize,
+    owner: &DispatchOwner,
+    mut is_continuation_event: impl FnMut(&Event) -> bool,
+) -> Result<Option<usize>, InvalidDispatchRecord> {
+    let pause_event = events.get(pause).ok_or(InvalidDispatchRecord)?;
+    let suffix = &events[pause + 1..];
+    let Some(first) = suffix.first() else {
+        return Ok(None);
+    };
+    let first = dispatch_record(first)?.ok_or(InvalidDispatchRecord)?;
+    if first.phase != Phase::Continuing || &first.owner != owner || first.call_id != pause_event.id
+    {
+        return Err(InvalidDispatchRecord);
+    }
+    records_bound_to(suffix, owner, |_| true)?;
+    if suffix
+        .iter()
+        .all(|event| is_dispatch_record(event) || is_continuation_event(event))
+    {
+        Ok(Some(pause + 1))
+    } else {
+        Err(InvalidDispatchRecord)
+    }
+}
+
 /// The code a run ends with when an approved call's `dispatched` record could
 /// not be written: that call never ran, and no later journaled call of the
 /// invocation starts. The run fails (not retryable): another submission of the
@@ -1497,5 +1544,64 @@ mod tests {
             "{\"version\":1}".to_owned(),
         );
         assert!(recorded_dispatches(&[garbage], "inv-1").is_err());
+    }
+
+    /// FU-269 (E5): a continuation lost before its first root save re-runs
+    /// behind exactly its own suffix: this execution's `continuing` record for
+    /// that pause first, its own records and start-path events after it.
+    #[test]
+    fn only_this_executions_own_suffix_lets_a_continuation_re_run() {
+        let mut pause = Event::new("root-1");
+        pause
+            .provider_metadata
+            .insert("pause".to_owned(), "yes".to_owned());
+        let own = |event: &Event| event.provider_metadata.contains_key("own");
+        let suffix = |events: &[Event], owner: &DispatchOwner| {
+            owned_continuation_suffix(events, 0, owner, own)
+        };
+        let mut forwarded = Event::new("child-1");
+        forwarded
+            .provider_metadata
+            .insert("own".to_owned(), "replayed call".to_owned());
+        let started = continuing(&pause, owner(), "hitl-1");
+
+        // Nothing written: a first attempt.
+        assert_eq!(suffix(&[pause.clone()], &owner()).ok(), Some(None));
+        // Its own suffix: the resolvers read the session through the pause.
+        let dead = [
+            pause.clone(),
+            started.clone(),
+            forwarded.clone(),
+            record("child-1", "call-1", Phase::Dispatched, None),
+        ];
+        assert_eq!(suffix(&dead, &owner()).ok(), Some(Some(1)));
+        // Another execution, or another generation of it, owns nothing here.
+        assert!(suffix(&dead, &DispatchOwner::new("execution-2", 1)).is_err());
+        assert!(suffix(&dead, &DispatchOwner::new("execution-1", 2)).is_err());
+        // A first event that is not its `continuing` record for this pause.
+        assert!(suffix(&[pause.clone(), forwarded.clone()], &owner()).is_err());
+        let mut other_pause = Event::new("root-1");
+        other_pause.id = "another-pause".to_owned();
+        assert!(
+            suffix(
+                &[pause.clone(), continuing(&other_pause, owner(), "hitl-1")],
+                &owner()
+            )
+            .is_err()
+        );
+        // A record of another execution later in the suffix.
+        let mut foreign = dead.to_vec();
+        foreign.push(continuing(
+            &pause,
+            DispatchOwner::new("execution-2", 1),
+            "hitl-1",
+        ));
+        assert!(suffix(&foreign, &owner()).is_err());
+        // An event outside the continuation's start path (an advance).
+        let mut advance = Event::new("root-2");
+        advance.llm_response.content = Some(adk_rust::Content::new("model").with_text("advanced"));
+        let mut advanced = dead.to_vec();
+        advanced.push(advance);
+        assert!(suffix(&advanced, &owner()).is_err());
     }
 }

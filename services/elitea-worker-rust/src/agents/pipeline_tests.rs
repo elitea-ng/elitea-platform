@@ -1264,6 +1264,22 @@ fn authorized_execution<'a>(
     )
 }
 
+/// [`authorized_execution`] whose claim carries Main's paused writer (FU-269).
+fn authorized_execution_with_paused_writer<'a>(
+    request: &'a super::request::AgentExecutionRequest,
+    execution_id: &str,
+    writer: Option<crate::protocol::elitea::runtime::v1::PausedWriterV1>,
+) -> AuthorizedNativeAssembly<'a> {
+    AuthorizedNativeAssembly::from_authorized(
+        request,
+        test_runtime_context_authority(),
+        crate::protocol::control::test_session_authority_for(execution_id, 3)
+            .with_paused_writer_for_test(writer),
+        Arc::new(crate::state::TestStateWriterLease::current()),
+        AuthorizedNativeCommandBinding::fixture_for_execution(execution_id),
+    )
+}
+
 fn admission_error(
     result: Result<
         super::runtime::AdmittedPipelineNativeAssembly<'_>,
@@ -5261,24 +5277,58 @@ fn a_toolkit_node_calling_an_index_tool_on_a_catalog_toolkit_asks_for_the_claim_
     assert!(!asks("list_indexes", other));
 }
 
-/// FU-265: the paused writer rides only on a continuation that re-enters a
-/// paused root row; a fresh run carrying it is refused before anything runs.
+/// FU-269 (E2): Main's paused writer rides only on a continuation that
+/// re-enters a paused root row; a fresh run whose claim carries one is refused
+/// before anything runs.
 #[tokio::test]
 async fn a_paused_writer_is_refused_on_a_fresh_run() {
     let assembler = PipelineNativeAgentAssembler::with_state(
         Arc::new(InMemorySessionService::new()),
         Arc::new(MemoryCheckpointer::new()),
     );
-    let mut request = pipeline_request();
-    request.payload.meta.insert(
-        crate::agents::graph::continuation_writer::PAUSED_WRITER_META_KEY.to_owned(),
-        json!({"execution_id": "0123456789abcdef0123456789abcdef", "generation": 1}),
-    );
+    let request = pipeline_request();
+    let writer = crate::protocol::elitea::runtime::v1::PausedWriterV1 {
+        execution_id: "0123456789abcdef0123456789abcdef".to_owned(),
+        generation: 1,
+    };
     assert!(
         assembler
-            .assemble(authorized_execution(&request, "execution-fresh"))
+            .assemble(authorized_execution_with_paused_writer(
+                &request,
+                "execution-fresh",
+                Some(writer)
+            ))
             .await
             .is_err(),
         "a fresh run carrying a paused writer must be refused"
+    );
+}
+
+/// FU-269 (decision 2): the FU-265 meta key is gone; a continuation that
+/// still carries it is refused by the strict profile, as any unknown key is.
+#[tokio::test]
+async fn the_retired_paused_writer_meta_key_is_refused() {
+    let assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::new(InMemorySessionService::new()),
+        Arc::new(MemoryCheckpointer::new()),
+    );
+    let mut request = pipeline_request();
+    request.payload.should_continue = true;
+    request.payload.hitl_resume = true;
+    request.payload.hitl_action = Some("approve".to_owned());
+    request.payload.meta.insert(
+        "elitea.continuation.paused_writer.v1".to_owned(),
+        json!({"execution_id": "0123456789abcdef0123456789abcdef", "generation": 1}),
+    );
+    let Err(error) = assembler
+        .assemble(authorized_execution(&request, "execution-continue"))
+        .await
+    else {
+        panic!("a continuation carrying the retired key must be refused");
+    };
+    assert_eq!(
+        error.code(),
+        NativeAgentAssemblyErrorCode::UnsupportedCapability,
+        "{error}"
     );
 }

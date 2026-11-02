@@ -988,7 +988,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// gateway.guardrail_verdicts.detector_type becomes VARCHAR(32), so
 	// azure_content_safety and bedrock_guardrails are recorded whole. No
 	// data, no permission.
-	require.EqualValues(t, 217, Head(shared))
+	//
+	// 218: shared/0218_agent_continuation_paused_writer.sql, the paused
+	// writer a continuation re-enters (FU-269): nullable
+	// paused_execution_id and paused_generation on
+	// elitea_runtime.agent_execution_jobs, written once by the admitting
+	// transaction and served on the claim receipt. No data, no permission.
+	require.EqualValues(t, 218, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -113,6 +113,24 @@ message ClaimReceiptV1 {
   // sends the older shapes: UNKNOWN_TOOL with the fixed refusal sentence, and
   // the generic authorization sentence.
   bool toolkit_typed_refusals = 18;
+  // The paused execution whose root checkpoint row this continuation
+  // re-enters, and the generation its paused terminal settled under. Main
+  // reads it in the admitting transaction, under the response lock, and
+  // stores it on the admitted job; the client never supplies it. Set only on
+  // ACCEPTED, RECOVER_AGENT_MODEL_CHECKPOINT and RECOVER_NODE_VISIT receipts
+  // of an agent continuation whose job holds one. A worker that does not see
+  // it (an older Main) keeps the earlier behaviour: a continuation lost
+  // before its first root save ends typed. An older worker ignores it.
+  PausedWriterV1 paused_writer = 19;
+}
+
+// PausedWriterV1 names one execution generation by its exact ids.
+message PausedWriterV1 {
+  // 32 lowercase hexadecimal characters; never the claim's own execution.
+  string execution_id = 1;
+  // At least 1.
+  uint64 generation = 2;
+  reserved 3 to 15;
 }
 
 // VectorClaimTokenV1 is a short-lived bearer bound to one claim: its

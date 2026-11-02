@@ -217,6 +217,9 @@ CREATE TABLE elitea_runtime.agent_execution_jobs (
     sio_event text NOT NULL,
     -- shared/0154_agent_stop_question_author.sql
     stop_question_author_id bigint,
+    -- shared/0218_agent_continuation_paused_writer.sql
+    paused_execution_id text,
+    paused_generation bigint,
     PRIMARY KEY (execution_id, generation),
     FOREIGN KEY (execution_id, generation, capability_id, input_bundle_id)
         REFERENCES elitea_runtime.execution_jobs

@@ -222,7 +222,7 @@ FOR UPDATE OF j, o`, request.ExecutionID, int64(request.Generation), request.Cap
 					}
 				}
 			}
-			return nil
+			return selectClaimPausedWriter(ctx, tx, request, &decision)
 		case err == nil:
 			if _, err := tx.Exec(ctx, `
 UPDATE elitea_runtime.execution_claims
@@ -500,7 +500,7 @@ WHERE claim_id = $1 AND released_at IS NULL`, lease.ClaimID)
 				return err
 			}
 		}
-		return nil
+		return selectClaimPausedWriter(ctx, tx, request, &decision)
 	})
 	if err != nil {
 		if errors.Is(err, executionapp.ErrInvalidClaim) || errors.Is(err, runtimedomain.ErrStaleFence) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

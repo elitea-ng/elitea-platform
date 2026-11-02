@@ -619,18 +619,6 @@ fn validate_common_profile(
                 | CommonProfileMode::FanoutWake
         );
     let output_continuation = mode == CommonProfileMode::OutputContinuation;
-    // FU-265: a continuation that re-enters a paused root row may also carry
-    // the paused writer Main names, in a key of its own (parsed strictly by
-    // the pipeline). Every other meta rule applies to the rest.
-    let mut meta = payload.meta.clone();
-    if matches!(
-        mode,
-        CommonProfileMode::Continuation
-            | CommonProfileMode::DirectGuardrailContinuation
-            | CommonProfileMode::McpAuthorization
-    ) {
-        meta.remove(super::graph::continuation_writer::PAUSED_WRITER_META_KEY);
-    }
     let valid_truncated_content = payload
         .truncated_content
         .as_deref()
@@ -650,13 +638,15 @@ fn validate_common_profile(
         || payload.debug_mode.is_some()
         || payload.next_input_suggestion.enabled
         || payload.debug
-        || !(meta.is_empty()
+        || !(payload.meta.is_empty()
             || (mode == CommonProfileMode::FanoutWake
-                && meta.len() == 1
-                && meta.contains_key(super::graph::fanout_wake::FANOUT_WAKE_META_KEY))
+                && payload.meta.len() == 1
+                && payload
+                    .meta
+                    .contains_key(super::graph::fanout_wake::FANOUT_WAKE_META_KEY))
             || (mode == CommonProfileMode::DirectGuardrailContinuation
-                && meta.len() == 1
-                && super::graph::static_tool_pause::parse_static_tool_decisions(&meta)
+                && payload.meta.len() == 1
+                && super::graph::static_tool_pause::parse_static_tool_decisions(&payload.meta)
                     .ok()
                     .flatten()
                     .is_some()))

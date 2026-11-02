@@ -1194,6 +1194,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             command,
             &request.payload.input_attachments,
             &policy,
+            session.paused_writer(),
         )?;
         self.state
             .open(session, lease, &plan, profile.definition())
@@ -1230,6 +1231,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             command,
             &request.payload.input_attachments,
             &policy,
+            session.paused_writer(),
         )?;
         let pipeline_aliases = frozen_pipeline_aliases(&toolsets);
         self.state
@@ -1416,7 +1418,13 @@ impl PipelineNativeAgentAssembler {
                         },
                     )
                     .await?;
-                wake_rerun = frontier == super::session::RecoveryFrontier::WakePark;
+                // A lost wake, or a lost continuation (FU-269), runs again as
+                // itself; any other frontier resumes from the checkpoint.
+                wake_rerun = matches!(
+                    frontier,
+                    super::session::RecoveryFrontier::WakePark
+                        | super::session::RecoveryFrontier::ContinuationPause
+                );
                 // A lost wake's answered child may have stopped mid model call
                 // under this execution: it resumes that step (R). A model step of
                 // another execution is never restored.

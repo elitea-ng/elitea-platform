@@ -763,6 +763,11 @@ impl AuthorizedNativeCommandBinding {
         }
     }
 
+    /// The claimed execution.
+    pub(crate) fn execution_id(&self) -> &str {
+        &self.execution_id
+    }
+
     /// The execution's public egress policy and ledger (#1490).
     pub(crate) const fn egress(&self) -> &std::sync::Arc<elitea_agent_runtime::egress::RunEgress> {
         &self.egress
@@ -1801,16 +1806,18 @@ impl PipelineStateServices {
 
     /// FU-265: whether `checkpoint`, the latest root row, is the paused row
     /// this continuation re-enters. One proof for the first attempt and the
-    /// reclaim: the row is this execution's own (it saved already), or it was
-    /// written by exactly the paused writer Main named, is a pause frontier on
-    /// this run's root thread, and the root session's latest pause event names
-    /// exactly that row. The refusal logs ids and generations only.
+    /// reclaim: the row is this execution's own (it saved already, `None`), or
+    /// it was written by exactly the paused writer Main named, is a pause
+    /// frontier on this run's root thread, and the root session's latest pause
+    /// event names exactly that row (the restored session and that pause's
+    /// index). The refusal logs ids and generations only.
     pub(super) async fn prove_continuation_row(
         &self,
         plan: &OrdinaryNativeAgentPlan,
         paused: &super::graph::continuation_writer::PausedWriter,
         checkpoint: &adk_rust::graph::Checkpoint,
-    ) -> Result<(), NativeAgentAssemblyError> {
+    ) -> Result<Option<(Box<dyn adk_rust::session::Session>, usize)>, NativeAgentAssemblyError>
+    {
         let writer = checkpoint.metadata.get("elitea.pipeline.execution.v1");
         let refuse = |cause: &'static str| {
             tracing::warn!(
@@ -1825,7 +1832,7 @@ impl PipelineStateServices {
             child_refused(cause)
         };
         if writer == Some(&serde_json::json!([plan.execution_id, plan.generation])) {
-            return Ok(());
+            return Ok(None);
         }
         if !paused.is_writer(writer) {
             return Err(refuse(ROOT_WRITER_MISMATCH));
@@ -1840,21 +1847,102 @@ impl PipelineStateServices {
         let events = session.events().all();
         // The latest pause event names exactly this row: the paused execution's
         // frontier. Events after it are this continuation's own (its input and
-        // records); the continuation's resolver binds the decision to the pause
-        // again when it runs.
-        let bound = events
-            .iter()
-            .rev()
-            .find_map(adk_rust::graph::interrupt::GraphInterruptPayload::from_event)
+        // records, `continuation_entry`); the continuation's resolver binds the
+        // decision to the pause again when it runs.
+        let pause = events.iter().rposition(|event| {
+            adk_rust::graph::interrupt::GraphInterruptPayload::from_event(event).is_some()
+        });
+        let bound = pause
+            .and_then(|index| {
+                adk_rust::graph::interrupt::GraphInterruptPayload::from_event(&events[index])
+            })
             .is_some_and(|pause| {
                 pause.thread_id == plan.session_id.as_str()
                     && pause.checkpoint_id == checkpoint.checkpoint_id
             });
-        if bound {
-            Ok(())
-        } else {
-            Err(refuse(CONTINUATION_PAUSE_UNBOUND))
+        match pause {
+            Some(index) if bound => Ok(Some((session, index))),
+            _ => Err(refuse(CONTINUATION_PAUSE_UNBOUND)),
         }
+    }
+
+    /// FU-269: how a continuation that re-enters the paused row its writer
+    /// Main named starts, on the first attempt and on a reclaim. The row is
+    /// proven (`prove_continuation_row`), then the events after the pause are
+    /// read (`dispatch_journal::owned_continuation_suffix`, E5): none, a first
+    /// attempt; this execution's own suffix, a re-run whose resolvers read the
+    /// session ending at the pause (E6); anything else is refused typed.
+    pub(super) async fn continuation_entry(
+        &self,
+        plan: &OrdinaryNativeAgentPlan,
+        paused: &super::graph::continuation_writer::PausedWriter,
+    ) -> Result<ContinuationEntry, NativeAgentAssemblyError> {
+        let checkpoint = self
+            .checkpointer
+            .load(plan.session_id.as_ref())
+            .await
+            .map_err(|_| dependency_unavailable())?
+            .ok_or_else(|| child_refused(CONTINUATION_PAUSE_UNBOUND))?;
+        let Some((session, pause)) = self
+            .prove_continuation_row(plan, paused, &checkpoint)
+            .await?
+        else {
+            // This execution saved its own row: an ordinary checkpoint resume.
+            return Ok(ContinuationEntry::default());
+        };
+        let events = session.events().all();
+        let owner =
+            super::dispatch_journal::DispatchOwner::new(plan.execution_id.clone(), plan.generation);
+        let mut owns = super::application_tools::ContinuationSuffix::default();
+        // A text continuation's own input is its user event (E4).
+        let own_input = serde_json::to_value(&plan.user_content).ok();
+        let suffix =
+            super::dispatch_journal::owned_continuation_suffix(&events, pause, &owner, |event| {
+                owns.owns(event, |content| {
+                    super::application_tools::is_pipeline_resume_marker(content)
+                        || serde_json::to_value(content).ok() == own_input
+                })
+            })
+            .map_err(|_| {
+                tracing::warn!(
+                    event = "pipeline_recovery_frontier_refused",
+                    cause = CONTINUATION_SUFFIX_UNOWNED,
+                    execution_id = %plan.execution_id,
+                    generation = plan.generation,
+                    expected_execution_id = paused.execution_id(),
+                    expected_generation = paused.generation(),
+                );
+                child_refused(CONTINUATION_SUFFIX_UNOWNED)
+            })?;
+        let pause_event = &events[pause];
+        let card = super::graph::resume::pause_interrupt_ids(
+            pause_event,
+            ROOT_AGENT_NAME,
+            plan.session_id.as_ref(),
+        )
+        .and_then(|cards| cards.into_iter().next())
+        .unwrap_or_else(|| checkpoint.checkpoint_id.clone());
+        let continuing = Some(ContinuingPause {
+            pause_id: pause_event.id.clone(),
+            pause_invocation_id: pause_event.invocation_id.clone(),
+            card,
+        });
+        Ok(match suffix {
+            None => ContinuationEntry {
+                session: Some(session),
+                continuing,
+                rerun: false,
+                input_written: false,
+            },
+            Some(len) => ContinuationEntry {
+                input_written: events[len..].iter().any(|event| event.author == "user"),
+                session: Some(Box::new(super::graph::continuation_writer::PauseView::new(
+                    session, len,
+                ))),
+                continuing,
+                rerun: true,
+            },
+        })
     }
 
     pub(super) async fn inspect_checkpoint(
@@ -1881,20 +1969,12 @@ impl PipelineStateServices {
             // wrote, which it re-enters. Any other writer is refused.
             RecoveryFrontier::WakePark
         } else if let Some(paused) = plan.paused_writer.as_ref() {
-            // FU-265: a continuation lost before its first root save. Its row
-            // is proven exactly as on the first attempt, but re-running the
-            // continuation is FU-269: until then it ends typed, nothing runs.
-            self.prove_continuation_row(plan, paused, &checkpoint)
-                .await?;
-            tracing::warn!(
-                event = "pipeline_recovery_frontier_refused",
-                cause = CONTINUATION_RERUN_UNSUPPORTED,
-                execution_id = %plan.execution_id,
-                generation = plan.generation,
-                expected_execution_id = paused.execution_id(),
-                expected_generation = paused.generation(),
-            );
-            return Err(child_refused(CONTINUATION_RERUN_UNSUPPORTED));
+            // FU-269: a continuation lost before its first root save. Its row
+            // and the suffix it left are proven exactly as on the first attempt
+            // (`continuation_entry`); it runs again as the continuation from
+            // that row, and the journal and dispatch records decide each call.
+            self.continuation_entry(plan, paused).await?;
+            RecoveryFrontier::ContinuationPause
         } else {
             tracing::warn!(
                 event = "pipeline_recovery_frontier_refused",
@@ -1906,9 +1986,20 @@ impl PipelineStateServices {
             return Err(child_refused(ROOT_WRITER_MISMATCH));
         };
         if checkpoint.thread_id != plan.session_id.as_str()
-            || !definition
-                .recovery_frontier_supported(&checkpoint.pending_nodes, &frozen.admitted_aliases())
             || checkpoint.cleared_interrupt.is_some()
+        {
+            return Err(invalid_configuration());
+        }
+        // The continuation re-enters its paused row itself: its resolver binds
+        // the decision to that row, and no frontier is resumed blind.
+        if frontier == RecoveryFrontier::ContinuationPause {
+            return Ok((
+                recovery_evidence(plan, &checkpoint, Vec::<Value>::new())?,
+                frontier,
+            ));
+        }
+        if !definition
+            .recovery_frontier_supported(&checkpoint.pending_nodes, &frozen.admitted_aliases())
         {
             return Err(invalid_configuration());
         }
@@ -1934,33 +2025,65 @@ impl PipelineStateServices {
                 .await?,
             );
         }
-        // Bind all frontier data, including graph state, attempts and child receipts.
-        // Convert through Value to order map keys before hashing.
-        let value = serde_json::to_value(&checkpoint).map_err(|_| invalid_configuration())?;
-        let bytes = if children.is_empty() {
-            serde_json::to_vec(&("elitea.pipeline.recovery.v1", plan.definition_digest, value))
-        } else {
-            serde_json::to_vec(&(
-                "elitea.pipeline.recovery.v2",
-                plan.definition_digest,
-                value,
-                children,
-            ))
-        }
-        .map_err(|_| invalid_configuration())?;
-        let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
-        Ok((
-            ValidatedModelCheckpoint::from_graph(
-                plan.execution_id.clone(),
-                plan.generation,
-                digest
-                    .as_ref()
-                    .try_into()
-                    .map_err(|_| invalid_configuration())?,
-            ),
-            frontier,
+        Ok((recovery_evidence(plan, &checkpoint, children)?, frontier))
+    }
+}
+
+/// Bind all frontier data, including graph state, attempts and child receipts.
+/// Convert through Value to order map keys before hashing.
+fn recovery_evidence<C: serde::Serialize>(
+    plan: &OrdinaryNativeAgentPlan,
+    checkpoint: &adk_rust::graph::Checkpoint,
+    children: Vec<C>,
+) -> Result<ValidatedModelCheckpoint, NativeAgentAssemblyError> {
+    let value = serde_json::to_value(checkpoint).map_err(|_| invalid_configuration())?;
+    let bytes = if children.is_empty() {
+        serde_json::to_vec(&("elitea.pipeline.recovery.v1", plan.definition_digest, value))
+    } else {
+        serde_json::to_vec(&(
+            "elitea.pipeline.recovery.v2",
+            plan.definition_digest,
+            value,
+            children,
         ))
     }
+    .map_err(|_| invalid_configuration())?;
+    let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
+    Ok(ValidatedModelCheckpoint::from_graph(
+        plan.execution_id.clone(),
+        plan.generation,
+        digest
+            .as_ref()
+            .try_into()
+            .map_err(|_| invalid_configuration())?,
+    ))
+}
+
+/// FU-269: the pause a continuation's `continuing` record names (E3).
+pub(super) struct ContinuingPause {
+    pause_id: String,
+    pause_invocation_id: String,
+    /// One card of the pause (an Application pause's first card), else the
+    /// paused row's checkpoint id.
+    card: String,
+}
+
+/// FU-269: how a continuation that re-enters a paused row starts
+/// (`PipelineStateServices::continuation_entry`). The default is a start
+/// without a named paused writer, unchanged.
+#[derive(Default)]
+pub(super) struct ContinuationEntry {
+    /// The root session the row proof restored (E7): the start reads it
+    /// instead of restoring it again. On a re-run it ends at the pause (E6).
+    session: Option<Box<dyn adk_rust::session::Session>>,
+    /// The pause this continuation's `continuing` record names.
+    continuing: Option<ContinuingPause>,
+    /// A reclaim re-running behind its own owner-proven suffix: its
+    /// `continuing` record is already in place.
+    rerun: bool,
+    /// The suffix already holds this continuation's user event (E4): the
+    /// Runner adds none.
+    input_written: bool,
 }
 
 /// One level of the Main-frozen saved-pipeline composition a recovery walk may
@@ -2009,9 +2132,9 @@ const CHILD_NOT_PARKED: &str = "pipeline.recovery.child_not_parked";
 const ROOT_WRITER_MISMATCH: &str = "pipeline.recovery.root_writer_mismatch";
 /// FU-265: the named paused row is not this continuation's pause.
 const CONTINUATION_PAUSE_UNBOUND: &str = "pipeline.recovery.continuation_pause_unbound";
-/// FU-265: the continuation's paused row is proven, but a continuation is not
-/// re-run before FU-269 (owner-proven suffix); it ends typed.
-const CONTINUATION_RERUN_UNSUPPORTED: &str = "pipeline.recovery.continuation_rerun_unsupported";
+/// FU-269: the events after the paused row's pause are not this
+/// continuation's own owner-proven suffix (`owned_continuation_suffix`).
+const CONTINUATION_SUFFIX_UNOWNED: &str = "pipeline.recovery.continuation_suffix_unowned";
 
 fn child_refused(cause: &'static str) -> NativeAgentAssemblyError {
     invalid_configuration().with_cause(cause, None)
@@ -2027,7 +2150,7 @@ pub(crate) fn is_recovery_frontier_cause(code: &str) -> bool {
         CHILD_NOT_PARKED,
         ROOT_WRITER_MISMATCH,
         CONTINUATION_PAUSE_UNBOUND,
-        CONTINUATION_RERUN_UNSUPPORTED,
+        CONTINUATION_SUFFIX_UNOWNED,
     ]
     .contains(&code)
 }
@@ -2049,6 +2172,11 @@ pub(super) enum RecoveryFrontier {
     /// runs again as the wake from the park it was admitted against (class I:
     /// the decision ledger and the children's receipts deduplicate it).
     WakePark,
+    /// A continuation whose process was lost before its first root save
+    /// (FU-269): it runs again as the continuation from the paused row its
+    /// writer Main named, behind its own owner-proven suffix. Each call's
+    /// journal and dispatch records decide it (R / C / I).
+    ContinuationPause,
 }
 
 /// One bound provider invocation that remains paired with its completion.
@@ -2620,8 +2748,17 @@ pub(super) async fn assemble_pipeline_native(
     let start = promote_printer_pause(start, &state, &plan, &printer_catalog).await?;
     let text_resume = matches!(&start, PipelineNativeStart::Text(_));
     let checkpoint_recovery = matches!(&start, PipelineNativeStart::Checkpoint);
+    let entry = match plan.paused_writer.as_ref() {
+        Some(paused) if start.reenters_paused_row() => {
+            state.continuation_entry(&plan, paused).await?
+        }
+        _ => ContinuationEntry::default(),
+    };
+    // E4: a re-run whose suffix holds its user event adds none.
+    let input_written = entry.input_written;
     let resume = resolve_pipeline_start(
         start,
+        entry,
         &state,
         &plan,
         &printer_catalog,
@@ -2720,7 +2857,7 @@ pub(super) async fn assemble_pipeline_native(
         application_tools,
     )
     .map_err(projection_configuration)?;
-    let input = if checkpoint_recovery {
+    let input = if checkpoint_recovery || input_written {
         Content::new("user")
     } else if text_resume {
         user_content
@@ -2743,6 +2880,7 @@ pub(super) async fn assemble_pipeline_native(
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // Keep claim, checkpoint, continuation proof, and Runner assembly visibly ordered.
 async fn resolve_pipeline_start(
     start: PipelineNativeStart,
+    mut entry: ContinuationEntry,
     state: &PipelineStateServices,
     plan: &OrdinaryNativeAgentPlan,
     printer_catalog: &super::graph::PrinterPauseCatalog,
@@ -2765,22 +2903,15 @@ async fn resolve_pipeline_start(
         reset_session_for_regeneration(state.sessions.as_ref(), &plan.user_id, &plan.session_id)
             .await?;
     }
-    // FU-265: with Main's paused writer, the first attempt proves the paused
-    // row exactly as a reclaim does (`prove_continuation_row`).
-    if start.reenters_paused_row()
-        && let Some(paused) = plan.paused_writer.as_ref()
-    {
-        let checkpoint = state
-            .checkpointer
-            .load(plan.session_id.as_ref())
-            .await
-            .map_err(|_| dependency_unavailable())?
-            .ok_or_else(|| child_refused(CONTINUATION_PAUSE_UNBOUND))?;
-        state
-            .prove_continuation_row(plan, paused, &checkpoint)
-            .await?;
-    }
-    Ok(match start {
+    // FU-269: with Main's paused writer the row was proven and the session
+    // restored once (`continuation_entry`); the arms read that session. A
+    // continuation records `continuing` once, before its Runner starts (E3).
+    let mut continuing_written = entry.rerun;
+    let session_for = async |entry: &mut ContinuationEntry| match entry.session.take() {
+        Some(session) => Ok(session),
+        None => restore_pipeline_session(state, plan).await,
+    };
+    let resume = match start {
         PipelineNativeStart::Checkpoint => {
             restore_pipeline_session(state, plan).await?;
             None
@@ -2804,7 +2935,7 @@ async fn resolve_pipeline_start(
             None
         }
         PipelineNativeStart::StaticTools(decisions) => {
-            let session = restore_pipeline_session(state, plan).await?;
+            let session = session_for(&mut entry).await?;
             let events = session.events().all();
             let journal = plan.dispatch_journal(Arc::clone(&state.sessions))?;
             // The same bound-pause rule as a sensitive decision: the pause is the
@@ -2850,14 +2981,17 @@ async fn resolve_pipeline_start(
                 .interrupt_ids()
                 .first()
                 .ok_or_else(invalid_configuration)?;
-            journal
-                .record_continuing(&interrupt.id, &interrupt.invocation_id, card)
-                .await
-                .map_err(|_| dependency_unavailable())?;
+            if !continuing_written {
+                journal
+                    .record_continuing(&interrupt.id, &interrupt.invocation_id, card)
+                    .await
+                    .map_err(|_| dependency_unavailable())?;
+                continuing_written = true;
+            }
             Some(super::graph::resume::PipelineResume::empty())
         }
         PipelineNativeStart::Hitl(decision) => {
-            let session = restore_pipeline_session(state, plan).await?;
+            let session = session_for(&mut entry).await?;
             let owner = super::dispatch_journal::DispatchOwner::new(
                 plan.execution_id.clone(),
                 plan.generation,
@@ -2925,10 +3059,13 @@ async fn resolve_pipeline_start(
                 }
                 // Owner proof of everything this continuation forwards before it
                 // finishes: a replacement of this execution continues behind it.
-                plan.dispatch_journal(Arc::clone(&state.sessions))?
-                    .record_continuing(&pause_id, &pause_invocation_id, &card)
-                    .await
-                    .map_err(|_| dependency_unavailable())?;
+                if !continuing_written {
+                    plan.dispatch_journal(Arc::clone(&state.sessions))?
+                        .record_continuing(&pause_id, &pause_invocation_id, &card)
+                        .await
+                        .map_err(|_| dependency_unavailable())?;
+                    continuing_written = true;
+                }
             }
             Some(resume)
         }
@@ -2955,7 +3092,7 @@ async fn resolve_pipeline_start(
             Some(super::graph::resume::PipelineResume::empty())
         }
         PipelineNativeStart::McpAuthorization(continuation) => {
-            let session = restore_pipeline_session(state, plan).await?;
+            let session = session_for(&mut entry).await?;
             Some(
                 continuation
                     .resolve(
@@ -2969,7 +3106,7 @@ async fn resolve_pipeline_start(
             )
         }
         PipelineNativeStart::Text(continuation) => {
-            let session = restore_pipeline_session(state, plan).await?;
+            let session = session_for(&mut entry).await?;
             Some(
                 continuation
                     .resolve_with_family(
@@ -2995,7 +3132,18 @@ async fn resolve_pipeline_start(
                     .preserve_descendant_static_inputs(),
             )
         }
-    })
+    };
+    // E3: the continuation's `continuing` record, once, before its Runner
+    // starts: the first event after the pause, the owner proof a re-run of
+    // this execution reads (`owned_continuation_suffix`). Only with a paused
+    // writer; it carries no content, so history, trace and replay ignore it.
+    if let Some(pause) = entry.continuing.as_ref().filter(|_| !continuing_written) {
+        plan.dispatch_journal(Arc::clone(&state.sessions))?
+            .record_continuing(&pause.pause_id, &pause.pause_invocation_id, &pause.card)
+            .await
+            .map_err(|_| dependency_unavailable())?;
+    }
+    Ok(resume)
 }
 
 /// Demo issue 5: a Printer pause tells the user "To resume the pipeline -
@@ -4666,6 +4814,7 @@ mod fanout_start_tests {
         };
         resolve_pipeline_start(
             wake_start(),
+            ContinuationEntry::default(),
             &state,
             &plan,
             &super::super::graph::PrinterPauseCatalog::default(),
