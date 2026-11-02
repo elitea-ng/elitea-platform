@@ -132,6 +132,20 @@ jobs:
         run: |
           bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
+      - name: Free runner disk for the full worker build
+        # A full worker build on top of main's restored target/ ran the
+        # runner out of disk (ENOSPC in `Test with PostgreSQL 18`, PR #1547:
+        # a tonic bump rebuilds most of the graph beside the cached copy).
+        # Bounded and NON-FATAL, as in ci-governed-conformance.yml: a refused
+        # rm only warns, and the build then fails honestly on ENOSPC.
+        working-directory: .
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
+            || echo "::warning::could not remove every preinstalled toolchain; continuing"
+          df -h / | tail -1
+
       # Both jobs below used to do a COLD build of the whole 418-crate
       # dependency graph on every Rust PR — twice per PR, once here and once in
       # the other job, with nothing carried between runs. Nothing in this
@@ -204,6 +218,20 @@ jobs:
       - name: Assert the pinned toolchain
         run: |
           bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+
+      - name: Free runner disk for the full worker build
+        # A full worker build on top of main's restored target/ ran the
+        # runner out of disk (ENOSPC in `Test with PostgreSQL 18`, PR #1547:
+        # a tonic bump rebuilds most of the graph beside the cached copy).
+        # Bounded and NON-FATAL, as in ci-governed-conformance.yml: a refused
+        # rm only warns, and the build then fails honestly on ENOSPC.
+        working-directory: .
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
+            || echo "::warning::could not remove every preinstalled toolchain; continuing"
+          df -h / | tail -1
 
       # Both jobs below used to do a COLD build of the whole 418-crate
       # dependency graph on every Rust PR — twice per PR, once here and once in
