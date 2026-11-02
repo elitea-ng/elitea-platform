@@ -64,6 +64,18 @@ The platform requests the scopes `openid`, `profile` and `email` (a provider on 
 - In **Keycloak**, keep the `email` client scope assigned to the client. If you remove it, Keycloak refuses the authorization request with `invalid_scope`. Without the scope, the id_token also has no `email` claim, and the login is refused.
 - In Keycloak, a user whose **Email verified** flag is off gets `"email_verified": false`, so the login is always refused. Turn the flag on for the user, or let the user verify the address in Keycloak.
 
+## When an OIDC login answers 409
+
+A 409 means that the login cannot use the account that the email claim names. Only an operator can resolve it. The body names the cause, and the elitea-main log has the warning `OIDC: refused a login that names two accounts` with the `sub` and the `cause`:
+
+| Body starts with | `cause` in the log | Meaning and remedy |
+| --- | --- | --- |
+| `this identity is already linked to another account. If your identity provider re-created your user` | `oidc_subject_holds_account` | Another OIDC subject holds the account. Usually the identity provider re-created the user. [Relink the account](#relink-an-account-after-the-identity-provider-re-created-a-user). |
+| `this identity is already linked to another account: the account with this email address signs in through SAML` | `saml_subject_holds_account` | A SAML identity holds the account. An OIDC login never takes over an account of the other protocol. The user signs in through SAML. `oidc-relink` does not apply. |
+| `the account with this email address is provisioned by the directory (SCIM)` | `scim_adoption_refused` | The account was created by SCIM, and this provider may not sign in SCIM-provisioned users. If this provider is the one paired with your SCIM client, turn on **Users provisioned by SCIM may sign in through this provider** (`OIDC_ADOPT_SCIM_USERS=true` for a provider configured through environment variables). `oidc-relink` does not apply. |
+| `the email address your identity provider now sends belongs to another account` | `email_held_by_another_account` | The subject is linked, and its new address is the address of a different account. Change the address of one of the two accounts. |
+| `your account changed while you signed in` | `concurrent_change` | The account or the link changed during the login, for example a concurrent delete. Sign in again. |
+
 ## Relink an account after the identity provider re-created a user
 
 When an identity provider deletes a user and creates it again, the user gets a new `sub`. The account still holds the old subject, so the login of the new subject is refused with 409:
@@ -97,15 +109,20 @@ This refusal is intentional: only an operator can confirm that the two subjects 
 
 Instead of `--sub`, you can use `--clear`. It removes the old link, and the next login of the user joins the account by email again. That login must pass the [sign-in rules](#oidc-sign-in-rules) for a first login, and a SCIM-provisioned account is joined only by a provider that may sign in SCIM-provisioned users.
 
+For a SCIM-provisioned account, use `--clear`: the command refuses `--sub`. A login links such an account only through a provider that may sign in SCIM-provisioned users. An `oidc:<sub>` link does not name its provider, so the command cannot check that setting, and a link that it wrote would bypass it. After `--clear`, the next login applies the provider's own setting.
+
 The command refuses, with exit code 2, and changes nothing when:
 
 - the email matches more than one account (the addresses are compared without case). Give the numeric user id.
 - the account has more than one OIDC link. Name the one to change with `--old-sub`.
 - another account already holds the new subject. The command names that account's user id. Resolve that account first.
+- `--sub` names a SCIM-provisioned account. Use `--clear`.
 
-Each applied change writes the security audit event `ai.elitea.security.v1.identity.link.changed` in the same transaction. The action is `identity.oidc_link.replaced`, `identity.oidc_link.cleared` or `identity.oidc_link.added` (a new subject on an account with no OIDC link). The resource is the user, the principal is `user:<operator id>`, and the reasons hold the SHA-256 of each subject, not the subject itself. See [Audit trail](/admin/audit-trail).
+The command takes the same per-subject lock as a login, so a first login of the new subject and a relink to it do not both link it.
 
-The command changes OIDC links only. A SAML login with a changed NameID gets the same 409, and has no command yet.
+Each applied change writes the security audit event `ai.elitea.security.v1.identity.link.changed` in the same transaction. The action is `identity.oidc_link.replaced`, `identity.oidc_link.cleared` or `identity.oidc_link.added` (a new subject on an account with no OIDC link). The resource is the user, the principal is `user:<operator id>`, and the reasons are `provider_namespace:oidc` and `via:oidc-relink`. The event holds no subject and no hash of a subject: a subject is often guessable (a numeric id or an email address), so its hash would disclose it. The plan that the command prints shows the subjects to the operator. See [Audit trail](/admin/audit-trail).
+
+The command changes OIDC links only. A SAML login with a changed NameID gets the 409 `this identity is already linked to another account`, and has no command yet.
 
 ## Session policy
 

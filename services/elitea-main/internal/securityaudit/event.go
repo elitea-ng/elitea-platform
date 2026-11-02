@@ -117,11 +117,16 @@ const (
 	// event.
 	TypeConfigChanged EventType = "ai.elitea.security.v1.config.changed"
 	// TypeIdentityLinkChanged is an operator change of a user's federated
-	// identity link (issue #1460): `elitea-main oidc-relink` replaced an
-	// account's OIDC subject (action identity.oidc_link.replaced) or removed
-	// it so that the next login links again (identity.oidc_link.cleared).
-	// ResourceID is the user id, PrincipalRef the operator, and the reasons
-	// carry the sha256 of each subject, never the subject itself.
+	// identity link (issue #1460), written by `elitea-main oidc-relink`. The
+	// actions are identity.oidc_link.replaced (an account's OIDC subject
+	// replaced by a new one), identity.oidc_link.cleared (the subject removed,
+	// so that the next login links the account again by email) and
+	// identity.oidc_link.added (a new subject on an account with no OIDC
+	// link). ResourceType is "user" and ResourceID the user id, PrincipalRef
+	// the operator, and the reasons are the codes provider_namespace:oidc and
+	// via:oidc-relink. No subject is in the event, and no digest of one: a
+	// subject is often guessable (a numeric id, an email address), so its
+	// unsalted digest would disclose it.
 	TypeIdentityLinkChanged EventType = "ai.elitea.security.v1.identity.link.changed"
 )
 

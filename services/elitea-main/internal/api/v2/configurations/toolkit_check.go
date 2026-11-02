@@ -77,6 +77,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -141,31 +142,75 @@ const (
 	toolkitCheckUnsupportedAuthMessage = "This credential uses an authentication method this platform cannot test yet."
 )
 
-// toolkitCheckHostRefusedMessage is the answer for a host that the toolkit
-// check allowlist does not name (issue #1460, item 12). It names the host and
-// the setting to change. The host is the hostname of the credential's own
-// base URL, which a reader of the credential card can already see; anything
-// that is not a plain host name or address is left out (safeEgressHost).
-func toolkitCheckHostRefusedMessage(host string) string {
-	subject := "The host of this endpoint"
-	if host = safeEgressHost(host); host != "" {
-		subject = "The host " + host
-	}
-	return subject + " is not on the toolkit connection-check allowlist. " +
-		"An operator can add it to the " + ToolkitCheckAllowlistEnv + " setting of elitea-main."
+// toolkitCheckEgressRefusedMessage is the ONE user-facing answer for a
+// destination the toolkit check refuses on egress grounds (issue #1460, item
+// 12): a host that ELITEA_TOOLKIT_CHECK_ALLOWLIST does not name, and an
+// allowlisted host that does not resolve, or resolves only to addresses the
+// egress guard refuses. The text is identical for all of them on purpose. A
+// tenant who can author a credential and press Test connection must not learn
+// from the answer whether an internal name resolves, or to which address
+// class: that would make the check a DNS and SSRF oracle.
+//
+// It may name the host, because the credential author typed it (egressSubject
+// shows only a plain host name or address). It does not suggest an allowlist
+// change, because for some refusals (cloud metadata, link-local, multicast,
+// reserved and unspecified addresses) no allowlist entry helps. The
+// distinguishing reason, with the address class and the resolved addresses,
+// is in the elitea-main log only (logToolkitCheckEgressRefusal).
+func toolkitCheckEgressRefusedMessage(host string) string {
+	return egressSubject(host) + " is refused by the egress policy of the toolkit connection check (the " +
+		ToolkitCheckAllowlistEnv + " setting of elitea-main and its address guard). " +
+		"An operator can find the reason in the elitea-main log."
 }
 
-// toolkitCheckAddressRefusedMessage is the answer when an allowed host name
-// resolves to an address that the egress guard refuses. The address is not
-// named: it is resolver output, not something the credential author wrote.
-func toolkitCheckAddressRefusedMessage(host string) string {
-	subject := "The host of this endpoint"
-	if host = safeEgressHost(host); host != "" {
-		subject = "The host " + host
+// Operator remedies for a refused toolkit check, logged with the refusal.
+const (
+	toolkitCheckRemedyAddHost = "add the host to " + ToolkitCheckAllowlistEnv
+	toolkitCheckRemedyAddCIDR = "the host resolves to a private address: add the address or its range (CIDR) " +
+		"next to the host name in " + ToolkitCheckAllowlistEnv
+	toolkitCheckRemedyNever = "the host resolves only to an address class that elitea-main never connects to " +
+		"(cloud metadata, link-local, multicast, reserved or unspecified), whatever " +
+		ToolkitCheckAllowlistEnv + " says; no allowlist entry permits it"
+	toolkitCheckRemedyResolve = "the host did not resolve; check its DNS name"
+)
+
+// Reasons of logToolkitCheckEgressRefusal.
+const (
+	toolkitCheckRefusalHostNotAllowlisted = "host_not_allowlisted"
+	toolkitCheckRefusalAddressRefused     = "address_refused"
+	toolkitCheckRefusalDestinationRefused = "destination_refused"
+)
+
+// logToolkitCheckEgressRefusal writes the operator half of an egress refusal:
+// which rule refused the host and what, if anything, an operator can change.
+// The tenant sees only toolkitCheckEgressRefusedMessage. The log carries the
+// host (never the URL, whose path and query are tenant data) and, for an
+// address refusal, each resolved address with its class. err is nil for a
+// host off the allowlist, and the guard's error otherwise.
+func logToolkitCheckEgressRefusal(ctx context.Context, configType, host string, err error) (reason string) {
+	attrs := []any{"type", configType, "host", host}
+	var refused *egress.AddressRefusedError
+	switch {
+	case err == nil:
+		reason = toolkitCheckRefusalHostNotAllowlisted
+		attrs = append(attrs, "remedy", toolkitCheckRemedyAddHost)
+	case errors.As(err, &refused):
+		reason = toolkitCheckRefusalAddressRefused
+		addresses := make([]string, 0, len(refused.Addresses))
+		for _, a := range refused.Addresses {
+			addresses = append(addresses, a.IP.String()+" ("+a.Class.String()+")")
+		}
+		remedy := toolkitCheckRemedyNever
+		if refused.Allowlistable() {
+			remedy = toolkitCheckRemedyAddCIDR
+		}
+		attrs = append(attrs, "addresses", strings.Join(addresses, ", "), "remedy", remedy)
+	default:
+		reason = toolkitCheckRefusalDestinationRefused
+		attrs = append(attrs, "remedy", toolkitCheckRemedyResolve)
 	}
-	return subject + " resolves to a private or reserved address, and the egress guard refuses it. " +
-		"For a provider on a private network, an operator can add the address range (CIDR) " +
-		"next to the host name in the " + ToolkitCheckAllowlistEnv + " setting of elitea-main."
+	slog.WarnContext(ctx, "toolkit_check: egress refused the destination", append([]any{"reason", reason}, attrs...)...)
+	return reason
 }
 
 // ToolkitCheckOutcome is one probe's verdict.
@@ -701,7 +746,8 @@ func (c *httpToolkitConnectionChecker) CheckToolkit(ctx context.Context, configT
 		}
 	}
 	if !c.allowsHost(target) {
-		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckHostRefusedMessage(target.Hostname())}
+		logToolkitCheckEgressRefusal(ctx, configType, target.Hostname(), nil)
+		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckEgressRefusedMessage(target.Hostname())}
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
@@ -728,9 +774,12 @@ func (c *httpToolkitConnectionChecker) CheckToolkit(ctx context.Context, configT
 
 	response, err := c.client.Do(request)
 	if errors.Is(err, egress.ErrDestinationRefused) {
-		// The name resolved to an address the guard refuses: the same
-		// configuration answer as a host off the list, with no address in it.
-		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckAddressRefusedMessage(target.Hostname())}
+		// The name did not resolve, or resolved only to addresses the guard
+		// refuses. The tenant gets the SAME answer as for a host off the
+		// list, so the check is no DNS or SSRF oracle; the address class and
+		// the resolved addresses go to the operator log only.
+		logToolkitCheckEgressRefusal(ctx, configType, target.Hostname(), err)
+		return ToolkitCheckOutcome{Reason: ToolkitCheckReasonUnreachable, Message: toolkitCheckEgressRefusedMessage(target.Hostname())}
 	}
 	if err != nil {
 		// The cause is deliberately dropped rather than logged with the

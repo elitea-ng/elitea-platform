@@ -659,3 +659,26 @@ func fakeCloudListClient(t *testing.T, fp *fakeCloudListProvider) (*http.Client,
 	dialer := &fakeCloudDialer{base: base, next: fp.Client().Transport}
 	return &http.Client{Transport: dialer}, dialer
 }
+
+// TestListProviderModels_EgressRefusalNamesTheHost proves the listing route
+// runs the checkers' own gate (egressAllowsAll): a refused host is named in
+// Detail, and only the host, exactly as Test connection names it, so the
+// elitea-main message for egress_not_allowed can name it too.
+func TestListProviderModels_EgressRefusalNamesTheHost(t *testing.T) {
+	fp := newFakeListProvider(http.StatusOK, `{"data":[{"id":"gpt-4o"}]}`)
+	defer fp.Close()
+
+	h := newCheckConnectionHandler(fakeEgressPolicy{allow: false})
+	resp := doListProviderModels(t, h, checkConnectionRequest{
+		Type: "open_ai", APIBase: "https://user:s3cret@LLM.Example.COM:8443/v1?token=abc", APIKey: "sk-test",
+	})
+	if resp.Success || resp.Reason != checkConnectionReasonEgress {
+		t.Fatalf("resp = %+v, want %q", resp, checkConnectionReasonEgress)
+	}
+	if resp.Detail != "llm.example.com:8443" {
+		t.Fatalf("detail = %q, want the refused host only", resp.Detail)
+	}
+	if fp.Hits() != 0 {
+		t.Fatalf("a refused host was dialled %d times", fp.Hits())
+	}
+}

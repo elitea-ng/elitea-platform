@@ -19,14 +19,16 @@ package main
 // USER is the numeric user id or the email address. Without --apply the
 // command prints the plan and writes nothing. --sub replaces the old subject
 // with the new one. --clear removes the old link; the next login of the user
-// then joins the account by email, with the usual email rules. Every applied
-// change writes one security audit event
-// (ai.elitea.security.v1.identity.link.changed) in the same transaction.
+// then joins the account by email, with the usual email rules. --sub is
+// refused for a SCIM-provisioned account: only a login through a provider
+// with adopt_scim_users may link one, so --clear is the remedy there. Every
+// applied change writes one security audit event
+// (ai.elitea.security.v1.identity.link.changed) in the same transaction, with
+// the action, the user and the operator, and no subject.
 // repos.RelinkOIDCIdentityTx holds the rules and the refusals.
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -138,10 +140,7 @@ func runOIDCRelinkWith(ctx context.Context, args []string, lookup func(string) (
 	}
 	switch {
 	case err == nil:
-	case errors.Is(err, repos.ErrRelinkUserNotFound), errors.Is(err, repos.ErrRelinkAmbiguousUser),
-		errors.Is(err, repos.ErrRelinkAmbiguousLink), errors.Is(err, repos.ErrRelinkOldLinkNotFound),
-		errors.Is(err, repos.ErrRelinkSubjectTaken), errors.Is(err, repos.ErrRelinkInvalidSubject),
-		errors.Is(err, repos.ErrRelinkInvalidOperation):
+	case repos.IsRelinkRefusal(err):
 		_, _ = fmt.Fprintln(stderr, "refused:", err)
 		return 2
 	default:

@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -189,13 +190,16 @@ type checkConnectionResponseBody struct {
 
 // connectionCheckMessages maps the gateway's safe reason vocabulary to the
 // user-facing message. Never derived from provider response text.
+//
+// egress_not_allowed is not in the map: its message names the refused host
+// from the gateway's Detail, so connectionCheckMessageFor and
+// modelConnectionMessageFor build it with egressNotAllowedMessage.
 var connectionCheckMessages = map[string]string{
-	"missing_api_base":   "This credential is missing its endpoint (api_base).",
-	"egress_not_allowed": egressNotAllowedMessage(""),
-	"unauthorized":       "The provider rejected the credential.",
-	"unreachable":        "Could not reach the provider.",
-	"upstream_error":     "The provider returned an unexpected response.",
-	"unsupported_type":   "Checking connection is not supported yet for this configuration type.",
+	"missing_api_base": "This credential is missing its endpoint (api_base).",
+	"unauthorized":     "The provider rejected the credential.",
+	"unreachable":      "Could not reach the provider.",
+	"upstream_error":   "The provider returned an unexpected response.",
+	"unsupported_type": "Checking connection is not supported yet for this configuration type.",
 	// The keyless mode's three reasons (the gateway's
 	// checkconnection_workload_identity.go).
 	"workload_identity_not_allowed": "Workload identity is not enabled on the LLM gateway, " +
@@ -217,20 +221,43 @@ var connectionCheckMessages = map[string]string{
 // host is the gateway's Detail for this reason: the refused host only
 // (elitea-llm-gateway egressRefusedHost). The caller authored that host, in
 // its api_base or by its region. A Detail that is not a plain host name or
-// address is not echoed (safeEgressHost), so a gateway defect cannot put
+// address is not echoed (egressDisplayHost), so a gateway defect cannot put
 // provider text into the message. An empty host gives the message without it.
 func egressNotAllowedMessage(host string) string {
 	const remedy = "An administrator can add it in the admin console: open LLM Governance, " +
 		"select New entry and the type \"Egress allowlist\". " +
 		"The deployment-wide floor is the GATEWAY_EGRESS_ALLOWLIST setting of the LLM gateway."
-	if host = safeEgressHost(host); host == "" {
+	if host = egressDisplayHost(host); host == "" {
 		return "The LLM gateway refused this endpoint because its host is not on the egress allowlist. " + remedy
 	}
 	return "The LLM gateway refused the host " + host + " because it is not on the egress allowlist. " + remedy
 }
 
+// egressSubject is the subject of a sentence about a refused host: "The host
+// <host>" for a host egressDisplayHost can show, and "The host of this
+// endpoint" otherwise.
+func egressSubject(host string) string {
+	if host = egressDisplayHost(host); host != "" {
+		return "The host " + host
+	}
+	return "The host of this endpoint"
+}
+
+// egressDisplayHost is host as a message may show it: a plain `name`,
+// `name:port` or IPv6 address (safeEgressHost), with a bare IPv6 address
+// bracketed, as an allowlist entry or a URL writes it (url.URL.Hostname drops
+// the brackets). It is "" for anything else.
+func egressDisplayHost(host string) string {
+	host = safeEgressHost(host)
+	if strings.Count(host, ":") > 1 && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
+	return host
+}
+
 // safeEgressHost returns host when it is a plain `name`, `name:port` or
-// bracketed IPv6 address of at most 260 characters, and "" for anything else.
+// IPv6 address (bare or bracketed) of at most 260 characters, and "" for
+// anything else.
 func safeEgressHost(host string) string {
 	if host == "" || len(host) > 260 {
 		return ""

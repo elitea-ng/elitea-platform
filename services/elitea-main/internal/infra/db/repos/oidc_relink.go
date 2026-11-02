@@ -22,11 +22,25 @@ package repos
 //   - an account with more than one OIDC link, unless the caller names the
 //     link to change;
 //   - a new subject that another account already holds.
+//
+// It also refuses to LINK a new subject to a SCIM-provisioned account
+// (ErrRelinkSCIMAccount). The login path adopts such an account only for a
+// provider with `adopt_scim_users` (identityrepo.AdoptionGuard). This command
+// cannot apply that rule: an `oidc:<sub>` link names no issuer, so it does
+// not know which provider the new subject comes from. Linking anyway would
+// let an operator command bypass the gate, so it refuses, and --clear is the
+// remedy: the user's next login then reaches the gate itself, with the
+// provider's real setting.
+//
+// Concurrency mirrors the login path. Before anything reads the new subject,
+// it takes the per-subject advisory lock that provisioning takes before its
+// subject lookup (AcquireAuthProviderAdvisoryLock, the same key derivation as
+// the SSO plane's provisionUser), so a first login of the new subject and a
+// relink to it are serialized. A unique violation on the link insert is still
+// mapped to ErrRelinkSubjectTaken, as the backstop.
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -34,7 +48,9 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
@@ -57,7 +73,23 @@ var (
 	ErrRelinkSubjectTaken     = errors.New("another account already holds the new subject")
 	ErrRelinkInvalidSubject   = errors.New("the subject is empty, too long, or holds control characters")
 	ErrRelinkInvalidOperation = errors.New("give exactly one of a new subject or clear")
+	ErrRelinkSCIMAccount      = errors.New("the account is provisioned by SCIM, and only a login through a provider " +
+		"with adopt_scim_users may link it; clear the old link instead, so that the next login applies that rule")
 )
+
+// IsRelinkRefusal reports whether err is one of the refusals above: an
+// operator input or account state the command declines, not a failure.
+func IsRelinkRefusal(err error) bool {
+	for _, refusal := range []error{
+		ErrRelinkUserNotFound, ErrRelinkAmbiguousUser, ErrRelinkAmbiguousLink, ErrRelinkOldLinkNotFound,
+		ErrRelinkSubjectTaken, ErrRelinkInvalidSubject, ErrRelinkInvalidOperation, ErrRelinkSCIMAccount,
+	} {
+		if errors.Is(err, refusal) {
+			return true
+		}
+	}
+	return false
+}
 
 // OIDCRelinkRequest is one relink.
 type OIDCRelinkRequest struct {
@@ -111,12 +143,6 @@ func validOIDCSubject(subject string) bool {
 	return true
 }
 
-// subjectDigest is the audit form of a subject: "sha256:<hex>".
-func subjectDigest(subject string) string {
-	sum := sha256.Sum256([]byte(subject))
-	return hex.EncodeToString(sum[:])
-}
-
 // RelinkOIDCIdentityTx plans, and with Apply writes, one relink in tx.
 func RelinkOIDCIdentityTx(ctx context.Context, tx pgx.Tx, req OIDCRelinkRequest) (OIDCRelinkPlan, error) {
 	req.User = strings.TrimSpace(req.User)
@@ -128,6 +154,15 @@ func RelinkOIDCIdentityTx(ctx context.Context, tx pgx.Tx, req OIDCRelinkRequest)
 	}
 	if req.OldSubject != "" && !validOIDCSubject(req.OldSubject) {
 		return OIDCRelinkPlan{}, ErrRelinkInvalidSubject
+	}
+	if req.NewSubject != "" {
+		// The login path's lock, taken before anything reads the subject and
+		// before the account row is locked, in the order provisioning takes
+		// them (subject lock, then rows), so the two cannot deadlock.
+		if err := sqlcgen.New(tx).AcquireAuthProviderAdvisoryLock(ctx,
+			identityrepo.OIDCProviderRefPrefix+req.NewSubject); err != nil {
+			return OIDCRelinkPlan{}, fmt.Errorf("oidc relink: lock the new subject: %w", err)
+		}
 	}
 
 	plan, err := relinkResolveUser(ctx, tx, req.User)
@@ -184,6 +219,14 @@ SELECT user_id FROM public.auth_core__user_provider WHERE provider_ref = $1`,
 		case !errors.Is(err, pgx.ErrNoRows):
 			return plan, fmt.Errorf("oidc relink: check the new subject: %w", err)
 		}
+		var scim bool
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM elitea_auth.scim_users WHERE user_id = $1)`, plan.UserID).Scan(&scim); err != nil {
+			return plan, fmt.Errorf("oidc relink: read the SCIM record: %w", err)
+		}
+		if scim {
+			return plan, ErrRelinkSCIMAccount
+		}
 		plan.Add = req.NewSubject
 	} else if plan.Remove == "" {
 		plan.NoChange = true
@@ -209,6 +252,12 @@ DELETE FROM public.auth_core__user_provider WHERE user_id = $1 AND provider_ref 
 		if _, err := tx.Exec(ctx, `
 INSERT INTO public.auth_core__user_provider (user_id, provider_ref) VALUES ($1, $2)`,
 			plan.UserID, identityrepo.OIDCProviderRefPrefix+plan.Add); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				// The advisory lock makes this unreachable for a login; a
+				// writer that does not take it can still win the race.
+				return plan, ErrRelinkSubjectTaken
+			}
 			return plan, fmt.Errorf("oidc relink: add the new link: %w", err)
 		}
 	}
@@ -220,13 +269,12 @@ INSERT INTO public.auth_core__user_provider (user_id, provider_ref) VALUES ($1, 
 	case plan.Remove == "":
 		action = ActionOIDCLinkAdded
 	}
-	reasons := []string{}
-	if plan.Remove != "" {
-		reasons = append(reasons, "old_subject_sha256:"+subjectDigest(plan.Remove))
-	}
-	if plan.Add != "" {
-		reasons = append(reasons, "new_subject_sha256:"+subjectDigest(plan.Add))
-	}
+	// No subject, and no digest of one, goes into the event. A subject is
+	// often guessable (a numeric GitHub id, an email address), so an unsalted
+	// digest of it is the subject in all but name. The event records the
+	// action, the account, the operator and the provider namespace; an
+	// `oidc:<sub>` link names no issuer, so there is no provider to record.
+	reasons := []string{"provider_namespace:oidc", "via:oidc-relink"}
 	appender, err := securityaudit.NewPostgresAppender("elitea-main/oidc-relink")
 	if err != nil {
 		return plan, fmt.Errorf("oidc relink: the audit appender: %w", err)

@@ -186,24 +186,14 @@ func (h *Handler) ListProviderModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fail closed, exactly as the checker does: no policy wired, or no gated
-	// destination, refuses rather than dialling.
-	if h.egressPolicy == nil || len(targets) == 0 {
-		h.logger.WarnContext(r.Context(), "list_provider_models: no egress policy or no gated target",
-			"type", req.Type)
+	// destination, refuses rather than dialling. The gate is the checkers'
+	// own (egressAllowsAll), so the refusal names the refused host in Detail
+	// exactly as Test connection does, and elitea-main's message names it.
+	if refused, ok := h.egressAllowsAll(r.Context(), req.Type, targets); !ok {
 		writeJSON(w, http.StatusOK, listProviderModelsResponse{
-			Reason: checkConnectionReasonEgress, Models: []string{},
+			Reason: checkConnectionReasonEgress, Detail: refused, Models: []string{},
 		})
 		return
-	}
-	for _, target := range targets {
-		if !h.egressPolicy.EgressAllows(target) {
-			h.logger.WarnContext(r.Context(), "list_provider_models: host is not on the egress allowlist",
-				"type", req.Type)
-			writeJSON(w, http.StatusOK, listProviderModelsResponse{
-				Reason: checkConnectionReasonEgress, Models: []string{},
-			})
-			return
-		}
 	}
 
 	allowPrivate := h.probeAllowsPrivateNetwork(req)

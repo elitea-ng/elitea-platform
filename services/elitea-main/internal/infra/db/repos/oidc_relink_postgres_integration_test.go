@@ -6,9 +6,12 @@ package repos
 // CI-only: skipped without the integration database.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -36,12 +39,17 @@ func TestRelinkOIDCIdentity(t *testing.T) {
 		(910003, 'two-links@example.com', 'Two Links'),
 		(910004, 'operator@example.com', 'Operator'),
 		(910005, 'twin@example.com', 'Twin A'),
-		(910006, 'TWIN@example.com', 'Twin B')`)
+		(910006, 'TWIN@example.com', 'Twin B'),
+		(910007, 'scim@example.com', 'SCIM'),
+		(910008, 'scim-linked@example.com', 'SCIM Linked')`)
 	mustExec(`INSERT INTO public.auth_core__user_provider (user_id, provider_ref) VALUES
 		(910001, 'oidc:old-sub'),
 		(910002, 'oidc:taken-sub'),
 		(910003, 'oidc:first'),
-		(910003, 'oidc:second')`)
+		(910003, 'oidc:second'),
+		(910008, 'oidc:scim-old')`)
+	mustExec(`INSERT INTO elitea_auth.scim_users (user_id, external_id) VALUES
+		(910007, 'scim-ext-1'), (910008, 'scim-ext-2')`)
 
 	relink := func(req OIDCRelinkRequest) (OIDCRelinkPlan, error) {
 		t.Helper()
@@ -96,18 +104,24 @@ WHERE event_type = 'ai.elitea.security.v1.identity.link.changed' AND event->'dat
 			"named link absent":     {OIDCRelinkRequest{User: "910003", NewSubject: "third", OldSubject: "zero"}, ErrRelinkOldLinkNotFound},
 			"subject held elsewhere": {OIDCRelinkRequest{User: "910001", NewSubject: "taken-sub", Apply: true, Operator: "910004"},
 				ErrRelinkSubjectTaken},
+			"SCIM account, no link": {OIDCRelinkRequest{User: "910007", NewSubject: "scim-new"}, ErrRelinkSCIMAccount},
+			"SCIM account, replace": {OIDCRelinkRequest{User: "910008", NewSubject: "scim-new", Apply: true, Operator: "910004"},
+				ErrRelinkSCIMAccount},
 			"both operations":  {OIDCRelinkRequest{User: "910001", NewSubject: "x", Clear: true}, ErrRelinkInvalidOperation},
 			"neither":          {OIDCRelinkRequest{User: "910001"}, ErrRelinkInvalidOperation},
 			"control in a sub": {OIDCRelinkRequest{User: "910001", NewSubject: "a\nb"}, ErrRelinkInvalidSubject},
 		} {
 			t.Run(name, func(t *testing.T) {
-				if _, err := relink(tc.req); !errors.Is(err, tc.want) {
+				if _, err := relink(tc.req); !errors.Is(err, tc.want) || !IsRelinkRefusal(err) {
 					t.Fatalf("err = %v, want %v", err, tc.want)
 				}
 			})
 		}
 		if got := links(910001); got != "oidc:old-sub" {
 			t.Fatalf("links = %q after refusals", got)
+		}
+		if got := links(910008); got != "oidc:scim-old" {
+			t.Fatalf("links = %q after a refused SCIM relink", got)
 		}
 	})
 
@@ -127,8 +141,17 @@ WHERE event_type = 'ai.elitea.security.v1.identity.link.changed' AND event->'dat
 			plan.AuditEventID).Scan(&event); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(event, "new-sub") || strings.Contains(event, "old-sub") {
-			t.Fatalf("the audit event holds a raw subject: %s", event)
+		// No subject, and no digest of one: a subject is guessable, so its
+		// unsalted sha256 is the subject in all but name.
+		for _, leak := range []string{"new-sub", "old-sub", sha256Hex("new-sub"), sha256Hex("old-sub"), "subject_sha256"} {
+			if strings.Contains(event, leak) {
+				t.Fatalf("the audit event holds a subject or its digest (%q): %s", leak, event)
+			}
+		}
+		for _, want := range []string{`"user:910004"`, `"910001"`, ActionOIDCLinkReplaced} {
+			if !strings.Contains(event, want) {
+				t.Fatalf("the audit event lacks %s: %s", want, event)
+			}
 		}
 		again, err := relink(OIDCRelinkRequest{User: "910001", NewSubject: "new-sub", Apply: true, Operator: "910004"})
 		if err != nil || !again.NoChange || again.Applied {
@@ -150,6 +173,50 @@ WHERE event_type = 'ai.elitea.security.v1.identity.link.changed' AND event->'dat
 		}
 	})
 
+	t.Run("a SCIM account can still be cleared", func(t *testing.T) {
+		plan, err := relink(OIDCRelinkRequest{User: "910008", Clear: true, Apply: true, Operator: "910004"})
+		if err != nil || !plan.Applied || plan.Remove != "scim-old" {
+			t.Fatalf("plan = %+v, err = %v", plan, err)
+		}
+		if got := links(910008); got != "" {
+			t.Fatalf("links = %q", got)
+		}
+	})
+
+	t.Run("the relink waits for a login holding the subject lock", func(t *testing.T) {
+		// A first login of the subject holds its advisory lock (the login
+		// path's key derivation) and links it to another account. The relink
+		// must wait for it, then see the link and refuse, instead of racing
+		// it to the insert.
+		login, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = login.Rollback(ctx) }()
+		if _, err := login.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`, "oidc:raced-sub"); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() {
+			_, err := relink(OIDCRelinkRequest{User: "910005", NewSubject: "raced-sub", Apply: true, Operator: "910004"})
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			t.Fatalf("the relink did not wait for the subject lock: %v", err)
+		case <-time.After(300 * time.Millisecond):
+		}
+		if _, err := login.Exec(ctx, `INSERT INTO public.auth_core__user_provider (user_id, provider_ref) VALUES (910002, 'oidc:raced-sub')`); err != nil {
+			t.Fatal(err)
+		}
+		if err := login.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; !errors.Is(err, ErrRelinkSubjectTaken) {
+			t.Fatalf("err = %v, want ErrRelinkSubjectTaken", err)
+		}
+	})
+
 	t.Run("an apply needs a numeric operator", func(t *testing.T) {
 		if _, err := relink(OIDCRelinkRequest{User: "910002", Clear: true, Apply: true, Operator: "admin"}); err == nil {
 			t.Fatal("an apply without a numeric operator was accepted")
@@ -158,4 +225,9 @@ WHERE event_type = 'ai.elitea.security.v1.identity.link.changed' AND event->'dat
 			t.Fatalf("links = %q", got)
 		}
 	})
+}
+
+func sha256Hex(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }

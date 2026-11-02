@@ -39,7 +39,7 @@ The gateway calls a provider host only when the egress allowlist permits it. **T
 The LLM gateway refused the host europe-west4-aiplatform.googleapis.com because it is not on the egress allowlist. An administrator can add it in the admin console: open LLM Governance, select New entry and the type "Egress allowlist". The deployment-wide floor is the GATEWAY_EGRESS_ALLOWLIST setting of the LLM gateway.
 ```
 
-The model test in the model form shows the same text after `Connection failed:`. The host is the host of the credential's `api_base`, or the regional endpoint that the region or location selects. The message has no scheme, path, user info or query.
+The model test in the model form shows the same text after `Connection failed:`. A refused listing of the credential's models names the host too. The host is the host of the credential's `api_base`, or the regional endpoint that the region or location selects. The message has no scheme, path, user info or query.
 
 To permit the host:
 
