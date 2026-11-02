@@ -256,7 +256,36 @@ fixture, because this fixture's root saves right after its only node. Its class 
 
 ## Real-browser evidence
 
-TO FILL (fanpar).
+- **Stack and approval.** The shared fanpar stack, with Roman's approval, under the gate §3b snapshot-and-restore
+  exception. The migration is unmerged, so `pg_dumpall` was taken first and restored right after.
+- **Images:**
+  - `elitea-main:fu269-09bf62fe7`, binary-checked for the marker "more than one settled terminal";
+  - `elitea-worker-rust:fu269-09bf62fe7`, binary-checked for the marker `continuation_suffix_unowned`;
+  - every other service on fanpar's images.
+- **Ledger:** shared 218 during the run. After the restore it is identical to before (shared 211), the `paused_*`
+  columns are gone, and verify-profile is 49/1 (the known stale-worktree check).
+- **Fixture:** chat 44, app 16 "FP child direct", made in the UI: an Agent node runs a saved child with a sensitive
+  MCP `reverse` node, then a root `echo_tail` MCP node.
+- **The FU-269 case, C → F:**
+  1. A paused, and the card was approved.
+  2. The Worker was killed the moment the MCP server logged the child call's `tools/list` (stream-triggered). The
+     server logged one `tools/call`.
+  3. B (writer named by Main, generation 1) saved no checkpoint row, only its journal Started row, so the latest root
+     row was A's.
+  4. The reclaim (claim attempt 2, `RECOVER_AGENT_MODEL_CHECKPOINT`) assembled and ran the continuation again, with
+     no frontier refusal.
+  5. It settled `FAILED` `RECOVERY_REFUSED`. After a reload the chat shows "An approved tool call may have started
+     before the run stopped… It was not repeated."
+  6. There were 0 MCP calls after the kill.
+- **Where the files are:** local evidence in `handoffs/point5-wave1-20261008/fu269/evidence/`, outside git.
+- **What production showed about the window.** B's first root save comes right after the child call returns, so in
+  production FU-269's window is the child call itself. A kill landing later, inside the root `echo_tail` call, is an
+  `Own`-frontier reclaim. That ends `INTERNAL` on the main images too (`pm-8c7e1bb75`, checked after the restore), so
+  it is a pre-existing gap, proposed as a follow-up. It is not changed here.
+- **Other observations:**
+  - **Not a double dispatch:** one approval makes two MCP calls, the child's `reverse` and the root `echo_tail`.
+  - **Web:** the older Web image (`pm-07757110d`) threw React error #185 while streaming the new pause; a reload shows
+    the card. Not investigated here.
 
 ## Fixtures
 
@@ -271,3 +300,7 @@ TO FILL (fanpar).
 ## Follow-ups
 
 - FU-270 (a fresh turn re-run from its input) is unchanged.
+- **Proposed:** a root effectful direct node lost mid-call on an `Own` frontier ends `INTERNAL` on a
+  model-checkpoint reclaim (`recovery_frontier_supported` refuses it untyped). It is pre-existing; seen in the browser
+  above.
+- **Not investigated:** React error #185 in Web `pm-07757110d` while streaming a pause.
