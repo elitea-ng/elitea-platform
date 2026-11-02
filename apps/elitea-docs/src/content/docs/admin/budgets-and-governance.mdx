@@ -34,6 +34,17 @@ A budget stored here is only enforced if the LLM gateway is configured with `GAT
 The spend ceiling on this page is set per project and per member only — there is no per-agent or per-tool spend cap, and setting one is not planned. To see WHICH agent or tool a project's cost came from, open Settings › Analytics on the project and use the Costs tab's **Cost by Agent** and **Cost by Tool** tables ([#875](https://github.com/elitea-ng/elitea-platform/issues/875)).
 </Note>
 
+### Billing when a caller stops a stream
+
+A caller can close a streamed answer before it ends, for example with **Stop**. The gateway then stops the model call at once, so the model is free for other requests. The provider has not sent its final token count yet, so the gateway bills an estimate:
+
+- **Input.** The prompt count from the provider, if it reported one. Otherwise, an estimate from the prompt text at about four characters per token. Inline images and audio are not counted.
+- **Output.** The output that reached the caller: the larger of one token per streamed chunk and the text length at four characters per token. The count from the provider is used when it is larger. The charge is never below what the caller received.
+
+If the final token count arrives before the call stops, the gateway bills that count instead. The request log marks an estimated row with error code `client_disconnected_usage_estimated` and status 200, so the failure views do not count it. A per-agent spend cap reads the same row.
+
+Other early stops (a provider error, a blocked guardrail, a stream that cannot start) keep the provider call open for `LLM_STREAM_GRACE_MS` (5 seconds by default) to collect the final count. A request that is not streamed has no estimate: a caller that disconnects stops the provider call and is not billed.
+
 ## Author LLM governance rules
 
 Open **LLM Governance**. Each row is a scoped rule the gateway reads and enforces on the `/llm` path: budgets, rate limits, model and MCP server allowlists, credential rate policy, and CEL-based routing rules.

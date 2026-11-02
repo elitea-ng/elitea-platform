@@ -16,10 +16,11 @@ package llmproxy
 //     channel when the context dies — exactly like bifrost's stream goroutine
 //     (providers/utils.GateSendChunk + CloseStream).
 //
-// Against main the request context IS the provider context, so the hangup
-// cancels it, the producer tears down before the usage trailer, and the stream
-// is billed nothing. Against the fix the provider context is decoupled for the
-// grace period, the trailer arrives, and the drain bills it.
+// Issue #9 decoupled the provider context so a drain could catch the trailer
+// after a hangup. Issue #1201 (human decision 2026-11-02) changed the hangup
+// half: the gateway now cancels the provider at once, to free the model slot,
+// and bills an estimate (prompt + relayed output). The decoupled context and
+// the grace drain stay for the exits where the caller may still be connected.
 
 import (
 	"io"
@@ -152,19 +153,15 @@ const (
 	gateWantCostNano   = 11*gateInputRateNano + 22*gateOutputRateNano
 )
 
-// TestStreamDisconnect_RealHangup_BillsProviderUsage is the issue #9 acceptance
-// gate for all three SSE dialects.
+// TestStreamDisconnect_RealHangup_CancelsProviderAndBillsEstimate is the
+// issue #1201 acceptance gate for all three SSE dialects.
 //
 // A client starts a streaming request, reads the first chunk, then hangs up.
-// The provider goes on generating and emits its usage trailer afterwards. The
-// gateway MUST bill that trailer: the tokens were produced and the provider
-// charges for them, so leaving them unbilled is free inference and a hard-budget
-// bypass.
-//
-// MUST FAIL against main: there the provider stream is bound to the request
-// context, so the hangup tears the producer down (assert tornDown) and nothing
-// is ever billed.
-func TestStreamDisconnect_RealHangup_BillsProviderUsage(t *testing.T) {
+// The provider would emit its usage trailer 300 ms later. The gateway MUST
+// cancel the provider at once (the model slot is free) and MUST still bill:
+// the prompt and the output the caller already received. Disconnecting must
+// never be free inference (issue #9).
+func TestStreamDisconnect_RealHangup_CancelsProviderAndBillsEstimate(t *testing.T) {
 	cases := []struct {
 		name     string
 		path     string
@@ -205,7 +202,7 @@ func TestStreamDisconnect_RealHangup_BillsProviderUsage(t *testing.T) {
 				preamble: tc.preamble,
 				trailer:  tc.trailer,
 				// Long enough that the hangup is certainly observed by the
-				// server first, short enough to stay well inside the grace.
+				// server first.
 				trailerDelay: 300 * time.Millisecond,
 			}
 			calc := &fakeCostEstimator{inputRateNano: gateInputRateNano, outputRateNano: gateOutputRateNano}
@@ -216,27 +213,28 @@ func TestStreamDisconnect_RealHangup_BillsProviderUsage(t *testing.T) {
 
 			srv.hangUpMidStream(t, tc.path, tc.body)
 
-			// The client is gone. The provider's usage trailer must still be
-			// billed, exactly once.
 			gate.waitForUpdate(t)
 			h.DrainBilling()
 
-			if router.tornDown.Load() {
-				t.Error("provider stream was torn down by the client hangup — " +
-					"the usage trailer was destroyed by the cancellation we are billing for (issue #9)")
+			if !router.tornDown.Load() {
+				t.Error("the provider stream was not cancelled on the client hangup — " +
+					"the model slot stays busy for a generation nobody reads (issue #1201)")
 			}
-			if !router.trailerSent.Load() {
-				t.Error("provider never got to send its usage trailer")
+			if router.trailerSent.Load() {
+				t.Error("the provider got to send its trailer: it ran on after the hangup")
 			}
 			if got := gate.updateCalls.Load(); got != 1 {
 				t.Fatalf("UpdateUsage calls = %d, want exactly 1 (bill the disconnected stream once)", got)
 			}
-			if got := gate.getLastUpdateCostNano(); got != gateWantCostNano {
-				t.Errorf("billed %d nano-USD, want %d (provider-reported 11 in / 22 out)", got, gateWantCostNano)
+			// Prompt "hi" is 1 token by estimate. The client read the first
+			// chunk ("hello ", 6 bytes = 2 tokens); the second ("world") may
+			// also have reached the socket (11 bytes = 3 tokens).
+			in, out := calc.getLastTokens()
+			if in != 1 {
+				t.Errorf("billed input tokens = %d, want 1 (the prompt estimate)", in)
 			}
-			if in, out := calc.getLastTokens(); in != 11 || out != 22 {
-				t.Errorf("billed tokens = (%d, %d), want (11, 22) — the numbers must come from the "+
-					"provider trailer, never from an estimate", in, out)
+			if out < 2 || out > 3 {
+				t.Errorf("billed output tokens = %d, want 2..3 (the relayed text)", out)
 			}
 		})
 	}

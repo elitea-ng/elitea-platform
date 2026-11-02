@@ -72,7 +72,9 @@ type RequestLogRow struct {
 	Provider   string `json:"provider"`
 	Model      string `json:"model"`
 	Streaming  bool   `json:"streaming"`
-	// ErrorCode is the gateway's own classification. Empty on success.
+	// ErrorCode is the gateway's own classification. Empty on success. A
+	// streamed row whose caller disconnected keeps status 200 and carries
+	// client_disconnected_usage_estimated: its token counts are an estimate.
 	ErrorCode        string `json:"error_code"`
 	PromptTokens     int64  `json:"prompt_tokens"`
 	CompletionTokens int64  `json:"completion_tokens"`
