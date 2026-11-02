@@ -5,7 +5,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { AddButton } from '../AddButton/AddButton';
 import { combineSx } from '../lib/combineSx';
-import { PageCrumbFallback, usePageCrumbs } from '../page-chrome';
+import { PageCrumbFallback, useHasPageChrome, usePageCrumbs } from '../page-chrome';
 import { SimpleSearchBar } from '../SimpleSearchBar';
 import { t } from '@/shared/i18n';
 
@@ -54,6 +54,7 @@ export const DrawerPageHeader = memo(function DrawerPageHeader({
   slotProps,
 }: DrawerPageHeaderProps) {
   usePageCrumbs([{ label: title }]);
+  const inShell = useHasPageChrome();
   const { search, onChangeSearch, placeholder } = slotProps?.searchInput ?? {};
   const { onAdd, tooltip: addButtonTooltip } = slotProps?.addButton ?? {};
   const styles = getStyles();
@@ -64,6 +65,11 @@ export const DrawerPageHeader = memo(function DrawerPageHeader({
     },
     [onChangeSearch],
   );
+
+  // Inside a shell the title is in the title row; with no search, add button
+  // or extra content there is nothing left for this row to hold, and an empty
+  // bordered band would sit over the page.
+  if (inShell && !showSearchInput && !showAddButton && extraContent === undefined) return null;
 
   return (
     <Box
