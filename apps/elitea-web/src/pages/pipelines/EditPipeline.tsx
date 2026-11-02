@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
@@ -10,7 +9,9 @@ import { FormProvider } from 'react-hook-form';
 import { ConfigurationTab, resetPipelineDraft, usePipelineVersionSync } from '@/features/pipelines';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { t } from '@/shared/i18n';
+import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { disarmUnsavedChangesNavBlocker, useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
+import { PageToolbar, pageSx } from '@/widgets/page-header';
 
 import { pipelineDetailDisplayName, toVersionSummaries } from './lib/editPipelineMappers';
 import { isPublicPipelinesProject } from './lib/isPublicPipelinesProject';
@@ -70,21 +71,8 @@ function editorIsLoading(isFetching: boolean, detail: unknown): boolean {
   return isFetching && detail === undefined;
 }
 
-const pageSx: SxProps<Theme> = {
-  height: '100%',
-  display: 'flex',
-  flexDirection: 'column',
-};
-const tabBarSx: SxProps<Theme> = {
-  flexShrink: 0,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  borderBottom: 1,
-  borderColor: 'divider',
-  padding: '0 1.5rem',
-  minHeight: '3rem',
-};
+/** The editor's controls (versions, chat, save) in the page toolbar. */
+const actionsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.5rem' };
 const contentSx: SxProps<Theme> = {
   flex: 1,
   minHeight: 0,
@@ -313,6 +301,9 @@ export function EditPipeline(): ReactNode {
     chatSlotContext,
   );
 
+  // The page's name is the shell's crumb (`Pipelines ▸ My pipeline`).
+  usePageCrumbs([{ label: detail ? pipelineDetailDisplayName(detail) : t('pages.pipelines.editPipeline.title', 'Pipeline') }]);
+
   // Both dead ends render from `./ui/EditPipelineNotFound.tsx` — same copy,
   // same keys; see that file for why they left this one.
   if (isDetailNotFound) return <EditPipelineNotFound kind="pipeline" />;
@@ -321,58 +312,59 @@ export function EditPipeline(): ReactNode {
   return (
     <FormProvider {...form}>
       <Box sx={pageSx}>
-        <Box sx={tabBarSx}>
-          <Typography variant="headingLarge" component="h1">
-            {detail ? pipelineDetailDisplayName(detail) : t('pages.pipelines.editPipeline.title', 'Pipeline')}
-          </Typography>
-          {/*
-            The version bar: version dropdown, Set-as-default, Delete version
-            and Save-As-Version. Rendered OUTSIDE the writer-only block below
-            on purpose — a public viewer keeps the selector and loses only the
-            write affordances, which is what `AgentVersionControls`' own
-            `canSaveNewVersion` gate (and `ApplicationTabBar.jsx:65`) means.
-          */}
-          <EditPipelineVersionBar
-            projectId={projectId}
-            applicationId={applicationId}
-            tab={params.tab}
-            versions={versions}
-            activeVersion={activeVersion}
-            isReadOnly={isReadOnlyView}
-            /* `isEditorLoading`, NOT `isFetching` — the same distinction, and
-               the same measured cost, that `editorIsLoading` above records for
-               the canvas. `useRefetchPipelineAfterSave` refetches the detail
-               after EVERY save, and while that request is in flight a raw
-               `isFetching` unmounted this whole header row: the version
-               selector, "Save As Version", Share/Fork and the Save bar all
-               left the screen and came back. Journey J16b measured the
-               consequence as a 30s wait for a "Save As Version" button that
-               was not in the document — an author who saves and then takes a
-               version sees the control they are reaching for disappear. */
-            isFetching={isEditorLoading}
-            versionFields={versionFields.fields}
-          />
-          {!isEditorLoading && !isReadOnlyView && (
-            <>
-              {/* The Chat action — the only way to actually TALK to this
-                  pipeline; see `./ui/ChatWithPipelineButton.tsx` for the
-                  participant mapping and why it is writer-only. */}
-              <EditPipelineActions
-                applicationId={params.agentId}
-                detail={detail}
-                activeVersion={activeVersion}
+        <PageToolbar
+          secondaryActions={
+            <Box sx={actionsSx}>
+              {/*
+                The version bar: version dropdown, Set-as-default, Delete version
+                and Save-As-Version. Rendered OUTSIDE the writer-only block below
+                on purpose — a public viewer keeps the selector and loses only the
+                write affordances, which is what `AgentVersionControls`' own
+                `canSaveNewVersion` gate (and `ApplicationTabBar.jsx:65`) means.
+              */}
+              <EditPipelineVersionBar
                 projectId={projectId}
+                applicationId={applicationId}
                 tab={params.tab}
+                versions={versions}
+                activeVersion={activeVersion}
+                isReadOnly={isReadOnlyView}
+                /* `isEditorLoading`, NOT `isFetching` — the same distinction, and
+                   the same measured cost, that `editorIsLoading` above records for
+                   the canvas. `useRefetchPipelineAfterSave` refetches the detail
+                   after EVERY save, and while that request is in flight a raw
+                   `isFetching` unmounted this whole header row: the version
+                   selector, "Save As Version", Share/Fork and the Save bar all
+                   left the screen and came back. Journey J16b measured the
+                   consequence as a 30s wait for a "Save As Version" button that
+                   was not in the document — an author who saves and then takes a
+                   version sees the control they are reaching for disappear. */
+                isFetching={isEditorLoading}
+                versionFields={versionFields.fields}
               />
-              <EditPipelineSaveBar
-                onSave={handleSave}
-                canSave={form.formState.isValid && !isSaving}
-                isSaving={isSaving}
-                onDiscarded={handleDiscarded}
-              />
-            </>
-          )}
-        </Box>
+              {!isEditorLoading && !isReadOnlyView && (
+                <>
+                  {/* The Chat action — the only way to actually TALK to this
+                      pipeline; see `./ui/ChatWithPipelineButton.tsx` for the
+                      participant mapping and why it is writer-only. */}
+                  <EditPipelineActions
+                    applicationId={params.agentId}
+                    detail={detail}
+                    activeVersion={activeVersion}
+                    projectId={projectId}
+                    tab={params.tab}
+                  />
+                  <EditPipelineSaveBar
+                    onSave={handleSave}
+                    canSave={form.formState.isValid && !isSaving}
+                    isSaving={isSaving}
+                    onDiscarded={handleDiscarded}
+                  />
+                </>
+              )}
+            </Box>
+          }
+        />
         <Box sx={contentSx}>
           <EditPipelineAlerts isError={isError} admissionRefused={admissionRefused} saveError={saveError} />
           <PipelineConfigurationTabBoundary>

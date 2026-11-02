@@ -1,11 +1,6 @@
 import { type ReactNode, useCallback, useMemo, useState } from 'react';
 
-// `shared/ui/icons/` has no back-arrow glyph (only S2's baseline-used icons
-// were ported) — the same documented fallback `features/analytics`'
-// `DetailHeader.tsx` already uses for this exact glyph.
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import Box from '@mui/material/Box';
-import IconButton from '@mui/material/IconButton';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
@@ -13,6 +8,8 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { CreateToolkitToolTabBar, ToolkitForm, ToolkitTypeSelector, type ToolkitEditorDeps, toolkitEditorHooks, useToolkitCreate } from '@/features/toolkits';
 import { t } from '@/shared/i18n';
+import { usePageCrumbs } from '@/shared/ui/page-chrome';
+import { PageToolbar, pageSx, useListSearchQuery } from '@/widgets/page-header';
 
 import { useToolkitCredentialPickerSlot } from './lib/credentialPickerSlots';
 import { useConnectorRefusal } from './lib/useConnectorRefusal';
@@ -22,27 +19,6 @@ import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { useProjectScopeIsTeam } from './lib/usePersonalProjectId';
 import type { EditToolDetail } from './lib/toolkitFormTypes';
 
-const pageSx: SxProps<Theme> = { height: '100%', display: 'flex', flexDirection: 'column' };
-/**
- * The baseline's own tab bar (`StyledTabs`' `tabBar`): `minHeight: 3.75rem`,
- * `padding: 0 1.5rem`, `gap: 0.75rem`, and a `border.table` bottom rule. The
- * previous 3rem/`divider` pair was ~12px short and drew the wrong grey.
- */
-const tabBarSx: SxProps<Theme> = (theme: Theme) => ({
-  flexShrink: 0,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: theme.spacing(1),
-  borderBottom: `0.0625rem solid ${theme.vars.palette.border.table}`,
-  backgroundColor: theme.vars.palette.background.eliteaDefault,
-  padding: theme.spacing(0, 3),
-  minHeight: '3.75rem',
-  boxSizing: 'border-box',
-});
-/** Back button + title, the baseline's `leftSection`. */
-const tabBarLeftSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', alignItems: 'center', gap: theme.spacing(1.5), minWidth: 0 });
-const backButtonSx: SxProps<Theme> = { margin: 0 };
 /**
  * The TYPE PICKER paints its own full-bleed filter band and divider
  * (`CategoryFilter`), so the page must not inset it — the baseline says the
@@ -114,6 +90,12 @@ export function createdEntityKind(isMCP: boolean, isApplication: boolean, toolki
 function resolveCreateTitle(isApplication: boolean, isMCP: boolean): string {
   if (isApplication) return t('pages.toolkits.createToolkit.titleApplication', 'New Application');
   return isMCP ? t('pages.toolkits.createToolkit.titleMcp', 'New MCP') : t('pages.toolkits.createToolkit.titleToolkit', 'New Toolkit');
+}
+
+/** The type gallery's search, in the page toolbar. */
+function resolveSearchPlaceholder(isApplication: boolean, isMCP: boolean): string {
+  if (isApplication) return t('toolkits.toolkitTypeSelector.searchApplication', 'Search applications');
+  return isMCP ? t('toolkits.toolkitTypeSelector.searchMcp', 'Search MCPs') : t('toolkits.toolkitTypeSelector.searchToolkit', 'Search toolkits');
 }
 
 /**
@@ -320,47 +302,29 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
     }
   }, [projectId, editToolDetail, formValues, createToolkitMutation, navigate, isMCP, isApplication, saveValidation]);
 
-  const title = useMemo(() => resolveCreateTitle(isApplication, isMCP), [isApplication, isMCP]);
-
-  /**
-   * The baseline renders `StyledTabs` with its `BackButton` (`hideBackButton`
-   * is never set on this page), so every create screen opens with a back arrow
-   * left of the title; this port had none. `BackButton`'s own fallback —
-   * `NavigationHelpers.getListRouteByPageType` — is the destination modelled
-   * here: the list this entity type is created from.
-   */
-  const handleBack = useCallback(() => {
-    if (isMCP) void navigate({ to: '/mcps/$tab', params: { tab: 'all' } });
-    else if (isApplication) void navigate({ to: '/apps/$tab', params: { tab: 'all' } });
-    else void navigate({ to: '/toolkits/$tab', params: { tab: 'all' } });
-  }, [navigate, isMCP, isApplication]);
+  // The page's name is the shell's crumb (`Toolkits ▸ New Toolkit`): the section crumb leads back to the list.
+  usePageCrumbs([{ label: resolveCreateTitle(isApplication, isMCP) }]);
+  const searchQuery = useListSearchQuery();
 
   return (
     <Box sx={pageSx}>
-      <Box sx={tabBarSx}>
-        <Box sx={tabBarLeftSx}>
-          <IconButton
-            onClick={handleBack}
-            size="small"
-            aria-label={t('pages.toolkits.createToolkit.back', 'Back')}
-            sx={backButtonSx}
-          >
-            <ArrowBackIcon fontSize="small" />
-          </IconButton>
-          <Typography variant="headingLarge" component="h1">{title}</Typography>
-        </Box>
-        {editToolDetail && (
-          <CreateToolkitToolTabBar
-            toolkitType={editToolDetail.type}
-            isDirty={isDirty}
-            isSaving={isCreating}
-            isMCP={isMCP}
-            isApplication={isApplication}
-            onSave={() => void handleSave()}
-            onClearEditTool={handleClearEditTool}
-          />
-        )}
-      </Box>
+      {editToolDetail ? (
+        <PageToolbar
+          secondaryActions={
+            <CreateToolkitToolTabBar
+              toolkitType={editToolDetail.type}
+              isDirty={isDirty}
+              isSaving={isCreating}
+              isMCP={isMCP}
+              isApplication={isApplication}
+              onSave={() => void handleSave()}
+              onClearEditTool={handleClearEditTool}
+            />
+          }
+        />
+      ) : (
+        <PageToolbar search={{ placeholder: resolveSearchPlaceholder(isApplication, isMCP), 'data-testid': 'toolkit-type-search' }} />
+      )}
       <Box sx={editToolDetail ? contentSx : selectorContentSx}>
         {createError !== undefined && connector.orFallback(
           <Typography role="alert" variant="bodyMedium" sx={errorSx}>
@@ -391,6 +355,7 @@ export function CreateToolkit({ isMCP = false, isApplication = false, deps }: Cr
             setFormikInitialValues={handleSetFormInitialValues}
             isMCP={isMCP}
             isApplication={isApplication}
+            searchQuery={searchQuery}
           />
         )}
       </Box>

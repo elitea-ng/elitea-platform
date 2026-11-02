@@ -1,14 +1,11 @@
 import { memo, useCallback } from 'react';
 
 import Box from '@mui/material/Box';
-import IconButton from '@mui/material/IconButton';
-import SvgIcon from '@mui/material/SvgIcon';
-import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { ArrowLeftIcon } from '../icons/arrow-left-icon';
 import { AddButton } from '../AddButton/AddButton';
 import { combineSx } from '../lib/combineSx';
+import { PageCrumbFallback, usePageCrumbs } from '../page-chrome';
 import { SimpleSearchBar } from '../SimpleSearchBar';
 import { t } from '@/shared/i18n';
 
@@ -29,32 +26,34 @@ export interface DrawerPageHeaderSlotProps {
 export interface DrawerPageHeaderProps {
   showBorder?: boolean;
   sx?: SxProps<Theme>;
-  showBackButton?: boolean;
   title: string;
   showSearchInput?: boolean;
   showAddButton?: boolean;
   extraContent?: React.ReactNode;
   slotProps?: DrawerPageHeaderSlotProps;
-  onBack?: () => void;
 }
 
 /**
- * Fixed-height header with back button + title on the left, and optional
- * search, extra content, and add button on the right. Ported from
- * `apps/elitea-ui/src/[fsd]/features/settings/ui/drawer-page/DrawerPageHeader.jsx`.
+ * A settings page's toolbar: optional search, extra content and add button.
+ * Ported from `apps/elitea-ui/src/[fsd]/features/settings/ui/drawer-page/
+ * DrawerPageHeader.jsx`.
+ *
+ * The title is the shell's: it is registered as the page's crumb
+ * (`Settings ▸ Profile`, `shared/ui/page-chrome`) and drawn here only where
+ * no shell title row exists (the desktop Settings dialog, a unit test). There
+ * is no back button: the section crumb and the settings navigation cover it.
  */
 // oxlint-disable-next-line eslint/complexity — ported from baseline
 export const DrawerPageHeader = memo(function DrawerPageHeader({
   showBorder = false,
   sx,
-  showBackButton = false,
   title,
   showSearchInput = false,
   showAddButton = false,
   extraContent,
   slotProps,
-  onBack,
 }: DrawerPageHeaderProps) {
+  usePageCrumbs([{ label: title }]);
   const { search, onChangeSearch, placeholder } = slotProps?.searchInput ?? {};
   const { onAdd, tooltip: addButtonTooltip } = slotProps?.addButton ?? {};
   const styles = getStyles();
@@ -70,30 +69,7 @@ export const DrawerPageHeader = memo(function DrawerPageHeader({
     <Box
       sx={combineSx(styles.container(showBorder), sx)}
     >
-      <Box sx={styles.titleContainer}>
-        {showBackButton && (
-          <IconButton
-            color="tertiary"
-            onClick={onBack}
-            sx={styles.iconButton}
-            aria-label={t('shared.ui.settings.header.back', 'Back')}
-          >
-            <SvgIcon
-              component={ArrowLeftIcon}
-              inheritViewBox
-            />
-          </IconButton>
-        )}
-        {/* The settings page's title: `headingLarge`, the one page-title size
-            the app and the admin console share (typography spec §2). */}
-        <Typography
-          variant="headingLarge"
-          color="text.secondary"
-          component="h1"
-        >
-          {title}
-        </Typography>
-      </Box>
+      <PageCrumbFallback title={title} />
       <Box sx={styles.body}>
         {showSearchInput && (
           // #6646: the shared search box, not a bare `<input>`. The bare
@@ -104,7 +80,7 @@ export const DrawerPageHeader = memo(function DrawerPageHeader({
             value={search ?? ''}
             onChange={handleInputChange}
             debounceMs={0}
-            placeholder={placeholder ?? t('shared.ui.settings.header.searchPlaceholder', 'Search something amazing!')}
+            placeholder={placeholder ?? t('shared.ui.settings.header.search', 'Search')}
             aria-label={t('shared.ui.settings.header.search', 'Search')}
             sx={searchBarSx}
           />
@@ -125,9 +101,7 @@ const searchBarSx: SxProps<Theme> = { flexShrink: 0, width: '15rem' };
 
 const getStyles = (): {
   container: (showBorder: boolean) => SxProps<Theme>;
-  titleContainer: SxProps<Theme>;
   body: SxProps<Theme>;
-  iconButton: SxProps<Theme>;
 } => ({
   container:
     (showBorder: boolean): SxProps<Theme> =>
@@ -143,12 +117,6 @@ const getStyles = (): {
       padding: '0 1.5rem',
     }),
 
-  titleContainer: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '1rem',
-  },
-
   body: {
     flex: 1,
     height: '100%',
@@ -157,11 +125,4 @@ const getStyles = (): {
     justifyContent: 'flex-end',
     gap: '1rem',
   },
-
-  iconButton: (theme) => ({
-    margin: '0',
-    '&:hover svg path': {
-      fill: theme.vars.palette.icon.fill.secondary,
-    },
-  }),
 });

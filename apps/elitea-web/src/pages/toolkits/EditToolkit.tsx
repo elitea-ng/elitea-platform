@@ -10,9 +10,9 @@ import { ConfigurationTab, DeleteToolkitButton, ExportToolkitButton, IndexesTab,
 import type { ToolkitInstance } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { ViewMode } from '@/shared/lib/enums';
-import { BaseTab } from '@/shared/ui/BaseTab';
-import { BaseTabs } from '@/shared/ui/BaseTabs';
+import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
+import { PageToolbar, pageSx } from '@/widgets/page-header';
 
 import { useScheduleCredentialsSelectSlot, useToolkitCredentialPickerSlot } from './lib/credentialPickerSlots';
 import { useCopyLinkMenuItem, useToolkitActionPermissions } from './lib/useToolkitHeaderActions';
@@ -29,19 +29,7 @@ import { useIndexesTabState } from './lib/useIndexesTabState';
 import type { IndexesTabState } from './lib/useIndexesTabState';
 import { useToolkitDetail } from './lib/useToolkitDetail';
 
-const pageSx: SxProps<Theme> = { height: '100%', display: 'flex', flexDirection: 'column' };
-const headerSx: SxProps<Theme> = {
-  flexShrink: 0,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  borderBottom: 1,
-  borderColor: 'divider',
-  padding: '0 1.5rem',
-  minHeight: '3rem',
-};
 const actionsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.5rem' };
-const tabBarSx: SxProps<Theme> = { flexShrink: 0, borderBottom: 1, borderColor: 'divider', padding: '0 1.5rem' };
 const contentSx: SxProps<Theme> = { flex: 1, minHeight: 0 };
 /** The refused save's own words. Without it a rejected `PUT` left the screen looking exactly like a successful one. */
 const saveErrorSx: SxProps<Theme> = { flexShrink: 0, padding: '0.5rem 1.5rem' };
@@ -103,7 +91,7 @@ function IndexesTabPanel({ toolkitId, state, renderCredentialsSelect, onConfigDi
   );
 }
 
-/** Split out of `EditToolkit` for the §3.5 complexity budget — see `IndexesTabPanel` above. */
+/** The page's crumb in the shell title row. Split out of `EditToolkit` for the §3.5 complexity budget — see `IndexesTabPanel` above. */
 function resolveTitle(isMCP: boolean, name: string | undefined): string {
   const fallback = isMCP ? t('pages.toolkits.editToolkit.titleMcp', 'Edit MCP') : t('pages.toolkits.editToolkit.title', 'Edit Toolkit');
   return name ?? fallback;
@@ -311,47 +299,48 @@ export function EditToolkit({ isMCP = false, deps }: EditToolkitProps): ReactNod
   const configurationTabSlots = useConfigurationTabSlots({ renderCredentialPicker, mcpLoadTools, projectId });
 
   const title = resolveTitle(isMCP, detail?.name);
+  usePageCrumbs([{ label: title }]);
 
   return (
     <Box sx={pageSx}>
-      <Box sx={headerSx}>
-        <Typography variant="headingLarge" component="h1">{title}</Typography>
-        {toolkitId !== undefined && (
-          <Box sx={actionsSx}>
-            <ExportToolkitButton
-              toolkitId={toolkitId}
-              name={detail?.name}
-              disabled={!canExport}
-            />
-            <DeleteToolkitButton
-              toolkitId={toolkitId}
-              name={detail?.name}
-              disabled={!canDelete}
-            />
-            <ToolkitsControls
-              viewMode={ViewMode.Owner}
-              menuItems={copyLinkMenuItems}
-            />
-            <ToolkitSaveBar
-              onSave={saveControls.onSave}
-              onDiscard={saveControls.onDiscard}
-              canSave={saveControls.canSave}
-              isSaving={saveControls.isSaving}
-              disabledReason={saveControls.disabledReason}
-            />
-          </Box>
-        )}
-      </Box>
-      <Box sx={tabBarSx}>
-        <BaseTabs
-          value={indexesTab.activeTab}
-          onChange={handleTabChange}
-          aria-label={title}
-        >
-          <BaseTab label={t('pages.toolkits.editToolkit.configurationTab', 'Configuration')} />
-          {!indexesTab.hidden && <BaseTab label={t('pages.toolkits.editToolkit.indexesTab', 'Indexes')} />}
-        </BaseTabs>
-      </Box>
+      <PageToolbar
+        tabs={{
+          items: [
+            { value: 'configuration', label: t('pages.toolkits.editToolkit.configurationTab', 'Configuration') },
+            ...(indexesTab.hidden ? [] : [{ value: 'indexes', label: t('pages.toolkits.editToolkit.indexesTab', 'Indexes') }]),
+          ],
+          selectedIndex: indexesTab.activeTab,
+          onChange: handleTabChange,
+          ariaLabel: title,
+        }}
+        secondaryActions={
+          toolkitId !== undefined && (
+            <Box sx={actionsSx}>
+              <ExportToolkitButton
+                toolkitId={toolkitId}
+                name={detail?.name}
+                disabled={!canExport}
+              />
+              <DeleteToolkitButton
+                toolkitId={toolkitId}
+                name={detail?.name}
+                disabled={!canDelete}
+              />
+              <ToolkitsControls
+                viewMode={ViewMode.Owner}
+                menuItems={copyLinkMenuItems}
+              />
+              <ToolkitSaveBar
+                onSave={saveControls.onSave}
+                onDiscard={saveControls.onDiscard}
+                canSave={saveControls.canSave}
+                isSaving={saveControls.isSaving}
+                disabledReason={saveControls.disabledReason}
+              />
+            </Box>
+          )
+        }
+      />
       {saveControls.saveError !== undefined && connector.orFallback(
         <Typography
           role="alert"

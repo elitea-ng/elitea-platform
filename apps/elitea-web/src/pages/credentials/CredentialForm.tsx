@@ -37,6 +37,9 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
+import { combineSx } from '@/shared/ui/lib/combineSx';
+import { usePageCrumbs } from '@/shared/ui/page-chrome';
+import { PageToolbar, pageBodySx, pageSx } from '@/widgets/page-header';
 
 import { CredentialsActions } from '@/features/credentials';
 
@@ -64,9 +67,20 @@ export interface CredentialFormProps {
   readonly onTypeChosen?: (type: string) => void;
 }
 
+/** The shell crumb: "New credential" while creating, the saved name once editing. */
+function crumbLabel(mode: CredentialFormMode, saved: { readonly label?: string; readonly elitea_title?: string } | undefined): string {
+  if (mode.kind === 'create') {
+    return mode.configurationMode ? t('credentials.form.newConfigurationTitle', 'New configuration') : t('credentials.form.newTitle', 'New credential');
+  }
+  const savedName = saved?.label || saved?.elitea_title;
+  if (savedName) return savedName;
+  return mode.configurationMode ? t('credentials.form.configurationTitle', 'Configuration') : t('credentials.form.title', 'Credential');
+}
+
 export function CredentialForm(props: CredentialFormProps): ReactNode {
   const c = useCredentialFormController(props);
   const { mode, context, onDiscarded } = props;
+  usePageCrumbs([{ label: crumbLabel(mode, c.saved) }]);
   const sectionFieldKeys = new Set(Object.values(c.schemaSections).flatMap(credentialSectionFieldKeys));
 
   // Gate on the RESOLVED descriptor, not on the raw type string: an unknown
@@ -90,96 +104,101 @@ export function CredentialForm(props: CredentialFormProps): ReactNode {
   }
 
   return (
-    <Box sx={containerSx}>
-      <Typography variant="headingMedium">
-        {mode.configurationMode ? t('credentials.form.configurationTitle', 'Configuration') : t('credentials.form.title', 'Credential')}
-      </Typography>
-      <TextField
-        label={t('credentials.form.nameLabel', 'Name')}
-        value={c.name}
-        onChange={(event) => {
-          c.setName(event.target.value);
-        }}
-        error={Boolean(c.fieldErrors['elitea_title'])}
-        helperText={c.fieldErrors['elitea_title']}
-        fullWidth
-        variant="standard"
-      />
-      {context.isTeamProject && (
-        <FormControlLabel
-          control={
-            <Switch
-              checked={c.shared}
-              onChange={(event) => {
-                c.setShared(event.target.checked);
-              }}
+    <Box sx={pageSx}>
+      <PageToolbar
+        secondaryActions={
+          <Box sx={actionsRowSx}>
+            <CredentialsActions.TabBar
+              isEditing={mode.kind === 'edit'}
+              onSave={c.save}
+              onDiscard={onDiscarded}
+              canSave={c.canSave}
+              isSaving={c.isSaving}
             />
-          }
-          label={t('credentials.form.sharedLabel', 'Shared with the team')}
-        />
-      )}
-      {Object.entries(c.schemaProperties).map(([fieldKey, property]) => {
-        if (
-          sectionFieldKeys.has(fieldKey) ||
-          isPlatformOnlyCredentialField(c.effectiveType, fieldKey) ||
-          !isCredentialPropertyVisible(property, c.data)
-        ) {
-          return null;
+            {mode.kind === 'edit' && (
+              <CredentialsActions.Controls
+                credentialName={c.name}
+                canDelete={c.canDelete}
+                isDeleting={c.isDeleting}
+                onDelete={c.remove}
+                {...(c.deleteDisabledReason !== undefined ? { deleteDisabledReason: c.deleteDisabledReason } : {})}
+              />
+            )}
+          </Box>
         }
-        return (
-          <CredentialSchemaField
-            key={fieldKey}
-            fieldKey={fieldKey}
-            property={property}
-            value={c.data[fieldKey]}
-            error={c.fieldErrors[fieldKey]}
-            required={c.schemaRequiredFields.includes(fieldKey)}
+      />
+      <Box sx={bodySx}>
+        <Box sx={containerSx}>
+        <TextField
+          label={t('credentials.form.nameLabel', 'Name')}
+          value={c.name}
+          onChange={(event) => {
+            c.setName(event.target.value);
+          }}
+          error={Boolean(c.fieldErrors['elitea_title'])}
+          helperText={c.fieldErrors['elitea_title']}
+          fullWidth
+          variant="standard"
+        />
+        {context.isTeamProject && (
+          <FormControlLabel
+            control={
+              <Switch
+                checked={c.shared}
+                onChange={(event) => {
+                  c.setShared(event.target.checked);
+                }}
+              />
+            }
+            label={t('credentials.form.sharedLabel', 'Shared with the team')}
+          />
+        )}
+        {Object.entries(c.schemaProperties).map(([fieldKey, property]) => {
+          if (
+            sectionFieldKeys.has(fieldKey) ||
+            isPlatformOnlyCredentialField(c.effectiveType, fieldKey) ||
+            !isCredentialPropertyVisible(property, c.data)
+          ) {
+            return null;
+          }
+          return (
+            <CredentialSchemaField
+              key={fieldKey}
+              fieldKey={fieldKey}
+              property={property}
+              value={c.data[fieldKey]}
+              error={c.fieldErrors[fieldKey]}
+              required={c.schemaRequiredFields.includes(fieldKey)}
+              projectId={context.projectId}
+              isTeamProject={context.isTeamProject}
+              onChange={c.setField}
+            />
+          );
+        })}
+        {Object.entries(c.schemaSections).map(([sectionKey, section]) => (
+          <CredentialFormSection
+            key={sectionKey}
+            sectionKey={sectionKey}
+            section={section}
+            schemaProperties={c.schemaProperties}
+            schemaRequiredFields={c.schemaRequiredFields}
+            data={c.data}
+            fieldErrors={c.fieldErrors}
             projectId={context.projectId}
             isTeamProject={context.isTeamProject}
             onChange={c.setField}
           />
-        );
-      })}
-      {Object.entries(c.schemaSections).map(([sectionKey, section]) => (
-        <CredentialFormSection
-          key={sectionKey}
-          sectionKey={sectionKey}
-          section={section}
-          schemaProperties={c.schemaProperties}
-          schemaRequiredFields={c.schemaRequiredFields}
-          data={c.data}
-          fieldErrors={c.fieldErrors}
-          projectId={context.projectId}
-          isTeamProject={context.isTeamProject}
-          onChange={c.setField}
-        />
-      ))}
-      {c.apiError && (
-        <Typography
-          variant="labelSmall"
-          sx={errorTextSx}
-        >
-          {c.apiError}
-        </Typography>
-      )}
-      {c.typeDescriptor?.has_test_connection && <TestConnectionBlock controller={c} />}
-      <Box sx={actionsRowSx}>
-        <CredentialsActions.TabBar
-          isEditing={mode.kind === 'edit'}
-          onSave={c.save}
-          onDiscard={onDiscarded}
-          canSave={c.canSave}
-          isSaving={c.isSaving}
-        />
-        {mode.kind === 'edit' && (
-          <CredentialsActions.Controls
-            credentialName={c.name}
-            canDelete={c.canDelete}
-            isDeleting={c.isDeleting}
-            onDelete={c.remove}
-            {...(c.deleteDisabledReason !== undefined ? { deleteDisabledReason: c.deleteDisabledReason } : {})}
-          />
+        ))}
+        {c.apiError && (
+          <Typography
+            variant="labelSmall"
+            sx={errorTextSx}
+          >
+            {c.apiError}
+          </Typography>
         )}
+        {c.typeDescriptor?.has_test_connection && <TestConnectionBlock controller={c} />}
+        </Box>
       </Box>
     </Box>
   );
@@ -253,6 +272,7 @@ function TestConnectionBlock({ controller }: TestConnectionBlockProps): ReactNod
   );
 }
 
+const bodySx: SxProps<Theme> = combineSx(pageBodySx, (theme: Theme) => ({ padding: theme.spacing(3) }));
 const containerSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', flexDirection: 'column', gap: theme.spacing(2), maxWidth: '40rem' });
 const actionsRowSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', alignItems: 'center', gap: theme.spacing(1) });
 const testConnectionRowSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', alignItems: 'center', gap: theme.spacing(1) });

@@ -1,13 +1,30 @@
+import type { ReactElement, ReactNode } from 'react';
+
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { PageChromeProvider, useShellCrumbs } from '@/shared/ui/page-chrome';
 import { server } from '@/test/setup';
 
 import { CreateToolkit, createdEntityKind } from './CreateToolkit';
 import { renderToolkitsRoute } from './__tests__/testRouter';
+
+/** What the shell's title row would show after the section crumb. */
+function CrumbProbe(): ReactNode {
+  return <div data-testid="crumbs">{useShellCrumbs().map((crumb) => crumb.label).join(' / ')}</div>;
+}
+
+function withShell(page: ReactElement): ReactElement {
+  return (
+    <PageChromeProvider>
+      {page}
+      <CrumbProbe />
+    </PageChromeProvider>
+  );
+}
 
 /**
  * `ToolkitTypeSelector`'s `CategorySection` rows use `useTextOverflow`
@@ -44,8 +61,7 @@ describe('CreateToolkit', () => {
 
     renderToolkitsRoute(<CreateToolkit deps={{ createToolkit }} />, '/toolkits/create', { projectId: 'proj-1' });
 
-    expect(await screen.findByText('New Toolkit')).toBeInTheDocument();
-    expect(screen.getByText('Choose the toolkit type')).toBeInTheDocument();
+    expect(await screen.findByText('Choose the toolkit type')).toBeInTheDocument();
 
     await user.click(await screen.findByText('GitHub'));
 
@@ -73,42 +89,38 @@ describe('CreateToolkit', () => {
     expect(await screen.findByRole('button', { name: 'GitHub' })).toBeInTheDocument();
   });
 
-  it('shows "New MCP" when isMCP is true', async () => {
+  it('names the page "New MCP" in the shell title row when isMCP is true', async () => {
     server.use(http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({})));
     const createToolkit = vi.fn();
 
-    renderToolkitsRoute(<CreateToolkit isMCP deps={{ createToolkit }} />, '/toolkits/create', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<CreateToolkit isMCP deps={{ createToolkit }} />), '/toolkits/create', { projectId: 'proj-1' });
 
-    expect(await screen.findByText('New MCP')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('New MCP'));
   });
 
-  it('shows "New Application" when isApplication is true', async () => {
+  it('names the page "New Application" in the shell title row when isApplication is true', async () => {
     server.use(http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({})));
     const createToolkit = vi.fn();
 
-    renderToolkitsRoute(<CreateToolkit isApplication deps={{ createToolkit }} />, '/toolkits/create', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<CreateToolkit isApplication deps={{ createToolkit }} />), '/toolkits/create', { projectId: 'proj-1' });
 
-    expect(await screen.findByText('New Application')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('New Application'));
   });
 
   /**
-   * [visual-parity regression] The baseline renders this page inside
-   * `StyledTabs` WITHOUT `hideBackButton`, so its tab bar always opens with a
-   * `BackButton` left of the title. This port rendered the title alone, so the
-   * screen had no back affordance at all — a missing element, not a style
-   * difference, and this assertion fails against the pre-fix component.
+   * The shell owns the title: the page registers "New Toolkit" as its crumb
+   * (the section crumb before it leads back to the list) and draws neither a
+   * heading nor a back arrow of its own.
    */
-  it('renders a back button left of the title in the sub-header', async () => {
+  it('names itself in the shell title row and draws no heading or back arrow', async () => {
     server.use(http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({})));
     const createToolkit = vi.fn();
 
-    renderToolkitsRoute(<CreateToolkit deps={{ createToolkit }} />, '/toolkits/create', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<CreateToolkit deps={{ createToolkit }} />), '/toolkits/create', { projectId: 'proj-1' });
 
-    const title = await screen.findByText('New Toolkit');
-    const back = screen.getByRole('button', { name: 'Back' });
-    expect(back).toBeInTheDocument();
-    // Left of the title, in the same bar.
-    expect(back.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('New Toolkit'));
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
   });
 
   it('does not render the save/cancel tab bar before a type is picked', async () => {

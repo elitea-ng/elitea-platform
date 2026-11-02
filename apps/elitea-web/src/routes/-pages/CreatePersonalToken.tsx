@@ -173,8 +173,6 @@ export function CreatePersonalTokenPage() {
       >
         <DrawerPageHeader
           title={t('entities.token.form.pageTitle', 'New Token')}
-          showBackButton
-          onBack={onCancel}
           extraContent={
             <Box sx={styles.headerRight}>
               <Button

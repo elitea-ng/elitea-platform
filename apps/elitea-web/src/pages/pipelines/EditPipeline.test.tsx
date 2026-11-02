@@ -1,3 +1,5 @@
+import type { ReactElement } from 'react';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configure, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -7,6 +9,7 @@ import { getGetApplicationMockHandler } from '@/shared/api/generated/application
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { installCodeMirrorTestPolyfills } from '@/shared/ui/lib/field/codeMirrorTestPolyfills';
+import { PageChromeProvider, useShellCrumbs } from '@/shared/ui/page-chrome';
 import { server } from '@/test/setup';
 import { NavBlockerDialog, useNavBlockerStore } from '@/widgets/app-shell';
 
@@ -17,6 +20,23 @@ import { usePipelineYamlStore } from '@/features/pipelines/model/pipelineYamlSto
 
 import { EditPipeline } from './EditPipeline';
 import { renderPipelinesRoute, renderPipelinesRouteWithoutSocket } from './__tests__/testRouter';
+
+/**
+ * The pipeline's name is the shell's crumb (`Pipelines ▸ My Pipeline`), not a
+ * heading of the page's own: the probe shows what the shell's title row says.
+ */
+function CrumbProbe(): ReactElement {
+  return <div data-testid="crumbs">{useShellCrumbs().map((crumb) => crumb.label).join(' / ')}</div>;
+}
+
+function withShell(page: ReactElement): ReactElement {
+  return (
+    <PageChromeProvider>
+      {page}
+      <CrumbProbe />
+    </PageChromeProvider>
+  );
+}
 
 // The pipeline editor mounts the real route, store and configuration panel,
 // so its first render and MUI exit transitions run past Testing Library's 1 s
@@ -195,7 +215,7 @@ describe('EditPipeline', () => {
     };
     server.use(getGetApplicationMockHandler(withGraph));
 
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
 
@@ -214,7 +234,7 @@ describe('EditPipeline', () => {
    */
   it('mounts the Triggers & schedules section in the real pipeline edit route', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
 
     const panel = within(await screen.findByTestId('edit-pipeline-configuration-panel'));
     expect(await panel.findByTestId('edit-pipeline-triggers-panel')).toBeInTheDocument();
@@ -224,18 +244,19 @@ describe('EditPipeline', () => {
     expect(await panel.findByTestId('pipeline-schedule-card')).toBeInTheDocument();
   });
 
-  it('renders the pipeline name once it loads', async () => {
+  it('names the page after the pipeline in the shell title row once it loads', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
 
-    expect(await screen.findByText('My Pipeline')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('My Pipeline'));
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 
   it('mounts the real ConfigurationTab (GeneralFormPanel + a live EditorPanel/flow editor), not an empty placeholder', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
 
@@ -275,7 +296,7 @@ describe('EditPipeline', () => {
      * on its first render.
      */
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRouteWithoutSocket(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRouteWithoutSocket(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
 
@@ -288,7 +309,7 @@ describe('EditPipeline', () => {
 
   it('shows the not-found state when the URL version is not in the versions list', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42/999', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42/999', {
       projectId: '9',
     });
 
@@ -297,7 +318,7 @@ describe('EditPipeline', () => {
 
   it('skips the not-found check when isFromCreation=true', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    const { router } = renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42/999', { projectId: '9' });
+    const { router } = renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42/999', { projectId: '9' });
     // A loaded CI shard took over the default 1 s to settle the first route
     // (EditPipeline flake on PR #1029); the outcome, not the speed, is the point.
     expect(await screen.findByText('Version not found', {}, { timeout: 10_000 })).toBeInTheDocument();
@@ -315,7 +336,7 @@ describe('EditPipeline', () => {
 
   it('renders the Save/Cancel bar once loaded', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
 
@@ -326,7 +347,7 @@ describe('EditPipeline', () => {
   it('clicking Cancel does not throw and keeps the page mounted', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const user = userEvent.setup();
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
 
@@ -339,7 +360,7 @@ describe('EditPipeline', () => {
   it('hides the Save/Cancel bar for a read-only viewer of a public pipeline (viewing under the public project)', async () => {
     setPublicProjectId('42');
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/latest/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/latest/42', {
       projectId: '42',
     });
 
@@ -351,7 +372,7 @@ describe('EditPipeline', () => {
   it('still renders the Save/Cancel bar for the same pipeline when the selected project is NOT the public project', async () => {
     setPublicProjectId('42');
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
 
@@ -365,7 +386,7 @@ describe('EditPipeline', () => {
         HttpResponse.json({ error: 'not found' }, { status: 404 }),
       ),
     );
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/999', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/999', {
       projectId: '9',
     });
 
@@ -376,7 +397,7 @@ describe('EditPipeline', () => {
 
   it('shows a save-error banner (instead of nothing) when a save attempt fails', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -394,7 +415,7 @@ describe('EditPipeline', () => {
 
   it('shows the server\'s own readable refusal when a pipeline save is refused for exceeding the size or node limits', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -419,7 +440,7 @@ describe('EditPipeline', () => {
    */
   it('mounts the model picker inside the configuration panel, showing the project default', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
 
@@ -440,7 +461,7 @@ describe('EditPipeline', () => {
         return HttpResponse.json({ id: '1', application_id: '42', name: 'base', status: 'draft' }, { status: 201 });
       }),
     );
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -474,7 +495,7 @@ describe('EditPipeline', () => {
         },
       }),
     );
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
 
@@ -491,7 +512,7 @@ describe('EditPipeline', () => {
         return HttpResponse.json({ id: '1', application_id: '42', name: 'base', status: 'draft' }, { status: 201 });
       }),
     );
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -517,7 +538,7 @@ describe('EditPipeline', () => {
         return HttpResponse.json({ id: '1', application_id: '42', name: 'base', status: 'draft' }, { status: 201 });
       }),
     );
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -534,7 +555,7 @@ describe('EditPipeline', () => {
 
   it('arms the unsaved-changes guard when only the model is changed (#133)', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -570,7 +591,7 @@ describe('leaving the editor', () => {
       }),
     );
     const user = userEvent.setup();
-    const { router } = renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    const { router } = renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
 
     // Wait for the version seed, then simulate a canvas/YAML edit the way the
     // editor writes one — straight into the store the save path reads.
@@ -603,7 +624,7 @@ describe('leaving the editor', () => {
   it('dismissing the discard dialog stays on the edit page', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const user = userEvent.setup();
-    const { router } = renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    const { router } = renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
 
     await user.click(await screen.findByText('Cancel'));
     await screen.findByText('Are you sure you want to discard changes?');
@@ -651,7 +672,7 @@ describe('talking to the pipeline', () => {
       }),
     );
     const user = userEvent.setup();
-    const { router } = renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    const { router } = renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
 
     await user.click(await screen.findByTestId('chat-with-pipeline-button', {}, { timeout: 5_000 }));
 
@@ -688,7 +709,7 @@ describe('talking to the pipeline', () => {
       http.post('*/elitea_core/conversations/prompt_lib/:projectId', () => HttpResponse.json({}, { status: 500 })),
     );
     const user = userEvent.setup();
-    const { router } = renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    const { router } = renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
 
     await user.click(await screen.findByTestId('chat-with-pipeline-button', {}, { timeout: 5_000 }));
 
@@ -800,7 +821,7 @@ describe('pipeline versioning', () => {
 
   it('mounts the version bar on the editor page', async () => {
     server.use(getGetApplicationMockHandler(detail({ versions: twoVersions })));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
 
@@ -852,7 +873,7 @@ describe('pipeline versioning', () => {
         }),
       ),
     );
-    const { router } = renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    const { router } = renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
     const user = userEvent.setup();
 
     await screen.findByTestId('version-selector-trigger');
@@ -913,7 +934,7 @@ describe('pipeline versioning', () => {
         }),
       ),
     );
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -977,7 +998,7 @@ describe('pipeline versioning', () => {
     // Opened on `v1`, not on `base`: `isSetDefaultDisabled` deliberately
     // refuses to pin `base` while no default is recorded, because `base` IS
     // the fallback in that state (`entities/version/model/selectors.ts:60`).
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42/2', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42/2', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -1052,7 +1073,7 @@ describe('pipeline versioning', () => {
         });
       }),
     );
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42/2', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42/2', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -1077,7 +1098,7 @@ describe('pipeline versioning', () => {
   it('keeps the selector but withholds Save As Version from a public-project viewer', async () => {
     setPublicProjectId('9');
     server.use(getGetApplicationMockHandler(detail({ versions: twoVersions })));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', {
       projectId: '9',
     });
 
@@ -1118,7 +1139,7 @@ describe('pipeline versioning', () => {
         return HttpResponse.json(detail());
       }),
     );
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
     const user = userEvent.setup();
 
     await screen.findByTestId('edit-pipeline-configuration-panel');
@@ -1184,7 +1205,7 @@ describe('the pipeline configuration form', () => {
 
   it('renders the reference form sections — General, Welcome message, Tags, Information', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
 
     const panel = within(await screen.findByTestId('edit-pipeline-configuration-panel'));
     expect(await panel.findByTestId('agent-name-input')).toHaveValue('My Pipeline');
@@ -1214,7 +1235,7 @@ describe('the pipeline configuration form', () => {
   it('sends a renamed pipeline to the APPLICATION endpoint, not only the version one', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const bodies = captureSaveBodies();
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
     const user = userEvent.setup();
 
     const panel = within(await screen.findByTestId('edit-pipeline-configuration-panel'));
@@ -1239,7 +1260,7 @@ describe('the pipeline configuration form', () => {
   it('sends a typed welcome message in the version PUT body', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const bodies = captureSaveBodies();
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
     const user = userEvent.setup();
 
     const panel = within(await screen.findByTestId('edit-pipeline-configuration-panel'));
@@ -1263,7 +1284,7 @@ describe('the pipeline configuration form', () => {
     (pipeline.version_details as Record<string, unknown>)['tags'] = [{ name: 'operations' }];
     server.use(getGetApplicationMockHandler(pipeline));
     const bodies = captureSaveBodies();
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
     const user = userEvent.setup();
 
     const panel = within(await screen.findByTestId('edit-pipeline-configuration-panel'));
@@ -1277,7 +1298,7 @@ describe('the pipeline configuration form', () => {
   it('sends a newly typed tag by name, with no placeholder id', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const bodies = captureSaveBodies();
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
     const user = userEvent.setup();
 
     const panel = within(await screen.findByTestId('edit-pipeline-configuration-panel'));
@@ -1302,7 +1323,7 @@ describe('the pipeline configuration form', () => {
     versionDetails['meta'] = { step_limit: 40, internal_tools: ['attachments'], icon_meta: { id: 9 } };
     server.use(getGetApplicationMockHandler(withMeta));
     const bodies = captureSaveBodies();
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
     const user = userEvent.setup();
 
     await screen.findByTestId('edit-pipeline-configuration-panel');
@@ -1323,7 +1344,7 @@ describe('the pipeline configuration form', () => {
   it('never sends tools or notes, the two keys the version PUT does not persist', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const bodies = captureSaveBodies();
-    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', { projectId: '9' });
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
     const user = userEvent.setup();
 
     await screen.findByTestId('edit-pipeline-configuration-panel');

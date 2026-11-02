@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { server } from '../../test/setup';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
-import { renderWithTheme } from '@/shared/ui/lib/testTheme';
+import { renderCredentialsRoute, withShellCrumbs } from './__tests__/testRouter';
 
 import { EditCredential } from './EditCredential';
 
@@ -53,7 +53,7 @@ function recordingHandlers(recorded: { url: string; body: string }[]) {
 
 function renderEdit() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return renderWithTheme(
+  return renderCredentialsRoute(
     <QueryClientProvider client={client}>
       <EditCredential
         context={CONTEXT}
@@ -77,7 +77,7 @@ describe('EditCredential (ROUTE-025/065 target)', () => {
       http.get(`${BASE}/configurations/configuration/7/abc`, () => HttpResponse.json({ uid: 'abc', type: 'openai', elitea_title: 'my-cred', data: {} })),
     );
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    renderWithTheme(
+    renderCredentialsRoute(
       <QueryClientProvider client={client}>
         <EditCredential
           context={CONTEXT}
@@ -90,25 +90,27 @@ describe('EditCredential (ROUTE-025/065 target)', () => {
     await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('my-cred'));
   });
 
-  it('titles the screen "Configuration" in configurationMode (ROUTE-065)', async () => {
+  it('names the saved configuration in the shell title row (ROUTE-065)', async () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(http.get(`${BASE}/configurations/available/`, () => HttpResponse.json([{ type: 'openai', config_schema: { title: 'OpenAI', properties: { data: { properties: {} } } } }])));
     server.use(
       http.get(`${BASE}/configurations/configuration/7/abc`, () => HttpResponse.json({ uid: 'abc', type: 'openai', elitea_title: 'my-cred', data: {} })),
     );
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    renderWithTheme(
+    renderCredentialsRoute(
       <QueryClientProvider client={client}>
-        <EditCredential
-          context={CONTEXT}
-          credentialUid="abc"
-          configurationMode
-          onSaved={vi.fn()}
-          onDiscarded={vi.fn()}
-        />
+        {withShellCrumbs(
+          <EditCredential
+            context={CONTEXT}
+            credentialUid="abc"
+            configurationMode
+            onSaved={vi.fn()}
+            onDiscarded={vi.fn()}
+          />,
+        )}
       </QueryClientProvider>,
     );
-    expect(await screen.findByText('Configuration')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('my-cred'));
   });
 });
 
@@ -250,7 +252,7 @@ describe('EditCredential loads a stored MODEL configuration (ROUTE-065)', () => 
 
   function renderStoredModel() {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-    return renderWithTheme(
+    return renderCredentialsRoute(
       <QueryClientProvider client={client}>
         <EditCredential
           context={CONTEXT}

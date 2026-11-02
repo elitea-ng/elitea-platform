@@ -375,6 +375,7 @@ export function useCredentialFormController(props: CredentialFormControllerProps
     schemaRequiredFields,
     name,
     setName,
+    saved: detail.data,
     shared,
     setShared,
     data,
