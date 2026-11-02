@@ -1,0 +1,25 @@
+# The values an operator layers over deploy/helm/elitea/values-gke.yaml: one
+# value for every <...> placeholder in it. The chart refuses to render
+# values-gke.yaml alone (templates/_globals.tpl, elitea.validatePlaceholders),
+# so every CI render of the GKE example adds this file. Example values only.
+externalSecrets:
+  secretStoreRef:
+    name: gcp-secret-manager
+global:
+  trustedProxyCidrs:
+    - 10.8.0.0/14
+    - 35.191.0.0/16
+    - 130.211.0.0/22
+main:
+  serviceAccount:
+    annotations:
+      iam.gke.io/gcp-service-account: elitea-main@example-project.iam.gserviceaccount.com
+  env:
+    OIDC_CLIENT_ID: "elitea-example-client"
+    STORAGE_CONTAINER: "example-project-elitea-artifacts"
+llmGateway:
+  serviceAccount:
+    annotations:
+      iam.gke.io/gcp-service-account: elitea-llm@example-project.iam.gserviceaccount.com
+  env:
+    GATEWAY_EGRESS_ALLOWLIST: "europe-west4-aiplatform.googleapis.com,aiplatform.googleapis.com"

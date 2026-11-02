@@ -18,17 +18,24 @@
 #        helm pull oci://ghcr.io/elitea-ng/charts/elitea --version <v> --untar
 #        less elitea/values-gke.yaml
 #   3. `values` below — every `<...>` and example.com of values-gke.yaml that
-#      is yours. Helm replaces a LIST whole, so a list you change here (hosts,
-#      tls) is restated in full. It is a YAML string rather than
-#      `valuesObject` so the manifest validates against older Application
-#      schemas too; Argo CD treats the two the same.
+#      is yours. The chart refuses to render while a `<...>` placeholder is
+#      left, and lists each one by its path. `global.publicUrl` fills the
+#      Ingress host, DEPLOYMENT_URL, OIDC_REDIRECT_URI, the public origin,
+#      the gateway's own origins and the worker's base URL and SPIFFE ID;
+#      set one of them only to override it. Helm replaces a LIST whole, so a
+#      list you change here is restated in full. It is a YAML string rather
+#      than `valuesObject` so the manifest validates against older
+#      Application schemas too; Argo CD treats the two the same.
 #
 # NO SECRET GOES IN THIS FILE. With externalSecrets on, the chart renders one
 # ExternalSecret per Secret it reads, from the ClusterSecretStore named below
 # (bootstrap/cluster-secret-store.yaml). values-gke.yaml reads them from ONE
 # Secret Manager secret, `elitea-platform` (a flat JSON object whose
-# properties are "<Kubernetes Secret>/<key>"), plus the database DSN from its
-# own secret, `elitea-database-url`. Render the chart with these values and
+# properties are "<Kubernetes Secret>/<key>", and one property for each value
+# that several Secrets carry: runtime-ca.crt, runtime-ca.key,
+# command-signing-keyring.json, gateway-identity-secret), plus the database
+# DSN from its own secret, `elitea-database-url`. deploy/scripts/mint-secrets.sh
+# mints that JSON for a NEW install. Render the chart with these values and
 # read the ExternalSecrets for the exact property list:
 #   helm template elitea <chart> -f values-gke.yaml -f <these values> \
 #     | yq 'select(.kind == "ExternalSecret")'
@@ -37,8 +44,11 @@
 #   PreSync hooks   the ExternalSecrets (wave -30), then the migrations and
 #                   the workload-session Job; a failed migration stops the
 #                   sync and the previous pods keep serving;
+#   wave -15        the certificate authorities of certManager.issuers
+#                   (values-gke.yaml sets create: true);
 #   wave -10        the NATS server, its CA and certificates, and the
-#                   stream/KV bootstrap Job (a Sync hook);
+#                   stream/KV bootstrap Job (a Sync hook, which waits for
+#                   NATS and restarts in place until NATS answers);
 #   wave  -5        elitea-vector and Qdrant (the bundled qdrant chart) with
 #                   its TLS Certificate;
 #   wave   0        the platform (main, web, scheduler, gateway, collector,
@@ -46,9 +56,11 @@
 #   wave   1        the agent worker.
 #
 # PRECONDITIONS this Application does not create: the GKE cluster
-# (Dataplane V2, Workload Identity), cert-manager with the elitea-internal-ca
-# and elitea-runtime-ca Issuers in the `elitea` namespace, the External
-# Secrets Operator and its store, Cloud SQL with the role and the two
+# (Dataplane V2, Workload Identity), cert-manager (the chart makes the
+# elitea-internal-ca and elitea-runtime-ca Issuers), KEDA if you want
+# queue-driven worker scaling (without it the worker scales on CPU), the
+# External Secrets Operator and its store, Cloud SQL with the role (CREATEDB
+# for the db-init Job, or the two databases made by hand) and the two
 # databases, the GCS bucket and the Google service accounts, the global
 # static IP and the DNS record. The docs page "Deploy on GKE with Argo CD"
 # lists each with its command.
@@ -80,19 +92,17 @@ spec:
           secretStoreRef:
             name: gcp-secret-manager
             kind: ClusterSecretStore
-          secrets:
-            # values-gke.yaml already reads the DSN from its own secret,
-            # elitea-database-url (maps merge, so it needs no restating).
-            # The runtime CA keypair the elitea-runtime-ca Issuer signs
-            # from: elitea-vector's certificates, Qdrant's TLS and the
-            # DeepWiki/Inventory callback client certificates. No pod reads
-            # it, so the chart lists it only when asked (`extra`).
-            elitea-runtime-ca:
-              extra: true
-              type: kubernetes.io/tls
-              keys:
-                tls.crt: {}
-                tls.key: {}
+          # values-gke.yaml already reads the DSN from its own secret,
+          # elitea-database-url, and (certManager.issuers.create) the runtime
+          # CA keypair elitea-runtime-ca from runtime-ca.crt/runtime-ca.key.
+
+        global:
+          publicUrl: https://elitea.example.com
+          # The pod CIDR plus Google's load-balancer ranges.
+          trustedProxyCidrs:
+            - "<pod CIDR>"
+            - 35.191.0.0/16
+            - 130.211.0.0/22
 
         main:
           serviceAccount:
@@ -102,12 +112,6 @@ spec:
             annotations:
               # gcloud compute addresses create elitea-ip --global
               kubernetes.io/ingress.global-static-ip-name: elitea-ip
-            hosts:
-              - elitea.example.com
-            tls:
-              - secretName: elitea-tls
-                hosts:
-                  - elitea.example.com
             certManager:
               # Your cert-manager ClusterIssuer (ACME, or the origin CA issuer
               # of a proxy in front of the load balancer).
@@ -120,25 +124,15 @@ spec:
               frontendConfig:
                 sslPolicy: ""
           env:
-            DEPLOYMENT_URL: "https://elitea.example.com"
-            # The pod CIDR plus Google's load-balancer ranges.
-            ELITEA_TRUSTED_PROXY_CIDRS: "<pod CIDR>,35.191.0.0/16,130.211.0.0/22"
             OIDC_CLIENT_ID: "<client id>"
-            OIDC_REDIRECT_URI: "https://elitea.example.com/auth/oidc/callback"
             ELITEA_INITIAL_GLOBAL_ADMINS: "email:admin@example.com"
             STORAGE_CONTAINER: "<PROJECT_ID>-elitea-artifacts"
-          fileConfig:
-            authConfig:
-              document:
-                public_origin: https://elitea.example.com
 
         llmGateway:
           serviceAccount:
             annotations:
               iam.gke.io/gcp-service-account: elitea-llm@<PROJECT_ID>.iam.gserviceaccount.com
           env:
-            GATEWAY_SELF_LLM_ORIGINS: >-
-              https://elitea.example.com/llm/v1,http://elitea-main:8080/llm/v1
             GATEWAY_EGRESS_ALLOWLIST: >-
               <REGION>-aiplatform.googleapis.com,aiplatform.googleapis.com
 
@@ -152,13 +146,13 @@ spec:
         #   env:
         #     ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,*.github.com,git.example.com"
 
-        worker:
-          runtime:
-            publicBaseUrl: https://elitea.example.com
-          runtimeSession:
-            # Must equal the URI SAN of the worker certificate in
-            # elitea-worker-material.
-            expectedIdentity: "spiffe://elitea.example.com/ns/elitea/sa/worker"
+        # global.publicUrl gives the worker its base URL and the SPIFFE ID
+        # spiffe://elitea.example.com/ns/elitea/sa/agent-worker, which must
+        # equal the URI SAN of the worker certificate in elitea-worker-material
+        # (mint-secrets.sh mints that one). To keep another ID, set it:
+        # worker:
+        #   runtimeSession:
+        #     expectedIdentity: "spiffe://elitea.example.com/ns/elitea/sa/worker"
   destination:
     server: https://kubernetes.default.svc
     namespace: elitea

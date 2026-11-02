@@ -9,6 +9,7 @@
   against a system that looks healthy.
 */ -}}
 
+{{- include "elitea.applyGlobals" . }}{{- /* idempotent; see _globals.tpl */}}
 {{- include "elitea.applyFeatureSwitches" . }}{{- /* idempotent; see _feature-switches.tpl */}}
 {{- include "elitea.compiledSnapshots.validate" . }}
 {{- include "elitea.codeNodes.validateWorker" . }}

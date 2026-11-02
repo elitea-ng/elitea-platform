@@ -28,3 +28,56 @@ which serves custom.metrics.k8s.io for the WHOLE cluster: one per cluster.
 Its rules expose only gateway_llm_sse_active_connections, for the gateway's
 HPA. Any other custom-metric HPA in this cluster reads nothing from it.
 {{- end }}
+{{- include "elitea.applyGlobals" . }}
+{{- if and .Values.worker.enabled .Values.worker.autoscaling.enabled (eq (include "elitea.scaling.workerSource" .) "cpu") (ne (toString .Values.worker.autoscaling.source) "cpu") }}
+NOTE: no KEDA is detected or declared, so the agent worker scales on CPU
+(a HorizontalPodAutoscaler), not on its JetStream backlog. CPU rises later
+than the backlog, because a turn waits on a model. To scale on the backlog,
+install KEDA once for the cluster and set scaling.keda.clusterInstalled=true
+(`helm template` and Argo CD cannot detect it), or set keda.enabled=true.
+With worker.autoscaling.enabled=false the worker runs worker.replicaCount
+replicas.
+{{- end }}
+{{- if dig "issuers" "create" false (.Values.certManager | default dict) }}
+NOTE: this release creates its mTLS CA issuers (certManager.issuers.create).
+The runtime CA Issuer {{ .Values.certManager.issuers.runtime.name }} signs with Secret
+{{ .Values.certManager.issuers.runtime.caSecretName }} (tls.crt, tls.key): the runtime CA. Until that Secret
+exists, the elitea-vector, Qdrant, callback client and egress audit
+Certificates stay not Ready.
+{{- end }}
+{{- $ns := .Release.Namespace }}
+{{- $mainEnv := .Values.main.env | default dict }}
+{{- $gcs := and .Values.main.enabled (eq (get $mainEnv "STORAGE_BACKEND" | toString) "gcs") (not (get $mainEnv "GCS_ENDPOINT")) }}
+{{- $vertex := and .Values.llmGateway.enabled .Values.llmGateway.workloadIdentity.enabled }}
+{{- if or $gcs $vertex }}
+
+GKE WORKLOAD IDENTITY. The chart cannot check the IAM side. Run these once.
+The names below are this release's. A wrong KSA or namespace in the member
+fails at the first request, with a credentials error that does not name
+Workload Identity.
+{{- if $gcs }}
+{{- $gsa := get (.Values.main.serviceAccount.annotations | default dict) "iam.gke.io/gcp-service-account" | default "GSA_OF_ELITEA_MAIN" }}
+{{- $project := regexReplaceAll "^[^@]+@([^.]+)\\.iam\\.gserviceaccount\\.com$" $gsa "${1}" }}
+{{- if eq $project $gsa }}{{- $project = "PROJECT_ID" }}{{- end }}
+
+  # elitea-main (STORAGE_BACKEND=gcs): bind the KSA, then grant the bucket.
+  gcloud iam service-accounts add-iam-policy-binding {{ $gsa }} \
+    --role roles/iam.workloadIdentityUser \
+    --member "serviceAccount:{{ $project }}.svc.id.goog[{{ $ns }}/{{ include "elitea-main.serviceAccountName" . }}]"
+  gcloud storage buckets add-iam-policy-binding gs://{{ get $mainEnv "STORAGE_CONTAINER" | default "BUCKET" }} \
+    --member "serviceAccount:{{ $gsa }}" --role roles/storage.admin
+{{- end }}
+{{- if $vertex }}
+{{- $gsa := get (.Values.llmGateway.serviceAccount.annotations | default dict) "iam.gke.io/gcp-service-account" | default "GSA_OF_THE_LLM_GATEWAY" }}
+{{- $project := regexReplaceAll "^[^@]+@([^.]+)\\.iam\\.gserviceaccount\\.com$" $gsa "${1}" }}
+{{- if eq $project $gsa }}{{- $project = "PROJECT_ID" }}{{- end }}
+
+  # LLM gateway (llmGateway.workloadIdentity, Vertex AI): bind the KSA, then
+  # grant Vertex AI.
+  gcloud iam service-accounts add-iam-policy-binding {{ $gsa }} \
+    --role roles/iam.workloadIdentityUser \
+    --member "serviceAccount:{{ $project }}.svc.id.goog[{{ $ns }}/{{ include "elitea-llm-gateway.serviceAccountName" . }}]"
+  gcloud projects add-iam-policy-binding {{ $project }} \
+    --member "serviceAccount:{{ $gsa }}" --role roles/aiplatform.user
+{{- end }}
+{{- end }}

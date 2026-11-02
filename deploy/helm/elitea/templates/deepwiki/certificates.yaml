@@ -32,8 +32,7 @@ spec:
     algorithm: ECDSA
     size: 256
   issuerRef:
-    name: {{ .Values.deepwiki.mtls.issuerRef.name }}
-    kind: {{ .Values.deepwiki.mtls.issuerRef.kind }}
+    {{- include "elitea.issuerRef" (dict "ctx" $ "ref" .Values.deepwiki.mtls.issuerRef "ca" "internal") | nindent 4 }}
     group: cert-manager.io
 ---
 apiVersion: cert-manager.io/v1
@@ -57,8 +56,7 @@ spec:
     algorithm: ECDSA
     size: 256
   issuerRef:
-    name: {{ .Values.deepwiki.mtls.issuerRef.name }}
-    kind: {{ .Values.deepwiki.mtls.issuerRef.kind }}
+    {{- include "elitea.issuerRef" (dict "ctx" $ "ref" .Values.deepwiki.mtls.issuerRef "ca" "internal") | nindent 4 }}
     group: cert-manager.io
 {{- end }}
 {{- if include "elitea.callbackClientIssued" (dict "ctx" . "provider" "deepwiki") }}

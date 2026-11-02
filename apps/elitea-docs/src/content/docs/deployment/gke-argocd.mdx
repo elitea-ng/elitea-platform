@@ -31,14 +31,14 @@ The chart creates none of these. Each one fails the first sync, or a pod soon af
 | Precondition | What it must be | Commands |
 |---|---|---|
 | GKE cluster | Dataplane V2, Workload Identity Federation, private nodes, Cloud NAT | [The cluster](#the-cluster) |
-| cert-manager | installed, with the `elitea-internal-ca` and `elitea-runtime-ca` Issuers in the `elitea` namespace | [cert-manager](#cert-manager) |
+| cert-manager | installed; the chart makes the `elitea-internal-ca` and `elitea-runtime-ca` Issuers (`certManager.issuers.create: true` in `values-gke.yaml`) | [cert-manager](#cert-manager) |
 | Cloud SQL | PostgreSQL 16+, private IP, "Allow only SSL connections", role and two databases created by hand | [Cloud SQL](#cloud-sql) |
 | GCS bucket and service accounts | a dedicated bucket, the `elitea-main` service account with `roles/storage.admin` on that bucket only | [GCS and service accounts](#gcs-and-service-accounts) |
 | DNS and TLS | a global static IP, a DNS record for it, a cert-manager issuer for the public certificate | [Edge](#edge-ip-dns-tls-and-an-optional-proxy) |
 | External Secrets Operator | installed, with a `ClusterSecretStore` on Secret Manager | [Secrets](#external-secrets-operator) |
 | Argo CD | installed, with the chart registry registered | [Argo CD](#argo-cd) |
-| KEDA | installed once for the cluster (or `keda.enabled: true` in a cluster that has none) | [Autoscaling](#autoscaling) |
-| Capacity | about 4 vCPU and 10 GiB of requests for the release | [Budget](#resource-budget) |
+| KEDA | installed once for the cluster (or `keda.enabled: true` in a cluster that has none). Without it the worker scales on CPU | [Autoscaling](#autoscaling) |
+| Capacity | about 4 vCPU and 10 GiB of requests for the release; no container requests less than 50m CPU (the GKE Autopilot minimum) | [Budget](#resource-budget) |
 
 The commands use these names. Change them consistently:
 
@@ -62,10 +62,12 @@ gcloud compute routers nats create elitea-nat --router elitea-nat-router \
 
 ### cert-manager
 
-Install cert-manager cluster-wide. The NATS CA, every NATS identity, the LLM gateway's, DeepWiki's and Inventory's mTLS hops, elitea-vector, Qdrant's TLS and the providers' callback client certificates are cert-manager `Certificate`s; you mint none of them by hand. Then create the namespace and the two Issuers the values name, exactly as in [Deploy from scratch, Step 1](/deployment/from-scratch#step-1-namespace-and-certificate-authorities):
+Install cert-manager cluster-wide. The NATS CA, every NATS identity, the LLM gateway's, DeepWiki's and Inventory's mTLS hops, elitea-vector, Qdrant's TLS and the providers' callback client certificates are cert-manager `Certificate`s; you mint none of them by hand. `values-gke.yaml` sets `certManager.issuers.create: true`, so the chart also makes the two namespaced Issuers that every mTLS block names (`certManager.issuers.internal` and `.runtime`), in wave `-15`:
 
-- `elitea-internal-ca`: self-signed by cert-manager; nothing leaves the cluster. It issues the gateway, DeepWiki and Inventory hops.
-- `elitea-runtime-ca`: a CA Issuer backed by the Secret `elitea-runtime-ca`. It issues elitea-vector's pair, Qdrant's `elitea-qdrant-tls` and the `elitea-deepwiki-callback-client` / `elitea-inventory-callback-client` certificates. On this path that Secret comes from Secret Manager (below), so the Issuer turns Ready on the first sync.
+- `elitea-internal-ca`: a self-signed Issuer, a CA `Certificate` (ECDSA P-256, five years) and the `elitea-internal-ca` Issuer over it; nothing leaves the cluster. It issues the gateway, DeepWiki and Inventory hops.
+- `elitea-runtime-ca`: a CA Issuer over the **existing** Secret `elitea-runtime-ca` (`certManager.issuers.runtime.caSecretName`). It issues elitea-vector's pair, Qdrant's `elitea-qdrant-tls` and the `elitea-deepwiki-callback-client` / `elitea-inventory-callback-client` certificates. The chart never generates this CA: the worker certificate and the runtime listeners in Secret Manager are signed by it. With `create: true` the chart lists the Secret as an ExternalSecret (`runtime-ca.crt` and `runtime-ca.key`), so the Issuer turns Ready on the first sync.
+
+Already made the two Issuers by hand, as in [Deploy from scratch, Step 1](/deployment/from-scratch#step-1-namespace-and-certificate-authorities)? Set `certManager.issuers.create: false`, and set `certManager.issuers.internal.kind` and `.runtime.kind` to `Issuer`. A block's own `issuerRef` still wins over the shared setting.
 
 The NATS CA is the chart's own (`elitea-nats-ca`, wave `-10`); you create nothing for it. A cert-manager **Cluster**Issuer for the public certificate (ACME, or the origin CA issuer of a proxy in front) is the third thing cert-manager needs; see [Edge](#edge-ip-dns-tls-and-an-optional-proxy).
 
@@ -82,11 +84,11 @@ gcloud sql instances create elitea-pg --database-version POSTGRES_16 \
 
 `values-gke.yaml` sizes for this tier: 4 vCPU and 16 GB, where Cloud SQL sets `max_connections` to **500** from the memory size (`postgresql.maxConnections: 500`). The chart adds up every component at its replica ceiling (elitea-main, the gateway, the scheduler, DeepWiki, Inventory and the worker's agent state: 359) and refuses a release that does not fit in 500 minus the 25 it reserves. If you set `--database-flags max_connections=…` yourself, state the same number in `postgresql.maxConnections`. [Scaling](/deployment/scaling#the-postgresql-connection-budget) has the formula.
 
-Cloud SQL has no superuser, so prepare the role and both databases once by hand. The password is the `db-password` that the mint script in the first of the [steps](#steps) writes:
+Cloud SQL has no superuser, so prepare the role and both databases once by hand. Choose the role's password; it goes into both DSNs in the first of the [steps](#steps):
 
 ```bash
 gcloud sql users create elitea_v2 --instance elitea-pg \
-  --password "$(cat elitea-material/db-password)"
+  --password '<password>'
 ```
 
 Then, connected as `postgres`:
@@ -167,7 +169,9 @@ gcloud compute security-policies rules update 2147483647 \
   --security-policy elitea-proxy-only --action deny-403
 ```
 
-A rule takes a limited number of ranges, so split a long list across several rules. Then set `main.ingress.gke.backendConfig.securityPolicy: elitea-proxy-only`. Add the proxy's ranges to `ELITEA_TRUSTED_PROXY_CIDRS` only if elitea-main should take the client address from the proxy's forwarding header.
+A rule takes a limited number of ranges, so split a long list across several rules. Then set `main.ingress.gke.backendConfig.securityPolicy: elitea-proxy-only`. Add the proxy's ranges to `global.trustedProxyCidrs` only if elitea-main should take the client address from the proxy's forwarding header. That one list fills both `main.env.ELITEA_TRUSTED_PROXY_CIDRS` and the authentication document's `trusted_proxy_cidrs`.
+
+The Service names are fixed (`elitea-main`, `elitea-llm-gateway`, and so on), not prefixed with the release name. This is by design: certificate SANs, the gateway's own origins and the NetworkPolicies name them. Install one release in a namespace.
 
 ### External Secrets Operator
 
@@ -202,6 +206,7 @@ Argo CD renders the chart with the Helm 3 it bundles, and the chart supports tha
   ```
 
 - **KEDA in this release.** Set `keda.enabled: true` and `scaling.keda.clusterInstalled: false`, only in a cluster with no KEDA: it is one per cluster. Add KEDA's three pods to the resource budget. On the first sync the ScaledObjects come after the CRDs (each carries `SkipDryRunOnMissingResource=true`).
+- **No KEDA.** Set `scaling.keda.clusterInstalled: false`. The worker (`worker.autoscaling.source: auto`) then scales on CPU with a HorizontalPodAutoscaler, and the release notes (`helm get notes elitea -n elitea`) say so. A component that has no CPU fallback keeps its fixed replica count.
 
 With a Prometheus in the cluster, set `scaling.prometheus.serverAddress` and both the gateway and DeepWiki move to their Prometheus triggers, on concurrent `/llm` streams and on running invocations. [Scaling](/deployment/scaling) has what each component scales on, the disruption budgets and the grace periods.
 
@@ -211,70 +216,52 @@ With a Prometheus in the cluster, set `scaling.prometheus.serverAddress` and bot
 
 | State | CPU requests | Memory requests |
 |---|---|---|
-| Steady state | 3670m | 8704Mi |
-| Peak during a rollout (the largest single surge) | 3920m | 9856Mi |
+| Steady state | 3700m | 8768Mi |
+| Peak during a rollout (the largest single surge) | 3950m | 9920Mi |
 
-The worker is the largest pod (1.5 vCPU, 3 GiB). It does not surge: `values-gke.yaml` sets `worker.rollingUpdate` and `main.rollingUpdate` to `maxSurge: 0, maxUnavailable: 1`. The old pod stops before the new one starts. Commands wait in JetStream for the minute the new worker takes to start, and one of the two elitea-main replicas keeps serving. With a surging worker the peak would be 5.2 vCPU / 11.5 GiB. Hook Jobs run for seconds and are not counted. At elitea-main's autoscaler maximum of 3, the steady state is 4070m / 9472Mi; scaling out under load uses the cluster's headroom above the reservation. To win back 450m / 1.5 GiB, leave DeepWiki or Inventory off (`enabled: false`). Qdrant also needs a 50Gi PersistentVolumeClaim (`standard-rwo`).
+The worker is the largest pod (1.4 vCPU, 3 GiB). It does not surge: `values-gke.yaml` sets `worker.rollingUpdate` and `main.rollingUpdate` to `maxSurge: 0, maxUnavailable: 1`. The old pod stops before the new one starts. Commands wait in JetStream for the minute the new worker takes to start, and one of the two elitea-main replicas keeps serving. With a surging worker the peak would be 5.1 vCPU / 11.5 GiB. Hook Jobs run for seconds and are not counted. At elitea-main's autoscaler maximum of 3, the steady state is 4100m / 9472Mi; scaling out under load uses the cluster's headroom above the reservation. To win back 450m / 1.5 GiB, leave DeepWiki or Inventory off (`enabled: false`). Qdrant also needs a 50Gi PersistentVolumeClaim (`standard-rwo`). Every container requests at least 50m CPU, the GKE Autopilot minimum, so Autopilot does not raise a request behind the budget.
 
 ## Steps
 
 <Steps>
 <Step title="Mint the material and put it into Secret Manager">
-Run the mint script of [Deploy from scratch, Step 4](/deployment/from-scratch#step-4-mint-the-secrets) with `DB_HOST` set to the Cloud SQL private IP. It writes every generated value into `./elitea-material`, and both DSNs with `sslmode=require`.
-
-A Secret Manager property is a JSON string, so two keys the script writes as raw bytes are rewritten as text of a length the platform accepts. Add the gateway's hop-detection secret, then build one JSON object whose property names are the Kubernetes Secret and the key joined by `/`, for example `elitea-main-sso/oidc-client-secret`:
+Run [`deploy/scripts/mint-secrets.sh`](https://github.com/elitea-ng/elitea-platform/blob/main/deploy/scripts/mint-secrets.sh) from the chart's source at your release tag. It needs `openssl` and `python3` with `cryptography`, no cluster and no network. It writes **one flat JSON object**: each property is the Kubernetes Secret and the key joined by `/` (for example `elitea-main-sso/application-secret-key`), plus one property for each value that several Secrets carry (`runtime-ca.crt`, `runtime-ca.key`, `command-signing-keyring.json`, `gateway-identity-secret`). `values-gke.yaml` reads those shared properties (`externalSecrets.sharedProperties: true`).
 
 ```bash
-cd elitea-material
-openssl rand -base64 32 | tr -d '\n' > auth-attempt-key         # 44 bytes: 32 to 64 accepted
-openssl rand -base64 24 | tr -d '\n' > worker-output-spool-key  # exactly 32 bytes
-openssl rand -base64 32 | tr -d '\n=' > gateway-hop-secret
-printf '%s' '<client secret from your IdP>' > oidc-client-secret
-
-p() { jq -n --arg k "$1" --rawfile v "$2" '{($k): $v}'; }
-{
-  p elitea-llm-gateway-secrets/identity-secret         gateway-identity-secret
-  p elitea-llm-gateway-secrets/secrets-master-key      secrets-master-key
-  p elitea-llm-gateway-secrets/hop-secret              gateway-hop-secret
-  p elitea-main-llm-gateway-secrets/gateway-identity-secret gateway-identity-secret
-  p elitea-main-sso/application-secret-key             application-secret-key
-  p elitea-main-sso/oidc-client-secret                 oidc-client-secret
-  p elitea-main-auth-material/auth-attempt-key         auth-attempt-key
-  p elitea-main-auth-material/auth-pat-signing-key     auth-pat-signing-key
-  p elitea-main-auth-material/auth-form-users.json     auth-form-users.json
-  p elitea-qdrant-api/api-key                          qdrant-api-key
-  p elitea-deepwiki-secrets/identity-secret            deepwiki-identity-secret
-  p elitea-inventory-secrets/identity-secret           inventory-identity-secret
-  for f in runtime-ca.crt command-signing-key.pem command-signing-keyring.json \
-           control-server.crt control-server.key output-server.crt \
-           output-server.key content-server.crt content-server.key; do
-    p "elitea-runtime-material/$f" "$f"
-  done
-  for f in runtime-ca.crt agent-worker-client.crt agent-worker-client.key \
-           command-signing-keyring.json worker-output-spool-key \
-           agent-checkpoint-connection; do
-    p "elitea-worker-material/$f" "$f"
-  done
-  p elitea-runtime-ca/tls.crt runtime-ca.crt
-  p elitea-runtime-ca/tls.key runtime-ca.key
-} | jq -s add > elitea-platform.json
+PUBLIC_URL=https://elitea.example.com NAMESPACE=elitea \
+OIDC_CLIENT_SECRET='<client secret from your IdP>' \
+AGENT_CHECKPOINT_CONNECTION='postgresql://elitea_v2:<password>@<Cloud SQL IP>:5432/elitea_v2_agentstate?sslmode=require' \
+  deploy/scripts/mint-secrets.sh elitea-platform.json
 
 gcloud secrets create elitea-platform --data-file elitea-platform.json
-gcloud secrets create elitea-database-url --data-file database-url
+printf '%s' 'postgresql://elitea_v2:<password>@<Cloud SQL IP>:5432/elitea_v2?sslmode=require' \
+  | gcloud secrets create elitea-database-url --data-file -
 rm elitea-platform.json
 ```
 
-That is the whole inventory for the install on this page, every default on: 29 properties in `elitea-platform`, and the platform DSN alone in `elitea-database-url`, so a password rotation touches one secret. The `elitea-runtime-ca` pair is listed by the example values as an `extra` Secret, because no pod reads it; the `elitea-runtime-ca` Issuer does. Turning on an optional component (the cloud executor, say) adds Secrets, and turning a default off (`deepwiki.enabled: false`) removes its own; render the chart with your values and read the ExternalSecrets for the exact property list:
+The script prints the Form login it minted, the properties it could not know (the OIDC client secret and the DSNs, when you do not pass them), and the values that go into your values file (`global.publicUrl`, `main.runtime.signingKeyId`, the OIDC issuer and client id). The worker certificate carries `spiffe://<host of PUBLIC_URL>/ns/<NAMESPACE>/sa/agent-worker`: the identity the chart derives from `global.publicUrl` in the same namespace.
+
+<Warning title="Mint once">
+Every run mints **new** values, and the script does not write over an existing file. Uploading a new run over a live install rotates the vault master key (`secrets-master-key`: every stored credential becomes unreadable, for good), the PAT and attempt keys (every token and session ends), the runtime CA and the command-signing key. To add one value to a live install, add only that property.
+</Warning>
+
+Two keys the platform reads as raw bytes are minted as printable text, because a Secret Manager property is a string: `auth-attempt-key` is 43 base64 characters (32 to 64 bytes are accepted), and `worker-output-spool-key` is 32 alphanumeric characters (exactly 32 bytes; a 44-character base64 string is refused).
+
+That is the whole inventory for the install on this page, every default on: 25 properties in `elitea-platform`, and the platform DSN alone in `elitea-database-url`. Turning on an optional component (the cloud executor, say) adds Secrets, and turning a default off (`deepwiki.enabled: false`) removes its own; render the chart with your values and read the ExternalSecrets for the exact property list:
 
 ```bash
 helm template elitea oci://ghcr.io/elitea-ng/charts/elitea --version <version> \
   -f values-gke.yaml -f your-values.yaml | yq 'select(.kind == "ExternalSecret")'
 ```
 
-A missing property holds back its **whole** Kubernetes Secret: ESO syncs all keys of an ExternalSecret or none. Keep `elitea-material` out of git and somewhere safe; losing `secrets-master-key` makes every stored credential unreadable.
+A missing property holds back its **whole** Kubernetes Secret: ESO syncs all keys of an ExternalSecret or none. Keep no copy of the JSON in git; losing `secrets-master-key` makes every stored credential unreadable.
 </Step>
 <Step title="Write the values">
-Start from the chart's own `values-gke.yaml` and override only what is yours. The example Application, [`applications/elitea.yaml`](https://github.com/elitea-ng/elitea-platform/blob/main/deploy/argocd/examples/gke/applications/elitea.yaml), does exactly that: `valueFiles: [values-gke.yaml]` (the file ships inside the published chart) and a short `values` block with the store name, the hostnames, the Google service accounts, the bucket, the OIDC client and the gateway origins. Pin `targetRevision` to an exact chart version.
+Start from the chart's own `values-gke.yaml` and override only what is yours. The example Application, [`applications/elitea.yaml`](https://github.com/elitea-ng/elitea-platform/blob/main/deploy/argocd/examples/gke/applications/elitea.yaml), does exactly that: `valueFiles: [values-gke.yaml]` (the file ships inside the published chart, so it always matches `targetRevision`) and a short `values` block with the store name, `global.publicUrl`, `global.trustedProxyCidrs`, the Google service accounts, the bucket, the OIDC client and the egress allowlist. Pin `targetRevision` to an exact chart version.
+
+`global.publicUrl` fills each of these that you leave empty: the Ingress host and its TLS host, `DEPLOYMENT_URL`, `OIDC_REDIRECT_URI` (`<publicUrl>/auth/oidc/callback`, when `OIDC_ISSUER_URL` is set), the authentication document's `public_origin`, the gateway's `GATEWAY_SELF_LLM_ORIGINS` (`<publicUrl>/llm` and `http://elitea-main:8080/llm`), `worker.runtime.publicBaseUrl` and `worker.runtimeSession.expectedIdentity`. Set one only to override it. The chart refuses to render while any value still holds a `<...>` placeholder, and lists each by its path.
+
+To keep your own values file in your GitOps repository, use a multi-source Application: the OCI chart as one source, and your repository as a `ref: values` source. `valueFiles` then names `values-gke.yaml` (inside the chart, at the pinned version) and `$values/<path>/elitea.yaml`. Do not copy `values-gke.yaml`: a copy does not follow the chart's version. [GitOps with Argo CD](/deployment/argocd#layer-values-from-your-repository) has the manifest.
 
 Read `values-gke.yaml` once in full: it states the Cloud SQL, GCS, Ingress, NetworkPolicy, NATS and Qdrant settings this page relies on. It lets DeepWiki and Inventory clone from `github.com` only; restate `deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST` and `inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST` for your git hosts (the chart copies each to elitea-main). For three Qdrant nodes, add the chart's `values-qdrant-ha.yaml`.
 
@@ -291,6 +278,8 @@ helm template elitea ./elitea -n elitea -f elitea/values-gke.yaml \
 ```
 
 For three NATS nodes, add the chart's `values-nats-ha.yaml` after `values-gke.yaml`; it raises the bootstrap's replica count with it.
+
+The release notes (`helm get notes elitea -n elitea`, or the output of `helm install`) print the `gcloud` Workload Identity bindings for the Google service accounts your values name.
 </Step>
 <Step title="Apply the root Application">
 Copy `deploy/argocd/examples/gke/` into your GitOps repository, point `root.yaml` at it, and apply the root once:
@@ -309,7 +298,8 @@ Everything happens inside the one `elitea` Application, in this order:
 | `PreSync`, wave `-30` | the ExternalSecrets; Argo CD waits until each is Ready |
 | `PreSync` | the platform and agent-state migrations; a failed migration stops the sync |
 | `PreSync`, wave `10` | the workload-session Job (the worker's row in `elitea_runtime.workload_sessions`) |
-| wave `-10` | the NATS server, its CA, server and client certificates, and the `elitea-nats-bootstrap` Job, a `Sync` hook that creates every stream and KV bucket |
+| wave `-15` | the `certManager.issuers` CA chain and Issuers |
+| wave `-10` | the NATS server, its CA, server and client certificates, and the `elitea-nats-bootstrap` Job, a `Sync` hook that waits for NATS (up to 300 seconds, then the pod restarts in place, `restartPolicy: OnFailure`) and creates every stream and KV bucket |
 | wave `-5` | elitea-vector and Qdrant (the bundled qdrant chart) with its TLS Certificate |
 | wave `0` | elitea-main, elitea-web, the scheduler, the LLM gateway, DeepWiki, Inventory, the OTel collector, the Ingress, BackendConfig and FrontendConfig |
 | wave `1` | the agent worker |
@@ -348,11 +338,15 @@ Argo CD deletes the bootstrap Job when it succeeds, so `argocd app get` is where
 | Migrations fail with `permission denied to create database` or a missing database | the databases were not prepared by hand | run the three SQL statements of [Cloud SQL](#cloud-sql) |
 | `FATAL: sorry, too many clients already` | `postgresql.maxConnections` is above the instance's flag | set both to the same number; lower `main.autoscaling.maxReplicas` |
 | The bootstrap Job or the NATS pod stays Pending on a Secret | cert-manager has not issued the NATS certificates | `kubectl -n elitea get certificates,certificaterequests`; cert-manager must be running before the sync |
-| elitea-vector waits for its certificate | the `elitea-runtime-ca` Issuer is not Ready | its Secret comes from the `elitea-runtime-ca` ExternalSecret; check that one first |
+| elitea-vector waits for its certificate | the `elitea-runtime-ca` Issuer is not Ready | its Secret comes from the `elitea-runtime-ca` ExternalSecret (`runtime-ca.crt`, `runtime-ca.key`); check that one first |
+| A Certificate names an Issuer that does not exist (`issuer.cert-manager.io "elitea-internal-ca" not found`) | `certManager.issuers.create` is off and the Issuers were not made by hand, or a `kind` does not match what exists | set `create: true`, or make the Issuers and set `certManager.issuers.*.kind` |
+| The render fails with `these values still hold a <...> placeholder` | a value still holds a `<...>` from `values-gke.yaml` | replace each path the message lists |
+| elitea-main refuses the worker's runtime session | the worker certificate's URI SAN differs from `worker.runtimeSession.expectedIdentity` | mint the certificate for `spiffe://<host>/ns/<namespace>/sa/agent-worker`, or set `expectedIdentity` to the SAN it has |
+| No trace reaches a collector | `otelCollector.enabled` is off and no endpoint is set, so export is off (`OTEL_SDK_DISABLED=true`) | set `global.otelEndpoint`, or turn the collector on |
 | The public certificate is never issued | DNS does not point at the static IP yet, or the issuer named in `certManager` does not exist | `kubectl -n elitea describe certificate elitea-tls` |
 | elitea-main exits naming NATS or the presence bucket | the bootstrap Job has not succeeded | `argocd app get elitea`, then the Job's log |
 | Vertex AI calls fail with a permission error | the gateway's service account lacks `roles/aiplatform.user`, or `llmGateway.workloadIdentity` is off | grant the role; keep the annotation and the switch |
 
 [Deploy from scratch](/deployment/from-scratch#when-it-does-not-work) has the symptoms that are not specific to Google Cloud. [GitOps with ArgoCD](/deployment/argocd) covers promotion and rollback.
 
-{/* source: deploy/argocd/examples/gke/ (root.yaml, applications/elitea.yaml, bootstrap/); deploy/helm/elitea/values-gke.yaml (preconditions, budget, externalSecrets, postgresql, dbInit, objectInit, networkPolicies.main.ingressFrom, main.ingress.gke, llmGateway.workloadIdentity, sandboxRuntime); deploy/helm/elitea/values.yaml (externalSecrets modes and ordering, main.ingress certManager and gke, sandboxRuntime); deploy/helm/tests/render-external-secrets.sh, render-gke-ingress.sh, render-gke-budget.sh; deploy/helm/elitea/templates/externalSecrets/; services/elitea-main/pkg/ssewriter/keepalive.go (25-second keepalive); services/elitea-main/internal/authcomposition/config.go (attempt key 32 to 64 bytes); services/elitea-worker-rust/src/spool.rs (32-byte spool key); docs/UPGRADING.md (one chart, one edge route, GKE Ingress, Helm 4). The property list is the render of values-gke.yaml plus the example values. Google Cloud commands are product behaviour, not tested by this repository. */}
+{/* source: deploy/argocd/examples/gke/ (root.yaml, applications/elitea.yaml, bootstrap/); deploy/helm/elitea/values-gke.yaml (preconditions, budget, externalSecrets incl. sharedProperties, certManager.issuers, global, postgresql, dbInit, objectInit, networkPolicies.main.ingressFrom, main.ingress.gke, llmGateway.workloadIdentity, sandboxRuntime); deploy/scripts/mint-secrets.sh; deploy/helm/elitea/templates/_globals.tpl, templates/certManager/issuers.yaml, templates/NOTES.txt; deploy/helm/tests/render-shared-settings.sh; deploy/helm/elitea/values.yaml (externalSecrets modes and ordering, main.ingress certManager and gke, sandboxRuntime); deploy/helm/tests/render-external-secrets.sh, render-gke-ingress.sh, render-gke-budget.sh; deploy/helm/elitea/templates/externalSecrets/; services/elitea-main/pkg/ssewriter/keepalive.go (25-second keepalive); services/elitea-main/internal/authcomposition/config.go (attempt key 32 to 64 bytes); services/elitea-worker-rust/src/spool.rs (32-byte spool key); docs/UPGRADING.md (one chart, one edge route, GKE Ingress, Helm 4). The property list is the render of values-gke.yaml plus the example values. Google Cloud commands are product behaviour, not tested by this repository. */}

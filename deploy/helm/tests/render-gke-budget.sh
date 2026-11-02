@@ -37,11 +37,14 @@ cd "$(dirname "$0")/../../.."
 
 chart=deploy/helm/elitea
 values="$chart/values-gke.yaml"
+# values-gke.yaml holds <...> placeholders, and the chart refuses to render
+# while one is left (elitea.validatePlaceholders): add the operator values.
+fixture=deploy/helm/tests/fixtures/gke-operator-values.yaml
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 echo "== values-gke.yaml renders"
-if ! helm template elitea "$chart" --namespace elitea -f "$values" > "$work/gke.yaml" 2> "$work/err"; then
+if ! helm template elitea "$chart" --namespace elitea -f "$values" -f "$fixture" > "$work/gke.yaml" 2> "$work/err"; then
   cat "$work/err" >&2
   echo "FAIL: values-gke.yaml does not render" >&2
   exit 1
@@ -153,7 +156,7 @@ echo "== GCS guards"
 refuse() {
   local description="$1" fragment="$2" out
   shift 2
-  if out="$(helm template elitea "$chart" --namespace elitea -f "$values" "$@" 2>&1)"; then
+  if out="$(helm template elitea "$chart" --namespace elitea -f "$values" -f "$fixture" "$@" 2>&1)"; then
     echo "FAIL: $description: rendered, expected a refusal" >&2; exit 1
   elif ! grep -qF -- "$fragment" <<<"$out"; then
     echo "FAIL: $description: refused for the wrong reason: $(tail -1 <<<"$out")" >&2; exit 1
@@ -163,7 +166,7 @@ refuse() {
 refuse "gcs with no Google service account on the elitea-main KSA" "reach the bucket as the NODE's service account" \
   --set main.serviceAccount.annotations=null
 refuse "objectInit on gcs" "objectInit creates S3-compatible buckets only" --set objectInit.enabled=true
-if helm template elitea "$chart" --namespace elitea -f "$values" --set main.serviceAccount.annotations=null \
+if helm template elitea "$chart" --namespace elitea -f "$values" -f "$fixture" --set main.serviceAccount.annotations=null \
     --set main.env.GCS_ENDPOINT=http://gcs-emulator:4443 >/dev/null 2>&1; then
   echo "  an emulator (GCS_ENDPOINT) needs no Google service account"
 else

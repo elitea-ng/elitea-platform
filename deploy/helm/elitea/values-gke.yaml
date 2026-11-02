@@ -1,13 +1,23 @@
 # values-gke.yaml — an EXAMPLE values file for Google Kubernetes Engine: the
 # core platform (chat, agents, indexing) with no static cloud credential in the
-# cluster. Copy it, replace every <...> and every example.com, and install:
+# cluster. Layer your own values over it, replace every <...> and every
+# example.com, and install:
 #
-#   helm install elitea deploy/helm/elitea -n elitea -f values-gke.yaml
+#   helm install elitea deploy/helm/elitea -n elitea -f values-gke.yaml \
+#     -f my-values.yaml
+#
+# The chart refuses to render while a value still holds a <...> placeholder,
+# and lists each one by its path. With Argo CD, reference this file from the
+# upstream repository at the chart's tag (a multi-source Application) instead
+# of copying it: the chart README and the "Deploy on GKE with Argo CD" guide
+# show the layout.
 #
 # WHAT IT ASSUMES EXISTS FIRST (the operator's preconditions, like the
 # database — this chart creates none of them):
 #   * a GKE cluster with Workload Identity Federation and Dataplane V2;
-#   * cert-manager, with the elitea-internal-ca and elitea-runtime-ca Issuers;
+#   * cert-manager. The chart creates the two mTLS CA issuers itself
+#     (certManager.issuers.create below); the runtime CA's certificate and key
+#     come from Secret Manager with the other secrets;
 #   * the External Secrets Operator and a ClusterSecretStore for GCP Secret
 #     Manager (its controller authenticates through its own Workload Identity);
 #   * Cloud SQL for PostgreSQL 16+, private IP, "Allow only SSL connections",
@@ -30,10 +40,10 @@
 #
 #   component                    replicas   cpu each   mem each      cpu    mem
 #   elitea-main                         2     400m      768Mi       800m   1536Mi
-#   elitea-web                          2      10m       32Mi        20m     64Mi
+#   elitea-web                          2      50m       32Mi       100m     64Mi
 #   elitea-scheduler                    2      50m       64Mi       100m    128Mi
 #   elitea-llm-gateway                  1     250m      512Mi       250m    512Mi
-#   agent worker                        1    1500m        3Gi      1500m   3072Mi
+#   agent worker                        1    1400m        3Gi      1400m   3072Mi
 #   elitea-vector                       2     100m      128Mi       200m    256Mi
 #   Qdrant                              1     250m        1Gi       250m   1024Mi
 #   DeepWiki (host + engine)            1     200m     1152Mi       200m   1152Mi
@@ -41,16 +51,16 @@
 #   OTel collector                      1      50m      128Mi        50m    128Mi
 #   NATS server (JetStream)             1     200m      512Mi       200m    512Mi
 #   ─────────────────────────────────────────────────────────────────────────
-#   STEADY STATE                                                   3720m   8768Mi
-#                                                               (3.72 vCPU, 8.6 GiB)
+#   STEADY STATE                                                   3700m   8768Mi
+#                                                               (3.70 vCPU, 8.6 GiB)
 #
 #   + the largest rollout surge. elitea-main and the worker do NOT surge
 #     here (rollingUpdate maxSurge 0 / maxUnavailable 1): a surge worker
-#     alone (+1500m/+3Gi) would take the peak to 5.2 vCPU / 11.5 GiB.
+#     alone (+1400m/+3Gi) would take the peak to 5.1 vCPU / 11.5 GiB.
 #     The largest remaining surges are the gateway (+250m) and DeepWiki
 #     (+1152Mi), one Deployment at a time:
-#   = PEAK DURING A ROLLOUT, at most                               3970m   9920Mi
-#                                                               (3.97 vCPU, 9.7 GiB)
+#   = PEAK DURING A ROLLOUT, at most                               3950m   9920Mi
+#                                                               (3.95 vCPU, 9.7 GiB)
 #
 # Not counted, and why:
 #   * the hook Jobs (migrations, workload-session, nats-bootstrap at 50m/64Mi)
@@ -60,10 +70,10 @@
 #     the app containers, never the sum, and every init here is at or below
 #     its pod's app request;
 #   * elitea-main's autoscaler above minReplicas: at its maxReplicas of 3 the
-#     steady state is 4070m / 9472Mi, just past the CPU budget: scaling out
+#     steady state is 4100m / 9472Mi, just past the CPU budget: scaling out
 #     under load is what the headroom above the reservation is for;
 #   * PgBouncer (off: three main replicas fit Cloud SQL's connections, see
-#     postgresql below) — on, it adds 10m/32Mi;
+#     postgresql below) — on, it adds 50m/32Mi;
 #   * KEDA's own pods: it is the cluster's add-on (scaling below), not this
 #     release's, so its operator, metrics server and webhook (about 300m and
 #     300Mi of requests together) come out of the cluster's add-on capacity;
@@ -81,12 +91,40 @@
 platform:
   aiProjectId: "1"
 
+# ── One public URL, one proxy list ──────────────────────────────────────────
+# publicUrl fills DEPLOYMENT_URL, OIDC_REDIRECT_URI, the authentication
+# document's public_origin, GATEWAY_SELF_LLM_ORIGINS, the worker's
+# publicBaseUrl and expectedIdentity (spiffe://elitea.example.com/ns/<release
+# namespace>/sa/agent-worker, the ID deploy/scripts/mint-secrets.sh puts in the
+# worker certificate) and the Ingress host. trustedProxyCidrs fills
+# ELITEA_TRUSTED_PROXY_CIDRS and the document's trusted_proxy_cidrs: the pod
+# CIDR plus Google's load-balancer ranges. Any of those keys set below wins.
+global:
+  publicUrl: https://elitea.example.com
+  trustedProxyCidrs:
+    - "<pod CIDR>"
+    - 35.191.0.0/16
+    - 130.211.0.0/22
+
+# ── mTLS issuers ────────────────────────────────────────────────────────────
+# The chart creates both CA issuers, namespaced: a new internal CA, and a CA
+# Issuer over the runtime CA in Secret elitea-runtime-ca (its certificate and
+# key are the properties runtime-ca.crt and runtime-ca.key below). Every mTLS
+# block takes its issuer from here.
+certManager:
+  issuers:
+    create: true
+
 # ── Secrets: GCP Secret Manager through the External Secrets Operator ───────
 # One Secret Manager secret, `elitea-platform`, holding a flat JSON object
-# whose properties are "<Kubernetes Secret>/<key>". `helm template` this file
-# and read the ExternalSecrets for the exact property list. Large material
-# (runtime and worker certificates) can move to its own secret per Kubernetes
-# Secret with externalSecrets.secrets.<name>.remoteKey.
+# whose properties are "<Kubernetes Secret>/<key>", plus the four shared ones
+# (sharedProperties): runtime-ca.crt, runtime-ca.key,
+# command-signing-keyring.json and gateway-identity-secret, each written once.
+# deploy/scripts/mint-secrets.sh generates that JSON and lists the values you
+# add yourself. `helm template` this file and read the ExternalSecrets for the
+# exact property list. Large material (runtime and worker certificates) can
+# move to its own secret per Kubernetes Secret with
+# externalSecrets.secrets.<name>.remoteKey.
 externalSecrets:
   enabled: true
   secretStoreRef:
@@ -94,6 +132,7 @@ externalSecrets:
     kind: ClusterSecretStore
   refreshInterval: 1h
   remoteKey: elitea-platform
+  sharedProperties: true
   secrets:
     # The DSN in one Secret Manager secret of its own, rotated with the
     # database password and nothing else:
@@ -130,7 +169,7 @@ postgresql:
   #                                                                 292
   # against 500 - 25 reserved = 475: 183 to spare, which is four more
   # elitea-main replicas (44 each). The worker's ceiling of 4 is the node
-  # budget's choice (1500m each), not the database's.
+  # budget's choice (1400m each), not the database's.
   maxConnections: 500
   reservedConnections: 25
 
@@ -231,14 +270,11 @@ main:
       # A global static IP reserved beforehand (gcloud compute addresses
       # create elitea-ip --global); your DNS record points at it.
       kubernetes.io/ingress.global-static-ip-name: elitea-ip
-    hosts:
-      - elitea.example.com
+    # hosts: global.publicUrl's host.
     # cert-manager issues this Secret (main.ingress.certManager below adds
-    # the annotations); the load balancer serves it.
+    # the annotations); the load balancer serves it. Its hosts: the same.
     tls:
       - secretName: elitea-tls
-        hosts:
-          - elitea.example.com
     certManager:
       clusterIssuer: letsencrypt
     gke:
@@ -250,11 +286,9 @@ main:
       frontendConfig:
         sslPolicy: ""
 
+  # DEPLOYMENT_URL, OIDC_REDIRECT_URI and ELITEA_TRUSTED_PROXY_CIDRS come from
+  # `global` above.
   env:
-    DEPLOYMENT_URL: "https://elitea.example.com"
-    # The pod CIDR plus Google's load-balancer ranges.
-    ELITEA_TRUSTED_PROXY_CIDRS: "<pod CIDR>,35.191.0.0/16,130.211.0.0/22"
-
     ELITEA_CONFIGURATIONS_ENABLED: "true"
     ELITEA_PROJECT_INFO_ENABLED: "true"
     ELITEA_INDEX_TYPES_ENABLED: "true"
@@ -264,7 +298,6 @@ main:
 
     OIDC_ISSUER_URL: "https://accounts.google.com"
     OIDC_CLIENT_ID: "<client id>"
-    OIDC_REDIRECT_URI: "https://elitea.example.com/auth/oidc/callback"
     ELITEA_INITIAL_GLOBAL_ADMINS: "email:admin@example.com"
 
     STORAGE_BACKEND: "gcs"
@@ -299,13 +332,9 @@ main:
       material:
         mountPath: /run/elitea-auth
         secretName: elitea-main-auth-material
+      # public_origin and trusted_proxy_cidrs come from `global` above.
       document:
         schema_version: elitea.auth.form.v2
-        public_origin: https://elitea.example.com
-        trusted_proxy_cidrs:
-          - 10.0.0.0/8
-          - 35.191.0.0/16
-          - 130.211.0.0/22
         redirects:
           direct_access_denied: /app/
           main_access_denied: /auth/login
@@ -339,7 +368,7 @@ web:
   replicaCount: 2
   resources:
     requests:
-      cpu: 10m
+      cpu: 50m
       memory: 32Mi
     limits:
       cpu: 200m
@@ -376,28 +405,24 @@ llmGateway:
   workloadIdentity:
     enabled: true
   egressPosture: "allowlist"
+  # GATEWAY_SELF_LLM_ORIGINS comes from global.publicUrl.
   env:
-    GATEWAY_SELF_LLM_ORIGINS: >-
-      https://elitea.example.com/llm/v1,http://elitea-main:8080/llm/v1
     GATEWAY_EGRESS_ALLOWLIST: >-
       <region>-aiplatform.googleapis.com,aiplatform.googleapis.com
   mtls:
     enabled: true
-    issuerRef:
-      name: elitea-internal-ca
-      kind: Issuer
 
 worker:
   replicaCount: 1
   # The JetStream backlog, through the cluster's KEDA (scaling above). Four
-  # is the node budget's choice (1500m CPU each), not KEDA's or the
+  # is the node budget's choice (1400m CPU each), not KEDA's or the
   # database's (8 connections a replica, postgresql above).
   autoscaling:
     enabled: true
     minReplicas: 1
     maxReplicas: 4
   materialSecretName: elitea-worker-material
-  # Stop the old worker before the new one starts: a surge worker (1500m/3Gi)
+  # Stop the old worker before the new one starts: a surge worker (1400m/3Gi)
   # does not fit the budget. Commands wait in JetStream and PostgreSQL's
   # outbox for the minute the new one takes to start (see the header).
   rollingUpdate:
@@ -405,16 +430,15 @@ worker:
     maxUnavailable: 1
   resources:
     requests:
-      cpu: 1500m
+      cpu: 1400m
       memory: 3Gi
     limits:
       cpu: "4"
       memory: 8Gi
-  runtime:
-    publicBaseUrl: https://elitea.example.com
+  # runtime.publicBaseUrl and runtimeSession.expectedIdentity come from
+  # global.publicUrl.
   runtimeSession:
     enabled: true
-    expectedIdentity: "spiffe://elitea.example.com/ns/elitea/sa/worker"
 
 vector:
   replicaCount: 2
@@ -424,10 +448,6 @@ vector:
       memory: 128Mi
     limits:
       memory: 512Mi
-  mtls:
-    issuerRef:
-      name: elitea-runtime-ca
-      kind: Issuer
   mainClient:
     enabled: true
   collection:
@@ -435,7 +455,7 @@ vector:
 
 # The bundled Qdrant (the upstream qdrant chart): one node on a 50Gi
 # standard-rwo (Persistent Disk) volume, PVC qdrant-storage-elitea-vectordb-0.
-# Its certificate comes from vector.mtls.issuerRef above. HA: layer
+# Its certificate comes from the runtime CA issuer (certManager). HA: layer
 # values-qdrant-ha.yaml (three nodes, three volumes).
 qdrant:
   persistence:
@@ -450,7 +470,7 @@ qdrant:
 
 # DeepWiki and Inventory are on by default. Their git allowlists are this
 # install's (the chart copies each to elitea-main); their callback client
-# certificates come from the namespaced runtime-CA Issuer, like the vector
+# certificates come from the runtime CA issuer (certManager), like the vector
 # stack's. Sized down from values.yaml for a small cluster: the engines'
 # requests rise with the repositories they index.
 deepwiki:
@@ -462,11 +482,6 @@ deepwiki:
     enabled: true
     minReplicas: 1
     maxReplicas: 3
-  callbackClient:
-    certManager:
-      issuerRef:
-        name: elitea-runtime-ca
-        kind: Issuer
   resources:
     requests:
       cpu: 50m
@@ -484,11 +499,6 @@ deepwiki:
 inventory:
   env:
     ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,*.github.com"
-  callbackClient:
-    certManager:
-      issuerRef:
-        name: elitea-runtime-ca
-        kind: Issuer
   resources:
     requests:
       cpu: 50m

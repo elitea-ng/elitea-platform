@@ -1,8 +1,57 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$comment": "Deliberately minimal: values.yaml and templates/guards.yaml are the contract. This file exists for the one check a template cannot make. `nats` is the bundled upstream nats chart's values, whose templates run before this chart's guards, so a values file that still sets the old client key `nats.service` (a string; it moved to natsClient.service) would fail inside the upstream chart with an error that names neither key. Schema validation runs before any template.",
+  "$comment": "Deliberately minimal: values.yaml and templates/guards.yaml are the contract. This file exists for the checks a template cannot make, or makes too late. `nats` is the bundled upstream nats chart's values, whose templates run before this chart's guards, so a values file that still sets the old client key `nats.service` (a string; it moved to natsClient.service) would fail inside the upstream chart with an error that names neither key. `global` is handed to every subchart, so its keys are typed here before any template reads them. Schema validation runs before any template.",
   "type": "object",
   "properties": {
+    "global": {
+      "type": "object",
+      "properties": {
+        "publicUrl": {
+          "description": "The origin browsers open, e.g. https://elitea.example.com. Fills DEPLOYMENT_URL, OIDC_REDIRECT_URI, the authentication document's public_origin, GATEWAY_SELF_LLM_ORIGINS, worker.runtime.publicBaseUrl, worker.runtimeSession.expectedIdentity and the Ingress host where each is empty (#1460).",
+          "type": "string",
+          "pattern": "^(|https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]+)?/?)$"
+        },
+        "trustedProxyCidrs": {
+          "description": "The proxies whose X-Forwarded-For elitea-main believes. Fills main.env.ELITEA_TRUSTED_PROXY_CIDRS and the authentication document's trusted_proxy_cidrs where each is empty.",
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "otelEndpoint": {
+          "description": "An OTLP/HTTP collector outside this chart; every component's default OTEL_EXPORTER_OTLP_ENDPOINT.",
+          "type": "string"
+        }
+      }
+    },
+    "certManager": {
+      "type": "object",
+      "properties": {
+        "issuers": {
+          "type": "object",
+          "properties": {
+            "create": {
+              "description": "true: the chart renders the internal CA chain and a runtime CA Issuer over runtime.caSecretName, namespaced.",
+              "type": "boolean"
+            },
+            "internal": {"$ref": "#/definitions/issuer"},
+            "runtime": {
+              "allOf": [
+                {"$ref": "#/definitions/issuer"},
+                {"properties": {"caSecretName": {"type": "string"}}}
+              ]
+            }
+          }
+        }
+      }
+    },
+    "externalSecrets": {
+      "type": "object",
+      "properties": {
+        "sharedProperties": {
+          "description": "Mode 3 only: read a value that several Secrets carry from one flat property (runtime-ca.crt, runtime-ca.key, command-signing-keyring.json, gateway-identity-secret).",
+          "type": "boolean"
+        }
+      }
+    },
     "nats": {
       "type": "object",
       "properties": {
@@ -10,6 +59,21 @@
           "description": "The bundled NATS server's Service settings (upstream nats chart). The NATS client's service NAME moved to natsClient.service; see docs/UPGRADING.md, 'One chart: NATS bundled'.",
           "type": "object"
         }
+      }
+    }
+  },
+  "definitions": {
+    "issuer": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "kind": {
+          "description": "Issuer or ClusterIssuer. Empty: Issuer with certManager.issuers.create, ClusterIssuer without.",
+          "type": "string",
+          "enum": ["", "Issuer", "ClusterIssuer"]
+        },
+        "duration": {"type": "string"},
+        "renewBefore": {"type": "string"}
       }
     }
   }

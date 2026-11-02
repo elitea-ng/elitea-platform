@@ -12,7 +12,7 @@ This walks a Kubernetes install of the `elitea` chart end to end. It is one char
   <Card title="PostgreSQL" icon="database">Reachable, with an administrator DSN available for the database-preparation Job (`CREATE DATABASE`). No extension is needed: vectors are kept in Qdrant through elitea-vector (`vector.enabled`), not in PostgreSQL.</Card>
   <Card title="NATS JetStream" icon="server">Bundled: the chart runs it (`nats.enabled`, on by default) and creates its streams with a hook Job (`natsBootstrap`). The platform needs no Redis: the runtime command bus, live updates and presence are on NATS, and the chart refuses values that still set `runtimeRedis`.</Card>
   <Card title="Object storage" icon="package">An S3-compatible bucket, created ahead of the first sync and named by `main.env.STORAGE_CONTAINER`.</Card>
-  <Card title="cert-manager" icon="shield-check">Required. The bundled NATS CA, the NATS client identities and the LLM gateway's mTLS hop (on by default) are all cert-manager `Certificate`s. The gateway's issuer (`llmGateway.mtls.issuerRef`, default `ClusterIssuer elitea-internal-ca`) is yours to create.</Card>
+  <Card title="cert-manager" icon="shield-check">Required. The bundled NATS CA, the NATS client identities and the LLM gateway's mTLS hop (on by default) are all cert-manager `Certificate`s. The mTLS issuers default to `ClusterIssuer`s `elitea-internal-ca` and `elitea-runtime-ca` (`certManager.issuers`), yours to create; or set `certManager.issuers.create: true` and the chart makes them, namespaced, over your runtime CA Secret.</Card>
 </CardGroup>
 
 ## Secrets to create beforehand
@@ -45,8 +45,10 @@ The chart **refuses to render** while either of these is empty — there is no s
 
 | Setting | What it is |
 |---|---|
-| `llmGateway.env.GATEWAY_SELF_LLM_ORIGINS` | Every origin that reaches this deployment's `/llm` surface, public and in-cluster, comma-separated — e.g. `https://elitea.example.com/llm/v1,http://elitea-main:8080/llm/v1`. |
+| `llmGateway.env.GATEWAY_SELF_LLM_ORIGINS` | Every origin that reaches this deployment's `/llm` surface, public and in-cluster, comma-separated — e.g. `https://elitea.example.com/llm,http://elitea-main:8080/llm`. `global.publicUrl` fills exactly that when this is empty. |
 | `llmGateway.egressPosture` | `"allowlist"` (only hosts in `GATEWAY_EGRESS_ALLOWLIST` / governance rows) or `"public-unrestricted"` (any public host, until the first governance row narrows it). Private-network reachability follows only from an entry that explicitly names a private address or block — never from the posture alone. |
+
+One value fills most of the URL-shaped settings: `global.publicUrl` (for example `https://elitea.example.com`) fills `DEPLOYMENT_URL`, the OIDC redirect URI, the authentication document's `public_origin`, the gateway's self origins, the worker's base URL and SPIFFE ID and the Ingress host, where each is empty. `global.trustedProxyCidrs` fills both trusted-proxy lists. See [Configuration](/deployment/configuration#release-wide-settings). The chart also refuses a value that still holds a `<...>` placeholder of an example file, and lists every such path.
 
 Also required: `platform.aiProjectId`, the id of the platform's public/shared project — it must name a project schema (`p_<id>`) that already exists. It fills `main.env.ELITEA_AI_PROJECT_ID`, `llmGateway.env.ELITEA_AI_PROJECT_ID` and `web.env.VITE_PUBLIC_PROJECT_ID` at once; `helm template` refuses a values file where the three copies disagree.
 
