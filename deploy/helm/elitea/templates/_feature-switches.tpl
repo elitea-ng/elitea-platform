@@ -262,7 +262,6 @@ spec:
     encoding: PKCS8
     rotationPolicy: Always
   issuerRef:
-    name: {{ $cm.issuerRef.name }}
-    kind: {{ $cm.issuerRef.kind }}
+    {{- include "elitea.issuerRef" (dict "ctx" .ctx "ref" $cm.issuerRef "ca" "runtime") | nindent 4 }}
     group: cert-manager.io
 {{- end }}

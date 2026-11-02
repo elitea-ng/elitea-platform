@@ -35,7 +35,13 @@ spec:
       labels:
         {{- include "nats-bootstrap.labels" . | nindent 8 }}
     spec:
-      restartPolicy: Never
+      # OnFailure, not Never (#1460): bootstrap.sh waits up to connectWait for
+      # the server, but a server that answers and then restarts (a first
+      # start, a certificate reload) can still fail one run. The kubelet then
+      # restarts the container IN the same pod, and the Job does not leave a
+      # failed pod behind that reads as a failed deploy. The script is
+      # idempotent, and backoffLimit counts these restarts.
+      restartPolicy: OnFailure
       containers:
         - name: nats-bootstrap
           image: "{{ .Values.natsBootstrap.image.repository }}:{{ .Values.natsBootstrap.image.tag }}"

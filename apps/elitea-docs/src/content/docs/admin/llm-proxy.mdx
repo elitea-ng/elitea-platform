@@ -31,6 +31,32 @@ Normally an AI provider credential belongs to one project. **Providers & models*
 A row imported from an older deployment can still hold its key as plain text rather than sealed in the vault. The panel flags this as `sealed: false` without ever displaying the value; re-saving the credential through this screen seals it.
 </Warning>
 
+### When the egress allowlist refuses a provider
+
+The gateway calls a provider host only when the egress allowlist permits it. **Test connection** then fails with a message that names the refused host, for example:
+
+```text
+The LLM gateway refused the host europe-west4-aiplatform.googleapis.com because it is not on the egress allowlist. An administrator can add it in the admin console: open LLM Governance, select New entry and the type "Egress allowlist". The deployment-wide floor is the GATEWAY_EGRESS_ALLOWLIST setting of the LLM gateway.
+```
+
+The model test in the model form shows the same text after `Connection failed:`. A refused listing of the credential's models names the host too. The host is the host of the credential's `api_base`, or the regional endpoint that the region or location selects. The message has no scheme, path, user info or query.
+
+To permit the host:
+
+1. **Add a governance entry.** In the admin console, open **LLM Governance**, select **New entry**, and set the type to **Egress allowlist**. Put the host in **Permitted destinations**. The gateway reads the entry within its refresh interval (30 seconds by default). You do not need a deployment change or a restart.
+2. **Or extend the floor.** `GATEWAY_EGRESS_ALLOWLIST` on the LLM gateway is the deployment-wide floor that the chart sets. Change it only for hosts that every deployment of this configuration needs. A change needs a new rollout of the gateway.
+
+The gateway enforces the union of the two lists. A governance entry can only add a host; it cannot remove a host that `GATEWAY_EGRESS_ALLOWLIST` names.
+
+Cloud providers whose endpoint follows from a region need the regional host:
+
+- **Vertex AI**: `<location>-aiplatform.googleapis.com` (for example `europe-west4-aiplatform.googleapis.com`), or `aiplatform.googleapis.com` for the `global` location, and the token endpoint `oauth2.googleapis.com` (or the `token_uri` host of the service-account key). A `*.googleapis.com` entry covers all of them.
+- **Amazon Bedrock**: `bedrock.<region>.amazonaws.com` for the credential's **Test connection**, and `bedrock-runtime.<region>.amazonaws.com` for the model test and for model calls.
+
+A private address (RFC 1918 or loopback) is reachable only when an entry names that address or its block, for example `10.0.5.20:8000` or `10.0.5.0/24`. A host name alone does not open a private address. See [Egress allowlists](/deployment/configuration#egress-allowlists).
+
+A model call at run time that the allowlist refuses also fails, but its error does not name the host, because the caller is not always the author of the credential. The gateway log records the refusal with the reason `EGRESS_HOST_NOT_ALLOWED` and the credential's `config_id`. Use **Test connection** to see the host.
+
 ### Keyless credentials (workload identity)
 
 On GKE, a platform provider of type **Vertex AI** or **EPAM DIAL** can hold no key. The gateway then signs in with the Google identity of its own pod (GKE Workload Identity).

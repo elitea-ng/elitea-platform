@@ -188,9 +188,9 @@ func TestALinkedSubjectOnASuspendedAccountIsRefused(t *testing.T) {
 // address must not hand it over.
 func TestANewSubjectCannotJoinAnAccountBoundToAnotherSubject(t *testing.T) {
 	tx := &scriptedTx{rows: []scriptedRow{
-		{err: pgx.ErrNoRows},         // no link for this subject
-		{err: pgx.ErrNoRows},         // the email upsert refuses the bound row
-		{values: []any{false, true}}, // not suspended, already bound
+		{err: pgx.ErrNoRows},                       // no link for this subject
+		{err: pgx.ErrNoRows},                       // the email upsert refuses the bound row
+		{values: []any{false, true, false, false}}, // not suspended, an OIDC subject holds it
 	}}
 
 	_, err := resolveProvisionedUser(
@@ -265,7 +265,7 @@ func TestANewSubjectOnASuspendedAddressIsReportedAsSuspended(t *testing.T) {
 	tx := &scriptedTx{rows: []scriptedRow{
 		{err: pgx.ErrNoRows},
 		{err: pgx.ErrNoRows},
-		{values: []any{true}}, // suspended
+		{values: []any{true, false, false, false}}, // suspended
 	}}
 
 	if _, err := resolveProvisionedUser(

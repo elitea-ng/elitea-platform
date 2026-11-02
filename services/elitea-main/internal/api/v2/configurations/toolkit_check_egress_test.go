@@ -8,7 +8,10 @@ package configurations_test
 // case depends on real DNS.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -57,49 +60,166 @@ func jiraProbe(checker handler.ToolkitConnectionChecker, baseURL string) handler
 	})
 }
 
-// egressRefusal is the answer for a host the configuration does not permit.
-func egressRefusal(t *testing.T) handler.ToolkitCheckOutcome {
+// hostRefusal is the answer for host when the allowlist does not name it. It
+// is the ONE answer every egress refusal of that host gets, whatever rule
+// refused it: the tests compare outcomes to it whole.
+func hostRefusal(t *testing.T, host string) handler.ToolkitCheckOutcome {
 	t.Helper()
-	outcome := jiraProbe(handler.NewToolkitConnectionChecker("only.example"), "https://elsewhere.example")
+	outcome := jiraProbe(handler.NewToolkitConnectionChecker("only.example"), "https://"+host)
 	if outcome.Reason != handler.ToolkitCheckReasonUnreachable || outcome.Message == "" {
 		t.Fatalf("baseline refusal = %+v", outcome)
+	}
+	if !strings.Contains(outcome.Message, host) ||
+		!strings.Contains(outcome.Message, handler.ToolkitCheckAllowlistEnv) {
+		t.Fatalf("baseline refusal %q must name the host and %s", outcome.Message, handler.ToolkitCheckAllowlistEnv)
 	}
 	return outcome
 }
 
+// egressRefusalLog is one "toolkit_check: egress refused the destination"
+// record: the operator half of a refusal, which the tenant never sees.
+type egressRefusalLog struct {
+	Reason    string `json:"reason"`
+	Host      string `json:"host"`
+	Addresses string `json:"addresses"`
+	Remedy    string `json:"remedy"`
+}
+
+// captureEgressRefusalLogs routes slog to a buffer for the rest of the test
+// and returns a function that reads the refusal records written so far. The
+// test must not run in parallel: slog's default logger is global.
+func captureEgressRefusalLogs(t *testing.T) func() []egressRefusalLog {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return func() []egressRefusalLog {
+		var records []egressRefusalLog
+		for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+			var record struct {
+				Msg string `json:"msg"`
+				egressRefusalLog
+			}
+			if json.Unmarshal([]byte(line), &record) == nil && record.Msg == "toolkit_check: egress refused the destination" {
+				records = append(records, record.egressRefusalLog)
+			}
+		}
+		buf.Reset()
+		return records
+	}
+}
+
+// lastRefusalLog returns the one refusal record of the last probe.
+func lastRefusalLog(t *testing.T, read func() []egressRefusalLog) egressRefusalLog {
+	t.Helper()
+	records := read()
+	if len(records) != 1 {
+		t.Fatalf("refusal log records = %+v, want exactly one", records)
+	}
+	return records[0]
+}
+
+// The tenant gets ONE answer for every egress refusal of a host: off the
+// list, unresolvable, resolving to an allowlistable private address, or to an
+// address class that is never dialled. Only the operator log tells them
+// apart, so Test connection is no DNS or SSRF oracle for a credential author.
+func TestToolkitCheckEgressRefusalIsOneAnswer(t *testing.T) {
+	read := captureEgressRefusalLogs(t)
+	want := hostRefusal(t, "provider.example")
+	if got := lastRefusalLog(t, read); got.Reason != "host_not_allowlisted" ||
+		!strings.Contains(got.Remedy, "add the host to "+handler.ToolkitCheckAllowlistEnv) {
+		t.Fatalf("host-off-the-list log = %+v", got)
+	}
+	for _, leak := range []string{"10.0.0.5", "169.254", "private", "metadata", "CIDR", "resolve"} {
+		if strings.Contains(want.Message, leak) {
+			t.Fatalf("the tenant answer %q says %q", want.Message, leak)
+		}
+	}
+
+	for _, tc := range []struct {
+		name, allowlist string
+		resolver        toolkitCheckResolver
+		reason          string
+		addresses       string
+		remedy          string
+	}{
+		{"private address, allowlistable", "provider.example",
+			toolkitCheckResolver{"provider.example": "10.0.0.5"},
+			"address_refused", "10.0.0.5 (private)", "add the address or its range (CIDR)"},
+		{"metadata, never reachable", "provider.example, 0.0.0.0/0",
+			toolkitCheckResolver{"provider.example": "169.254.169.254"},
+			"address_refused", "169.254.169.254 (forbidden)", "no allowlist entry permits it"},
+		{"unresolvable", "provider.example",
+			toolkitCheckResolver{},
+			"destination_refused", "", "did not resolve"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checker := handler.NewToolkitConnectionChecker(tc.allowlist, egress.WithResolver(tc.resolver))
+			if got := jiraProbe(checker, "https://provider.example"); got != want {
+				t.Fatalf("outcome = %+v, want the same answer as a host off the list %+v", got, want)
+			}
+			got := lastRefusalLog(t, read)
+			if got.Reason != tc.reason || got.Host != "provider.example" || got.Addresses != tc.addresses ||
+				!strings.Contains(got.Remedy, tc.remedy) {
+				t.Fatalf("log = %+v, want reason %q, addresses %q and a remedy with %q", got, tc.reason, tc.addresses, tc.remedy)
+			}
+		})
+	}
+}
+
+// An IPv6 host is named as an allowlist entry or a URL writes it, in
+// brackets: url.URL.Hostname drops them, and egressSubject puts them back.
+func TestToolkitCheckRefusalBracketsAnIPv6Host(t *testing.T) {
+	outcome := jiraProbe(handler.NewToolkitConnectionChecker("only.example"), "https://[fd12::7]:8443")
+	if !strings.HasPrefix(outcome.Message, "The host [fd12::7] is refused") {
+		t.Fatalf("message = %q, want the IPv6 host in brackets", outcome.Message)
+	}
+}
+
 // Every blocked class, as the address an allowlisted NAME resolves to, is
 // refused before any connection: with no private entry, and for the classes
-// that stay forbidden, even with private ranges named.
+// that stay forbidden, even with private ranges named. The tenant answer is
+// the one a host off the list gets. The operator log says which: a private
+// address that an entry naming its range would permit, or a class that no
+// entry permits (never suggesting the allowlist for it).
 func TestToolkitCheckRefusesEveryBlockedAddressClass(t *testing.T) {
-	refusal := egressRefusal(t)
+	read := captureEgressRefusalLogs(t)
+	refusal := hostRefusal(t, "provider.example")
+	read()
+	const (
+		allowlistable = "add the address or its range (CIDR)"
+		never         = "no allowlist entry permits it"
+	)
 	cases := []struct {
 		ip      string
 		entries string // beyond the host name
+		remedy  string
 	}{
-		{"127.0.0.1", ""},
-		{"::1", ""},
-		{"::ffff:127.0.0.1", ""},
-		{"64:ff9b::7f00:1", ""}, // NAT64 of loopback
-		{"10.0.0.5", ""},
-		{"172.16.0.5", ""},
-		{"192.168.1.5", ""},
-		{"fc00::5", ""},
-		{"100.64.1.5", ""},      // CGNAT
-		{"198.18.0.5", ""},      // benchmarking
-		{"::ffff:10.0.0.5", ""}, // IPv4-mapped RFC 1918
-		{"2002:a00:5::1", ""},   // 6to4 of RFC 1918
-		{"0.0.0.0", "0.0.0.0/0"},
-		{"169.254.169.254", "0.0.0.0/0"},           // cloud metadata (link-local)
-		{"::ffff:169.254.169.254", "0.0.0.0/0"},    // IPv4-mapped metadata
-		{"64:ff9b::a9fe:a9fe", "0.0.0.0/0"},        // NAT64 metadata
-		{"2002:a9fe:a9fe::1", "0.0.0.0/0"},         // 6to4 metadata
-		{"100.100.100.200", "100.64.0.0/10"},       // metadata inside CGNAT
-		{"fd00:ec2::254", "fc00::/7"},              // metadata inside ULA
-		{"168.63.129.16", "0.0.0.0/0"},             // platform endpoint
-		{"224.0.0.1", "0.0.0.0/0"},                 // multicast
-		{"240.0.0.1", "0.0.0.0/0"},                 // reserved
-		{"fe80::1", "::/0"},                        // IPv6 link-local
-		{"127.0.0.1", "100.64.0.0/10, 10.0.0.0/8"}, // other private ranges named, not loopback
+		{"127.0.0.1", "", allowlistable},
+		{"::1", "", allowlistable},
+		{"::ffff:127.0.0.1", "", allowlistable},
+		{"64:ff9b::7f00:1", "", allowlistable}, // NAT64 of loopback
+		{"10.0.0.5", "", allowlistable},
+		{"172.16.0.5", "", allowlistable},
+		{"192.168.1.5", "", allowlistable},
+		{"fc00::5", "", allowlistable},
+		{"100.64.1.5", "", allowlistable},      // CGNAT
+		{"198.18.0.5", "", allowlistable},      // benchmarking
+		{"::ffff:10.0.0.5", "", allowlistable}, // IPv4-mapped RFC 1918
+		{"2002:a00:5::1", "", allowlistable},   // 6to4 of RFC 1918
+		{"0.0.0.0", "0.0.0.0/0", never},
+		{"169.254.169.254", "0.0.0.0/0", never},                   // cloud metadata (link-local)
+		{"::ffff:169.254.169.254", "0.0.0.0/0", never},            // IPv4-mapped metadata
+		{"64:ff9b::a9fe:a9fe", "0.0.0.0/0", never},                // NAT64 metadata
+		{"2002:a9fe:a9fe::1", "0.0.0.0/0", never},                 // 6to4 metadata
+		{"100.100.100.200", "100.64.0.0/10", never},               // metadata inside CGNAT
+		{"fd00:ec2::254", "fc00::/7", never},                      // metadata inside ULA
+		{"168.63.129.16", "0.0.0.0/0", never},                     // platform endpoint
+		{"224.0.0.1", "0.0.0.0/0", never},                         // multicast
+		{"240.0.0.1", "0.0.0.0/0", never},                         // reserved
+		{"fe80::1", "::/0", never},                                // IPv6 link-local
+		{"127.0.0.1", "100.64.0.0/10, 10.0.0.0/8", allowlistable}, // other private ranges named, not loopback
 	}
 	for _, tc := range cases {
 		t.Run(tc.ip+" with "+tc.entries, func(t *testing.T) {
@@ -108,10 +228,17 @@ func TestToolkitCheckRefusesEveryBlockedAddressClass(t *testing.T) {
 			started := time.Now()
 			outcome := jiraProbe(checker, "https://provider.example")
 			if outcome != refusal {
-				t.Fatalf("outcome = %+v, want the configuration refusal %+v", outcome, refusal)
+				t.Fatalf("outcome = %+v, want the one refusal %+v", outcome, refusal)
 			}
 			if time.Since(started) > time.Second {
 				t.Fatalf("refusal took %s; it must be decided before any connect", time.Since(started))
+			}
+			got := lastRefusalLog(t, read)
+			if got.Reason != "address_refused" || !strings.Contains(got.Remedy, tc.remedy) {
+				t.Fatalf("log = %+v, want address_refused with a remedy that says %q", got, tc.remedy)
+			}
+			if tc.remedy == never && strings.Contains(got.Remedy, "CIDR") {
+				t.Fatalf("log remedy %q suggests the allowlist for a class no entry permits", got.Remedy)
 			}
 		})
 	}
@@ -120,7 +247,7 @@ func TestToolkitCheckRefusesEveryBlockedAddressClass(t *testing.T) {
 // A self-hosted provider on a private address passes when the same list names
 // its range, and is refused otherwise, with the provider never reached.
 func TestToolkitCheckPrivateProviderNeedsItsRangeNamed(t *testing.T) {
-	refusal := egressRefusal(t)
+	refusal := hostRefusal(t, "gitlab.corp.example")
 	server, hits := countingProvider(t)
 	port := serverPort(t, server)
 	resolver := egress.WithResolver(toolkitCheckResolver{"gitlab.corp.example": "127.0.0.1"})
@@ -159,7 +286,7 @@ func TestToolkitCheckPrivateProviderNeedsItsRangeNamed(t *testing.T) {
 // Proxy variables are ignored: the probe dials the checked provider directly,
 // and a target the guard refuses is not sent to a proxy instead.
 func TestToolkitCheckIgnoresProxyEnvironment(t *testing.T) {
-	refusal := egressRefusal(t)
+	refusal := hostRefusal(t, "metadata.example")
 	proxy, proxyHits := countingProvider(t)
 	provider, providerHits := countingProvider(t)
 	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {

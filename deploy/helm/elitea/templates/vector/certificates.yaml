@@ -31,8 +31,7 @@ spec:
     size: 256
     rotationPolicy: Always
   issuerRef:
-    name: {{ .Values.vector.mtls.issuerRef.name }}
-    kind: {{ .Values.vector.mtls.issuerRef.kind }}
+    {{- include "elitea.issuerRef" (dict "ctx" $ "ref" .Values.vector.mtls.issuerRef "ca" "runtime") | nindent 4 }}
     group: cert-manager.io
 ---
 apiVersion: cert-manager.io/v1
@@ -60,8 +59,7 @@ spec:
     size: 256
     rotationPolicy: Always
   issuerRef:
-    name: {{ .Values.vector.mtls.issuerRef.name }}
-    kind: {{ .Values.vector.mtls.issuerRef.kind }}
+    {{- include "elitea.issuerRef" (dict "ctx" $ "ref" .Values.vector.mtls.issuerRef "ca" "runtime") | nindent 4 }}
     group: cert-manager.io
 {{- if include "elitea-vector.mainClientEnabled" . }}
 ---
@@ -94,8 +92,7 @@ spec:
     size: 256
     rotationPolicy: Always
   issuerRef:
-    name: {{ .Values.vector.mtls.issuerRef.name }}
-    kind: {{ .Values.vector.mtls.issuerRef.kind }}
+    {{- include "elitea.issuerRef" (dict "ctx" $ "ref" .Values.vector.mtls.issuerRef "ca" "runtime") | nindent 4 }}
     group: cert-manager.io
 {{- end }}
 {{- end }}

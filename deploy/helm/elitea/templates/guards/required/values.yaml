@@ -13,11 +13,16 @@
       left on with nothing to read it
       (elitea.featureDependencies), e.g. vector.enabled=false beside the
       DeepWiki engine.
-  It also applies the one-switch-per-feature derivation
-  (elitea.applyFeatureSwitches) before anything else reads main.env.
+  It also applies the release-wide derivations (elitea.applyGlobals:
+  global.publicUrl, global.trustedProxyCidrs, the OTel defaults) and the
+  one-switch-per-feature derivation (elitea.applyFeatureSwitches) before
+  anything else reads main.env, and refuses values that still hold a `<...>`
+  placeholder (elitea.validatePlaceholders).
 
   It renders no object.
 */ -}}
+{{- include "elitea.validatePlaceholders" . -}}
+{{- include "elitea.applyGlobals" . -}}
 {{- include "elitea.applyFeatureSwitches" . -}}
 {{- $missing := include "elitea.requiredValuesMissing" . -}}
 {{- $conflicts := include "elitea.featureDependencies" . -}}

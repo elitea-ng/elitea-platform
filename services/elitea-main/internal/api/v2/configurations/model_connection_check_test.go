@@ -160,8 +160,18 @@ func TestLLMModelCheck_FailuresAreCategorised(t *testing.T) {
 			"Wrong API protocol or route: the endpoint answered, but not with a model completion"},
 		{"rate limit", `{"success":false,"reason":"rate_limited","probe":"completion"}`, "Rate limited"},
 		{"unreachable", `{"success":false,"reason":"unreachable","probe":"completion"}`, "Connection failed"},
-		{"egress", `{"success":false,"reason":"egress_not_allowed","probe":"completion"}`,
-			"Connection failed: This endpoint is not permitted by the platform's configuration."},
+		{"egress without a host", `{"success":false,"reason":"egress_not_allowed","probe":"completion"}`,
+			"Connection failed: The LLM gateway refused this endpoint because its host is not on the egress allowlist. " +
+				"An administrator can add it in the admin console: open LLM Governance, select New entry and the type \"Egress allowlist\". " +
+				"The deployment-wide floor is the GATEWAY_EGRESS_ALLOWLIST setting of the LLM gateway."},
+		{"egress names the host", `{"success":false,"reason":"egress_not_allowed","detail":"europe-west4-aiplatform.googleapis.com","probe":"completion"}`,
+			"Connection failed: The LLM gateway refused the host europe-west4-aiplatform.googleapis.com because it is not on the egress allowlist. " +
+				"An administrator can add it in the admin console: open LLM Governance, select New entry and the type \"Egress allowlist\". " +
+				"The deployment-wide floor is the GATEWAY_EGRESS_ALLOWLIST setting of the LLM gateway."},
+		{"egress never echoes a detail that is not a host", `{"success":false,"reason":"egress_not_allowed","detail":"<b>sk-secret</b> https://x/y","probe":"completion"}`,
+			"Connection failed: The LLM gateway refused this endpoint because its host is not on the egress allowlist. " +
+				"An administrator can add it in the admin console: open LLM Governance, select New entry and the type \"Egress allowlist\". " +
+				"The deployment-wide floor is the GATEWAY_EGRESS_ALLOWLIST setting of the LLM gateway."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

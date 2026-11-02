@@ -141,7 +141,7 @@ func (g *Guard) Validate(ctx context.Context, rawURL string) error {
 		return fmt.Errorf("%w: could not resolve %q: %v", ErrDestinationRefused, host, err)
 	}
 	if len(g.permittedIPs(ips, destinationPort(u))) == 0 {
-		return notPermitted(host)
+		return notPermitted(host, ips)
 	}
 	return nil
 }
@@ -228,17 +228,59 @@ func (g *Guard) dialContext(ctx context.Context, network, addr string) (net.Conn
 	}
 	allowed := g.permittedIPs(ips, port)
 	if len(allowed) == 0 {
-		return nil, notPermitted(host)
+		return nil, notPermitted(host, ips)
 	}
 
 	return addrcheck.DialFirst(ctx, &net.Dialer{Timeout: dialTimeout}, network, allowed, port)
 }
 
-func notPermitted(host string) error {
-	return fmt.Errorf(
-		"%w: %q does not resolve to a permitted destination "+
+// RefusedAddress is one resolved address of a refused destination, for an
+// operator log. Class is addrcheck.Private for an address that an allowlist
+// entry naming it (or its block) would permit, and addrcheck.Forbidden for an
+// address that is never dialled, whatever the allowlist says.
+type RefusedAddress struct {
+	IP    net.IP
+	Class addrcheck.Class
+}
+
+// AddressRefusedError is the refusal of a host whose every resolved address
+// the guard refuses. It wraps ErrDestinationRefused, and its text is the one
+// the guard has always returned (no address in it). Addresses is resolver
+// output: a caller may log it for an operator, but must not show it to the
+// tenant who named the host, or the guard becomes a DNS oracle for internal
+// names.
+type AddressRefusedError struct {
+	Host      string
+	Addresses []RefusedAddress
+}
+
+func (e *AddressRefusedError) Error() string {
+	return fmt.Sprintf(
+		"%v: %q does not resolve to a permitted destination "+
 			"(loopback, private-network, link-local, multicast and reserved addresses are refused)",
-		ErrDestinationRefused, host)
+		ErrDestinationRefused, e.Host)
+}
+
+func (e *AddressRefusedError) Unwrap() error { return ErrDestinationRefused }
+
+// Allowlistable reports whether an allowlist entry could permit at least one
+// of the refused addresses: true when one is of the Private class, false when
+// every one is Forbidden.
+func (e *AddressRefusedError) Allowlistable() bool {
+	for _, a := range e.Addresses {
+		if a.Class == addrcheck.Private {
+			return true
+		}
+	}
+	return false
+}
+
+func notPermitted(host string, ips []net.IP) error {
+	addresses := make([]RefusedAddress, 0, len(ips))
+	for _, ip := range ips {
+		addresses = append(addresses, RefusedAddress{IP: ip, Class: classify(ip)})
+	}
+	return &AddressRefusedError{Host: host, Addresses: addresses}
 }
 
 // permittedIPs is the ONE filter Validate and dialContext both apply. It keeps

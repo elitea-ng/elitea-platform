@@ -336,6 +336,16 @@ jobs:
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
           bash deploy/helm/tests/render-gke-budget.sh
 
+      # #1460: certManager.issuers, global.publicUrl, global.trustedProxyCidrs,
+      # the OTel defaults, the <...> placeholder guard, the shared
+      # ExternalSecret properties, the 50m CPU floor, the db-init DSNs and the
+      # NATS bootstrap restart policy.
+      - name: The release-wide settings derive what they promise
+        run: |
+          python3 -c "import yaml" 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-shared-settings.sh
+
       - name: The agent worker renders for both implementations
         run: |
           python3 -c 'import yaml' 2>/dev/null \
@@ -771,8 +781,11 @@ jobs:
       - name: helm template + kubeconform (GKE example, NATS HA)
         if: matrix.chart == 'elitea'
         run: |
+          # values-gke.yaml keeps its <...> placeholders, and the chart
+          # refuses to render one: the fixture fills each of them.
           helm template ci-release deploy/helm/elitea \
-            -f deploy/helm/elitea/values-gke.yaml > /tmp/elitea-gke.yaml
+            -f deploy/helm/elitea/values-gke.yaml \
+            -f deploy/helm/tests/fixtures/gke-operator-values.yaml > /tmp/elitea-gke.yaml
           helm template ci-release deploy/helm/elitea ${{ matrix.values }} \
             -f deploy/helm/elitea/values-nats-ha.yaml > /tmp/elitea-nats-ha.yaml
           kubeconform -strict -summary -verbose \

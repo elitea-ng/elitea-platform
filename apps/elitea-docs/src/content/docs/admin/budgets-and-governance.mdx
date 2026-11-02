@@ -49,6 +49,17 @@ Open **LLM Governance**. Each row is a scoped rule the gateway reads and enforce
 
 <Screenshot id="admin-governance-table" alt="LLM Governance rule table" />
 
+### Egress allowlist
+
+An **Egress allowlist** entry adds provider hosts that a credential's `api_base` (or a cloud provider's regional endpoint) may name. Put the hosts in **Permitted destinations**: a host, `host:port`, `*.domain`, or a CIDR block. This is the first place to add a host when **Test connection** answers `The LLM gateway refused the host <host> because it is not on the egress allowlist`.
+
+- The entry applies to every project.
+- The gateway enforces the union of these entries and `GATEWAY_EGRESS_ALLOWLIST`, the floor that the chart sets. An entry can only add a host. It cannot remove a host that the floor names.
+- The first entry in either list turns the restriction on for every credential.
+- A private address is reachable only when an entry names that address or its block. A host name alone does not open it.
+
+See [When the egress allowlist refuses a provider](/admin/llm-proxy#when-the-egress-allowlist-refuses-a-provider).
+
 ### Throttles per agent and per user
 
 A **Rate limit** entry has two more scope fields. Use them to limit one agent or one user, in addition to the project rate limit (ADR-0041 decision 4).

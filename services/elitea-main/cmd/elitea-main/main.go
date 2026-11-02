@@ -139,6 +139,15 @@ func main() {
 		os.Exit(code)
 	}
 
+	// The OIDC relink operator command (oidc_relink.go, #1460): it runs and
+	// exits.
+	if len(os.Args) > 1 && os.Args[1] == oidcRelinkCommand {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := runOIDCRelink(ctx, os.Args[2:], os.LookupEnv, os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
+
 	// The credential policy operator command (credential_governance.go).
 	if len(os.Args) > 1 && os.Args[1] == credentialPolicyCommand {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

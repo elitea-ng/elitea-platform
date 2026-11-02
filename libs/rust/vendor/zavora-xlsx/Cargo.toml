@@ -424,6 +424,11 @@ path = "tests/integration_tests.rs"
 name = "named_ranges_crud_tests"
 path = "tests/named_ranges_crud_tests.rs"
 
+# Elitea patch (zip 9): the pass-through round trip.
+[[test]]
+name = "passthrough_survives_a_round_trip"
+path = "tests/passthrough_survives_a_round_trip.rs"
+
 [[test]]
 name = "phase3_tests"
 path = "tests/phase3_tests.rs"

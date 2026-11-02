@@ -252,6 +252,14 @@ tasks:
       - task: helm:nats-bundled
       - task: helm:default-on
       - task: helm:scaling
+      - task: helm:shared-settings
+
+  helm:shared-settings:
+    desc: Check the release-wide settings (#1460) — certManager.issuers, global.publicUrl, global.trustedProxyCidrs, the OTel defaults, the placeholder guard, shared ExternalSecret properties and the 50m CPU floor
+    deps: [helm:deps]
+    cmds:
+      # Needs helm, python3 and PyYAML.
+      - bash deploy/helm/tests/render-shared-settings.sh
 
   helm:scaling:
     desc: Check scale-out readiness (S11) — every autoscaler with and without its source, bundled KEDA and prometheus-adapter on/off, no replicas under an autoscaler, spread and PDBs, grace periods, the all-component connection budget and the gateway's expected replicas
