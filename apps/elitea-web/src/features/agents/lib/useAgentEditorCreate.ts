@@ -156,7 +156,8 @@ function draftConversationStarters(versionDetails: AgentDraftValues['version_det
  */
 function draftOutputContract(meta: NonNullable<AgentDraftValues['version_details']>['meta']) {
   const contract = readOutputContract(meta?.['output_contract']);
-  return contract === null ? {} : { output_contract: contract };
+  const citations = meta?.['citations'] === 'required' ? { citations: 'required' as const } : {};
+  return contract === null ? citations : { output_contract: contract, ...citations };
 }
 
 /** `submit`'s request-body construction, extracted purely to keep `useAgentEditorCreate` under the oxlint complexity budget. */

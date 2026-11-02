@@ -12,16 +12,12 @@ package guardrail
 // private address only when the allowlist names a private destination.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"strings"
-	"unicode/utf8"
 )
 
 // ContractVersion is the value of the request's `version` field.
@@ -162,46 +158,13 @@ func validHeaderName(h string) bool {
 var errAdapter = errors.New("guardrail adapter")
 
 func (d *httpDetector) detect(ctx context.Context, env Env, stage, content string) ([]Finding, error) {
-	if env.HTTPClient == nil || env.EgressAllows == nil || !env.EgressAllows(d.cfg.URL) {
-		return nil, fmt.Errorf("%w: the adapter host is not on the egress allowlist", errAdapter)
-	}
 	body, err := json.Marshal(AdapterRequest{Version: ContractVersion, Stage: stage, Detector: d.name, Content: content})
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode request: %v", errAdapter, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.cfg.URL, bytes.NewReader(body))
+	raw, err := egressPost(ctx, env, d.cfg.URL, body, secretHeader(ctx, env, "auth_secret", d.cfg.AuthSecret, d.cfg.AuthHeader, ""))
 	if err != nil {
-		return nil, fmt.Errorf("%w: build request", errAdapter)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if d.cfg.AuthSecret != "" {
-		if env.ResolveSecret == nil {
-			return nil, fmt.Errorf("%w: no secrets vault is available for auth_secret", errAdapter)
-		}
-		value, rerr := env.ResolveSecret(ctx, d.cfg.AuthSecret)
-		if rerr != nil || value == "" {
-			return nil, fmt.Errorf("%w: auth_secret does not resolve", errAdapter)
-		}
-		req.Header.Set(d.cfg.AuthHeader, value)
-	}
-	resp, err := env.HTTPClient.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("%w: timeout", errAdapter)
-		}
-		return nil, fmt.Errorf("%w: request failed", errAdapter)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAdapterResponseBytes))
-		return nil, fmt.Errorf("%w: status %d", errAdapter, resp.StatusCode)
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAdapterResponseBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("%w: read response", errAdapter)
-	}
-	if len(raw) > maxAdapterResponseBytes {
-		return nil, fmt.Errorf("%w: response is larger than %d bytes", errAdapter, maxAdapterResponseBytes)
+		return nil, err
 	}
 	var parsed AdapterResponse
 	if err := json.Unmarshal(raw, &parsed); err != nil {
@@ -217,7 +180,6 @@ func (d *httpDetector) detect(ctx context.Context, env Env, stage, content strin
 // label and score filters.
 func (d *httpDetector) findings(in []AdapterFinding, content string) ([]Finding, error) {
 	var offsets []int // code point index -> byte offset, built on demand
-	runeCount := -1
 	out := make([]Finding, 0, len(in))
 	for _, f := range in {
 		if !ValidLabel(f.Label) {
@@ -244,15 +206,10 @@ func (d *httpDetector) findings(in []AdapterFinding, content string) ([]Finding,
 			return nil, fmt.Errorf("%w: a finding has start without end", errAdapter)
 		}
 		if offsets == nil {
-			offsets = make([]int, 0, utf8.RuneCountInString(content)+1)
-			for i := range content {
-				offsets = append(offsets, i)
-			}
-			offsets = append(offsets, len(content))
-			runeCount = len(offsets) - 1
+			offsets = codePointOffsets(content)
 		}
 		s, e := *f.Start, *f.End
-		if s < 0 || e < s || e > runeCount {
+		if s < 0 || e < s || e > len(offsets)-1 {
 			return nil, fmt.Errorf("%w: a finding span is outside the content", errAdapter)
 		}
 		if s == e {

@@ -422,6 +422,7 @@ export * from "./getWorkspaceHandoffPolicyHeaders.zod";
 export * from "./getWorkspaceSegmentObjectHeaders.zod";
 export * from "./globalUserInviteRequest.zod";
 export * from "./globalUserInviteResult.zod";
+export * from "./groundingIndicator.zod";
 export * from "./groupsListResponse.zod";
 export * from "./handOffChatExecutionSteeringBody.zod";
 export * from "./handOffChatExecutionSteeringHeaders.zod";

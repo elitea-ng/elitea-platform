@@ -63,6 +63,11 @@ const (
 	TypeHTTP    = "http"
 )
 
+// DetectorTypes lists the detector types this gateway runs.
+func DetectorTypes() []string {
+	return []string{TypeRegex, TypeSecrets, TypeHTTP, TypeAzureContentSafety, TypeBedrockGuardrails, TypeModelArmor, TypeLlamaGuard, TypePresidio}
+}
+
 // Bounds. elitea-main refuses a row outside them on write; the gateway refuses
 // one that reached the table another way.
 const (
@@ -112,7 +117,11 @@ type Detector struct {
 	Name   string
 	Type   string
 	Action string
-	impl   detectorImpl
+	// Content is ContentAll or ContentToolResults; Slot is empty or
+	// SlotPromptInjection (slot.go).
+	Content string
+	Slot    string
+	impl    detectorImpl
 }
 
 // HTTPAdapter returns the adapter configuration of an http detector, or nil.
@@ -164,6 +173,10 @@ func ParseRow(name string, data map[string]any) (*Row, error) {
 		}
 		names[d.Name] = true
 		row.Detectors = append(row.Detectors, d)
+	}
+
+	if err := checkRowScopes(row); err != nil {
+		return nil, err
 	}
 
 	if v, present := g["timeout_ms"]; present && v != nil {
@@ -246,10 +259,23 @@ func parseDetector(obj map[string]any) (*Detector, error) {
 		d.impl, err = newSecretsDetector(obj)
 	case TypeHTTP:
 		d.impl, err = newHTTPDetector(obj)
+	case TypeLlamaGuard:
+		d.impl, err = newLlamaGuardDetector(obj)
+	case TypePresidio:
+		d.impl, err = newPresidioDetector(obj)
+	case TypeAzureContentSafety:
+		d.impl, err = newAzureDetector(obj)
+	case TypeBedrockGuardrails:
+		d.impl, err = newBedrockDetector(obj)
+	case TypeModelArmor:
+		d.impl, err = newModelArmorDetector(obj)
 	default:
-		return nil, fmt.Errorf("type must be %q, %q or %q", TypeRegex, TypeSecrets, TypeHTTP)
+		return nil, fmt.Errorf("type must be one of %s", strings.Join(DetectorTypes(), ", "))
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := parseDetectorScope(d, obj); err != nil {
 		return nil, err
 	}
 	if h, ok := d.impl.(*httpDetector); ok {

@@ -390,9 +390,9 @@ export function CreateAgentForm({
           stepLimit={versionDetails?.meta?.step_limit}
           onStepLimitChange={state.onStepLimitChange}
           modelSettingsSlot={modelSettingsSlot}
-          outputContract={state.outputContract}
-          onOutputContractChange={state.onOutputContractChange}
+          outputContract={state.outputContract} onOutputContractChange={state.onOutputContractChange}
           showOutputContract={showOutputContract}
+          citations={{ value: state.citations, onChange: state.onCitationsChange }}
         />
       </Box>
     </Box>

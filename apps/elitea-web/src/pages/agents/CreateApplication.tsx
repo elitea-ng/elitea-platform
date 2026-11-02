@@ -18,7 +18,6 @@ import {
 import { CreateAgentForm } from '@/features/agents';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { t } from '@/shared/i18n';
-import { readOutputContract } from '@/shared/ui/OutputContractField';
 import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { AgentModelSettings } from '@/widgets/agent-model-settings';
 import { disarmUnsavedChangesNavBlocker, useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
@@ -27,6 +26,7 @@ import { PageToolbar, pageSx } from '@/widgets/page-header';
 import {
   areExtraFieldsEqual,
   mapCreateErrorToFieldErrors,
+  applyContentControlField,
   type CreateAgentFormExtraFields,
 } from './lib/createApplicationDraftState';
 import { agentSaveErrorMessage } from './lib/agentSaveErrorMessage';
@@ -174,7 +174,7 @@ export function CreateApplication(): ReactNode {
       instructions: extraFields.instructions,
       welcome_message: extraFields.welcomeMessage,
       variables: extraFields.variables,
-      meta: { step_limit: extraFields.stepLimit, output_contract: extraFields.outputContract },
+      meta: { step_limit: extraFields.stepLimit, output_contract: extraFields.outputContract, citations: extraFields.citations ?? null },
       llm_settings: extraFields.llmSettings,
     },
   };
@@ -219,9 +219,6 @@ export function CreateApplication(): ReactNode {
             stepLimit: typeof value === 'number' ? value : undefined,
           }));
           return;
-        case 'version_details.meta.output_contract':
-          setExtraFields((previous) => ({ ...previous, outputContract: readOutputContract(value) }));
-          return;
         // No `version_details.llm_settings` case, deliberately: model settings
         // reach `extraFields.llmSettings` through `handleModelSettingsChange`
         // below, straight off the `AgentModelSettings` slot. The create form's
@@ -230,6 +227,8 @@ export function CreateApplication(): ReactNode {
         // EDIT page's identical-looking branch IS live, which is what made
         // this one read as reachable. Do not re-add it.
         default:
+          // `meta.output_contract` and `meta.citations` (ADR-0043).
+          setExtraFields((previous) => applyContentControlField(previous, path, value));
           return;
       }
     },
@@ -259,6 +258,7 @@ export function CreateApplication(): ReactNode {
             ...draftDefaults.versionDetails.meta,
             step_limit: extraFields.stepLimit ?? draftDefaults.versionDetails.meta.step_limit,
             ...(extraFields.outputContract === null ? {} : { output_contract: extraFields.outputContract }),
+            ...(extraFields.citations === 'required' ? { citations: 'required' } : {}),
           },
           llmSettings: extraFields.llmSettings,
         },

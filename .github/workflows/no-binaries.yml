@@ -73,7 +73,9 @@ jobs:
           node scripts/ci/check-helm-version.mjs
           # check-chart-deps.mjs is the vendored-dependency gate helm-lint.yml
           # and publish.yml run; its parser is tested here, where no Helm is.
-          for t in check-helm-version check-chart-deps; do
+          # check-vendor-manifest-notes.mjs is the vendored-crate manifest gate
+          # of dependency-scanning.yml; its scenarios need only node.
+          for t in check-helm-version check-chart-deps check-vendor-manifest-notes; do
             expected="$(grep -c '^test(' "scripts/ci/${t}.test.mjs")"
             status=0
             output="$(node --test --test-reporter=tap "scripts/ci/${t}.test.mjs" 2>&1)" || status=$?

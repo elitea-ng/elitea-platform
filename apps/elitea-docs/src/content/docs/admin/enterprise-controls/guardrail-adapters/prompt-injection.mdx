@@ -1,0 +1,147 @@
+---
+title: "Prompt-injection slot"
+description: "Attach a prompt-injection classifier to the tool results of a request, with the prompt_injection slot of an input guardrail entry."
+---
+
+A tool result can contain text that looks like an instruction. This is indirect prompt injection. The worker puts each tool result in an envelope, and the preamble tells the model that the envelope holds data. See [Untrusted content](/admin/enterprise-controls/content-controls#untrusted-content). The envelope makes injection harder, but it does not prevent it.
+
+The **prompt-injection slot** adds a classifier. A detector in the slot reads only the tool results of a request, before the gateway sends the request to the provider. It can block the request or flag it.
+
+## Prerequisites
+
+- A classifier that finds prompt injection or jailbreak text. See [Which classifiers can fill the slot](#which-classifiers-can-fill-the-slot).
+- The classifier endpoint on an **Egress allowlist** entry. See [Egress allowlist](/admin/budgets-and-governance#egress-allowlist).
+- Agents that use tools. Without a tool result, the slot detector does not run.
+
+## What the gateway reads
+
+The slot detector reads the tool results of each request format:
+
+| Request format | Tool results |
+| --- | --- |
+| Chat completions | The content of each message with the role `tool`. |
+| Responses | The output of each `function_call_output`, `custom_tool_call_output` and shell call output item. |
+| Anthropic messages | The content of each `tool_result` block. |
+
+A request has the full history of the conversation, so the detector reads the tool results of earlier turns again. A text completion or an embedding request has no tool results.
+
+## Set up the slot
+
+Add these settings to a detector of an **input** entry:
+
+| Setting | Value | Meaning |
+| --- | --- | --- |
+| `content` | `tool_results` | The detector reads the tool results only. Required for the slot. |
+| `slot` | `prompt_injection` | The detector fills the prompt-injection slot. |
+| `action` | `block` or `flag` | A `mask` action is refused: a mask cannot remove an injection. |
+
+The other detectors of the entry read all the text of the request, as before. The admin dialog has a switch for each detector, **prompt-injection slot**, which sets `content` and `slot` and changes `mask` to `block`.
+
+The admin API refuses (HTTP 400):
+
+- `slot` without `content: tool_results`;
+- `content: tool_results` on an output entry;
+- `action: mask` in the slot;
+- a `secrets` or `presidio` detector in the slot.
+
+### Example with Llama Guard
+
+```json
+{
+  "guardrail": {
+    "stage": "input",
+    "timeout_ms": 3000,
+    "fail_mode": "closed",
+    "detectors": [
+      {
+        "name": "tool-injection",
+        "type": "llama_guard",
+        "action": "block",
+        "url": "http://llama-guard.internal:8000/v1/chat/completions",
+        "model": "meta-llama/Llama-Guard-4-12B",
+        "content": "tool_results",
+        "slot": "prompt_injection"
+      },
+      { "type": "secrets", "action": "mask" }
+    ]
+  }
+}
+```
+
+### Example with the HTTP adapter
+
+Run a prompt-injection model, for example `meta-llama/Llama-Prompt-Guard-2-86M` or `protectai/deberta-v3-base-prompt-injection-v2`, behind a small service that implements the [HTTP adapter contract](/admin/enterprise-controls/content-controls#http-adapter-contract). To serve such a model with a text-classification API, you can use the Hugging Face Text Embeddings Inference image `ghcr.io/huggingface/text-embeddings-inference:cpu-latest`:
+
+```sh
+podman run -d --name prompt-guard -p 8080:80 -e HF_TOKEN=<your Hugging Face token> \
+  ghcr.io/huggingface/text-embeddings-inference:cpu-latest \
+  --model-id meta-llama/Llama-Prompt-Guard-2-86M
+```
+
+Make sure that your version of the image supports the architecture of the model. Text Embeddings Inference answers `POST /predict` with labels and scores. Put a small service in front of it that converts the answer to the adapter contract: one finding without a span for each malicious label.
+
+```json
+{
+  "name": "tool-injection",
+  "type": "http",
+  "action": "flag",
+  "url": "http://prompt-guard-adapter.internal:9000/v1/check",
+  "min_score": 0.8,
+  "content": "tool_results",
+  "slot": "prompt_injection"
+}
+```
+
+## Which classifiers can fill the slot
+
+| Classifier | Detector | Notes |
+| --- | --- | --- |
+| Azure AI Content Safety, Prompt Shields | `azure_content_safety` | Detects attacks in documents. Set `prompt_shields`. See [Azure AI Content Safety](/admin/enterprise-controls/guardrail-adapters/azure-content-safety). |
+| AWS Bedrock Guardrails, prompt attack filter | `bedrock_guardrails` | Turn on the prompt attack filter in the guardrail. See [AWS Bedrock Guardrails](/admin/enterprise-controls/guardrail-adapters/bedrock-guardrails). |
+| Google Model Armor, `pi_and_jailbreak` filter | `model_armor` | Turn on the filter in the template. See [Google Cloud Model Armor](/admin/enterprise-controls/guardrail-adapters/model-armor). |
+| Llama Guard 3 or 4 | `llama_guard` | Llama Guard classifies harm categories, not injection. Use it with `categories` for the harms that an injected instruction asks for, for example `S1`, `S2`, `S7` and `S14`. See [Llama Guard adapter](/admin/enterprise-controls/guardrail-adapters/llama-guard). |
+| Your own model | `http` | For example Llama Prompt Guard 2 or a DeBERTa prompt-injection model, through the HTTP adapter contract. |
+| A list of known phrases | `regex` | Use `terms` such as `ignore previous instructions`. This finds only known text. |
+
+The `secrets` and `presidio` detectors cannot fill the slot. They find data, not instructions.
+
+## Labels and evidence
+
+Every finding of a slot detector gets the label `prompt_injection`, whatever label the classifier gives. Every verdict of a slot detector also has the label `slot:prompt_injection`, also when the outcome is `pass`. So the verdicts show that the slot ran, and on which requests.
+
+Example verdict of a blocked request:
+
+```json
+{
+  "stage": "input",
+  "row": "tool-injection",
+  "detector": "tool-injection",
+  "detector_type": "llama_guard",
+  "action": "block",
+  "outcome": "blocked",
+  "fail_mode": "closed",
+  "labels": ["prompt_injection", "slot:prompt_injection"],
+  "findings": 1,
+  "runs": 1
+}
+```
+
+The refusal is HTTP 400 with the code `guardrail_blocked`. The message names the entry, the detector and the labels. It never contains the tool result. For an agent run, the run evidence keeps the verdict. See [Reconstruct an agent run](/admin/enterprise-controls/reconstruct-a-run).
+
+## Latency
+
+The gateway runs the entries in their order, and the detectors of an entry in their order. A slot detector reads the tool results only. The other detectors read all the text. All the detectors of an entry share the `timeout_ms` of the entry. A cloud or self-hosted classifier puts the tool results into units up to its size limit. It reads at most the 16 newest units, and records the label `partial_coverage` when it skips older ones. See [How a detector reads the content](/admin/enterprise-controls/content-controls#how-a-detector-reads-the-content).
+
+A request carries the full history, so each model call of an agent sends all the earlier tool results again. A long run sends more text to the classifier on each step. Measure the latency of the classifier at the size of your longest runs.
+
+## Fail mode
+
+- Use `block` with `fail_mode: closed` when an agent can act on systems outside the platform. A classifier outage then stops agent runs that read tool results, with HTTP 503 `guardrail_unavailable`.
+- Use `flag` with `fail_mode: open` to measure the classifier before you block. Review the `slot:prompt_injection` verdicts with the label `prompt_injection`.
+- Keep the [read untrusted, then act](/admin/enterprise-controls/content-controls#untrusted-content) approval rule on. The slot does not replace it.
+
+## Limitations
+
+- A classifier finds known patterns of injection. A new attack can pass it.
+- The slot reads the tool results that the request carries. It does not read the files that a user attaches, the system prompt, or the arguments of earlier tool calls.
+- A block stops the full request. The gateway cannot remove one tool result and continue.

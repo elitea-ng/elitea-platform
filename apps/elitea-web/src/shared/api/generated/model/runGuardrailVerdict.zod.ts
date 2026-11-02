@@ -49,7 +49,16 @@ export const RunGuardrailVerdict = zod
     stage: zod.enum(["input", "output"]),
     row: zod.string().describe("The name of the guardrail governance entry."),
     detector: zod.string(),
-    detector_type: zod.enum(["regex", "secrets", "http"]),
+    detector_type: zod.enum([
+      "regex",
+      "secrets",
+      "http",
+      "azure_content_safety",
+      "bedrock_guardrails",
+      "model_armor",
+      "llama_guard",
+      "presidio",
+    ]),
     action: zod.enum(["block", "mask", "flag"]),
     outcome: zod.enum([
       "pass",
@@ -60,7 +69,11 @@ export const RunGuardrailVerdict = zod
       "error_closed",
     ]),
     fail_mode: zod.enum(["open", "closed"]),
-    labels: zod.array(zod.string()),
+    labels: zod
+      .array(zod.string())
+      .describe(
+        "The finding labels. A detector in a slot also adds slot:<name>, for example slot:prompt_injection.",
+      ),
     findings: zod.int(),
     max_score: zod.number(),
     latency_ms: zod.int(),

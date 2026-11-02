@@ -2977,6 +2977,7 @@ export interface components {
             /** @description Omitted, not empty, for a group with no attachments. */
             message_items?: components["schemas"]["AttachmentMessageItem"][];
             metadata?: {
+                grounding?: components["schemas"]["GroundingIndicator"];
                 /** @description Client contract 1.14. On a user's message: the user ids the sender tagged (the send's `user_ids`), deduplicated, in the order sent, at most 64. Absent when the message tags nobody and on messages sent before 1.14. These are who was TAGGED, not who was notified: notification only reaches project members other than the sender. */
                 mentioned_user_ids?: number[];
                 /** @description Client contract 1.14. On a user's message: true when it tagged `@everyone` (the send's `sending_to_everyone`); absent otherwise. */
@@ -3318,6 +3319,26 @@ export interface components {
              * @example true
              */
             renamed: boolean;
+        };
+        /** @description On an agent's answer (ADR-0043 decision 5): how many sources the answer cites and which statements have no citation. Present only when the agent's version sets `meta.citations` to `required` and the model saw at least one tool result; absent, not zero, otherwise. There is no confidence score. A cited source does not prove that the source supports the statement. Main stores the worker's value after it checks the shape (internal/infra/db/repos/agent_grounding.go). */
+        GroundingIndicator: {
+            /** @description The statements of the answer: sentences outside code blocks, headings and tables that are not questions or lead-ins ending with a colon. */
+            claim_spans: number;
+            /** @description Markers whose number names no source. */
+            invalid_markers: number;
+            /** @description The tool results the model saw, numbered 1, 2, 3 in request order. */
+            sources_available: number;
+            /** @description The distinct sources the answer cites with a valid `[n]` marker. */
+            sources_cited: number;
+            /** @description The first 64 statements without a citation, in answer order, as UTF-16 code unit offsets into the stored answer text. */
+            uncited: {
+                end: number;
+                start: number;
+            }[];
+            /** @description The statements without a valid citation marker. */
+            uncited_spans: number;
+            /** @enum {integer} */
+            version: 1;
         };
         /** @description The 400 answer to a native client whose `X-Client-Version` does not parse (ADR-0025 decision 5). NOTE(W2): internal/api/middleware/client_version.go:190 (`WriteInvalidClientVersion`). */
         InvalidClientVersionError: {
@@ -4205,6 +4226,11 @@ export interface components {
                 toolkit_id?: string;
             };
             category?: string;
+            /**
+             * @description Whether the agent must cite its sources (ADR-0043 decision 5). With `required`, the worker numbers the tool results the model sees, asks the model to cite them as [n], and stores a grounding indicator on the answer (`meta.grounding` of the message). Null, absent or `off` is no citation rule. A save with another value is refused with 400. Pipelines and nested agents ignore it.
+             * @enum {string|null}
+             */
+            citations?: "off" | "required" | null;
             icon_meta?: {
                 [key: string]: unknown;
             };

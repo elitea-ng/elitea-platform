@@ -223,6 +223,8 @@ function toVersionMetaBody(
       notes: edits.notes,
       // #1500 — always sent: `null` clears a stored contract (an omitted key keeps it through the merge).
       output_contract: edits.outputContract,
+      // ADR-0043 decision 5 — always sent: `null` clears a stored setting.
+      citations: edits.citations ?? null,
     },
   };
 }

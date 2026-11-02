@@ -17,6 +17,7 @@ pub(crate) mod dispatch_journal;
 pub(crate) mod driven;
 pub(crate) mod events;
 pub mod graph;
+pub(crate) mod grounding_model;
 pub(crate) use elitea_agent_runtime::instruction_authority;
 pub(crate) mod internal_tools;
 mod model_checkpoint;

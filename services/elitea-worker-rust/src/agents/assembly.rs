@@ -72,6 +72,9 @@ pub(crate) struct OrdinaryNoToolProfile {
     /// agent's final answer must meet it. A pipeline keeps its contracts on
     /// its LLM nodes, so a pipeline shell has none.
     output_contract: Option<Arc<elitea_agent_runtime::output_contract::OutputContract>>,
+    /// The version's `meta.citations` (ADR-0043 decision 5). Only a root
+    /// agent's binding uses it.
+    citations: elitea_agent_runtime::grounding::CitationMode,
 }
 
 /// Admitted independently from the task model before credential redemption.
@@ -258,6 +261,7 @@ impl OrdinaryNoToolProfile {
             instruction_plan: super::instruction_authority::InstructionPlan::admit(request)?,
             edit_format: application_edit_format(request),
             output_contract: None,
+            citations: elitea_agent_runtime::grounding::CitationMode::Off,
         })
     }
 
@@ -308,6 +312,7 @@ impl OrdinaryNoToolProfile {
             instruction_plan: super::instruction_authority::InstructionPlan::admit(request)?,
             edit_format: application_edit_format(request),
             output_contract: application_output_contract(request)?,
+            citations: application_citations(request),
         })
     }
 
@@ -437,6 +442,8 @@ impl OrdinaryNoToolProfile {
             } else {
                 None
             },
+            // A nested agent's answer goes to its parent, not to the chat.
+            citations: elitea_agent_runtime::grounding::CitationMode::Off,
         })
     }
 
@@ -461,6 +468,12 @@ impl OrdinaryNoToolProfile {
             instructions,
             ..self.clone()
         }
+    }
+
+    /// The agent's citation setting (`meta.citations`).
+    #[must_use]
+    pub(crate) const fn citations(&self) -> elitea_agent_runtime::grounding::CitationMode {
+        self.citations
     }
 
     /// The agent's output contract, when its version declares one.
@@ -828,6 +841,35 @@ fn application_output_contract(
         Some(Value::Object(version)) => version_output_contract(version),
         _ => Ok(None),
     }
+}
+
+/// An application version's `meta.citations`; an ad-hoc turn has none.
+///
+/// Main checks the value on every write path. A stored value that this worker
+/// cannot read (a row written before that check) turns citations off with a
+/// warning. It does not refuse the turn: citations are a reading aid, and a
+/// refusal would stop every chat turn of the agent. The warning names no
+/// stored value.
+fn application_citations(
+    request: &AgentExecutionRequest,
+) -> elitea_agent_runtime::grounding::CitationMode {
+    if request.kind != AgentExecutionKind::Application {
+        return elitea_agent_runtime::grounding::CitationMode::Off;
+    }
+    let meta = match request.payload.application.get("version_details") {
+        Some(Value::Object(version)) => version.get("meta").and_then(Value::as_object),
+        _ => None,
+    };
+    elitea_agent_runtime::grounding::CitationMode::from_value(
+        meta.and_then(|meta| meta.get(elitea_agent_runtime::grounding::META_KEY)),
+    )
+    .unwrap_or_else(|_| {
+        tracing::warn!(
+            event = "agent_citations_setting_invalid",
+            "the stored meta.citations is not off, required or null; citations are off for this turn"
+        );
+        elitea_agent_runtime::grounding::CitationMode::Off
+    })
 }
 
 fn version_output_contract(

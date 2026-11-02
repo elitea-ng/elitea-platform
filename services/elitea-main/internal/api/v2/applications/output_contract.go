@@ -27,6 +27,9 @@ func checkOutputContracts(w http.ResponseWriter, body map[string]any, agentType 
 	if body == nil {
 		return true
 	}
+	if !checkCitations(w, body) {
+		return false
+	}
 	var err error
 	if meta, _ := body["meta"].(map[string]any); meta != nil {
 		err = outputcontract.CheckMeta(agentType, meta)

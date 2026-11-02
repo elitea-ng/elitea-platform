@@ -56,6 +56,9 @@ type currentAgentFullMessage struct {
 	InvokedSkills              json.RawMessage
 	ResponseMetadata           json.RawMessage
 	OutputLimitReached         bool
+	// Grounding is the sanitized grounding indicator (ADR-0043 decision 5);
+	// nil when the answer has none.
+	Grounding json.RawMessage
 }
 
 type currentAgentHITLPause struct {
@@ -428,6 +431,7 @@ func decodeCurrentAgentFullMessage(contentJSON, references, responseMetadata jso
 		OutputLimitReached:         metadata.OutputLimitReached,
 		PipelineStaticProof:        bytes.Clone(metadata.PipelineStaticProof),
 		PipelineStaticTools:        bytes.Clone(metadata.PipelineStaticTools),
+		Grounding:                  groundingFromMetadata(responseMetadata),
 	}, nil
 }
 
@@ -709,6 +713,7 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 				PipelineStaticProof: staticProof,
 				PipelineStaticTools: staticTools,
 				SkippedCapabilities: cloneJSONOrDefault(terminal.SkippedCapabilities, []byte("null")),
+				Grounding:           cloneJSONOrDefault(message.Grounding, []byte("null")),
 				MessageGroupID:      int64(messageGroupID),
 			},
 		)
