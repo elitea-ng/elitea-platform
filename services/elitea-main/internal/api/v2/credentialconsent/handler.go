@@ -13,6 +13,10 @@
 // the callback, which consumes the state once, exchanges the code and
 // seals the grant with a security audit event.
 //
+// The provider "entra" is the re-consent of a governed run paused by an
+// Entra exchange (#1477, entra.go): start takes a `car_` reference, the
+// user signs in again, and the callback resumes the run.
+//
 // router.go mounts the routes only when RouterConfig.CredentialConsent is
 // set, which the composition root does only with credential governance on.
 // Start is gated on models.credentials.governed.use in the body's project;
@@ -60,7 +64,10 @@ type AuthorizationReferences interface {
 type Handler struct {
 	flow       Flow
 	references AuthorizationReferences
-	logger     *slog.Logger
+	// entra serves the Entra re-consent of a paused run (#1477,
+	// WithEntraConsent); nil without it.
+	entra  *entraConsent
+	logger *slog.Logger
 }
 
 // Option configures a Handler.
@@ -72,17 +79,18 @@ func WithAuthorizationReferences(references AuthorizationReferences) Option {
 	return func(h *Handler) { h.references = references }
 }
 
-// New builds the handler.
+// New builds the handler. It needs a provider consent flow, the Entra
+// re-consent (WithEntraConsent), or both.
 func New(flow Flow, logger *slog.Logger, opts ...Option) (*Handler, error) {
-	if flow == nil {
-		return nil, errors.New("credential consent: a consent flow is required")
-	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	h := &Handler{flow: flow, logger: logger}
 	for _, opt := range opts {
 		opt(h)
+	}
+	if h.flow == nil && h.entra == nil {
+		return nil, errors.New("credential consent: a consent flow is required")
 	}
 	return h, nil
 }
@@ -155,6 +163,14 @@ func (h *Handler) Start(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "the caller has no resolved user id")
 		return
 	}
+	if isEntra(provider(r, ":start")) {
+		h.startEntra(w, r, body, userID)
+		return
+	}
+	if h.flow == nil {
+		writeError(w, http.StatusNotFound, "no OAuth application is configured for this provider")
+		return
+	}
 	start := provideroauth.StartRequest{
 		UserID: userID, Provider: provider(r, ":start"), TenantProjectID: body.ProjectID,
 		AgentBindingID: body.AgentBindingID, TargetBindingID: body.TargetBindingID,
@@ -213,7 +229,11 @@ type callbackView struct {
 	Provider        string `json:"provider"`
 	ProjectID       int64  `json:"project_id"`
 	AgentBindingID  string `json:"agent_binding_id"`
-	TargetBindingID string `json:"target_binding_id"`
+	TargetBindingID string `json:"target_binding_id,omitempty"`
+	// ConversationUUID and ExecutionID name the run an Entra re-consent
+	// resumed (#1477).
+	ConversationUUID string `json:"conversation_uuid,omitempty"`
+	ExecutionID      string `json:"execution_id,omitempty"`
 }
 
 // errNotPermitted refuses a callback whose caller lost the permission.
@@ -229,6 +249,14 @@ func (h *Handler) Callback(resolver auth.PermissionResolver, mode string) http.H
 			return
 		}
 		name := provider(r, ":callback")
+		if isEntra(name) {
+			h.callbackEntra(w, r, user, resolver, mode)
+			return
+		}
+		if h.flow == nil {
+			writeError(w, http.StatusNotFound, "no OAuth application is configured for this provider")
+			return
+		}
 		query := r.URL.Query()
 		authorize := func(ctx context.Context, tenantProjectID int64) (int64, error) {
 			if resolver == nil {
@@ -272,6 +300,11 @@ func (h *Handler) Callback(resolver auth.PermissionResolver, mode string) http.H
 			h.refusal(r.Context(), user, name, "consent.code_rejected")
 			writeError(w, http.StatusBadGateway, "the provider refused the authorization code")
 			return
+		case errors.Is(err, provideroauth.ErrSiteNotAccessible):
+			// Atlassian 3LO (#1464): the user granted other sites.
+			h.refusal(r.Context(), user, name, "consent.site_not_covered")
+			writeError(w, http.StatusConflict, "the consent does not cover the target site; consent again and select that site")
+			return
 		case errors.Is(err, provideroauth.ErrProviderUnavailable):
 			writeError(w, http.StatusBadGateway, "the provider token endpoint is unavailable")
 			return
@@ -309,6 +342,12 @@ func (h *Handler) Callback(resolver auth.PermissionResolver, mode string) http.H
 func (h *Handler) refusal(ctx context.Context, user auth.User, provider, reason string) {
 	userID, err := strconv.ParseInt(user.UserID, 10, 64)
 	if err != nil || userID <= 0 {
+		return
+	}
+	if h.flow == nil {
+		// Entra re-consent alone (#1477): no provider consent custody to
+		// audit in. The refusal is logged without any value.
+		h.logger.InfoContext(ctx, "credential consent refused", "provider", provider, "reason", reason, "user_id", userID)
 		return
 	}
 	if err := h.flow.RecordRefusal(ctx, userID, provider, reason); err != nil {

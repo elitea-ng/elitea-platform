@@ -206,7 +206,21 @@ JOIN elitea_identity.target_bindings AS t
 WHERE $3::text <> '' AND g.tenant_project_id = $1 AND g.agent_binding_id = NULLIF($3, '')::uuid
   AND g.toolkit_id = ANY($4::bigint[]) AND g.state = 'active'
   AND (g.expires_at IS NULL OR g.expires_at > clock_timestamp())
-  AND 'use' = ANY (g.capabilities)`, stored.GetTenantProjectId(), targetIDs, binding, digestOnly)
+  AND 'use' = ANY (g.capabilities)
+UNION
+-- #1464: an Atlassian 3LO token is used at the API gateway, not at the
+-- target site.
+SELECT $5::text, ''
+FROM elitea_identity.credential_references AS r
+WHERE r.tenant_project_id = $1 AND r.class = 'oauth_delegated' AND r.provider_type = ANY($6::text[])
+  AND (r.target_binding_id = ANY($2::uuid[])
+       OR ($3::text <> '' AND EXISTS (
+           SELECT 1 FROM elitea_identity.credential_use_grants AS g
+           WHERE g.tenant_project_id = $1 AND g.agent_binding_id = NULLIF($3, '')::uuid
+             AND g.toolkit_id = ANY($4::bigint[]) AND g.credential_reference_id = r.id
+             AND g.state = 'active' AND 'use' = ANY (g.capabilities))))`,
+		stored.GetTenantProjectId(), targetIDs, binding, digestOnly,
+		workeregress.GovernedOAuthGatewayURL, workeregress.GovernedOAuthGatewayProviders())
 	if err != nil {
 		return nil, fmt.Errorf("worker egress: read the governed credential targets: %w", err)
 	}

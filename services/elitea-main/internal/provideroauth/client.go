@@ -34,7 +34,10 @@ const (
 const (
 	AtlassianAuthorizeURL = "https://auth.atlassian.com/authorize"
 	AtlassianTokenURL     = "https://auth.atlassian.com/oauth/token"
-	atlassianAudience     = "api.atlassian.com"
+	// AtlassianAPIURL is the Atlassian API gateway. A 3LO access token is
+	// valid only at <AtlassianAPIURL>/ex/<product>/<cloudid> (#1464).
+	AtlassianAPIURL   = "https://api.atlassian.com"
+	atlassianAudience = "api.atlassian.com"
 )
 
 const (
@@ -74,6 +77,10 @@ type ProviderConfig struct {
 	Scopes      []string
 	// Timeout bounds one token request. Default 10s.
 	Timeout time.Duration
+	// APIURL is the Atlassian API gateway (AtlassianAPIURL when empty). Main
+	// reads accessible-resources there at consent, and the grant keeps the
+	// product API base under it. Not used by other flavors.
+	APIURL string
 }
 
 // String keeps the client secret out of logs.
@@ -105,6 +112,11 @@ func (p ProviderConfig) validate() error {
 	}
 	if err := redirectURI(p.RedirectURI, p.Provider); err != nil {
 		return fail("redirect URI: %v", err)
+	}
+	if p.APIURL != "" {
+		if err := endpoint(p.APIURL); err != nil {
+			return fail("API URL: %v", err)
+		}
 	}
 	// Atlassian 3LO needs scopes (offline_access for a refresh token); Aha!
 	// OAuth2 has none.
@@ -204,6 +216,10 @@ func NewClient(cfg ProviderConfig, httpClient *http.Client) (*Client, error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = defaultProviderTimeout
 	}
+	if cfg.Flavor == FlavorAtlassian && cfg.APIURL == "" {
+		cfg.APIURL = AtlassianAPIURL
+	}
+	cfg.APIURL = strings.TrimSuffix(cfg.APIURL, "/")
 	if httpClient == nil {
 		httpClient = &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}
 	} else {

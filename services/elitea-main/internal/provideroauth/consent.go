@@ -374,7 +374,16 @@ RETURNING provider_type, tenant_project_id, user_id, agent_binding_id::text, tar
 	if err != nil {
 		return CallbackResult{}, err
 	}
-	grantID, err := c.grants.save(ctx, consented{Key: key, Tokens: tokens, RedirectURI: redirectURI})
+	// Atlassian 3LO (#1464): the token works only at the API gateway, for
+	// the sites the user granted. The target's site must be one of them;
+	// its API base is stored with the grant.
+	var apiBase string
+	if resolver, ok := authorizer.(APIBaseResolver); ok {
+		if apiBase, err = resolver.ResolveAPIBase(ctx, tokens.AccessToken, target.TargetIdentity); err != nil {
+			return CallbackResult{}, err
+		}
+	}
+	grantID, err := c.grants.save(ctx, consented{Key: key, Tokens: tokens, RedirectURI: redirectURI, APIBase: apiBase})
 	if err != nil {
 		return CallbackResult{}, err
 	}

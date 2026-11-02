@@ -59,6 +59,8 @@ type Handler struct {
 	locators  Locators
 	providers Providers
 	ids       func() string
+	// rotator serves Rotate (WithRotate).
+	rotator Rotator
 }
 
 // New builds the handler. A nil store is refused.
@@ -86,6 +88,23 @@ type referenceView struct {
 	MigratedFrom     *string `json:"migrated_from"`
 	CreatedAt        string  `json:"created_at"`
 	UpdatedAt        string  `json:"updated_at"`
+	// PendingRotation is a written secret version that waits for :activate
+	// by a second operator (#1505); absent when none.
+	PendingRotation *rotationView `json:"pending_rotation,omitempty"`
+}
+
+type rotationView struct {
+	Locator    string `json:"locator"`
+	Generation int64  `json:"generation"`
+	StagedBy   string `json:"staged_by"`
+	StagedAt   string `json:"staged_at"`
+}
+
+func rotationOf(p *repos.PendingRotation) *rotationView {
+	if p == nil {
+		return nil
+	}
+	return &rotationView{Locator: p.Locator, Generation: p.Generation, StagedBy: p.StagedBy, StagedAt: p.StagedAt.UTC().Format(time.RFC3339Nano)}
 }
 
 func optional(value string) *string {
@@ -103,6 +122,7 @@ func view(r repos.CredentialReferenceRecord) referenceView {
 		StagedBy: optional(r.StagedBy), ActivatedBy: optional(r.ActivatedBy),
 		LastTransitionBy: optional(r.LastTransitionBy), MigratedFrom: optional(r.MigratedFrom),
 		CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: r.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		PendingRotation: rotationOf(r.Rotation),
 	}
 }
 
@@ -330,7 +350,12 @@ func actor(w http.ResponseWriter, r *http.Request) (string, bool) {
 
 // decode reads a JSON object with no unknown field. An empty body is `{}`.
 func decode(w http.ResponseWriter, r *http.Request, into any) bool {
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	return decodeWithin(w, r, into, maxBodyBytes)
+}
+
+// decodeWithin is decode with its own body limit.
+func decodeWithin(w http.ResponseWriter, r *http.Request, into any, limit int64) bool {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	decoder.DisallowUnknownFields()
 	err := decoder.Decode(into)
 	if errors.Is(err, io.EOF) {
@@ -348,8 +373,11 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	case errors.Is(err, credentialgrant.ErrReferenceNotFound), errors.Is(err, repos.ErrToolkitNotFound),
 		errors.Is(err, repos.ErrAgentBindingNotUsable):
 		writeError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, repos.ErrCredentialReferenceSelfActive), errors.Is(err, repos.ErrCredentialReferenceActor):
+	case errors.Is(err, repos.ErrCredentialReferenceSelfActive), errors.Is(err, repos.ErrCredentialReferenceActor),
+		errors.Is(err, repos.ErrCredentialReferenceSelfRotation):
 		writeError(w, http.StatusForbidden, err.Error())
+	case errors.Is(err, repos.ErrCredentialReferenceNotRotatable):
+		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, repos.ErrCredentialReferenceTransition), errors.Is(err, repos.ErrCredentialReferenceNoStager),
 		errors.Is(err, repos.ErrCredentialReferenceRetired), errors.Is(err, repos.ErrCredentialReferenceTenant),
 		errors.Is(err, repos.ErrCredentialReferenceIncomplete),

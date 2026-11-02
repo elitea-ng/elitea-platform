@@ -62,6 +62,7 @@ import (
 	v2toolkits "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webedge"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webhook"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 	identityapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
 	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
@@ -2055,6 +2056,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// same typed-nil reason.
 	var childAgentStart desktopopsapi.ChildAgentStarter
 	var childAgentAuthorizer desktopopsapi.ChildAgentAuthorizer
+	// The Entra re-consent (#1477) resumes a paused run through the same
+	// chat continuation, under the same guard.
+	var credentialAuthorizationContinuer agentexecutionapp.CurrentAgentContinuer
 	var mcpToolkitRun v2mcp.ToolkitRunUseCase
 	// The unattended pipeline entry points (issues 192, 193).
 	//
@@ -2313,6 +2317,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			supportAssistantStart = publicRoutes.AgentStart
 			mcpAgentStart = publicRoutes.AgentStart
 			childAgentStart = publicRoutes.AgentStart
+			credentialAuthorizationContinuer = publicRoutes.AgentStart
 			// The pipeline trigger and schedule handler. It runs pipelines
 			// through the SAME use case as chat, MCP and the support widget —
 			// see internal/api/v2/pipelinetriggers for why there is one
@@ -2920,12 +2925,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose step retention: %w", err)
 	}
 
+	credentialConsentHandler, err := withEntraReconsent(providerOAuthGoverned.Consent, entraGoverned,
+		credentialAuthorizationContinuer, os.Getenv("COOKIE_SECURE") != "false", logger)
+	if err != nil {
+		return fmt.Errorf("compose the Entra credential re-consent: %w", err)
+	}
+
 	r := api.NewRouter(api.RouterConfig{
 		RetentionAdmin:                v2retention.NewHandler(dbrepos.NewRetentionPolicyRepo(pool)),
 		AgentIdentityAdmin:            agentIdentity.Admin,
 		CredentialGrantsAdmin:         credentialGrantsAdminHandler,
 		CredentialProbe:               credentialProbeHandler,
-		CredentialConsent:             providerOAuthGoverned.Consent,
+		CredentialConsent:             credentialConsentHandler,
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
 		ExecutionSuspensions:          executionSuspensions.handler,
 		MandateAttachments:            governedTriggers.Attachments,

@@ -151,10 +151,15 @@ impl ConfluenceToolkitConfig {
             base_url.set_path(&path);
         }
         // `Confluence.__init__`: an Atlassian URL without `/wiki` gets it
-        // (the library tests the URL text, so `jira.com` counts too).
+        // (the library tests the URL text, so `jira.com` counts too). The
+        // Atlassian API gateway of a governed 3LO token
+        // (`api.atlassian.com/ex/confluence/<cloud id>`, #1464) serves the
+        // same REST paths under `/wiki` too.
         let mut api_root = base_url.clone();
         let text = base_url.as_str();
-        if (text.contains("atlassian.net") || text.contains("jira.com")) && !text.contains("/wiki")
+        let gateway = base_url.host_str() == Some("api.atlassian.com");
+        if (gateway || text.contains("atlassian.net") || text.contains("jira.com"))
+            && !text.contains("/wiki")
         {
             let path = format!("{}/wiki", api_root.path().trim_end_matches('/'));
             api_root.set_path(&path);

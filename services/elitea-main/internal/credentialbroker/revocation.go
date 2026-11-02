@@ -197,6 +197,7 @@ func (b *Broker) partitionKey(req RedeemRequest, facts requestFacts, scopes []st
 		ScopeDigest:           cache.ScopeDigest(scopes, b.cfg.Catalog.Class(r.Action.OperationID)),
 		PolicyRevisionID:      r.Context.PolicyRevisionID,
 		Generation:            facts.reference.Generation,
+		Locator:               facts.reference.Locator,
 	}
 }
 

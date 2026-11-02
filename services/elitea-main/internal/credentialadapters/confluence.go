@@ -19,7 +19,8 @@ func Confluence() AdapterDescriptor {
 		Probe: probe("confluence.space.read"),
 		MaterialKeys: map[credentialgrant.CredentialClass][]string{
 			staticSecret:   {"token", "username"},
-			oauthDelegated: {"access_token"},
+			// api_base: the Atlassian 3LO gateway base (#1464).
+			oauthDelegated: {"access_token", "api_base"},
 		},
 		OAuthAuthority: credentialgrant.OAuthAuthorityProvider,
 		Qualification: map[credentialgrant.CredentialClass]string{

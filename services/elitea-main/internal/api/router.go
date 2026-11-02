@@ -3121,8 +3121,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// possible, so it needs approve, and the stager can never be
 				// the activator (the store and the 0193 CHECK enforce it).
 				// Listing needs manage OR approve; creating a staged reference
-				// from scratch (#1482), retire, attach, detach and the toolkit
-				// pin need manage.
+				// from scratch (#1482), retire, attach, detach, the toolkit pin
+				// and a secret rotation (#1505) need manage; the rotation's
+				// :activate needs approve from another operator.
 				if cfg.CredentialReferencesAdmin != nil {
 					references := cfg.CredentialReferencesAdmin
 					referencesManage := central(v2agentidentity.PermissionBindingsManage)
@@ -3136,6 +3137,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(referencesRead).Get("/credential_references/{id}", references.Get)
 					r.With(referencesApprove).Post("/credential_references/{id}:activate", references.Activate)
 					r.With(referencesManage).Post("/credential_references/{id}:retire", references.Retire)
+					r.With(referencesManage).Post("/credential_references/{id}:rotate", references.Rotate)
 					r.With(referencesManage).Post("/credential_references/{id}:attach", references.Attach)
 					r.With(referencesManage).Post("/credential_references/{id}:detach", references.Detach)
 					r.With(referencesManage).Put("/agent_identities/{id}/toolkits/{toolkitID}", references.PinToolkit)
