@@ -23,7 +23,7 @@
  * field, and the full list comes back.
  */
 import { test, expect } from '@playwright/test';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
@@ -48,6 +48,25 @@ async function openTodayGroup(page: Page): Promise<void> {
   if ((await today.getAttribute('aria-expanded')) !== 'true') await today.click();
 }
 
+/**
+ * Brings a row into the Today group, paging it with "Show more" as needed:
+ * the group delivers its newest rows a page at a time and this file runs in
+ * parallel with journeys that seed the same group, so a row created a moment
+ * ago on another worker can sit on its second page.
+ */
+async function revealInToday(page: Page, row: Locator): Promise<void> {
+  const more = page
+    .getByTestId('shell-chats')
+    .getByTestId('shell-chats-group')
+    .filter({ has: page.locator('.shell-group-caption', { hasText: /^Today$/ }) })
+    .locator('xpath=ancestor::li[1]')
+    .getByTestId('shell-chats-more');
+  await expect(async () => {
+    if (!(await row.isVisible()) && (await more.isVisible())) await more.locator('.shell-row-main').click();
+    await expect(row).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
+}
+
 test('the rail’s search control narrows the list to the conversation it names', async ({ page }) => {
   const keptName = uniqueName('kept');
   const droppedName = uniqueName('dropped');
@@ -60,8 +79,8 @@ test('the rail’s search control narrows the list to the conversation it names'
 
   const keptRow = page.locator(`[data-conversation-id="${kept}"]`);
   const droppedRow = page.locator(`[data-conversation-id="${dropped}"]`);
-  await expect(keptRow).toBeVisible({ timeout: 15_000 });
-  await expect(droppedRow).toBeVisible({ timeout: 15_000 });
+  await revealInToday(page, keptRow);
+  await revealInToday(page, droppedRow);
 
   // The control is not an input until it is asked to be — the list renders
   // the search field only while the caption's search is open.

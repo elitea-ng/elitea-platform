@@ -179,5 +179,11 @@ describe('AccountMenu', () => {
     expect(screen.queryByTestId('shell-report-bug')).not.toBeInTheDocument();
     await user.click(button);
     expect(await screen.findByRole('menu', { name: 'Account menu' })).toBeInTheDocument();
+
+    // A mouse press opens it without focusing the button; Escape must still
+    // hand focus back to the button, not drop it on <body>.
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+    await waitFor(() => expect(button).toHaveFocus());
   });
 });

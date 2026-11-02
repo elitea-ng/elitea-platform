@@ -78,6 +78,9 @@ export function MenuHeader({ children }: { readonly children: ReactNode }): Reac
   return (
     <ListSubheader
       disableSticky
+      // A caption, not an item: inside a role="menu" list an <li> with its
+      // implicit listitem role is invalid (axe `listitem`).
+      role="presentation"
       sx={(theme: Theme) => ({
         ...theme.typography.labelSmall,
         fontWeight: 600,

@@ -9,7 +9,7 @@
  * top to bottom as: the email, the caller's rows (`children`), the version
  * line (a click copies it, for a support request) and Sign out, always last.
  */
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 
 import ContentCopyOutlinedIcon from '@mui/icons-material/ContentCopyOutlined';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -97,6 +97,9 @@ function AccountButton({ identity, tenant, collapsed, label, expanded, selected,
         minWidth: 0,
         justifyContent: collapsed ? 'center' : 'flex-start',
         gap: 1,
+        // The button's own size, which the visually hidden name inherits: the
+        // UA's 13.33px button font fell off the type ladder.
+        fontSize: theme.typography.labelSmall.fontSize,
         paddingX: collapsed ? 0.5 : 1,
         paddingY: 0.75,
         borderRadius: theme.vars.shape.radiusSm,
@@ -197,10 +200,22 @@ export function AccountMenuFrame({
   children,
 }: AccountMenuFrameProps): React.JSX.Element {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  // The trigger opens on pointerdown with the press's focus suppressed, so the
+  // menu's own restore had only <body> to go back to: Escape left focus
+  // nowhere. Dismissing the menu (Escape, a click outside) hands focus back to
+  // the trigger; a row's own action decides focus for itself.
+  const trigger = useRef<HTMLElement | null>(null);
   const close = (): void => setAnchor(null);
   const open = (next: HTMLElement): void => {
+    trigger.current = next;
     setAnchor(next);
     onOpen?.();
+  };
+  const dismiss = (): void => {
+    close();
+    const target = trigger.current;
+    // After the menu's own focus trap has let go.
+    if (target !== null) window.setTimeout(() => target.focus(), 0);
   };
   const menuLabel = t('desktop.account.menu', 'Account menu');
 
@@ -220,10 +235,14 @@ export function AccountMenuFrame({
       <Menu
         anchorEl={anchor}
         open={anchor !== null}
-        onClose={close}
+        onClose={dismiss}
         anchorOrigin={{ vertical: 'top', horizontal: collapsed ? 'right' : 'left' }}
         transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        slotProps={{ list: { dense: true, 'aria-label': menuLabel }, paper: { sx: { minWidth: '15rem' } } }}
+        disableRestoreFocus
+        slotProps={{
+          list: { dense: true, 'aria-label': menuLabel },
+          paper: { sx: { minWidth: '15rem' } },
+        }}
       >
         {identity.email ? <MenuHeader>{identity.email}</MenuHeader> : null}
         {children(close)}
