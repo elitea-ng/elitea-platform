@@ -85,9 +85,7 @@ export function derivePageTitle(pathname: string, searchName: string, projectNam
 
   // `/agents-hub` is listed BEFORE `/agents` in SECTION_BY_PREFIX so this
   // find() resolves it correctly — `/agents-hub`.startsWith('/agents') is
-  // also true, the same substring-prefix hazard `widgets/create-button`'s
-  // `currentEntityFromPathname` documents and fixes the same way (ordering,
-  // proven by the analogous regression test in that widget).
+  // also true, so the order of the table is what resolves it.
   const section = SECTION_BY_PREFIX.find((entry) => pathname.startsWith(entry.prefix));
   if (!section) return project;
 

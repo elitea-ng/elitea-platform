@@ -112,8 +112,8 @@ export function SkillPublishControls({
        * 409 when the catalog copy is already gone) used to be written to state
        * nothing displayed: the button re-enabled, the version stayed published,
        * and the user saw exactly what a success looks like. This app has no
-       * global toast host, so it uses the local-Snackbar pattern
-       * `processes/chat/ui/ChatConversationSidebar.tsx` established.
+       * global toast host, so it uses a local Snackbar, as
+       * `features/toolkits/ui/IndexesTab.tsx` does.
        */}
       <Snackbar
         open={state.error !== undefined && !state.isOpen}
