@@ -814,7 +814,12 @@ fn read_pictures<RS: Read + Seek>(
     let mut pics = Vec::new();
     for i in 0..zip.len() {
         let mut zfile = zip.by_index(i)?;
-        let zname = zfile.name()?;
+        // Elitea patch (zip 9): `ZipFile::name` returns `ZipResult<Cow<str>>`.
+        // A name that does not decode cannot match a media path, so the entry
+        // is skipped instead of failing the workbook. zip 8 never refused a name.
+        let Ok(zname) = zfile.name() else {
+            continue;
+        };
         // no Thumbnails
         if zname.starts_with("Pictures") {
             if let Some(ext) = zname.split('.').next_back() {

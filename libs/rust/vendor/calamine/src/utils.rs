@@ -10,7 +10,6 @@ use std::io::{Read, Seek};
 
 use quick_xml::{escape::resolve_xml_entity, events::BytesRef};
 use zip::read::ZipArchive;
-use zip::result::ZipResult;
 
 const UNICODE_ESCAPE_LENGTH: usize = 7; // Length of _x00HH_.
 
@@ -165,16 +164,82 @@ pub(crate) fn unescape_xml(original: &str) -> Cow<'_, str> {
 }
 
 /// Build a lookup cache mapping lowercased normalized paths to original ZIP entry names.
-pub fn build_zip_path_cache<RS: Read + Seek>(
-    zip: &ZipArchive<RS>,
-) -> ZipResult<HashMap<String, String>> {
+pub fn build_zip_path_cache<RS: Read + Seek>(zip: &ZipArchive<RS>) -> HashMap<String, String> {
     let mut cache = HashMap::with_capacity(zip.len());
     for zip_path in zip.file_names() {
-        let zip_path = zip_path?;
+        // Elitea patch (zip 9): `file_names` yields `ZipResult<Cow<str>>`,
+        // because zip 9 decodes a name on demand. An entry whose name does
+        // not decode stays out of the cache, so a lookup for it falls back to
+        // the path itself, as for any absent entry. One such entry must not
+        // abort opening the workbook: zip 8 decoded every name and opened it.
+        let Ok(zip_path) = zip_path else {
+            continue;
+        };
         let normalized = zip_path.replace('\\', "/").to_ascii_lowercase();
         cache.insert(normalized, zip_path.to_string());
     }
-    Ok(cache)
+    cache
+}
+
+#[cfg(test)]
+pub(crate) mod zip_path_cache_tests {
+    use super::*;
+    use std::io::{Cursor, Write};
+    use zip::write::SimpleFileOptions;
+
+    /// The name bytes of the entry that is not UTF-8.
+    pub(crate) const NON_UTF8_NAME: &[u8] = b"xl/\xff\xfe-opaque.bin";
+
+    /// A zip of `entries`, plus one entry named `NON_UTF8_NAME`. zip 9
+    /// writes a name only from a `str`, so that entry is written under an
+    /// ASCII placeholder of the same length, and the placeholder's bytes are
+    /// then replaced in the local and the central header. The
+    /// language-encoding flag stays clear, as for any ASCII name.
+    pub(crate) fn zip_with_a_non_utf8_name(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let placeholder = "x".repeat(NON_UTF8_NAME.len());
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = SimpleFileOptions::default();
+        for (name, data) in entries {
+            w.start_file(*name, opts).unwrap();
+            w.write_all(data).unwrap();
+        }
+        w.start_file(placeholder.as_str(), opts).unwrap();
+        w.write_all(b"opaque").unwrap();
+        let mut bytes = w.finish().unwrap().into_inner();
+        let from = placeholder.as_bytes();
+        let mut replaced = 0;
+        let mut i = 0;
+        while i + from.len() <= bytes.len() {
+            if &bytes[i..i + from.len()] == from {
+                bytes[i..i + from.len()].copy_from_slice(NON_UTF8_NAME);
+                replaced += 1;
+                i += from.len();
+            } else {
+                i += 1;
+            }
+        }
+        assert_eq!(replaced, 2, "the local and the central header name");
+        bytes
+    }
+
+    #[test]
+    fn a_non_utf8_entry_name_does_not_abort_the_cache() {
+        let bytes = zip_with_a_non_utf8_name(&[("xl/workbook.xml", b"<workbook/>")]);
+        let zip = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        assert!(
+            std::str::from_utf8(zip.file_names_raw().nth(1).unwrap()).is_err(),
+            "the fixture must hold a name that is not UTF-8"
+        );
+        let cache = build_zip_path_cache(&zip);
+        // The good entry is always found, whatever zip makes of the other.
+        assert_eq!(
+            cached_zip_path(&cache, "XL/WORKBOOK.XML"),
+            "xl/workbook.xml"
+        );
+        // zip 9.1 reads a non-UTF-8 name as CP437, so it decodes and is
+        // cached. A zip that refuses the name drops only that entry.
+        assert!(cache.len() == 2 || cache.len() == 1, "{cache:?}");
+    }
 }
 
 /// Look up a path in the cache, falling back to the path itself.

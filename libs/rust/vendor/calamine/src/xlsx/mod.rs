@@ -707,7 +707,12 @@ impl<RS: Read + Seek> Xlsx<RS> {
         let media_path = format!("{}media", self.xl_path);
         for i in 0..self.zip.len() {
             let mut zfile = self.zip.by_index(i)?;
-            let zname = zfile.name()?;
+            // Elitea patch (zip 9): `ZipFile::name` returns `ZipResult<Cow<str>>`.
+            // A name that does not decode cannot match a media path, so the entry
+            // is skipped instead of failing the workbook. zip 8 never refused a name.
+            let Ok(zname) = zfile.name() else {
+                continue;
+            };
             if zname.starts_with(&media_path) {
                 if let Some(ext) = zname.split('.').next_back() {
                     if [
@@ -2542,7 +2547,7 @@ impl<RS: Read + Seek> Reader<RS> for Xlsx<RS> {
         check_for_password_protected(&mut reader)?;
 
         let zip = ZipArchive::new(reader)?;
-        let zip_path_cache = build_zip_path_cache(&zip)?;
+        let zip_path_cache = build_zip_path_cache(&zip);
         let mut xlsx = Xlsx {
             zip,
             xl_path: "xl/".to_string(),
@@ -4558,7 +4563,7 @@ mod tests {
         let zip_size = zip_writer.finish().unwrap().position() as usize;
 
         let zip = ZipArchive::new(std::io::Cursor::new(&buf[..zip_size])).unwrap();
-        let zip_path_cache = build_zip_path_cache(&zip).unwrap();
+        let zip_path_cache = build_zip_path_cache(&zip);
         let mut xlsx = Xlsx {
             zip,
             xl_path: "xl/".to_string(),
@@ -4580,5 +4585,38 @@ mod tests {
         assert_eq!("String 1", &xlsx.strings[0]);
         assert_eq!("String 2", &xlsx.strings[1]);
         assert_eq!("String 3", &xlsx.strings[2]);
+    }
+
+    // Elitea patch (zip 9): a workbook that holds an entry whose name is
+    // not UTF-8 still opens, and its sheet still reads.
+    #[test]
+    fn a_workbook_with_a_non_utf8_entry_name_opens() {
+        let parts: &[(&str, &[u8])] = &[
+            (
+                "[Content_Types].xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#,
+            ),
+            (
+                "_rels/.rels",
+                br#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/workbook.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                br#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>kept</t></is></c><c r="B1"><v>42</v></c></row></sheetData></worksheet>"#,
+            ),
+        ];
+        let bytes = crate::utils::zip_path_cache_tests::zip_with_a_non_utf8_name(parts);
+        let mut xlsx = Xlsx::new(std::io::Cursor::new(bytes)).expect("the workbook opens");
+        let range = xlsx.worksheet_range("Sheet1").expect("the sheet reads");
+        assert_eq!(range.get_value((0, 0)), Some(&Data::String("kept".into())));
+        assert_eq!(range.get_value((0, 1)), Some(&Data::Float(42.0)));
     }
 }

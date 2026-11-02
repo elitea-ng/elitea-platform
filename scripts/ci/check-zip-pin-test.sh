@@ -40,11 +40,19 @@ fresh() {
   done)
   git -C "$WORK/tree" init -q
   git -C "$WORK/tree" add -A
+  broken_edit=""
 }
 
 # expect <name> <pass|fail> <message substring or ''>
 expect() {
   local name="$1" want="$2" needle="$3" output status
+  # A breakage that did not apply leaves the tree unbroken, and a red case
+  # would then measure nothing. The case fails here, before the gate runs.
+  if [ -n "$broken_edit" ]; then
+    echo "FAIL ${name}: the edit that breaks the tree did not apply: ${broken_edit}" >&2
+    failed=$((failed + 1))
+    return
+  fi
   set +e
   output="$(ZIP_PIN_ROOT="$WORK/tree" bash "$GATE" 2>&1)"
   status=$?
@@ -60,8 +68,30 @@ expect() {
   failed=$((failed + 1))
 }
 
-edit() { # edit <file> <sed expression>
-  sed -i.bak -E "$2" "$WORK/tree/$1" && rm -f "$WORK/tree/$1.bak"
+# edit <file> <sed expression> and edit_awk <file> <awk program>: rewrite one
+# file of the copy. An edit command that fails, or that changes nothing, sets
+# `broken_edit`, and `expect` then fails the case. Before this, a GNU-only sed
+# expression failed on macOS, the failure was swallowed, and the case ran on
+# an unbroken tree. Use POSIX sed -E or awk only: no `0,/re/` address.
+edit() {
+  apply_edit "$1" sed -E "$2"
+}
+
+edit_awk() {
+  apply_edit "$1" awk "$2"
+}
+
+apply_edit() { # apply_edit <file> <command...>: run <command> <file> > new
+  local f="$WORK/tree/$1"
+  shift
+  if ! "$@" "$f" > "$f.new"; then
+    broken_edit="${broken_edit}'$*' failed on ${f#"$WORK/tree/"}; "
+  elif cmp -s "$f" "$f.new"; then
+    broken_edit="${broken_edit}'$*' changed nothing in ${f#"$WORK/tree/"}; "
+  else
+    cat "$f.new" > "$f"
+  fi
+  rm -f "$f.new"
   git -C "$WORK/tree" add -A
 }
 
@@ -140,7 +170,7 @@ fresh; edit services/elitea-doc-extractor/Cargo.toml '/^zip = \{ version = "=9\.
 expect "(a) a listed manifest that states no zip" fail "services/elitea-doc-extractor/Cargo.toml: states no zip requirement"
 fresh; put services/elitea-vector/extra/Cargo.toml '[package]\nname = "extra"\nversion = "0.1.0"\n\n[dependencies]\nzip = "8.6"\n'
 expect "(a) a NEW manifest that declares zip must be listed" fail "services/elitea-vector/extra/Cargo.toml: declares zip"
-fresh; for f in $(cd "$WORK/tree" && git ls-files -- '*Cargo.toml'); do
+fresh; for f in $(cd "$WORK/tree" && git grep -lF '"=9.1.3"' -- '*Cargo.toml'); do
   edit "$f" 's/^(version = )"=9\.1\.3"$/\1"9.1.3"/; s/zip = \{ version = "=9\.1\.3"/zip = { version = "9.1.3"/'
 done
 expect "(a)(d) no exact pin anywhere" fail "read no exact zip pin from any manifest"
@@ -163,13 +193,13 @@ fresh; set_pkg services/elitea-worker-rust/Cargo.lock zavora-xlsx source "regist
 expect "(c) a dropped zavora patch" fail "services/elitea-worker-rust/Cargo.lock: zavora-xlsx 0.1.2 resolves from"
 fresh; set_pkg services/elitea-doc-extractor/Cargo.lock calamine version 0.36.1
 expect "(c) a calamine at another version" fail "services/elitea-doc-extractor/Cargo.lock: calamine 0.36.1, but libs/rust/vendor/calamine is 0.36.2"
-fresh; edit libs/rust/vendor/calamine/Cargo.toml '0,/^version = "0\.36\.2"$/{/^version = "0\.36\.2"$/d}'
+fresh; edit_awk libs/rust/vendor/calamine/Cargo.toml '!gone && /^version = "0\.36\.2"$/ { gone = 1; next } { print }'
 expect "(c)(d) a vendored crate with no version" fail "libs/rust/vendor/calamine/Cargo.toml: read no '[package] version'"
 
 # (d) non-vacuity
 fresh; git -C "$WORK/tree" rm -qf services/elitea-vector/Cargo.lock
 expect "(d) one lockfile fewer than the floor" fail "Cargo.lock file(s), expected at least 12"
-fresh; for f in $(cd "$WORK/tree" && git ls-files -- '*Cargo.lock'); do edit "$f" 's/^name = "zip"$/name = "zipp"/'; done
+fresh; for f in $(cd "$WORK/tree" && git grep -l '^name = "zip"$' -- '*Cargo.lock'); do edit "$f" 's/^name = "zip"$/name = "zipp"/'; done
 expect "(d) no zip entry in any lockfile" fail "found no zip entry in any of the 12 lockfile(s)"
 fresh; git -C "$WORK/tree" rm -qf libs/rust/Cargo.lock services/elitea-worker-rust/Cargo.lock
 expect "(d) patched entries below the floor" fail "patched package entr(ies), expected at least 10"

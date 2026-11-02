@@ -306,6 +306,9 @@ Updating: replace the directory with the new archive's contents, remove its
 comment), update this table, and rerun `cargo test -p elitea-office-core`.
 Drop the copy when an upstream release requires `zip` 9 or later.
 
+**Upstream.** The `zip` 9 move, on the current `zavora-ai/zavora-docx` default
+branch: UPSTREAM_ZAVORA_DOCX.
+
 ## `zavora-slide-opc/` — zavora-slide-opc 0.1.1 on zip 9
 
 The OPC reader and writer under `zavora-slide`. `elitea-office-core` reaches it
@@ -361,6 +364,9 @@ diff -r /tmp/zavora-slide-opc-0.1.1 vendor/zavora-slide-opc  # only Cargo.toml a
   reader and writer that the caller gives it.
 
 Updating: as for `zavora-docx-opc` above.
+
+**Upstream.** The `zip` 9 move of `zavora-slide-opc` and `zavora-slide-xlsx`,
+on the current `zavora-ai/zavora-slide` default branch: UPSTREAM_ZAVORA_SLIDE.
 
 ## `zavora-slide-xlsx/` — zavora-slide-xlsx 0.1.1 on zip 9
 
@@ -419,6 +425,9 @@ diff -r /tmp/zavora-slide-xlsx-0.1.1 vendor/zavora-slide-xlsx  # only Cargo.toml
 
 Updating: as for `zavora-docx-opc` above.
 
+**Upstream.** The `zip` 9 move of `zavora-slide-opc` and `zavora-slide-xlsx`,
+on the current `zavora-ai/zavora-slide` default branch: UPSTREAM_ZAVORA_SLIDE.
+
 ## `calamine/` — calamine 0.36.2 (upstream 0.36.1 + zip 9)
 
 The XLSX, XLSB, XLS and ODS reader. `xberg` 1.3.10 pulls it in as an optional
@@ -438,7 +447,7 @@ version every direct declaration in this repository already pins.
 | Source | `https://static.crates.io/crates/calamine/calamine-0.36.1.crate` |
 | Archive SHA-256 | `5fa68281b1a76b54a62156474adb06bb380a67e07dd60656e3217152b42183f3` (equals the crates.io index `cksum`) |
 | Upstream commit | `0a24c2a9f1e38c0932c1299e633270dc730db505` (`.cargo_vcs_info.json`), `https://github.com/tafia/calamine` |
-| Tree digest | `0a267a73dd43fc74394dd8283e00eb8178848d7880d6cbafce58d5becdaeb128` (44 files; command below) |
+| Tree digest | `34b75557b910b21cbef99d5fbe6f6434bcc68e43e4ac6c3f5be0880ed127f049` (44 files; command below) |
 | Licence | `MIT`; the text is in the directory (`LICENSE-MIT.md`) |
 
 **The version is 0.36.2.** The patch must satisfy `xberg`'s `^0.36.1` range,
@@ -459,10 +468,18 @@ archive's, byte for byte.
 | --- | --- | --- |
 | `Cargo.toml`, `Cargo.toml.orig` | `zip` moves from `8.6` to `=9.1.3`. | zip 8.6.0 carries the four CVEs above. The feature set is unchanged: `default-features = false`, `features = ["deflate"]`. The requirement is exact, not a caret: `^9.1.3` let elitea-inventory-engine and the desktop doc-extract-sidecar, which reach zip only through this crate, resolve a later, unvetted 9.x on the next `cargo update` (scripts/ci/check-zip-pin.sh). |
 | `Cargo.toml`, `Cargo.toml.orig` | `version` moves from `0.36.1` to `0.36.2`. | The patch must stay inside `^0.36.1`. The new patch level marks the copy in `cargo tree` and in each lock. |
-| `src/utils.rs` | `build_zip_path_cache` returns `ZipResult<HashMap<String, String>>`. It applies `?` to each `file_names()` item and returns `Ok(cache)`. A `use zip::result::ZipResult;` line is added. | zip 9 returns `ZipResult<Cow<'_, str>>` for each entry name. zip 8 returned `&str`. |
-| `src/xlsx/mod.rs` | `Reader::new` calls `build_zip_path_cache(&zip)?`. The shared-strings unit test calls `build_zip_path_cache(&zip).unwrap()`. `read_pictures` calls `zfile.name()?`. | The cache builder is now fallible. `ZipFile::name` is now fallible. `?` maps the error through `XlsxError::Zip`. |
-| `src/xlsb/mod.rs` | `Reader::new` calls `build_zip_path_cache(&zip)?`. `read_pictures` calls `zfile.name()?`. | The same two changes. `?` maps the error through `XlsbError::Zip`. |
-| `src/ods.rs` | `read_pictures` calls `zfile.name()?`. | `ZipFile::name` is now fallible. `?` maps the error through `OdsError::Zip`. |
+| `src/utils.rs` | `build_zip_path_cache` keeps its 0.36.1 signature (`HashMap<String, String>`, not fallible) and skips a `file_names()` item that is an error. A test module, `zip_path_cache_tests`, adds `a_non_utf8_entry_name_does_not_abort_the_cache` and the fixture helper that the xlsx test uses. | zip 9 returns `ZipResult<Cow<'_, str>>` for each entry name. zip 8 returned `&str` and never refused a name. Upstream 0.37.0 applies `?` there, so one entry name that does not decode aborts the open of the whole `.xlsx` or `.xlsb`. A lookup of a skipped entry falls back to the path itself, as for any absent entry. |
+| `src/xlsx/mod.rs` | `read_pictures` skips an entry whose `zfile.name()` is an error. A test, `a_workbook_with_a_non_utf8_entry_name_opens`, opens a minimal workbook that also holds the entry name bytes `xl/\xff\xfe-opaque.bin`, and reads its sheet. | `ZipFile::name` is now fallible. A name that does not decode cannot match a media path. Without the skip, one odd entry fails the read of the workbook. |
+| `src/xlsb/mod.rs` | `read_pictures` skips an entry whose `zfile.name()` is an error. | The same change. |
+| `src/ods.rs` | `read_pictures` skips an entry whose `zfile.name()` is an error. | The same change. |
+
+Each source change carries an "Elitea patch (zip 9)" comment. zip 9.1.3 reads
+a name that is not UTF-8 as CP437, which maps every byte, so on 9.1.3 the skip
+is defensive: the fixture name decodes, and the tests prove that a workbook
+with such a name opens and reads. The skip keeps that true if a later zip
+refuses a name.
+
+**Upstream.** The skip, on the current `tafia/calamine` master: UPSTREAM_CALAMINE.
 
 The archive's `Cargo.lock` is removed (see "Why no `Cargo.lock`" above).
 
@@ -480,7 +497,8 @@ diff -r /tmp/calamine-0.36.1 vendor/calamine     # only the six files in the tab
 Run `cargo test --all-features --lib`, not `cargo test`. The published archive
 sets `exclude = ["tests/**/*"]`, so it holds no `tests/` directory. 38 doc
 tests open a path under `tests/`, and they fail with `NotFound` on the
-unpatched archive too. The 44 library tests pass.
+unpatched archive too. The 46 library tests pass, the two zip 9 name tests
+among them.
 
 **Review (2026-10-31).**
 
@@ -494,9 +512,9 @@ unpatched archive too. The 44 library tests pass.
   signatures.
 - Name decoding moves. zip 8 decoded every entry name when it read the central
   directory. zip 9 decodes a name on each `name()` or `file_names()` call: it
-  takes the bytes as UTF-8, or else as CP437. A decode failure now reaches the
-  caller as `XlsxError::Zip`, `XlsbError::Zip` or `OdsError::Zip`. The decoded
-  value for a conforming file does not change.
+  takes the bytes as UTF-8, or else as CP437. A decode failure skips that one
+  entry, in the path cache and in the picture scans. It never fails the
+  workbook. The decoded value for a conforming file does not change.
 - I/O, network, environment, threads: none. The reader works on the
   `Read + Seek` value the caller gives it.
 
@@ -523,7 +541,7 @@ version bump cannot remove them. This copy links the platform's own `zip`
 | Source | `https://static.crates.io/crates/zavora-xlsx/zavora-xlsx-0.1.2.crate` |
 | Archive SHA-256 | `c5e2a142df28712030b103d2ac9dad6d127ed026a2d9053852c799bff7b63e67` (equals the crates.io index `cksum`) |
 | Upstream commit | `6e47878cc5631c48fd5cf411785a78a458dca2cb` (`.cargo_vcs_info.json`), `https://github.com/zavora-ai/zavora-xlsx` |
-| Tree digest | `23d880c5ba01c7800b9f14b20a707580c060b54752e18a9655f20d37289b224d` (242 files; command below) |
+| Tree digest | `c2d96f0a698c52e1328ab36e1d358dfb0fd401b82f18c185c59cd2e9e8ead59b` (243 files; command below) |
 | Licence | `Apache-2.0` (its `Cargo.toml`); the text is in the directory (`LICENSE`) |
 | Version | `0.1.2`, unchanged. `office-core/tests/isolation.rs` asserts the exact `=0.1.2` pin and the locked version. A patch crate must keep the version it replaces. |
 
@@ -533,14 +551,15 @@ version bump cannot remove them. This copy links the platform's own `zip`
 | --- | --- | --- |
 | `Cargo.toml`, `Cargo.toml.orig` | The `zip` requirement becomes `=9.1.3`, exact and not a caret (scripts/ci/check-zip-pin.sh holds every manifest to it). `default-features = false` and `features = ["deflate"]` stay as upstream set them, which is what `libs/rust/office-core/Cargo.toml` takes for its own `zip`. | This is the whole point of the copy. Both manifests change so the generated and the original agree. |
 | `src/zip/zip_reader.rs` | `ZipReader::new` reads each entry name through `let Ok(name) = entry.name()`. | `zip` 9 returns `Result<Cow<str>, ZipError>` from `ZipFile::name`, not `&str`: a name is decoded on demand and can fail. An entry whose name does not decode stays out of the case-insensitive path cache, exactly as an entry that does not open already did. |
-| `src/workbook/mod.rs` | Two entry-name scans (the pass-through part list and `pictures`) use `.and_then(\|e\| e.name().ok().map(Cow::into_owned))`. | The same signature change. Both scans already dropped an entry that `by_index_raw` refused, so they now drop an undecodable name the same way. |
+| `src/workbook/mod.rs` | The pass-through part scan of `open_from_buffer` reads each name with `entry.name()?`: a name that does not decode fails the open with `Error::Zip`. An entry that `by_index_raw` refuses is still skipped, as upstream does. The `pictures` scan skips a name that does not decode. | The same signature change. The pass-through parts are written back on save, and `zip` 9 writes a name only from a `str` (the one raw-name path, `raw_copy_file`, needs the source archive, which the save no longer has). A part whose name does not decode can therefore not be preserved under its own bytes, and skipping it lost the part silently on the next save. A typed error is the loud failure; `elitea-office-core` maps it to `OfficeError::Malformed`. `pictures` only reads, so a skip loses nothing. |
+| `Cargo.toml`, `tests/passthrough_survives_a_round_trip.rs` | A new test target. It adds a `customXml/item1.xml` part and a part whose name bytes are not UTF-8 to a saved workbook, then opens, edits, saves and reopens it, and checks that both parts keep their content. | The round-trip proof for the change above. `zip` 9.1.3 reads a name that is not UTF-8 as CP437, which maps every byte, so that part decodes and is kept under the CP437 reading, as `zip` 2 also did. The error path is defensive on 9.1.3. |
 | 10 files under `tests/` | 37 call sites add one `unwrap()` after `name()` or `name_for_index(i).unwrap()`. | The same signature change. `grep -rn '\.name()\.unwrap()\|name_for_index(i)\.unwrap()\.unwrap()' tests/` lists every one. |
 | 4 files under `tests/` | 10 tests get one `std::fs::create_dir_all("output")` call, each marked `// Elitea patch`. The files are `format_variants_tests.rs` (4 tests), `named_ranges_crud_tests.rs` (2), `streaming_perf_tests.rs` (3) and `theme_color_tests.rs` (1). | The tests write to a relative `output/` path that nothing creates, so they failed with `Io(NotFound)` on a clean checkout. `tests/demo_integration.rs` already creates its directory this way. The call makes the suite pass without a prepared directory. |
 | `tests/read_sheet_protection_tests.rs`, `examples/read_sheet_protection.rs` | 4 tests and 1 example get one `std::fs::create_dir_all("target")` call, each marked `// Elitea patch`. | They write to a relative `target/` path. Cargo creates `target/` inside the crate only when `CARGO_TARGET_DIR` is unset, so the 4 tests failed with `Io(NotFound)` when it points elsewhere, a common CI setting. The call makes them pass with any target directory. |
 | `Cargo.lock` | Removed (see "Why no `Cargo.lock`" above). | Cargo ignores a path dependency's lockfile, and GitHub's dependency graph reads every lockfile in the repository. |
 | `AGENTS.md` | Removed. | The archive ships the upstream project's own agent instructions. An agent that works here finds the file and follows it, and it prescribes a five-crate workspace and `cargo test --workspace`, which do not exist in this repository. |
 
-The two library changes carry an "Elitea patch (zip 9)" comment. Nothing else
+The library changes carry an "Elitea patch (zip 9)" comment. Nothing else
 in the crate names `zip`: the reader and the writer wrap it in
 `src/zip/`, and `src/error.rs` holds `Error::Zip(zip::result::ZipError)`.
 `ZipError::FileNotFound`, `ZipArchive::{new, by_name, by_index_raw, len}`,
@@ -556,15 +575,15 @@ call it.
 curl -sL https://static.crates.io/crates/zavora-xlsx/zavora-xlsx-0.1.2.crate -o /tmp/x.crate
 shasum -a 256 /tmp/x.crate                     # the archive SHA-256 above
 tar xzf /tmp/x.crate -C /tmp && rm /tmp/zavora-xlsx-0.1.2/Cargo.lock
-diff -r /tmp/zavora-xlsx-0.1.2 vendor/zavora-xlsx   # the 20 files in the table,
+diff -r /tmp/zavora-xlsx-0.1.2 vendor/zavora-xlsx   # the 21 files in the table,
                                                    # and `Only in ...: AGENTS.md`
 (cd vendor/zavora-xlsx && find . -type f | LC_ALL=C sort | xargs shasum -a 256) | shasum -a 256
 (cd vendor/zavora-xlsx && cargo check --all-features && cargo test --all-features)
 rm -rf vendor/zavora-xlsx/output vendor/zavora-xlsx/target vendor/zavora-xlsx/Cargo.lock
 ```
 
-**What the tests showed (2026-10-31, `zip` 9.1.3 pinned).** 45 suites, 602
-tests, 0 failures with `--all-features`; 577 tests, 0 failures with
+**What the tests showed (2026-11-01, `zip` 9.1.3 pinned).** 46 suites, 603
+tests, 0 failures with `--all-features`; 578 tests, 0 failures with
 `--no-default-features`, which is how `elitea-office-core` links it. Two
 doctests are `ignore` upstream (`async_io`, `serde_support`).
 
@@ -580,7 +599,7 @@ crate writes through `zip` 9 are proven readable by something other than
 Ten tests in four suites failed on a clean checkout because they write to a
 relative `output/` directory, and the published archive excludes `output/`
 (`exclude` in its `Cargo.toml`). Each test now creates the directory, as the
-table above records, so 602 of 602 tests pass with no prepared directory. This
+table above records, so every test passes with no prepared directory. This
 was an upstream packaging gap, not a `zip` 9 effect. Do not commit the
 directory; the suites create it and `.gitignore` holds it.
 
@@ -615,3 +634,27 @@ Updating: replace the directory with the new archive's contents, remove its
 `Cargo.lock`, re-apply the changes in the table, update the table and the
 review, and rerun `cargo test -p elitea-office-core` (the hostile corpus and
 the isolation test). Drop this copy when an upstream release requires `zip` 9.
+
+**Upstream.** The `zip` 9 move, the name handling above and the test-directory
+fixes, on the current `zavora-ai/zavora-xlsx` default branch: UPSTREAM_ZAVORA_XLSX.
+
+## Moving zip
+
+`zip` is pinned exactly, `=9.1.3`, in every manifest that names it: the host
+crates and the five vendored copies above (`calamine`, `zavora-xlsx`,
+`zavora-docx-opc`, `zavora-slide-opc`, `zavora-slide-xlsx`).
+`scripts/ci/check-zip-pin.sh` fails when two manifests disagree, when a pin is
+not exact, or when a lockfile resolves another `zip`. Dependabot cannot edit a
+vendored manifest, so `.github/dependabot.yml` ignores `zip` in every cargo
+entry: a scanner bump of the host pins alone fails resolution against the
+vendored pins and turns the shared nightly group PR red.
+
+A `zip` bump is a re-vendor, in one reviewed PR:
+
+1. Move every `=9.1.3` in `git grep -lF '"=9.1.3"' -- '*Cargo.toml'` to the new
+   version, the vendored `Cargo.toml` and `Cargo.toml.orig` files included.
+2. Run `cargo update -p zip --precise <version>` in each workspace that
+   `check-zip-pin.sh` lists, and run that script.
+3. For each vendored copy, run its **Verify** block above, refresh its tree
+   digest, and record any API change in its table.
+4. Run `cargo test --locked -p elitea-office-core` from `libs/rust`.
