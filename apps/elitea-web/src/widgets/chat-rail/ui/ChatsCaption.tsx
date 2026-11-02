@@ -50,7 +50,7 @@ function LocalWorkMenu({ filter }: { readonly filter: ChatRailFilter }): React.J
   const label = t('widgets.chatRail.more', 'More chat options');
   return (
     <>
-      <IconButton size="small" aria-label={label} aria-haspopup="menu" data-testid="shell-chats-more" {...pressToOpen(setAnchor)}>
+      <IconButton size="small" aria-label={label} aria-haspopup="menu" data-testid="shell-chats-options" {...pressToOpen(setAnchor)}>
         <MoreHorizIcon fontSize="inherit" />
       </IconButton>
       <Menu anchorEl={anchor} open={anchor !== null} onClose={() => setAnchor(null)} slotProps={{ list: { dense: true } }}>
