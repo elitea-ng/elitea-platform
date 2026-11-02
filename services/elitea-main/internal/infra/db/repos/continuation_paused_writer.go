@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -47,20 +48,30 @@ FOR UPDATE OF g`
 	defer rows.Close()
 	var execution string
 	var generation *int64
-	count := 0
+	var generations []int64
 	for rows.Next() {
-		count++
 		if err := rows.Scan(&execution, &generation); err != nil {
 			return "", 0, fmt.Errorf("read the paused writer: %w", err)
+		}
+		if generation != nil {
+			generations = append(generations, *generation)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return "", 0, fmt.Errorf("read the paused writer: %w", err)
 	}
-	if count != 1 || execution == "" || generation == nil || *generation < 1 {
+	if len(generations) > 1 {
+		// An agent execution is admitted at generation 1 and keeps it across
+		// reclaims, so it settles once: two settled terminals break that
+		// invariant. Never pick one; ids and generations only.
+		slog.WarnContext(ctx, "continuation paused writer: more than one settled terminal; naming none",
+			"paused_execution_id", execution, "generations", generations)
 		return "", 0, errNoPausedWriter
 	}
-	return execution, *generation, nil
+	if execution == "" || len(generations) != 1 || generations[0] < 1 {
+		return "", 0, errNoPausedWriter
+	}
+	return execution, generations[0], nil
 }
 
 // recordPausedWriter stores the paused writer of a continuation on its job,

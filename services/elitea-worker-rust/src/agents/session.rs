@@ -2878,7 +2878,6 @@ pub(super) async fn assemble_pipeline_native(
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // Keep claim, checkpoint, continuation proof, and Runner assembly visibly ordered.
-#[allow(clippy::too_many_lines)] // One arm per continuation kind, in order.
 async fn resolve_pipeline_start(
     start: PipelineNativeStart,
     mut entry: ContinuationEntry,

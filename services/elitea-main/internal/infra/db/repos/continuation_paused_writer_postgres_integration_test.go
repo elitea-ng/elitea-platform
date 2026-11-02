@@ -11,6 +11,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -121,8 +123,11 @@ func TestPostgresPausedWriterIsTheResponsesSettledPausedExecution(t *testing.T) 
 	}
 	none("no settled terminal", false)
 
-	// A run reclaimed before it paused settles under a later generation; a
-	// failed attempt of another generation is not the paused terminal.
+	// Only a SUCCEEDED settlement is the paused terminal. An agent execution
+	// settles at generation 1 today (it is admitted at 1 and a reclaim keeps
+	// it, agentexecution/admission.go and repos/claims.go claim attempts); the
+	// reader takes the settled generation as stored rather than assuming 1,
+	// which generation 3 here proves.
 	settlePausedFixture(t, tx, pausedWriterFixture, 1, "FAILED")
 	settlePausedFixture(t, tx, pausedWriterFixture, 3, "SUCCEEDED")
 	for _, lock := range []bool{false, true} {
@@ -132,9 +137,24 @@ func TestPostgresPausedWriterIsTheResponsesSettledPausedExecution(t *testing.T) 
 		}
 	}
 
-	// Two settled terminals: never pick one.
+	// Two settled terminals break the one-settlement invariant: never pick
+	// one, and warn with ids and generations only.
+	var captured lockedBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&captured, nil)))
+	defer slog.SetDefault(previous)
 	settlePausedFixture(t, tx, pausedWriterFixture, 4, "SUCCEEDED")
 	none("two settled terminals", true)
+	logged := captured.String()
+	if !strings.Contains(logged, "more than one settled terminal") ||
+		!strings.Contains(logged, pausedWriterFixture) || !strings.Contains(logged, "generations=") {
+		t.Fatalf("the invariant break is not logged with its ids: %q", logged)
+	}
+	for _, private := range []string{"approve the call", "40000000-0000-4000-8000-000000000265"} {
+		if strings.Contains(logged, private) {
+			t.Fatalf("the warning logs %q: %q", private, logged)
+		}
+	}
 }
 
 // C5: the read runs in the deciding project's transaction, so a decision in

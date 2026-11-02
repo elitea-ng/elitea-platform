@@ -4417,6 +4417,8 @@ async fn postgres_continuation_effect_process() {
             let outcome = run_to_end(invocation).await;
             panic!("crash: the process outlived its crash point: {outcome:?}");
         }
+        // B's first attempt runs to its end (no loss).
+        "complete" => complete_continuation(&pool, counting, &depth, marker, &tool_calls).await,
         "recover" => {
             let outcomes = if committed {
                 vec![TestModelGatewayOutcome::Response(pipeline_text_response(
@@ -4430,6 +4432,102 @@ async fn postgres_continuation_effect_process() {
             recover_continuation(&assembler, marker, &depth, &mode, &tool_calls, &captured).await;
         }
         other => panic!("unknown phase {other}"),
+    }
+}
+
+/// B's first attempt of a [`continuation_scenario`] run to its end: the
+/// call runs once.
+async fn complete_continuation(
+    pool: &sqlx::PgPool,
+    counting: Arc<PipelineMcpConnector>,
+    depth: &str,
+    marker: bool,
+    tool_calls: &AtomicUsize,
+) {
+    let pending: Value =
+        serde_json::from_str(&std::env::var(PENDING_ENV).expect("pending")).expect("json");
+    let request = approval(&pending, depth);
+    let (assembler, _) = continuation_assembler(pool, counting, depth, false, Vec::new());
+    let invocation = assembler
+        .assemble(claim_for(&request, CONTINUING_EXECUTION, 1, marker))
+        .await
+        .unwrap_or_else(|error| panic!("complete: assemble the continuation: {error}"));
+    run_to_end(invocation)
+        .await
+        .unwrap_or_else(|error| panic!("complete: the continuation completes: {error}"));
+    assert_eq!(tool_calls.load(Ordering::Acquire), 1, "complete: runs once");
+}
+
+/// What the re-run of a lost continuation does, per `depth` and `mode`
+/// (R / C / I).
+async fn assert_rerun(
+    invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
+    depth: &str,
+    mode: &str,
+    tool_calls: &AtomicUsize,
+    captured: &CapturedModelRequests,
+) {
+    if depth == "0" && mode == "started" {
+        // C: a root direct node's call that may have run is never
+        // repeated; it is escalated to an operator (node recovery's
+        // reconcile pause), as on any reclaim of such a node.
+        let (frames, completion) = run_frames(invocation).await;
+        completion.unwrap_or_else(|error| panic!("recover: the run pauses: {error}"));
+        let recovery = frames
+            .iter()
+            .find(|(kind, _)| kind == "agent_node_recovery_required")
+            .map_or_else(
+                || panic!("recover: an operator reconcile pause: {frames:?}"),
+                |(_, metadata)| &metadata["node_recovery_required_v1"],
+            );
+        assert_eq!(recovery["stop_reason"], "effect_reconciliation_required");
+        assert_eq!(recovery["node_id"], "direct");
+        assert_eq!(recovery["allowed_actions"], json!(["reconcile"]));
+        assert_eq!(
+            tool_calls.load(Ordering::Acquire),
+            0,
+            "recover: not repeated"
+        );
+        return;
+    }
+    let outcome = run_to_end(invocation).await;
+    match mode {
+        // R: the committed result replays; the call never runs again.
+        "committed" => {
+            outcome.unwrap_or_else(|error| panic!("recover: the run completes: {error}"));
+            assert_eq!(tool_calls.load(Ordering::Acquire), 0, "recover: replayed");
+            assert_eq!(model_requests(captured), 1, "recover: only the next step");
+        }
+        // C → F: the call may have run; it is not repeated and the run
+        // ends with the registered may-have-started reason.
+        "started" => {
+            let error = outcome.expect_err("recover: a call that may have run ends the run");
+            assert!(
+                error.contains(crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE),
+                "recover: the registered may-have-started reason: {error}"
+            );
+            assert_eq!(
+                tool_calls.load(Ordering::Acquire),
+                0,
+                "recover: not repeated"
+            );
+        }
+        // I: the journal never recorded a start; the call runs once.
+        "undispatched" => {
+            outcome.unwrap_or_else(|error| panic!("recover: the run completes: {error}"));
+            assert_eq!(tool_calls.load(Ordering::Acquire), 1, "recover: runs once");
+        }
+        // Lost before its Runner: the decision is applied once (a direct
+        // call runs once, a HITL node routes and completes).
+        "before_runner" => {
+            outcome.unwrap_or_else(|error| panic!("recover: the run completes: {error}"));
+            assert_eq!(
+                tool_calls.load(Ordering::Acquire),
+                usize::from(depth != "gate"),
+                "recover: runs once"
+            );
+        }
+        other => panic!("unknown mode {other}"),
     }
 }
 
@@ -4470,66 +4568,7 @@ async fn recover_continuation(
     if marker {
         let invocation =
             recovered.unwrap_or_else(|error| panic!("recover: the continuation re-runs: {error}"));
-        if depth == "0" && mode == "started" {
-            // C: a root direct node's call that may have run is never
-            // repeated; it is escalated to an operator (node recovery's
-            // reconcile pause), as on any reclaim of such a node.
-            let (frames, completion) = run_frames(invocation).await;
-            completion.unwrap_or_else(|error| panic!("recover: the run pauses: {error}"));
-            let recovery = frames
-                .iter()
-                .find(|(kind, _)| kind == "agent_node_recovery_required")
-                .map(|(_, metadata)| &metadata["node_recovery_required_v1"])
-                .unwrap_or_else(|| panic!("recover: an operator reconcile pause: {frames:?}"));
-            assert_eq!(recovery["stop_reason"], "effect_reconciliation_required");
-            assert_eq!(recovery["node_id"], "direct");
-            assert_eq!(recovery["allowed_actions"], json!(["reconcile"]));
-            assert_eq!(
-                tool_calls.load(Ordering::Acquire),
-                0,
-                "recover: not repeated"
-            );
-            return;
-        }
-        let outcome = run_to_end(invocation).await;
-        match mode {
-            // R: the committed result replays; the call never runs again.
-            "committed" => {
-                outcome.unwrap_or_else(|error| panic!("recover: the run completes: {error}"));
-                assert_eq!(tool_calls.load(Ordering::Acquire), 0, "recover: replayed");
-                assert_eq!(model_requests(captured), 1, "recover: only the next step");
-            }
-            // C → F: the call may have run; it is not repeated and the run
-            // ends with the registered may-have-started reason.
-            "started" => {
-                let error = outcome.expect_err("recover: a call that may have run ends the run");
-                assert!(
-                    error.contains(crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE),
-                    "recover: the registered may-have-started reason: {error}"
-                );
-                assert_eq!(
-                    tool_calls.load(Ordering::Acquire),
-                    0,
-                    "recover: not repeated"
-                );
-            }
-            // I: the journal never recorded a start; the call runs once.
-            "undispatched" => {
-                outcome.unwrap_or_else(|error| panic!("recover: the run completes: {error}"));
-                assert_eq!(tool_calls.load(Ordering::Acquire), 1, "recover: runs once");
-            }
-            // Lost before its Runner: the decision is applied once (a direct
-            // call runs once, a HITL node routes and completes).
-            "before_runner" => {
-                outcome.unwrap_or_else(|error| panic!("recover: the run completes: {error}"));
-                assert_eq!(
-                    tool_calls.load(Ordering::Acquire),
-                    usize::from(depth != "gate"),
-                    "recover: runs once"
-                );
-            }
-            other => panic!("unknown mode {other}"),
-        }
+        assert_rerun(invocation, depth, mode, tool_calls, captured).await;
         return;
     }
     let cause = "pipeline.recovery.root_writer_mismatch";
@@ -4615,6 +4654,36 @@ async fn root_continuation_counts(pool: &sqlx::PgPool) -> (i64, i64) {
     .expect("read the root continuation events")
 }
 
+/// Set the journal to the loss point `mode` names (see
+/// [`continuation_scenario`]).
+async fn set_loss_point(pool: &sqlx::PgPool, depth: &str, mode: &str) {
+    match mode {
+        "committed" => {
+            let removed = sqlx::query(
+                "DELETE FROM elitea_runtime.agent_graph_checkpoints \
+                 WHERE thread_id LIKE $1 AND pending_nodes LIKE '%after%'",
+            )
+            .bind(child_direct_thread(depth))
+            .execute(pool)
+            .await
+            .expect("remove the row saved after the call")
+            .rows_affected();
+            assert_eq!(removed, 1, "the child saved one row after the call");
+        }
+        "undispatched" => {
+            let removed = sqlx::query(
+                "DELETE FROM elitea_runtime.agent_graph_checkpoints WHERE thread_id LIKE 'n1:%'",
+            )
+            .execute(pool)
+            .await
+            .expect("remove the journal")
+            .rows_affected();
+            assert_ne!(removed, 0, "the call's journal existed");
+        }
+        _ => {}
+    }
+}
+
 /// FU-265 / FU-269 two-process proof: A pauses, B's approval is lost around
 /// the call at `depth`, B is reclaimed; `marker` says whether Main named A as
 /// the paused writer. The journal after the loss is set to `mode`, as in
@@ -4673,31 +4742,7 @@ async fn continuation_scenario(url: &str, marker: bool, depth: &str, mode: &str)
         usize::from(mode != "before_runner"),
         "one journal for the one call: {journals:?}"
     );
-    match mode {
-        "committed" => {
-            let removed = sqlx::query(
-                "DELETE FROM elitea_runtime.agent_graph_checkpoints \
-                 WHERE thread_id LIKE $1 AND pending_nodes LIKE '%after%'",
-            )
-            .bind(child_direct_thread(depth))
-            .execute(&db.pool)
-            .await
-            .expect("remove the row saved after the call")
-            .rows_affected();
-            assert_eq!(removed, 1, "the child saved one row after the call");
-        }
-        "undispatched" => {
-            let removed = sqlx::query(
-                "DELETE FROM elitea_runtime.agent_graph_checkpoints WHERE thread_id LIKE 'n1:%'",
-            )
-            .execute(&db.pool)
-            .await
-            .expect("remove the journal")
-            .rows_affected();
-            assert_ne!(removed, 0, "the call's journal existed");
-        }
-        _ => {}
-    }
+    set_loss_point(&db.pool, depth, mode).await;
     let before = root_continuation_counts(&db.pool).await;
     // E3: with the paused writer B records `continuing` once, before its
     // Runner starts; from an older Main (no writer) it records none, as before.
@@ -4724,6 +4769,62 @@ async fn continuation_scenario(url: &str, marker: bool, depth: &str, mode: &str)
     assert!(
         after.1 <= 1 && after.1 >= before.1,
         "one resume marker at most, none removed: {before:?} {after:?}"
+    );
+    db.pool.close().await;
+}
+
+/// Decision 2 deviation: a response for which Main names no writer (no single
+/// settled paused terminal) still resumes on its first attempt, as before
+/// FU-269, and records no `continuing` record.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_continuation_without_a_named_writer_resumes_on_its_first_attempt() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-269 PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let phase = |phase: &'static str, pending: &str| {
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
+            .args([
+                "--exact",
+                CONTINUATION_TEST,
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(DATABASE_ENV, &db.database_name)
+            .env(MARKER_ENV, "0")
+            .env(DEPTH_ENV, "1")
+            .env(MODE_ENV, "started")
+            .env(PENDING_ENV, pending)
+            .env(PHASE_ENV, phase);
+        command
+    };
+    let output = run_phase("pause", phase("pause", ""));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "pause: {stdout}");
+    let pending = stdout
+        .lines()
+        .find_map(|line| line.split_once(PENDING_LINE).map(|(_, card)| card))
+        .unwrap_or_else(|| panic!("the pause phase printed its card: {stdout}"))
+        .to_owned();
+    let output = run_phase("complete", phase("complete", &pending));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "complete: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        root_continuation_counts(&db.pool).await.0,
+        0,
+        "no `continuing` record"
     );
     db.pool.close().await;
 }
