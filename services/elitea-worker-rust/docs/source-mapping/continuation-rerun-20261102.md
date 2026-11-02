@@ -191,7 +191,14 @@ then reclaimed.
 - `TestClaimDecisionPausedWriterIsBoundToAgentWork`;
 - `TestClaimReceiptCarriesThePausedWriterOnlyWithInputs`.
 
-**Counts:** TO FILL (full Worker and Main suites).
+**Counts:**
+
+- **Worker,** `cargo test --locked --all-features` with real PostgreSQL: 2,965 passed, 0 failed, 105 ignored. The
+  ignored tests are the existing ones; none is added here. `cargo clippy --all-targets --all-features -D warnings` is
+  clean.
+- **Main,** `go vet ./...` and `go test ./...` with real PostgreSQL: every package passed, after the claim unit tests
+  were given the claim's new paused-writer read (`node_recovery_claim_test.go`, `node_recovery_prefrontier_test.go`).
+  The four touched packages (`repos`, `application/execution`, `runtimegrpc/control`, `migrate`) were re-run in full.
 
 ## Performance
 
