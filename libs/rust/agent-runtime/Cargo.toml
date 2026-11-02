@@ -96,8 +96,9 @@ hyper = { version = "1.12.0", default-features = false, features = ["client", "h
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "http2", "native-tokio", "ring"] }
 hyper-util = { version = "0.1.21", default-features = false, features = ["client-legacy", "http1", "http2", "tokio"] }
 # Output contracts (ADR-0043 decision 2): validates a JSON Schema contract.
-# No remote or file `$ref` resolution (the default features); the version
-# adk-agent already locks.
+# No remote or file `$ref` resolution (the default features). Tracks the
+# latest release on its own: the vendored adk-agent still pins 0.47, so the
+# lockfile carries both copies until that vendor is re-cut.
 jsonschema = { version = "0.60.2", default-features = false }
 md-5 = "0.11.0"
 minijinja = { version = "3.0.4", default-features = false, features = ["builtins", "fuel", "serde"] }
