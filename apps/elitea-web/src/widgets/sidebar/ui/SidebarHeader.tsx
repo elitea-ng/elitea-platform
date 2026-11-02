@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import KeyboardDoubleArrowLeftIcon from '@mui/icons-material/KeyboardDoubleArrowLeft';
 import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArrowRight';
@@ -29,6 +29,14 @@ export interface SidebarHeaderProps {
  */
 export function SidebarHeader({ collapsed, onToggleCollapsed }: SidebarHeaderProps): ReactNode {
   const toggleLabel = collapsed ? t('widgets.sidebar.expand', 'Expand sidebar') : t('widgets.sidebar.collapse', 'Collapse sidebar');
+  // Controlled, and closed by the click: the toggle moves when the rail
+  // changes width, out from under the pointer, so no `mouseleave` ever came
+  // and its tooltip stayed on screen over the collapsed rail.
+  const [tipOpen, setTipOpen] = useState(false);
+  const toggle = (): void => {
+    setTipOpen(false);
+    onToggleCollapsed();
+  };
   return (
     <Box
       sx={{
@@ -56,8 +64,8 @@ export function SidebarHeader({ collapsed, onToggleCollapsed }: SidebarHeaderPro
       {!collapsed && <Box sx={{ flex: 1 }} />}
       {/* Collapsed too: the bell is the only way to the notifications, so the narrow rail keeps it as an icon. */}
       <NotificationButton />
-      <Tooltip title={toggleLabel} placement={collapsed ? 'right' : 'bottom'}>
-        <IconButton size="small" data-testid="sidebar-collapse-toggle" aria-label={toggleLabel} aria-expanded={!collapsed} onClick={onToggleCollapsed}>
+      <Tooltip title={toggleLabel} placement={collapsed ? 'right' : 'bottom'} open={tipOpen} onOpen={() => setTipOpen(true)} onClose={() => setTipOpen(false)}>
+        <IconButton size="small" data-testid="sidebar-collapse-toggle" aria-label={toggleLabel} aria-expanded={!collapsed} onClick={toggle}>
           {collapsed ? <KeyboardDoubleArrowRightIcon fontSize="small" /> : <KeyboardDoubleArrowLeftIcon fontSize="small" />}
         </IconButton>
       </Tooltip>

@@ -195,8 +195,13 @@ const toolbarSx: SxProps<Theme> = {
 
 const leftSx: SxProps<Theme> = { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', display: 'flex', alignItems: 'center', alignSelf: 'stretch' };
 
-/** Tabs keep room for two or three of themselves; past that they scroll. */
-const leftWithTabsSx: SxProps<Theme> = { minWidth: 'min(16rem, 35%)' };
+/**
+ * Tabs keep room for one or two of themselves; past that they scroll. A
+ * larger floor (16rem) pushed the actions past the toolbar's end in a 712px
+ * page (a 1280px window with the side panel open): the primary action was
+ * cut off.
+ */
+const leftWithTabsSx: SxProps<Theme> = { minWidth: 'min(10rem, 25%)' };
 
 /**
  * With tabs beside it the search folds to its icon earlier (below 992px) —

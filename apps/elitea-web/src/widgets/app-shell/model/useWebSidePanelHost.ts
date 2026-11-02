@@ -8,7 +8,9 @@
  * tab wins, as in the frame.
  *
  * Open or closed is remembered per viewer (`el.sidePanel.open`); with nothing
- * remembered it is open on a wide window (≥1280px). Below 1024px the panel is
+ * remembered it is open on a wide window (≥1440px: at 1280px the 248px rail
+ * and the 320px panel left the page 712px, too narrow for a list's toolbar,
+ * whose search folded and whose primary action was cut off). Below 1024px the panel is
  * a temporary drawer over the page, opened only on request and never
  * remembered — a narrow window has no room to keep it beside the content.
  */
@@ -25,7 +27,7 @@ const OPEN_KEY = 'sidePanel.open';
 /** A drawer over the page below this width. */
 const SIDE_PANEL_NARROW_QUERY = '(max-width: 1023.95px)';
 /** Open by default from this width, when the viewer never chose. */
-const SIDE_PANEL_WIDE_QUERY = '(min-width: 1280px)';
+const SIDE_PANEL_WIDE_QUERY = '(min-width: 1440px)';
 
 function readStoredOpen(): boolean | null {
   try {

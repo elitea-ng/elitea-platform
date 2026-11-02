@@ -369,7 +369,11 @@ function configurationTabStyles(isSmallWindow: boolean, isChatPaneCollapsed: boo
     errorContainer: { display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', width: '100%' },
     spinnerContainer: { height: '100%', width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' },
     mainContainer: {
-      height: 'calc(100vh - 3.8125rem)',
+      // The page body's height, not the viewport's less a guessed header: under
+      // the shell's title row and the page toolbar a viewport-derived height
+      // overflowed the body, which then scrolled the flow canvas out from under
+      // its own nodes.
+      height: '100%',
       overflow: 'scroll',
       padding: '0.75rem 1.5rem 1.5rem',
       gap: '2rem',
