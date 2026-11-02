@@ -112,8 +112,7 @@ interface FolderWire {
   readonly total?: number;
   readonly offset?: number;
   readonly meta?: { readonly is_pinned?: boolean; readonly [key: string]: unknown };
-  /** The creator's user id (the `folders` handler's `Folder.OwnerID`). */
-  readonly owner_id?: string | number;
+  readonly owner_id?: string | number; // creator (Go `Folder.OwnerID`); the rail's owner guard reads it
   readonly [key: string]: unknown;
 }
 
@@ -126,8 +125,6 @@ function normaliseFolder(wire: FolderWire): Folder {
     ...(wire.total !== undefined ? { total: wire.total } : {}),
     ...(wire.offset !== undefined ? { offset: wire.offset } : {}),
     ...(wire.meta?.is_pinned !== undefined ? { isPinned: wire.meta.is_pinned } : {}),
-    // Dropped before, so the rail's owner guard compared `undefined` and
-    // greyed out Rename, Pin and Delete for the folder's own creator.
     ...(wire.owner_id !== undefined ? { ownerId: String(wire.owner_id) } : {}),
     ...needsYouField(wire['needs_you']),
   };
@@ -266,8 +263,7 @@ export interface FolderConversationsParams {
   readonly sort_order?: string;
   /** `local_work` pages the rail's "Local work" filter; absent pages the ordinary rail. */
   readonly source?: string;
-  /** The rail's search: the page holds only the titles that match, as the first page did. */
-  readonly query?: string;
+  readonly query?: string; // the rail's search, as on the first page
 }
 
 function folderConversationsQueryString(params: FolderConversationsParams): string {
@@ -303,8 +299,7 @@ export interface DateGroupConversationsParams {
   readonly sort_order?: string;
   /** `local_work` pages the rail's "Local work" filter; absent pages the ordinary rail. */
   readonly source?: string;
-  /** The rail's search: the page holds only the titles that match, as the first page did. */
-  readonly query?: string;
+  readonly query?: string; // the rail's search, as on the first page
 }
 
 function dateGroupConversationsQueryString(params: DateGroupConversationsParams): string {
