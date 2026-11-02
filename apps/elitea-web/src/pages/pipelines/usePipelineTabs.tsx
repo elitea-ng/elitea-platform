@@ -44,8 +44,10 @@ function usePublicPipelineTabs(totals: PipelinesTabTotals, hasAdminPermission: b
   return useMemo(
     () => [
       { value: 'latest', label: 'Latest', count: totals.latestTotal, content: <Latest /> },
-      { value: 'my-liked', label: 'My liked', count: totals.myLikedTotal, content: <MyLiked /> },
-      { value: 'trending', label: 'Trending', count: totals.trendingTotal, content: <Trending /> },
+      // Hidden until the public API can filter by liked status / trend: both
+      // tabs would only say "not available yet". An old link lands on the first tab.
+      { value: 'my-liked', label: 'My liked', count: totals.myLikedTotal, hidden: true, content: <MyLiked /> },
+      { value: 'trending', label: 'Trending', count: totals.trendingTotal, hidden: true, content: <Trending /> },
       {
         value: 'admin',
         label: 'Admin',

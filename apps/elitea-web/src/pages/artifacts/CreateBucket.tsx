@@ -12,6 +12,7 @@ import { useNavigate, useSearch } from '@tanstack/react-router';
 import type { Bucket } from '@/entities/bucket';
 import { useArtifactBuckets, useArtifactMutations } from '@/features/artifacts';
 import { t } from '@/shared/i18n';
+import { usePageCrumbs } from '@/shared/ui/page-chrome';
 
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 
@@ -154,6 +155,7 @@ export function CreateBucket(): ReactNode {
   const [error, setError] = useState<string>();
   const validationError = isEditing ? '' : validateBucketName(name);
   const retentionError = validateRetentionDays(retention);
+  usePageCrumbs([{ label: formTitle(isEditing) }]);
 
   const pending = isEditing ? mutations.editBucketRetention.isPending : mutations.createBucket.isPending;
 
@@ -188,7 +190,6 @@ export function CreateBucket(): ReactNode {
           submit();
         }}
       >
-        <Typography variant="headingLarge" component="h1">{formTitle(isEditing)}</Typography>
         {error !== undefined && <Typography role="alert">{error}</Typography>}
         <TextField
           fullWidth

@@ -1,50 +1,21 @@
 import { useEffect, useMemo, type ReactNode, type SyntheticEvent } from 'react';
 
 import Box from '@mui/material/Box';
-import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { EntityImportButton, useEntityImport } from '@/features/agent-lifecycle';
 import { t } from '@/shared/i18n';
-import { EntityListRail, RAIL_CONTENT_WIDTH, useEntityRailVisible } from '@/shared/ui/EntityRail';
-import { ListSearchField, ListViewToggle, PageHeader } from '@/widgets/page-header';
-import { useSidebarCollapsedStore } from '@/widgets/sidebar';
+import { PERMISSIONS } from '@/shared/lib/permissions';
+import { EntityListFilters, useRailTagSelection } from '@/shared/ui/EntityRail';
+import { ListViewToggle, PageToolbar, pageBodySx, pageSx } from '@/widgets/page-header';
+import { usePermissionSet } from '@/widgets/sidebar';
 
 import { isPublicPipelinesProject } from './lib/isPublicPipelinesProject';
 import { useHasAdminPermission } from './lib/useHasAdminPermission';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { usePipelinesData } from './usePipelinesData';
 import { usePipelineTabs } from './usePipelineTabs';
-
-/**
- * The page's own column, narrowed while the rail is on screen.
- *
- * `EntityRail` is `position: fixed` at `right: 12px` with a `z-index` of
- * 1000 and the full viewport height, so anything the page draws under it is
- * unreachable — the pointer lands on the rail. The header's right-hand
- * controls (the table/card switch, the Import button) sat exactly there:
- * clicking the switch did nothing at all at any viewport wide enough to show
- * the rail, which is every viewport at or above 800px.
- *
- * `CARD_LIST_WIDTH` (`apps/elitea-ui/src/common/constants.js:511`) is the
- * baseline's answer, and `pages/skills/Skills.tsx` already applies it. The
- * width goes on the page column rather than on the header alone, so the tab
- * panel below it lines up with the header instead of running under the rail.
- */
-const pageSx = (railVisible: boolean): SxProps<Theme> => ({
-  height: '100%',
-  display: 'flex',
-  flexDirection: 'column',
-  width: railVisible ? RAIL_CONTENT_WIDTH : '100%',
-});
-
-
-const tabPanelSx: SxProps<Theme> = {
-  flex: 1,
-  minHeight: 0,
-  overflowY: 'auto',
-};
 
 /** The public feeds plus the Admin tab pin the rail to "Trending Authors" (`pages/Applications/PrivateAgentsList.jsx:141-151`, the same component the pipelines domain reuses). */
 const TRENDING_AUTHOR_TABS: readonly string[] = ['latest', 'my-liked', 'trending', 'admin'];
@@ -74,16 +45,15 @@ interface PipelinesRouteParams {
  *  - `ToolbarImportButton` (`@/[fsd]/entities/import-wizard/ui`) is mounted
  *    now, as `EntityImportButton` in the header's `actions` slot.
  *
- * **Search and the view switch are real now** — `widgets/page-header`'s
- * `ListSearchField` and `ListViewToggle`, in this header's own slots. See
- * `pages/agents/Applications.tsx`'s module comment for the full contract;
- * this page mounts the identical pair against `pageKey="pipelines"`.
+ * **The page's one toolbar** — `widgets/page-header`'s `PageToolbar`, as on
+ * `pages/agents/Applications.tsx` (see its module comment), with
+ * `pageKey="pipelines"` and "+ New pipeline".
  *  - `DateRangeSelect`/`useTrendRange` — see `Trending.tsx`'s own doc
  *    comment: the backing `trend_start_period` filter has no server-side
  *    support at all, so there is nothing for a working date picker to
  *    control.
  *
- * **The rail is real; the tag FILTER on this page is not — disclosed.** The
+ * **The Filters tab is real; the tag FILTER on this page is not — disclosed.** The
  * "Tags" panel lists this project's real tags and writes the selection into
  * the shell-wide `tags[]` search param (linkable, restored on reload), but
  * no application list narrows by it, because elitea-main cannot support it
@@ -103,13 +73,12 @@ export function Pipelines(): ReactNode {
   const projectId = useSelectedProjectId();
   const isPublicProject = isPublicPipelinesProject(projectId);
   const hasAdminPermission = useHasAdminPermission(isPublicProject ? projectId : undefined);
-  const navRailCollapsed = useSidebarCollapsedStore((state) => state.collapsed);
-  // The same answer the rail itself gives, so the column and the rail can
-  // never disagree about whether the rail is on screen.
-  const railVisible = useEntityRailVisible(navRailCollapsed);
+  const canCreate = usePermissionSet(projectId).has(PERMISSIONS.applications.create) && !isPublicProject;
+  const { selectedTags } = useRailTagSelection();
   const totals = usePipelinesData(projectId, hasAdminPermission);
   const entityImport = useEntityImport(projectId);
   const tabs = usePipelineTabs(isPublicProject, totals, hasAdminPermission);
+  const title = t('pages.pipelines.pipelines.tabsAriaLabel', 'Pipelines');
 
   const visibleTabs = useMemo(() => tabs.filter((tab) => tab.hidden !== true), [tabs]);
   const selectedIndex = visibleTabs.findIndex((tab) => tab.value === params.tab);
@@ -121,25 +90,19 @@ export function Pipelines(): ReactNode {
     void navigate({ to: '/pipelines/$tab', params: { tab: firstTab.value }, replace: true });
   }, [selectedIndex, visibleTabs, navigate]);
 
-  /**
-   * The tabs whose body is a real list. `MyLiked`/`Trending` are disclosed
-   * empty states (their own module comments record the absent server filters),
-   * so the header's search box and view switch have nothing to act on there.
-   */
-  const searchableTab = params.tab !== 'my-liked' && params.tab !== 'trending';
-
   const handleChangeTab = (_event: SyntheticEvent, nextIndex: number): void => {
     const nextTab = visibleTabs[nextIndex];
     if (nextTab === undefined) return;
     void navigate({ to: '/pipelines/$tab', params: { tab: nextTab.value } });
   };
 
+  const createAction = canCreate
+    ? { label: t('pages.pipelines.pipelines.create', 'New pipeline'), testId: 'pipelines-create', onClick: () => void navigate({ to: '/pipelines/create' }) }
+    : undefined;
 
   return (
-    <Box sx={pageSx(railVisible)}>
-      <PageHeader
-        title={t('pages.pipelines.pipelines.tabsAriaLabel', 'Pipelines')}
-        titleComponent="h1"
+    <Box sx={pageSx}>
+      <PageToolbar
         tabs={{
           items: visibleTabs.map((tab) => ({
             value: tab.value,
@@ -147,42 +110,20 @@ export function Pipelines(): ReactNode {
           })),
           selectedIndex: selectedIndex === -1 ? false : selectedIndex,
           onChange: handleChangeTab,
-          ariaLabel: t('pages.pipelines.pipelines.tabsAriaLabel', 'Pipelines'),
+          ariaLabel: title,
           testIdPrefix: 'pipelines-tab',
         }}
-        /*
-         * Import (validation-matrix gap 12). Production carries this control
-         * on the Agents, Pipelines and Skills list headers; this app had it on
-         * Skills only, so an agent could be exported and never brought back —
-         * `POST /elitea_core/import_wizard/prompt_lib/{project}` was generated
-         * and had `"usedBy": []`. Hidden for the PUBLIC project's lists, which
-         * are read-only catalogues, matching the create button's own rule.
-         */
-        slots={{
-          /*
-           * The search box and the table/card switch, both restored from the
-           * reference (`pages/pipelines/…Applications.jsx`/`Pipelines.jsx` mount
-           * `ViewToggle` in the header's middle slot; `components/
-           * RightPanel.jsx` mounts the search box in the rail). Both were
-           * disclosed as unported by this file's own module comment.
-           *
-           * Rendered only for the tabs that HAVE a list — `MyLiked` and
-           * `Trending` render a "not available yet" notice with no rows, so a
-           * search box and a view switch over them would be two controls that
-           * change nothing.
-           */
-          ...(searchableTab
-            ? {
-                search: <ListSearchField data-testid="pipeline-search-input" />,
-                viewToggle: (
-                  <ListViewToggle
-                    pageKey="pipelines"
-                    testIdPrefix="pipeline"
-                  />
-                ),
-              }
-            : {}),
-          actions: isPublicProject ? undefined : (
+        search={{ placeholder: t('pages.pipelines.pipelines.search', 'Search pipelines'), 'data-testid': 'pipeline-search-input' }}
+        filters={{ activeCount: selectedTags.length }}
+        viewToggle={
+          <ListViewToggle
+            pageKey="pipelines"
+            testIdPrefix="pipeline"
+          />
+        }
+        /* Import (validation-matrix gap 12) and create: hidden on the PUBLIC project's read-only catalogue. */
+        secondaryActions={
+          isPublicProject ? undefined : (
             <EntityImportButton
               testIdPrefix="pipelines"
               isImporting={entityImport.run.isPending}
@@ -190,18 +131,19 @@ export function Pipelines(): ReactNode {
                 await entityImport.run.mutateAsync(document);
               }}
             />
-          ),
-        }}
+          )
+        }
+        primaryAction={createAction}
       />
       <Box
-        sx={tabPanelSx}
+        sx={pageBodySx}
         role="tabpanel"
       >
         {selectedIndex !== -1 ? visibleTabs[selectedIndex]?.content : null}
       </Box>
-      <EntityListRail
+      <EntityListFilters
         projectId={projectId}
-        navRailCollapsed={navRailCollapsed}
+        subject={title}
         preferTrendingAuthors={TRENDING_AUTHOR_TABS.includes(params.tab ?? '')}
       />
     </Box>

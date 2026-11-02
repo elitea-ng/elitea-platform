@@ -12,17 +12,18 @@ import { useListToolkitInstances } from '@/shared/api/generated/toolkits/toolkit
 import type { ToolkitInstance } from '@/shared/api/generated/model';
 import { unwrapListPage } from '@/shared/api/unwrap';
 import { getConfig } from '@/shared/config';
-import { t } from '@/shared/i18n';
-import { PageHeader } from '@/widgets/page-header';
+import { PERMISSIONS } from '@/shared/lib/permissions';
 import { EntityCard, entityTypeIcon } from '@/shared/ui/EntityCardList';
+import { PageToolbar, pageBodySx, pageSx, useListSearchQuery } from '@/widgets/page-header';
+import { usePermissionSet } from '@/widgets/sidebar';
 
+import { matchesQuery, toListItem, toTagList } from './lib/toolkitListRows';
+import { toolkitsCopy } from './lib/toolkitsCopy';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
-import { ToolkitsAuthorCard } from './ui/ToolkitsAuthorCard';
+import { ToolkitsFilters } from './ui/ToolkitsFilters';
 
 const PAGE_SIZE = 20;
 
-const pageSx: SxProps<Theme> = { height: '100%', display: 'flex', flexDirection: 'column' };
-const tabPanelSx: SxProps<Theme> = { flex: 1, minHeight: 0, overflowY: 'auto' };
 const listSx: SxProps<Theme> = { height: '100%' };
 
 export interface ToolkitsProps {
@@ -48,36 +49,6 @@ export function shouldRedirectToCreatePage(input: {
 }): boolean {
   const { isPublicProject: isPublic, isLoading, isError, hasMoreRawPages, scopedItemCount, selectedTypesCount } = input;
   return !isPublic && !isLoading && !isError && !hasMoreRawPages && scopedItemCount === 0 && selectedTypesCount === 0;
-}
-
-/** `settings` narrowed to the two string fields `ToolkitListItem`/`toolkitDisplayName`'s fallback chain actually reads — `ToolkitInstance.settings` is an untyped `Record<string, unknown>` (arbitrary per-type JSON), not directly assignable to `ToolkitListItem`'s narrower shape. */
-function toListItem(row: ToolkitInstance): ToolkitListItem {
-  const settings = row.settings;
-  const eliteaTitle = typeof settings['elitea_title'] === 'string' ? settings['elitea_title'] : undefined;
-  const configurationTitle = typeof settings['configuration_title'] === 'string' ? settings['configuration_title'] : undefined;
-  return {
-    id: row.id,
-    name: row.name,
-    type: row.type,
-    ...((eliteaTitle !== undefined || configurationTitle !== undefined) && {
-      settings: {
-        ...(eliteaTitle !== undefined && { elitea_title: eliteaTitle }),
-        ...(configurationTitle !== undefined && { configuration_title: configurationTitle }),
-      },
-    }),
-  };
-}
-
-/** `tagList` — every distinct toolkit TYPE among the currently-loaded rows, name-sorted. Simpler than `useLoadToolkits.ts`'s own `buildProjectWideTagList` (the full schema-catalogue-derived list): that hook's `toolkitSchemas`/label-lookup machinery (`useGetCurrentToolkitSchemas`) is not exported from `features/toolkits`' public `index.ts` either (same §3.5 budget ceiling — see that barrel's own doc comment), so this reads the raw `type` string directly off whatever rows have actually loaded, same "presentation-layer, not a full re-implementation" scope every other disclosed gap in this unit takes. */
-function toTagList(rows: readonly ToolkitInstance[]): { readonly id: number; readonly name: string }[] {
-  const seen = new Set<string>();
-  const tags: { id: number; name: string }[] = [];
-  for (const row of rows) {
-    if (seen.has(row.type)) continue;
-    seen.add(row.type);
-    tags.push({ id: tags.length + 1, name: row.type });
-  }
-  return tags.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** `resolvedPage === 0 ? freshRows : [...priorRows, ...freshRows]`, split out to keep {@link usePagedToolkitRows}'s own complexity under the §3.5 budget. */
@@ -178,6 +149,8 @@ function usePagedToolkitRows(projectId: string | undefined, isMCP: boolean): Use
 
 interface UseToolkitsListDataResult {
   readonly data: readonly ToolkitListItem[];
+  /** The rows of this list's kind loaded so far, before the type filter and the search. */
+  readonly scopedCount: number;
   readonly tagList: readonly { readonly id: number; readonly name: string }[];
   readonly selectedTypes: readonly string[];
   readonly onSelectType: (typeName: string) => void;
@@ -192,7 +165,7 @@ interface UseToolkitsListDataResult {
 }
 
 /** MCP-scoping, client-side type-filtering, and the redirect gate, layered over {@link usePagedToolkitRows} — split out of the `Toolkits` component body to keep its own cyclomatic complexity under the §3.5 budget. */
-function useToolkitsListData(projectId: string | undefined, isMCP: boolean, isPublicProjectFlag: boolean): UseToolkitsListDataResult {
+function useToolkitsListData(projectId: string | undefined, isMCP: boolean, isPublicProjectFlag: boolean, query: string): UseToolkitsListDataResult {
   const [selectedTypes, setSelectedTypes] = useState<readonly string[]>([]);
   const paged = usePagedToolkitRows(projectId, isMCP);
 
@@ -201,7 +174,7 @@ function useToolkitsListData(projectId: string | undefined, isMCP: boolean, isPu
     () => (selectedTypes.length === 0 ? scopedRows : scopedRows.filter((row) => selectedTypes.includes(row.type))),
     [scopedRows, selectedTypes],
   );
-  const data = useMemo(() => filteredRows.map(toListItem), [filteredRows]);
+  const data = useMemo(() => filteredRows.map(toListItem).filter((item) => matchesQuery(item, query)), [filteredRows, query]);
   const tagList = useMemo(() => toTagList(scopedRows), [scopedRows]);
 
   const onSelectType = useCallback((typeName: string) => {
@@ -220,6 +193,7 @@ function useToolkitsListData(projectId: string | undefined, isMCP: boolean, isPu
 
   return {
     data,
+    scopedCount: scopedRows.length,
     tagList,
     selectedTypes,
     onSelectType,
@@ -287,27 +261,25 @@ function ToolkitCard({ item, isMCP, onOpen }: ToolkitCardProps): ReactNode {
  *  - **No server-side search/sort/type filtering** — `ListToolkitInstancesParams`
  *    only has `limit`/`offset`. The "Types" filter is real and interactive,
  *    but filters CLIENT-SIDE over whatever pages have already loaded.
- *  - **No search box** — feeds the same unsupported server param, so not
- *    added (`query` stays `undefined`).
+ *  - **The toolbar's search filters CLIENT-SIDE** too, over the loaded
+ *    rows' names and types — the server param it would feed does not exist.
  *  - **`tagList`** is derived from loaded rows' raw `type` strings, not the
  *    baseline's per-type schema-derived label (see `toTagList`'s own doc).
- *  - **`AuthorInformation` gap CLOSED** — `rightPanelExtra` carries the real
- *    author card; see `./ui/ToolkitsAuthorCard.tsx`.
+ *  - **Types and the author card are the Filters tab** of the shell's side
+ *    panel (`./ui/ToolkitsFilters.tsx`), opened from the toolbar's Filters
+ *    button; the toolbar shows the count where a single tab repeated the
+ *    page's name.
  */
 export function Toolkits({ isMCP = false }: ToolkitsProps): ReactNode {
-  const title = isMCP ? t('pages.toolkits.toolkits.titleMcp', 'MCPs') : t('pages.toolkits.toolkits.title', 'Toolkits');
-  const emptyTitle = isMCP
-    ? t('pages.toolkits.toolkits.emptyMcpTitle', 'No MCPs yet')
-    : t('pages.toolkits.toolkits.emptyTitle', 'No toolkits yet');
-  const emptyDescription = isMCP
-    ? t('pages.toolkits.toolkits.emptyMcpDescription', 'Create your first MCP to get started.')
-    : t('pages.toolkits.toolkits.emptyDescription', 'Create your first toolkit to get started.');
+  const copy = toolkitsCopy(isMCP);
 
   const navigate = useNavigate();
   const projectId = useSelectedProjectId();
   const isPublic = isPublicToolkitsProject(projectId);
+  const canCreate = usePermissionSet(projectId).has(PERMISSIONS.toolkits.create) && !isPublic;
+  const query = useListSearchQuery();
 
-  const list = useToolkitsListData(projectId, isMCP, isPublic);
+  const list = useToolkitsListData(projectId, isMCP, isPublic, query);
 
   const handleOpen = useCallback(
     (toolkitId: string) => {
@@ -329,18 +301,18 @@ export function Toolkits({ isMCP = false }: ToolkitsProps): ReactNode {
     void navigate({ to: isMCP ? '/mcps/create' : '/toolkits/create', replace: true });
   }, [list.isRedirectEligible, isMCP, navigate]);
 
+  const createAction = canCreate ? { label: copy.createLabel, testId: copy.createTestId, onClick: handleCreateClick } : undefined;
+
   return (
     <Box sx={pageSx}>
-      <PageHeader
-        title={title}
-        titleComponent="h1"
-        tabs={{ items: [{ value: 'all', label: title }], selectedIndex: 0, ariaLabel: title, testIdPrefix: 'toolkits-tab' }}
+      <PageToolbar
+        summary={copy.summary(list.scopedCount)}
+        search={{ placeholder: copy.searchPlaceholder, 'data-testid': copy.searchTestId }}
+        filters={{ activeCount: list.selectedTypes.length }}
+        primaryAction={createAction}
       />
-      <Box
-        sx={tabPanelSx}
-        role="tabpanel"
-      >
-        <Box data-testid={isMCP ? 'mcps-list-panel' : 'toolkits-list-panel'}>
+      <Box sx={pageBodySx}>
+        <Box data-testid={copy.listTestId}>
           <ToolkitsList
             sx={listSx}
             data={list.data}
@@ -360,19 +332,22 @@ export function Toolkits({ isMCP = false }: ToolkitsProps): ReactNode {
               onLoadMore: list.onLoadMore,
               totalCount: list.totalCount,
             }}
-            typeFilter={{
-              tagList: list.tagList,
-              selectedTypes: list.selectedTypes,
-              onSelectType: list.onSelectType,
-              onClearTypes: list.onClearTypes,
-            }}
+            query={query}
             isMCP={isMCP}
-            emptyStateConfig={{ title: emptyTitle, description: emptyDescription, onCreateClick: handleCreateClick }}
-            // Single-line element (not this file's usual one-prop-per-line style): it sits 1 line under the §3.5 400-line budget.
-            rightPanelExtra={<ToolkitsAuthorCard projectId={projectId} isMCP={isMCP} />}
+            emptyStateConfig={{ title: copy.emptyTitle, description: copy.emptyDescription, onCreateClick: handleCreateClick }}
           />
         </Box>
       </Box>
+      <ToolkitsFilters
+        projectId={projectId}
+        isMCP={isMCP}
+        subject={copy.title}
+        tagList={list.tagList}
+        selectedTypes={list.selectedTypes}
+        onSelectType={list.onSelectType}
+        onClearTypes={list.onClearTypes}
+        isLoading={list.isLoading}
+      />
     </Box>
   );
 }

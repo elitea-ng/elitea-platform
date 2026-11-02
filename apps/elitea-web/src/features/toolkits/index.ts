@@ -24,7 +24,7 @@
  * moment a genuine cross-slice (`pages/`/`widgets/`) consumer needs one
  * directly.
  *
- * `ToolkitTypesPanel`/`ToolkitsEmptyListPlaceHolder`/`ToolkitsEmptyState`/
+ * `ToolkitsEmptyListPlaceHolder`/`ToolkitsEmptyState`/
  * `ToolkitsTabBarPlaceholder` stay intra-slice-only too — each is already
  * consumed by `ToolkitsList`/`ToolkitsTabBar` internally, and no evidence
  * (baseline call sites or this batch's brief) points to a caller needing

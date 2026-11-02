@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
@@ -5,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { resetBackendCapabilitiesForTests, setBackendCapabilityForTests } from '@/shared/config/backendCapabilities';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { PageChromeProvider, useShellCrumbs } from '@/shared/ui/page-chrome';
 import { server } from '@/test/setup';
 
 import { CreateSkill } from './CreateSkill';
@@ -23,7 +26,23 @@ afterEach(() => {
   resetBackendCapabilitiesForTests();
 });
 
+function CrumbProbe(): ReactNode {
+  return <div data-testid="crumbs">{useShellCrumbs().map((crumb) => crumb.label).join(' / ')}</div>;
+}
+
 describe('CreateSkill', () => {
+  it('names itself "New Skill" in the shell title row and draws no heading of its own', async () => {
+    renderSkillsRoute(
+      <PageChromeProvider>
+        <CreateSkill />
+        <CrumbProbe />
+      </PageChromeProvider>,
+      '/skills/create',
+    );
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('New Skill'));
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  });
+
   /* elitea_issues: #5399 — saving with Instructions empty shows inline
      "Instructions are required." validation, never a raw backend error;
      the mutation is never even sent (no request mock is registered here). */
@@ -59,11 +78,11 @@ describe('CreateSkill', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/skills/all/skill-1'));
   });
 
-  it('discards back to the list', async () => {
+  it('cancels back to the list, even before anything is typed', async () => {
     const user = userEvent.setup();
     const { router } = renderSkillsRoute(<CreateSkill />, '/skills/create');
-    await user.type(await screen.findByTestId('skill-name-input'), 'x');
-    await user.click(screen.getByRole('button', { name: 'Discard' }));
+    await screen.findByTestId('skill-name-input');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/skills/all'));
   });
 

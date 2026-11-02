@@ -4,18 +4,17 @@
  * chat is gone from the chat lists of every member, and any member can
  * unarchive it. Each row tells who archived it and when, opens its
  * conversation (an archived conversation stays usable), and offers
- * Unarchive (back to the lists) and Delete. A name filter narrows the
- * loaded rows.
+ * Unarchive (back to the lists) and Delete. The toolbar's search (the
+ * URL's `query`) narrows the loaded rows by name.
  *
  * The web chat list's header and the desktop sidebar's "Archived" row both
- * open this page.
+ * open this page; the shell's crumb (`Chat ▸ Archived`) leads back.
  */
 import { useState, type ReactNode } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 import { formatDistanceToNow } from 'date-fns';
 
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import UnarchiveOutlinedIcon from '@mui/icons-material/UnarchiveOutlined';
 import Alert from '@mui/material/Alert';
@@ -35,8 +34,10 @@ import type { ConversationSummary, Permission } from '@/shared/api/generated/mod
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { t } from '@/shared/i18n';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
-import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
+import { combineSx } from '@/shared/ui/lib/combineSx';
+import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { useSelectedProject } from '@/widgets/app-shell';
+import { PageToolbar, pageBodySx, pageSx, useListSearchQuery } from '@/widgets/page-header';
 
 import { useArchivedConversations, type ArchivedConversations } from './useArchivedConversations';
 
@@ -121,30 +122,25 @@ export default function ArchivedChatsPage(): ReactNode {
   const projectId = project?.id === undefined ? undefined : String(project.id);
   const archived = useArchivedConversations(projectId);
   const canArchive = useCanArchive(projectId);
-  const [query, setQuery] = useState('');
+  const query = useListSearchQuery();
   const [deleting, setDeleting] = useState<ConversationSummary | null>(null);
+  usePageCrumbs([{ label: t('pages.chatArchived.crumb', 'Archived') }]);
 
   return (
-    <Box data-testid="archived-chats-page" sx={{ display: 'flex', flexDirection: 'column', gap: 2, padding: 3, maxWidth: '48rem', boxSizing: 'border-box' }}>
-      <Box>
-        <Button size="small" startIcon={<ArrowBackIcon />} onClick={() => void navigate({ to: '/chat' })}>
-          {t('pages.chatArchived.back', 'Chats')}
-        </Button>
-      </Box>
-      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
-        <Typography variant="headingMedium" component="h1">
-          {t('pages.chatArchived.title', 'Archived chats')}
-        </Typography>
-        {archived.total > 0 && <Typography variant="bodyMedium" color="text.secondary">{archived.total}</Typography>}
-      </Box>
-      <SimpleSearchBar value={query} onChange={setQuery} onClear={() => setQuery('')} placeholder={t('pages.chatArchived.filter', 'Filter archived chats…')} data-testid="archived-filter" />
-      <ArchivedList
-        archived={archived}
-        query={query}
-        canArchive={canArchive}
-        onOpen={(row) => void navigate({ to: '/chat/$conversationId', params: { conversationId: String(row.id) } })}
-        onDelete={setDeleting}
+    <Box data-testid="archived-chats-page" sx={pageSx}>
+      <PageToolbar
+        {...(archived.total > 0 ? { summary: t('pages.chatArchived.summary', '{{count}} archived chats', { count: archived.total }) } : {})}
+        search={{ placeholder: t('pages.chatArchived.filter', 'Filter archived chats…'), 'data-testid': 'archived-filter' }}
       />
+      <Box sx={bodySx}>
+        <ArchivedList
+          archived={archived}
+          query={query}
+          canArchive={canArchive}
+          onOpen={(row) => void navigate({ to: '/chat/$conversationId', params: { conversationId: String(row.id) } })}
+          onDelete={setDeleting}
+        />
+      </Box>
       <DeleteEntityModal
         open={deleting !== null}
         name={deleting?.name ?? ''}
@@ -164,3 +160,5 @@ export default function ArchivedChatsPage(): ReactNode {
     </Box>
   );
 }
+
+const bodySx = combineSx(pageBodySx, { gap: 2, padding: 3, maxWidth: '48rem', boxSizing: 'border-box' });

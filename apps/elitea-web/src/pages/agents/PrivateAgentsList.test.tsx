@@ -119,10 +119,10 @@ describe('PrivateAgentsList', () => {
 
   /*
    * The search box moved to the page HEADER (`widgets/page-header`'s
-   * `ListSearchField`, mounted by `Applications.tsx`/`Pipelines.tsx`), so this
+   * `PageSearch`, mounted by `Applications.tsx`/`Pipelines.tsx`), so this
    * tab body no longer renders one. Its contract is now "read the route's
    * `query` param", which is what these tests drive. The typing interaction
-   * itself is covered by `widgets/page-header/ui/ListSearchField.test.tsx`.
+   * itself is covered by `widgets/page-header/ui/PageSearch.test.tsx`.
    */
   it('filters client-side by the header search box\'s `query` param', async () => {
     server.use(

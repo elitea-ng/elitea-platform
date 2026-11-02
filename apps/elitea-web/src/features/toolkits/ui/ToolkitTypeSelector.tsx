@@ -51,6 +51,12 @@ export interface ToolkitTypeSelectorProps {
   readonly isMCP?: boolean;
   readonly isApplication?: boolean;
   readonly disableNavigation?: boolean;
+  /**
+   * The search text, when the page owns the search box (the create page's
+   * toolbar, its text in the URL). Omitted — the chat's toolkit editor — the
+   * gallery shows a search box of its own.
+   */
+  readonly searchQuery?: string;
 }
 
 function getDefaultTools(selectedToolsProperty: Readonly<{ readonly args_schemas?: Readonly<Record<string, { readonly default?: boolean }>> }> | undefined): readonly string[] {
@@ -256,7 +262,7 @@ function selectToolkit(item: ToolkitTypeMenuItem): void {
   item.onClick();
 }
 
-export function ToolkitTypeSelector({ onSelectTool, setFormikInitialValues, isMCP = false, isApplication = false }: ToolkitTypeSelectorProps): ReactNode {
+export function ToolkitTypeSelector({ onSelectTool, setFormikInitialValues, isMCP = false, isApplication = false, searchQuery: pageQuery }: ToolkitTypeSelectorProps): ReactNode {
   const onAddTool = useCallback(
     (toolType: string, toolSchemas: ToolkitTypeSchemaMap) => () => {
       const { detail, initialFormValues } = resolveToolSelection(toolType, toolSchemas);
@@ -293,6 +299,7 @@ export function ToolkitTypeSelector({ onSelectTool, setFormikInitialValues, isMC
     categoryOfToolkit,
     selectToolkit,
     localGroupForMCP,
+    pageQuery,
   );
 
   const renderCategory = useCallback(
@@ -314,9 +321,8 @@ export function ToolkitTypeSelector({ onSelectTool, setFormikInitialValues, isMC
   return (
     <CategoryFilter
       title={title}
-      searchPlaceholder={resolveSearchPlaceholder(isApplication, isMCP)}
-      searchQuery={searchQuery}
-      onSearchChange={onSearchChange}
+      // A page that owns the search keeps its box in the page toolbar.
+      {...(pageQuery === undefined ? { searchPlaceholder: resolveSearchPlaceholder(isApplication, isMCP), searchQuery, onSearchChange } : {})}
       allCategories={[...allCategories]}
       selectedCategories={[...selectedCategories]}
       onSelectCategory={onSelectCategory}

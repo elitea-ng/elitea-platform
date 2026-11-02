@@ -279,12 +279,12 @@ describe('ROUTE-025 /credentials/:tab/:credential_uid navigation callbacks', () 
     });
   });
 
-  it('renders the page WITHOUT configurationMode — the editor is titled "Credential"', async () => {
+  it('renders the page WITHOUT configurationMode — the shell names the saved credential', async () => {
     installHandlers();
     mountAt(`/credentials/all/${CREDENTIAL_UID}`);
 
     const scope = await main();
-    expect(await scope.findByText('Credential')).toBeInTheDocument();
+    await waitFor(() => expect(scope.getByTestId('shell-title')).toHaveTextContent('A cred'));
     expect(scope.queryByText('Configuration')).not.toBeInTheDocument();
   });
 });
@@ -317,14 +317,14 @@ describe('ROUTE-023 /credentials/create-credential navigation callbacks', () => 
     });
   });
 
-  it('renders the page WITHOUT configurationMode — the form is titled "Credential"', async () => {
+  it('renders the page WITHOUT configurationMode — the shell names it "New credential"', async () => {
     installHandlers();
     mountAt('/credentials/create-credential');
 
     await chooseTypeAndName('new cred');
 
     const scope = await main();
-    expect(await scope.findByText('Credential')).toBeInTheDocument();
+    await waitFor(() => expect(scope.getByTestId('shell-title')).toHaveTextContent('New credential'));
     expect(scope.queryByText('Configuration')).not.toBeInTheDocument();
   });
 });
@@ -346,23 +346,23 @@ describe('ROUTE-023 /credentials/create-credential navigation callbacks', () => 
  * the parent ever pre-selected a type unconditionally.
  */
 describe('ROUTE-024/064 :credentialType deep links skip the type picker', () => {
-  it('/credentials/create-credential/:credentialType opens the form directly, titled "Credential"', async () => {
+  it('/credentials/create-credential/:credentialType opens the form directly, named "New credential"', async () => {
     installHandlers();
     mountAt('/credentials/create-credential/openai');
 
     const scope = await main();
     expect(await scope.findByLabelText('Name')).toBeInTheDocument();
-    expect(scope.getByText('Credential')).toBeInTheDocument();
+    await waitFor(() => expect(scope.getByTestId('shell-title')).toHaveTextContent('New credential'));
     expect(scope.queryByPlaceholderText('Search credentials')).not.toBeInTheDocument();
   });
 
-  it('/settings/create-configuration/:credentialType opens the form directly, titled "Configuration"', async () => {
+  it('/settings/create-configuration/:credentialType opens the form directly, named "New configuration"', async () => {
     installHandlers();
     mountAt('/settings/create-configuration/openai');
 
     const scope = await main();
     expect(await scope.findByLabelText('Name')).toBeInTheDocument();
-    expect(scope.getByText('Configuration')).toBeInTheDocument();
+    await waitFor(() => expect(scope.getByTestId('shell-title')).toHaveTextContent('New configuration'));
     expect(scope.queryByPlaceholderText('Search credentials')).not.toBeInTheDocument();
   });
 
@@ -437,7 +437,8 @@ describe('picking a type writes it to the URL', () => {
       expect(router.state.location.pathname).toBe('/settings/create-configuration/openai');
     });
     // Still the settings screen: configurationMode survives the hop.
-    expect(await (await main()).findByText('Configuration')).toBeInTheDocument();
+    const scope = await main();
+    await waitFor(() => expect(scope.getByTestId('shell-title')).toHaveTextContent('New configuration'));
   });
 
   it('going back after picking a type returns to the picker, not a stale form', async () => {
@@ -491,14 +492,14 @@ describe('ROUTE-063 /settings/create-configuration navigation callbacks', () => 
     });
   });
 
-  it('renders the SAME page WITH configurationMode — the form is titled "Configuration"', async () => {
+  it('renders the SAME page WITH configurationMode — the shell names it "New configuration"', async () => {
     installHandlers();
     mountAt('/settings/create-configuration');
 
     await chooseTypeAndName('new config');
 
     const scope = await main();
-    expect(await scope.findByText('Configuration')).toBeInTheDocument();
+    await waitFor(() => expect(scope.getByTestId('shell-title')).toHaveTextContent('New configuration'));
     expect(scope.queryByText('Credential')).not.toBeInTheDocument();
   });
 
@@ -561,12 +562,12 @@ describe('ROUTE-065 /settings/edit-configuration/:credential_uid navigation call
     });
   });
 
-  it('renders the SAME page WITH configurationMode — the editor is titled "Configuration"', async () => {
+  it('renders the SAME page WITH configurationMode — the shell names the saved configuration', async () => {
     installHandlers();
     mountAt(`/settings/edit-configuration/${CREDENTIAL_UID}`);
 
     const scope = await main();
-    expect(await scope.findByText('Configuration')).toBeInTheDocument();
+    await waitFor(() => expect(scope.getByTestId('shell-title')).toHaveTextContent('A cred'));
     expect(scope.queryByText('Credential')).not.toBeInTheDocument();
   });
 

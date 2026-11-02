@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
@@ -5,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { resetBackendCapabilitiesForTests, setBackendCapabilityForTests } from '@/shared/config/backendCapabilities';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { PageChromeProvider, useShellCrumbs } from '@/shared/ui/page-chrome';
 import { server } from '@/test/setup';
 
 import { EditSkill, skillIconVersionId, skillVersionKey, toSkillForm, toSkillIconMeta } from './EditSkill';
@@ -46,6 +49,10 @@ afterEach(() => {
   resetBackendCapabilitiesForTests();
   vi.restoreAllMocks();
 });
+
+function CrumbProbe(): ReactNode {
+  return <div data-testid="crumbs">{useShellCrumbs().map((crumb) => crumb.label).join(' / ')}</div>;
+}
 
 describe('EditSkill', () => {
   it('maps basic and versioned skill responses into editable form values', () => {
@@ -102,6 +109,18 @@ describe('EditSkill', () => {
     expect(skillIconVersionId(detail, 'base')).toBe('v1');
     expect(skillIconVersionId(detail, undefined)).toBe('v1');
     expect(skillIconVersionId(undefined, undefined)).toBeUndefined();
+  });
+
+  it('names the skill in the shell title row and draws no heading of its own', async () => {
+    renderSkillsRoute(
+      <PageChromeProvider>
+        <EditSkill />
+        <CrumbProbe />
+      </PageChromeProvider>,
+      '/skills/all/skill-1',
+    );
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('Reviewer'));
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 
   it('loads the form and ephemeral test panel', async () => {

@@ -5,17 +5,12 @@ import Box from '@mui/material/Box';
 import { useRouterState } from '@tanstack/react-router';
 
 import { getConfig } from '@/shared/config';
+import { SidePanelSlotProvider } from '@/shared/desktop/inspectorSlot';
 import { usePlatformAnnouncements } from '@/shared/lib/hooks/usePlatformAnnouncements';
 import { readPersistedProject } from '@/shared/lib/selectedProjectPersistence';
+import { PageChromeProvider } from '@/shared/ui/page-chrome';
 import { SupportAssistantWidget } from '@/widgets/support-assistant';
-import {
-  Sidebar,
-  usePermissionSet,
-  useProjectOptions,
-  useSidebarCollapsedStore,
-  SIDE_BAR_WIDTH_PX,
-  COLLAPSED_SIDE_BAR_WIDTH_PX,
-} from '@/widgets/sidebar';
+import { Sidebar, usePermissionSet, useProjectOptions } from '@/widgets/sidebar';
 
 import type { Project } from '@/entities/project';
 
@@ -23,11 +18,14 @@ import type { SelectedProject } from '../model/selectedProject.store';
 import { usePersonalProjectId } from '../model/usePersonalProjectId';
 import { useSelectedProject } from '../model/useSelectedProject.hooks';
 import { useSettleShellAfterProvisioning } from '../model/useSettleShellAfterProvisioning';
+import { useWebSidePanelHost } from '../model/useWebSidePanelHost';
 import { BudgetWarningBanner } from './BudgetWarningBanner';
 import { MaintenanceSplash } from './MaintenanceSplash';
 import { NavBlockerDialog } from './NavBlockerDialog';
 import { PlatformBanner } from './PlatformBanner';
 import { PageTitleSetter } from './PageTitleSetter';
+import { ShellTopBar } from './ShellTopBar';
+import { WebSidePanel } from './WebSidePanel';
 
 /**
  * The desktop build's workspace-first frame (ADR-0029) replaces the web
@@ -166,7 +164,7 @@ export function AppShell({ children }: AppShellProps): ReactNode {
      put this function over the §3.5 complexity budget on their own. */
   const selectedProjectId = project?.id;
   const permissions = usePermissionSet(selectedProjectId);
-  const collapsed = useSidebarCollapsedStore((state) => state.collapsed);
+  const sidePanel = useWebSidePanelHost();
   const pathname = useRouterState({ select: (routerState) => routerState.location.pathname });
   const { banner, maintenance } = usePlatformAnnouncements();
   const isOnboardingPage = pathname === ONBOARDING_PATHNAME;
@@ -251,8 +249,6 @@ export function AppShell({ children }: AppShellProps): ReactNode {
     }
   }, [project, projects, projectsLoading, selectProject]);
 
-  const sidebarWidth = isOnboardingPage ? 0 : collapsed ? COLLAPSED_SIDE_BAR_WIDTH_PX : SIDE_BAR_WIDTH_PX;
-
   // A maintenance window replaces the whole shell — sidebar included — for
   // everyone the API is refusing. Rendering the product around the splash would
   // leave every control looking usable while every request behind it answers
@@ -279,61 +275,71 @@ export function AppShell({ children }: AppShellProps): ReactNode {
     );
   }
 
+  // The page title is the shell's (`ShellTopBar`'s breadcrumb), and what
+  // belongs beside the page is in the side panel (`WebSidePanel`): pages
+  // register both through the two providers below.
   return (
-    <Box sx={{ display: 'flex' }}>
-      {/*
-       * The assistant widget wraps the SIDEBAR now, and the reason is the
-       * render prop it has always had: `SidebarBody.jsx` puts a "Support Bot"
-       * hit area in the rail's footer bar whenever a deployment has an
-       * assistant to open, and the only place that `onToggleAssistant` handle
-       * exists is inside this render prop. It used to be called with `() =>
-       * null`, so the footer bar had nothing to render and the rail fell back
-       * to a plain Help Center row on every deployment, enabled or not.
-       *
-       * The widget renders a FRAGMENT — the children plus its own
-       * fixed-position overlay — so both stay direct flex children of this
-       * row exactly as before; nothing about the overlay's placement changes.
-       */}
-      <SupportAssistantWidget project={project ?? undefined}>
-        {({ onToggleAssistant }) =>
-          hideSidebar ? null : (
-            <Sidebar
-              permissions={permissions}
-              projects={projects}
-              selectedProjectId={selectedProjectId}
-              onSelectProject={selectProject}
-              onToggleAssistant={onToggleAssistant}
-            />
-          )
-        }
-      </SupportAssistantWidget>
-      <Box
-        component="main"
-        sx={{
-          display: 'block',
-          flexGrow: 1,
-          width: `calc(100% - ${sidebarWidth}px)`,
-          maxWidth: `calc(100% - ${sidebarWidth}px)`,
-          height: '100vh',
-          boxSizing: 'border-box',
-          position: 'relative',
-        }}
-      >
-        <PageTitleSetter projectName={project?.name} />
-        {/* Above the page content and inside `main`, so it scrolls with the
-            document rather than floating over it. The legacy banner was
-            absolutely positioned at `zIndex: 2400`, which put it on top of
-            every dialog in the app. */}
-        <PlatformBanner banner={banner} />
-        {/* Below the platform banner on purpose: an operator's notice about
-            the deployment outranks one project's budget. Issue 312 — the
-            threshold read has existed since #322 with nothing calling it, so a
-            project went from "fine" to "every call refused" with no warning
-            between. */}
-        <BudgetWarningBanner projectId={selectedProjectId} projectName={project?.name} />
-        {children}
-        <NavBlockerDialog />
-      </Box>
-    </Box>
+    <SidePanelSlotProvider value={sidePanel.slot}>
+      <PageChromeProvider>
+        <Box sx={{ display: 'flex' }}>
+          {/*
+           * The assistant widget wraps the SIDEBAR now, and the reason is the
+           * render prop it has always had: `SidebarBody.jsx` puts a "Support Bot"
+           * hit area in the rail's footer bar whenever a deployment has an
+           * assistant to open, and the only place that `onToggleAssistant` handle
+           * exists is inside this render prop. It used to be called with `() =>
+           * null`, so the footer bar had nothing to render and the rail fell back
+           * to a plain Help Center row on every deployment, enabled or not.
+           *
+           * The widget renders a FRAGMENT — the children plus its own
+           * fixed-position overlay — so both stay direct flex children of this
+           * row exactly as before; nothing about the overlay's placement changes.
+           */}
+          <SupportAssistantWidget project={project ?? undefined}>
+            {({ onToggleAssistant }) =>
+              hideSidebar ? null : (
+                <Sidebar
+                  permissions={permissions}
+                  projects={projects}
+                  selectedProjectId={selectedProjectId}
+                  onSelectProject={selectProject}
+                  onToggleAssistant={onToggleAssistant}
+                />
+              )
+            }
+          </SupportAssistantWidget>
+          <Box
+            component="main"
+            sx={{
+              display: 'flex',
+              flexDirection: 'column',
+              flex: 1,
+              minWidth: 0,
+              height: '100vh',
+              boxSizing: 'border-box',
+              position: 'relative',
+            }}
+          >
+            <PageTitleSetter projectName={project?.name} />
+            {!isOnboardingPage && <ShellTopBar sidePanel={sidePanel} />}
+            {/* Above the page content and inside `main`, so it scrolls with the
+                document rather than floating over it. The legacy banner was
+                absolutely positioned at `zIndex: 2400`, which put it on top of
+                every dialog in the app. */}
+            <PlatformBanner banner={banner} />
+            {/* Below the platform banner on purpose: an operator's notice about
+                the deployment outranks one project's budget. Issue 312 — the
+                threshold read has existed since #322 with nothing calling it, so a
+                project went from "fine" to "every call refused" with no warning
+                between. */}
+            <BudgetWarningBanner projectId={selectedProjectId} projectName={project?.name} />
+            {/* The page scrolls here, under the title row — as in the desktop frame. */}
+            <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative' }}>{children}</Box>
+            <NavBlockerDialog />
+          </Box>
+          <WebSidePanel host={sidePanel} />
+        </Box>
+      </PageChromeProvider>
+    </SidePanelSlotProvider>
   );
 }

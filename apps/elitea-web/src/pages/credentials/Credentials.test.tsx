@@ -5,9 +5,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { server } from '../../test/setup';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
-import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { Credentials } from './Credentials';
+import { renderCredentialsRoute } from './__tests__/testRouter';
 
 const BASE = '/api/v2';
 
@@ -16,11 +16,11 @@ afterEach(() => {
 });
 
 describe('Credentials (ROUTE-022 target)', () => {
-  it('renders the page heading (COPY-466) and the credentials list', async () => {
+  it('renders the credentials list under its toolbar', async () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(http.get(`${BASE}/configurations/configurations/7`, () => HttpResponse.json({ items: [], total: 0, limit: 20, offset: 0 })));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    renderWithTheme(
+    renderCredentialsRoute(
       <QueryClientProvider client={client}>
         <Credentials
           tab="all"
@@ -29,17 +29,18 @@ describe('Credentials (ROUTE-022 target)', () => {
           onCreateNew={vi.fn()}
         />
       </QueryClientProvider>,
+      '/credentials/all',
     );
-    expect(screen.getByText('Credentials')).toBeInTheDocument();
     expect(await screen.findByText('No credentials yet')).toBeInTheDocument();
+    expect(screen.getByTestId('page-toolbar-summary')).toHaveTextContent('0 credentials');
   });
 
-  /** COMPOSITION ROOT — see `pages/skills/Skills.test.tsx` (issue 841). */
-  it('renders its heading inside the shared page header', () => {
+  /** COMPOSITION ROOT — the shell's breadcrumb names the page; the page draws only its toolbar. */
+  it('renders its search and create action in the page toolbar, and no heading of its own', async () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(http.get(`${BASE}/configurations/configurations/7`, () => HttpResponse.json({ items: [], total: 0, limit: 20, offset: 0 })));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    renderWithTheme(
+    renderCredentialsRoute(
       <QueryClientProvider client={client}>
         <Credentials
           tab="all"
@@ -48,9 +49,12 @@ describe('Credentials (ROUTE-022 target)', () => {
           onCreateNew={vi.fn()}
         />
       </QueryClientProvider>,
+      '/credentials/all',
     );
 
-    const header = screen.getByTestId('page-header');
-    expect(header).toContainElement(screen.getByRole('heading', { name: 'Credentials', level: 1 }));
+    const toolbar = await screen.findByTestId('page-toolbar');
+    expect(toolbar).toContainElement(screen.getByTestId('credentials-search-input'));
+    expect(toolbar).toContainElement(screen.getByRole('button', { name: 'New credential' }));
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 });

@@ -144,7 +144,7 @@ describe('the toolkit credential picker is supplied by the real composition root
 
     renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
-    await screen.findByText('My GitHub');
+    await screen.findByRole('tablist', { name: 'My GitHub' });
 
     // The picker's own label, derived by the form from the property key.
     const picker = await screen.findByRole('combobox', { name: /Github Configuration/i });
@@ -173,7 +173,7 @@ describe('the toolkit credential picker is supplied by the real composition root
 
     renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
-    await screen.findByText('My GitHub');
+    await screen.findByRole('tablist', { name: 'My GitHub' });
     const picker = await screen.findByRole('combobox', { name: /Github Configuration/i });
 
     // Give the batch-validation/auto-select effects a tick to run before
@@ -189,7 +189,7 @@ describe('the toolkit credential picker is supplied by the real composition root
 
     renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
-    await screen.findByText('My GitHub');
+    await screen.findByRole('tablist', { name: 'My GitHub' });
     await user.click(await screen.findByRole('combobox', { name: /Github Configuration/i }));
     await user.click(within(await screen.findByRole('listbox')).getByText('CI Bot Token'));
 
@@ -256,7 +256,7 @@ describe('the toolkit credential picker is supplied by the real composition root
 
     renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
-    await screen.findByText('My GitHub');
+    await screen.findByRole('tablist', { name: 'My GitHub' });
     await waitFor(() => {
       expect(screen.queryByRole('combobox', { name: /Github Configuration/i })).not.toBeInTheDocument();
     });
@@ -279,7 +279,7 @@ describe('the toolkit credential picker is supplied by the real composition root
 
     renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
-    await screen.findByText('My GitHub');
+    await screen.findByRole('tablist', { name: 'My GitHub' });
     await screen.findByRole('combobox', { name: /Github Configuration/i });
 
     await waitFor(() => {
@@ -306,7 +306,7 @@ describe('the index schedule modal credential select is supplied by the real com
 
     renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
-    await screen.findByText('My GitHub');
+    await screen.findByRole('tablist', { name: 'My GitHub' });
     await user.click(await screen.findByRole('tab', { name: 'Indexes' }));
     await user.click(await screen.findByTestId('index-schedule-settings'));
 
@@ -343,7 +343,7 @@ describe('the credential status indicator reads the real stored connection check
 
     renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
-    await screen.findByText('My GitHub');
+    await screen.findByRole('tablist', { name: 'My GitHub' });
     await user.click(await screen.findByRole('combobox', { name: /Github Configuration/i }));
 
     const indicator = await screen.findByTestId('credential-status-indicator');
@@ -370,7 +370,7 @@ describe('the credential status indicator reads the real stored connection check
 
     renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
-    await screen.findByText('My GitHub');
+    await screen.findByRole('tablist', { name: 'My GitHub' });
     await user.click(await screen.findByRole('combobox', { name: /Github Configuration/i }));
     await user.click(await screen.findByTestId('credential-reload-button'));
 
@@ -393,7 +393,7 @@ describe('the credential status indicator reads the real stored connection check
 
     renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
-    await screen.findByText('My GitHub');
+    await screen.findByRole('tablist', { name: 'My GitHub' });
     await user.click(await screen.findByRole('combobox', { name: /Github Configuration/i }));
     await screen.findByText('CI Bot Token');
 

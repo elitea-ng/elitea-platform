@@ -2,7 +2,7 @@
  * The frame's inspector (`shared/desktop/inspectorSlot`): ONE full-height
  * panel at the window's right edge, on the sidebar's own surface, whose tabs
  * the page on screen contributes — Local work's Changes, Approvals and Index,
- * the chat's Conversation. Tabs only appear on the pages they belong to.
+ * the chat's Conversation, a list page's Filters. Tabs only appear on the pages they belong to.
  *
  * Like an IDE's tool windows, the panel stacks its tabs in one or two groups
  * (a splitter between them); a tab moves between groups by dragging its chip
@@ -30,6 +30,7 @@ import type { AppIpc } from '@/shared/desktop/appEvents';
 import {
   INSPECTOR_TAB_PAGE,
   InspectorSlotProvider,
+  SidePanelSlotProvider,
   type InspectorPage,
   type InspectorSlot,
   type InspectorTabId,
@@ -118,8 +119,14 @@ export function useInspectorHost(appIpc: AppIpc | undefined): InspectorHost {
   return { slot, page, tabs, windows, setBody, setWindowBody };
 }
 
+/** The inspector is both the frame's own slot and the shell's side panel (the list pages' Filters, the chat's Conversation). */
 export function InspectorSlotScope({ host, children }: { readonly host: InspectorHost; readonly children: ReactNode }): React.JSX.Element {
-  return <InspectorSlotProvider value={host.slot}>{children}</InspectorSlotProvider>;
+  const sidePanel = useMemo(() => ({ ...host.slot, show: (tab: InspectorTabId) => useDesktopLayout.getState().showInspector(tab) }), [host.slot]);
+  return (
+    <InspectorSlotProvider value={host.slot}>
+      <SidePanelSlotProvider value={sidePanel}>{children}</SidePanelSlotProvider>
+    </InspectorSlotProvider>
+  );
 }
 
 /** The groups the panel shows now (none: the page has no tabs, or every one is closed). */

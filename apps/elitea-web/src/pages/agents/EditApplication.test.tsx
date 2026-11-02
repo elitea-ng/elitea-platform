@@ -1,3 +1,5 @@
+import type { ReactElement } from 'react';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configure, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -7,11 +9,29 @@ import { getGetApplicationMockHandler } from '@/shared/api/generated/application
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { installCodeMirrorTestPolyfills } from '@/shared/ui/lib/field/codeMirrorTestPolyfills';
+import { PageChromeProvider, useShellCrumbs } from '@/shared/ui/page-chrome';
 import { server } from '@/test/setup';
 import { NavBlockerDialog, useNavBlockerStore } from '@/widgets/app-shell';
 
 import { EditApplication } from './EditApplication';
 import { renderAgentsRoute } from './__tests__/testRouter';
+
+/**
+ * The agent's name is the shell's crumb (`Agents ▸ My Agent`), not a heading
+ * of the page's own: the probe shows what the shell's title row would say.
+ */
+function CrumbProbe(): ReactElement {
+  return <div data-testid="crumbs">{useShellCrumbs().map((crumb) => crumb.label).join(' / ')}</div>;
+}
+
+function withShell(page: ReactElement): ReactElement {
+  return (
+    <PageChromeProvider>
+      {page}
+      <CrumbProbe />
+    </PageChromeProvider>
+  );
+}
 
 // This page's real `CreateAgentForm` mounts a CodeMirror-backed field
 // (`InstructionsInput`), which needs both stubs `installCodeMirrorTestPolyfills`
@@ -178,30 +198,29 @@ afterEach(() => {
 });
 
 describe('EditApplication', () => {
-  it('renders the application name once it loads', async () => {
+  it('names the page after the application in the shell title row once it loads', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
 
-    // 5s, not the 1s default: the configuration panel now renders the real
-    // `CreateAgentForm` (several MUI accordions) instead of an empty Box, so the
-    // first paint is much heavier. This passed locally and failed on CI at the
-    // default timeout, with the DOM showing the fallback `<h3>Agent</h3>` — the
-    // query had simply not resolved yet. The assertion is unchanged; only the
-    // wait is realistic for a slower machine.
+    // 5s, not the 1s default: the configuration panel renders the real
+    // `CreateAgentForm` (several MUI accordions), so the first paint is heavy
+    // and the crumb shows the fallback "Agent" until the detail resolves.
     //
     // The query's own 5s timeout used to equal vitest's 5s default test
     // budget — a slow-but-correct mount and an uninformative "Test timed
     // out" raced for the same clock. Scoped to 15s below, same pattern as
     // the rename test, so the query still fails with a named element when
     // one is genuinely missing, well before the test budget would.
-    expect(await screen.findByText('My Agent', {}, { timeout: 5_000 })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('My Agent'), { timeout: 5_000 });
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
   }, 15_000);
 
   it('renders the configuration tab panel with the real agent fields in it', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
 
@@ -221,7 +240,7 @@ describe('EditApplication', () => {
 
   it('shows the not-found state when the URL version is not in the versions list', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42/999', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42/999', {
       projectId: '9',
     });
 
@@ -240,7 +259,7 @@ describe('EditApplication', () => {
     // `createMemoryHistory`'s `initialEntries` parses a combined path+query
     // string, which this fixture found does NOT reliably populate
     // `location.search` for a cold `initialEntries` string.
-    const { router } = renderAgentsRoute(<EditApplication />, '/agents/all/42/999', { projectId: '9' });
+    const { router } = renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42/999', { projectId: '9' });
     await waitFor(() => expect(screen.getByText('Version not found')).toBeInTheDocument(), { timeout: 5_000 });
 
     await router.navigate({
@@ -256,7 +275,7 @@ describe('EditApplication', () => {
 
   it('renders the Save/Cancel bar once loaded', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
 
@@ -295,7 +314,7 @@ describe('EditApplication', () => {
       ),
     );
     const user = userEvent.setup();
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
 
@@ -327,7 +346,7 @@ describe('EditApplication', () => {
 
   it('mounts "Save As Version" for an owner and withholds it from a read-only viewer', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    const owner = renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    const owner = renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
     // Two full mounts in this one test, each carrying a 5s query timeout
@@ -337,7 +356,7 @@ describe('EditApplication', () => {
     owner.unmount();
 
     setPublicProjectId('9');
-    const viewer = renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    const viewer = renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
     await viewer.findByTestId('version-selector-trigger', {}, { timeout: 5_000 });
@@ -347,7 +366,7 @@ describe('EditApplication', () => {
   it('clicking Cancel does not throw and keeps the page mounted', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const user = userEvent.setup();
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
 
@@ -360,7 +379,7 @@ describe('EditApplication', () => {
   it('hides the Save/Cancel bar for a read-only viewer of a public agent (viewing under the public project)', async () => {
     setPublicProjectId('42');
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/latest/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/latest/42', {
       projectId: '42',
     });
 
@@ -372,7 +391,7 @@ describe('EditApplication', () => {
   it('still renders the Save/Cancel bar for the same agent when the selected project is NOT the public project', async () => {
     setPublicProjectId('42');
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
 
@@ -386,7 +405,7 @@ describe('EditApplication', () => {
         HttpResponse.json({ error: 'not found' }, { status: 404 }),
       ),
     );
-    renderAgentsRoute(<EditApplication />, '/agents/all/999', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/999', {
       projectId: '9',
     });
 
@@ -397,7 +416,7 @@ describe('EditApplication', () => {
 
   it('shows a save-error banner (instead of nothing) when a save attempt fails', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -441,7 +460,7 @@ describe('EditApplication', () => {
       }),
       http.put('*/elitea_core/application/prompt_lib/:projectId/:id', () => HttpResponse.json({ id: '42' }, { status: 201 })),
     );
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -479,7 +498,7 @@ describe('EditApplication', () => {
         return HttpResponse.json({ id: '42' }, { status: 201 });
       }),
     );
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -529,7 +548,7 @@ describe('EditApplication', () => {
       }),
       http.put('*/elitea_core/application/prompt_lib/:projectId/:id', () => HttpResponse.json({ id: '42' }, { status: 201 })),
     );
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -561,7 +580,7 @@ describe('EditApplication', () => {
       }),
       http.put('*/elitea_core/application/prompt_lib/:projectId/:id', () => HttpResponse.json({ id: '42' }, { status: 201 })),
     );
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -587,7 +606,7 @@ describe('EditApplication', () => {
    */
   it('mounts the export, delete and version-delete controls for a writer', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
 
@@ -607,7 +626,7 @@ describe('EditApplication', () => {
   it('hides the export, delete and version-delete controls from a read-only viewer of a public agent', async () => {
     setPublicProjectId('42');
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/latest/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/latest/42', {
       projectId: '42',
     });
 
@@ -629,7 +648,7 @@ describe('EditApplication', () => {
    */
   it("mounts the Tools panel inside the configuration panel, with the version's attached tools on screen", async () => {
     server.use(getGetApplicationMockHandler(detailWithTools()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
 
@@ -658,7 +677,7 @@ describe('EditApplication', () => {
    */
   it("mounts the tag editor in the configuration panel with the version's stored tags on screen", async () => {
     server.use(getGetApplicationMockHandler(detailWithTags()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
 
@@ -681,7 +700,7 @@ describe('EditApplication', () => {
       }),
       http.put('*/elitea_core/application/prompt_lib/:projectId/:id', () => HttpResponse.json({ id: '42' }, { status: 201 })),
     );
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -705,7 +724,7 @@ describe('EditApplication', () => {
     server.use(getGetApplicationMockHandler(detailWithTags()));
     const versionBodies: Record<string, unknown>[] = [];
     captureVersionSave(versionBodies);
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -726,7 +745,7 @@ describe('EditApplication', () => {
   it('offers a read-only viewer neither tool control (no attach menu, remove disabled)', async () => {
     setPublicProjectId('42');
     server.use(getGetApplicationMockHandler(detailWithTools()));
-    renderAgentsRoute(<EditApplication />, '/agents/latest/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/latest/42', {
       projectId: '42',
     });
 
@@ -745,7 +764,7 @@ describe('EditApplication', () => {
    */
   it('mounts the model picker, showing the project default for a version that pins none', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
 
@@ -768,7 +787,7 @@ describe('EditApplication', () => {
         },
       }),
     );
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
 
@@ -779,7 +798,7 @@ describe('EditApplication', () => {
     server.use(getGetApplicationMockHandler(detail()));
     const bodies: Record<string, unknown>[] = [];
     captureVersionSave(bodies);
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -802,7 +821,7 @@ describe('EditApplication', () => {
     server.use(getGetApplicationMockHandler(detail()));
     const bodies: Record<string, unknown>[] = [];
     captureVersionSave(bodies);
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -825,7 +844,7 @@ describe('EditApplication', () => {
 
   it('arms the unsaved-changes guard when only the model is changed (#133)', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', {
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
     const user = userEvent.setup();
@@ -855,7 +874,7 @@ describe('EditApplication', () => {
    */
   it('mounts the Information section inside the configuration panel, showing the ids the detail read carries', async () => {
     server.use(getGetApplicationMockHandler(detail()));
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', { projectId: '9' });
 
     const panel = await screen.findByTestId('edit-application-configuration-tab-panel', {}, { timeout: 5_000 });
     const information = await screen.findByTestId('agent-information-section', {}, { timeout: 5_000 });
@@ -900,7 +919,7 @@ describe('EditApplication', () => {
             }),
       ),
     );
-    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', { projectId: '9' });
 
     const information = await screen.findByTestId('agent-information-section', {}, { timeout: 5_000 });
     expect(await within(information).findByText('Forked from:', {}, { timeout: 5_000 })).toBeInTheDocument();
@@ -918,7 +937,7 @@ describe('leaving the editor', () => {
   it('confirming the discard dialog navigates back to the agents list', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const user = userEvent.setup();
-    const { router } = renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    const { router } = renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', { projectId: '9' });
 
     const description = await screen.findByTestId('agent-description-input', {}, { timeout: 5_000 });
     await user.type(description, ' edited');
@@ -938,7 +957,7 @@ describe('leaving the editor', () => {
   it('dismissing the discard dialog stays on the edit page', async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const user = userEvent.setup();
-    const { router } = renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    const { router } = renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', { projectId: '9' });
 
     // The form's inputs render before the detail fetch settles, but the
     // toolbar (and its Cancel) waits for `!isFetching` — await the BUTTON,
@@ -984,7 +1003,7 @@ describe('talking to the agent', () => {
       }),
     );
     const user = userEvent.setup();
-    const { router } = renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    const { router } = renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', { projectId: '9' });
 
     await user.click(await screen.findByTestId('chat-with-agent-button', {}, { timeout: 5_000 }));
 
@@ -1022,7 +1041,7 @@ describe('talking to the agent', () => {
       http.post('*/elitea_core/participants/prompt_lib/:projectId/:conversationId', () => HttpResponse.json({ error: reason }, { status: 400 })),
     );
     const user = userEvent.setup();
-    const { router } = renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    const { router } = renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', { projectId: '9' });
 
     await user.click(await screen.findByTestId('chat-with-agent-button', {}, { timeout: 5_000 }));
 
@@ -1036,7 +1055,7 @@ describe('talking to the agent', () => {
       http.post('*/elitea_core/conversations/prompt_lib/:projectId', () => HttpResponse.json({}, { status: 500 })),
     );
     const user = userEvent.setup();
-    const { router } = renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    const { router } = renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', { projectId: '9' });
 
     await user.click(await screen.findByTestId('chat-with-agent-button', {}, { timeout: 5_000 }));
 

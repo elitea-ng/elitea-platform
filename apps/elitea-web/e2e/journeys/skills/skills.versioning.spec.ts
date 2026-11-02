@@ -55,7 +55,7 @@ test('SKILL-2: create a version, edit it independently, compare, and restore it 
   try {
     // ---- Setup: create the skill on the form (same path SKILL-1 drives). ----
     await page.goto(BASE_URL + '/app/skills/all');
-    await page.getByRole('button', { name: 'Create skill' }).click();
+    await page.getByTestId('skills-create').click();
     await page.waitForURL(/\/skills\/create/, { timeout: 15_000 });
     await page.getByTestId('skill-name-input').fill(name);
     await page.getByTestId('skill-description-input').fill('Created by the skills versioning journey.');

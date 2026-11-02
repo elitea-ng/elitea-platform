@@ -1,0 +1,49 @@
+---
+title: "Page layout"
+description: "How every Elitea page is laid out on the web and in the desktop app: title bar, page toolbar, side panel and sidebar."
+---
+
+Every page in Elitea uses the same layout, in the browser and in the desktop app. The title is in the title bar, the controls for the page are in one toolbar, and filters and other side content are in a side panel on the right. You find the same control in the same place on every page.
+
+## Title bar and breadcrumb
+
+The title bar at the top of the page shows a breadcrumb: the section, then the page that is open. For example, **Agents** on the agents list, **Toolkits › New toolkit** on the toolkit create form, or **Agents › My agent** in the agent editor.
+
+- Select the section in the breadcrumb (for example **Toolkits**) to go back to its list. Pages do not have their own large title or a back arrow.
+- On a create or edit form, use **Cancel** or **Discard** next to **Save** to leave the form. If you have unsaved changes, Elitea asks before you leave.
+- **Web:** the title bar is a thin row above the page. When the page has side content, a side panel toggle shows at the right end of the row.
+- **Desktop:** the breadcrumb is in the window's title bar row, next to the sidebar and inspector toggles.
+
+## Page toolbar
+
+Under the title bar, each page has one toolbar row:
+
+- **Left:** the page's tabs, or a count of what the page lists (for example "12 credentials").
+- **Right**, always in this order:
+  1. **Search.** The search text is kept in the page address (`query`), so a filtered list can be bookmarked or shared and stays after a reload. Press `/`, or ⌘F (Ctrl+F on Windows and Linux), to go to the search box. In a narrow window the box folds to its search icon; select the icon to type.
+  2. **Filters.** Opens the **Filters** tab of the side panel. A badge shows how many filters are on.
+  3. **View switch** between cards and a table, where the list has one.
+  4. **Secondary actions**, for example **Import**.
+  5. **The primary action**, for example **+ New agent**, **+ New pipeline**, **+ New skill**, **+ New toolkit**, **+ New MCP** or **+ New credential**.
+
+On a type gallery (for example when you pick a toolkit or credential type to create), the search box is at the left end of the toolbar.
+
+## Side panel
+
+Content that belongs next to a page is in the side panel on the right, not over the page:
+
+- **Filters**, on the list pages: the tags (or types) to filter by, then the author card or the trending authors.
+- **Conversation**, in a chat: the participants, agents, toolkits and the context budget of the conversation.
+
+The panel shows its tabs as chips at the top and has a close button.
+
+- **Desktop:** the side panel is the inspector. Show or hide it with the inspector toggle in the title bar, or ⌘⌥\\. The **Filters** tab works like the other inspector tabs.
+- **Web:** show or hide the panel with the toggle at the right end of the title bar. Elitea remembers whether you keep it open. If you have not chosen, it is open on windows 1280px wide or wider. In windows narrower than 1024px, the panel opens over the page as a drawer and closes when you select outside it.
+
+## Sidebar
+
+The sidebar on the left has the same structure on the web and on the desktop: the project switcher, your chats, and the sections of the platform. Each section you can create in, such as Agents or Toolkits, shows a **+** when you point at it or move to it with the keyboard. Select **+** to create a new item of that kind. See [Platform overview](/menus/overview).
+
+<Info title="Related">
+[Platform overview](/menus/overview) · [Agents](/menus/agents) · [Toolkits](/menus/toolkits) · [Credentials](/menus/credentials)
+</Info>

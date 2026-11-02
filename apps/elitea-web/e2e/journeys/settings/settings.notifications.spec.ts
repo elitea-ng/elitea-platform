@@ -35,14 +35,12 @@ import { BASE_URL } from '../../../playwright.config';
 
 /**
  * The toolbar's search box, and the addressable proof that the page chrome is
- * present (`DrawerPageHeader` renders its title as a `<div>`, so the title is
- * not a role landmark).
+ * present (the title is the shell's breadcrumb, not part of the page).
  *
  * `Search`, EXACT — not `Search notifications…`. The screen was rebuilt to
  * match production, whose `NotificationTableToolbar.jsx:45` passes
  * `placeholder="Search"`; the longer string was this port's invention.
- * `exact` matters: the settings header's own default placeholder is
- * `Search something amazing!`, and a substring match would accept it.
+ * `exact` keeps a longer placeholder from passing as this one.
  */
 const searchBox = (page: import('@playwright/test').Page) =>
   page.getByPlaceholder('Search', { exact: true });

@@ -147,7 +147,7 @@ export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsLi
   const sortOrder: SortOrder = search.sort_order === 'asc' ? 'asc' : 'desc';
 
   // The search box is the page HEADER's (`widgets/page-header`'s
-  // `ListSearchField`, mounted by `Applications.tsx`), and its value reaches
+  // `PageSearch`, mounted by `Applications.tsx`), and its value reaches
   // this tab through the route's `query` search param. This component used to
   // own both the box and the state; a box per tab meant the text was lost on
   // every tab change and could not be linked to.

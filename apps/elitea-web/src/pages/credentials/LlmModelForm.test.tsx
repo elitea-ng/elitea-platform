@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { server } from '../../test/setup';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
-import { renderWithTheme } from '@/shared/ui/lib/testTheme';
+import { renderCredentialsRoute } from './__tests__/testRouter';
 
 import { CredentialForm } from './CredentialForm';
 import type { CredentialFormContext } from './CredentialForm';
@@ -69,7 +69,7 @@ const STORED_MODEL = {
 
 function renderForm(ui: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return renderWithTheme(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  return renderCredentialsRoute(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
 }
 
 function serveType(): void {

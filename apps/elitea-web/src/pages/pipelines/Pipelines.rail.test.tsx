@@ -12,6 +12,7 @@ import { getGetSocialTrendingAuthorsMockHandler } from '@/shared/api/generated/s
 import { getListTagsMockHandler } from '@/shared/api/generated/tags/tags.msw';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { server } from '@/test/setup';
+import { SidePanelHarness } from '@/test/sidePanelHarness';
 
 import { Pipelines } from './Pipelines';
 import { renderPipelinesRoute } from './__tests__/testRouter';
@@ -44,18 +45,18 @@ afterEach(() => {
   resetConfigForTests();
 });
 
-describe('Pipelines right-hand rail', () => {
-  it('renders the rail with the project tag chips', async () => {
+describe('Pipelines Filters tab', () => {
+  it('offers the Filters tab with the project tag chips', async () => {
     setConfig('1');
-    renderPipelinesRoute(<Pipelines />, '/pipelines/latest', { projectId: '1' });
+    renderPipelinesRoute(<SidePanelHarness><Pipelines /></SidePanelHarness>, '/pipelines/latest', { projectId: '1' });
 
-    expect(await screen.findByTestId('entity-rail')).toBeInTheDocument();
+    expect(await screen.findByTestId('side-panel-tab-filters')).toContainElement(await screen.findByTestId('entity-list-filters'));
     expect(await screen.findByTestId('tags-panel-chip-alpha')).toBeInTheDocument();
   });
 
   it('shows Trending Authors on the public feed tabs', async () => {
     setConfig('1');
-    renderPipelinesRoute(<Pipelines />, '/pipelines/latest', { projectId: '1' });
+    renderPipelinesRoute(<SidePanelHarness><Pipelines /></SidePanelHarness>, '/pipelines/latest', { projectId: '1' });
 
     expect(await screen.findByText('Trending Authors')).toBeInTheDocument();
     expect(await screen.findByText('Grace Hopper')).toBeInTheDocument();
@@ -65,27 +66,9 @@ describe('Pipelines right-hand rail', () => {
   it('marks a clicked chip as selected', async () => {
     setConfig('1');
     const user = userEvent.setup();
-    renderPipelinesRoute(<Pipelines />, '/pipelines/latest', { projectId: '1' });
+    renderPipelinesRoute(<SidePanelHarness><Pipelines /></SidePanelHarness>, '/pipelines/latest', { projectId: '1' });
 
     await user.click(await screen.findByTestId('tags-panel-chip-alpha'));
     await waitFor(() => expect(screen.getByTestId('tags-panel-chip-alpha')).toHaveAttribute('aria-pressed', 'true'));
-  });
-  /*
-   * The rail is `position: fixed` over the right edge of the viewport with a
-   * z-index of 1000, so a page column that stays 100% wide draws its header
-   * controls UNDER it and the pointer never reaches them. E2E measured it:
-   * the table/card switch could not be clicked at all
-   * (`e2e/journeys/pipelines/pipelines.dashboard.spec.ts`, "entity-rail subtree intercepts pointer
-   * events"). `pages/skills/Skills.tsx` already narrows its column the same
-   * way.
-   */
-  it('narrows the page column to the card-list width while the rail is on screen', async () => {
-    setConfig('1');
-    renderPipelinesRoute(<Pipelines />, '/pipelines/latest', { projectId: '1' });
-
-    expect(await screen.findByTestId('entity-rail')).toBeInTheDocument();
-    const column = screen.getByRole('tabpanel').parentElement;
-    expect(column).not.toBeNull();
-    expect(getComputedStyle(column as HTMLElement).width).toBe('calc(100% - 328px)');
   });
 });

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 
+import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
@@ -10,7 +11,6 @@ import { useNavigate } from '@tanstack/react-router';
 import {
   GenerateSkillModal,
   isSkillValid,
-  SkillEditorToolbar,
   SkillForm,
   useSkillMutations,
   type SkillDraft,
@@ -18,6 +18,9 @@ import {
 } from '@/features/skills';
 import { hasBackendCapability } from '@/shared/config';
 import { t } from '@/shared/i18n';
+import { BaseBtn } from '@/shared/ui/BaseBtn';
+import { usePageCrumbs } from '@/shared/ui/page-chrome';
+import { PageToolbar, pageSx } from '@/widgets/page-header';
 
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 
@@ -31,6 +34,7 @@ export function CreateSkill(): ReactNode {
   const [showErrors, setShowErrors] = useState(false);
   const [generateOpen, setGenerateOpen] = useState(false);
   const [error, setError] = useState<string>();
+  usePageCrumbs([{ label: t('skills.create.title', 'New Skill') }]);
 
   // `SkillForm` renders the Generate button only when it receives
   // `onGenerate`. The draft endpoint is not mounted, so it receives nothing —
@@ -55,15 +59,27 @@ export function CreateSkill(): ReactNode {
 
   return (
     <Box sx={pageSx}>
-      <Box sx={headerSx}>
-        <Typography variant="headingSmall">{t('skills.create.title', 'New Skill')}</Typography>
-        <SkillEditorToolbar
-          isDirty={value !== EMPTY_SKILL}
-          isSaving={mutations.create.isPending}
-          onSave={save}
-          onDiscard={() => void navigate({ to: '/skills/$tab', params: { tab: 'all' } })}
-        />
-      </Box>
+      <PageToolbar
+        secondaryActions={
+          <>
+            <BaseBtn
+              variant="secondary"
+              disabled={mutations.create.isPending}
+              onClick={() => void navigate({ to: '/skills/$tab', params: { tab: 'all' } })}
+            >
+              {t('common.cancel', 'Cancel')}
+            </BaseBtn>
+            <BaseBtn
+              variant="contained"
+              startIcon={<SaveOutlinedIcon />}
+              disabled={value === EMPTY_SKILL || mutations.create.isPending}
+              onClick={save}
+            >
+              {t('skills.toolbar.save', 'Save')}
+            </BaseBtn>
+          </>
+        }
+      />
       <Box sx={contentSx}>
         {error && <Typography role="alert">{error}</Typography>}
         <SkillForm
@@ -88,15 +104,6 @@ export function CreateSkill(): ReactNode {
   );
 }
 
-const pageSx: SxProps<Theme> = { height: '100%', display: 'flex', flexDirection: 'column' };
-const headerSx: SxProps<Theme> = (theme: Theme) => ({
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  minHeight: '3rem',
-  padding: theme.spacing(1, 3),
-  borderBottom: `0.0625rem solid ${theme.vars.palette.border.lines}`,
-});
 const contentSx: SxProps<Theme> = (theme: Theme) => ({
   flex: 1,
   overflowY: 'auto',

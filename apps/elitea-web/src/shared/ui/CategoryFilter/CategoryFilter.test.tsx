@@ -16,8 +16,18 @@ describe('CategoryFilter', () => {
   });
 
   it('gives the search field an accessible name from the placeholder', () => {
-    const { getByRole } = renderWithTheme(<CategoryFilter searchPlaceholder="Search prompts" />);
+    const { getByRole } = renderWithTheme(
+      <CategoryFilter
+        searchPlaceholder="Search prompts"
+        onSearchChange={vi.fn()}
+      />,
+    );
     expect(getByRole('textbox', { name: 'Search prompts' })).toBeInTheDocument();
+  });
+
+  it('draws no search box for a caller that does not handle one', () => {
+    const { queryByRole } = renderWithTheme(<CategoryFilter searchPlaceholder="Search prompts" />);
+    expect(queryByRole('textbox')).toBeNull();
   });
 
   it('calls onSearchChange as the user types', async () => {

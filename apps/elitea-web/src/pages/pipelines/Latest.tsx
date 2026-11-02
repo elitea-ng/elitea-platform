@@ -50,7 +50,7 @@ function isPipelineRow(app: App): boolean {
 export function Latest(): ReactNode {
   const navigate = useNavigate();
   // The search box is the page HEADER's (`widgets/page-header`'s
-  // `ListSearchField`); its value reaches this tab as the route's `query`
+  // `PageSearch`); its value reaches this tab as the route's `query`
   // search param.
   const query = useListSearchQuery();
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);

@@ -206,7 +206,7 @@ test('J21a: settings/secrets renders its real page chrome', async ({ page }) => 
   const add = page.getByRole('button', { name: 'Create new secret', exact: true });
   await expect(add).toBeEnabled({ timeout: 15_000 });
 
-  // The header's own title. DrawerPageHeader renders it as the page's h1;
+  // The page's title, the last crumb of the shell's title row (its one h1);
   // an unscoped `getByText('Secrets')` also matches the settings sidebar
   // link, which is present on every settings route. (A DOM-path scope from
   // the search input broke when every search field became one SimpleSearchBar.)

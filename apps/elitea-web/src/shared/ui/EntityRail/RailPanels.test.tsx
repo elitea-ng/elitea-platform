@@ -1,78 +1,12 @@
-import { act } from 'react';
-
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithTheme } from '../lib/testTheme';
-import { EntityRail, isEntityRailVisible } from './EntityRail';
 import { RailAuthorCardView } from './RailAuthorCard';
 import { RailTagsPanelView } from './RailTagsPanel';
 import { RailTrendingAuthorsView } from './RailTrendingAuthors';
 import { railStatForKind, resolveRailStat } from './lib/railStatistics';
-
-function setWindowWidth(width: number): void {
-  Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: width });
-}
-
-describe('isEntityRailVisible', () => {
-  it('hides below 700px when the nav rail is collapsed (useShouldCollapseRightToolbar.js:16-19)', () => {
-    expect(isEntityRailVisible(699, true)).toBe(false);
-    expect(isEntityRailVisible(700, true)).toBe(true);
-  });
-
-  it('hides below 800px when the nav rail is open', () => {
-    expect(isEntityRailVisible(799, false)).toBe(false);
-    expect(isEntityRailVisible(800, false)).toBe(true);
-  });
-
-  it('uses the earlier-hiding 800px threshold as the default', () => {
-    expect(isEntityRailVisible(750, false)).toBe(false);
-    expect(isEntityRailVisible(750, true)).toBe(true);
-  });
-});
-
-describe('EntityRail', () => {
-  it('renders the search slot above its children', () => {
-    setWindowWidth(1400);
-    renderWithTheme(
-      <EntityRail search={<div data-testid="search-slot" />}>
-        <div data-testid="rail-child" />
-      </EntityRail>,
-    );
-    const rail = screen.getByTestId('entity-rail');
-    expect(rail).toContainElement(screen.getByTestId('search-slot'));
-    expect(rail).toContainElement(screen.getByTestId('rail-child'));
-    expect(rail.firstChild).toBe(screen.getByTestId('search-slot'));
-  });
-
-  it('renders nothing at all below the width threshold', () => {
-    setWindowWidth(640);
-    renderWithTheme(
-      <EntityRail>
-        <div data-testid="rail-child" />
-      </EntityRail>,
-    );
-    expect(screen.queryByTestId('entity-rail')).toBeNull();
-    expect(screen.queryByTestId('rail-child')).toBeNull();
-  });
-
-  it('appears and disappears as the window is resized', () => {
-    setWindowWidth(640);
-    renderWithTheme(
-      <EntityRail>
-        <div data-testid="rail-child" />
-      </EntityRail>,
-    );
-    expect(screen.queryByTestId('entity-rail')).toBeNull();
-
-    act(() => {
-      setWindowWidth(1200);
-      window.dispatchEvent(new Event('resize'));
-    });
-    expect(screen.getByTestId('entity-rail')).toBeInTheDocument();
-  });
-});
 
 describe('RailTagsPanelView', () => {
   const tags = [
@@ -153,6 +87,22 @@ describe('RailTagsPanelView', () => {
       />,
     );
     expect(screen.getAllByTestId('entity-rail-tag-skeleton')).toHaveLength(10);
+    expect(screen.queryByText('No tags to display.')).toBeNull();
+  });
+
+  it('says what the caller filters by when there is nothing to show', () => {
+    renderWithTheme(
+      <RailTagsPanelView
+        tags={[]}
+        selectedTags={[]}
+        onToggleTag={vi.fn()}
+        onClearTags={vi.fn()}
+        isLoading={false}
+        isError={false}
+        emptyText="No types to display."
+      />,
+    );
+    expect(screen.getByText('No types to display.')).toBeInTheDocument();
     expect(screen.queryByText('No tags to display.')).toBeNull();
   });
 

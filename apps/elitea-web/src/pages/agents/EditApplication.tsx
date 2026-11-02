@@ -10,9 +10,11 @@ import { AgentVersionControls } from '@/features/agents';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { t } from '@/shared/i18n';
 import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
+import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { disarmUnsavedChangesNavBlocker, useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
+import { PageToolbar, pageSx } from '@/widgets/page-header';
 
-import { contentSx, pageSx, tabBarSx } from './EditApplication.styles';
+import { actionsSx, contentSx } from './EditApplication.styles';
 import { agentSaveErrorMessage } from './lib/agentSaveErrorMessage';
 import { applicationDetailDisplayName, toVersionSummaries } from './lib/editApplicationMappers';
 import { isPublicAgentsProject } from './lib/isPublicAgentsProject';
@@ -28,7 +30,6 @@ import { EditApplicationActions } from './ui/EditApplicationActions';
 import { EditApplicationAiEditSlot } from './ui/EditApplicationAiEditSlot';
 import { EditApplicationConfigurationPanel } from './ui/EditApplicationConfigurationPanel';
 import { EditApplicationEditorTabs } from './ui/EditApplicationEditorTabs';
-import { EditApplicationHeader } from './ui/EditApplicationHeader';
 import { EditApplicationSaveBar } from './ui/EditApplicationSaveBar';
 
 interface EditApplicationParams {
@@ -260,11 +261,8 @@ export function EditApplication(): ReactNode {
     void navigate({ to: '/agents/$tab', params: { tab: params.tab ?? 'latest' } });
   }, [navigate, params.tab]);
 
-  // #897 — the header's own back arrow. Same target as Discard, but without
-  // the disarm: a dirty form still gets the unsaved-changes nav blocker.
-  const handleBack = useCallback(() => {
-    void navigate({ to: '/agents/$tab', params: { tab: params.tab ?? 'latest' } });
-  }, [navigate, params.tab]);
+  // The page's name is the shell's crumb (`Agents ▸ My agent`); the section crumb leads back to the list.
+  usePageCrumbs([{ label: detail ? applicationDetailDisplayName(detail) : t('pages.agents.editApplication.title', 'Agent') }]);
 
   if (isDetailNotFound) {
     return (
@@ -290,48 +288,48 @@ export function EditApplication(): ReactNode {
   return (
     <FormProvider {...form}>
       <Box sx={pageSx}>
-        <Box sx={tabBarSx}>
-          <EditApplicationHeader
-            title={detail ? applicationDetailDisplayName(detail) : t('pages.agents.editApplication.title', 'Agent')}
-            onBack={handleBack}
-          />
-          {versionControls.showVersionControls && (
-            <AgentVersionControls
-              applicationId={versionControls.applicationIdText}
-              projectId={projectId}
-              versions={versionControls.versionOptions}
-              activeVersionId={versionControls.activeVersionId}
-              onSelectVersion={versionControls.handleSelectVersion}
-              versionBody={versionControls.versionBody}
-              canSaveNewVersion={versionControls.canSaveNewVersion}
-              versionDelete={versionControls.versionDelete}
-              onNewVersionSaved={versionControls.handleNewVersionSaved}
-            />
-          )}
-          {/*
-           * #307 — the entity-level actions (export, delete). Both were
-           * ported, tested, and imported by nothing at all; see
-           * `./ui/EditApplicationActions.tsx` for the baseline placement and
-           * for why they are writer-only.
-           */}
-          {!isFetching && !isReadOnlyView && (
-            <>
-              <EditApplicationActions
-                applicationId={params.agentId}
-                detail={detail}
-                activeVersion={activeVersion}
-                tab={params.tab}
-                projectId={projectId}
-              />
-              <EditApplicationSaveBar
-                onSave={handleSave}
-                canSave={canSaveApplication(form.formState.isValid, isSaving, isDirty)}
-                isSaving={isSaving}
-                onDiscarded={handleDiscarded}
-              />
-            </>
-          )}
-        </Box>
+        <PageToolbar
+          secondaryActions={
+            <Box sx={actionsSx}>
+              {versionControls.showVersionControls && (
+                <AgentVersionControls
+                  applicationId={versionControls.applicationIdText}
+                  projectId={projectId}
+                  versions={versionControls.versionOptions}
+                  activeVersionId={versionControls.activeVersionId}
+                  onSelectVersion={versionControls.handleSelectVersion}
+                  versionBody={versionControls.versionBody}
+                  canSaveNewVersion={versionControls.canSaveNewVersion}
+                  versionDelete={versionControls.versionDelete}
+                  onNewVersionSaved={versionControls.handleNewVersionSaved}
+                />
+              )}
+              {/*
+               * #307 — the entity-level actions (export, delete). Both were
+               * ported, tested, and imported by nothing at all; see
+               * `./ui/EditApplicationActions.tsx` for the baseline placement and
+               * for why they are writer-only.
+               */}
+              {!isFetching && !isReadOnlyView && (
+                <>
+                  <EditApplicationActions
+                    applicationId={params.agentId}
+                    detail={detail}
+                    activeVersion={activeVersion}
+                    tab={params.tab}
+                    projectId={projectId}
+                  />
+                  <EditApplicationSaveBar
+                    onSave={handleSave}
+                    canSave={canSaveApplication(form.formState.isValid, isSaving, isDirty)}
+                    isSaving={isSaving}
+                    onDiscarded={handleDiscarded}
+                  />
+                </>
+              )}
+            </Box>
+          }
+        />
         <Box sx={contentSx}>
           {isError && (
             <Typography

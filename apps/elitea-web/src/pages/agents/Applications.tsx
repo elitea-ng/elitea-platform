@@ -1,50 +1,21 @@
 import { useEffect, useMemo, type ReactNode, type SyntheticEvent } from 'react';
 
 import Box from '@mui/material/Box';
-import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { EntityImportButton, useEntityImport } from '@/features/agent-lifecycle';
 import { t } from '@/shared/i18n';
-import { EntityListRail, RAIL_CONTENT_WIDTH, useEntityRailVisible } from '@/shared/ui/EntityRail';
-import { ListSearchField, ListViewToggle, PageHeader } from '@/widgets/page-header';
-import { useSidebarCollapsedStore } from '@/widgets/sidebar';
+import { PERMISSIONS } from '@/shared/lib/permissions';
+import { EntityListFilters, useRailTagSelection } from '@/shared/ui/EntityRail';
+import { ListViewToggle, PageToolbar, pageBodySx, pageSx } from '@/widgets/page-header';
+import { usePermissionSet } from '@/widgets/sidebar';
 
 import { isPublicAgentsProject } from './lib/isPublicAgentsProject';
 import { useHasAdminPermission } from './lib/useHasAdminPermission';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { useApplicationsData } from './useApplicationsData';
 import { useApplicationTabs } from './useApplicationTabs';
-
-/**
- * The page's own column, narrowed while the rail is on screen.
- *
- * `EntityRail` is `position: fixed` at `right: 12px` with a `z-index` of
- * 1000 and the full viewport height, so anything the page draws under it is
- * unreachable — the pointer lands on the rail. The header's right-hand
- * controls (the table/card switch, the Import button) sat exactly there:
- * clicking the switch did nothing at all at any viewport wide enough to show
- * the rail, which is every viewport at or above 800px.
- *
- * `CARD_LIST_WIDTH` (`apps/elitea-ui/src/common/constants.js:511`) is the
- * baseline's answer, and `pages/skills/Skills.tsx` already applies it. The
- * width goes on the page column rather than on the header alone, so the tab
- * panel below it lines up with the header instead of running under the rail.
- */
-const pageSx = (railVisible: boolean): SxProps<Theme> => ({
-  height: '100%',
-  display: 'flex',
-  flexDirection: 'column',
-  width: railVisible ? RAIL_CONTENT_WIDTH : '100%',
-});
-
-
-const tabPanelSx: SxProps<Theme> = {
-  flex: 1,
-  minHeight: 0,
-  overflowY: 'auto',
-};
 
 /** The four public tabs (`latest`/`my-liked`/`trending`) plus `admin` are the ones the baseline pins to "Trending Authors" (`RightInfoPanel` picks per-project elsewhere; `PrivateAgentsList.jsx:141-151` hard-codes it for Admin). */
 const TRENDING_AUTHOR_TABS: readonly string[] = ['latest', 'my-liked', 'trending', 'admin'];
@@ -77,20 +48,18 @@ interface AgentsRouteParams {
  *    `trend_start_period` filter has no server-side support at all, so
  *    there is nothing for a working date picker to control.
  *
- * **Search and the view switch are real now.** `ViewToggle`
- * (`@/components/ViewToggle` in the baseline) and the rail's search box
- * (`components/RightPanel.jsx:67-86`) were both disclosed here as having no
- * port. They are `widgets/page-header`'s `ListViewToggle` and
- * `ListSearchField`, mounted in this header's own `viewToggle`/`search`
- * slots. The search text is the route's `query` param and reaches the
+ * **The page's one toolbar** (`widgets/page-header`'s `PageToolbar`): the
+ * tabs, the search box (`PageSearch`), the Filters button, the card/table
+ * switch (`ListViewToggle`), Import and "+ New agent". The page's name is the
+ * shell's title row; the tags and authors are the Filters tab of the shell's
+ * side panel (`EntityListFilters`). The search text is the route's `query` param and reaches the
  * selected tab from there; the applications list endpoint reads the same
  * name server-side (`ListApplicationsParams.query`), so the filter is not
  * limited to the first fetched page. The view choice is the `view` param
  * `shared/ui/EntityCardList` already obeyed, additionally remembered per page
  * in `localStorage`.
  *
- * **The rail and its tag filter are both real (issue 841).** The "Tags"
- * panel lists this project's real tags and writes the selection into the
+ * **The tag filter is real (issue 841).** The "Tags" panel lists this project's real tags and writes the selection into the
  * shell-wide `tags[]` search param (linkable, restored on reload), and
  * `PrivateAgentsList`/`PrivatePipelinesList` send that selection to the
  * server as the `tags` request param.
@@ -109,13 +78,12 @@ export function Applications(): ReactNode {
   const projectId = useSelectedProjectId();
   const isPublicProject = isPublicAgentsProject(projectId);
   const hasAdminPermission = useHasAdminPermission(isPublicProject ? projectId : undefined);
-  const navRailCollapsed = useSidebarCollapsedStore((state) => state.collapsed);
-  // The same answer the rail itself gives, so the column and the rail can
-  // never disagree about whether the rail is on screen.
-  const railVisible = useEntityRailVisible(navRailCollapsed);
+  const canCreate = usePermissionSet(projectId).has(PERMISSIONS.applications.create) && !isPublicProject;
+  const { selectedTags } = useRailTagSelection();
   const totals = useApplicationsData(projectId, hasAdminPermission);
   const entityImport = useEntityImport(projectId);
   const tabs = useApplicationTabs(isPublicProject, totals, hasAdminPermission);
+  const title = t('pages.agents.applications.tabsAriaLabel', 'Agents');
 
   const visibleTabs = useMemo(() => tabs.filter((tab) => tab.hidden !== true), [tabs]);
   const selectedIndex = visibleTabs.findIndex((tab) => tab.value === params.tab);
@@ -127,24 +95,19 @@ export function Applications(): ReactNode {
     void navigate({ to: '/agents/$tab', params: { tab: firstTab.value }, replace: true });
   }, [selectedIndex, visibleTabs, navigate]);
 
-  /**
-   * The tabs whose body is a real list. `MyLiked`/`Trending` are disclosed
-   * empty states (their own module comments record the absent server filters),
-   * so the header's search box and view switch have nothing to act on there.
-   */
-  const searchableTab = params.tab !== 'my-liked' && params.tab !== 'trending';
-
   const handleChangeTab = (_event: SyntheticEvent, nextIndex: number): void => {
     const nextTab = visibleTabs[nextIndex];
     if (nextTab === undefined) return;
     void navigate({ to: '/agents/$tab', params: { tab: nextTab.value } });
   };
 
+  const createAction = canCreate
+    ? { label: t('pages.agents.applications.create', 'New agent'), testId: 'agents-create', onClick: () => void navigate({ to: '/agents/create' }) }
+    : undefined;
+
   return (
-    <Box sx={pageSx(railVisible)}>
-      <PageHeader
-        title={t('pages.agents.applications.tabsAriaLabel', 'Agents')}
-        titleComponent="h1"
+    <Box sx={pageSx}>
+      <PageToolbar
         tabs={{
           items: visibleTabs.map((tab) => ({
             value: tab.value,
@@ -152,42 +115,23 @@ export function Applications(): ReactNode {
           })),
           selectedIndex: selectedIndex === -1 ? false : selectedIndex,
           onChange: handleChangeTab,
-          ariaLabel: t('pages.agents.applications.tabsAriaLabel', 'Agents'),
+          ariaLabel: title,
           testIdPrefix: 'agents-tab',
         }}
+        search={{ placeholder: t('pages.agents.applications.search', 'Search agents'), 'data-testid': 'agent-search-input' }}
+        filters={{ activeCount: selectedTags.length }}
+        viewToggle={
+          <ListViewToggle
+            pageKey="agents"
+            testIdPrefix="agent"
+          />
+        }
         /*
-         * Import (validation-matrix gap 12). Production carries this control
-         * on the Agents, Pipelines and Skills list headers; this app had it on
-         * Skills only, so an agent could be exported and never brought back —
-         * `POST /elitea_core/import_wizard/prompt_lib/{project}` was generated
-         * and had `"usedBy": []`. Hidden for the PUBLIC project's lists, which
-         * are read-only catalogues, matching the create button's own rule.
+         * Import (validation-matrix gap 12) and create. Hidden for the PUBLIC
+         * project's lists, which are read-only catalogues.
          */
-        slots={{
-          /*
-           * The search box and the table/card switch, both restored from the
-           * reference (`pages/agents/…Applications.jsx`/`Pipelines.jsx` mount
-           * `ViewToggle` in the header's middle slot; `components/
-           * RightPanel.jsx` mounts the search box in the rail). Both were
-           * disclosed as unported by this file's own module comment.
-           *
-           * Rendered only for the tabs that HAVE a list — `MyLiked` and
-           * `Trending` render a "not available yet" notice with no rows, so a
-           * search box and a view switch over them would be two controls that
-           * change nothing.
-           */
-          ...(searchableTab
-            ? {
-                search: <ListSearchField data-testid="agent-search-input" />,
-                viewToggle: (
-                  <ListViewToggle
-                    pageKey="agents"
-                    testIdPrefix="agent"
-                  />
-                ),
-              }
-            : {}),
-          actions: isPublicProject ? undefined : (
+        secondaryActions={
+          isPublicProject ? undefined : (
             <EntityImportButton
               testIdPrefix="agents"
               isImporting={entityImport.run.isPending}
@@ -195,18 +139,19 @@ export function Applications(): ReactNode {
                 await entityImport.run.mutateAsync(document);
               }}
             />
-          ),
-        }}
+          )
+        }
+        primaryAction={createAction}
       />
       <Box
-        sx={tabPanelSx}
+        sx={pageBodySx}
         role="tabpanel"
       >
         {selectedIndex !== -1 ? visibleTabs[selectedIndex]?.content : null}
       </Box>
-      <EntityListRail
+      <EntityListFilters
         projectId={projectId}
-        navRailCollapsed={navRailCollapsed}
+        subject={title}
         preferTrendingAuthors={TRENDING_AUTHOR_TABS.includes(params.tab ?? '')}
       />
     </Box>

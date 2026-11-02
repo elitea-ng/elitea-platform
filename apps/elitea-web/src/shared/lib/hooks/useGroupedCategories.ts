@@ -74,15 +74,20 @@ function matchesQuery(item: GroupedCategoryItem, needle: string): boolean {
  *                    item carries it (baseline: MCP's empty `Local` bucket,
  *                    which is what makes the "Still no local MCP available"
  *                    placeholder reachable).
+ * @param query       the search text when the CALLER owns it (a page toolbar's
+ *                    search, kept in the URL); omitted, the hook keeps its own
+ *                    and `onSearchChange` writes it.
  */
 export function useGroupedCategories<T extends GroupableItem>(
   items: readonly T[],
   categoryOf: (item: T) => string | readonly string[] | undefined,
   onSelect: (item: T) => void,
   specialGroup?: string,
+  query?: string,
 ): UseGroupedCategoriesResult {
   const [selectedCategories, setSelectedCategories] = useState<readonly string[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [ownQuery, setSearchQuery] = useState('');
+  const searchQuery = query ?? ownQuery;
 
   const allItems = useMemo<readonly GroupedCategoryItem[]>(
     () =>

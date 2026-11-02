@@ -52,13 +52,13 @@ describe('Applications', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/agents/latest'));
   });
 
-  it('shows the four public tabs on the public project, Admin hidden by default', async () => {
+  it('shows Latest on the public project; the placeholder My liked / Trending tabs and Admin are hidden', async () => {
     setConfig('1');
     renderAgentsRoute(<Applications />, '/agents/latest', { projectId: '1' });
 
     expect(await screen.findByTestId('agents-tab-latest')).toBeInTheDocument();
-    expect(screen.getByTestId('agents-tab-my-liked')).toBeInTheDocument();
-    expect(screen.getByTestId('agents-tab-trending')).toBeInTheDocument();
+    expect(screen.queryByTestId('agents-tab-my-liked')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('agents-tab-trending')).not.toBeInTheDocument();
     expect(screen.queryByTestId('agents-tab-admin')).not.toBeInTheDocument();
   });
 
@@ -84,16 +84,22 @@ describe('Applications', () => {
     expect(screen.getByTestId('agents-tab-rejected')).toBeInTheDocument();
   });
 
-  it('clicking a tab navigates to its :tab URL and renders that tab\'s content', async () => {
+  it("clicking a tab navigates to its :tab URL", async () => {
     setConfig('1');
+    server.use(getPermissionListMockHandler([{ name: 'models.applications.applications.list', enabled: true }]));
     const user = userEvent.setup();
     const { router } = renderAgentsRoute(<Applications />, '/agents/latest', { projectId: '1' });
 
-    await screen.findByTestId('agents-tab-trending');
-    await user.click(screen.getByTestId('agents-tab-trending'));
+    await user.click(await screen.findByTestId('agents-tab-admin'));
 
-    await waitFor(() => expect(router.state.location.pathname).toBe('/agents/trending'));
-    expect(await screen.findByTestId('agents-trending-unavailable')).toBeInTheDocument();
+    await waitFor(() => expect(router.state.location.pathname).toBe('/agents/admin'));
+  });
+
+  it('sends an old link to a hidden placeholder tab to the first tab', async () => {
+    setConfig('1');
+    const { router } = renderAgentsRoute(<Applications />, '/agents/trending', { projectId: '1' });
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/agents/latest'));
   });
 
   it('shows the tab-badge count when useApplicationsData resolves one, e.g. "Latest (3)"', async () => {
@@ -110,19 +116,41 @@ describe('Applications', () => {
    * and the import control must survive the move, because the journeys and
    * the visual baselines pin them.
    */
-  it('renders its tabs and its import control inside the shared page header', async () => {
+  it('renders its tabs and its import control inside the page toolbar, and no heading of its own', async () => {
     renderAgentsRoute(<Applications />, '/agents/all', { projectId: '9' });
 
-    const header = await screen.findByTestId('page-header');
-    expect(header).toContainElement(await screen.findByTestId('agents-tab-all'));
-    expect(header).toContainElement(screen.getByRole('tablist', { name: 'Agents' }));
-    expect(header).toContainElement(screen.getByTestId('agents-import-button'));
+    const toolbar = await screen.findByTestId('page-toolbar');
+    expect(toolbar).toContainElement(await screen.findByTestId('agents-tab-all'));
+    expect(toolbar).toContainElement(screen.getByRole('tablist', { name: 'Agents' }));
+    expect(toolbar).toContainElement(screen.getByTestId('agents-import-button'));
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  });
+
+  it('offers "+ New agent" to a caller who may create, and opens the create page', async () => {
+    server.use(getPermissionListMockHandler([{ name: 'models.applications.applications.create', enabled: true }]));
+    const user = userEvent.setup();
+    const { router } = renderAgentsRoute(<Applications />, '/agents/all', { projectId: '9' });
+
+    const visited: string[] = [];
+    router.subscribe('onBeforeNavigate', (event) => visited.push(event.toLocation.pathname));
+
+    await user.click(await screen.findByRole('button', { name: 'New agent' }));
+
+    // The fixture renders this page on every route, so the create route's own page is not there to stay on.
+    await waitFor(() => expect(visited).toContain('/agents/create'));
+  });
+
+  it('offers no create action without the create permission', async () => {
+    renderAgentsRoute(<Applications />, '/agents/all', { projectId: '9' });
+
+    await screen.findByTestId('page-toolbar');
+    expect(screen.queryByTestId('agents-create')).toBeNull();
   });
 });
 
 /*
  * The header's own controls — the composition root, not the components.
- * `ListSearchField.test.tsx` and `ListViewToggle.test.tsx` prove each control
+ * `PageSearch.test.tsx` and `ListViewToggle.test.tsx` prove each control
  * works; these tests prove this page MOUNTS them, which is the half that was
  * missing (`ViewToggle` and the rail search box were both disclosed as
  * unported in this page's module comment) and the half a component test can
@@ -136,15 +164,6 @@ describe('Applications — header controls', () => {
     expect(await screen.findByTestId('agent-search-input')).toBeInTheDocument();
     expect(screen.getByTestId('agent-table-view-button')).toBeInTheDocument();
     expect(screen.getByTestId('agent-card-view-button')).toBeInTheDocument();
-  });
-
-  it('omits both on a tab whose body has no rows to act on', async () => {
-    setConfig('1');
-    renderAgentsRoute(<Applications />, '/agents/trending', { projectId: '1' });
-
-    expect(await screen.findByTestId('agents-tab-trending')).toBeInTheDocument();
-    expect(screen.queryByTestId('agent-search-input')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('agent-table-view-button')).not.toBeInTheDocument();
   });
 
   it('hands the typed query to the tab body, which sends it to the server', async () => {

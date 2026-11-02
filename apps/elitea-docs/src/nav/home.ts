@@ -27,6 +27,7 @@ export const homeTab: NavTab = {
       title: 'Platform overview',
       pages: [
         { kind: 'page', slug: 'menus/overview', title: 'Platform overview' },
+        { kind: 'page', slug: 'menus/page-layout', title: 'Page layout' },
         { kind: 'page', slug: 'menus/chat', title: 'Chat' },
         { kind: 'page', slug: 'menus/agents', title: 'Agents' },
         { kind: 'page', slug: 'menus/pipelines', title: 'Pipelines' },

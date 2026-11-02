@@ -4,7 +4,7 @@
  * QueryClient, real MSW-mocked network, no `vi.mock()` of application code
  * (R-M1). Covers ACT-040 (create via Save) and ACT-041 (test connection).
  */
-import type { ReactNode } from 'react';
+import type { ReactElement } from 'react';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
@@ -13,8 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { server } from '../../test/setup';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
-import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
+import { renderCredentialsRoute, withShellCrumbs } from './__tests__/testRouter';
 import { CredentialForm } from './CredentialForm';
 import type { CredentialFormContext } from './CredentialForm';
 
@@ -47,9 +47,9 @@ const CONTEXT: CredentialFormContext = {
   canDelete: true,
 };
 
-function renderForm(ui: ReactNode) {
+function renderForm(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return renderWithTheme(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  return renderCredentialsRoute(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
 }
 
 afterEach(() => {
@@ -458,6 +458,27 @@ describe('CredentialForm — create flow', () => {
 });
 
 describe('CredentialForm — edit flow', () => {
+  it('names the saved credential in the shell title row', async () => {
+    configureGeneratedClient({ baseUrl: BASE });
+    server.use(http.get(`${BASE}/configurations/available/`, () => HttpResponse.json([OPENAI_TYPE])));
+    server.use(
+      http.get(`${BASE}/configurations/configuration/7/abc`, () =>
+        HttpResponse.json({ uid: 'abc', type: 'openai', elitea_title: 'existing-cred', data: { api_key: 'sk-existing' }, shared: false }),
+      ),
+    );
+    renderForm(
+      withShellCrumbs(
+        <CredentialForm
+          context={CONTEXT}
+          mode={{ kind: 'edit', configId: 'abc' }}
+          onSaved={vi.fn()}
+          onDiscarded={vi.fn()}
+        />,
+      ),
+    );
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('existing-cred'));
+  });
+
   it('loads the existing credential and shows its data, name, and Delete control', async () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(http.get(`${BASE}/configurations/available/`, () => HttpResponse.json([OPENAI_TYPE])));
@@ -718,19 +739,22 @@ describe('CredentialForm — edit flow', () => {
 });
 
 describe('CredentialForm — configuration mode (ROUTE-063..065)', () => {
-  it('titles the screen "Configuration" instead of "Credential"', async () => {
+  it('names the screen "New configuration" in the shell title row and draws no heading of its own', async () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(http.get(`${BASE}/configurations/available/`, () => HttpResponse.json([OPENAI_TYPE])));
     renderForm(
-      <CredentialForm
-        context={CONTEXT}
-        mode={{ kind: 'create', credentialType: 'openai', configurationMode: true }}
-        onSaved={vi.fn()}
-        onDiscarded={vi.fn()}
-      />,
+      withShellCrumbs(
+        <CredentialForm
+          context={CONTEXT}
+          mode={{ kind: 'create', credentialType: 'openai', configurationMode: true }}
+          onSaved={vi.fn()}
+          onDiscarded={vi.fn()}
+        />,
+      ),
     );
-    expect(await screen.findByText('Configuration')).toBeInTheDocument();
-    expect(screen.queryByText('Credential', { selector: 'h3, h4, h5, h6' })).not.toBeInTheDocument();
+    expect(await screen.findByLabelText('Name')).toBeInTheDocument();
+    expect(screen.getByTestId('crumbs')).toHaveTextContent('New configuration');
+    expect(screen.queryByText('Configuration', { selector: 'h1, h2, h3, h4, h5, h6' })).not.toBeInTheDocument();
   });
 
   /**

@@ -13,14 +13,15 @@ import { getGetSocialTrendingAuthorsMockHandler } from '@/shared/api/generated/s
 import { getListTagsMockHandler } from '@/shared/api/generated/tags/tags.msw';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { server } from '@/test/setup';
+import { SidePanelHarness } from '@/test/sidePanelHarness';
 
 import { Applications } from './Applications';
 import { renderAgentsRoute } from './__tests__/testRouter';
 
 /**
- * The right-hand rail on `/agents/:tab` (`shared/ui/EntityRail`) — the
- * composition the baseline builds as `CardList -> RightPanel -> [SearchBar]
- * + Categories + AuthorInformation|TrendingAuthors`.
+ * The Filters tab `/agents/:tab` puts in the shell's side panel
+ * (`shared/ui/EntityRail`'s `EntityListFilters`) — the baseline's right rail,
+ * `CardList -> RightPanel -> Categories + AuthorInformation|TrendingAuthors`.
  */
 const globals = globalThis as unknown as Record<string, unknown>;
 
@@ -57,12 +58,12 @@ afterEach(() => {
   resetConfigForTests();
 });
 
-describe('Applications right-hand rail', () => {
-  it('renders the rail with the project tag chips', async () => {
+describe('Applications Filters tab', () => {
+  it('offers the Filters tab with the project tag chips', async () => {
     setConfig('1');
-    renderAgentsRoute(<Applications />, '/agents/latest', { projectId: '1' });
+    renderAgentsRoute(<SidePanelHarness><Applications /></SidePanelHarness>, '/agents/latest', { projectId: '1' });
 
-    expect(await screen.findByTestId('entity-rail')).toBeInTheDocument();
+    expect(await screen.findByTestId('side-panel-tab-filters')).toContainElement(await screen.findByTestId('entity-list-filters'));
     expect(await screen.findByTestId('tags-panel-chip-alpha')).toBeInTheDocument();
     expect(screen.getByTestId('tags-panel-chip-beta')).toBeInTheDocument();
   });
@@ -70,7 +71,7 @@ describe('Applications right-hand rail', () => {
   it('writes the clicked tag into the `tags[]` search param and sorts it to the front', async () => {
     setConfig('1');
     const user = userEvent.setup();
-    const { router } = renderAgentsRoute(<Applications />, '/agents/latest', { projectId: '1' });
+    const { router } = renderAgentsRoute(<SidePanelHarness><Applications /></SidePanelHarness>, '/agents/latest', { projectId: '1' });
 
     await user.click(await screen.findByTestId('tags-panel-chip-beta'));
 
@@ -83,7 +84,7 @@ describe('Applications right-hand rail', () => {
   it('clears the whole selection from the URL through the clear-all control', async () => {
     setConfig('1');
     const user = userEvent.setup();
-    const { router } = renderAgentsRoute(<Applications />, '/agents/latest', { projectId: '1' });
+    const { router } = renderAgentsRoute(<SidePanelHarness><Applications /></SidePanelHarness>, '/agents/latest', { projectId: '1' });
 
     await user.click(await screen.findByTestId('tags-panel-chip-alpha'));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ 'tags[]': ['alpha'] }));
@@ -95,7 +96,7 @@ describe('Applications right-hand rail', () => {
 
   it('shows Trending Authors on the public feed tabs', async () => {
     setConfig('1');
-    renderAgentsRoute(<Applications />, '/agents/latest', { projectId: '1', user: { id: '5', personal_project_id: '1' } });
+    renderAgentsRoute(<SidePanelHarness><Applications /></SidePanelHarness>, '/agents/latest', { projectId: '1', user: { id: '5', personal_project_id: '1' } });
 
     expect(await screen.findByText('Trending Authors')).toBeInTheDocument();
     expect(await screen.findByText('Grace Hopper')).toBeInTheDocument();
@@ -104,7 +105,7 @@ describe('Applications right-hand rail', () => {
 
   it('shows the author card with the /agents statistic on a private tab of the personal project', async () => {
     setConfig('1');
-    renderAgentsRoute(<Applications />, '/agents/all', { projectId: '9', user: { id: '5', personal_project_id: '9' } });
+    renderAgentsRoute(<SidePanelHarness><Applications /></SidePanelHarness>, '/agents/all', { projectId: '9', user: { id: '5', personal_project_id: '9' } });
 
     expect(await screen.findByTestId('entity-rail-author')).toBeInTheDocument();
     expect(screen.getByTestId('entity-rail-author-total')).toHaveTextContent('Agents:7');
@@ -114,27 +115,30 @@ describe('Applications right-hand rail', () => {
 
   it('falls back to Trending Authors when the selected project is NOT the viewer personal project', async () => {
     setConfig('1');
-    renderAgentsRoute(<Applications />, '/agents/all', { projectId: '9', user: { id: '5', personal_project_id: '3' } });
+    renderAgentsRoute(<SidePanelHarness><Applications /></SidePanelHarness>, '/agents/all', { projectId: '9', user: { id: '5', personal_project_id: '3' } });
 
     expect(await screen.findByText('Trending Authors')).toBeInTheDocument();
     expect(screen.queryByTestId('entity-rail-author')).toBeNull();
   });
   /*
-   * The rail is `position: fixed` over the right edge of the viewport with a
-   * z-index of 1000, so a page column that stays 100% wide draws its header
-   * controls UNDER it and the pointer never reaches them. E2E measured it:
-   * the table/card switch could not be clicked at all
-   * (`e2e/journeys/agents/agents.list.spec.ts`, "entity-rail subtree intercepts pointer
-   * events"). `pages/skills/Skills.tsx` already narrows its column the same
-   * way.
+   * The tags used to be a `position: fixed` column over the page (z-index
+   * 1000), which covered the header's controls and the desktop inspector. In
+   * the side panel they are beside the page, so the page keeps its width.
    */
-  it('narrows the page column to the card-list width while the rail is on screen', async () => {
+  it('renders nothing over the page: the filters live in the side panel only', async () => {
     setConfig('1');
-    renderAgentsRoute(<Applications />, '/agents/latest', { projectId: '1', user: { id: '5', personal_project_id: '1' } });
+    renderAgentsRoute(<SidePanelHarness><Applications /></SidePanelHarness>, '/agents/latest', { projectId: '1', user: { id: '5', personal_project_id: '1' } });
 
-    expect(await screen.findByTestId('entity-rail')).toBeInTheDocument();
-    const column = screen.getByRole('tabpanel').parentElement;
-    expect(column).not.toBeNull();
-    expect(getComputedStyle(column as HTMLElement).width).toBe('calc(100% - 328px)');
+    const filters = await screen.findByTestId('entity-list-filters');
+    expect(screen.getByTestId('side-panel-harness')).toContainElement(filters);
+    expect(screen.queryByTestId('entity-rail')).toBeNull();
+  });
+
+  it('draws no filters at all without a shell side panel', async () => {
+    setConfig('1');
+    renderAgentsRoute(<Applications />, '/agents/latest', { projectId: '1' });
+
+    expect(await screen.findByTestId('page-toolbar')).toBeInTheDocument();
+    expect(screen.queryByTestId('entity-list-filters')).toBeNull();
   });
 });

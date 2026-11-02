@@ -88,7 +88,7 @@ async function openPipelinesList(page: Page): Promise<void> {
 }
 
 /**
- * The header's search field — `widgets/page-header`'s `ListSearchField`,
+ * The header's search field — `widgets/page-header`'s `PageSearch`,
  * mounted with this test id by `Pipelines.tsx`.
  *
  * The box used to live inside the tab body and filter the ONE page the list
@@ -123,9 +123,9 @@ function cards(page: Page) {
  * header is visible" test on its own asserts nothing a blank page with a tab
  * bar would fail.
  *
- * The header this app renders is the TAB BAR, not a title: `PageHeader`
- * ignores its `title` prop whenever `tabs` is set (`widgets/page-header`), so
- * the accessible name of the tablist is what identifies this screen.
+ * The page's toolbar is its TAB BAR, not a title (`widgets/page-header`'s
+ * `PageToolbar`; the shell's breadcrumb names the page), so the accessible
+ * name of the tablist is what identifies this screen.
  */
 test('J16d: the dashboard lists a pipeline the API created, and the search box narrows the list to it', async ({
   page,

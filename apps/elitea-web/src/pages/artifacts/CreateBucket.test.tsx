@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,8 +11,14 @@ const mocks = vi.hoisted(() => ({
   editBucket: vi.fn(),
 }));
 
+import { PageChromeProvider, useShellCrumbs } from '@/shared/ui/page-chrome';
+
 import { CreateBucket, parseRetentionDays, validateBucketName, validateRetentionDays } from './CreateBucket';
 import { renderArtifactsRoute } from './__tests__/testRouter';
+
+function CrumbProbe(): ReactNode {
+  return <div data-testid="crumbs">{useShellCrumbs().map((crumb) => crumb.label).join(' / ')}</div>;
+}
 
 describe('validateRetentionDays / parseRetentionDays', () => {
   it('treats an empty box as "keep indefinitely" rather than an error', () => {
@@ -55,6 +63,18 @@ describe('CreateBucket', () => {
     vi.spyOn(artifactsFeature, 'useArtifactBuckets').mockReturnValue({
       data: [{ id: 'docs', name: 'docs', isPinned: false, createdAt: '2026-01-01T00:00:00Z', retentionDays: 30 }],
     } as never);
+  });
+
+  it('names itself "New bucket" in the shell title row and draws no heading of its own', async () => {
+    renderArtifactsRoute(
+      <PageChromeProvider>
+        <CreateBucket />
+        <CrumbProbe />
+      </PageChromeProvider>,
+      '/artifacts/create-bucket',
+    );
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('New bucket'));
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 
   it('creates a valid bucket and navigates back to its artifact list', async () => {
@@ -126,8 +146,15 @@ describe('CreateBucket in edit mode', () => {
 
   it('seeds the form from the bucket and saves a new retention window', async () => {
     const user = userEvent.setup();
-    const { router } = renderArtifactsRoute(<CreateBucket />, '/artifacts/create-bucket?bucket=docs');
-    expect(await screen.findByText('Edit bucket')).toBeInTheDocument();
+    const { router } = renderArtifactsRoute(
+      <PageChromeProvider>
+        <CreateBucket />
+        <CrumbProbe />
+      </PageChromeProvider>,
+      '/artifacts/create-bucket?bucket=docs',
+    );
+    expect(await screen.findByTestId('crumbs')).toHaveTextContent('Edit bucket');
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
     const retention = await screen.findByLabelText('Retention (days)');
     await waitFor(() => expect(retention).toHaveValue('30'));
     await user.clear(retention);

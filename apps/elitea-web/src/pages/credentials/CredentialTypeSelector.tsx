@@ -18,13 +18,12 @@
  *    `shared/ui/ToolkitTypeIcon`; every tile used to render with no leading
  *    glyph.
  *
- * STILL DISCLOSED: this screen has no sub-header of its own ("New Credential"
- * / "New Configuration" with the route's own back affordance). That bar
- * belongs to the credentials route/page shell, which also wraps the credential
- * FORM — out of this change's fence, and noted rather than silently added.
+ * The page's toolbar row carries the gallery's search (its text in the URL's
+ * `query`, as on every list); the shell's crumb names the page.
  */
 import { useCallback, useMemo, type ReactNode } from 'react';
 
+import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
@@ -35,6 +34,7 @@ import { GroupedCategory } from '@/shared/ui/GroupedCategory';
 import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
 import { ToolkitTypeIcon } from '@/shared/ui/ToolkitTypeIcon';
 import type { CategoryItem } from '@/shared/ui/CategoryItemCard';
+import { PageToolbar, pageBodySx, pageSx, useListSearchQuery } from '@/widgets/page-header';
 
 import type { ConfigurationTypeDescriptor } from '@/features/credentials';
 
@@ -93,10 +93,13 @@ export function CredentialTypeSelector({ configurationsData, isFetching, onSelec
 
   const handleSelect = useCallback((item: CredentialTypeMenuItem) => { onSelectType(item.key); }, [onSelectType]);
 
-  const { allCategories, groupedItems, selectedCategories, searchQuery, onSearchChange, onSelectCategory } = useGroupedCategories<CredentialTypeMenuItem>(
+  const query = useListSearchQuery();
+  const { allCategories, groupedItems, selectedCategories, onSelectCategory } = useGroupedCategories<CredentialTypeMenuItem>(
     items,
     itemCategory,
     handleSelect,
+    undefined,
+    query,
   );
 
   const renderCategory = useCallback(
@@ -110,29 +113,31 @@ export function CredentialTypeSelector({ configurationsData, isFetching, onSelec
   );
 
   return (
-    <CategoryFilter
-      title={t('credentials.typeSelector.title', 'Choose the credentials type')}
-      searchPlaceholder={t('credentials.typeSelector.search', 'Search credentials')}
-      searchQuery={searchQuery}
-      onSearchChange={onSearchChange}
-      allCategories={[...allCategories]}
-      selectedCategories={[...selectedCategories]}
-      onSelectCategory={onSelectCategory}
-    >
-      <GroupedCategory
-        isLoading={isFetching}
-        allCategories={allCategories}
-        selectedCategories={selectedCategories}
-        groupedItems={groupedItems}
-        renderCategory={renderCategory}
-        noResultsSlot={
-          <NoResultsMessage
-            title={t('credentials.typeSelector.noResultsTitle', 'No credentials found')}
-            description={t('credentials.typeSelector.noResultsDescription', 'Try adjusting your search terms or category filters')}
+    <Box sx={pageSx}>
+      <PageToolbar search={{ placeholder: t('credentials.typeSelector.search', 'Search credentials'), 'data-testid': 'credential-type-search' }} />
+      <Box sx={pageBodySx}>
+        <CategoryFilter
+          title={t('credentials.typeSelector.title', 'Choose the credentials type')}
+          allCategories={[...allCategories]}
+          selectedCategories={[...selectedCategories]}
+          onSelectCategory={onSelectCategory}
+        >
+          <GroupedCategory
+            isLoading={isFetching}
+            allCategories={allCategories}
+            selectedCategories={selectedCategories}
+            groupedItems={groupedItems}
+            renderCategory={renderCategory}
+            noResultsSlot={
+              <NoResultsMessage
+                title={t('credentials.typeSelector.noResultsTitle', 'No credentials found')}
+                description={t('credentials.typeSelector.noResultsDescription', 'Try adjusting your search terms or category filters')}
+              />
+            }
+            sx={groupedItemsSx}
           />
-        }
-        sx={groupedItemsSx}
-      />
-    </CategoryFilter>
+        </CategoryFilter>
+      </Box>
+    </Box>
   );
 }

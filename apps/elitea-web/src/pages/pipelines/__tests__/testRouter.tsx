@@ -95,7 +95,7 @@ function buildTestRouter(
     // rail writes and make a passing tag-selection test meaningless.
     validateSearch: (search: Record<string, unknown>) => ({
       // `query` is the list header's search text
-      // (`widgets/page-header`'s `ListSearchField` writes it); the tab body
+      // (`widgets/page-header`'s `PageSearch` writes it); the tab body
       // reads it back with `useListSearchQuery`. A fixture that dropped it
       // would make every search assertion below unreachable.
       query: typeof search.query === 'string' ? search.query : undefined,

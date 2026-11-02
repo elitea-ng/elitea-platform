@@ -3,13 +3,11 @@ import type { ReactNode } from 'react';
 import { RailAuthorCard, shouldShowAuthorCard, useRailViewer } from '@/shared/ui/EntityRail';
 
 /**
- * The `rightPanelExtra` slot `features/toolkits`' `ToolkitsList` leaves for
- * a page-level caller — filled with the real author card
- * (`shared/ui/EntityRail`), the baseline's `AuthorInformation` in
- * `RightInfoPanel.jsx:44-48`.
+ * The author card under the toolkits / MCPs list's Filters
+ * (`./ToolkitsFilters.tsx`) — the real author card (`shared/ui/EntityRail`),
+ * the baseline's `AuthorInformation` in `RightInfoPanel.jsx:44-48`.
  *
- * A page-owned component rather than an inline block in `Toolkits.tsx`:
- * that file is 3 lines under the §3.5 400-line budget, and this decision
+ * A page-owned component because this decision
  * (personal-project predicate + which pathname keys the statistic) is a
  * self-contained unit worth naming. `/toolkits` renders `Toolkits:
  * total_toolkits`; `/mcps` matches no entry in the baseline's own

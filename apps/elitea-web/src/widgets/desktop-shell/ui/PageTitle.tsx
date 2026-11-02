@@ -1,8 +1,11 @@
 /**
  * The main title row's name of what is open, as the Local work toolbar names
  * its thread (folder ▸ thread): `Chats ▸ folder ▸ conversation` on a chat,
- * `Chats ▸ Archived` on the archived chats, and the page's own name (Agents,
- * Artifacts, Settings, …) elsewhere.
+ * `Chats ▸ Archived` on the archived chats, and the section's name (Agents,
+ * Artifacts, Settings, …) elsewhere, followed by the crumbs the page on screen
+ * registered (`shared/ui/page-chrome`): `Toolkits ▸ New toolkit`,
+ * `Agents ▸ My agent`. The section then links back to its list; the page
+ * draws no title or back arrow of its own.
  *
  * The conversation's name and folder come from the frame's chat rail (the
  * rows the sidebar selects), falling back to the chat page's own read of the
@@ -15,11 +18,15 @@ import { useState, type KeyboardEvent, type ReactNode } from 'react';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import Box from '@mui/material/Box';
 import InputBase from '@mui/material/InputBase';
+import Link from '@mui/material/Link';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
+import { Link as RouterLink } from '@tanstack/react-router';
+
 import { conversationApi } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
+import { useShellCrumbs, type PageCrumb } from '@/shared/ui/page-chrome';
 
 import { selectedEliteaItem, type EliteaItem } from '../lib/eliteaSections';
 import { ARCHIVED_PATH, findInRail, openConversationId, useChatRail } from '../model/chatRail';
@@ -118,10 +125,36 @@ function ConversationTitle({ projectId, conversationId }: { readonly projectId: 
   );
 }
 
-function pageName(pathname: string, items: readonly EliteaItem[]): string {
-  if (pathname === '/settings' || pathname.startsWith('/settings/')) return t('desktop.shell.settings', 'Settings');
+/** The section the pathname is in, and the route its crumb links back to. */
+function pageSection(pathname: string, items: readonly EliteaItem[]): PageCrumb {
+  if (pathname === '/settings' || pathname.startsWith('/settings/')) return { label: t('desktop.shell.settings', 'Settings'), to: '/settings' };
   const item = items.find((candidate) => candidate.value === selectedEliteaItem(pathname, items));
-  return item?.label ?? '';
+  return { label: item?.label ?? '', ...(item === undefined ? {} : { to: item.url }) };
+}
+
+/** The section, then the page's own crumbs: the last one is the heading, the ones before it link. */
+function PageCrumbs({ pathname, items }: { readonly pathname: string; readonly items: readonly EliteaItem[] }): React.JSX.Element {
+  const section = pageSection(pathname, items);
+  const crumbs = [section, ...useShellCrumbs()].filter((crumb) => crumb.label !== '');
+  return (
+    <>
+      {crumbs.map((crumb, index) => {
+        const last = index === crumbs.length - 1;
+        return (
+          <Box key={`${String(index)}:${crumb.label}`} sx={{ display: 'contents' }}>
+            {index > 0 && <Separator />}
+            {last || crumb.to === undefined ? (
+              <Crumb strong={last}>{crumb.label}</Crumb>
+            ) : (
+              <Link component={RouterLink} to={crumb.to} underline="hover" color="inherit" data-testid="page-title-section" sx={{ display: 'flex', minWidth: 0 }}>
+                <Crumb>{crumb.label}</Crumb>
+              </Link>
+            )}
+          </Box>
+        );
+      })}
+    </>
+  );
 }
 
 export interface PageTitleProps {
@@ -148,7 +181,7 @@ export function PageTitle({ pathname, items, projectId }: PageTitleProps): React
           )}
         </>
       ) : (
-        <Crumb strong>{pageName(pathname, items)}</Crumb>
+        <PageCrumbs pathname={pathname} items={items} />
       )}
     </Box>
   );

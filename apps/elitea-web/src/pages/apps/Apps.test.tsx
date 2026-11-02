@@ -185,11 +185,11 @@ describe('Apps (ROUTE-036/039)', () => {
   });
 
   /** COMPOSITION ROOT — see `pages/agents/Applications.test.tsx` (issue 841). */
-  it('renders both tabs inside the shared page header', async () => {
+  it('renders both tabs inside the shared page toolbar', async () => {
     server.use(getListApplicationsMockHandler(applicationsList(1)));
     renderAppsRoute('/apps/applications', { projectId: 'proj-1' });
 
-    const header = await screen.findByTestId('page-header');
+    const header = await screen.findByTestId('page-toolbar');
     expect(header).toContainElement(screen.getByRole('tablist', { name: 'Apps' }));
     expect(header).toContainElement(screen.getByRole('tab', { name: /App Catalog/ }));
   });

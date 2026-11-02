@@ -7,10 +7,12 @@ A skill is a focused, reusable instruction set — write it once in Markdown, at
 
 <Screenshot id="skills-list" alt="The Skills dashboard for the current project" />
 
+The Skills page has two tabs: **Skills** (the project's own skills) and **Public** (the published catalog). Its toolbar has the search box, **Filters** (tags and authors, in the side panel), **Import** and **+ New skill**; see [Page layout](/menus/page-layout).
+
 ## Create a skill
 
 <Steps>
-  <Step title="Open the form">Select **+** in the sidebar, or **Create** from the Skills page, and choose Skill.</Step>
+  <Step title="Open the form">Select **+ New skill** in the Skills page toolbar, or the **+** next to **Skills** in the sidebar.</Step>
   <Step title="Fill in General">Give it a **Name** (lowercase letters, digits, and hyphens only, no leading/trailing hyphen, 64 characters max, and it must not contain "claude" or "anthropic"), a **Description**, and optional tags.</Step>
   <Step title="Write Instructions">Enter the skill's instructions in the Markdown editor, up to 5,000 characters. Toggle Edit/Preview to check formatting.</Step>
   <Step title="Save">The skill opens with a test chat panel on the right so you can verify its behavior before attaching it to any agent.</Step>
@@ -50,7 +52,7 @@ Use the version dropdown next to the skill's name to switch versions. Saving alw
 
 ## Export, import, fork, and publish
 
-- **Export** downloads the current version as a `.md` file; **Import** on the Skills page uploads one back (always as a new `base` version, regardless of the version it was exported from).
+- **Export** downloads the current version as a `.md` file; **Import** in the Skills page toolbar uploads one back (always as a new `base` version, regardless of the version it was exported from).
 - **Fork** copies a skill version into a project you choose.
 - **Publish** submits a version to [Catalog](/menus/catalog); **Unpublish** removes it. See [Skill publishing](/how-tos/agents-pipelines/publishing).
 
