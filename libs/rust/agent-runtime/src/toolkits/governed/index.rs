@@ -10,7 +10,7 @@
 //! digest of the `index_data` arguments. The envelope is checked against the
 //! toolkit's configured target, its expiry and the adapter's material rule
 //! before any provider I/O, exactly as a tool call's is
-//! ([`GovernedOperationClient::redeem_checked`]). The settings then carry the
+//! (`GovernedOperationClient::redeem_checked`). The settings then carry the
 //! envelope's material as their only credential ([`index_settings`]).
 //!
 //! The run is the invocation: the material serves the one run it was
