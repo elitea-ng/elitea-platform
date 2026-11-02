@@ -4218,10 +4218,11 @@ async fn postgres_a_member_child_sensitive_direct_call_pauses_then_runs_once_or_
 }
 
 // ---------------------------------------------------------------------------
-// FU-265: a continuation lost before its first root save. Execution A pauses
-// on a saved child's sensitive direct call; continuation B (Main names A as
-// the paused writer) approves it and dies inside the journaled call; the
-// reclaim of B re-enters A's row and the journal decides.
+// FU-265 / FU-269: a continuation lost before its first root save. Execution
+// A pauses on a saved child's sensitive direct call (at `depth`); continuation
+// B (Main names A as the paused writer on its claim) approves it and is lost
+// around the journaled call; the reclaim of B re-enters A's row, re-runs the
+// continuation behind its own suffix, and the call's journal decides.
 // ---------------------------------------------------------------------------
 
 const CONTINUATION_TEST: &str =
@@ -4258,38 +4259,77 @@ fn claim_for<'a>(
     )
 }
 
-/// The root → Agent node → saved child (a sensitive direct call) assembler.
+/// The root → Agent node → saved child (a sensitive direct call at `depth`)
+/// assembler. `then_llm`: an llm node follows the call in that child.
 fn continuation_assembler(
     pool: &sqlx::PgPool,
     connector: Arc<dyn McpConnector>,
-) -> PipelineNativeAgentAssembler {
-    let (platform, model_facade, _) =
-        saved_runtime_with(Vec::new(), child_direct_pipeline(false, false), None);
-    PipelineNativeAgentAssembler::postgres(
-        pool.clone(),
-        SessionLimits::default(),
-        CheckpointLimits::default(),
-        sensitive_pipeline_mcp_policy(),
-        platform,
-        model_facade,
+    depth: &str,
+    then_llm: bool,
+    outcomes: Vec<TestModelGatewayOutcome>,
+) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
+    let (details, second) = if depth == "2" {
+        (
+            child_direct_middle(false),
+            Some(child_direct_pipeline(then_llm, false)),
+        )
+    } else {
+        (child_direct_pipeline(then_llm, false), None)
+    };
+    let (platform, model_facade, captured) = saved_runtime_with(outcomes, details, second);
+    (
+        PipelineNativeAgentAssembler::postgres(
+            pool.clone(),
+            SessionLimits::default(),
+            CheckpointLimits::default(),
+            sensitive_pipeline_mcp_policy(),
+            platform,
+            model_facade,
+        )
+        .with_mcp_connector(connector)
+        .with_fixed_parallel_for_tests(),
+        captured,
     )
-    .with_mcp_connector(connector)
-    .with_fixed_parallel_for_tests()
+}
+
+/// A pipeline whose root HITL node routes an approval to a state modifier.
+const CONTINUATION_GATE_YAML: &str = "state:\n  input:\n    type: str\n  messages:\n    type: list\n  verdict:\n    type: str\nentry_point: review\nnodes:\n  - id: review\n    type: hitl\n    input:\n      - input\n    user_message:\n      type: fixed\n      value: Approve?\n    routes:\n      approve: approved\n      reject: rejected\n  - id: approved\n    type: state_modifier\n    template: 'APPROVED {{ input }}'\n    input: [input]\n    output: [verdict]\n    transition: END\n  - id: rejected\n    type: state_modifier\n    template: 'REJECTED {{ input }}'\n    input: [input]\n    output: [verdict]\n    transition: END\n";
+
+/// The paused run at `depth`: `0` a sensitive direct node on the root,
+/// `gate` a root HITL node, `1`/`2` a saved child's direct node that deep.
+fn continuation_request(depth: &str) -> super::super::request::AgentExecutionRequest {
+    match depth {
+        "0" => mcp_pipeline_request(
+            "release intelligence",
+            &["lookup_release"],
+            "lookup_release",
+        ),
+        "gate" => {
+            let mut request = pipeline_request();
+            request.payload.application["version_details"]["instructions"] =
+                json!(CONTINUATION_GATE_YAML);
+            request
+        }
+        _ => child_direct_request(false),
+    }
 }
 
 /// The approval of `pending`, as Main admits it.
-fn approval(pending: &Value) -> super::super::request::AgentExecutionRequest {
-    let mut request = child_direct_request(false);
+fn approval(pending: &Value, depth: &str) -> super::super::request::AgentExecutionRequest {
+    let mut request = continuation_request(depth);
     request.binding.request_content_digest = [29; 32];
     request.payload.should_continue = true;
     request.payload.hitl_resume = true;
     request.payload.hitl_action = Some("approve".to_owned());
     request.payload.hitl_value = Some(String::new());
-    request.payload.hitl_decisions = vec![json!({
+    let mut decision = json!({
         "interrupt_id": pending["interrupt_id"],
-        "tool_call_id": pending["tool_call_id"],
         "action": "approve", "value": ""
-    })];
+    });
+    if let Some(call) = pending.get("tool_call_id").filter(|call| !call.is_null()) {
+        decision["tool_call_id"] = call.clone();
+    }
+    request.payload.hitl_decisions = vec![decision];
     request
 }
 
@@ -4307,6 +4347,9 @@ async fn postgres_continuation_effect_process() {
     );
     let pool = connect(&database).await;
     let marker = std::env::var(MARKER_ENV).is_ok_and(|marker| marker == "1");
+    let depth = std::env::var(DEPTH_ENV).expect("depth");
+    let mode = std::env::var(MODE_ENV).expect("mode");
+    let committed = mode == "committed";
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let counting = Arc::new(PipelineMcpConnector {
         connections: Arc::new(AtomicUsize::new(0)),
@@ -4315,8 +4358,10 @@ async fn postgres_continuation_effect_process() {
     });
     match std::env::var(PHASE_ENV).expect("phase").as_str() {
         "pause" => {
-            let request = child_direct_request(false);
-            let invocation = continuation_assembler(&pool, counting)
+            let request = continuation_request(&depth);
+            let (assembler, _) =
+                continuation_assembler(&pool, counting, &depth, committed, Vec::new());
+            let invocation = assembler
                 .assemble(claim_for(&request, EXECUTION, 1, false))
                 .await
                 .unwrap_or_else(|error| panic!("pause: assemble: {error}"));
@@ -4325,43 +4370,84 @@ async fn postgres_continuation_effect_process() {
                 .iter()
                 .find(|event| event["type"] == "agent_hitl_interrupt")
                 .unwrap_or_else(|| panic!("pause: a sensitive card: {browser:?}"));
-            let pending = &card["response_metadata"]["hitl_interrupts"][0];
+            let metadata = &card["response_metadata"];
+            let pending = metadata["hitl_interrupts"].get(0).unwrap_or(metadata);
             assert_eq!(tool_calls.load(Ordering::Acquire), 0, "pause: nothing ran");
             println!("{PENDING_LINE}{pending}");
         }
         "crash" => {
             let pending: Value =
                 serde_json::from_str(&std::env::var(PENDING_ENV).expect("pending")).expect("json");
-            let request = approval(&pending);
-            let invocation = continuation_assembler(
-                &pool,
-                Arc::new(JournalCrashingConnector { pool: pool.clone() }),
-            )
-            .assemble(claim_for(&request, CONTINUING_EXECUTION, 1, marker))
-            .await
-            .unwrap_or_else(|error| panic!("crash: assemble the continuation: {error}"));
+            let request = approval(&pending, &depth);
+            // `before_runner`: B is lost after its start recorded `continuing`
+            // and before its Runner ran anything.
+            if mode == "before_runner" {
+                let (assembler, _) =
+                    continuation_assembler(&pool, counting, &depth, false, Vec::new());
+                let _invocation = assembler
+                    .assemble(claim_for(&request, CONTINUING_EXECUTION, 1, marker))
+                    .await
+                    .unwrap_or_else(|error| panic!("crash: assemble the continuation: {error}"));
+                std::process::exit(CRASH_EXIT_CODE);
+            }
+            // `committed`: the call returns and its journal commits; the
+            // process dies at the next step's model request. Otherwise it
+            // dies inside the call, once its Started record is durable.
+            let (assembler, _) = if committed {
+                continuation_assembler(
+                    &pool,
+                    counting,
+                    &depth,
+                    true,
+                    vec![TestModelGatewayOutcome::ExitProcess(CRASH_EXIT_CODE)],
+                )
+            } else {
+                continuation_assembler(
+                    &pool,
+                    Arc::new(JournalCrashingConnector { pool: pool.clone() }),
+                    &depth,
+                    false,
+                    Vec::new(),
+                )
+            };
+            let invocation = assembler
+                .assemble(claim_for(&request, CONTINUING_EXECUTION, 1, marker))
+                .await
+                .unwrap_or_else(|error| panic!("crash: assemble the continuation: {error}"));
             let outcome = run_to_end(invocation).await;
             panic!("crash: the process outlived its crash point: {outcome:?}");
         }
-        "recover" => recover_continuation(&pool, marker, counting, &tool_calls).await,
+        "recover" => {
+            let outcomes = if committed {
+                vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+                    "summarized",
+                ))]
+            } else {
+                Vec::new()
+            };
+            let (assembler, captured) =
+                continuation_assembler(&pool, counting, &depth, committed, outcomes);
+            recover_continuation(&assembler, marker, &depth, &mode, &tool_calls, &captured).await;
+        }
         other => panic!("unknown phase {other}"),
     }
 }
 
 /// The reclaim phase of a [`continuation_scenario`]. With the paused writer
-/// B re-runs from A's row and the journal decides the call; without it (an
-/// older Main) B ends typed. Nothing runs again either way, and a refusal log
-/// carries ids and generations only (C4).
+/// B re-runs from A's row and the journal decides the call (R / C / I);
+/// without it (an older Main) B ends typed. A refusal log carries ids and
+/// generations only (C4).
 async fn recover_continuation(
-    pool: &sqlx::PgPool,
+    assembler: &PipelineNativeAgentAssembler,
     marker: bool,
-    counting: Arc<PipelineMcpConnector>,
+    depth: &str,
+    mode: &str,
     tool_calls: &AtomicUsize,
+    captured: &CapturedModelRequests,
 ) {
     let pending: Value =
         serde_json::from_str(&std::env::var(PENDING_ENV).expect("pending")).expect("json");
-    let request = approval(&pending);
-    let assembler = continuation_assembler(pool, counting);
+    let request = approval(&pending, depth);
     // This phase runs in its own process, so a global subscriber
     // captures exactly its logs.
     let capture = crate::agents::assembly_tests::CapturedOutput::default();
@@ -4374,7 +4460,7 @@ async fn recover_continuation(
     )
     .expect("the phase process's subscriber");
     let recovered = recovered_with(
-        &assembler,
+        assembler,
         &request,
         CONTINUING_EXECUTION,
         2,
@@ -4384,20 +4470,66 @@ async fn recover_continuation(
     if marker {
         let invocation =
             recovered.unwrap_or_else(|error| panic!("recover: the continuation re-runs: {error}"));
-        // C → F: the call may have run; it is not repeated and the run ends
-        // with the registered may-have-started reason.
-        let error = run_to_end(invocation)
-            .await
-            .expect_err("recover: a call that may have run ends the run");
-        assert!(
-            error.contains(crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE),
-            "recover: the registered may-have-started reason: {error}"
-        );
-        assert_eq!(
-            tool_calls.load(Ordering::Acquire),
-            0,
-            "recover: not repeated"
-        );
+        if depth == "0" && mode == "started" {
+            // C: a root direct node's call that may have run is never
+            // repeated; it is escalated to an operator (node recovery's
+            // reconcile pause), as on any reclaim of such a node.
+            let (frames, completion) = run_frames(invocation).await;
+            completion.unwrap_or_else(|error| panic!("recover: the run pauses: {error}"));
+            let recovery = frames
+                .iter()
+                .find(|(kind, _)| kind == "agent_node_recovery_required")
+                .map(|(_, metadata)| &metadata["node_recovery_required_v1"])
+                .unwrap_or_else(|| panic!("recover: an operator reconcile pause: {frames:?}"));
+            assert_eq!(recovery["stop_reason"], "effect_reconciliation_required");
+            assert_eq!(recovery["node_id"], "direct");
+            assert_eq!(recovery["allowed_actions"], json!(["reconcile"]));
+            assert_eq!(
+                tool_calls.load(Ordering::Acquire),
+                0,
+                "recover: not repeated"
+            );
+            return;
+        }
+        let outcome = run_to_end(invocation).await;
+        match mode {
+            // R: the committed result replays; the call never runs again.
+            "committed" => {
+                outcome.unwrap_or_else(|error| panic!("recover: the run completes: {error}"));
+                assert_eq!(tool_calls.load(Ordering::Acquire), 0, "recover: replayed");
+                assert_eq!(model_requests(captured), 1, "recover: only the next step");
+            }
+            // C → F: the call may have run; it is not repeated and the run
+            // ends with the registered may-have-started reason.
+            "started" => {
+                let error = outcome.expect_err("recover: a call that may have run ends the run");
+                assert!(
+                    error.contains(crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE),
+                    "recover: the registered may-have-started reason: {error}"
+                );
+                assert_eq!(
+                    tool_calls.load(Ordering::Acquire),
+                    0,
+                    "recover: not repeated"
+                );
+            }
+            // I: the journal never recorded a start; the call runs once.
+            "undispatched" => {
+                outcome.unwrap_or_else(|error| panic!("recover: the run completes: {error}"));
+                assert_eq!(tool_calls.load(Ordering::Acquire), 1, "recover: runs once");
+            }
+            // Lost before its Runner: the decision is applied once (a direct
+            // call runs once, a HITL node routes and completes).
+            "before_runner" => {
+                outcome.unwrap_or_else(|error| panic!("recover: the run completes: {error}"));
+                assert_eq!(
+                    tool_calls.load(Ordering::Acquire),
+                    usize::from(depth != "gate"),
+                    "recover: runs once"
+                );
+            }
+            other => panic!("unknown mode {other}"),
+        }
         return;
     }
     let cause = "pipeline.recovery.root_writer_mismatch";
@@ -4434,6 +4566,38 @@ async fn recover_continuation(
     );
 }
 
+/// Run to its end: every projected frame (type and metadata) and the
+/// completion's error, if any.
+async fn run_frames(
+    mut invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
+) -> (Vec<(String, Value)>, Result<(), String>) {
+    invocation
+        .project_start(timestamp(1))
+        .expect("pipeline browser start");
+    let (mut run, mut projector, completion) = invocation.start().expect("pipeline start");
+    let mut frames = Vec::new();
+    loop {
+        match run.next_event().await {
+            Err(error) => return (frames, Err(error.to_string())),
+            Ok(Some(event)) => {
+                for frame in projector.project(&event).expect("project") {
+                    frames.push((
+                        frame.r#type.clone(),
+                        serde_json::from_slice(&frame.response_metadata).unwrap_or_default(),
+                    ));
+                }
+            }
+            Ok(None) => break,
+        }
+    }
+    let completed = completion
+        .select()
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string());
+    (frames, completed)
+}
+
 /// The root session of the paused pipeline: the session holding B's
 /// `continuing` record. Its `continuing` records and its pipeline resume
 /// markers (user events), counted.
@@ -4451,9 +4615,14 @@ async fn root_continuation_counts(pool: &sqlx::PgPool) -> (i64, i64) {
     .expect("read the root continuation events")
 }
 
-/// FU-265 two-process proof: A pauses, B's approval dies inside the call,
-/// B is reclaimed; `marker` says whether Main named A as the paused writer.
-async fn continuation_scenario(url: &str, marker: bool) {
+/// FU-265 / FU-269 two-process proof: A pauses, B's approval is lost around
+/// the call at `depth`, B is reclaimed; `marker` says whether Main named A as
+/// the paused writer. The journal after the loss is set to `mode`, as in
+/// [`child_direct_scenario`]: `started` (as the crash left it), `committed`
+/// (the child's row after the call removed: lost between the journal commit
+/// and the child's save), `undispatched` (the journal removed: lost before
+/// the Started append).
+async fn continuation_scenario(url: &str, marker: bool, depth: &str, mode: &str) {
     let db = IsolatedPostgres::create(url).await;
     install_schema(&db.pool).await;
     sqlx::raw_sql(CHECKPOINT_MIGRATION)
@@ -4471,6 +4640,8 @@ async fn continuation_scenario(url: &str, marker: bool) {
             ])
             .env(DATABASE_ENV, &db.database_name)
             .env(MARKER_ENV, if marker { "1" } else { "0" })
+            .env(DEPTH_ENV, depth)
+            .env(MODE_ENV, mode)
             .env(PENDING_ENV, pending)
             .env(PHASE_ENV, phase);
         command
@@ -4499,9 +4670,34 @@ async fn continuation_scenario(url: &str, marker: bool) {
     let journals = journal_threads(&db.pool).await;
     assert_eq!(
         journals.len(),
-        1,
+        usize::from(mode != "before_runner"),
         "one journal for the one call: {journals:?}"
     );
+    match mode {
+        "committed" => {
+            let removed = sqlx::query(
+                "DELETE FROM elitea_runtime.agent_graph_checkpoints \
+                 WHERE thread_id LIKE $1 AND pending_nodes LIKE '%after%'",
+            )
+            .bind(child_direct_thread(depth))
+            .execute(&db.pool)
+            .await
+            .expect("remove the row saved after the call")
+            .rows_affected();
+            assert_eq!(removed, 1, "the child saved one row after the call");
+        }
+        "undispatched" => {
+            let removed = sqlx::query(
+                "DELETE FROM elitea_runtime.agent_graph_checkpoints WHERE thread_id LIKE 'n1:%'",
+            )
+            .execute(&db.pool)
+            .await
+            .expect("remove the journal")
+            .rows_affected();
+            assert_ne!(removed, 0, "the call's journal existed");
+        }
+        _ => {}
+    }
     let before = root_continuation_counts(&db.pool).await;
     // E3: with the paused writer B records `continuing` once, before its
     // Runner starts; from an older Main (no writer) it records none, as before.
@@ -4518,27 +4714,81 @@ async fn continuation_scenario(url: &str, marker: bool) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(journal_threads(&db.pool).await, journals, "no new journal");
+    let after = root_continuation_counts(&db.pool).await;
     // E3/E4/E6: the re-run wrote no second `continuing` record and no second
     // resume marker, and B's earlier events are still stored.
     assert_eq!(
-        root_continuation_counts(&db.pool).await,
-        before,
-        "the re-run duplicates nothing and removes nothing"
+        after.0, before.0,
+        "no second `continuing` record: {after:?}"
     );
-    assert!(before.1 <= 1, "one resume marker at most: {before:?}");
+    assert!(
+        after.1 <= 1 && after.1 >= before.1,
+        "one resume marker at most, none removed: {before:?} {after:?}"
+    );
     db.pool.close().await;
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn postgres_an_approved_child_call_lost_before_the_continuation_saves_re_runs_and_is_not_repeated()
- {
-    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
-        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-265 PostgreSQL proof");
-        return;
+/// The matrix of a decided continuation lost before its first root save
+/// (decision 1), each case with Main's paused writer.
+macro_rules! continuation_case {
+    ($name:ident, $depth:literal, $mode:literal) => {
+        #[tokio::test(flavor = "current_thread")]
+        async fn $name() {
+            let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+                eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-269 PostgreSQL proof");
+                return;
+            };
+            continuation_scenario(&url, true, $depth, $mode).await;
+        }
     };
-    continuation_scenario(&url, true).await;
 }
+
+continuation_case!(
+    postgres_an_approved_child_call_lost_before_the_continuation_saves_re_runs_and_is_not_repeated,
+    "1",
+    "started"
+);
+continuation_case!(
+    postgres_a_lost_continuation_replays_a_committed_child_call,
+    "1",
+    "committed"
+);
+continuation_case!(
+    postgres_a_lost_continuation_runs_an_undispatched_child_call_once,
+    "1",
+    "undispatched"
+);
+continuation_case!(
+    postgres_a_lost_continuation_stops_typed_on_a_started_call_two_levels_down,
+    "2",
+    "started"
+);
+continuation_case!(
+    postgres_a_lost_continuation_replays_a_committed_call_two_levels_down,
+    "2",
+    "committed"
+);
+continuation_case!(
+    postgres_a_lost_continuation_runs_an_undispatched_call_two_levels_down_once,
+    "2",
+    "undispatched"
+);
+
+continuation_case!(
+    postgres_a_lost_continuation_escalates_a_started_root_direct_call_to_reconcile,
+    "0",
+    "started"
+);
+continuation_case!(
+    postgres_a_continuation_lost_before_its_runner_runs_a_root_direct_call_once,
+    "0",
+    "before_runner"
+);
+continuation_case!(
+    postgres_a_continuation_lost_before_its_runner_applies_a_hitl_node_decision_once,
+    "gate",
+    "before_runner"
+);
 
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_a_continuation_without_its_paused_writer_is_refused_typed_on_reclaim() {
@@ -4546,5 +4796,5 @@ async fn postgres_a_continuation_without_its_paused_writer_is_refused_typed_on_r
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-265 PostgreSQL proof");
         return;
     };
-    continuation_scenario(&url, false).await;
+    continuation_scenario(&url, false, "1", "started").await;
 }
