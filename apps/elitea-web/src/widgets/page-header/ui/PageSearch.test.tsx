@@ -61,13 +61,19 @@ describe('PageSearch', () => {
 describe('isSearchShortcut', () => {
   const key = (init: Partial<KeyboardEvent> & { target?: EventTarget | null }) => ({ key: '', metaKey: false, ctrlKey: false, altKey: false, target: document.body, ...init });
 
-  it('takes `/` only outside a text field, and ⌘F / Ctrl+F anywhere', () => {
+  it('takes `/` only outside a text field, and leaves ⌘F / Ctrl+F to the browser’s find', () => {
     const field = document.createElement('input');
+    const area = document.createElement('textarea');
+    const editable = document.createElement('div');
+    editable.contentEditable = 'true';
+    // jsdom does not compute `isContentEditable` from the attribute.
+    Object.defineProperty(editable, 'isContentEditable', { value: true });
     expect(isSearchShortcut(key({ key: '/' }))).toBe(true);
     expect(isSearchShortcut(key({ key: '/', target: field }))).toBe(false);
-    expect(isSearchShortcut(key({ key: 'f', metaKey: true, target: field }))).toBe(true);
-    expect(isSearchShortcut(key({ key: 'f', ctrlKey: true }))).toBe(true);
-    expect(isSearchShortcut(key({ key: 'f' }))).toBe(false);
-    expect(isSearchShortcut(key({ key: 'f', metaKey: true, altKey: true }))).toBe(false);
+    expect(isSearchShortcut(key({ key: '/', target: area }))).toBe(false);
+    expect(isSearchShortcut(key({ key: '/', target: editable }))).toBe(false);
+    expect(isSearchShortcut(key({ key: 'f', metaKey: true }))).toBe(false);
+    expect(isSearchShortcut(key({ key: 'f', ctrlKey: true }))).toBe(false);
+    expect(isSearchShortcut(key({ key: '/', metaKey: true }))).toBe(false);
   });
 });

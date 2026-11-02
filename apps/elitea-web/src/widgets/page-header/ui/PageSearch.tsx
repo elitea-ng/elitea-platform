@@ -22,8 +22,8 @@ import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
  * The write is `replace`, so typing a query does not fill the browser's back
  * stack with one entry per debounced keystroke.
  *
- * `/` (outside a text field) and ⌘F / Ctrl+F focus the box, as in a native
- * app's list. Below a 720px wide toolbar the box folds to its icon and opens
+ * `/` (outside a text field) focuses the box. ⌘F / Ctrl+F is left to the
+ * browser's own find-in-page: taking it over would hide a tool people use. Below a 720px wide toolbar the box folds to its icon and opens
  * again while it has focus (`PageToolbar` is the size container).
  */
 export interface PageSearchProps {
@@ -42,11 +42,10 @@ function isTextField(target: EventTarget | null): boolean {
   return target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
 }
 
-/** `/` or ⌘F / Ctrl+F: the shortcut that focuses the page's search. */
+/** `/`, outside a text field: the shortcut that focuses the page's search. */
 export function isSearchShortcut(event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'target'>): boolean {
-  if (event.altKey) return false;
-  if (event.key === '/' && !event.metaKey && !event.ctrlKey) return !isTextField(event.target);
-  return (event.key === 'f' || event.key === 'F') && (event.metaKey || event.ctrlKey);
+  if (event.altKey || event.metaKey || event.ctrlKey) return false;
+  return event.key === '/' && !isTextField(event.target);
 }
 
 export function PageSearch({ placeholder, 'data-testid': dataTestId }: PageSearchProps): ReactNode {
