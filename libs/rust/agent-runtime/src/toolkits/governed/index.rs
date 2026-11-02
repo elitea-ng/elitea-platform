@@ -3,7 +3,7 @@
 //! A governed `index.ingest.v1` run reads one toolkit's source. It never
 //! trusts a credential in its claimed toolkit settings. Before it reads the
 //! source, it redeems the toolkit's credential ONCE through the run's
-//! [`CredentialRedeemer`] (`RuntimeContentService.RedeemCredential`, under
+//! [`CredentialRedeemer`](super::CredentialRedeemer) (`RuntimeContentService.RedeemCredential`, under
 //! the live claim and the mandate the index schedule names). The redemption
 //! binds the provider's index operation ([`index_operation`]), an empty
 //! resource (the run reads the whole source the arguments select) and the

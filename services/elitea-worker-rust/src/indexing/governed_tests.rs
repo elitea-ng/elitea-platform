@@ -46,8 +46,8 @@ fn client(respond: Box<Respond>) -> (GovernedOperationClient, Arc<Recording>) {
     )
 }
 
-fn redeemed_token() -> Result<RedeemOutcome, RedeemFailure> {
-    Ok(RedeemOutcome::Envelope(CredentialEnvelope::new(
+fn redeemed_token() -> RedeemOutcome {
+    RedeemOutcome::Envelope(CredentialEnvelope::new(
         "redemption-1".to_owned(),
         EnvelopeKind::Static,
         BTreeMap::from([(
@@ -56,7 +56,7 @@ fn redeemed_token() -> Result<RedeemOutcome, RedeemFailure> {
         )]),
         i64::MAX,
         "https://acme.atlassian.net".to_owned(),
-    )))
+    ))
 }
 
 fn confluence_entry() -> Vec<u8> {
@@ -85,7 +85,7 @@ async fn a_legacy_run_reads_its_claimed_configuration_unchanged() {
 
 #[tokio::test]
 async fn a_governed_run_reads_the_source_with_the_redeemed_credential_only() {
-    let (client, recording) = client(Box::new(redeemed_token));
+    let (client, recording) = client(Box::new(|| Ok(redeemed_token())));
     let entry = confluence_entry();
     let configuration = governed_toolkit_configuration(Some(&client), &entry, PARAMETERS)
         .await
@@ -130,13 +130,13 @@ async fn a_refused_or_unavailable_redemption_fails_the_run_closed() {
         let failure = governed_toolkit_configuration(Some(&client), &entry, PARAMETERS)
             .await
             .expect_err("refused");
-        assert!(failure == want, "unexpected failure kind");
+        assert_eq!(failure, want);
     }
 }
 
 #[tokio::test]
 async fn a_source_without_a_governed_adapter_is_refused_before_any_redemption() {
-    let (client, recording) = client(Box::new(redeemed_token));
+    let (client, recording) = client(Box::new(|| Ok(redeemed_token())));
     let entry = serde_json::to_vec(&json!({
         "id": 3, "type": "github", "toolkit_name": "code",
         "settings": {"github_configuration": {"access_token": "claim-time-secret"}},
@@ -145,13 +145,13 @@ async fn a_source_without_a_governed_adapter_is_refused_before_any_redemption() 
     let failure = governed_toolkit_configuration(Some(&client), &entry, PARAMETERS)
         .await
         .expect_err("refused");
-    assert!(failure == RuntimeFailureKind::UnsupportedCapability);
+    assert_eq!(failure, RuntimeFailureKind::UnsupportedCapability);
     assert!(recording.calls.lock().expect("calls").is_empty());
 }
 
 #[tokio::test]
 async fn a_credential_free_toolkit_is_unchanged_and_redeems_nothing() {
-    let (client, recording) = client(Box::new(redeemed_token));
+    let (client, recording) = client(Box::new(|| Ok(redeemed_token())));
     let entry = serde_json::to_vec(
         &json!({"id": 4, "type": "artifact", "toolkit_name": "files", "settings": {"bucket": "b"}}),
     )

@@ -1012,24 +1012,12 @@ where
             Ok(Err(error)) => return IndexRunEnd::Failure(runtime_context_failure(&error)),
             Err(error) => return IndexRunEnd::Failure(lease_failure(&error)),
         };
-        // A governed run reads its source with the toolkit credential it
-        // redeems from the broker, never the claimed one (#1473). A legacy
-        // run has no governed client and reads its claimed configuration.
-        let governed = crate::transport::credential_redeemer::governed_client(
-            &self.platform,
-            &authorized.shared_runtime_context(),
-        );
-        let governed_configuration = match lease
-            .run_pre_invocation(crate::indexing::governed::governed_toolkit_configuration(
-                governed.as_deref(),
-                inputs.toolkit_configuration.as_bytes(),
-                inputs.tool_parameters.as_bytes(),
-            ))
+        let governed_configuration = match self
+            .governed_index_configuration(authorized, lease, inputs)
             .await
         {
-            Ok(Ok(configuration)) => configuration,
-            Ok(Err(failure)) => return IndexRunEnd::Failure(failure),
-            Err(error) => return IndexRunEnd::Failure(lease_failure(&error)),
+            Ok(configuration) => configuration,
+            Err(failure) => return IndexRunEnd::Failure(failure),
         };
         let execution = authorized.execution();
         let probe = lease.state_probe();
@@ -1053,10 +1041,8 @@ where
         let run = IndexRun {
             command: index,
             toolkit_configuration: governed_configuration
-                .as_ref()
-                .map_or(inputs.toolkit_configuration.as_bytes(), |entry| {
-                    entry.as_slice()
-                }),
+                .as_deref()
+                .map_or(inputs.toolkit_configuration.as_bytes(), Vec::as_slice),
             tool_parameters: inputs.tool_parameters.as_bytes(),
             parsed: inputs.parsed.as_ref(),
             embedding_binding: inputs
@@ -1107,6 +1093,30 @@ where
             Ok(result) => IndexRunEnd::Result(Box::new(result)),
             Err(failure) => IndexRunEnd::Failure(failure),
         }
+    }
+
+    /// The toolkit configuration a governed index run reads: the claimed
+    /// entry with the credential redeemed from the broker as its only
+    /// credential (#1473). `None` for a legacy run or a credential-free
+    /// toolkit, which read the claimed entry unchanged.
+    async fn governed_index_configuration(
+        &self,
+        authorized: &AuthorizedToolkitExecution,
+        lease: &mut ClaimLeaseMonitor,
+        inputs: &IndexInputs,
+    ) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>, RuntimeFailureKind> {
+        let governed = crate::transport::credential_redeemer::governed_client(
+            &self.platform,
+            &authorized.shared_runtime_context(),
+        );
+        lease
+            .run_pre_invocation(crate::indexing::governed::governed_toolkit_configuration(
+                governed.as_deref(),
+                inputs.toolkit_configuration.as_bytes(),
+                inputs.tool_parameters.as_bytes(),
+            ))
+            .await
+            .map_err(|error| lease_failure(&error))?
     }
 
     async fn materialize_request(
