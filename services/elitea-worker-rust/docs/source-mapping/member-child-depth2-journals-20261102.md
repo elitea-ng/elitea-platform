@@ -111,11 +111,10 @@ orchestrator accepted this in place of a journal key change.
 ## Tests
 
 - **Worker, full suite** (`cargo test --offline --locked --no-fail-fast --all-targets --all-features --
-  --test-threads=4`, real PostgreSQL): 2977 passed, 1 failed, 105 ignored. The lib target: 2872 passed, 1 failed,
-  105 ignored (FU-269's lib target: 2860 passed, 105 ignored; this branch adds 11 tests). The one failure,
-  `lock_bound_tests::checkpoint_write_behind_a_stalled_writer_fails_typed_within_the_lock_bound`, measured an 8.8 s
-  client wait against PostgreSQL's 10 s lock timeout while the Docker VM ran an image build (host load ~139). Rerun at
-  normal load it passes (10.5 s). This branch does not touch the checkpointer.
+  --test-threads=4`, real PostgreSQL), at the R1 head: **2979 passed, 0 failed, 105 ignored**. The lib target: 2874
+  passed, 105 ignored (FU-269's lib target: 2860 passed, 105 ignored; this branch adds 14 tests). An earlier run under
+  host load ~139 failed only `lock_bound_tests::checkpoint_write_behind_a_stalled_writer_fails_typed_within_the_lock_bound`
+  (an 8.8 s client wait against PostgreSQL's 10 s lock timeout); it passes at normal load and in this run.
 - **Clippy:** `cargo clippy --offline --all-targets --all-features -- -D warnings`, clean.
 - **New Worker tests** (real PostgreSQL, tool and model calls counted):
   - `branch_journals_reach_the_nested_saved_pipelines` (`src/agents/graph/compiler.rs` unit test): the level-2
