@@ -22,6 +22,14 @@ func TestRelinkOIDCIdentity(t *testing.T) {
 			t.Fatalf("%s: %v", statement, err)
 		}
 	}
+	// The auth tables are owned by 001_initial.sql, outside the ledgered
+	// corpus; create them in that shape (auth_core_baseline.sql).
+	seedAuthCoreTables(t, pool)
+	mustExec(`CREATE TABLE IF NOT EXISTS public.auth_core__user_provider (
+    user_id integer NOT NULL REFERENCES public.auth_core__user (id) ON UPDATE CASCADE ON DELETE CASCADE,
+    provider_ref text NOT NULL,
+    PRIMARY KEY (user_id, provider_ref),
+    UNIQUE (provider_ref))`)
 	mustExec(`INSERT INTO public.auth_core__user (id, email, name) VALUES
 		(910001, 'Recreated@Example.com', 'Recreated'),
 		(910002, 'other@example.com', 'Other'),

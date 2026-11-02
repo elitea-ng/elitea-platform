@@ -611,11 +611,11 @@ func oidcAdoptsSCIMUsers() bool {
 //
 // THE ONLY ACCEPTED PROOF IS AN EXPLICIT `"email_verified": true`. An ABSENT
 // claim is not proof, and OIDC_REQUIRE_EMAIL_VERIFIED does not make it one.
-// That variable gates joinAccountByEmail — the step where an unknown subject
-// ADOPTS an existing account — and nothing else. A brand new subject with no
-// `email_verified` claim still provisions a new account with the variable set
-// to true, so reading the variable here would report a verification that no
-// component performed. An operator whose provider omits the claim names the
+// That variable gates joinAccountByEmail — the first login of an unknown
+// subject, which adopts an existing account or creates a new one — and nothing
+// else. With the variable off, a subject with no `email_verified` claim still
+// gets an account, so reading the variable here would report a verification
+// that no component performed. An operator whose provider omits the claim names the
 // login by `oidc:<sub>` instead, and reads that value off
 // `GET /api/v2/social/author`.
 //
