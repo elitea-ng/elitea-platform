@@ -31,6 +31,14 @@ import (
 // and the Postgres store, then claims it through the production claim path.
 func admitAgentRun(t *testing.T, pool *pgxpool.Pool, suffix, capability string, input *runtimev1.AgentExecutionInputV1) (string, runtimedomain.Fence) {
 	t.Helper()
+	execution, decision := admitAndClaimAgentRun(t, pool, suffix, capability, input, nil)
+	return execution, decision.Lease.Fence
+}
+
+// admitAndClaimAgentRun is admitAgentRun with a hook that runs on the
+// admitted execution before the claim, and the whole claim decision.
+func admitAndClaimAgentRun(t *testing.T, pool *pgxpool.Pool, suffix, capability string, input *runtimev1.AgentExecutionInputV1, beforeClaim func(execution string)) (string, executionapp.ClaimDecision) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	policy := testAgentDispatchPolicy()
@@ -93,6 +101,9 @@ WHERE execution_id = $1 RETURNING outbox_id`, outcome.ExecutionID, envelope, dig
 	}); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
+	if beforeClaim != nil {
+		beforeClaim(outcome.ExecutionID)
+	}
 	if _, err := pool.Exec(ctx, `
 INSERT INTO elitea_runtime.workload_sessions (workload_session_id, workload_identity, producer_id, issued_at, expires_at)
 VALUES ($1, 'spiffe://elitea.test/agent-worker/1', 'agent-worker-1', clock_timestamp() - interval '1 minute', clock_timestamp() + interval '1 day')
@@ -116,7 +127,7 @@ ON CONFLICT DO NOTHING`, "agent-worker-session-"+suffix); err != nil {
 	if err != nil || decision.Disposition != executionapp.ClaimAccepted {
 		t.Fatalf("claim: %+v %v", decision, err)
 	}
-	return outcome.ExecutionID, decision.Lease.Fence
+	return outcome.ExecutionID, decision
 }
 
 func memoryAgentInput(application, tools string) *runtimev1.AgentExecutionInputV1 {

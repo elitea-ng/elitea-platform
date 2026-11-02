@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -115,6 +116,57 @@ func TestNoLeaseObsoleteDecisionIsLimitedToDurableCancellation(t *testing.T) {
 		if err := decision.validate(request, MaxClaimLeaseTTLMillis); !errors.Is(err, ErrInvalidClaim) {
 			t.Fatalf("unsafe no-lease obsolete decision was accepted: %+v err=%v", decision, err)
 		}
+	}
+}
+
+// FU-269: a paused writer rides only on an executable or recovering agent
+// claim, names another execution, and has a generation.
+func TestClaimDecisionPausedWriterIsBoundToAgentWork(t *testing.T) {
+	now := time.Date(2026, time.November, 2, 12, 0, 0, 0, time.UTC)
+	request := ClaimRequest{
+		CommandID: "command-1", OutboxID: "outbox-1", ExecutionID: "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+		Generation: 1, CapabilityID: executiondomain.AgentApplicationCapability,
+		SignedEnvelopeDigest: runtimedomain.SHA256([]byte("signed-envelope")),
+		WorkloadIdentity:     "spiffe://elitea.test/workload/worker-1", WorkloadSessionID: "session-1",
+		ProducerID: "producer-1",
+	}
+	lease := runtimedomain.ActiveLease{
+		ClaimID: "claim-1", DesiredState: runtimedomain.DesiredRunning, ExpiresAt: now.Add(time.Minute),
+		Fence: runtimedomain.Fence{
+			CommandID: request.CommandID, ExecutionID: request.ExecutionID, Generation: request.Generation,
+			WorkloadIdentity: request.WorkloadIdentity, WorkloadSessionID: request.WorkloadSessionID,
+			ProducerID: request.ProducerID, ClaimAttempt: 1, LeaseEpoch: 1,
+			Token: runtimedomain.FenceToken(runtimedomain.SHA256([]byte("token"))),
+		},
+	}
+	minuteTTL := ClaimLeaseTTLMillis(time.Minute.Milliseconds())
+	decision := func(writer PausedWriter) ClaimDecision {
+		return ClaimDecision{Lease: lease, LeaseObservedAt: now, Disposition: ClaimAccepted, PausedWriter: &writer}
+	}
+	valid := PausedWriter{ExecutionID: "0123456789abcdef0123456789abcdef", Generation: 3}
+	if err := decision(valid).validate(request, minuteTTL); err != nil {
+		t.Fatalf("a paused writer on an accepted agent claim was rejected: %v", err)
+	}
+	for name, writer := range map[string]PausedWriter{
+		"its own execution": {ExecutionID: request.ExecutionID, Generation: 3},
+		"generation 0":      {ExecutionID: valid.ExecutionID},
+		"an uppercase id":   {ExecutionID: "0123456789ABCDEF0123456789ABCDEF", Generation: 3},
+		"a short id":        {ExecutionID: "0123456789abcdef", Generation: 3},
+		"past int64":        {ExecutionID: valid.ExecutionID, Generation: math.MaxInt64 + 1},
+	} {
+		if err := decision(writer).validate(request, minuteTTL); !errors.Is(err, ErrInvalidClaim) {
+			t.Fatalf("%s was accepted: %v", name, err)
+		}
+	}
+	other := decision(valid)
+	other.Disposition = ClaimActiveLeaseNoACK
+	if err := other.validate(request, minuteTTL); !errors.Is(err, ErrInvalidClaim) {
+		t.Fatalf("a paused writer on a no-input claim was accepted: %v", err)
+	}
+	toolRun := request
+	toolRun.CapabilityID = executiondomain.ToolkitCallToolCapability
+	if err := decision(valid).validate(toolRun, minuteTTL); !errors.Is(err, ErrInvalidClaim) {
+		t.Fatalf("a paused writer on a tool run was accepted: %v", err)
 	}
 }
 

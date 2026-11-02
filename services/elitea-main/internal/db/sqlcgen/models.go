@@ -389,16 +389,18 @@ type EliteaRuntimeAgentAdmissionReservation struct {
 }
 
 type EliteaRuntimeAgentExecutionJob struct {
-	ExecutionID               string `db:"execution_id" json:"execution_id"`
-	Generation                int64  `db:"generation" json:"generation"`
-	CapabilityID              string `db:"capability_id" json:"capability_id"`
-	InputBundleID             string `db:"input_bundle_id" json:"input_bundle_id"`
-	RequestEntryID            string `db:"request_entry_id" json:"request_entry_id"`
-	ClientStreamID            string `db:"client_stream_id" json:"client_stream_id"`
-	ClientMessageID           string `db:"client_message_id" json:"client_message_id"`
-	ClientExecutionGeneration string `db:"client_execution_generation" json:"client_execution_generation"`
-	SioEvent                  string `db:"sio_event" json:"sio_event"`
-	StopQuestionAuthorID      *int64 `db:"stop_question_author_id" json:"stop_question_author_id"`
+	ExecutionID               string  `db:"execution_id" json:"execution_id"`
+	Generation                int64   `db:"generation" json:"generation"`
+	CapabilityID              string  `db:"capability_id" json:"capability_id"`
+	InputBundleID             string  `db:"input_bundle_id" json:"input_bundle_id"`
+	RequestEntryID            string  `db:"request_entry_id" json:"request_entry_id"`
+	ClientStreamID            string  `db:"client_stream_id" json:"client_stream_id"`
+	ClientMessageID           string  `db:"client_message_id" json:"client_message_id"`
+	ClientExecutionGeneration string  `db:"client_execution_generation" json:"client_execution_generation"`
+	SioEvent                  string  `db:"sio_event" json:"sio_event"`
+	StopQuestionAuthorID      *int64  `db:"stop_question_author_id" json:"stop_question_author_id"`
+	PausedExecutionID         *string `db:"paused_execution_id" json:"paused_execution_id"`
+	PausedGeneration          *int64  `db:"paused_generation" json:"paused_generation"`
 }
 
 type EliteaRuntimeCommandOutbox struct {

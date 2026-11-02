@@ -60,6 +60,7 @@ type claimControllerStub struct {
 	invokeErr         error
 	abortDisposition  *executionapp.ClaimAbortDisposition
 	abortErr          error
+	pausedWriter      *executionapp.PausedWriter
 }
 
 func (s claimControllerStub) AuthorizeInvocation(_ context.Context, fence runtimedomain.Fence) (executionapp.AuthorizeInvocationDisposition, error) {
@@ -125,7 +126,7 @@ func (s claimControllerStub) Claim(_ context.Context, request executionapp.Claim
 	if leaseObservedAt.IsZero() && disposition == executionapp.ClaimAccepted {
 		leaseObservedAt = s.lease.ExpiresAt.Add(-time.Minute)
 	}
-	return executionapp.ClaimDecision{Lease: s.lease, LeaseObservedAt: leaseObservedAt, Disposition: disposition, RetirementReason: s.retirementReason, SettlementRecovery: s.recovery, ClaimHandoffWatermark: s.watermark}, nil
+	return executionapp.ClaimDecision{Lease: s.lease, LeaseObservedAt: leaseObservedAt, Disposition: disposition, RetirementReason: s.retirementReason, SettlementRecovery: s.recovery, ClaimHandoffWatermark: s.watermark, PausedWriter: s.pausedWriter}, nil
 }
 
 func (s claimControllerStub) Abort(_ context.Context, fence runtimedomain.Fence, disposition executionapp.ClaimAbortDisposition) error {
@@ -234,6 +235,44 @@ func TestClaimCommandAuthenticatesThenVerifiesThenClaimsBeforeResolvingInput(t *
 	}
 	if response.GetReceipt().GetToolkitTypedRefusals() {
 		t.Fatal("an agent claim advertised the tool-run refusal shapes")
+	}
+}
+
+// FU-269: the claim receipt carries the paused writer the claim decision
+// serves, and only on a disposition that hands the worker business inputs.
+func TestClaimReceiptCarriesThePausedWriterOnlyWithInputs(t *testing.T) {
+	writer := &executionapp.PausedWriter{ExecutionID: "0123456789abcdef0123456789abcdef", Generation: 3}
+	for disposition, want := range map[executionapp.ClaimDisposition]bool{
+		executionapp.ClaimAccepted:         true,
+		executionapp.ClaimActiveLeaseNoACK: false,
+	} {
+		manifest := validManifest()
+		calls := []string{}
+		server, err := NewServer(
+			testControlServerConfig(),
+			workloadAuthorizerStub{calls: &calls},
+			verifierSpy{calls: &calls, verifier: newTestVerifier(t)},
+			claimControllerStub{calls: &calls, lease: validLease(), disposition: disposition, pausedWriter: writer},
+			inputResolverStub{calls: &calls, manifest: manifest},
+			&settlementControllerStub{calls: &calls},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := server.ClaimCommand(context.Background(), claimRequestForManifest(t, manifest))
+		if err != nil || response.GetRejection() != nil {
+			t.Fatalf("%s: %v %v", disposition, response, err)
+		}
+		got := response.GetReceipt().GetPausedWriter()
+		if !want {
+			if got != nil {
+				t.Fatalf("%s carried %v", disposition, got)
+			}
+			continue
+		}
+		if got.GetExecutionId() != writer.ExecutionID || got.GetGeneration() != writer.Generation {
+			t.Fatalf("%s carried %v", disposition, got)
+		}
 	}
 }
 

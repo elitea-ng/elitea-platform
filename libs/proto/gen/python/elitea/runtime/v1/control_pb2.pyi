@@ -120,7 +120,7 @@ class SettlementRecoveryV1(_message.Message):
     def __init__(self, proposal: _Optional[_Union[_output_pb2.SettlementProposalV1, _Mapping]] = ..., proposal_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., idempotency_key: _Optional[str] = ..., settlement_receipt_id: _Optional[str] = ..., outcome: _Optional[_Union[_common_pb2.ExecutionOutcomeV1, str]] = ...) -> None: ...
 
 class ClaimReceiptV1(_message.Message):
-    __slots__ = ("disposition", "identity", "fence", "lease_expires_at_unix_millis", "input_bundle_ref", "input_bundle", "desired_state", "claim_handoff_watermark", "claim_id", "settlement_recovery", "retirement", "claim_started_at_unix_micros", "node_recovery_receipt_json", "vector_token", "toolkit_typed_refusals")
+    __slots__ = ("disposition", "identity", "fence", "lease_expires_at_unix_millis", "input_bundle_ref", "input_bundle", "desired_state", "claim_handoff_watermark", "claim_id", "settlement_recovery", "retirement", "claim_started_at_unix_micros", "node_recovery_receipt_json", "vector_token", "toolkit_typed_refusals", "paused_writer")
     DISPOSITION_FIELD_NUMBER: _ClassVar[int]
     IDENTITY_FIELD_NUMBER: _ClassVar[int]
     FENCE_FIELD_NUMBER: _ClassVar[int]
@@ -136,6 +136,7 @@ class ClaimReceiptV1(_message.Message):
     NODE_RECOVERY_RECEIPT_JSON_FIELD_NUMBER: _ClassVar[int]
     VECTOR_TOKEN_FIELD_NUMBER: _ClassVar[int]
     TOOLKIT_TYPED_REFUSALS_FIELD_NUMBER: _ClassVar[int]
+    PAUSED_WRITER_FIELD_NUMBER: _ClassVar[int]
     disposition: ClaimDispositionV1
     identity: _common_pb2.ExecutionIdentityV1
     fence: _common_pb2.ExecutionFenceV1
@@ -151,7 +152,16 @@ class ClaimReceiptV1(_message.Message):
     node_recovery_receipt_json: bytes
     vector_token: VectorClaimTokenV1
     toolkit_typed_refusals: bool
-    def __init__(self, disposition: _Optional[_Union[ClaimDispositionV1, str]] = ..., identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., lease_expires_at_unix_millis: _Optional[int] = ..., input_bundle_ref: _Optional[_Union[_input_pb2.ExecutionInputBundleReferenceV1, _Mapping]] = ..., input_bundle: _Optional[_Union[_input_pb2.ExecutionInputBundleV1, _Mapping]] = ..., desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., claim_handoff_watermark: _Optional[int] = ..., claim_id: _Optional[str] = ..., settlement_recovery: _Optional[_Union[SettlementRecoveryV1, _Mapping]] = ..., retirement: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., claim_started_at_unix_micros: _Optional[int] = ..., node_recovery_receipt_json: _Optional[bytes] = ..., vector_token: _Optional[_Union[VectorClaimTokenV1, _Mapping]] = ..., toolkit_typed_refusals: _Optional[bool] = ...) -> None: ...
+    paused_writer: PausedWriterV1
+    def __init__(self, disposition: _Optional[_Union[ClaimDispositionV1, str]] = ..., identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., lease_expires_at_unix_millis: _Optional[int] = ..., input_bundle_ref: _Optional[_Union[_input_pb2.ExecutionInputBundleReferenceV1, _Mapping]] = ..., input_bundle: _Optional[_Union[_input_pb2.ExecutionInputBundleV1, _Mapping]] = ..., desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., claim_handoff_watermark: _Optional[int] = ..., claim_id: _Optional[str] = ..., settlement_recovery: _Optional[_Union[SettlementRecoveryV1, _Mapping]] = ..., retirement: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., claim_started_at_unix_micros: _Optional[int] = ..., node_recovery_receipt_json: _Optional[bytes] = ..., vector_token: _Optional[_Union[VectorClaimTokenV1, _Mapping]] = ..., toolkit_typed_refusals: _Optional[bool] = ..., paused_writer: _Optional[_Union[PausedWriterV1, _Mapping]] = ...) -> None: ...
+
+class PausedWriterV1(_message.Message):
+    __slots__ = ("execution_id", "generation")
+    EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
+    GENERATION_FIELD_NUMBER: _ClassVar[int]
+    execution_id: str
+    generation: int
+    def __init__(self, execution_id: _Optional[str] = ..., generation: _Optional[int] = ...) -> None: ...
 
 class VectorClaimTokenV1(_message.Message):
     __slots__ = ("bearer", "expires_at_unix_millis", "allowed_sources")

@@ -302,6 +302,10 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 	// when told so (an older Main would refuse them and the run would never
 	// settle).
 	receipt.ToolkitTypedRefusals = advertisesTypedToolRefusals(command)
+	// The paused writer the admitting transaction stored on the job (FU-269).
+	if writer := decision.PausedWriter; writer != nil {
+		receipt.PausedWriter = &runtimev1.PausedWriterV1{ExecutionId: writer.ExecutionID, Generation: writer.Generation}
+	}
 
 	manifest, err := s.inputs.ResolveClaimInput(ctx, lease.Fence, command.GetInputBundleRef())
 	if err != nil {
