@@ -145,9 +145,9 @@ async function typeMore(page: Page, text: string): Promise<void> {
   await input.pressSequentially(text, { delay: 15 });
 }
 
-/** The mention dropdown's own heading — present only while it is mounted (`ChatBoxPopups.tsx`'s `userMentions` gate). Not ambiguous with the (collapsed, unopened) participants rail, which never renders this text unless expanded — and nothing here expands it. */
+/** The mention dropdown's own heading — present only while it is mounted (`ChatBoxPopups.tsx`'s `userMentions` gate). Scoped to the page's `<main>`: the shell side panel's Conversation tab (a sibling of `<main>`) carries a "Participants" caption of its own. */
 function mentionDropdown(page: Page) {
-  return page.getByText('Participants', { exact: true });
+  return page.getByRole('main').getByText('Participants', { exact: true });
 }
 
 /* onetest: ELITEA-0393 — typing "@" in a conversation with only the caller as participant never mounts the mention dropdown, and "@" stays plain text */

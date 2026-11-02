@@ -73,17 +73,18 @@ test('the sidebar and Agents list render the PUBLIC-project state, not the priva
   // branch this shell's sidebar has.
   await expect(rail(page).getByRole('link', { name: 'Skills', exact: true })).toHaveCount(0);
 
-  // Agents: the four PUBLIC tabs render (Latest/My liked/Trending), not the
-  // six private ones (All/Drafts/Published/…) — `useApplicationTabs.tsx`'s
-  // own split, gated on the exact same id comparison.
+  // Agents: the PUBLIC tab set renders (Latest), not the six private ones
+  // (All/Drafts/Published/…) — `useApplicationTabs.tsx`'s own split, gated on
+  // the exact same id comparison. My liked/Trending are public tabs too but
+  // stay hidden until their backends exist.
   await page.goto(BASE_URL + '/app/agents/all', { waitUntil: 'domcontentloaded' });
   // `Applications.tsx` redirects an invalid/private tab param to the first
   // PUBLIC tab on this project, replacing the URL — so landing on `latest`
   // is itself part of what this test is proving.
   await page.waitForURL('**/app/agents/latest**', { timeout: 15_000 });
   await expect(page.getByTestId('agents-tab-latest')).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByTestId('agents-tab-my-liked')).toBeVisible();
-  await expect(page.getByTestId('agents-tab-trending')).toBeVisible();
+  await expect(page.getByTestId('agents-tab-my-liked')).toHaveCount(0);
+  await expect(page.getByTestId('agents-tab-trending')).toHaveCount(0);
   // The private-only tabs must be absent, not merely unselected.
   await expect(page.getByTestId('agents-tab-all')).toHaveCount(0);
   await expect(page.getByTestId('agents-tab-drafts')).toHaveCount(0);

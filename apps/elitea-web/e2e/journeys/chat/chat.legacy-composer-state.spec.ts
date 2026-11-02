@@ -27,6 +27,7 @@ import { test, expect } from '@playwright/test';
 import type { APIRequestContext, Page } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
+import { openParticipants } from '../../fixtures/sidePanel';
 import {
   API_BASE,
   AUTOTEST_PREFIX,
@@ -46,9 +47,7 @@ function uniqueName(tag: string): string {
 }
 
 async function openParticipantsRail(page: Page): Promise<void> {
-  const expand = page.getByRole('button', { name: 'Expand participants' });
-  if ((await expand.count()) > 0) await expand.click();
-  await expect(page.getByTestId('participants-container')).toBeVisible({ timeout: 15_000 });
+  await openParticipants(page);
 }
 
 /** The signed-in persona, read from the same endpoint the app itself reads it from. */

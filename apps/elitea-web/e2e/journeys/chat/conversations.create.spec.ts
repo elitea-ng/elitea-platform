@@ -28,6 +28,7 @@ import type { Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
+import { openParticipants } from '../../fixtures/sidePanel';
 import {
   API_BASE,
   AUTOTEST_PREFIX,
@@ -198,10 +199,8 @@ test('a conversation opens with an empty transcript, default participants, no mo
   expect(expectedLabel).not.toBe('None');
 
   // No configured agent or toolkit; only the caller appears in the users row.
-  const expand = page.getByRole('button', { name: 'Expand participants' });
-  await expect(expand).toBeVisible({ timeout: 20_000 });
-  await expand.click();
-  await expect(page.getByTestId('participants-container')).toBeVisible({ timeout: 10_000 });
+  // The participants are the side panel's Conversation tab.
+  await openParticipants(page);
   await expect(page.getByTestId('participants-section-Agents')).toHaveCount(0);
   await expect(page.getByTestId('participants-section-Toolkits')).toHaveCount(0);
   const users = page.getByTestId('users-section');

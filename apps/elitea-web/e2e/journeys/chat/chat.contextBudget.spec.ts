@@ -12,6 +12,7 @@ import type { APIRequestContext, Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
+import { openParticipants } from '../../fixtures/sidePanel';
 import {
   API_BASE,
   AUTOTEST_PREFIX,
@@ -84,7 +85,7 @@ async function expectUnmeasuredStatus(request: APIRequestContext, conversationId
 async function openBudgetPanel(page: Page, conversationId: string, mode: BudgetMode) {
   await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
   await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
-  await page.getByRole('button', { name: 'Expand participants' }).click();
+  await openParticipants(page);
   const panel = page.getByTestId('context-budget-panel');
   await expect(panel).toBeVisible({ timeout: 20_000 });
   await expect(panel.getByTestId('context-budget-stat-mode')).toContainText(mode === 'full' ? 'Full' : 'Balanced');
@@ -126,7 +127,7 @@ test('profile presets apply to new conversations while existing snapshots and un
     await openBudgetPanel(page, fullId, 'full');
     await page.reload();
     await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
-    await page.getByRole('button', { name: 'Expand participants' }).click();
+    await openParticipants(page);
     await expect(page.getByTestId('context-budget-stat-mode')).toContainText('Full');
     await openBudgetPanel(page, balancedId, 'balanced');
     expect(await readFrozenStrategy(page.request, fullId)).toEqual(fullSnapshot);

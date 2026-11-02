@@ -7,7 +7,7 @@
  * marked as #907 ("label goes blank after the switch"): that turned out to be
  * `AgentEditorPanel`'s responsive icon-only mode, entered because the test
  * left the participants rail expanded — see the in-test comment at the
- * `Collapse participants` click for the measurements.
+ * `closeSidePanel` call for the measurements.
  *
  * Ported by use case from `w1-chat-interface.md` (ELITEA-0387 (#907) (#907)).
  *
@@ -60,6 +60,7 @@ import type { APIRequestContext } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
+import { closeSidePanel, openParticipants } from '../../fixtures/sidePanel';
 import {
   API_BASE,
   AUTOTEST_PREFIX,
@@ -179,14 +180,13 @@ test('ELITEA-0387: switching a not-published agent\'s version has no spurious er
     // bare model view). `AgentEditorPanel` — and its `VersionSelector` — only
     // renders once this agent IS the active participant, so it is selected
     // from the rail first, exactly as a person would.
-    const expandParticipants = page.getByRole('button', { name: 'Expand participants' });
-    await expect(expandParticipants).toBeVisible({ timeout: 15_000 });
-    await expandParticipants.click();
+    await openParticipants(page);
     const agentsSection = page.getByTestId('participants-section-Agents');
     await expect(agentsSection).toBeVisible({ timeout: 15_000 });
     await agentsSection.getByText(agentName, { exact: true }).click();
 
-    // Collapse the rail again once the pick has landed. `AgentEditorPanel` is
+    // Close the side panel (the participants' Conversation tab) once the pick
+    // has landed. `AgentEditorPanel` is
     // responsive (`useAgentEditorPanelFit`): it measures the composer's
     // controls ROW and drops every label — the version selector's included —
     // for an icon-only view below 430px. An expanded participants rail takes
@@ -199,7 +199,7 @@ test('ELITEA-0387: switching a not-published agent\'s version has no spurious er
     // passed inside the fit hook's own 100ms debounce window). Measured on
     // this stack: rail open -> row 352px, icon; rail closed -> row 548px,
     // label. See #907's ledger row.
-    await page.getByRole('button', { name: 'Collapse participants' }).click();
+    await closeSidePanel(page);
 
     const versionButton = page.getByRole('button', { name: 'version selector menu' });
     await expect(versionButton, 'the version selector must be offered for an agent with 2+ versions').toBeVisible({
@@ -285,9 +285,7 @@ test('ELITEA-0386: editing a not-published agent participant\'s LLM settings fro
     await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
     await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
 
-    const expandParticipants = page.getByRole('button', { name: 'Expand participants' });
-    await expect(expandParticipants).toBeVisible({ timeout: 15_000 });
-    await expandParticipants.click();
+    await openParticipants(page);
     const agentsSection = page.getByTestId('participants-section-Agents');
     await expect(agentsSection).toBeVisible({ timeout: 15_000 });
     await agentsSection.getByText(agentName, { exact: true }).click();

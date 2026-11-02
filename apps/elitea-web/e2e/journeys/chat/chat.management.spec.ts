@@ -79,6 +79,7 @@ import type { APIRequestContext, Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
+import { openParticipants } from '../../fixtures/sidePanel';
 import {
   API_BASE,
   AUTOTEST_PREFIX,
@@ -207,12 +208,9 @@ async function openRowMenu(page: Page, conversationId: string): Promise<void> {
   }).toPass({ timeout: 40_000 });
 }
 
-/** Opens the participants rail, which `ChatPage` mounts collapsed (baseline `NewChat.jsx:166`). */
+/** Opens the participants: the shell side panel's Conversation tab. */
 async function openParticipantsRail(page: Page): Promise<void> {
-  const expand = page.getByRole('button', { name: 'Expand participants' });
-  await expect(expand).toBeVisible({ timeout: 20_000 });
-  await expand.click();
-  await expect(page.getByTestId('participants-container')).toBeVisible({ timeout: 10_000 });
+  await openParticipants(page);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -41,6 +41,7 @@
 import { test, expect } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
+import { openParticipants } from '../../fixtures/sidePanel';
 import {
   AUTOTEST_PREFIX,
   addConversationParticipant,
@@ -81,9 +82,7 @@ test('opening a second agent editor keeps the first one open in its own tab', as
     await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
 
-    const expand = page.getByRole('button', { name: 'Expand participants' });
-    if ((await expand.count()) > 0) await expand.click();
-    await expect(page.getByTestId('participants-container')).toBeVisible({ timeout: 15_000 });
+    await openParticipants(page);
 
     async function openEditor(name: string): Promise<void> {
       const row = page.getByTestId('participants-container').getByText(name, { exact: false }).first();

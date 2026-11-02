@@ -20,6 +20,7 @@
 import { test, expect } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
+import { openParticipants } from '../../fixtures/sidePanel';
 import {
   AUTOTEST_PREFIX,
   addConversationParticipant,
@@ -86,8 +87,7 @@ test('L-conv-isolation: two conversations with the identical name stay isolated 
     await page.goto(`${BASE_URL}/app/chat/${fresh}`);
     await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
 
-    const expand = page.getByRole('button', { name: 'Expand participants' });
-    if ((await expand.count()) > 0) await expand.click();
+    await openParticipants(page);
     // No "Agents" participant section at all renders here — `original`'s
     // attached agent participant never bleeds into this same-named conversation.
     await expect(page.getByTestId('participants-section-Agents')).toHaveCount(0);

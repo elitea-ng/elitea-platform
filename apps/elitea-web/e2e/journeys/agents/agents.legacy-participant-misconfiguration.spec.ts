@@ -44,6 +44,7 @@
 import { test, expect } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
+import { openParticipants } from '../../fixtures/sidePanel';
 import {
   AUTOTEST_PREFIX,
   addConversationParticipant,
@@ -100,9 +101,7 @@ test('parent agent shows a misconfiguration warning in Chat when its nested sub-
     await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
     await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
 
-    const expand = page.getByRole('button', { name: 'Expand participants' });
-    if ((await expand.count()) > 0) await expand.click();
-    await expect(page.getByTestId('participants-container')).toBeVisible({ timeout: 15_000 });
+    await openParticipants(page);
 
     const section = page.getByTestId('participants-section-Agents');
     await expect(section).toBeVisible({ timeout: 20_000 });
