@@ -122,7 +122,7 @@ func (s *Store) writeVerdicts(ctx context.Context, records []Record) error {
 				truncate(v.Stage, 16),
 				truncate(v.Row, 255),
 				truncate(v.Detector, 64),
-				truncate(v.DetectorType, 16),
+				truncate(v.DetectorType, 32),
 				truncate(v.Action, 16),
 				truncate(v.Outcome, 16),
 				truncate(v.FailMode, 8),

@@ -53,6 +53,10 @@ A free-text **Editor Notes** field records internal context about the current ve
 
 In **Advanced**, **Output contract** sets a rule for the agent's final answer: a JSON Schema, a regular expression, or a named format (`json`, `markdown` or `csv`). The worker validates each final answer. If an answer is not valid, the worker asks the model one more time, with the validation error. If the second answer is also not valid, the run stops with `OUTPUT_CONTRACT_VIOLATION`. An agent with a contract shows its answer only after the answer is validated. Select **None** to remove the contract. See [Output contracts](/admin/enterprise-controls/content-controls#output-contracts).
 
+### Require citations
+
+In **Advanced**, **Require citations** tells the agent to cite the tool results that it uses, as `[1]`, `[2]`. The chat then shows under each answer how many sources the answer cites and how many statements have no citation. This is not a confidence score. A cited source does not prove that the source supports the statement. See [Grounding indicators](/admin/enterprise-controls/content-controls#grounding-indicators).
+
 ## Test the agent
 
 The embedded chat panel on the right lets you send messages, pick a model and its settings (Reasoning for reasoning models, Creativity for standard ones, Max Completion Tokens), and iterate without leaving the page. When context management is on for the project, a Context Budget widget appears above the panel after the first message.

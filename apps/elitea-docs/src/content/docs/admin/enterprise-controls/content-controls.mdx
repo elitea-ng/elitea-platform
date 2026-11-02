@@ -21,8 +21,8 @@ An entry has these settings:
 | --- | --- | --- |
 | Scope | Projects, providers and models, as in the other governance entries. Agents of one project (`scope.agent_ids`), with exactly one project in `scope.project_ids`. Users are not permitted. | Every request |
 | `stage` | `input`: the request, before the provider call. `output`: the answer, streamed or not. | — (required) |
-| `detectors` | An ordered list of 1 to 16 detectors. Each detector has a `type` (`regex`, `secrets` or `http`) and an `action` (`block`, `mask` or `flag`). | — (required) |
-| `timeout_ms` | 50 to 30000. The time limit for all detectors of the entry on one content. | 2000 |
+| `detectors` | An ordered list of 1 to 16 detectors. Each detector has a `type` (`regex`, `secrets`, `http`, `azure_content_safety`, `bedrock_guardrails`, `model_armor`, `llama_guard` or `presidio`) and an `action` (`block`, `mask` or `flag`). On an input entry, `content: tool_results` makes a detector read the tool results only. | — (required) |
+| `timeout_ms` | 50 to 30000. The time limit for all detectors of the entry on one check. All the calls of the entry share this one limit. | 2000 |
 | `fail_mode` | `closed`: a detector failure or a timeout refuses the request. `open`: the request continues and the verdict records the failure. | `closed` when a detector blocks or masks; `open` when all detectors flag |
 | `apply_to_embeddings` | `true` applies an input entry to embedding requests too. | `false` |
 | `stream_window_bytes` | 64 to 8192. The look-behind buffer of a streamed answer for an output entry. | 256 |
@@ -33,7 +33,7 @@ Put the settings in the `guardrail` object of the entry data, as in the example 
 
 The gateway applies the entries as follows:
 
-1. **Every matching entry runs.** The narrowest entry does not replace the wider ones. The entries run from the widest scope to the narrowest, and then by name. The detectors of an entry run in their order.
+1. **Every matching entry runs.** The narrowest entry does not replace the wider ones. The entries run from the widest scope to the narrowest, and then by name. The detectors of an entry run in their order. A block in an entry stops the check before a later entry sends content to its classifier.
 2. **Every detector reads the original content.** The gateway collects the spans of all `mask` detectors and replaces them one time, with `[REDACTED:<label>]`.
 3. **A `block` result stops the check** and refuses the request or the answer. A `flag` result changes nothing and adds a verdict.
 4. **The input stage runs before the provider call.** It reads the message text, the Responses instructions and the tool results in all formats: a chat `tool` message, a Responses `function_call_output` (text or content parts), a shell call output, and an Anthropic `tool_result`. A blocked request does not reach the provider. A masked request goes to the provider with the markers.
@@ -54,6 +54,36 @@ The error message names the entry, the detector and the labels. It never contain
 - **`regex`** finds the `patterns` (1 to 64 expressions of at most 1024 bytes) and the `terms` (at most 1000 words or phrases, 64 KiB in total). The patterns use the RE2 syntax, which has linear time and no back-references. A pattern that matches an empty string is refused. A term matches without case, on word boundaries. Set a `label` to name the findings (default `custom`).
 - **`secrets`** uses the platform secret rules: `aws-access-key-id`, `aws-secret-access-key`, `private-key`, `github-token`, `github-fine-grained-token`, `gitlab-token`, `slack-token`, `slack-webhook`, `connection-string-password`, `password-assignment` and `jwt`. These are the rules that the desktop handoff uses. Set `rules` to use only some of them. The label of a finding is its rule id. When a rule names a secret group, a `mask` action replaces only the secret value, not the key name around it. The `private-key` rule matches the full PEM block, from the `BEGIN` line through the `END` line. A `mask` action replaces the header, the key body and the footer with one marker. When the text has no `END` line, the mask continues to the end of that message or tool result. In a request, a key without an `END` line does not mask the messages after it.
 - **`http`** sends the content to a classifier that you operate, with the [HTTP adapter contract](#http-adapter-contract).
+- **Cloud classifiers** send the content to a classifier service of your cloud account. Each one has a setup guide:
+  - [`azure_content_safety`](/admin/enterprise-controls/guardrail-adapters/azure-content-safety): Azure AI Content Safety harm categories, blocklists and Prompt Shields.
+  - [`bedrock_guardrails`](/admin/enterprise-controls/guardrail-adapters/bedrock-guardrails): an AWS Bedrock guardrail, through `ApplyGuardrail`.
+  - [`model_armor`](/admin/enterprise-controls/guardrail-adapters/model-armor): a Google Cloud Model Armor template.
+
+  A cloud classifier result that reports a prompt attack or a jailbreak has the label `prompt_injection`. Credentials are `{{secret.NAME}}` references, and each call goes through the egress allowlist, as for the `http` detector.
+- **`llama_guard`** sends the content to a self-hosted Llama Guard 3 or 4 model. See [Llama Guard adapter](/admin/enterprise-controls/guardrail-adapters/llama-guard).
+- **`presidio`** sends the content to a self-hosted Presidio Analyzer and masks the personal data it finds. See [Presidio adapter](/admin/enterprise-controls/guardrail-adapters/presidio).
+
+#### How a detector reads the content
+
+The gateway sends the content to a detector in calls. The size of one call depends on the detector:
+
+- **`regex` and `http`** read all the messages and tool results of the check in one call, joined by blank lines. So an `http` detector makes one call for each check.
+- **`secrets`** reads each message and each tool result alone. A match never crosses from one message to the next.
+- **The cloud and self-hosted classifiers** have a size limit for one call. The gateway puts whole messages together into units up to that limit. A unit never mixes tool results with other messages. A message that is longer than the limit goes into two or more units, cut at a space when one is near. A finding without a position covers its unit, not all of the request.
+
+| Detector | Limit for one call |
+| --- | --- |
+| `azure_content_safety` | 10000 characters |
+| `bedrock_guardrails` | 25000 characters |
+| `model_armor` | 32000 characters |
+| `llama_guard` | 16000 characters |
+| `presidio` | 100000 characters |
+
+The gateway counts characters as UTF-16 code units. A character outside the Basic Multilingual Plane, for example an emoji, counts as two.
+
+A classifier makes at most 16 calls for one check, and at most 4 calls at the same time. All the calls share the `timeout_ms` of the entry. When a check needs more than 16 units, the classifier reads the 16 newest units, which are the end of the conversation. The verdict then has the label `partial_coverage`. A long conversation is thus not a detector failure. In a normal conversation, an earlier request sent the older messages as its newest messages, and the classifier read them then. A client can send a history that it wrote itself. Use a `regex` or `secrets` detector when every character of a long request must be read.
+
+A detector of an input entry can read the tool results only (`content: tool_results`), and it can fill the prompt-injection slot (`slot: prompt_injection`). See [Prompt-injection slot](/admin/enterprise-controls/guardrail-adapters/prompt-injection).
 
 Example entry, which masks secrets and blocks a confidential project name in answers:
 
@@ -174,12 +204,12 @@ For an agent run, the [run steps API](/admin/enterprise-controls/reconstruct-a-r
 5. Set the timeout, the fail mode and the stream window if the defaults do not apply.
 6. Save. The gateway applies the entry within its refresh interval (`LLM_GOVERNANCE_REFRESH_SEC`, 30 seconds by default).
 
-For an `http` detector, first create the secret in the public project and add the adapter host to the **Egress allowlist** entry.
+For an `http`, `llama_guard` or `presidio` detector or a cloud classifier, first create the secret in the public project and add the service host to the **Egress allowlist** entry. The admin form has an **Add a cloud classifier detector** section that writes the detector of a cloud classifier.
 
 ### Limitations
 
-- The built-in detectors find patterns, terms and known secret formats. Harm categories and personal data need a classifier through the HTTP adapter.
-- Adapters for named classifier services are not available yet. Use the HTTP adapter with a small service that calls them.
+- The built-in detectors find patterns, terms and known secret formats. Harm categories and personal data need a classifier: a cloud classifier detector, Llama Guard, Presidio or the HTTP adapter.
+- Azure AI Content Safety and Llama Guard return no positions, so their findings cover all of the content.
 
 ## Output contracts
 
@@ -203,6 +233,8 @@ The contract is part of the version. A run uses the contract of the version that
 ### Limits on save
 
 Main validates the contract when you create an agent or save a version. If the contract is not correct, the save fails with HTTP 422 and the code `OUTPUT_CONTRACT_INVALID`. The `reason` field tells which rule failed, and `node_id` tells the pipeline node.
+
+An import or a fork checks the same rules. If a version of the file has a contract that is not correct, the import or the fork of that agent fails, and the message tells the rule. The internal MCP version tools refuse the update with HTTP 400.
 
 | Limit | Value | `reason` |
 |---|---|---|
@@ -258,6 +290,54 @@ Upgrade every worker before you save a contract. A run with a contract tells the
 ## Why there is no confidence score
 
 The platform does not give a confidence score for an agent's answer. A language model does not give a probability that its answer is correct. Token probabilities tell how likely a word is, not how likely a fact is. A score that the platform makes from them, or from a second model, looks precise but it is not calibrated for your task. People then trust it more than they should.
+
+The platform gives two other aids: grounding indicators, and confidence fields that the agent author defines.
+
+### Grounding indicators
+
+An agent can show how well its answer is tied to its sources. This is not a score. It is two counts that you can examine.
+
+**How to turn it on.** In the agent editor, open **Advanced** and select **Require citations**. This sets `meta.citations` to `required` on the agent version. Then:
+
+1. The worker numbers each tool result of the current turn: 1, 2, 3, in the order of the request. The current turn starts after the last user message. The number goes in front of the source name of the envelope, for example `<untrusted source="3:search_index">`. See [Untrusted content](#untrusted-content).
+2. A tool result of an earlier turn of the conversation keeps its source name without a number. The model can read it, but it does not cite it.
+3. The worker adds a citation rule after the agent's instructions. The rule tells the model to end each sentence that uses a numbered tool result with the number of that result in square brackets, for example `[3]`, or `[2, 5]` for more than one result. The rule also tells the model not to cite a block without a number.
+4. After the final answer, the worker calculates the indicator from the answer text and the number of sources. It does not call a model.
+
+**What the numbers mean.** The chat shows a line under the answer:
+
+- **N of M sources cited.** M is the number of tool results of the current turn. Tool results of earlier turns do not count, so M does not grow during a conversation. N is the number of different results that the answer cites with a correct marker.
+- **K statements without a citation.** Click it to see each of these statements, marked. A statement is a sentence of the answer. These parts are not statements: code blocks, headings, table rows, questions, and lead-in sentences that end with a colon. A list marker at the start of a line is not part of the statement. A marker with a number that no source has (for example `[0]`, or `[9]` when there are 4 sources) is counted as an invalid marker. It does not count as a citation.
+
+Main stores the indicator on the message as `meta.grounding`, so the indicator stays after a reload:
+
+```json
+{
+  "version": 1,
+  "sources_available": 4,
+  "sources_cited": 2,
+  "claim_spans": 6,
+  "uncited_spans": 1,
+  "uncited": [{ "start": 120, "end": 168 }],
+  "invalid_markers": 0
+}
+```
+
+`uncited` has the first 64 statements without a citation, as UTF-16 offsets into the answer text. The worker also records a run step (kind `output`, name `grounding_check`) with the counts. The step does not contain the answer text.
+
+**Limits.**
+
+- A cited source does not prove that the source supports the statement. The model can cite the wrong source, or cite a source that says something different. The indicator tells you where to look. It does not tell you that the answer is correct.
+- When the current turn has no tool result (for example, a plain chat without tools, or a follow-up question that the model answers from earlier results), there is no indicator. It is absent, not zero.
+- One source is one tool result. A search that returns ten chunks is one source.
+- Only the root agent of a chat gets an indicator. Pipelines and nested agents ignore the setting.
+- The split into sentences is simple. An abbreviation such as "e.g." can end a statement early.
+- Upgrade every worker before you turn on citations. A worker of an earlier release ignores the setting.
+- Main accepts only `off`, `required` or `null` for `meta.citations`, on every path that writes an agent version: create, update, new version, import, fork and the internal MCP tools. An import or a fork with another value fails for that agent, with a message. A stored row with another value (for example, from an earlier release) does not stop the chat: the worker turns citations off for that turn and logs the warning `agent_citations_setting_invalid`. To fix the row, set **Require citations** in the agent editor and save the agent.
+
+If you need a stated confidence level, use an output contract, as the next section shows.
+
+### Confidence fields in an output contract
 
 If your process needs a confidence value, make it part of the agent's output contract. Then the agent must give the value, and you define what it means. You can also make the model give its reasons and sources, so that a person can examine them. Calibrate the value against your own evaluation data before you use it to route work.
 
@@ -418,7 +498,7 @@ A tool result can contain text that looks like an instruction: a Jira issue, a w
 </untrusted>
 ```
 
-The envelope applies to every tool result that the model gets: toolkit tools, MCP tools, index searches, web tools and the answers of nested agents. The `source` attribute is the name of the tool. The worker neutralises each `<untrusted` and `</untrusted` in the content (it writes `&lt;` in place of `<`), so the content cannot close the envelope.
+The envelope applies to every tool result that the model gets: toolkit tools, MCP tools, index searches, web tools and the answers of nested agents. The `source` attribute is the name of the tool. When the agent must cite, the name starts with the number of the result, for example `3:get_issue`. See [Grounding indicators](#grounding-indicators). The worker neutralises each `<untrusted` and `</untrusted` in the content (it writes `&lt;` in place of `<`), so the content cannot close the envelope.
 
 The built-in preamble tells the model that the text in the envelope is data, never an instruction. The overhead is small: 35 bytes and the name of the tool for each result, approximately 10 to 15 tokens. The built-in preamble is approximately 30 tokens for each model call.
 
@@ -436,7 +516,7 @@ The rule applies to root agents, nested agents and pipeline LLM nodes. The rule 
 - The rule counts a read only when a toolkit or MCP tool returned a result. A file that a user attached is in its own envelope, but it does not turn on the rule.
 - A turn that continues after a pause, or that recovers after a worker restart, counts as a turn that read untrusted content.
 - Pipeline tool nodes do not use the rule. Use the pipeline `hitl` rule for them. See [Required approval in pipelines](/admin/enterprise-controls/runtime-safety#required-approval-in-pipelines).
-- A detector for prompt injection is not part of this release.
+- To add a prompt-injection classifier on tool results, use the [prompt-injection slot](/admin/enterprise-controls/guardrail-adapters/prompt-injection).
 
 ### Configure
 

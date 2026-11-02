@@ -699,7 +699,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 	// The input guardrails, before the budget gate for the same reason.
 	defer recordGuardrailVerdicts(ctx)
-	if !h.applyInputGuardrails(w, ctx, provider, model, policy.TrafficGeneration, chatRequestTexts(bifReq)) {
+	if !h.applyInputGuardrails(w, ctx, provider, model, policy.TrafficGeneration, chatRequestTexts(bifReq), chatToolResultTexts(bifReq)) {
 		sc.cancel() // rejected before dispatch: nothing owns the context
 		return
 	}
@@ -773,7 +773,7 @@ func (h *Handler) TextCompletion(w http.ResponseWriter, r *http.Request) {
 	// FIX #4: enforce the budget gate before calling the provider.
 	provider, model := providerModelFromTextReq(bifReq)
 	defer recordGuardrailVerdicts(ctx)
-	if !h.applyInputGuardrails(w, ctx, provider, model, policy.TrafficGeneration, textRequestTexts(bifReq)) {
+	if !h.applyInputGuardrails(w, ctx, provider, model, policy.TrafficGeneration, textRequestTexts(bifReq), nil) {
 		return
 	}
 	if !h.checkBudget(w, ctx, model) {
@@ -811,7 +811,7 @@ func (h *Handler) Embeddings(w http.ResponseWriter, r *http.Request) {
 	// Embeddings (and so indexing) run only the input rows that opt in
 	// with apply_to_embeddings, and no output row.
 	defer recordGuardrailVerdicts(ctx)
-	if !h.applyInputGuardrails(w, ctx, provider, model, policy.TrafficEmbedding, embeddingRequestTexts(bifReq)) {
+	if !h.applyInputGuardrails(w, ctx, provider, model, policy.TrafficEmbedding, embeddingRequestTexts(bifReq), nil) {
 		return
 	}
 	if !h.checkBudget(w, ctx, model) {
@@ -854,7 +854,7 @@ func (h *Handler) Responses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer recordGuardrailVerdicts(ctx)
-	if !h.applyInputGuardrails(w, ctx, provider, model, policy.TrafficGeneration, responsesRequestTexts(bifReq)) {
+	if !h.applyInputGuardrails(w, ctx, provider, model, policy.TrafficGeneration, responsesRequestTexts(bifReq), responsesToolResultTexts(bifReq)) {
 		sc.cancel() // rejected before dispatch: nothing owns the context
 		return
 	}
@@ -955,7 +955,7 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer recordGuardrailVerdicts(ctx)
-	if !h.applyInputGuardrails(w, ctx, provider, model, policy.TrafficGeneration, responsesRequestTexts(bifReq)) {
+	if !h.applyInputGuardrails(w, ctx, provider, model, policy.TrafficGeneration, responsesRequestTexts(bifReq), responsesToolResultTexts(bifReq)) {
 		sc.cancel() // rejected before dispatch: nothing owns the context
 		return
 	}

@@ -43,15 +43,15 @@ type span struct {
 }
 
 // segmentLocal marks a detector whose matches must not cross the boundary of
-// a part. CheckAll joins the parts into one content; such a detector reads
-// each part alone. The secrets detector is one: its private-key rule matches
-// through the end of the text when a PEM block has no END line, and that end
-// is the end of the part, not the end of the whole request.
+// a part, so it reads each part alone (units.go). The secrets detector is
+// one: its private-key rule matches through the end of the text when a PEM
+// block has no END line, and that end is the end of the part, not the end of
+// the whole request.
 type segmentLocal interface {
 	segmentLocal()
 }
 
-// bound is the byte range of one part inside the joined content.
+// bound is a byte range.
 type bound struct{ start, end int }
 
 // result is the outcome of one pipeline run on one content.
@@ -79,115 +79,108 @@ func (p *Pipeline) Check(ctx context.Context, content string) (masked string, bl
 	return applyMasks(content, res.spans), nil
 }
 
-// run evaluates the selected detectors of every row, in row order and in
-// detector order. A block, or a failure of a closed row, stops the run.
+// run evaluates the selected detectors on one content.
 func (p *Pipeline) run(ctx context.Context, content string, filter detectorFilter) result {
-	return p.runParts(ctx, content, nil, filter)
+	blocked, spans := p.runRows(ctx, []string{content}, nil, filter)
+	if blocked != nil {
+		return result{blocked: blocked}
+	}
+	return result{spans: spans[0]}
 }
 
-// runParts is run on a content joined from parts. A segmentLocal detector
-// reads each part alone; the others read the whole content. Nil parts make
-// the whole content one part.
-func (p *Pipeline) runParts(ctx context.Context, content string, parts []bound, filter detectorFilter) result {
-	var res result
+// runRows evaluates the selected detectors of every row on parts, in row
+// order and in detector order. tool marks the parts that are tool results.
+// Each row runs under ONE deadline, its timeout. A block, or a failure of a
+// closed row, stops the run: a later row sends no content anywhere. It
+// returns the refusing verdict, or the mask spans of each part.
+func (p *Pipeline) runRows(ctx context.Context, parts []string, tool []bool, filter detectorFilter) (*Verdict, [][]span) {
+	spans := make([][]span, len(parts))
 	for _, row := range p.Rows {
 		rowCtx, cancel := context.WithTimeout(ctx, row.Timeout)
-		stop := p.runRow(rowCtx, row, content, parts, filter, &res)
+		blocked := p.runRow(rowCtx, row, parts, tool, filter, spans)
 		cancel()
-		if stop {
-			return res
+		if blocked != nil {
+			return blocked, nil
 		}
 	}
-	return res
+	return nil, spans
 }
 
-// detectParts runs d on each part of content and moves the findings to
-// offsets in content. A finding without a span covers its part only.
-func (p *Pipeline) detectParts(ctx context.Context, d *Detector, content string, parts []bound) ([]Finding, error) {
-	var out []Finding
-	for _, b := range parts {
-		found, err := d.impl.detect(ctx, p.Env, p.Stage, content[b.start:b.end])
-		if err != nil {
-			return nil, err
-		}
-		for _, f := range found {
-			if f.Whole {
-				f.Whole = false
-				f.Start, f.End = 0, b.end-b.start
-			}
-			f.Start += b.start
-			f.End += b.start
-			out = append(out, f)
+// detectorParts returns the indexes of the parts that d reads: every part
+// for content all, the tool results for content tool_results.
+func detectorParts(d *Detector, n int, tool []bool) []int {
+	idx := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		if d.Content != ContentToolResults || isToolPart(tool, i) {
+			idx = append(idx, i)
 		}
 	}
-	return out, nil
+	return idx
 }
 
-func (p *Pipeline) runRow(ctx context.Context, row *Row, content string, parts []bound, filter detectorFilter, res *result) bool {
+func (p *Pipeline) runRow(ctx context.Context, row *Row, parts []string, tool []bool, filter detectorFilter, spans [][]span) *Verdict {
 	for _, d := range row.Detectors {
 		if !filter(d) {
 			continue
 		}
-		started := time.Now()
-		var (
-			findings []Finding
-			err      error
-		)
-		if _, local := d.impl.(segmentLocal); local && len(parts) > 1 {
-			findings, err = p.detectParts(ctx, d, content, parts)
-		} else {
-			findings, err = d.impl.detect(ctx, p.Env, p.Stage, content)
+		idx := detectorParts(d, len(parts), tool)
+		if len(idx) == 0 {
+			// No part is in the scope of the detector (a tool_results
+			// detector on a request without a tool result): no run, no
+			// verdict.
+			continue
 		}
+		started := time.Now()
+		views, partial := detectorViews(d, parts, tool, idx)
+		perView, err := p.detectViews(ctx, d, views)
 		latency := time.Since(started)
 		v := Verdict{
 			Stage: p.Stage, Row: row.Name, Detector: d.Name, DetectorType: d.Type,
-			Action: d.Action, FailMode: row.FailMode,
+			Action: d.Action, FailMode: row.FailMode, Slot: d.Slot,
 		}
 		if err != nil {
 			v.Labels = []string{LabelDetectorError}
 			if row.FailMode == FailClosed {
 				v.Outcome = OutcomeErrorClosed
 				p.Collector.add(v, latency)
-				res.blocked = &v
-				return true
+				return &v
 			}
 			v.Outcome = OutcomeErrorOpen
 			p.Collector.add(v, latency)
 			continue
 		}
-		v.Findings = len(findings)
-		for _, f := range findings {
-			v.Labels = append(v.Labels, f.Label)
-			if f.Score > v.MaxScore {
-				v.MaxScore = f.Score
+		var found []partSpan
+		for i := range views {
+			for _, f := range slotFindings(d, perView[i]) {
+				v.Findings++
+				v.Labels = append(v.Labels, f.Label)
+				if f.Score > v.MaxScore {
+					v.MaxScore = f.Score
+				}
+				found = append(found, views[i].spans(f)...)
 			}
 		}
-		if len(findings) == 0 {
-			v.Outcome = OutcomePass
-			p.Collector.add(v, latency)
-			continue
+		if partial {
+			v.Labels = append(v.Labels, LabelPartialCoverage)
 		}
-		switch d.Action {
-		case ActionBlock:
+		switch {
+		case v.Findings == 0:
+			v.Outcome = OutcomePass
+		case d.Action == ActionBlock:
 			v.Outcome = OutcomeBlocked
 			p.Collector.add(v, latency)
-			res.blocked = &v
-			return true
-		case ActionMask:
+			return &v
+		case d.Action == ActionMask:
 			v.Outcome = OutcomeMasked
-			for _, f := range findings {
-				if f.Whole {
-					res.spans = append(res.spans, span{start: 0, end: len(content), label: f.Label})
-				} else {
-					res.spans = append(res.spans, span{start: f.Start, end: f.End, label: f.Label})
-				}
+			for _, s := range found {
+				spans[s.part] = append(spans[s.part], s.span)
 			}
 		default:
 			v.Outcome = OutcomeFlagged
 		}
 		p.Collector.add(v, latency)
 	}
-	return false
+	return nil
 }
 
 // MaskMarker returns the text that replaces a masked span.
@@ -264,46 +257,28 @@ func clamp(v, lo, hi int) int {
 	return v
 }
 
-// segmentSeparator joins the parts CheckAll inspects. A detector reads the
-// parts as one content, so an http adapter costs one round trip per stage.
+// segmentSeparator joins the parts that one detector call reads (units.go).
 const segmentSeparator = "\n\n"
 
-// CheckAll runs the pipeline once on parts joined by a blank line, and returns
-// each part masked, or blocked. A mask span that covers a separator masks
-// both parts it touches. A segmentLocal detector (secrets) reads each part
-// alone, so its spans never cross a separator.
+// CheckAll runs the pipeline on parts and returns each part masked, or
+// blocked. A detector reads the parts as units.go describes. A mask span
+// that covers a separator masks both parts it touches.
 func (p *Pipeline) CheckAll(ctx context.Context, parts []string) ([]string, *Verdict) {
+	return p.checkParts(ctx, parts, nil)
+}
+
+// checkParts runs every detector on parts; tool marks the tool results.
+func (p *Pipeline) checkParts(ctx context.Context, parts []string, tool []bool) ([]string, *Verdict) {
 	if !p.Active() || len(parts) == 0 {
 		return parts, nil
 	}
-	if len(parts) == 1 {
-		out, blocked := p.Check(ctx, parts[0])
-		return []string{out}, blocked
-	}
-	joined := strings.Join(parts, segmentSeparator)
-	bounds := make([]bound, len(parts))
-	offset := 0
-	for i, part := range parts {
-		bounds[i] = bound{start: offset, end: offset + len(part)}
-		offset += len(part) + len(segmentSeparator)
-	}
-	res := p.runParts(ctx, joined, bounds, allDetectors)
-	if res.blocked != nil {
-		return nil, res.blocked
+	blocked, spans := p.runRows(ctx, parts, tool, allDetectors)
+	if blocked != nil {
+		return nil, blocked
 	}
 	out := make([]string, len(parts))
-	offset = 0
 	for i, part := range parts {
-		end := offset + len(part)
-		var local []span
-		for _, s := range res.spans {
-			if s.end <= offset || s.start >= end {
-				continue
-			}
-			local = append(local, span{start: clamp(s.start-offset, 0, len(part)), end: clamp(s.end-offset, 0, len(part)), label: s.label})
-		}
-		out[i] = applyMasks(part, local)
-		offset = end + len(segmentSeparator)
+		out[i] = applyMasks(part, spans[i])
 	}
 	return out, nil
 }

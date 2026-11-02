@@ -982,7 +982,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// elitea_runtime.platform_preamble_revisions (one append-only row per
 	// save that changes the text, with its sha256, author and the mirrored
 	// security audit event). No data, no permission.
-	require.EqualValues(t, 216, Head(shared))
+	//
+	// 217: shared/0217_guardrail_cloud_detector_types.sql, room for the
+	// cloud classifier detector types (ADR-0043 decision 1, #1500):
+	// gateway.guardrail_verdicts.detector_type becomes VARCHAR(32), so
+	// azure_content_safety and bedrock_guardrails are recorded whole. No
+	// data, no permission.
+	require.EqualValues(t, 217, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

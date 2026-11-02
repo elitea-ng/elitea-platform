@@ -996,6 +996,17 @@ impl OrdinaryNativeAgentAssembler {
         output_continuation: bool,
         tool_policy: &crate::toolkits::ToolAdmissionPolicy,
     ) -> Result<BoundModelFacade, NativeAgentAssemblyError> {
+        // ADR-0043 decision 5: an agent that must cite gets the citation
+        // rule after its instructions, outside the author's text.
+        let cites = profile.citations().is_required();
+        let cited_instruction;
+        let system_instruction = if cites {
+            cited_instruction =
+                elitea_agent_runtime::grounding::with_citation_rule(system_instruction);
+            cited_instruction.as_str()
+        } else {
+            system_instruction
+        };
         let invocation = model_invocation(
             profile,
             system_instruction,
@@ -1022,13 +1033,15 @@ impl OrdinaryNativeAgentAssembler {
             .output_contract()
             .filter(|_| !output_continuation)
             .cloned();
-        Ok(bound.with_output_contract(
-            contract,
-            super::output_contract_model::ContractStepScope {
-                execution_id: context.execution_id().to_owned(),
-                node_id: String::new(),
-            },
-        ))
+        Ok(bound
+            .with_output_contract(
+                contract,
+                super::output_contract_model::ContractStepScope {
+                    execution_id: context.execution_id().to_owned(),
+                    node_id: String::new(),
+                },
+            )
+            .with_grounding(cites))
     }
 }
 

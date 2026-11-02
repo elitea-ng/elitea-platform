@@ -103,6 +103,7 @@ impl ModelFacade {
             primary,
             summary: None,
             output_contract: None,
+            grounding: None,
         })
     }
 
@@ -160,6 +161,14 @@ pub(crate) struct BoundModelFacade {
     /// when the agent or node declares one. Built once per binding; each
     /// final answer gets its own retry.
     output_contract: Option<Arc<dyn adk_rust::Llm>>,
+    /// The model that numbers the request's sources for a root agent that
+    /// must cite (ADR-0043 decision 5). It wraps the output contract model
+    /// when there is one. The handle is the run's own source count, which
+    /// the root event projector reads for the final message.
+    grounding: Option<(
+        Arc<dyn adk_rust::Llm>,
+        crate::agents::grounding_model::GroundingSources,
+    )>,
 }
 
 enum BoundProviderModel {
@@ -185,6 +194,23 @@ impl BoundModelFacade {
                     scope,
                 ),
             ) as Arc<dyn adk_rust::Llm>
+        });
+        self
+    }
+
+    /// Number the sources of every request of this binding and record the
+    /// count for the final message's grounding indicator (ADR-0043 decision
+    /// 5) when `cites` is true. Call it after [`Self::with_output_contract`].
+    /// `false` leaves the binding as it is.
+    #[must_use]
+    pub(crate) fn with_grounding(mut self, cites: bool) -> Self {
+        self.grounding = cites.then(|| {
+            let sources = crate::agents::grounding_model::GroundingSources::default();
+            let model = Arc::new(crate::agents::grounding_model::GroundingModel::new(
+                self.adk_model(),
+                sources.clone(),
+            )) as Arc<dyn adk_rust::Llm>;
+            (model, sources)
         });
         self
     }
@@ -230,9 +256,15 @@ impl BoundOrdinaryAgentModel for BoundModelFacade {
     }
 
     fn adk_model(&self) -> Arc<dyn adk_rust::Llm> {
-        self.output_contract
-            .clone()
+        self.grounding
+            .as_ref()
+            .map(|(model, _)| Arc::clone(model))
+            .or_else(|| self.output_contract.clone())
             .unwrap_or_else(|| self.primary_model())
+    }
+
+    fn grounding_sources(&self) -> Option<crate::agents::grounding_model::GroundingSources> {
+        self.grounding.as_ref().map(|(_, sources)| sources.clone())
     }
 
     fn take_completed_text(self) -> Result<String, NativeAgentAssemblyError> {

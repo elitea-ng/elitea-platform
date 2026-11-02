@@ -2077,6 +2077,12 @@ pub(crate) trait BoundOrdinaryAgentModel: Send + 'static {
     fn durable_completion(&self) -> Option<Arc<dyn DurableModelCompletion>> {
         None
     }
+
+    /// The run's source count for the grounding indicator (ADR-0043
+    /// decision 5), when the bound agent must cite.
+    fn grounding_sources(&self) -> Option<super::grounding_model::GroundingSources> {
+        None
+    }
 }
 
 /// Read-only provider completion used only while ADK persists a terminal event.
@@ -3374,6 +3380,7 @@ where
     if recovering {
         projector.mark_checkpoint_recovery();
     }
+    projector.attach_grounding(model.grounding_sources());
     let runner_sessions = Arc::new(
         RunnerSessionService::new(sessions, model.durable_completion())
             .with_recovery(recovering)
@@ -3857,7 +3864,7 @@ where
     )
     .await?;
     // Every model step and the root run stop after a failed dispatch record.
-    let (agent, projector) = build_runtime_agent(
+    let (agent, mut projector) = build_runtime_agent(
         journal.abort().guard(prepared.model),
         generation_config,
         max_iterations,
@@ -3866,6 +3873,7 @@ where
         prepared.parallel_applications,
         None,
     )?;
+    projector.attach_grounding(model.grounding_sources());
     let agent = journal.abort().guard_agent(agent);
     let mut runner_builder = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)

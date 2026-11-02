@@ -76,6 +76,8 @@ export interface ApplicationVersionDraft {
     readonly internal_tools: readonly string[];
     /** #1500 — the output contract (ADR-0043 decision 2). Absent is no contract. */
     readonly output_contract?: OutputContract | null | undefined;
+    /** ADR-0043 decision 5 — `'required'` makes the agent cite. Absent is off. */
+    readonly citations?: 'required' | null | undefined;
   };
   /**
    * The model this version runs on — see `shared/api/agentLlmSettings.ts`
