@@ -12,10 +12,7 @@ import ListItemText from '@mui/material/ListItemText';
 
 import { t } from '@/shared/i18n';
 
-export interface FolderChoice {
-  readonly id: string;
-  readonly name: string;
-}
+import type { FolderChoice } from '../lib/conversationMenu';
 
 export interface MoveToFolderDialogProps {
   readonly open: boolean;

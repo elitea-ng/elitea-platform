@@ -48,6 +48,8 @@ export interface NavItem {
   readonly value: NavItemValue;
   readonly label: string;
   readonly url: string;
+  /** Where the row's "+" goes, and its name ("New agent"); absent on a row that creates nothing from the sidebar. Gated by `canCreate` (`createGate.ts`). */
+  readonly create?: { readonly url: string; readonly label: string };
 }
 
 export interface NavSection {
@@ -59,9 +61,9 @@ export function navSections(): readonly NavSection[] {
   return [
     {
       items: [
-        { value: 'chat', label: t('widgets.sidebar.nav.chat', 'Chats'), url: '/chat' },
-        { value: 'agents', label: t('widgets.sidebar.nav.agents', 'Agents'), url: '/agents' },
-        { value: 'pipelines', label: t('widgets.sidebar.nav.pipelines', 'Pipelines'), url: '/pipelines' },
+        { value: 'chat', label: t('widgets.sidebar.nav.chat', 'Chats'), url: '/chat', create: { url: '/chat', label: t('widgets.sidebar.create.chat', 'New chat') } },
+        { value: 'agents', label: t('widgets.sidebar.nav.agents', 'Agents'), url: '/agents', create: { url: '/agents/create', label: t('widgets.sidebar.create.agent', 'New agent') } },
+        { value: 'pipelines', label: t('widgets.sidebar.nav.pipelines', 'Pipelines'), url: '/pipelines', create: { url: '/pipelines/create', label: t('widgets.sidebar.create.pipeline', 'New pipeline') } },
         // Desktop build only (ADR-0029 D0). A literal MODE test, not a helper
         // call: the bundler folds it, so the web bundle carries no trace.
         ...(import.meta.env.MODE === 'desktop' ? [{ value: 'workspaces' as const, label: t('widgets.sidebar.nav.workspaces', 'Workspaces'), url: '/workspaces' }] : []),
@@ -69,20 +71,21 @@ export function navSections(): readonly NavSection[] {
     },
     {
       items: [
-        { value: 'skills', label: t('widgets.sidebar.nav.skills', 'Skills'), url: '/skills' },
+        { value: 'skills', label: t('widgets.sidebar.nav.skills', 'Skills'), url: '/skills', create: { url: '/skills/create', label: t('widgets.sidebar.create.skill', 'New skill') } },
         // The row reads "Toolkits & Indexes" in production, and it is one row
         // for both things: `SidebarBody.jsx:137` in the old app gives it that
         // label, that breadcrumb and that tooltip. This app shortened it to
         // "Toolkits", which names half of what the row opens. The PAGE title
         // is a separate surface and keeps its own string.
-        { value: 'toolkits', label: t('widgets.sidebar.nav.toolkits', 'Toolkits & Indexes'), url: '/toolkits' },
-        { value: 'mcps', label: t('widgets.sidebar.nav.mcps', 'MCPs'), url: '/mcps' },
+        { value: 'toolkits', label: t('widgets.sidebar.nav.toolkits', 'Toolkits & Indexes'), url: '/toolkits', create: { url: '/toolkits/create', label: t('widgets.sidebar.create.toolkit', 'New toolkit') } },
+        { value: 'mcps', label: t('widgets.sidebar.nav.mcps', 'MCPs'), url: '/mcps', create: { url: '/mcps/create', label: t('widgets.sidebar.create.mcp', 'New MCP') } },
         { value: 'credentials', label: t('widgets.sidebar.nav.credentials', 'Credentials'), url: '/credentials' },
-        { value: 'applications', label: t('widgets.sidebar.nav.applications', 'Applications'), url: '/apps' },
+        // An application starts from the catalog of app templates, not a create page of its own.
+        { value: 'applications', label: t('widgets.sidebar.nav.applications', 'Applications'), url: '/apps', create: { url: '/apps/catalog', label: t('widgets.sidebar.create.application', 'New application') } },
       ],
     },
     {
-      items: [{ value: 'artifacts', label: t('widgets.sidebar.nav.artifacts', 'Artifacts'), url: '/artifacts' }],
+      items: [{ value: 'artifacts', label: t('widgets.sidebar.nav.artifacts', 'Artifacts'), url: '/artifacts', create: { url: '/artifacts/create-bucket', label: t('widgets.sidebar.create.bucket', 'New bucket') } }],
     },
   ];
 }

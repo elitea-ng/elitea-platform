@@ -29,7 +29,7 @@ import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
-import { buildSharedConversationUrl, getConversationShareBasename } from '../../lib/shareUrl';
+import { buildSharedConversationUrl, getConversationShareBasename } from '../lib/shareUrl';
 
 const EXPIRY_OPTIONS: readonly { readonly value: ShareLinkExpiry; readonly label: string }[] = [
   { value: '1h', label: t('features.chatConversationList.shareLink.expiry.1h', '1 hour') },

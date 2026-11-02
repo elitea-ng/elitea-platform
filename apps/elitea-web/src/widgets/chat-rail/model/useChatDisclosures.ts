@@ -8,7 +8,7 @@
 import { useEffect, useState } from 'react';
 
 import { findInRail, type ChatRail } from './chatRail';
-import { chatGroupKey, useChatGroupsOpen } from './useEliteaSectionOpen';
+import { chatGroupKey, useChatGroupsOpen } from './useSectionOpen';
 
 export function useChatDisclosures(rail: ChatRail, openId: string) {
   const groups = useChatGroupsOpen();

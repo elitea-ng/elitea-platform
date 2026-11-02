@@ -1,9 +1,7 @@
 /**
- * Issue 940/A6 — Chat "Duplicate" action. Split out of
- * `useConversationSidebar.ts` purely to keep that file under the §3.5
- * 400-line budget — no behavioural reason, same class of split that file's
- * own module doc already documents for splitting the component out of its
- * composition root.
+ * Issue 940/A6 — Chat "Duplicate" action, for the conversation rail
+ * (`useConversationRail`). It resolves to the new conversation's id; the
+ * caller opens it.
  *
  * No dedicated Go clone route exists
  * (`services/elitea-main/internal/api/v2/conversations/handler.go`'s
@@ -40,11 +38,9 @@
  *    #6271: newest first) comes from the server's own `updated_at` order,
  *    the same source of truth every other row on the rail already trusts.
  */
-import type { Dispatch, SetStateAction } from 'react';
 import { useCallback } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
 
 import type { Conversation } from '@/entities/conversation';
 import { conversationApi } from '@/entities/conversation';
@@ -62,21 +58,13 @@ import { useAddParticipantMutation } from '@/entities/participant';
  */
 const FOLDER_LIST_QUERY_KEY = ['folder', 'list'] as const;
 
-export interface UseDuplicateConversationParams {
-  readonly projectId: string | undefined;
-  readonly toastError: (message: string) => void;
-  readonly setActiveConversation: Dispatch<SetStateAction<Conversation | undefined>>;
-}
-
-export function useDuplicateConversation(params: UseDuplicateConversationParams): (conversation: Conversation) => Promise<void> {
-  const { projectId, toastError, setActiveConversation } = params;
-  const navigate = useNavigate();
+export function useDuplicateConversation(projectId: string | undefined, toastError: (message: string) => void): (conversation: Conversation) => Promise<string | undefined> {
   const queryClient = useQueryClient();
   const { mutateAsync: addParticipants } = useAddParticipantMutation();
 
   return useCallback(
-    async (conversation: Conversation): Promise<void> => {
-      if (projectId === undefined) return;
+    async (conversation: Conversation): Promise<string | undefined> => {
+      if (projectId === undefined) return undefined;
       try {
         const source = await conversationApi.details({ projectId, id: conversation.id });
         const duplicateName = `${source.name || conversation.name} (copy)`;
@@ -110,13 +98,12 @@ export function useDuplicateConversation(params: UseDuplicateConversationParams)
 
         void queryClient.invalidateQueries({ queryKey: FOLDER_LIST_QUERY_KEY });
 
-        const duplicated: Conversation = { id: String(created.id), name: duplicateName, isPrivate };
-        setActiveConversation(duplicated);
-        void navigate({ to: '/chat/$conversationId', params: { conversationId: duplicated.id }, search: { playback: '0' } });
+        return String(created.id);
       } catch {
         toastError('Failed to duplicate the conversation');
+        return undefined;
       }
     },
-    [projectId, addParticipants, queryClient, navigate, toastError, setActiveConversation],
+    [projectId, addParticipants, queryClient, toastError],
   );
 }

@@ -47,7 +47,7 @@
     // Same "public surface awaiting Wave 2 consumption" situation, one
     // layer up: Wave-2 batch 1's own features/widgets/pages domain barrels
     // (analytics, apps, credentials, mcps, notifications, user-public,
-    // app-shell, create-button, sidebar) aren't imported by anything yet
+    // app-shell, sidebar) aren't imported by anything yet
     // because the route-wiring pass (pointing each src/routes/**
     // placeholder RouteShell at its real page) hasn't landed. Same
     // mechanism as the two entries above: marking each domain's index.ts
@@ -69,7 +69,6 @@
     // Same "exported for a Wave-2 consumer that hasn't landed yet" gap on
     // individual types (component prop/state shapes, a route-key alias)
     // that aren't re-exported through their slice's index.ts either.
-    "src/widgets/create-button/lib/routes.ts",
     "src/entities/message/lib/wire.ts",
     "src/features/credentials/model/useCredentialValidation.ts",
     "src/features/credentials/ui/CredentialsSelect.tsx",

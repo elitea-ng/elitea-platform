@@ -1,5 +1,5 @@
 /**
- * Whether a sidebar section is expanded, remembered per viewer (an `el.`
+ * Whether a sidebar section is expanded (web and desktop), remembered per viewer (an `el.`
  * key, swept by logout like every `el.` key): the Chats list
  * (`el.desktop.chatsOpen`), and the "Workshop" group
  * (`el.desktop.workshopOpen`, closed until opened). The third element
@@ -11,7 +11,7 @@
  * open by default, Yesterday and older are closed, so the recent chats get
  * the room.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { createStorage } from '@/shared/lib/storage';
 
@@ -55,8 +55,25 @@ function usePersistedOpen(key: string, fallback = true): SectionOpen {
   return [open, toggle, expand];
 }
 
-export function useChatsSectionOpen(): SectionOpen {
-  return usePersistedOpen(CHATS_KEY);
+/** The chat routes: `/chat`, a conversation, the archived chats page. */
+function isChatPath(pathname: string): boolean {
+  return pathname === '/chat' || pathname.startsWith('/chat/');
+}
+
+/**
+ * The Chats list's open state. Opening the chat expands it, so its
+ * conversations are on screen: on each navigation to a chat route, not on
+ * every render — a person who collapses them on the chat page keeps them
+ * collapsed until the next navigation.
+ */
+export function useChatsSectionOpen(pathname: string): SectionOpen {
+  const section = usePersistedOpen(CHATS_KEY);
+  const expand = section[2];
+  const onChat = isChatPath(pathname);
+  useEffect(() => {
+    if (onChat) expand();
+  }, [onChat, pathname, expand]);
+  return section;
 }
 
 export function useWorkshopOpen(): SectionOpen {

@@ -1,132 +1,50 @@
 /**
- * One conversation in the sidebar's Chats list: a native row (`ShellRow`)
- * that opens it, with the same actions on a right-click (the OS menu,
- * `useContextMenu`) and on its hover "⋯" button: Pin / Unpin, Rename,
- * Move to folder…, Fork (a new chat with the whole history, client contract
- * 1.11), Archive, Copy Link, Delete. Rename edits the title in
- * place; Move to folder… lists the project's chat folders (a pinned chat is
- * not moved, as in the web list). Archive and
- * Delete ask first: the archive is the project's (it takes the chat out of
- * every member's list; any member can unarchive it). Rename and Delete are
- * the author's, as in the web list.
+ * One conversation in the sidebar's Chats list: a row (`ShellRow`) that
+ * opens it, with its actions (`lib/conversationMenu.ts`) on the hover "⋯"
+ * button and, on the desktop, on a right-click (the OS menu,
+ * `onNativeContextMenu`). Rename edits the title in place; Move to folder…
+ * lists the project's chat folders; Share by link… opens the share links
+ * dialog. Archive, Delete and the visibility switch ask first: the archive is
+ * the project's (it takes the chat out of every member's list; any member can
+ * unarchive it).
  *
  * A row the person may move (not pinned, with the folder right) is a drag
  * source (`@dnd-kit`, `useDraggable` with the conversation id, the web
  * list's id scheme); `ChatsSection` owns the drop. The open conversation's
  * row scrolls into view when it becomes the selection.
  */
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 
 import { useDraggable } from '@dnd-kit/core';
 
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import Box from '@mui/material/Box';
-import IconButton from '@mui/material/IconButton';
 import InputBase from '@mui/material/InputBase';
-import Menu from '@mui/material/Menu';
 import type { Theme } from '@mui/material/styles';
 
 import type { Conversation } from '@/entities/conversation';
+import { ShareLinkDialog } from '@/features/chat-conversation-list';
 import { t } from '@/shared/i18n';
-import { MenuDivider, MenuRow, MenuRowText, pressToOpen } from '@/shared/ui/native-menu';
 import { activityGlyph, activityTitleBold, useRowActivity } from '@/shared/lib/conversationActivity';
 import { ConversationActivityGlyph } from '@/shared/ui/ConversationActivity';
 import { BaseModal } from '@/shared/ui/BaseModal';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 
-import { conversationLink, copyText } from '../lib/conversationLink';
-import { useContextMenu, type ContextAction } from '../model/useContextMenu';
-import { MoveToFolderDialog, type FolderChoice } from './MoveToFolderDialog';
+import { conversationActions, type ConversationRowActions, type RowAsks } from '../lib/conversationMenu';
+import type { ContextAction } from '../model/contextAction';
+import { MoveToFolderDialog } from './MoveToFolderDialog';
+import { RowMenu } from './RowMenu';
 import { ShellRow } from './rows';
 
-export interface ConversationRowActions {
-  readonly open: (conversation: Conversation) => void;
-  readonly pin: (conversation: Conversation, shouldPin: boolean) => void;
-  readonly rename: (conversation: Conversation, name: string) => void;
-  readonly archive: (conversation: Conversation) => void;
-  /** Forks the whole history into a new chat of the caller, and opens it. */
-  readonly fork: (conversation: Conversation) => void;
-  readonly remove: (conversation: Conversation) => void;
-  readonly canModify: (conversation: Conversation) => boolean;
-  /** Holds the project's archive right (`PERMISSIONS.chat.archive`); without it the server answers 403. */
-  readonly canArchive: boolean;
-  /** The project's chat folders, for Move to folder…. */
-  readonly folders: readonly FolderChoice[];
-  /** The folder that holds the conversation now; `null` when none does. */
-  readonly folderOf: (conversation: Conversation) => string | null;
-  readonly moveToFolder: (conversation: Conversation, folderId: string | null) => void;
-  /** Holds the folder right (`PERMISSIONS.chat.folders.update`): Move to folder… and the drag. */
-  readonly canMoveToFolder: boolean;
-}
+/** The desktop's native context menu for a row; absent on the web, where the browser's own menu stays. */
+export type NativeContextMenu = (event: MouseEvent, actions: readonly ContextAction[]) => void;
 
 export interface ConversationRowProps {
   readonly conversation: Conversation;
   readonly selected: boolean;
   readonly indent: number;
   readonly actions: ConversationRowActions;
-}
-
-/** The row's actions, once, for both menus. Leaves only (the ⋯ menu renders the same list). */
-interface RowAsks {
-  readonly rename: () => void;
-  readonly move: () => void;
-  readonly archive: () => void;
-  readonly remove: () => void;
-}
-
-function conversationActions(conversation: Conversation, actions: ConversationRowActions, asks: RowAsks): ContextAction[] {
-  const link = conversationLink(conversation.id);
-  const pinned = conversation.isPinned === true;
-  const mine = actions.canModify(conversation);
-  return [
-    { id: 'open', label: t('desktop.menu.open', 'Open'), run: () => actions.open(conversation) },
-    { separator: true },
-    { id: 'pin', label: pinned ? t('desktop.chats.unpin', 'Unpin') : t('desktop.chats.pin', 'Pin'), run: () => actions.pin(conversation, !pinned) },
-    { id: 'rename', label: t('desktop.chats.rename', 'Rename'), enabled: mine, run: asks.rename },
-    {
-      id: 'move',
-      label: t('desktop.chats.moveToFolder', 'Move to folder…'),
-      enabled: actions.canMoveToFolder && !pinned && (actions.folders.length > 0 || actions.folderOf(conversation) !== null),
-      run: asks.move,
-    },
-    { id: 'fork', label: t('desktop.chats.fork', 'Fork'), run: () => actions.fork(conversation) },
-    { id: 'archive', label: t('desktop.chats.archive', 'Archive'), enabled: actions.canArchive, run: asks.archive },
-    { separator: true },
-    { id: 'link', label: t('workspace.copyLink', 'Copy Link'), enabled: link !== null, run: () => link !== null && copyText(link) },
-    { separator: true },
-    { id: 'delete', label: t('desktop.chats.delete', 'Delete…'), enabled: mine, run: asks.remove },
-  ];
-}
-
-/** The row's hover "⋯": the same leaves as its native context menu (the Local work thread rows use it too). */
-export function RowMenu({ items, label, testId = 'shell-conversation-more' }: { readonly items: readonly ContextAction[]; readonly label: string; readonly testId?: string }): React.JSX.Element {
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const close = (): void => setAnchor(null);
-  return (
-    <>
-      <IconButton size="small" aria-label={label} aria-haspopup="menu" data-testid={testId} {...pressToOpen(setAnchor)}>
-        <MoreHorizIcon fontSize="inherit" />
-      </IconButton>
-      <Menu anchorEl={anchor} open={anchor !== null} onClose={close} slotProps={{ list: { dense: true }, paper: { sx: { minWidth: '12rem' } } }}>
-        {items.map((item, index) =>
-          'separator' in item ? (
-            <MenuDivider key={`separator-${String(index)}`} />
-          ) : 'submenu' in item ? null : (
-            <MenuRow
-              key={item.id}
-              disabled={item.enabled === false}
-              onClick={() => {
-                close();
-                item.run();
-              }}
-            >
-              <MenuRowText>{item.label}</MenuRowText>
-            </MenuRow>
-          ),
-        )}
-      </Menu>
-    </>
-  );
+  readonly projectId: string | undefined;
+  readonly onNativeContextMenu?: NativeContextMenu | undefined;
 }
 
 /** The title being edited in place: Enter saves, Escape or leaving the field cancels. */
@@ -175,28 +93,87 @@ function useScrollIntoViewWhenSelected(selected: boolean) {
   return node;
 }
 
-export function ConversationRow({ conversation, selected, indent, actions }: ConversationRowProps): React.JSX.Element {
-  const showMenu = useContextMenu();
+type Ask = 'rename' | 'move' | 'visibility' | 'shareByLink' | 'archive' | 'remove';
+
+interface RowDialogsProps {
+  readonly conversation: Conversation;
+  readonly label: string;
+  readonly ask: Ask | null;
+  readonly close: () => void;
+  readonly actions: ConversationRowActions;
+  readonly projectId: string | undefined;
+}
+
+/** The dialogs the row's actions ask through. */
+function RowDialogs({ conversation, label, ask, close, actions, projectId }: RowDialogsProps): React.JSX.Element {
+  const makePublic = conversation.isPrivate;
+  const confirm = (run: () => void) => () => {
+    close();
+    run();
+  };
+  return (
+    <>
+      {ask === 'move' && (
+        <MoveToFolderDialog open name={label} folders={actions.folders} currentFolderId={actions.folderOf(conversation)} onClose={close} onMove={(folderId) => actions.moveToFolder(conversation, folderId)} />
+      )}
+      {ask === 'shareByLink' && projectId !== undefined && <ShareLinkDialog open projectId={projectId} conversationId={conversation.id} conversationName={label} onClose={close} />}
+      <BaseModal
+        open={ask === 'visibility'}
+        title={makePublic ? t('desktop.chats.makePublic', 'Make public') : t('desktop.chats.restrictAccess', 'Restrict access')}
+        content={
+          makePublic
+            ? t('desktop.chats.makePublicText', 'Everyone in the project can open this conversation.')
+            : t('desktop.chats.restrictAccessText', 'Project members who are not participants will no longer be able to open this conversation.')
+        }
+        onClose={close}
+        onConfirm={confirm(() => actions.setPrivate(conversation, !makePublic))}
+        actions={{ confirmText: makePublic ? t('desktop.chats.makePublic', 'Make public') : t('desktop.chats.restrictAccess', 'Restrict access') }}
+      />
+      <BaseModal
+        open={ask === 'archive'}
+        title={t('desktop.chats.archiveTitle', 'Archive “{{name}}”?', { name: label })}
+        content={t('desktop.chats.archiveText', "The chat moves to the project's Archived chats and leaves the chat list for everyone in the project. Any member can unarchive it.")}
+        onClose={close}
+        onConfirm={confirm(() => actions.archive(conversation))}
+        actions={{ confirmText: t('desktop.chats.archive', 'Archive') }}
+      />
+      <DeleteEntityModal
+        open={ask === 'remove'}
+        name={label}
+        onClose={close}
+        onConfirm={confirm(() => actions.remove(conversation))}
+        copy={{ title: t('desktop.chats.deleteTitle', 'Delete chat'), textContent: t('desktop.chats.deleteText', "This can't be undone. Delete ") }}
+      />
+    </>
+  );
+}
+
+export function ConversationRow({ conversation, selected, indent, actions, projectId, onNativeContextMenu }: ConversationRowProps): React.JSX.Element {
   const drag = useRowDrag(conversation, actions);
   const scrollTarget = useScrollIntoViewWhenSelected(selected);
-  const [renaming, setRenaming] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [archiving, setArchiving] = useState(false);
-  const [moving, setMoving] = useState(false);
+  const [ask, setAsk] = useState<Ask | null>(null);
   const label = conversation.name === '' ? t('desktop.chats.untitled', 'Untitled chat') : conversation.name;
-  const asks: RowAsks = { rename: () => setRenaming(true), move: () => setMoving(true), archive: () => setArchiving(true), remove: () => setDeleting(true) };
+  const asks: RowAsks = {
+    rename: () => setAsk('rename'),
+    move: () => setAsk('move'),
+    visibility: () => setAsk('visibility'),
+    shareByLink: () => setAsk('shareByLink'),
+    archive: () => setAsk('archive'),
+    remove: () => setAsk('remove'),
+  };
   const items = conversationActions(conversation, actions, asks);
   // Client contract 1.12: the activity glyph and the bold title of an unread answer.
   const activity = useRowActivity(conversation);
+  const close = (): void => setAsk(null);
 
   return (
     <>
-      {renaming ? (
+      {ask === 'rename' ? (
         <RenameField
           conversation={conversation}
           indent={indent}
           onDone={(name) => {
-            setRenaming(false);
+            close();
             if (name !== null && name !== '') actions.rename(conversation, name);
           }}
         />
@@ -217,7 +194,7 @@ export function ConversationRow({ conversation, selected, indent, actions }: Con
             indent={indent}
             selected={selected}
             onClick={() => actions.open(conversation)}
-            onContextMenu={(event) => showMenu(event, items)}
+            {...(onNativeContextMenu !== undefined ? { onContextMenu: (event: MouseEvent) => onNativeContextMenu(event, items) } : {})}
             bold={activityTitleBold(activity)}
             status={<ConversationActivityGlyph kind={activityGlyph(activity)} />}
             trailingOnHover
@@ -225,37 +202,7 @@ export function ConversationRow({ conversation, selected, indent, actions }: Con
           />
         </Box>
       )}
-      {moving && (
-        <MoveToFolderDialog
-          open
-          name={label}
-          folders={actions.folders}
-          currentFolderId={actions.folderOf(conversation)}
-          onClose={() => setMoving(false)}
-          onMove={(folderId) => actions.moveToFolder(conversation, folderId)}
-        />
-      )}
-      <BaseModal
-        open={archiving}
-        title={t('desktop.chats.archiveTitle', 'Archive “{{name}}”?', { name: label })}
-        content={t('desktop.chats.archiveText', "The chat moves to the project's Archived chats and leaves the chat list for everyone in the project. Any member can unarchive it.")}
-        onClose={() => setArchiving(false)}
-        onConfirm={() => {
-          setArchiving(false);
-          actions.archive(conversation);
-        }}
-        actions={{ confirmText: t('desktop.chats.archive', 'Archive') }}
-      />
-      <DeleteEntityModal
-        open={deleting}
-        name={label}
-        onClose={() => setDeleting(false)}
-        onConfirm={() => {
-          setDeleting(false);
-          actions.remove(conversation);
-        }}
-        copy={{ title: t('desktop.chats.deleteTitle', 'Delete chat'), textContent: t('desktop.chats.deleteText', "This can't be undone. Delete ") }}
-      />
+      <RowDialogs conversation={conversation} label={label} ask={ask} close={close} actions={actions} projectId={projectId} />
     </>
   );
 }

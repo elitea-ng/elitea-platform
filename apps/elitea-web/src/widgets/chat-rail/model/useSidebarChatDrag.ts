@@ -17,17 +17,12 @@ import type { Conversation } from '@/entities/conversation';
 import { useDragAndDrop, type FolderListItem } from '@/features/chat-conversation-list';
 
 import type { ChatRail } from './chatRail';
-import { useDesktopLayout } from './desktopLayout.store';
 
 /** The web list's drop ids (`useDragAndDrop.positioning.ts` `FOLDER_ID_PREFIX`, `resolveDropTarget`). */
 export const folderDropId = (folderId: string): string => `folder-${folderId}`;
 export const UNGROUPED_DROP_ID = 'ungrouped-conversations';
 
-function notice(message: string): void {
-  useDesktopLayout.getState().setNotice(message);
-}
-
-export function useSidebarChatDrag(rail: Pick<ChatRail, 'folders' | 'pinned' | 'dateGroups' | 'moveToFolder'>) {
+export function useSidebarChatDrag(rail: Pick<ChatRail, 'folders' | 'pinned' | 'dateGroups' | 'moveToFolder'>, onError: (message: string) => void) {
   const { folders: railFolders, pinned, dateGroups, moveToFolder } = rail;
   const folders = useMemo<FolderListItem[]>(
     () => railFolders.map((folder) => ({ ...folder, conversations: folder.conversations.map((conversation) => ({ ...conversation, folderId: folder.id })) })),
@@ -38,7 +33,7 @@ export function useSidebarChatDrag(rail: Pick<ChatRail, 'folders' | 'pinned' | '
     (conversation: Conversation, target: FolderListItem | null) => moveToFolder(conversation, target === null ? null : target.id),
     [moveToFolder],
   );
-  const drag = useDragAndDrop({ onMoveToFolderConversation, folders, originalFolders: folders, conversations, toastError: notice });
+  const drag = useDragAndDrop({ onMoveToFolderConversation, folders, originalFolders: folders, conversations, toastError: onError });
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   return { ...drag, sensors };
 }

@@ -1,19 +1,9 @@
 /**
- * The bell's PLACEMENT, not its behaviour.
+ * The rail's header row: the bell sits beside the logo (not at the bottom of
+ * the rail), and the collapse toggle is a button in the same row.
  *
- * `NotificationButton` used to be mounted at the bottom of the rail, just
- * above the footer, while the old app has it in the sticky-top header row next
- * to the logo (`SidebarBody.jsx:233`). The misplacement was deliberate and
- * documented: the unit that added the widget owned `SidebarBody.tsx` and the
- * widget, but not `SidebarHeader.tsx`, so it could not put the bell where it
- * belonged.
- *
- * Every existing sidebar test passed with the bell in either position — they
- * assert that it renders and that its popover works, never where it sits. This
- * one fails if it leaves the header row.
- *
- * The router harness is `NotificationButton.test.tsx`'s, reduced: the bell
- * reads `useRouteContext`/`useNavigate`, so it cannot render without one.
+ * The bell reads `useRouteContext`/`useNavigate`, so the header renders
+ * inside a router.
  */
 import type { ReactElement } from 'react';
 
@@ -77,5 +67,12 @@ describe('SidebarHeader — the notification bell sits in the header row', () =>
 
     expect(screen.getByTestId('sidebar-toggle')).toBeInTheDocument();
     expect(screen.queryByTestId('sidebar-notification-button')).not.toBeInTheDocument();
+  });
+
+  it('carries the collapse toggle in the header row, named for what it does', async () => {
+    await renderHeader(false);
+    const toggle = screen.getByTestId('sidebar-collapse-toggle');
+    expect(toggle).toHaveAccessibleName('Collapse sidebar');
+    expect(screen.getByTestId('sidebar-toggle').parentElement?.contains(toggle)).toBe(true);
   });
 });

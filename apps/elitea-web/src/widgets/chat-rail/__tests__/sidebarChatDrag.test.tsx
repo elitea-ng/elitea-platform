@@ -31,7 +31,7 @@ const end = (id: string, over: string | null) =>
   ({ active: { id, data: { current: undefined }, rect: { current: { initial: null, translated: null } } }, over: over === null ? null : { id: over, data: { current: undefined }, rect: {} } }) as never;
 
 async function drop(model: ReturnType<typeof rail>, id: string, over: string | null) {
-  const { result } = renderHook(() => useSidebarChatDrag(model));
+  const { result } = renderHook(() => useSidebarChatDrag(model, vi.fn()));
   act(() => result.current.handleDragStart(start(id)));
   await act(async () => {
     await result.current.handleDragEnd(end(id, over));
@@ -73,7 +73,7 @@ describe('useSidebarChatDrag', () => {
 
   it('marks the valid drop targets while a row is dragged', () => {
     const model = rail();
-    const { result } = renderHook(() => useSidebarChatDrag(model));
+    const { result } = renderHook(() => useSidebarChatDrag(model, vi.fn()));
     act(() => result.current.handleDragStart(start('51')));
     expect(result.current.getDropAreaState(folderDropId('f2')).isValidDropTarget).toBe(true);
     expect(result.current.getDropAreaState(folderDropId('f1')).isValidDropTarget).toBe(false);

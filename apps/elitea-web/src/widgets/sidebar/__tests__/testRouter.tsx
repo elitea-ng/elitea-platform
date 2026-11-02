@@ -17,11 +17,9 @@ import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/sh
 const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
 
 /**
- * Self-contained router harness for this widget's component tests — see
- * `widgets/create-button/__tests__/testRouter.tsx` for the full rationale
- * (duplicated rather than shared across widgets: each unit's `__tests__` is
- * inside its own owned path, and a shared test-only helper would need to
- * live in a lower layer this unit does not own).
+ * Self-contained router harness for this widget's component tests: the
+ * sidebar's links and hooks read the router, so every test renders inside a
+ * real memory-history router.
  *
  * `QueryClientProvider` (a fresh `QueryClient` per call, never shared
  * across tests — same isolation `NotificationListItem.test.tsx` uses) was

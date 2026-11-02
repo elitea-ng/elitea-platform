@@ -6,26 +6,17 @@ import * as slice from './index';
  * Pins the slice's RUNTIME public surface (spec §3.3: index.ts is the only
  * file other slices may import). `export type` interfaces are erased by
  * `verbatimModuleSyntax` and never appear on the runtime namespace object,
- * so this list is deliberately the value-export subset only — see
- * `./index.ts`'s own module doc for the full (type + value) surface and the
- * reasoning behind each inclusion/exclusion. Precedent: `entities/
+ * so this list is the value-export subset only. Precedent: `entities/
  * conversation/index.test.ts`, `features/pipelines/index.test.ts`.
  */
 const PUBLIC_SURFACE = [
-  'Conversations',
+  'ShareLinkDialog',
   'useArchiveConversation',
   'useConversationActivity',
   'useConversationRail',
-  'useCreateFolder',
-  'useDeleteFolder',
   'useDragAndDrop',
-  'useEditFolder',
-  'useMarkConversationReadOnView',
   'useForkConversation',
-  'useMoveToFolderConversation',
-  'usePinConversation',
-  'useQueryFoldersList',
-  'useReorderFolders',
+  'useMarkConversationReadOnView',
 ] as const;
 
 describe('features/chat-conversation-list public surface', () => {

@@ -17,32 +17,39 @@
  * that holds it opens for it (until the person closes it again), and the row
  * scrolls into view.
  *
- * The data is the frame's chat rail (`model/chatRail.tsx`, the web chat
- * list's `useConversationRail`): the same grouped listing and cache, so Local
- * work threads and hidden conversations are left out exactly as the web list
- * leaves them out. Folders are managed as in the web list, through its hooks:
- * "New folder" on the Chats row, "Move to folder…" in a row's menu, and a drag
- * of a row onto a folder (or out of one onto the recent chats,
- * `useSidebarChatDrag`).
+ * The data is the shell's chat rail (`model/chatRail.tsx`,
+ * `useConversationRail`): one grouped listing and cache, Local work threads
+ * and hidden conversations left out. Folders: "New folder" on the Chats row,
+ * Rename / Pin / Delete in a folder's menu, "Move to folder…" in a row's menu,
+ * and a drag of a row onto a folder (or out of one onto the recent chats,
+ * `useSidebarChatDrag`). The Chats caption's search opens a title filter at
+ * the top of the list (`ChatsSearchField`).
+ *
+ * The same list serves the web and the desktop. What only the desktop has
+ * comes in as props: `onError` (its notice banner; the web shows a snackbar
+ * of the list's own) and `onNativeContextMenu` (a right-click opens the OS
+ * menu; the web keeps the browser's).
  */
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { DndContext, pointerWithin } from '@dnd-kit/core';
 import { useNavigate } from '@tanstack/react-router';
 
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
+import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
+import Snackbar from '@mui/material/Snackbar';
 
-import { useForkConversation } from '@/features/chat-conversation-list';
 import { t } from '@/shared/i18n';
 
-import { ARCHIVED_PATH, ChatRailProvider, openConversationId, PINNED_GROUP, useChatRail, type ChatRail } from '../model/chatRail';
-import { useDesktopLayout } from '../model/desktopLayout.store';
+import { ARCHIVED_PATH, ChatRailProvider, openConversationId, PINNED_GROUP, useChatRail, useChatRailFilter, type ChatRail } from '../model/chatRail';
 import { useChatDisclosures } from '../model/useChatDisclosures';
-import { chatGroupKey } from '../model/useEliteaSectionOpen';
+import { useRowActions } from '../model/useRowActions';
+import { chatGroupKey } from '../model/useSectionOpen';
 import { useSidebarChatDrag } from '../model/useSidebarChatDrag';
-import type { ConversationRowActions } from './ConversationRow';
-import { DragPreview, FolderItem, Group, LIST_SX, NewFolderField, RecentArea, Rows, ShowMore } from './ChatsSectionParts';
+import { ChatsSearchField } from './ChatsSearchField';
+import { DragPreview, FolderItem, FolderNameField, Group, LIST_SX, RecentArea, Rows, ShowMore, type RowEnv } from './ChatsSectionParts';
+import type { NativeContextMenu } from './ConversationRow';
 import { CHILD_INDENT, ShellRow } from './rows';
 
 /** The listing's bucket names (`folders/handler.go` `groupOrder`) as sidebar captions. */
@@ -63,41 +70,17 @@ function groupCaption(name: string): string {
   }
 }
 
-/** A failure of the list, told the way the shell tells everything else (its notice banner). */
-function useErrorNotice(rail: ChatRail): void {
+/** A failure of the list, told through `onError` (the desktop's notice banner) or, without one, the list's own snackbar. */
+function useErrorReport(rail: ChatRail, onError: ((message: string) => void) | undefined) {
+  const [shown, setShown] = useState<string | undefined>(undefined);
+  const report = useCallback((message: string) => (onError === undefined ? setShown(message) : onError(message)), [onError]);
   const { error, dismissError } = rail;
   useEffect(() => {
     if (error === undefined) return;
-    useDesktopLayout.getState().setNotice(error);
+    report(error);
     dismissError();
-  }, [error, dismissError]);
-}
-
-function useRowActions(rail: ChatRail, openId: string, projectId: string | undefined, rights: { readonly canArchive: boolean; readonly canMoveToFolder: boolean }): ConversationRowActions {
-  const navigate = useNavigate();
-  const fork = useForkConversation({ projectId, toastError: (message) => useDesktopLayout.getState().setNotice(message) });
-  return {
-    open: (conversation) => void navigate({ to: '/chat/$conversationId', params: { conversationId: conversation.id } }),
-    pin: rail.pin,
-    rename: rail.rename,
-    canModify: rail.canModify,
-    canArchive: rights.canArchive,
-    canMoveToFolder: rights.canMoveToFolder,
-    // The open conversation stays open when it is archived (an archive changes the lists, not the chat).
-    archive: rail.archive,
-    // The fork opens at once, as a new chat does.
-    fork: (conversation) =>
-      void fork(conversation.id).then((made) => {
-        if (made !== undefined) void navigate({ to: '/chat/$conversationId', params: { conversationId: made.id } });
-      }),
-    remove: (conversation) =>
-      void rail.remove(conversation).then((removed) => {
-        if (removed && conversation.id === openId) void navigate({ to: '/chat' });
-      }),
-    folders: rail.folders.map((folder) => ({ id: folder.id, name: folder.name })),
-    folderOf: (conversation) => rail.folders.find((folder) => folder.conversations.some((item) => item.id === conversation.id))?.id ?? null,
-    moveToFolder: (conversation, folderId) => void rail.moveToFolder(conversation, folderId),
-  };
+  }, [error, dismissError, report]);
+  return { report, shown, dismiss: () => setShown(undefined) };
 }
 
 export interface ChatsSectionProps {
@@ -109,32 +92,84 @@ export interface ChatsSectionProps {
   readonly onCreatingFolderDone?: () => void;
   /** Holds `PERMISSIONS.chat.archive` in this project. */
   readonly canArchive?: boolean;
-  /** Holds `PERMISSIONS.chat.folders.update` in this project: Move to folder… and the drag. */
+  /** Holds `PERMISSIONS.chat.folders.update` in this project: Move to folder…, the drag, a folder's Rename and Pin. */
   readonly canMoveToFolder?: boolean;
+  /** Holds `PERMISSIONS.chat.folders.delete` in this project. */
+  readonly canDeleteFolder?: boolean;
+  /** Tells a failure; without it the list shows a snackbar of its own. */
+  readonly onError?: ((message: string) => void) | undefined;
+  /** The desktop's native context menu for a row. */
+  readonly onNativeContextMenu?: NativeContextMenu | undefined;
 }
 
-function ChatsList({ rail, projectId, pathname, creatingFolder = false, onCreatingFolderDone, canArchive = false, canMoveToFolder = false }: ChatsSectionProps & { readonly rail: ChatRail }): React.JSX.Element {
-  useErrorNotice(rail);
-  const openId = openConversationId(pathname);
-  const actions = useRowActions(rail, openId, projectId, { canArchive, canMoveToFolder });
+/** What every row of the list shares: its actions, the project, the native menu, the Local work filter. */
+function useRowEnv(props: ChatsSectionProps, rail: ChatRail, openId: string, report: (message: string) => void): RowEnv {
+  const filter = useChatRailFilter();
+  const can = { canArchive: props.canArchive === true, canMoveToFolder: props.canMoveToFolder === true };
+  return {
+    actions: useRowActions(rail, openId, props.projectId, can, report),
+    projectId: props.projectId,
+    onNativeContextMenu: props.onNativeContextMenu,
+    localWork: filter?.localWorkOnly === true,
+  };
+}
+
+/** The list's last rows: "No chats yet" (or "No chats match" while searching) and the Archived row. */
+function TailRows({ empty, searching, pathname }: { readonly empty: boolean; readonly searching: boolean; readonly pathname: string }): React.JSX.Element {
   const navigate = useNavigate();
-  const drag = useSidebarChatDrag(rail);
+  return (
+    <>
+      {empty && (
+        <li>
+          <ShellRow
+            muted
+            testId="shell-chats-empty"
+            indent={CHILD_INDENT}
+            label={searching ? t('desktop.chats.noMatch', 'No chats match') : t('desktop.chats.empty', 'No chats yet')}
+            onClick={() => void navigate({ to: '/chat' })}
+          />
+        </li>
+      )}
+      <li>
+        <ShellRow
+          testId="shell-chats-archived"
+          muted={pathname !== ARCHIVED_PATH}
+          icon={<ArchiveOutlinedIcon />}
+          label={t('desktop.chats.archived', 'Archived')}
+          selected={pathname === ARCHIVED_PATH}
+          onClick={() => void navigate({ to: ARCHIVED_PATH })}
+        />
+      </li>
+    </>
+  );
+}
+
+function ChatsList(props: ChatsSectionProps & { readonly rail: ChatRail }): React.JSX.Element {
+  const { rail, pathname } = props;
+  const errors = useErrorReport(rail, props.onError);
+  const filter = useChatRailFilter();
+  const openId = openConversationId(pathname);
+  const env = useRowEnv(props, rail, openId, errors.report);
+  const drag = useSidebarChatDrag(rail, errors.report);
   const open = useChatDisclosures(rail, openId);
   const groups = rail.dateGroups.filter((group) => group.conversations.length > 0);
   const empty = !rail.isLoading && rail.pinned.length === 0 && rail.folders.length === 0 && groups.length === 0;
+  const searchOpen = filter?.searchOpen === true;
+  const searching = searchOpen && filter.query.trim() !== '';
 
   return (
     <DndContext sensors={drag.sensors} collisionDetection={pointerWithin} onDragStart={drag.handleDragStart} onDragEnd={(event) => void drag.handleDragEnd(event)} autoScroll={false}>
+      {searchOpen && <ChatsSearchField filter={filter} />}
       <Box component="ul" data-testid="shell-chats" aria-label={t('desktop.chats.label', 'Chats')} sx={LIST_SX}>
         {rail.pinned.length > 0 && (
           <Group caption={t('desktop.chats.pinned', 'Pinned')} count={rail.pinned.length} rows={rail.pinned} open={open.groupOpen(PINNED_GROUP)} onToggle={() => open.toggleGroup(PINNED_GROUP)}>
-            <Rows conversations={rail.pinned} openId={openId} indent={CHILD_INDENT} actions={actions} />
+            <Rows conversations={rail.pinned} openId={openId} indent={CHILD_INDENT} env={env} />
           </Group>
         )}
-        {creatingFolder && (
-          <NewFolderField
+        {props.creatingFolder === true && (
+          <FolderNameField
             onDone={(name) => {
-              onCreatingFolderDone?.();
+              props.onCreatingFolderDone?.();
               if (name !== null && name !== '') void rail.createFolder(name);
             }}
           />
@@ -148,40 +183,33 @@ function ChatsList({ rail, projectId, pathname, creatingFolder = false, onCreati
             onToggle={() => open.toggleFolder(folder.id)}
             onExpand={() => open.expandFolder(folder.id)}
             openId={openId}
-            actions={actions}
+            env={env}
             drag={drag}
+            canUpdateFolder={props.canMoveToFolder === true}
+            canDeleteFolder={props.canDeleteFolder === true}
           />
         ))}
         <RecentArea drag={drag}>
           {groups.map((group) => (
             <Group key={group.name} caption={groupCaption(group.name)} count={group.total ?? group.conversations.length} rows={group.conversations} serverNeedsYou={group.needsYou} open={open.groupOpen(group.name)} onToggle={() => open.toggleGroup(group.name)}>
-              <Rows conversations={group.conversations} openId={openId} indent={CHILD_INDENT} actions={actions} />
+              <Rows conversations={group.conversations} openId={openId} indent={CHILD_INDENT} env={env} />
               {rail.hasMore(group) && <ShowMore indent={CHILD_INDENT} onClick={() => rail.loadMoreInGroup(group.name)} />}
             </Group>
           ))}
         </RecentArea>
-        {empty && (
-          <li>
-            <ShellRow muted indent={CHILD_INDENT} label={t('desktop.chats.empty', 'No chats yet')} onClick={() => void navigate({ to: '/chat' })} />
-          </li>
-        )}
-        <li>
-          <ShellRow
-            testId="shell-chats-archived"
-            muted={pathname !== ARCHIVED_PATH}
-            icon={<ArchiveOutlinedIcon />}
-            label={t('desktop.chats.archived', 'Archived')}
-            selected={pathname === ARCHIVED_PATH}
-            onClick={() => void navigate({ to: ARCHIVED_PATH })}
-          />
-        </li>
+        <TailRows empty={empty} searching={searching} pathname={pathname} />
       </Box>
       <DragPreview drag={drag} />
+      <Snackbar open={errors.shown !== undefined} autoHideDuration={6000} onClose={errors.dismiss} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}>
+        <Alert severity="error" variant="filled" onClose={errors.dismiss}>
+          {errors.shown}
+        </Alert>
+      </Snackbar>
     </DndContext>
   );
 }
 
-/** The frame's chat rail when there is one; outside the frame (tests) a rail of its own. */
+/** The shell's chat rail when there is one; outside a provider (tests) a rail of its own. */
 export function ChatsSection(props: ChatsSectionProps): React.JSX.Element {
   const rail = useChatRail();
   if (rail !== null) return <ChatsList {...props} rail={rail} />;

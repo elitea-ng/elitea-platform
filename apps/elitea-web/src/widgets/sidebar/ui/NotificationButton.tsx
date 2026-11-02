@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouteContext } from '@tanstack/react-router';
 
+import type { PopoverOrigin } from '@mui/material/Popover';
+
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import Popover from '@mui/material/Popover';
@@ -124,75 +126,37 @@ function selectPersonalProjectId(context: unknown): string | undefined {
  */
 const DEAD_STREAM_POLL_MS = 60_000;
 
-export function NotificationButton(): ReactNode {
+export interface NotificationBellProps {
+  /** The personal project the notifications belong to; without one the bell opens the chat. */
+  readonly projectId: string | undefined;
+  readonly hasUnread: boolean;
+  /**
+   * Where the tooltip and the popover open: `right` beside the web
+   * sidebar's header row, `below` under the desktop sidebar's title bar.
+   */
+  readonly placement?: 'right' | 'below';
+}
+
+const POPOVER_ORIGIN: Readonly<Record<'right' | 'below', { readonly anchor: PopoverOrigin; readonly transform: PopoverOrigin }>> = {
+  right: { anchor: { vertical: 'bottom', horizontal: 'left' }, transform: { vertical: 'top', horizontal: 'left' } },
+  below: { anchor: { vertical: 'bottom', horizontal: 'right' }, transform: { vertical: 'top', horizontal: 'right' } },
+};
+
+/** The bell itself: the unread dot and the popover of the latest notifications. The web sidebar feeds it (`NotificationButton`); the desktop feeds it from its one notifications subscription. */
+export function NotificationBell({ projectId, hasUnread, placement = 'right' }: NotificationBellProps): ReactNode {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const routeContext: unknown = useRouteContext({ strict: false });
-  const personalProjectId = selectPersonalProjectId(routeContext);
-
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
-  const [hasUnread, setHasUnread] = useState(false);
-
-  // Live push, now over SSE (issue #92 — see this file's header). No-ops
-  // without a personal project id, without runtime config, or in a runtime
-  // with no `EventSource`; `notifications_ready` inside the hook also
-  // invalidates the list query, so the authoritative effect below re-runs.
-  // Declared BEFORE the badge query because `streamDead` decides whether
-  // that query polls.
-  const handleNotify = useCallback(() => setHasUnread(true), []);
-  const { streamDead } = useNotificationsSSE(personalProjectId, handleNotify);
-
-  // Badge-only signal: the real API has no dedicated "count only" param
-  // (`features/notifications/api/notifications.ts`'s `ListNotificationsParams`
-  // — see that file's header), so `pageSize: 1` + `only_new: true` (both
-  // real, already-supported params) plus reading the response's own `total`
-  // field is the faithful equivalent of the old app's
-  // `only_new: true, only_total: true, pageSize: 1` query shape.
-  const { data, dataUpdatedAt } = useNotificationsList(
-    { projectId: personalProjectId ?? '', pageSize: 1, params: { only_new: true } },
-    {
-      enabled: !!personalProjectId,
-      // The fallback for a stream that will not come back. See this file's
-      // header: without it the dot only changes on refocus or remount.
-      refetchInterval: streamDead ? DEAD_STREAM_POLL_MS : false,
-      refetchIntervalInBackground: false,
-    },
-  );
-
-  // Old app: `useEffect(() => { if (data !== undefined) setHasMessages(!!data
-  // ?.total); }, [data])` (`NotificationButton.jsx:60-64`) — every fresh
-  // query response is AUTHORITATIVE and can flip the dot back off (e.g.
-  // after "mark all as read" invalidates and refetches this same query,
-  // `features/notifications/api/useNotifications.ts`'s
-  // `NOTIFICATIONS_QUERY_ROOT` invalidation). The live-push handler below
-  // only ever sets this `true` OPTIMISTICALLY between refetches — reproduced
-  // as-is, not `pushedUnread || data-derived` (that OR'd shape is a one-way
-  // ratchet: once a live push flips it `true`, no later "actually 0 now"
-  // response could ever flip it back).
-  //
-  // `dataUpdatedAt` (also in the deps, alongside `data` itself) matters:
-  // TanStack Query's default `structuralSharing` keeps `data`'s object
-  // reference stable across a refetch that resolves to an unchanged value
-  // (e.g. `{ rows: [], total: 0 }` again, right after a push already set
-  // this optimistically `true`) — RTK Query, the old app's client, has no
-  // such structural-sharing reuse and hands back a fresh reference on every
-  // fetch. Depending on `data` alone would silently reintroduce the exact
-  // one-way-ratchet bug this fix exists to close, in the very common case
-  // where the "authoritative" refetch confirms the same total the previous
-  // fetch already had. `dataUpdatedAt` changes on every settle regardless.
-  useEffect(() => {
-    if (data !== undefined) setHasUnread(!!data.total);
-  }, [data, dataUpdatedAt]);
 
   const handleClick = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>) => {
-      if (!personalProjectId) {
+      if (!projectId) {
         void navigate({ to: '/chat' });
         return;
       }
       setAnchorEl(event.currentTarget);
     },
-    [navigate, personalProjectId],
+    [navigate, projectId],
   );
 
   /**
@@ -207,25 +171,23 @@ export function NotificationButton(): ReactNode {
    */
   const handleClose = useCallback(() => {
     setAnchorEl(null);
-    if (personalProjectId) {
-      queryClient.removeQueries({ queryKey: [...NOTIFICATIONS_QUERY_ROOT, 'infinite', personalProjectId] });
+    if (projectId) {
+      queryClient.removeQueries({ queryKey: [...NOTIFICATIONS_QUERY_ROOT, 'infinite', projectId] });
     }
-  }, [personalProjectId, queryClient]);
+  }, [projectId, queryClient]);
 
+  const origin = POPOVER_ORIGIN[placement];
   return (
     <>
-      <Tooltip
-        title={t('widgets.sidebar.notification.tooltip', 'Notifications')}
-        placement="right"
-      >
+      <Tooltip title={t('widgets.sidebar.notification.tooltip', 'Notifications')} placement={placement === 'right' ? 'right' : 'bottom'}>
         <IconButton
           data-testid="sidebar-notification-button"
           aria-label={t('widgets.sidebar.notification.tooltip', 'Notifications')}
           onClick={handleClick}
+          size={placement === 'below' ? 'small' : 'medium'}
           sx={(theme: Theme) => ({
             position: 'relative',
-            width: '2rem',
-            height: '2rem',
+            ...(placement === 'right' ? { width: '2rem', height: '2rem' } : {}),
             '&:hover': { backgroundColor: theme.vars.palette.background.button.tertiary.hover },
             '&:active': { backgroundColor: theme.vars.palette.background.button.tertiary.pressed },
           })}
@@ -236,8 +198,8 @@ export function NotificationButton(): ReactNode {
               data-testid="sidebar-notification-unread-dot"
               sx={(theme: Theme) => ({
                 position: 'absolute',
-                top: '0.375rem',
-                right: '0.375rem',
+                top: placement === 'right' ? '0.375rem' : '0.125rem',
+                right: placement === 'right' ? '0.375rem' : '0.125rem',
                 width: '0.5rem',
                 height: '0.5rem',
                 borderRadius: theme.vars.shape.radiusPill,
@@ -247,23 +209,59 @@ export function NotificationButton(): ReactNode {
           )}
         </IconButton>
       </Tooltip>
-      {anchorEl && personalProjectId && (
+      {anchorEl && projectId && (
         <Popover
           open
           anchorEl={anchorEl}
           onClose={handleClose}
-          anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-          transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+          anchorOrigin={origin.anchor}
+          transformOrigin={origin.transform}
           slotProps={{
             paper: { sx: (theme: Theme) => ({ borderRadius: theme.vars.shape.radiusMd, overflow: 'hidden' }) },
           }}
         >
-          <NotificationPopoverContent
-            projectId={personalProjectId}
-            onClose={handleClose}
-          />
+          <NotificationPopoverContent projectId={projectId} onClose={handleClose} />
         </Popover>
       )}
     </>
   );
+}
+
+/** The web sidebar's bell: its own notifications subscription (SSE, a slow poll once the stream is spent) feeding `NotificationBell`. */
+export function NotificationButton(): ReactNode {
+  const routeContext: unknown = useRouteContext({ strict: false });
+  const personalProjectId = selectPersonalProjectId(routeContext);
+  const [hasUnread, setHasUnread] = useState(false);
+
+  // Live push, now over SSE (issue #92 — see this file's header). No-ops
+  // without a personal project id, without runtime config, or in a runtime
+  // with no `EventSource`; `notifications_ready` inside the hook also
+  // invalidates the list query, so the authoritative effect below re-runs.
+  // Declared BEFORE the badge query because `streamDead` decides whether
+  // that query polls.
+  const handleNotify = useCallback(() => setHasUnread(true), []);
+  const { streamDead } = useNotificationsSSE(personalProjectId, handleNotify);
+
+  // Badge-only signal: `pageSize: 1` + `only_new: true` and the response's
+  // own `total` (the API has no "count only" param).
+  const { data, dataUpdatedAt } = useNotificationsList(
+    { projectId: personalProjectId ?? '', pageSize: 1, params: { only_new: true } },
+    {
+      enabled: !!personalProjectId,
+      // The fallback for a stream that will not come back. See this file's
+      // header: without it the dot only changes on refocus or remount.
+      refetchInterval: streamDead ? DEAD_STREAM_POLL_MS : false,
+      refetchIntervalInBackground: false,
+    },
+  );
+
+  // Every fresh response is AUTHORITATIVE and can flip the dot back off (a
+  // live push only sets it optimistically between refetches). `dataUpdatedAt`
+  // is a dependency because structural sharing keeps `data`'s reference
+  // stable across a refetch that resolves to an unchanged value.
+  useEffect(() => {
+    if (data !== undefined) setHasUnread(!!data.total);
+  }, [data, dataUpdatedAt]);
+
+  return <NotificationBell projectId={personalProjectId} hasUnread={hasUnread} />;
 }

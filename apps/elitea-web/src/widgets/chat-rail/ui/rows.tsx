@@ -1,16 +1,25 @@
 /**
- * The sidebar's row primitives: one dense, single-line, native-feeling list
- * row (icon, label, optional quiet trailing text, optional trailing actions),
- * and a section caption. Selection and hover use the same drawer-menu tokens
- * as the web sidebar, so a brand pack re-themes both alike.
+ * The sidebar's row primitives (web and desktop): one dense, single-line,
+ * native-feeling list row (icon, label, optional quiet trailing text,
+ * optional trailing actions, an optional "+" that creates one more of what
+ * the row lists), and a section caption. Selection and hover use the
+ * drawer-menu tokens, so a brand pack re-themes both alike.
+ *
+ * A row with `to` is a link (the web sidebar's rows: open in a new tab, copy
+ * the address); one with only `onClick` is a button.
  */
 import type { MouseEvent, ReactNode } from 'react';
 
+import { Link } from '@tanstack/react-router';
+
+import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import Box from '@mui/material/Box';
 import ButtonBase from '@mui/material/ButtonBase';
+import IconButton from '@mui/material/IconButton';
 import type { Theme } from '@mui/material/styles';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 /**
@@ -23,13 +32,24 @@ import Typography from '@mui/material/Typography';
  */
 export const CHILD_INDENT = 3;
 
+/** A row's "+": what it creates (its accessible name, "New agent") and how. */
+export interface RowCreate {
+  readonly label: string;
+  readonly onCreate: () => void;
+  readonly testId: string;
+}
+
 export interface ShellRowProps {
   label: string;
   icon?: ReactNode;
   selected?: boolean;
   /** Extra left indent, in spacing units (threads sit under their folder: {@link CHILD_INDENT}). */
   indent?: number;
-  onClick: () => void;
+  /** Where the row goes, as a link; without it the row is a button. */
+  to?: string;
+  onClick?: () => void;
+  /** The "+" at the row's end: shown on hover and focus, always in the tab order and the accessibility tree. */
+  create?: RowCreate | undefined;
   /** Shown at the right edge; `trailingOnHover` hides it until the row is hovered or focused. */
   trailing?: ReactNode;
   trailingOnHover?: boolean;
@@ -88,6 +108,10 @@ function rowSx(theme: Theme, { selected, dropActive, swaps, trailingRoom }: RowL
     // The actions overlay the row's right edge on hover, where the meta text was.
     '& .shell-row-trailing': swaps ? { position: 'absolute', right: 0, top: 0, bottom: 0, visibility: 'hidden' } : {},
     '&:hover .shell-row-trailing, &:focus-within .shell-row-trailing': { visibility: 'visible' },
+    // The "+" fades instead of hiding, so a keyboard or a screen reader always reaches it; a touch screen always shows it.
+    '& .shell-row-create': { opacity: 0 },
+    '&:hover .shell-row-create, &:focus-within .shell-row-create': { opacity: 1 },
+    '@media (hover: none)': { '& .shell-row-create': { opacity: 1 } },
     ...(swaps
       ? {
           '&:hover .shell-row-meta, &:focus-within .shell-row-meta': { display: 'none' },
@@ -188,10 +212,38 @@ function RowLeading({ disclosure, icon, reserveIcon, indent }: { readonly disclo
   );
 }
 
+/** The row's "+". */
+function RowCreateButton({ create }: { readonly create: RowCreate }): React.JSX.Element {
+  return (
+    <Tooltip title={create.label}>
+      <IconButton
+        size="small"
+        className="shell-row-create"
+        aria-label={create.label}
+        data-testid={create.testId}
+        onClick={create.onCreate}
+        sx={{ marginRight: 0.5, transition: 'opacity 120ms', '&:focus-visible': { opacity: 1 } }}
+      >
+        <AddOutlinedIcon fontSize="inherit" />
+      </IconButton>
+    </Tooltip>
+  );
+}
+
+function RowTrailing({ trailing }: { readonly trailing: ReactNode }): React.JSX.Element | null {
+  if (trailing === undefined) return null;
+  return (
+    <Box className="shell-row-trailing" sx={{ display: 'flex', alignItems: 'center', paddingRight: 0.5 }}>
+      {trailing}
+    </Box>
+  );
+}
+
 export function ShellRow(props: ShellRowProps): React.JSX.Element {
-  const { label, icon, selected = false, indent = 0, onClick, trailing, trailingOnHover = false, trailingRoom = '3.75rem', meta, muted = false, title, testId, ariaExpanded, onContextMenu } = props;
+  const { label, icon, selected = false, indent = 0, to, onClick, create, trailing, trailingOnHover = false, trailingRoom = '3.75rem', meta, muted = false, title, testId, ariaExpanded, onContextMenu } = props;
   const { disclosure, reserveIcon = false, dropActive = false, labelClassName, metaTestId, bold, status } = props;
   const swaps = trailing !== undefined && trailingOnHover;
+  const link = to === undefined ? {} : { component: Link, to };
   return (
     <Box
       data-testid={testId}
@@ -199,6 +251,7 @@ export function ShellRow(props: ShellRowProps): React.JSX.Element {
       sx={(theme: Theme) => rowSx(theme, { selected: selected || dropActive, dropActive, swaps, trailingRoom })}
     >
       <ButtonBase
+        {...link}
         className="shell-row-main"
         onClick={onClick}
         title={title}
@@ -215,6 +268,8 @@ export function ShellRow(props: ShellRowProps): React.JSX.Element {
           minHeight: '1.75rem',
           borderRadius: theme.vars.shape.radiusSm,
           textAlign: 'left',
+          color: 'inherit',
+          textDecoration: 'none',
         })}
       >
         <RowLeading disclosure={disclosure} icon={icon} reserveIcon={reserveIcon} indent={indent} />
@@ -222,11 +277,8 @@ export function ShellRow(props: ShellRowProps): React.JSX.Element {
         <RowMeta meta={meta} testId={metaTestId} />
         <RowStatus status={status} />
       </ButtonBase>
-      {trailing !== undefined && (
-        <Box className="shell-row-trailing" sx={{ display: 'flex', alignItems: 'center', paddingRight: 0.5 }}>
-          {trailing}
-        </Box>
-      )}
+      <RowTrailing trailing={trailing} />
+      {create !== undefined && <RowCreateButton create={create} />}
     </Box>
   );
 }

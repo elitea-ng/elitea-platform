@@ -2,7 +2,7 @@
  * Thin wrapper over the generated `usePermissionList` hook (S4, `shared/api/
  * generated/auth/auth.ts`; endpoint `GET /auth/permissions/prompt_lib/
  * {projectId}`), reduced to the `Set<string>` shape every permission check
- * in this widget (and `widgets/create-button`) actually wants — mirrors old
+ * in this widget actually wants — mirrors old
  * app's `new Set(permissions)` (`SidebarBody.jsx:80`).
  *
  * `enabled: projectId !== undefined` (react-query's own opt-out, not a

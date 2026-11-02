@@ -1,7 +1,8 @@
 /**
  * The parts of the sidebar's Chats list (`ChatsSection.tsx`): a date group
  * with its disclosure caption, the conversation rows, a folder row (a drop
- * target), the recent chats' drop area, the new-folder field and the drag
+ * target, with its own menu: Rename, Pin / Unpin, Delete…), the recent
+ * chats' drop area, the name field of a new or renamed folder and the drag
  * preview. Their own file for the 400-line budget.
  */
 import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
@@ -18,11 +19,22 @@ import { t } from '@/shared/i18n';
 import { isLocalWorkConversation } from '@/shared/lib/localWork';
 import { GroupActivitySummary } from '@/shared/ui/ConversationActivity';
 
+import type { ConversationRowActions } from '../lib/conversationMenu';
 import type { ChatRail } from '../model/chatRail';
 import { folderDropId, UNGROUPED_DROP_ID, type useSidebarChatDrag } from '../model/useSidebarChatDrag';
-import { ConversationRow, type ConversationRowActions } from './ConversationRow';
+import { ConversationRow, type NativeContextMenu } from './ConversationRow';
 import { FolderClosedIcon, FolderOpenIcon } from './folderIcons';
+import { FolderMenu } from './FolderMenu';
 import { CHILD_INDENT, ShellRow } from './rows';
+
+/** What every conversation row of the list shares: its actions, the project, the desktop's native menu. */
+export interface RowEnv {
+  readonly actions: ConversationRowActions;
+  readonly projectId: string | undefined;
+  readonly onNativeContextMenu?: NativeContextMenu | undefined;
+  /** The list shows the Local work threads (the web's "Local work only" filter). */
+  readonly localWork?: boolean;
+}
 
 /** How long a dragged row hovers a closed folder before it opens. */
 const OPEN_ON_HOVER_MS = 600;
@@ -75,16 +87,17 @@ interface RowsProps {
   readonly conversations: readonly Conversation[];
   readonly openId: string;
   readonly indent: number;
-  readonly actions: ConversationRowActions;
+  readonly env: RowEnv;
 }
 
-export function Rows({ conversations, openId, indent, actions }: RowsProps): React.JSX.Element {
+export function Rows({ conversations, openId, indent, env }: RowsProps): React.JSX.Element {
   // The listing already leaves Local work threads out; a row that still says so belongs to the Local work section above.
+  const shown = env.localWork === true ? conversations : conversations.filter((conversation) => !isLocalWorkConversation(conversation));
   return (
     <>
-      {conversations.filter((conversation) => !isLocalWorkConversation(conversation)).map((conversation) => (
+      {shown.map((conversation) => (
         <li key={conversation.id}>
-          <ConversationRow conversation={conversation} selected={conversation.id === openId} indent={indent} actions={actions} />
+          <ConversationRow conversation={conversation} selected={conversation.id === openId} indent={indent} actions={env.actions} projectId={env.projectId} onNativeContextMenu={env.onNativeContextMenu} />
         </li>
       ))}
     </>
@@ -108,14 +121,18 @@ interface FolderProps {
   readonly onToggle: () => void;
   readonly onExpand: () => void;
   readonly openId: string;
-  readonly actions: ConversationRowActions;
+  readonly env: RowEnv;
   readonly drag: Drag;
+  /** Holds `PERMISSIONS.chat.folders.update` / `.delete` in this project. */
+  readonly canUpdateFolder: boolean;
+  readonly canDeleteFolder: boolean;
 }
 
 /** A folder row (a drop target), and its conversations while it is open. A dragged row that hovers a closed folder opens it. */
-export function FolderItem({ rail, folder, expanded, onToggle, onExpand, openId, actions, drag }: FolderProps): React.JSX.Element {
+export function FolderItem({ rail, folder, expanded, onToggle, onExpand, openId, env, drag, canUpdateFolder, canDeleteFolder }: FolderProps): React.JSX.Element {
   const id = folderDropId(folder.id);
-  const { isOver, setNodeRef } = useDroppable({ id, disabled: !actions.canMoveToFolder });
+  const [renaming, setRenaming] = useState(false);
+  const { isOver, setNodeRef } = useDroppable({ id, disabled: !env.actions.canMoveToFolder });
   const dropActive = isOver && drag.getDropAreaState(id).isValidDropTarget;
   useEffect(() => {
     if (!dropActive || expanded) return undefined;
@@ -123,23 +140,48 @@ export function FolderItem({ rail, folder, expanded, onToggle, onExpand, openId,
     return () => window.clearTimeout(timer);
   }, [dropActive, expanded, onExpand]);
   const count = folder.total ?? folder.conversations.length;
+  const owner = rail.canModifyFolder(folder);
   return (
     <li>
       <Box ref={setNodeRef}>
-        <ShellRow
-          testId="shell-chats-folder"
-          icon={expanded ? <FolderOpenIcon /> : <FolderClosedIcon />}
-          ariaExpanded={expanded}
-          label={folder.name}
-          meta={String(count)}
-          status={<GroupActivitySummary rows={folder.conversations} serverNeedsYou={folder.needsYou} />}
-          dropActive={dropActive}
-          onClick={onToggle}
-        />
+        {renaming ? (
+          <FolderNameField
+            initial={folder.name}
+            label={t('desktop.chats.renameFolderLabel', 'Folder name')}
+            testId="shell-chats-folder-name"
+            onDone={(name) => {
+              setRenaming(false);
+              if (name !== null && name !== '') rail.renameFolder(folder.id, name);
+            }}
+          />
+        ) : (
+          <ShellRow
+            testId="shell-chats-folder"
+            icon={expanded ? <FolderOpenIcon /> : <FolderClosedIcon />}
+            ariaExpanded={expanded}
+            label={folder.name}
+            meta={String(count)}
+            status={<GroupActivitySummary rows={folder.conversations} serverNeedsYou={folder.needsYou} />}
+            dropActive={dropActive}
+            onClick={onToggle}
+            trailingOnHover
+            trailing={
+              <FolderMenu
+                name={folder.name}
+                pinned={folder.isPinned === true}
+                canUpdate={owner && canUpdateFolder}
+                canDelete={owner && canDeleteFolder}
+                onRename={() => setRenaming(true)}
+                onPin={(pin) => rail.pinFolder(folder.id, pin)}
+                onDelete={() => rail.deleteFolder(folder.id)}
+              />
+            }
+          />
+        )}
       </Box>
       {expanded && (
         <Box component="ul" sx={LIST_SX}>
-          <Rows conversations={folder.conversations} openId={openId} indent={CHILD_INDENT} actions={actions} />
+          <Rows conversations={folder.conversations} openId={openId} indent={CHILD_INDENT} env={env} />
           {rail.hasMore(folder) && <ShowMore indent={CHILD_INDENT} onClick={() => rail.loadMoreInFolder(folder.id)} />}
         </Box>
       )}
@@ -175,9 +217,16 @@ export function RecentArea({ drag, children }: { readonly drag: Drag; readonly c
   );
 }
 
-/** The new folder's name: Enter creates it, Escape or leaving the field cancels. */
-export function NewFolderField({ onDone }: { readonly onDone: (name: string | null) => void }): React.JSX.Element {
-  const [value, setValue] = useState('');
+interface FolderNameFieldProps {
+  readonly onDone: (name: string | null) => void;
+  readonly initial?: string;
+  readonly label?: string;
+  readonly testId?: string;
+}
+
+/** A folder's name, new or renamed: Enter saves it, Escape or leaving the field cancels. */
+export function FolderNameField({ onDone, initial = '', label = t('desktop.chats.newFolderLabel', 'New folder name'), testId = 'shell-chats-new-folder-name' }: FolderNameFieldProps): React.JSX.Element {
+  const [value, setValue] = useState(initial);
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     if (event.key === 'Enter') onDone(value.trim());
     else if (event.key === 'Escape') onDone(null);
@@ -192,7 +241,7 @@ export function NewFolderField({ onDone }: { readonly onDone: (name: string | nu
         onKeyDown={onKeyDown}
         onBlur={() => onDone(null)}
         inputRef={(node: HTMLInputElement | null) => node?.focus()}
-        inputProps={{ 'aria-label': t('desktop.chats.newFolderLabel', 'New folder name'), 'data-testid': 'shell-chats-new-folder-name' }}
+        inputProps={{ 'aria-label': label, 'data-testid': testId }}
         sx={(theme: Theme) => ({
           flex: 1,
           paddingX: 0.5,
