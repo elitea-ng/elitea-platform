@@ -16,6 +16,10 @@ type RunAuthority struct {
 	// SubjectUserID is the mandate's subject user; 0 for an autonomous
 	// mandate, whose run has no subject principal.
 	SubjectUserID int64
+	// AgentBindingID is the agent binding the mandate names, as the
+	// fire-time check read it. An index schedule freezes its toolkit's
+	// credential under it (#1473). Admission still re-reads the binding.
+	AgentBindingID string
 	// Caller is how the run was started, recorded in CallerContextV1 only:
 	// an inbound trigger names its authentication mode and trigger here.
 	// Zero for a schedule.

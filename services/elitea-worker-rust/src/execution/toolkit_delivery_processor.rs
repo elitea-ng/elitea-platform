@@ -1012,6 +1012,13 @@ where
             Ok(Err(error)) => return IndexRunEnd::Failure(runtime_context_failure(&error)),
             Err(error) => return IndexRunEnd::Failure(lease_failure(&error)),
         };
+        let governed_configuration = match self
+            .governed_index_configuration(authorized, lease, inputs)
+            .await
+        {
+            Ok(configuration) => configuration,
+            Err(failure) => return IndexRunEnd::Failure(failure),
+        };
         let execution = authorized.execution();
         let probe = lease.state_probe();
         let clock = Arc::clone(&self.clock);
@@ -1033,7 +1040,9 @@ where
         });
         let run = IndexRun {
             command: index,
-            toolkit_configuration: inputs.toolkit_configuration.as_bytes(),
+            toolkit_configuration: governed_configuration
+                .as_deref()
+                .map_or(inputs.toolkit_configuration.as_bytes(), Vec::as_slice),
             tool_parameters: inputs.tool_parameters.as_bytes(),
             parsed: inputs.parsed.as_ref(),
             embedding_binding: inputs
@@ -1084,6 +1093,30 @@ where
             Ok(result) => IndexRunEnd::Result(Box::new(result)),
             Err(failure) => IndexRunEnd::Failure(failure),
         }
+    }
+
+    /// The toolkit configuration a governed index run reads: the claimed
+    /// entry with the credential redeemed from the broker as its only
+    /// credential (#1473). `None` for a legacy run or a credential-free
+    /// toolkit, which read the claimed entry unchanged.
+    async fn governed_index_configuration(
+        &self,
+        authorized: &AuthorizedToolkitExecution,
+        lease: &mut ClaimLeaseMonitor,
+        inputs: &IndexInputs,
+    ) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>, RuntimeFailureKind> {
+        let governed = crate::transport::credential_redeemer::governed_client(
+            &self.platform,
+            &authorized.shared_runtime_context(),
+        );
+        lease
+            .run_pre_invocation(crate::indexing::governed::governed_toolkit_configuration(
+                governed.as_deref(),
+                inputs.toolkit_configuration.as_bytes(),
+                inputs.tool_parameters.as_bytes(),
+            ))
+            .await
+            .map_err(|error| lease_failure(&error))?
     }
 
     async fn materialize_request(
@@ -1138,10 +1171,13 @@ where
         {
             Ok(Ok(Some(context))) => {
                 execution.attach_security_context(Arc::new(context));
-                // A verified governed toolkit command is still refused
-                // (#1120): a direct call, a validation and an index ingest
-                // would all use claim-time toolkit settings, and none is
-                // wired through the governed operation client yet.
+                // A governed tool call redeems through the governed seam
+                // (#1474), and a governed index run redeems its toolkit's
+                // credential in `governed_index_configuration` (#1473).
+                // Discovery and validation are still refused here.
+                if super::governed_direct::admits_governed(verified.kind()) {
+                    return Ok(());
+                }
                 tracing::warn!(
                     event = "toolkit_delivery_governed_refused",
                     reason_code = "toolkit_not_governable",
@@ -1214,8 +1250,10 @@ where
             record_toolkit_deadline("pre_invocation_deadline");
             return Err(RuntimeFailureKind::DeadlineExceeded);
         }
+        let runtime =
+            super::governed_direct::runtime_for(&self.runtime, &self.platform, authorized);
         let result = match lease
-            .run_pre_invocation(self.runtime.execute(
+            .run_pre_invocation(runtime.execute(
                 request,
                 &verified.command().execution_id,
                 &verified.command().command_id,
@@ -1456,9 +1494,11 @@ where
             self.office_authority(verified, authorized, lease, request)
                 .await?
         };
+        let runtime =
+            super::governed_direct::runtime_for(&self.runtime, &self.platform, authorized);
         let operation = async {
             if is_call {
-                self.runtime
+                runtime
                     .execute_test(
                         request,
                         &command.execution_id,
@@ -1468,7 +1508,7 @@ where
                     )
                     .await
             } else {
-                self.runtime.discover(request, office.as_ref()).await
+                runtime.discover(request, office.as_ref()).await
             }
         };
         let result = lease

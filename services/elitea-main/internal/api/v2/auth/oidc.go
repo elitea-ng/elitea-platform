@@ -248,6 +248,9 @@ func (h *OIDCHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if hint := loginHint(r.URL.Query().Get("login_hint")); hint != "" {
 		authOptions = append(authOptions, oauth2.SetAuthURLParam("login_hint", hint))
 	}
+	// A credential re-consent (issue 1477) may ask for a new prompt and
+	// for the claims of an Entra claims challenge.
+	authOptions = append(authOptions, reconsentOptions(r, runtime.entra)...)
 	authURL := runtime.oauth2Cfg.AuthCodeURL(stateValue, authOptions...)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }

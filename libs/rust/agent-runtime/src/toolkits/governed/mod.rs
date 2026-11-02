@@ -41,6 +41,7 @@ use super::policy::ToolAdmissionPolicy;
 
 pub mod adapters;
 pub mod client;
+pub mod index;
 
 pub use client::GovernedOperationClient;
 

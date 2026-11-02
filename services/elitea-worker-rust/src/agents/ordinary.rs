@@ -711,7 +711,10 @@ impl OrdinaryNativeAgentAssembler {
                 runtime_context,
                 profile.kind(),
                 tool_snapshot,
-            )),
+            ))
+            // A governed run (#1474): nested agents and saved pipelines
+            // redeem through the same seam as this agent's own toolkits.
+            .with_governed(governed_client(&self.platform, runtime_context)),
         )
         .await?;
         // #990 review 4: named whether or not a single child survived — an

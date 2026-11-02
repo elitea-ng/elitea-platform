@@ -285,6 +285,11 @@ jobs:
           POSTGRES_DB: postgres
         ports:
           - 5432:5432
+        # Many test packages apply the full shared migration chain at the
+        # same time, each in its own database. With the default of 64 locks
+        # per transaction the shared lock table runs out ("out of shared
+        # memory", SQLSTATE 53200).
+        command: postgres -c max_locks_per_transaction=512
         options: >-
           --health-cmd="pg_isready -U postgres"
           --health-interval=10s

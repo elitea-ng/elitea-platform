@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { CredentialReferencePendingRotation } from "./credentialReferencePendingRotation.zod";
 
 export const CredentialReference = zod
   .object({
@@ -75,6 +76,7 @@ export const CredentialReference = zod
       .describe(
         "The migrate-references source key, when the migration helper staged it.",
       ),
+    pending_rotation: CredentialReferencePendingRotation.optional(),
     created_at: zod.iso.datetime({ offset: true }),
     updated_at: zod.iso.datetime({ offset: true }),
   })

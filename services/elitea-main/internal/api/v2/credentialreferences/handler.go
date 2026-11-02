@@ -6,6 +6,8 @@
 //	GET    /api/v2/admin/credential_references/{id}
 //	POST   /api/v2/admin/credential_references/{id}:activate   {}
 //	POST   /api/v2/admin/credential_references/{id}:retire     {}
+//	POST   /api/v2/admin/credential_references/{id}:rotate     {"material"}
+//	POST   /api/v2/admin/credential_references/{id}:cancel_rotation {}
 //	POST   /api/v2/admin/credential_references/{id}:attach     {"project_id", "toolkit_id"}
 //	POST   /api/v2/admin/credential_references/{id}:detach     {"project_id", "toolkit_id"}
 //	PUT    /api/v2/admin/agent_identities/{id}/toolkits/{toolkit_id}  {"project_id"}
@@ -59,6 +61,20 @@ type Handler struct {
 	locators  Locators
 	providers Providers
 	ids       func() string
+	// rotator serves Rotate (WithRotate).
+	rotator Rotator
+	// retirer retires the secret version a transition superseded
+	// (WithSecretRetire). Without it the version stays in the store.
+	retirer SecretRetirer
+}
+
+// WithSecretRetire makes :activate, :retire and :cancel_rotation retire
+// the secret version they take out of use (#1505).
+func (h *Handler) WithSecretRetire(retirer SecretRetirer) *Handler {
+	if h != nil {
+		h.retirer = retirer
+	}
+	return h
 }
 
 // New builds the handler. A nil store is refused.
@@ -86,6 +102,23 @@ type referenceView struct {
 	MigratedFrom     *string `json:"migrated_from"`
 	CreatedAt        string  `json:"created_at"`
 	UpdatedAt        string  `json:"updated_at"`
+	// PendingRotation is a written secret version that waits for :activate
+	// by a second operator (#1505); absent when none.
+	PendingRotation *rotationView `json:"pending_rotation,omitempty"`
+}
+
+type rotationView struct {
+	Locator    string `json:"locator"`
+	Generation int64  `json:"generation"`
+	StagedBy   string `json:"staged_by"`
+	StagedAt   string `json:"staged_at"`
+}
+
+func rotationOf(p *repos.PendingRotation) *rotationView {
+	if p == nil {
+		return nil
+	}
+	return &rotationView{Locator: p.Locator, Generation: p.Generation, StagedBy: p.StagedBy, StagedAt: p.StagedAt.UTC().Format(time.RFC3339Nano)}
 }
 
 func optional(value string) *string {
@@ -103,7 +136,17 @@ func view(r repos.CredentialReferenceRecord) referenceView {
 		StagedBy: optional(r.StagedBy), ActivatedBy: optional(r.ActivatedBy),
 		LastTransitionBy: optional(r.LastTransitionBy), MigratedFrom: optional(r.MigratedFrom),
 		CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: r.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		PendingRotation: pendingOf(r),
 	}
+}
+
+// pendingOf shows a pending rotation on an active reference only. Retire
+// clears it; this also hides one that a row written before that rule kept.
+func pendingOf(r repos.CredentialReferenceRecord) *rotationView {
+	if r.State != credentialgrant.ReferenceActive {
+		return nil
+	}
+	return rotationOf(r.Rotation)
 }
 
 // List serves GET /admin/credential_references.
@@ -170,6 +213,11 @@ func (h *Handler) transition(action repos.CredentialReferenceAction) http.Handle
 			writeStoreError(w, err)
 			return
 		}
+		if rec.Superseded != nil && h.retirer != nil {
+			// After the commit and the cache invalidation: the broker no
+			// longer reads this version.
+			h.retirer.RetireSuperseded(r.Context(), rec, who)
+		}
 		writeJSON(w, http.StatusOK, view(rec))
 	}
 }
@@ -179,9 +227,15 @@ func (h *Handler) Activate(w http.ResponseWriter, r *http.Request) {
 	h.transition(repos.CredentialReferenceActivate)(w, r)
 }
 
-// Retire serves POST …/{id}:retire.
+// Retire serves POST …/{id}:retire. It also cancels a pending rotation.
 func (h *Handler) Retire(w http.ResponseWriter, r *http.Request) {
 	h.transition(repos.CredentialReferenceRetire)(w, r)
+}
+
+// CancelRotation serves POST …/{id}:cancel_rotation: it clears a pending
+// rotation and retires its secret version (#1505).
+func (h *Handler) CancelRotation(w http.ResponseWriter, r *http.Request) {
+	h.transition(repos.CredentialReferenceCancelRotation)(w, r)
 }
 
 type toolkitBody struct {
@@ -330,7 +384,12 @@ func actor(w http.ResponseWriter, r *http.Request) (string, bool) {
 
 // decode reads a JSON object with no unknown field. An empty body is `{}`.
 func decode(w http.ResponseWriter, r *http.Request, into any) bool {
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	return decodeWithin(w, r, into, maxBodyBytes)
+}
+
+// decodeWithin is decode with its own body limit.
+func decodeWithin(w http.ResponseWriter, r *http.Request, into any, limit int64) bool {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	decoder.DisallowUnknownFields()
 	err := decoder.Decode(into)
 	if errors.Is(err, io.EOF) {
@@ -348,8 +407,12 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	case errors.Is(err, credentialgrant.ErrReferenceNotFound), errors.Is(err, repos.ErrToolkitNotFound),
 		errors.Is(err, repos.ErrAgentBindingNotUsable):
 		writeError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, repos.ErrCredentialReferenceSelfActive), errors.Is(err, repos.ErrCredentialReferenceActor):
+	case errors.Is(err, repos.ErrCredentialReferenceSelfActive), errors.Is(err, repos.ErrCredentialReferenceActor),
+		errors.Is(err, repos.ErrCredentialReferenceSelfRotation):
 		writeError(w, http.StatusForbidden, err.Error())
+	case errors.Is(err, repos.ErrCredentialReferenceNotRotatable), errors.Is(err, repos.ErrCredentialReferenceRotationPending),
+		errors.Is(err, repos.ErrCredentialReferenceNoRotation):
+		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, repos.ErrCredentialReferenceTransition), errors.Is(err, repos.ErrCredentialReferenceNoStager),
 		errors.Is(err, repos.ErrCredentialReferenceRetired), errors.Is(err, repos.ErrCredentialReferenceTenant),
 		errors.Is(err, repos.ErrCredentialReferenceIncomplete),

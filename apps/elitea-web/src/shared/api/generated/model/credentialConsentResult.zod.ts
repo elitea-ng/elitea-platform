@@ -44,13 +44,30 @@ import * as zod from "zod";
 
 export const CredentialConsentResult = zod
   .object({
-    status: zod.string().describe("Always connected."),
+    status: zod
+      .string()
+      .describe(
+        "`connected` for a provider grant. `resumed` for an Entra re-consent (provider `entra`, issue 1477) that continued the paused run.\n",
+      ),
     provider: zod
       .string()
-      .describe("The provider adapter id, for example jira."),
+      .describe("The provider adapter id, for example jira, or entra."),
     project_id: zod.int(),
     agent_binding_id: zod.uuid(),
-    target_binding_id: zod.uuid(),
+    target_binding_id: zod
+      .uuid()
+      .optional()
+      .describe("The target binding of a provider grant. Absent for entra."),
+    conversation_uuid: zod
+      .uuid()
+      .optional()
+      .describe("The conversation of the run an Entra re-consent resumed."),
+    execution_id: zod
+      .string()
+      .optional()
+      .describe(
+        "The execution that continues the run an Entra re-consent resumed.",
+      ),
   })
   .describe(
     "A stored provider OAuth grant. Names the grant's key only; no field holds a token, a code or a verifier.\n",

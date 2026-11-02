@@ -34,7 +34,16 @@ const (
 const (
 	AtlassianAuthorizeURL = "https://auth.atlassian.com/authorize"
 	AtlassianTokenURL     = "https://auth.atlassian.com/oauth/token"
-	atlassianAudience     = "api.atlassian.com"
+	// AtlassianAPIURL is the Atlassian API gateway. A 3LO access token is
+	// valid only at <AtlassianAPIURL>/ex/<product>/<cloudid> (#1464). It is
+	// fixed, with no override: the consent stores bases under it, the token
+	// source releases only bases under it, the worker egress opens only it
+	// (repos.GovernedEgressTargets), and the Rust worker accepts only its
+	// host (elitea_connectors::atlassian::ATLASSIAN_GATEWAY_HOST). An
+	// override in one place and not the others would send the token to a
+	// base the worker refuses, or open the wrong host.
+	AtlassianAPIURL   = "https://api.atlassian.com"
+	atlassianAudience = "api.atlassian.com"
 )
 
 const (

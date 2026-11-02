@@ -16,6 +16,7 @@ pub(crate) mod direct_hitl;
 pub(crate) mod dispatch_journal;
 pub(crate) mod driven;
 pub(crate) mod events;
+mod governed_nested;
 pub mod graph;
 pub(crate) mod grounding_model;
 pub(crate) use elitea_agent_runtime::instruction_authority;
@@ -57,6 +58,8 @@ mod context_management_tests;
 mod direct_hitl_tests;
 #[cfg(test)]
 mod events_tests;
+#[cfg(test)]
+mod governed_nested_tests;
 #[cfg(test)]
 mod instruction_authority_tests;
 #[cfg(test)]

@@ -14,16 +14,21 @@
 //!   cannot answer (a 401 for a narrow scope, a timeout, a malformed list)
 //!   leaves that one connection out, named in the run notice; it does not
 //!   end the run;
-//! - each tool call redeems `mcp.tool.call` on `mcp:tool/<name>`, opens a
-//!   FRESH session with only `Authorization: Bearer <token>` to that one
-//!   server, lists the tools on that session and calls the tool through
-//!   ADK's own MCP tool (task polling and input rounds included), and drops
-//!   the session and the token with the call's frame.
+//! - each tool call redeems `mcp.tool.call` on `mcp:tool/<name>`. The call
+//!   runs on a session to that one server whose only credential is
+//!   `Authorization: Bearer <token>`, through ADK's own MCP tool (task
+//!   polling and input rounds included).
 //!
-//! A fresh session per call costs one MCP `initialize` and one `tools/list`
-//! more per call than the legacy path. That is accepted for now: no session,
-//! client or token outlives the one invocation its envelope was minted for,
-//! and the call runs on the one execution path every MCP tool uses.
+//! The session is reused per (run build, server, token generation)
+//! (`session.rs`, #1474): a later call that redeems the SAME token for the
+//! same server uses the open session and its listing, and a new token opens
+//! a new session. No session outlives the latest redemption of its token,
+//! and no session or token of one server is used for another.
+//!
+//! The same path serves an ordinary agent, a nested agent and a saved
+//! pipeline (#1474): each builds its toolsets from its own version's frozen
+//! references, and Main checks each redemption against the references it
+//! froze for the run.
 //!
 //! Only a saved direct `mcp` toolkit is governable: a connection with no
 //! toolkit id Main can bind a grant to, a prebuilt or internal server, or a
@@ -34,6 +39,8 @@
 
 use std::sync::Arc;
 use std::time::Duration;
+
+mod session;
 
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
@@ -197,6 +204,8 @@ struct GovernedServer {
     toolkit_id: i64,
     target: String,
     credential_reference_id: String,
+    /// The reusable call session of this server only (#1474).
+    sessions: Arc<session::SessionSlot>,
 }
 
 impl GovernedServer {
@@ -236,6 +245,7 @@ impl GovernedServer {
             toolkit_id,
             target,
             credential_reference_id: credential_reference_id(settings),
+            sessions: Arc::default(),
         }))
     }
 
@@ -503,37 +513,60 @@ impl GovernedMcpTool {
             Err(error) => return Err(error.into_adk_error()),
         };
         let token = access_token(&envelope).map_err(GovernedError::into_adk_error)?;
+        let not_after = envelope.not_after_unix_millis();
         drop(envelope);
-        // 3. A fresh session to the frozen endpoint, the token its only
-        //    credential; the tool, the session and the token drop with this
-        //    frame. The call goes through ADK's own MCP tool from a listing
-        //    on this session: one execution path for every MCP tool.
-        let config = self.server.session_config(token);
+        // 3. The session of THIS server for this token generation: the open
+        //    one when the call redeemed the same token, else a fresh one with
+        //    the token as its only credential (#1474).
+        let generation = session::token_generation(&token);
         let session = self
-            .connector
-            .connect_session(&config)
-            .await
-            .map_err(|error| session_error(&error))?;
-        let (tools, _) = discover_tools(&config, &session)
-            .await
-            .map_err(|error| session_error(&error))?;
+            .server
+            .sessions
+            .session(generation, not_after, self.client.clock(), || {
+                self.open_session(token, generation, not_after)
+            })
+            .await?;
         // A tool changed since its approval is not served (#1501).
-        let tool = crate::toolkits::mcp_pin::keep_pinned(tools, config.pinned_tools.as_ref())
-            .into_iter()
-            .find(|tool| tool.name() == name)
+        let tool = session
+            .tool(name)
             .ok_or_else(|| GovernedError::ToolNotServed.into_adk_error())?;
         let bounded = BoundedMcpTool::new(
             tool,
             self.server.name(),
             self.server.timeout(),
-            Arc::new(config.error_redaction()),
+            Arc::new(session.config().error_redaction()),
         )
         .map_err(|error| session_error(&error))?;
         let result = bounded.execute(ctx, args).await;
         drop(bounded);
-        drop(session);
-        drop(config);
+        if result.is_err() {
+            // The next call dials afresh: a broken session is not reused.
+            self.server.sessions.evict(&session);
+        }
         result
+    }
+
+    /// Open one session to this server with `token` as its only credential
+    /// and list its pinned tools on it.
+    async fn open_session(
+        &self,
+        token: Zeroizing<String>,
+        generation: session::TokenGeneration,
+        not_after: i64,
+    ) -> adk_core::Result<session::CachedSession> {
+        let config = self.server.session_config(token);
+        let opened = self
+            .connector
+            .connect_session(&config)
+            .await
+            .map_err(|error| session_error(&error))?;
+        let (tools, _) = discover_tools(&config, &opened)
+            .await
+            .map_err(|error| session_error(&error))?;
+        let tools = crate::toolkits::mcp_pin::keep_pinned(tools, config.pinned_tools.as_ref());
+        Ok(session::CachedSession::new(
+            generation, not_after, tools, opened, config,
+        ))
     }
 }
 

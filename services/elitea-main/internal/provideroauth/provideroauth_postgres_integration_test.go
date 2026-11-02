@@ -149,6 +149,17 @@ func newRotatingProvider(t *testing.T, redirectURI string) (*rotatingProvider, *
 }
 
 func (p *rotatingProvider) serve(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == accessibleResourcesPath {
+		// The Atlassian gateway (#1464): the consented token reaches one
+		// site, acme.
+		if r.Header.Get("Authorization") != "Bearer at-consent" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `[{"id":%q,"url":"https://acme.atlassian.net","name":"acme"}]`, tCloudID)
+		return
+	}
 	var fields map[string]string
 	if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
 		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
@@ -211,12 +222,15 @@ func jiraClient(t *testing.T, tokenURL, redirectURI string) *Client {
 		Provider: "jira", Flavor: FlavorAtlassian, ClientID: "client", ClientSecret: "client-secret",
 		AuthorizeURL: tokenURL + "/authorize", TokenURL: tokenURL + "/oauth/token", RedirectURI: redirectURI,
 		Scopes: []string{"read:jira-work", "offline_access"}, Timeout: 5 * time.Second,
-	}, nil)
+	}, gatewayTransportTo(t, tokenURL))
 	require.NoError(t, err)
 	return c
 }
 
 const tRedirect = "http://127.0.0.1:9/api/v2/credential_consent/jira:callback"
+
+// tCloudID is the cloud id of the acme site on the mock gateway (#1464).
+const tCloudID = "11223344-a1b2-c3d4-e5f6-77889900aabb"
 
 var tKey = GrantKey{TenantProjectID: tTenant, Provider: "jira", TargetBindingID: tTarget, SubjectUserID: tUser, AgentBindingID: tBinding}
 
@@ -534,6 +548,9 @@ func TestConsentFlow(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "at-consent", snap.AccessToken)
 		require.Equal(t, result.GrantID, snap.ID)
+		// #1464: the target site's gateway base is stored with the grant,
+		// and the token source releases it.
+		require.Equal(t, AtlassianAPIURL+"/ex/jira/"+tCloudID, snap.APIBase)
 
 		_, err = consent.Callback(ctx, CallbackRequest{Provider: "jira", State: state, Code: "code-1"}, asUser(tUser))
 		require.ErrorIs(t, note(err), ErrStateInvalid, "a reused state was accepted")

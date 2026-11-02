@@ -476,8 +476,12 @@ WHERE state = 'committed' AND backend = 'vault' AND locator_path = $1`, path).Sc
 	if _, err := pool.Exec(ctx, `DELETE FROM elitea_identity.credential_references WHERE backend = 'vault'`); err != nil {
 		t.Fatal(err)
 	}
-	if code, _, _ = runMigrateForTest(t, dsn, deps, args...); code != 1 || len(vault.values[path]) != 2 || vault.values[path][1] != "someone-else" {
+	if code, _, out = runMigrateForTest(t, dsn, deps, args...); code != 1 || len(vault.values[path]) != 2 || vault.values[path][1] != "someone-else" {
 		t.Fatalf("a foreign value: exit %d, vault %v", code, vault.values[path])
+	}
+	// The stop message points at the rotation route (#1505).
+	if !strings.Contains(out, ":rotate") || !strings.Contains(out, "/api/v2/admin/credential_references/") {
+		t.Fatalf("the stop message does not name the rotation route: %s", out)
 	}
 	if n := countRefs(t, pool, "backend = 'vault' AND generation > 0"); n != 0 {
 		t.Fatalf("a refused copy left a pinned reference: %d", n)

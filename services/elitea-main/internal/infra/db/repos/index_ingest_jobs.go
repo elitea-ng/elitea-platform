@@ -11,6 +11,7 @@ import (
 	"time"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -285,8 +286,12 @@ func (r *IndexIngestJobsRepository) AdmitIndexIngest(ctx context.Context, admiss
 	}); err != nil {
 		return indexingapp.AdmissionOutcome{}, fmt.Errorf("insert index command outbox: %w", err)
 	}
+	facts := recordFacts(admission.Record, timing.AdmittedAt, 0)
+	// A governed scheduled index run carries its toolkit's credential
+	// freeze, made under its mandate's binding (#1473); nil otherwise.
+	facts.governed = agentexecutionapp.UnattendedCredentialFreezeFrom(ctx)
 	if _, err := admitExecutionProfile(ctx, tx, pgxRows(tx), r.policy.CredentialProfile,
-		admissionPin{executionID: admission.Record.Outbox.ExecutionID}, recordFacts(admission.Record, timing.AdmittedAt, 0)); err != nil {
+		admissionPin{executionID: admission.Record.Outbox.ExecutionID}, facts); err != nil {
 		return indexingapp.AdmissionOutcome{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

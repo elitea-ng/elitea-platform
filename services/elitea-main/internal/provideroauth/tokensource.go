@@ -31,6 +31,11 @@ type AccessToken struct {
 	ExpiresAt  time.Time
 	GrantID    string
 	Generation int64
+	// APIBase is the provider API base the token must be used at
+	// (Atlassian 3LO: https://api.atlassian.com/ex/<product>/<cloud id>,
+	// #1464). Empty for a provider with none, and for a grant consented
+	// before it was stored. Not a secret.
+	APIBase string
 }
 
 // String keeps the token out of logs.
@@ -167,6 +172,11 @@ func (s *TokenSource) AccessToken(ctx context.Context, key GrantKey) (AccessToke
 		},
 	})
 	if err == nil {
+		// A stored base this client could not have written is never
+		// released.
+		if c, ok := client.(*Client); !ok || !c.validAPIBase(token.APIBase) {
+			token.APIBase = ""
+		}
 		// The credential inventory's last use (ADR-0044 decision 5).
 		credentialuse.Default().Touch(credentialuse.KindProviderOAuthGrant, token.GrantID, key.TenantProjectID)
 	}
@@ -174,7 +184,7 @@ func (s *TokenSource) AccessToken(ctx context.Context, key GrantKey) (AccessToke
 }
 
 func tokenOf(s snapshot) AccessToken {
-	return AccessToken{Token: s.AccessToken, ExpiresAt: s.ExpiresAt, GrantID: s.ID, Generation: s.Generation}
+	return AccessToken{Token: s.AccessToken, ExpiresAt: s.ExpiresAt, GrantID: s.ID, Generation: s.Generation, APIBase: s.APIBase}
 }
 
 func (s *TokenSource) refresh(ctx context.Context, client Refresher, lease refresh.Lease, snap snapshot) (AccessToken, error) {
@@ -205,5 +215,5 @@ func (s *TokenSource) refresh(ctx context.Context, client Refresher, lease refre
 	if err != nil {
 		return AccessToken{}, err
 	}
-	return AccessToken{Token: tokens.AccessToken, ExpiresAt: tokens.ExpiresAt, GrantID: snap.ID, Generation: generation}, nil
+	return AccessToken{Token: tokens.AccessToken, ExpiresAt: tokens.ExpiresAt, GrantID: snap.ID, Generation: generation, APIBase: snap.APIBase}, nil
 }

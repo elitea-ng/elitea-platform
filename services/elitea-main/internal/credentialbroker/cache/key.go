@@ -25,6 +25,10 @@ type PartitionKey struct {
 	ScopeDigest           [32]byte // sorted scopes + operation class
 	PolicyRevisionID      string
 	Generation            int64
+	// Locator is the reference's secret locator. A pgvault rotation moves
+	// the reference to a new name at the same generation (#1505), so the
+	// generation alone does not tell the two secrets apart.
+	Locator string
 }
 
 // ScopeDigest is sha256 over the sorted, de-duplicated scopes and the

@@ -13,6 +13,8 @@
 
 mod direct_request;
 mod direct_runtime;
+#[cfg(test)]
+mod direct_runtime_governed_tests;
 
 pub(crate) use direct_request::{DirectToolkitRequest, DirectToolkitRequestErrorCode};
 #[cfg(test)]

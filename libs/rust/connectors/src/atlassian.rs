@@ -27,6 +27,15 @@ pub use self::listing::{
     MAX_DOWNLOAD_REDIRECTS, Snapshot, authorized_json, refused_credential, same_origin,
 };
 
+/// The Atlassian API gateway host. An Atlassian 3LO (OAuth) token works only
+/// at `https://api.atlassian.com/ex/<product>/<cloud id>`, never at the site
+/// URL (#1464). This is the one Rust source of the host: the governed
+/// adapters check an envelope's `api_base` against it, and the Confluence
+/// configurations give a gateway base its `/wiki` REST root. Main has the
+/// same fixed value (`provideroauth.AtlassianAPIURL`); neither side has an
+/// override.
+pub const ATLASSIAN_GATEWAY_HOST: &str = "api.atlassian.com";
+
 /// The longest secret a configuration carries.
 pub const MAX_SECRET_BYTES: usize = 16 * 1_024;
 /// The longest identity (username, hosting) a configuration carries.

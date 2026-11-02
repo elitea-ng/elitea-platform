@@ -1881,6 +1881,15 @@ export const getListCredentialReferencesResponseMock = (
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       null,
     ]),
+    pending_rotation: faker.helpers.arrayElement([
+      {
+        locator: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        generation: faker.number.int(),
+        staged_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        staged_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      },
+      undefined,
+    ]),
     created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   })),
@@ -1936,6 +1945,15 @@ export const getGetCredentialReferenceResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     null,
   ]),
+  pending_rotation: faker.helpers.arrayElement([
+    {
+      locator: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      generation: faker.number.int(),
+      staged_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      staged_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    },
+    undefined,
+  ]),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
@@ -1970,6 +1988,101 @@ export const getActivateCredentialReferenceResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     null,
   ]),
+  pending_rotation: faker.helpers.arrayElement([
+    {
+      locator: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      generation: faker.number.int(),
+      staged_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      staged_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    },
+    undefined,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getRotateCredentialReferenceResponseMock = (
+  overrideResponse: Partial<Extract<CredentialReference, object>> = {},
+): CredentialReference => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  class: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  backend: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  locator: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  target_binding_id: faker.string.uuid(),
+  target_identity: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  generation: faker.number.int(),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  staged_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  activated_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  last_transition_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  migrated_from: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  pending_rotation: faker.helpers.arrayElement([
+    {
+      locator: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      generation: faker.number.int(),
+      staged_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      staged_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    },
+    undefined,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getCancelCredentialReferenceRotationResponseMock = (
+  overrideResponse: Partial<Extract<CredentialReference, object>> = {},
+): CredentialReference => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  class: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  backend: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  locator: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  target_binding_id: faker.string.uuid(),
+  target_identity: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  generation: faker.number.int(),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  staged_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  activated_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  last_transition_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  migrated_from: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  pending_rotation: faker.helpers.arrayElement([
+    {
+      locator: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      generation: faker.number.int(),
+      staged_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      staged_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    },
+    undefined,
+  ]),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
@@ -2003,6 +2116,15 @@ export const getRetireCredentialReferenceResponseMock = (
   migrated_from: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     null,
+  ]),
+  pending_rotation: faker.helpers.arrayElement([
+    {
+      locator: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      generation: faker.number.int(),
+      staged_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      staged_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    },
+    undefined,
   ]),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
@@ -5089,6 +5211,58 @@ export const getActivateCredentialReferenceMockHandler = (
   );
 };
 
+export const getRotateCredentialReferenceMockHandler = (
+  overrideResponse?:
+    | CredentialReference
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialReference> | CredentialReference),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/credential_references/:id\\:rotate",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRotateCredentialReferenceResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCancelCredentialReferenceRotationMockHandler = (
+  overrideResponse?:
+    | CredentialReference
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialReference> | CredentialReference),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/credential_references/:id\\:cancel_rotation",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCancelCredentialReferenceRotationResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getRetireCredentialReferenceMockHandler = (
   overrideResponse?:
     | CredentialReference
@@ -6259,6 +6433,8 @@ export const getAdminMock = () => [
   getCreateCredentialReferenceMockHandler(),
   getGetCredentialReferenceMockHandler(),
   getActivateCredentialReferenceMockHandler(),
+  getRotateCredentialReferenceMockHandler(),
+  getCancelCredentialReferenceRotationMockHandler(),
   getRetireCredentialReferenceMockHandler(),
   getAttachCredentialReferenceMockHandler(),
   getDetachCredentialReferenceMockHandler(),

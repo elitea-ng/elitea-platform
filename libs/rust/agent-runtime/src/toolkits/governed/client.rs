@@ -127,6 +127,11 @@ impl GovernedOperationClient {
         }))
     }
 
+    /// The clock this client reads `not_after` against.
+    pub(crate) const fn clock(&self) -> Clock {
+        self.clock
+    }
+
     /// A fresh invocation id (UUID v7 on this client's clock).
     pub(crate) fn invocation_id(&self) -> Result<String, GovernedError> {
         uuid_v7(self.clock)

@@ -40,6 +40,10 @@ struct MockServers {
     refuse_listing: Mutex<Vec<String>>,
     /// Listings wait here, to prove they overlap.
     barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
+    /// Sessions closed (dropped), by server (#1474).
+    closed: Mutex<Vec<String>>,
+    /// Listings sleep this long, so concurrent calls overlap a dial.
+    list_delay: Mutex<Option<std::time::Duration>>,
 }
 
 impl MockServers {
@@ -53,6 +57,10 @@ impl MockServers {
 
     fn listings(&self) -> Vec<String> {
         self.listings.lock().expect("listings").clone()
+    }
+
+    fn closed(&self) -> Vec<String> {
+        self.closed.lock().expect("closed").clone()
     }
 }
 
@@ -102,6 +110,14 @@ struct Listed {
     tool: Arc<dyn Tool>,
 }
 
+impl Drop for Listed {
+    fn drop(&mut self) {
+        if let Ok(mut closed) = self.servers.closed.lock() {
+            closed.push(self.endpoint.clone());
+        }
+    }
+}
+
 #[async_trait]
 impl Toolset for Listed {
     fn name(&self) -> &'static str {
@@ -117,6 +133,10 @@ impl Toolset for Listed {
         let barrier = self.servers.barrier.lock().expect("barrier").clone();
         if let Some(barrier) = barrier {
             barrier.wait().await;
+        }
+        let delay = *self.servers.list_delay.lock().expect("delay");
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
         }
         if self
             .servers
@@ -785,4 +805,271 @@ async fn a_server_outside_the_runs_allowlist_is_never_contacted() {
             .any(|host| host.host == "b.mcp.example.test"),
         "{summary:?}"
     );
+}
+
+// Session reuse per (run build, server, token generation) (#1474).
+
+/// Build on `servers` with a governed client over `clock`.
+async fn build_with_clock(
+    servers: Arc<MockServers>,
+    tools: Vec<Value>,
+    respond: Box<Respond>,
+    clock: super::governed::client::Clock,
+) -> (super::mcp::GovernedMcpToolsets, Arc<RecordingRedeemer>) {
+    let version = json!({"tools": tools});
+    let policy = policy();
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(policy.as_ref());
+    let connector: Arc<dyn McpConnector> = Arc::new(Connector(servers));
+    let redeemer = RecordingRedeemer::new(respond);
+    let client = Arc::new(
+        GovernedOperationClient::new(
+            Arc::new(reference_registry()),
+            Arc::clone(&redeemer) as Arc<dyn super::governed::CredentialRedeemer>,
+        )
+        .with_clock(clock),
+    );
+    let built = materialize_governed_mcp_toolsets(&snapshot, &connector, &policy, &client)
+        .await
+        .expect("governed MCP");
+    (built, redeemer)
+}
+
+/// An envelope for `target` with `token` that expires at `not_after`.
+fn expiring(target: &str, token: &str, not_after: i64) -> RedeemOutcome {
+    RedeemOutcome::Envelope(super::governed::CredentialEnvelope::new(
+        "redemption-1".to_owned(),
+        EnvelopeKind::OauthAccess,
+        BTreeMap::from([(
+            "access_token".to_owned(),
+            zeroize::Zeroizing::new(token.to_owned()),
+        )]),
+        not_after,
+        canonical_resource_uri(target).expect("canonical"),
+    ))
+}
+
+async fn call(toolset: &Arc<dyn Toolset>) -> Value {
+    lookup(toolset)
+        .await
+        .execute(context(), json!({"query": "1.2"}))
+        .await
+        .expect("governed call")
+}
+
+/// #1474: every call redeems `mcp.tool.call`, but a call that redeems the
+/// same token for the same server runs on the open session: one session
+/// and one `tools/list` for two calls.
+#[tokio::test]
+async fn calls_with_the_same_token_reuse_one_session() {
+    let (built, servers, redeemer) = build(
+        vec![mcp_tool(Some(41), "alpha", SERVER_A, &json!({}))],
+        per_server(),
+    )
+    .await;
+    let dialled = servers.sessions().len();
+    let listed = servers.listings().len();
+    call(&built.toolsets[0]).await;
+    call(&built.toolsets[0]).await;
+    let calls = redeemer
+        .calls()
+        .into_iter()
+        .filter(|call| call.operation_id == MCP_TOOL_CALL)
+        .count();
+    assert_eq!(calls, 2, "each call is redeemed and decided by Main");
+    assert_eq!(servers.sessions().len(), dialled + 1, "one call session");
+    assert_eq!(servers.listings().len(), listed + 1, "one call listing");
+    assert_eq!(servers.calls(), [SERVER_A, SERVER_A]);
+}
+
+/// #1474: a new token is a new generation: the old session is dropped
+/// before a new one is dialled with only the new token.
+#[tokio::test]
+async fn a_new_token_opens_a_new_session_and_drops_the_old_one() {
+    let answers = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&answers);
+    let (built, servers, _) = build(
+        vec![mcp_tool(Some(41), "alpha", SERVER_A, &json!({}))],
+        Box::new(move |_| {
+            let token = format!("token-{}", counter.fetch_add(1, Ordering::SeqCst));
+            Ok(RedeemOutcome::Envelope(envelope(
+                EnvelopeKind::OauthAccess,
+                &[("access_token", token.as_str())],
+                &canonical_resource_uri(SERVER_A).expect("canonical"),
+            )))
+        }),
+    )
+    .await;
+    let closed = servers.closed().len();
+    call(&built.toolsets[0]).await;
+    call(&built.toolsets[0]).await;
+    assert_eq!(
+        servers.sessions(),
+        [
+            (SERVER_A.to_owned(), Some("token-0".to_owned())),
+            (SERVER_A.to_owned(), Some("token-1".to_owned())),
+            (SERVER_A.to_owned(), Some("token-2".to_owned())),
+        ]
+    );
+    assert_eq!(
+        servers.closed().len(),
+        closed + 1,
+        "the token-1 session closed when token-2 arrived"
+    );
+}
+
+/// Acceptance (#1474): with reuse on, a session or token of one server is
+/// never used for another. Calls alternate between two servers; each call
+/// reaches its own server, on a session that carries its own token only.
+#[tokio::test]
+async fn reused_sessions_never_cross_servers() {
+    let (built, servers, _) = build(
+        vec![
+            mcp_tool(Some(41), "alpha", SERVER_A, &json!({})),
+            mcp_tool(Some(42), "beta", SERVER_B, &json!({})),
+        ],
+        per_server(),
+    )
+    .await;
+    for _ in 0..2 {
+        assert_eq!(call(&built.toolsets[0]).await, json!({"server": SERVER_A}));
+        assert_eq!(call(&built.toolsets[1]).await, json!({"server": SERVER_B}));
+    }
+    assert_eq!(servers.calls(), [SERVER_A, SERVER_B, SERVER_A, SERVER_B]);
+    let sessions = servers.sessions();
+    // Two listing sessions, then one call session per server.
+    assert_eq!(sessions.len(), 4, "{sessions:?}");
+    for (server, token) in &sessions {
+        let expected = if server == SERVER_A {
+            "token-for-a"
+        } else {
+            "token-for-b"
+        };
+        assert_eq!(token.as_deref(), Some(expected), "{sessions:?}");
+    }
+}
+
+static EXPIRY_NOW: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+fn expiry_clock() -> i64 {
+    EXPIRY_NOW.load(Ordering::SeqCst)
+}
+
+/// #1474: no session outlives its token. A call after the latest
+/// redemption of the session's token expired dials a new session even when
+/// Main answers the same token again, and the timer closes an idle session
+/// when its redemption expires.
+#[tokio::test]
+async fn no_session_outlives_its_redeemed_token() {
+    EXPIRY_NOW.store(0, Ordering::SeqCst);
+    let servers = Arc::new(MockServers::default());
+    let (built, _) = build_with_clock(
+        Arc::clone(&servers),
+        vec![mcp_tool(Some(41), "alpha", SERVER_A, &json!({}))],
+        Box::new(|_| Ok(expiring(SERVER_A, "same-token", expiry_clock() + 100))),
+        expiry_clock,
+    )
+    .await;
+    let dialled = servers.sessions().len();
+    call(&built.toolsets[0]).await;
+    EXPIRY_NOW.store(50, Ordering::SeqCst);
+    call(&built.toolsets[0]).await;
+    assert_eq!(
+        servers.sessions().len(),
+        dialled + 1,
+        "reused before expiry"
+    );
+    // The second redemption moved the expiry to 150.
+    EXPIRY_NOW.store(140, Ordering::SeqCst);
+    call(&built.toolsets[0]).await;
+    assert_eq!(servers.sessions().len(), dialled + 1, "reused before 150");
+    EXPIRY_NOW.store(400, Ordering::SeqCst);
+    call(&built.toolsets[0]).await;
+    assert_eq!(
+        servers.sessions().len(),
+        dialled + 2,
+        "a session past its token's expiry is not reused"
+    );
+    // The new session expires at 500; the timer closes it once the clock
+    // passes that, without another call.
+    let closed = servers.closed().len();
+    EXPIRY_NOW.store(600, Ordering::SeqCst);
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while servers.closed().len() == closed {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the expired session was closed");
+}
+
+/// #1474 review: no lock is held across a dial. Two concurrent calls that
+/// redeem different tokens dial and list in parallel: each listing waits at
+/// a barrier of two, so a dial that held the slot's lock would block the
+/// other call and time out.
+#[tokio::test]
+async fn concurrent_calls_with_new_tokens_dial_in_parallel() {
+    let answers = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&answers);
+    let (built, servers, _) = build(
+        vec![mcp_tool(Some(41), "alpha", SERVER_A, &json!({}))],
+        Box::new(move |_| {
+            let token = format!("token-{}", counter.fetch_add(1, Ordering::SeqCst));
+            Ok(RedeemOutcome::Envelope(envelope(
+                EnvelopeKind::OauthAccess,
+                &[("access_token", token.as_str())],
+                &canonical_resource_uri(SERVER_A).expect("canonical"),
+            )))
+        }),
+    )
+    .await;
+    let dialled = servers.sessions().len();
+    *servers.barrier.lock().expect("barrier") = Some(Arc::new(tokio::sync::Barrier::new(2)));
+    let toolset = &built.toolsets[0];
+    let (first, second) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(call(toolset), call(toolset))
+    })
+    .await
+    .expect("the two dials overlapped");
+    assert_eq!(first, json!({"server": SERVER_A}));
+    assert_eq!(second, json!({"server": SERVER_A}));
+    let sessions = servers.sessions();
+    assert_eq!(sessions.len(), dialled + 2, "{sessions:?}");
+    let mut tokens: Vec<_> = sessions[dialled..]
+        .iter()
+        .map(|(server, token)| {
+            assert_eq!(server, SERVER_A, "{sessions:?}");
+            token.clone().expect("token")
+        })
+        .collect();
+    tokens.sort();
+    tokens.dedup();
+    assert_eq!(tokens.len(), 2, "each session carries its own token");
+}
+
+/// #1474 review: concurrent calls that redeem the same token share one dial
+/// and one listing, and all run on that session.
+#[tokio::test]
+async fn concurrent_calls_with_the_same_token_share_one_dial() {
+    let (built, servers, _) = build(
+        vec![mcp_tool(Some(41), "alpha", SERVER_A, &json!({}))],
+        per_server(),
+    )
+    .await;
+    let dialled = servers.sessions().len();
+    let listed = servers.listings().len();
+    *servers.list_delay.lock().expect("delay") = Some(std::time::Duration::from_millis(50));
+    let toolset = &built.toolsets[0];
+    let results = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(call(toolset), call(toolset), call(toolset))
+    })
+    .await
+    .expect("the calls finished");
+    assert_eq!(results.0, json!({"server": SERVER_A}));
+    assert_eq!(results.1, json!({"server": SERVER_A}));
+    assert_eq!(results.2, json!({"server": SERVER_A}));
+    assert_eq!(servers.sessions().len(), dialled + 1, "one shared dial");
+    assert_eq!(servers.listings().len(), listed + 1, "one shared listing");
+    assert_eq!(servers.calls(), [SERVER_A, SERVER_A, SERVER_A]);
 }

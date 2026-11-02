@@ -158,6 +158,10 @@ type CurrentToolkitSettingsResolver struct {
 	// webProviders resolves the `web` and `host_intel` toolkits' providers
 	// (WithWebProviders); nil freezes them with none.
 	webProviders CurrentWebProviderSource
+	// governed reads a governed run's configuration targets
+	// (WithGovernedConfigurations); nil refuses every configuration of a
+	// governed run.
+	governed GovernedConfigurationSource
 }
 
 func NewCurrentToolkitSettingsResolver(
@@ -297,7 +301,7 @@ func (w *currentToolkitSettingsWalker) resolveToolkitSettings(
 			fieldPath := currentToolkitSettingsPath(path, plan.name)
 			switch kind {
 			case currentToolkitConfigurationField:
-				if err := w.resolveConfigurationField(ctx, settings, plan, fieldPath, depth); err != nil {
+				if err := w.resolveConfigurationField(ctx, settings, plan, fieldPath, toolkitType, depth); err != nil {
 					return nil, err
 				}
 			case currentToolkitReferenceField:
@@ -395,6 +399,7 @@ func (w *currentToolkitSettingsWalker) resolveConfigurationField(
 	settings map[string]any,
 	plan currentToolkitFieldPlan,
 	fieldPath string,
+	toolkitType string,
 	depth int,
 ) error {
 	value := settings[plan.name]
@@ -473,6 +478,10 @@ func (w *currentToolkitSettingsWalker) resolveConfigurationField(
 	if _, ok := reference["private"]; !ok {
 		w.addViolation(fieldPath, CurrentToolkitConfigurationReferenceInvalidCode)
 		return nil
+	}
+	if IsGovernedRun(ctx) {
+		// A governed run never expands a title (governed_configuration.go).
+		return w.resolveGovernedConfiguration(ctx, settings, plan, fieldPath, toolkitType, reference)
 	}
 
 	ownedReference, err := w.cloneObject(ctx, reference, depth+1)

@@ -11,6 +11,7 @@ pub(crate) mod command_delivery;
 mod configuration_validation;
 mod execution_delivery_processor;
 pub(crate) mod fanout_decisions;
+mod governed_direct;
 pub mod invocation_admission;
 mod invocation_supervisor;
 mod native_agent_lifecycle;
