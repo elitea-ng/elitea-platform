@@ -330,6 +330,18 @@ describe('permission filtering', () => {
     expect(screen.getByTestId('admin-nav').querySelectorAll('hr')).toHaveLength(1);
   });
 
+  it('scrolls its links in their own region, between a fixed header and footer', async () => {
+    // A short window (1024x600) cut the last links and the footer off: the
+    // layout clips, and nothing in the nav scrolled.
+    await mountAdmin();
+    const region = screen.getByTestId('admin-nav-scroll');
+    const style = window.getComputedStyle(region);
+    expect(style.overflowY).toBe('auto');
+    expect(style.minHeight).toBe('0px');
+    for (const link of screen.getAllByTestId(/^admin-nav-item-/)) expect(region).toContainElement(link);
+    expect(region).not.toContainElement(screen.getByTestId('admin-nav-user-button'));
+  });
+
   it('drops a group that loses every item, rather than rendering an empty one', () => {
     const groups = visibleAdminNavGroups((permission) =>
       ['admin.auth.users', 'configuration.roles.permissions.view', 'projects.projects.projects.view', 'configuration.secrets.secret.list', 'admin.moderation'].includes(

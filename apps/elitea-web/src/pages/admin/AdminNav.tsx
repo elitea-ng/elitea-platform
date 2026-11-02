@@ -141,36 +141,46 @@ export function AdminNav(): ReactNode {
     >
       <AdminNavHeader collapsed={collapsed} onToggle={toggle} />
 
-      {groups.map((group, index) => (
-        <Fragment key={group.id}>
-          {index > 0 && <AdminNavDivider />}
-          <Box
-            sx={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.5rem',
-              padding: '0.5rem 0.75rem',
-              boxSizing: 'border-box',
-              maxWidth: '100%',
-              // The reference bottom-aligns its second group. Growing the FIRST
-              // group's container is what pushes everything after it down; the
-              // divider then sits directly above the bottom group, as it does
-              // there. When permissions leave only ONE group, it grows instead
-              // and the footer stays pinned to the bottom either way.
-              ...(index === 0 ? { flex: 1 } : {}),
-            }}
-          >
-            {group.items.map((item) => (
-              <AdminNavLink
-                key={item.id}
-                item={item}
-                active={item.id === activeId}
-                collapsed={collapsed}
-              />
-            ))}
-          </Box>
-        </Fragment>
-      ))}
+      {/*
+        The links scroll; the header and the footer stay. Without this region
+        the column ran past a short window (1024x600) and the layout's
+        `overflow: hidden` cut the last links and the footer off, out of reach.
+      */}
+      <Box
+        data-testid="admin-nav-scroll"
+        sx={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column' }}
+      >
+        {groups.map((group, index) => (
+          <Fragment key={group.id}>
+            {index > 0 && <AdminNavDivider />}
+            <Box
+              sx={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.5rem',
+                padding: '0.5rem 0.75rem',
+                boxSizing: 'border-box',
+                maxWidth: '100%',
+                // The reference bottom-aligns its second group. Growing the FIRST
+                // group's container is what pushes everything after it down; the
+                // divider then sits directly above the bottom group, as it does
+                // there. When permissions leave only ONE group, it grows instead
+                // and the footer stays pinned to the bottom either way.
+                ...(index === 0 ? { flex: 1 } : {}),
+              }}
+            >
+              {group.items.map((item) => (
+                <AdminNavLink
+                  key={item.id}
+                  item={item}
+                  active={item.id === activeId}
+                  collapsed={collapsed}
+                />
+              ))}
+            </Box>
+          </Fragment>
+        ))}
+      </Box>
 
       <AdminNavDivider />
       <AdminNavFooter collapsed={collapsed} />
