@@ -148,6 +148,11 @@ test('the HITL node\'s Input picker is enabled only when the user message is F-S
   // Switch the user message's own "Type" mapping (`SimpleLLMInputItem`) to
   // F-String — only then does the tooltip's stated condition ("Available
   // only when the User message type is set to F-String") hold.
+  //
+  // At 1280px the editor folds its chat pane so the canvas keeps at least
+  // 480px (`useEditorPaneRoom`). "Fit view" (the canvas's own control) then
+  // brings the whole new card into that canvas, as a user would.
+  await page.getByRole('button', { name: /fit view/i }).click();
   const messageType = card.getByRole('combobox', { name: 'Type' });
   await messageType.click();
   await page.getByRole('option', { name: 'F-String', exact: true }).click();

@@ -71,7 +71,7 @@ describe('PrivatePipelinesList', () => {
 
   /*
    * The search box moved to the page HEADER (`widgets/page-header`'s
-   * `ListSearchField`, mounted by `Pipelines.tsx`), so this tab body no longer
+   * `PageSearch`, mounted by `Pipelines.tsx`), so this tab body no longer
    * renders one. Its contract is now "read the route's `query` param".
    */
   it('narrows the list by the header search box\'s `query` param, and sends it to the server', async () => {

@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react';
-import { useCallback, useEffect, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
@@ -12,6 +11,7 @@ import { t } from '@/shared/i18n';
 import { GraphAdmissionGate } from './settings/GraphAdmissionGate';
 import type { ViewMode } from '@/shared/lib/enums';
 
+import { usePaneFold } from '../lib/hooks/useEditorPaneRoom';
 import { useIsSmallWindow } from '../lib/hooks/useIsSmallWindow';
 
 /**
@@ -55,6 +55,8 @@ import { useIsSmallWindow } from '../lib/hooks/useIsSmallWindow';
 export interface GeneralFormPanelProps {
   readonly applicationId: string | number | undefined;
   readonly onCollapsed: (collapsed: boolean) => void;
+  /** Starts folded while the canvas lacks room (`useEditorPaneRoom`); a click overrides it. */
+  readonly autoFolded?: boolean | undefined;
   readonly viewMode?: (typeof ViewMode)[keyof typeof ViewMode] | undefined;
   readonly renderConfigurationForm: (props: { applicationId: string | number | undefined; viewMode: (typeof ViewMode)[keyof typeof ViewMode] | undefined }) => ReactNode;
 }
@@ -72,24 +74,9 @@ const containerSx = (isSmallWindow: boolean, collapsed: boolean): SxProps<Theme>
 });
 const collapseButtonSx: SxProps<Theme> = { padding: '0', marginLeft: '0', position: 'absolute', top: '0', right: '0', zIndex: 100 };
 
-export function GeneralFormPanel({ applicationId, onCollapsed, viewMode, renderConfigurationForm }: GeneralFormPanelProps): ReactNode {
-  const [collapsed, setCollapsed] = useState(false);
+export function GeneralFormPanel({ applicationId, onCollapsed, autoFolded = false, viewMode, renderConfigurationForm }: GeneralFormPanelProps): ReactNode {
   const { isSmallWindow } = useIsSmallWindow();
-
-  const onClickCollapsed = useCallback(() => {
-    setCollapsed((prev) => {
-      onCollapsed(!prev);
-      return !prev;
-    });
-  }, [onCollapsed]);
-
-  useEffect(() => {
-    if (isSmallWindow) {
-      setCollapsed(false);
-      onCollapsed(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSmallWindow]);
+  const { collapsed, toggle: onClickCollapsed } = usePaneFold(autoFolded, isSmallWindow, onCollapsed);
 
   return (
     <Box

@@ -20,6 +20,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { BASE_URL } from '../../../playwright.config';
 import { AUTOTEST_PREFIX } from '../../fixtures/api';
 import {
+  foldEditorPanes,
   PIPELINE_STARTER_ENTRY_NODE_ID,
   createPipelineThroughApi,
   deletePipeline,
@@ -46,10 +47,7 @@ async function openCanvas(page: Page, pipeline: CreatedPipeline): Promise<void> 
   await page.goto(`${BASE_URL}/app/pipelines/latest/${pipeline.id}`);
   await expect(page.getByTestId('rf__wrapper')).toBeVisible({ timeout: 30_000 });
   await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 20_000 });
-  await page.getByRole('button', { name: 'Collapse the configuration panel' }).click();
-  await expect(page.getByRole('button', { name: 'Expand the configuration panel' })).toBeVisible({ timeout: 10_000 });
-  await page.getByRole('button', { name: 'Collapse the chat panel' }).click();
-  await expect(page.getByRole('button', { name: 'Expand the chat panel' })).toBeVisible({ timeout: 10_000 });
+  await foldEditorPanes(page);
 }
 
 async function saveAndAwaitPersist(page: Page): Promise<void> {

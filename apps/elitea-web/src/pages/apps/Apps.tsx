@@ -15,22 +15,12 @@ import {
   useHasApplications,
 } from '@/features/apps';
 import { t } from '@/shared/i18n';
+import { PERMISSIONS } from '@/shared/lib/permissions';
 import { AppCatalogIcon } from '@/shared/ui/icons/app-catalog-icon';
 import { ApplicationsIcon } from '@/shared/ui/icons/applications-icon';
-import { PageHeader } from '@/widgets/page-header';
-
-const pageSx = {
-  height: '100%',
-  display: 'flex',
-  flexDirection: 'column' as const,
-};
-
-
-const tabPanelSx = {
-  flex: 1,
-  minHeight: 0,
-  overflowY: 'auto' as const,
-};
+import { useSelectedProjectStore } from '@/widgets/app-shell';
+import { PageToolbar, pageBodySx, pageSx } from '@/widgets/page-header';
+import { usePermissionSet } from '@/widgets/sidebar';
 
 interface AppsRouteParams {
   readonly tab?: string;
@@ -77,6 +67,7 @@ export function Apps() {
   const params = useParams({ strict: false }) as AppsRouteParams;
   const search = useSearch({ strict: false }) as AppsRouteSearch;
   const { hasApplications } = useHasApplications();
+  const canCreate = usePermissionSet(useSelectedProjectStore((state) => state.project?.id)).has(PERMISSIONS.toolkits.create);
 
   const normalizedTab = normalizeAppsTab(params.tab, hasApplications);
   const normalizedSearch = useMemo(
@@ -117,11 +108,13 @@ export function Apps() {
     [navigate],
   );
 
+  const createAction = canCreate
+    ? { label: t('pages.apps.create', 'New application'), testId: 'apps-create', onClick: () => void navigate({ to: '/apps/create' }) }
+    : undefined;
+
   return (
     <Box sx={pageSx}>
-      <PageHeader
-        title={t('apps.tabs.ariaLabel', 'Apps')}
-        titleComponent="h1"
+      <PageToolbar
         tabs={{
           items: [
             { value: 'configured', label: t('apps.tabs.applications', 'Applications'), icon: <ApplicationsIcon /> },
@@ -131,10 +124,11 @@ export function Apps() {
           onChange: handleChangeTab,
           ariaLabel: t('apps.tabs.ariaLabel', 'Apps'),
         }}
+        primaryAction={createAction}
       />
 
       <Box
-        sx={tabPanelSx}
+        sx={pageBodySx}
         role="tabpanel"
       >
         {isConfiguredTab ? (

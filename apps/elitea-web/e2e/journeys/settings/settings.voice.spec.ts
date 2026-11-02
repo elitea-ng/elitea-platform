@@ -460,6 +460,9 @@ test('ELITEA-1315: Apply persists the staged change to the SAME store Settings �
   page,
 }) => {
   await page.goto(PERSONALIZATION_URL, { waitUntil: 'domcontentloaded' });
+  // Settle before navigating on: on WebKit a navigation while the boot calls
+  // are still in flight left the next page blank (the flake this test had).
+  await expect(page.getByTestId('voice-personalization-section')).toBeVisible({ timeout: 30_000 });
   await page.evaluate((key: string) => localStorage.removeItem(key), VOICE_CONFIG_KEY);
 
   // ── Cancel discards ──────────────────────────────────────────────────

@@ -363,8 +363,7 @@ export function IndexesTab(props: IndexesTabProps): ReactNode {
       {/*
         * No global toast host exists in this app (the gap `IndexActions.tsx`
         * and `IndexesContainer.tsx` each disclose for their own swallowed
-        * errors) — same local-Snackbar pattern `processes/chat/ui/
-        * ChatConversationSidebar.tsx` established for exactly this reason.
+        * errors) — so a local Snackbar shows this one.
         */}
       {notice !== undefined && (
         <Snackbar

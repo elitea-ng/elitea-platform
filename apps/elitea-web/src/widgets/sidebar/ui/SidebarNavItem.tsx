@@ -17,16 +17,9 @@ export interface SidebarNavItemProps {
 }
 
 /**
- * Ported from `[fsd]/widgets/sidebar-root/ui/SidebarMenuItem.jsx`, reduced:
- * the old app's "personal-space disabled" tooltip variant
- * (`TooltipForDisablePersonalSpace`/`useDisablePersonalSpace`) reads Redux
- * `state.user.personal_project_id`, which has no source in this app yet
- * (§ "current user identity" gap, `../index.ts`) — every item therefore
- * always renders through the plain collapsed-label tooltip path, never
- * disabled for that reason.
- *
- * A real `<Link>` (R-C1: a real interactive element), not a `Box` +
- * `onClick`.
+ * One icon of the collapsed rail (`SidebarBody.tsx`): the place's glyph, its
+ * name in a tooltip. A real `<Link>` (R-C1), not a `Box` + `onClick`.
+ * Ported from `[fsd]/widgets/sidebar-root/ui/SidebarMenuItem.jsx`.
  */
 export function SidebarNavItem({ label, icon, to, selected, showLabel }: SidebarNavItemProps): ReactNode {
   return (
@@ -72,6 +65,7 @@ export function SidebarNavItem({ label, icon, to, selected, showLabel }: Sidebar
             minWidth: '1rem',
             width: '1rem',
             height: '1rem',
+            '& svg': { width: '1rem', height: '1rem' },
           }}
         >
           {icon}

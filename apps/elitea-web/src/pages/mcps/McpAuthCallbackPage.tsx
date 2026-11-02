@@ -109,7 +109,9 @@ function containerSx(theme: Theme) {
     alignItems: 'center',
     justifyContent: 'center',
     padding: theme.spacing(4),
-    minHeight: '100vh',
+    // The shell's scroll box, not the viewport (which the title row shares).
+    minHeight: '100%',
+    boxSizing: 'border-box' as const,
     gap: theme.spacing(2),
   };
 }

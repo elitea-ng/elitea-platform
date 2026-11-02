@@ -3,6 +3,8 @@
  * who archived it and when; Unarchive sends it back to the chat lists (and
  * takes it off this page), a failed Unarchive puts it back here.
  */
+import type { ReactNode } from 'react';
+
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -13,6 +15,7 @@ import { AppProviders } from '@/app/providers/AppProviders';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { archiveLocalThread, archivedThreadIds } from '@/shared/desktop/archivedThreads';
+import { PageChromeProvider, useShellCrumbs } from '@/shared/ui/page-chrome';
 import { server } from '@/test/setup';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 
@@ -27,18 +30,25 @@ let unarchived: string[];
 let archivedParam: string | null;
 let unarchiveStatus: number;
 
-function mount(): void {
+function CrumbProbe(): ReactNode {
+  return <div data-testid="crumbs">{useShellCrumbs().map((crumb) => crumb.label).join(' / ')}</div>;
+}
+
+function mount(initialPath = '/chat/archived'): void {
   const rootRoute = createRootRoute({ component: Outlet });
   const router = createRouter({
     routeTree: rootRoute.addChildren([
       createRoute({ getParentRoute: () => rootRoute, path: '/chat/archived', component: ArchivedChatsPage }),
       createRoute({ getParentRoute: () => rootRoute, path: '/chat', component: () => null }),
     ]),
-    history: createMemoryHistory({ initialEntries: ['/chat/archived'] }),
+    history: createMemoryHistory({ initialEntries: [initialPath] }),
   });
   render(
     <AppProviders>
-      <RouterProvider router={router as never} />
+      <PageChromeProvider>
+        <RouterProvider router={router as never} />
+        <CrumbProbe />
+      </PageChromeProvider>
     </AppProviders>,
   );
 }
@@ -79,6 +89,21 @@ afterEach(() => {
 const rowOf = (name: string): HTMLElement => screen.getAllByTestId('archived-conversation').find((node) => node.textContent?.includes(name)) as HTMLElement;
 
 describe('ArchivedChatsPage', () => {
+  it('names itself "Archived" in the shell title row and draws no heading or back button of its own', async () => {
+    mount();
+    expect(await screen.findByText('Old sprint retro')).toBeInTheDocument();
+    expect(screen.getByTestId('crumbs')).toHaveTextContent('Archived');
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Chats' })).toBeNull();
+    expect(screen.getByTestId('page-toolbar-summary')).toHaveTextContent('2 archived chats');
+  });
+
+  it('narrows the rows by the toolbar search, its text in the URL', async () => {
+    mount('/chat/archived?query=retro');
+    expect(await screen.findByText('Old sprint retro')).toBeInTheDocument();
+    expect(screen.queryByText('Spike: socket.io removal')).toBeNull();
+  });
+
   it("lists the project's archived chats with who archived them and when", async () => {
     mount();
     expect(await screen.findByText('Old sprint retro')).toBeInTheDocument();

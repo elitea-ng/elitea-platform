@@ -24,13 +24,16 @@
  *     so the waiver records a debt to re-home them rather than hiding an
  *     un-curated barrel.
  *   useInteractiveTourController.hooks.ts: hook-deps waived (12/8)
- *   notifications/index.ts: slice-public-api waived (21/20) — issue 940/A4
+ *   notifications/index.ts: slice-public-api waived (23/20) — issue 940/A4
  *     (bell popover infinite scroll) added exactly one new hook
  *     (`useNotificationsInfiniteList`) to a barrel that was already CURATED
  *     and sitting exactly at the 20 cap; the hook has one real external
  *     consumer (`widgets/sidebar/ui/NotificationButton.tsx`) and no smaller
  *     bundling was available without renaming the 5 already-shipped
- *     individual hook exports this same barrel carries.
+ *     individual hook exports this same barrel carries. The desktop system
+ *     notices added two pure helpers (`systemNoticeText`,
+ *     `systemNoticesEnabled`) whose outside consumer is the desktop
+ *     shell's notice bridge (`useDesktopNotifications`): 23/20.
  *   agents/index.ts: slice-public-api waived (21/20) — elitea_issues #6627
  *     added exactly one new component (`AgentIconEditor`, the editable agent
  *     icon `CreateAgentForm.tsx`'s own doc comment disclosed as a standing

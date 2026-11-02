@@ -55,7 +55,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
 import { AUTOTEST_PREFIX, expectStoredAssistantAnswer, fillComposer } from '../fixtures/api';
-import { COMPILER_LEGAL_NODE_ID, parseStoredGraph, readStoredPipelineVersion } from '../fixtures/pipelines';
+import { COMPILER_LEGAL_NODE_ID, ensureChatPanelExpanded, foldEditorPanes, parseStoredGraph, readStoredPipelineVersion } from '../fixtures/pipelines';
 
 const APPLICATIONS_RE = /\/elitea_core\/applications\/prompt_lib\/(\d+)/;
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
@@ -280,23 +280,6 @@ async function saveAndAwaitPersist(page: Page): Promise<void> {
   await expect(page.getByText('Failed to save your changes.')).toHaveCount(0);
 }
 
-/**
- * Leave the chat panel EXPANDED, whichever state the save left it in.
- *
- * Asserting on one specific button here made the sibling journey fail with
- * "waiting for Expand the chat panel" while the page showed "Collapse the chat
- * panel" — a message about the harness. What is needed is the pane open.
- */
-async function ensureChatPanelExpanded(page: Page): Promise<void> {
-  const expand = page.getByRole('button', { name: 'Expand the chat panel' });
-  const collapse = page.getByRole('button', { name: 'Collapse the chat panel' });
-  await expect(expand.or(collapse), 'the editor must still render its chat panel after a save').toBeVisible({
-    timeout: 60_000,
-  });
-  if ((await expand.count()) > 0) await expand.click();
-  await expect(collapse).toBeVisible({ timeout: 10_000 });
-}
-
 /** Every `tool_name` the stored execution trace carries, in the order the rows come back. */
 async function traceToolNames(page: Page, projectId: string, conversationId: string): Promise<readonly string[]> {
   const traces = await page.request.get(
@@ -344,11 +327,10 @@ test('a two-node graph connected on the canvas runs BOTH nodes, in the order the
   await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 20_000 });
   // With the configuration panel open, a node added at the viewport centre
   // lands under it and every click reports the panel intercepting pointer
-  // events. Collapsing it also runs the editor's own `fitView`.
-  await page.getByRole('button', { name: 'Collapse the configuration panel' }).click();
-  await expect(page.getByRole('button', { name: 'Expand the configuration panel' })).toBeVisible({ timeout: 10_000 });
-  await page.getByRole('button', { name: 'Collapse the chat panel' }).click();
-  await expect(page.getByRole('button', { name: 'Expand the chat panel' })).toBeVisible({ timeout: 10_000 });
+  // events. Collapsing it also runs the editor's own `fitView`. The chat pane
+  // goes too; at 1280px the editor has already folded it, so the fold is
+  // idempotent (`foldEditorPanes`).
+  await foldEditorPanes(page);
 
   // Each node configured while it is the topmost card — see the module header.
   await page.getByRole('button', { name: 'Add node' }).click();

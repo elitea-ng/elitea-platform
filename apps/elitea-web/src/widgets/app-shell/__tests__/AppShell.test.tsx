@@ -1,5 +1,5 @@
 import { QueryClient } from '@tanstack/react-query';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -130,8 +130,19 @@ beforeEach(() => {
     ]),
     getPermissionListMockHandler([{ name: 'models.chat.folders.get', enabled: true }]),
     authorHandler(),
+    // The sidebar's chat list, its budget chip and the support assistant
+    // probe all ask at mount; the strict server refuses anything unhandled.
+    http.get('*/elitea_core/folder/prompt_lib/:projectId', () => HttpResponse.json({ pinned: { conversations: [] }, folders: [], date_groups: [], total_folders: 0 })),
+    http.get('*/elitea_core/project_budget/prompt_lib/:projectId/budget', () => HttpResponse.json({}, { status: 404 })),
+    http.get('*/support_assistant/config/', () => HttpResponse.json({}, { status: 404 })),
   );
 });
+
+/** The Workshop group (agents … MCPs) is closed until opened; open it so its rows are on screen. */
+function openWorkshop(): void {
+  const toggle = screen.getByTestId('shell-elitea-workshop').querySelector('[aria-expanded]');
+  if (toggle !== null && toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
+}
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -173,7 +184,7 @@ describe('AppShell', () => {
 
     expect(await screen.findByTestId('maintenance-splash')).toBeInTheDocument();
     expect(screen.queryByText('page content')).toBeNull();
-    expect(screen.queryByTestId('sidebar-create-button')).toBeNull();
+    expect(screen.queryByTestId('sidebar-collapse-toggle')).toBeNull();
   });
 
   // …and NOT for an administrator, who is the one person who has to be able to
@@ -206,7 +217,7 @@ describe('AppShell', () => {
       </AppShell>,
     );
     expect(screen.getByText('page content')).toBeInTheDocument();
-    expect(screen.getByTestId('sidebar-create-button')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-collapse-toggle')).toBeInTheDocument();
   });
 
   // R1 regression: the old app (`settings.js`'s `authorDetails.matchFulfilled`
@@ -440,7 +451,7 @@ describe('AppShell', () => {
       { initialPath: '/onboarding' },
     );
     expect(screen.getByText('onboarding content')).toBeInTheDocument();
-    expect(screen.queryByTestId('sidebar-create-button')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar-collapse-toggle')).not.toBeInTheDocument();
   });
 
   it('still renders the sidebar on the onboarding route once the caller has a personal project', async () => {
@@ -451,7 +462,7 @@ describe('AppShell', () => {
       { initialPath: '/onboarding' },
     );
     await waitFor(() => {
-      expect(screen.getByTestId('sidebar-create-button')).toBeInTheDocument();
+      expect(screen.getByTestId('sidebar-collapse-toggle')).toBeInTheDocument();
     });
   });
 
@@ -462,7 +473,7 @@ describe('AppShell', () => {
         <div>page content</div>
       </AppShell>,
     );
-    expect(screen.getByTestId('sidebar-create-button')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-collapse-toggle')).toBeInTheDocument();
   });
 
   /*
@@ -472,8 +483,9 @@ describe('AppShell', () => {
    * answered against a user who has no personal project yet, and both come
    * back empty. Nothing re-asked: `staleTime` is 30s and both queries had
    * SUCCEEDED, so the shell opened on "Project: No projects" with every
-   * permission-gated nav row missing — Chats, Toolkits & Indexes, MCPs, Credentials,
-   * Artifacts — until the user reloaded the page.
+   * permission-gated nav row missing — Chats, Toolkits & Indexes, MCPs,
+   * Artifacts — until the user reloaded the page. (Credentials is in the
+   * account menu now, not on the rail.)
    *
    * Both handlers below answer empty ONCE and then the real thing, which is
    * the sequence the server actually produces. A test whose handlers answered
@@ -516,9 +528,9 @@ describe('AppShell', () => {
 
     // The nav rows the empty permission answer had dropped.
     expect(await screen.findByText('Chats')).toBeInTheDocument();
-    expect(screen.getByText('Toolkits & Indexes')).toBeInTheDocument();
+    openWorkshop();
+    expect(await screen.findByText('Toolkits & Indexes')).toBeInTheDocument();
     expect(screen.getByText('MCPs')).toBeInTheDocument();
-    expect(screen.getByText('Credentials')).toBeInTheDocument();
     expect(screen.getByText('Artifacts')).toBeInTheDocument();
   });
 
@@ -592,9 +604,9 @@ describe('AppShell', () => {
       expect(await screen.findByRole('button', { name: /Project:\s*Acme/ }, { timeout: 20_000 })).toBeInTheDocument();
       expect(screen.queryByText('No projects')).not.toBeInTheDocument();
       expect(await screen.findByText('Chats', undefined, { timeout: 20_000 })).toBeInTheDocument();
-      expect(screen.getByText('Toolkits & Indexes')).toBeInTheDocument();
+      openWorkshop();
+      expect(await screen.findByText('Toolkits & Indexes')).toBeInTheDocument();
       expect(screen.getByText('MCPs')).toBeInTheDocument();
-      expect(screen.getByText('Credentials')).toBeInTheDocument();
       expect(screen.getByText('Artifacts')).toBeInTheDocument();
 
       // The author query is what had to be asked again; the two lists follow

@@ -193,6 +193,17 @@ pub struct Attention {
     permission: AtomicU8,
     /// Cloud threads waiting on the person (`activity.rs`): counted with the approvals on the Dock badge.
     external: AtomicUsize,
+    /// Unread platform notifications (the page's bell, `notices.rs`): also on the Dock badge.
+    platform_unread: AtomicUsize,
+}
+
+/// What the Dock badge counts: open approvals, cloud threads waiting on the
+/// person and unread platform notifications.
+#[must_use]
+pub fn badge_count(pending: usize, external: usize, platform_unread: usize) -> usize {
+    pending
+        .saturating_add(external)
+        .saturating_add(platform_unread)
 }
 
 impl Attention {
@@ -203,6 +214,7 @@ impl Attention {
             tracker: Mutex::new(Tracker::default()),
             permission: AtomicU8::new(PERMISSION_UNKNOWN),
             external: AtomicUsize::new(0),
+            platform_unread: AtomicUsize::new(0),
         }
     }
 
@@ -237,6 +249,13 @@ impl Attention {
         }
     }
 
+    /// The number of unread platform notifications changed.
+    pub fn set_platform_unread(&self, unread: usize) {
+        if self.platform_unread.swap(unread, Ordering::AcqRel) != unread {
+            self.refresh_badge();
+        }
+    }
+
     /// `approval_respond` answered `request_id`.
     pub fn answered(&self, request_id: &str) {
         if self.tracker().answered(request_id) {
@@ -252,7 +271,11 @@ impl Attention {
             let Some(attention) = app.try_state::<std::sync::Arc<Attention>>() else {
                 return;
             };
-            let count = attention.tracker().pending() + attention.external.load(Ordering::Acquire);
+            let count = badge_count(
+                attention.tracker().pending(),
+                attention.external.load(Ordering::Acquire),
+                attention.platform_unread.load(Ordering::Acquire),
+            );
             if let Some(window) = app.get_webview_window("main") {
                 // Windows has no badge count (unsupported, ignored).
                 let _ = window
@@ -272,16 +295,32 @@ impl Attention {
             .map(|w| w.name)
     }
 
-    fn notify(&self, notice: &Notice) {
-        let focused = self
-            .app
+    /// The main window is in front, where the person sees what happened.
+    fn main_window_focused(&self) -> bool {
+        self.app
             .get_webview_window("main")
-            .is_some_and(|w| w.is_focused().unwrap_or(false) && w.is_visible().unwrap_or(true));
-        if focused || !self.allowed() {
+            .is_some_and(|w| w.is_focused().unwrap_or(false) && w.is_visible().unwrap_or(true))
+    }
+
+    fn notify(&self, notice: &Notice) {
+        if self.main_window_focused() || !self.allowed() {
             return;
         }
         let name = self.workspace_name(notice.turn_id());
         let (title, body) = notice_text(notice, name.as_deref());
+        self.show(&title, &body);
+    }
+
+    /// Show a notification with already checked text, unless the window is
+    /// in front or notifications are not allowed.
+    pub(crate) fn show_unfocused(&self, title: &str, body: &str) {
+        if self.main_window_focused() || !self.allowed() {
+            return;
+        }
+        self.show(title, body);
+    }
+
+    fn show(&self, title: &str, body: &str) {
         use tauri_plugin_notification::NotificationExt as _;
         if let Err(error) = self
             .app

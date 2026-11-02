@@ -11,8 +11,6 @@ import { t } from '@/shared/i18n';
 import { uniqueArrayByProp } from '@/shared/lib/array';
 
 import { useIsMcpVisible } from '../../api/useIsMcpVisible';
-import { ToolkitTypesPanel } from './ToolkitTypesPanel';
-import type { ToolkitTypeTag } from './ToolkitTypesPanel';
 import { ToolkitsEmptyListPlaceHolder } from './ToolkitsEmptyListPlaceHolder';
 import { ToolkitsEmptyState } from './ToolkitsEmptyState';
 
@@ -47,9 +45,10 @@ import { ToolkitsEmptyState } from './ToolkitsEmptyState';
  *    functionally equivalent (calls `onLoadMore` once the sentinel enters
  *    the viewport, gated the same way the baseline's own `loadMore`
  *    callback is: `hasMore && !isLoadingMore`), not virtualized.
- *  - **No `TeamMates`/`AuthorInformation`.** Neither is ported (no home,
- *    out of scope) — `rightPanelExtra` is an injected `ReactNode` slot a
- *    page-level caller fills with whichever of the two applies.
+ *  - **No right column.** The "Types" filter and the
+ *    author card are the page's Filters tab in the shell's side panel now
+ *    (`pages/toolkits/Toolkits.tsx` composes it), not a column this list
+ *    draws beside its grid.
  *  - **No `useQueryTrendingAuthor`/navigate-away-when-empty effect.**
  *    Route-derived concerns move to the caller per this session's
  *    established "page/route-layer caller reads its own params" convention
@@ -192,24 +191,14 @@ interface ToolkitsListState {
   readonly totalCount: number;
 }
 
-/** The right-panel type-filter wiring, grouped for the same §3.5 reason as {@link ToolkitsListState} (and NOT exported for the same reason). */
-interface ToolkitsListTypeFilter {
-  readonly tagList: readonly ToolkitTypeTag[];
-  readonly selectedTypes: readonly string[];
-  readonly onSelectType: (typeName: string) => void;
-  readonly onClearTypes: () => void;
-}
-
 export interface ToolkitsListProps {
   readonly data: readonly ToolkitListItem[] | undefined;
   readonly renderCard: (toolkit: ToolkitListItem) => ReactNode;
   readonly listState: ToolkitsListState;
-  readonly typeFilter: ToolkitsListTypeFilter;
   readonly query?: string;
   readonly isMCP?: boolean;
   readonly emptyListPlaceHolder?: ReactNode;
   readonly emptyStateConfig?: ToolkitsEmptyStateConfig;
-  readonly rightPanelExtra?: ReactNode;
   readonly sx?: SxProps<Theme>;
 }
 
@@ -217,16 +206,13 @@ export function ToolkitsList({
   data,
   renderCard,
   listState,
-  typeFilter,
   query,
   isMCP = false,
   emptyListPlaceHolder,
   emptyStateConfig,
-  rightPanelExtra,
   sx,
 }: ToolkitsListProps): ReactNode {
   const { isLoading, isFetchingMore = false, isError = false, hasMore, onLoadMore } = listState;
-  const { tagList, selectedTypes, onSelectType, onClearTypes } = typeFilter;
 
   const isMcpVisible = useIsMcpVisible();
   const items = useMemo(() => dedupeToolkitsForDisplay(data, isMcpVisible), [data, isMcpVisible]);
@@ -290,16 +276,6 @@ export function ToolkitsList({
           </Box>
         )}
       </Box>
-      <Box sx={rightPanelContainerSx}>
-        <ToolkitTypesPanel
-          tagList={tagList}
-          selectedTypes={selectedTypes}
-          onSelectType={onSelectType}
-          onClear={onClearTypes}
-          sx={rightPanelSx}
-        />
-        {rightPanelExtra}
-      </Box>
     </Box>
   );
 }
@@ -315,7 +291,7 @@ const centeredSx: SxProps<Theme> = { display: 'flex', justifyContent: 'center', 
 
 /**
  * `DataCards.jsx`'s grid geometry, matched to `shared/ui/EntityCardList`'s
- * own: `1.25rem 0 0 1.5rem` padding, a `1rem` gap and `MIN_CARD_WIDTH`
+ * own: the page toolbar's `1.5rem` gutter, a `1rem` gap and `MIN_CARD_WIDTH`
  * (300px) tracks, so a toolkit grid lines up with an agent/pipeline/skill
  * one column-for-column at the same viewport.
  */
@@ -323,8 +299,7 @@ const cardsGridSx: SxProps<Theme> = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
   gap: '1rem',
-  padding: '1.25rem 0 0 1.5rem',
-  marginRight: '-1rem',
+  padding: '1.25rem 1.5rem 1.5rem',
   boxSizing: 'border-box',
   width: '100%',
 };
@@ -333,6 +308,3 @@ const cardSlotSx: SxProps<Theme> = { minWidth: 0 };
 
 const sentinelSx: SxProps<Theme> = { display: 'flex', justifyContent: 'center', padding: '1rem' };
 
-const rightPanelContainerSx: SxProps<Theme> = { height: '100dvh', display: 'flex', flexDirection: 'column' };
-
-const rightPanelSx: SxProps<Theme> = { flex: 1 };

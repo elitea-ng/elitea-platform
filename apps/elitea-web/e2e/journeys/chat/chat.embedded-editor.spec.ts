@@ -50,6 +50,7 @@ import { expect, test } from '@playwright/test';
 import type { APIRequestContext, Page } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
+import { openParticipants } from '../../fixtures/sidePanel';
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, createConversation, deleteConversation, readCallerIdentity } from '../../fixtures/api';
 
 const CONVERSATION_PATH = `/elitea_core/conversation/prompt_lib/${DEFAULT_PROJECT_ID}`;
@@ -98,18 +99,10 @@ async function openPipelineCreate(page: Page): Promise<void> {
   await createNew.click();
 }
 
-/**
- * Opens the participants rail if it is collapsed.
- *
- * The rail's toggle is one button whose accessible name STATES the direction
- * ("Expand participants" / "Collapse participants"), so the expand name being
- * absent is exactly "already expanded" — there is no state to read separately
- * and no risk of collapsing an open rail by clicking blind.
- */
+/** Opens the participants: the shell side panel's Conversation tab. */
 async function expandParticipants(page: Page): Promise<void> {
-  const expand = page.getByRole('button', { name: 'Expand participants' });
-  if ((await expand.count()) > 0) await expand.click();
-  await expect(page.getByTestId('participants-container')).toBeVisible({ timeout: 15_000 });
+  // The participants are the side panel's Conversation tab.
+  await openParticipants(page);
 }
 
 /**

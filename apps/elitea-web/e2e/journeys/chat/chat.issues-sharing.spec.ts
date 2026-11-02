@@ -1,19 +1,17 @@
 /**
  * elitea_issues #6283 — "Team Project Conversations: Allow the Creator to
- * Revert a Public Conversation to Restricted Access". Reproduced: before this
- * package's fix, `ConversationItem.menu.tsx` rendered "Make public" only
- * while `conversation.isPrivate` was true and rendered NO replacement once it
- * went public — the creator had no menu path back. The server permits
- * restriction only for the creator.
- * The client affordance is a "Restrict access" entry that PUTs `is_private: true`.
+ * Revert a Public Conversation to Restricted Access". The sidebar row's "⋯"
+ * menu (`widgets/chat-rail/lib/conversationMenu.ts`) offers "Make public" for
+ * a private conversation and "Restrict access" for a public one; each asks in
+ * a dialog, then PUTs `is_private`. The server permits restriction only for
+ * the creator.
  *
  * SCOPE CUT (also recorded in `S/issues/gaps.md`): the issue's full request
  * additionally wants a participant-selection step ("choose who keeps
  * access") before restricting. That step is NOT built — restricting reverts
  * to the conversation's participant list exactly as it already stands. This
  * journey pins the part that is built: the server write, and the menu
- * flipping back to "Make public" afterwards (`ConversationItem.menu.test.tsx`
- * covers the component-level branching this depends on).
+ * flipping back to "Make public" afterwards.
  *
  * Reuses `chat.sharing.spec.ts`'s own fixtures/helpers rather than
  * reimporting duplicates of them, since this is the direct continuation of
@@ -53,10 +51,14 @@ async function readIsPrivate(page: Page, conversationId: string, projectId: stri
   return body.is_private !== false;
 }
 
+/** Opens the sidebar's Today group (open by default; a remembered close is undone). */
 async function openTodayGroup(page: Page): Promise<void> {
-  const sidebar = page.getByTestId('chat-conversation-sidebar');
-  await expect(sidebar).toBeVisible({ timeout: 20_000 });
-  const today = sidebar.getByRole('button', { name: 'Today' });
+  const list = page.getByTestId('shell-chats');
+  await expect(list).toBeVisible({ timeout: 20_000 });
+  const today = list
+    .getByTestId('shell-chats-group')
+    .filter({ has: page.locator('.shell-group-caption', { hasText: /^Today$/ }) })
+    .locator('.shell-row-main');
   await expect(today).toBeVisible({ timeout: 20_000 });
   if ((await today.getAttribute('aria-expanded')) !== 'true') await today.click();
 }
@@ -68,15 +70,15 @@ async function openChat(page: Page): Promise<void> {
   await openTodayGroup(page);
 }
 
-/** Same retried hover+click gesture `chat.sharing.spec.ts` documents at length — the row menu trigger only mounts on hover, and the rail can reorder under a resting pointer. */
+/** Same retried hover+click gesture `chat.sharing.spec.ts` documents — the row's "⋯" is only visible while the row is hovered, and the list can reorder under a resting pointer. */
 async function openRowMenu(page: Page, conversationId: string): Promise<void> {
-  const row = page.getByTestId(`conversation-item-${conversationId}`);
+  const row = page.locator(`[data-conversation-id="${conversationId}"]`);
   await expect(row).toBeVisible({ timeout: 20_000 });
   const menu = page.getByRole('menu');
   await expect(async () => {
     if ((await menu.count()) === 0) {
       await row.hover();
-      await row.getByRole('button', { name: 'More actions' }).click({ timeout: 5_000 });
+      await row.getByTestId('shell-conversation-more').click({ timeout: 5_000 });
     }
     await expect(menu).toBeVisible({ timeout: 5_000 });
   }).toPass({ timeout: 40_000 });
@@ -108,8 +110,9 @@ test('R1: "Restrict access" reverts a public conversation to private on the serv
     // "Restrict access" replaces "Make public" once public — never both.
     await expect(page.getByRole('menuitem', { name: 'Make public' })).toHaveCount(0);
     await page.getByRole('menuitem', { name: 'Restrict access' }).click();
-    await expect(page.getByText('Project members who are not participants will no longer be able to open this conversation. Continue?')).toBeVisible({ timeout: 10_000 });
-    await page.getByRole('menuitem', { name: 'Restrict access' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('Project members who are not participants will no longer be able to open this conversation.')).toBeVisible({ timeout: 10_000 });
+    await dialog.getByRole('button', { name: 'Restrict access' }).click();
 
     // THE SERVER, not the optimistic patch — same discipline S1 uses for the opposite direction.
     await expect

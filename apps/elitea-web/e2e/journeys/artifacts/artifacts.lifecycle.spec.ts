@@ -679,15 +679,19 @@ test.describe('J20 artifacts lifecycle', () => {
       // No reload between here and the upload.
       await expect.poll(async () => (await footerSize.textContent())?.trim(), { timeout: 20_000 }).not.toBe(sizeBefore);
 
-      // …and the value shown is the one the SERVER reports, not merely a
-      // different one. Re-read per poll (see `serverTotalSize`): the total is
-      // project-wide, so a bucket another spec creates or drops in this window
-      // moves it for a reason that has nothing to do with this upload.
+      // …and the value shown is one the SERVER reported since the upload, not
+      // merely a different one. The total is project-wide, so a bucket another
+      // spec writes in this window moves it AFTER the page read it (a webkit
+      // run saw footer 400.1 KB, server 400.3 KB), and the page has no reason
+      // to read it again: every total seen since the upload counts here, and
+      // the reload below holds the page to the server's current one.
+      const seen = new Set<string>();
       await expect
         .poll(
           async () => {
-            const [shown, server] = [(await footerSize.textContent())?.trim(), await serverTotalSize(request, projectId)];
-            return shown === server ? 'equal' : `footer ${shown}, server ${server}`;
+            seen.add(await serverTotalSize(request, projectId));
+            const shown = (await footerSize.textContent())?.trim() ?? '';
+            return seen.has(shown) ? 'equal' : `footer ${shown}, server ${[...seen].join(' / ')}`;
           },
           { timeout: 20_000 },
         )

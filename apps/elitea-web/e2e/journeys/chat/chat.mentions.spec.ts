@@ -145,9 +145,9 @@ async function typeMore(page: Page, text: string): Promise<void> {
   await input.pressSequentially(text, { delay: 15 });
 }
 
-/** The mention dropdown's own heading — present only while it is mounted (`ChatBoxPopups.tsx`'s `userMentions` gate). Not ambiguous with the (collapsed, unopened) participants rail, which never renders this text unless expanded — and nothing here expands it. */
+/** The mention dropdown's own heading — present only while it is mounted (`ChatBoxPopups.tsx`'s `userMentions` gate). Scoped to the page's `<main>`: the shell side panel's Conversation tab (a sibling of `<main>`) carries a "Participants" caption of its own. */
 function mentionDropdown(page: Page) {
-  return page.getByText('Participants', { exact: true });
+  return page.getByRole('main').getByText('Participants', { exact: true });
 }
 
 /* onetest: ELITEA-0393 — typing "@" in a conversation with only the caller as participant never mounts the mention dropdown, and "@" stays plain text */
@@ -198,7 +198,7 @@ test('ELITEA-0391: autocomplete activates only once a second participant exists'
     await expect(mentionDropdown(page), 'a second REAL participant must activate the dropdown').toBeVisible({
       timeout: 10_000,
     });
-    await expect(page.getByText(teammate!.name, { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByText(teammate!.name, { exact: true })).toBeVisible();
   } finally {
     await deleteConversation(page.request, conversationId);
   }
@@ -237,7 +237,7 @@ test('ELITEA-0394: the dropdown lists only conversation participants, not every 
 
     await typeInComposer(page, '@');
     await expect(mentionDropdown(page)).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(teammate!.name, { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByText(teammate!.name, { exact: true })).toBeVisible();
     await expect(page.getByText('Everyone', { exact: true })).toBeVisible();
     // The caller's own name must never appear — self-exclusion, not
     // absence-because-not-a-participant (the discriminator this case is
@@ -246,7 +246,7 @@ test('ELITEA-0394: the dropdown lists only conversation participants, not every 
     // in this stack's default project the directory holds exactly the
     // caller and the one attached teammate, so "not the caller" is the
     // strongest bound available — see this test's own header note).
-    await expect(page.getByText(author.name, { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('main').getByText(author.name, { exact: true })).toHaveCount(0);
 
     // Filtering for a name nobody has must surface nobody — a dropdown that
     // quietly fell back to some other directory would still list a match.
@@ -288,8 +288,8 @@ test('ELITEA-0392: trigger, filter, mouse-select, re-trigger, keyboard-select, i
     // 1) Trigger — both participants listed.
     await typeInComposer(page, '@');
     await expect(mentionDropdown(page)).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(first!.name, { exact: true })).toBeVisible();
-    await expect(page.getByText(second.name, { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByText(first!.name, { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByText(second.name, { exact: true })).toBeVisible();
 
     // 2) Filter — type enough of `first`'s name that only it matches.
     // `useMentionDetection`'s filter is `u.name.toLowerCase().includes(searchStr)`,
@@ -304,11 +304,11 @@ test('ELITEA-0392: trigger, filter, mouse-select, re-trigger, keyboard-select, i
       test.skip(true, 'this stack\'s two seeded users share a name prefix — filtering cannot discriminate them');
     }
     await typeMore(page, firstToken);
-    await expect(page.getByText(second.name, { exact: true }), 'the filter must narrow the list').toHaveCount(0);
-    await expect(page.getByText(first!.name, { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByText(second.name, { exact: true }), 'the filter must narrow the list').toHaveCount(0);
+    await expect(page.getByRole('main').getByText(first!.name, { exact: true })).toBeVisible();
 
     // 3) Mouse-select.
-    await page.getByText(first!.name, { exact: true }).click();
+    await page.getByRole('main').getByText(first!.name, { exact: true }).click();
     await expect(mentionDropdown(page)).toHaveCount(0);
     await expect(input).toHaveValue(`@${first!.name} `);
 
@@ -320,8 +320,8 @@ test('ELITEA-0392: trigger, filter, mouse-select, re-trigger, keyboard-select, i
     // 5) Re-trigger — both participants listed again.
     await typeMore(page, '@');
     await expect(mentionDropdown(page)).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(first!.name, { exact: true })).toBeVisible();
-    await expect(page.getByText(second.name, { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByText(first!.name, { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByText(second.name, { exact: true })).toBeVisible();
 
     // 6) Keyboard-select — ArrowDown then Enter. `UserMentionList`'s own
     // listener resets the active index to 0 on every filtered-list change and

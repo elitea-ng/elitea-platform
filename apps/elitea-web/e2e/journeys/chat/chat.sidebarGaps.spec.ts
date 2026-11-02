@@ -14,8 +14,8 @@
  * and never a reload — which is the actual ELITEA-0513 discriminator.
  * `chat.folders.spec.ts` proves the single-folder pagination fetcher
  * (`folderApi.folderConversations`, `?grouped=true&folder_id=…`) answers a
- * correct page — but never drives the UI's own scroll-triggered follow-up
- * request for it, which is ELITEA-0514.
+ * correct page — but never drives the sidebar folder's own "Show more"
+ * follow-up request for it, which is ELITEA-0514.
  */
 import type { APIRequestContext } from '@playwright/test';
 import { test, expect } from '@playwright/test';
@@ -107,28 +107,29 @@ test('ELITEA-0513: a pinned conversation is excluded from every date group, incl
       ).not.toContain(conversationId);
     }
 
-    // And the UI agrees. `PinnedConversations.tsx` renders pinned rows
-    // unconditionally at the top of the rail with no group wrapper or
-    // heading of its own (confirmed reading the component: it is a bare
-    // `.map` over `renderConversationItem`) — so there is no "Pinned"
-    // label to assert on, and the discriminator is instead that the row is
-    // visible WITHOUT expanding anything: a row still inside a collapsed
-    // date-group body could not be, since `DateGroup` starts collapsed
-    // (`chat.management.spec.ts`'s `openTodayGroup` exists precisely because
-    // date-group rows are not visible until their toggle is clicked).
+    // And the UI agrees: the sidebar list shows the row under its "Pinned"
+    // group, and exactly once — a row also listed in a date group would be
+    // rendered twice (Today is open by default too).
     await page.goto(BASE_URL + '/app/chat');
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
+    const row = page.locator(`[data-conversation-id="${conversationId}"]`);
+    const pinnedGroup = page
+      .getByTestId('shell-chats')
+      .getByTestId('shell-chats-group')
+      .filter({ has: page.locator('.shell-group-caption', { hasText: /^Pinned$/ }) });
+    await expect(pinnedGroup.locator('.shell-row-main')).toHaveAttribute('aria-expanded', 'true', { timeout: 15_000 });
     await expect(
-      page.getByTestId(`conversation-item-${conversationId}`),
-      'a pinned row must be visible without expanding any date group',
+      pinnedGroup.locator('xpath=ancestor::li[1]').locator(`[data-conversation-id="${conversationId}"]`),
+      'a pinned row must show under the Pinned group',
     ).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId(`conversation-item-${conversationId}`)).toHaveCount(1);
+    await expect(row).toHaveCount(1);
     await checkA11y(page);
 
     // Reload — no duplication, still exactly one row, still pinned server-side.
     await page.reload();
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByTestId(`conversation-item-${conversationId}`)).toHaveCount(1);
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    await expect(row).toHaveCount(1);
 
     const afterReload = await readGroupedListing(page.request);
     expect((afterReload.pinned?.conversations ?? []).map((c) => String(c.id))).toContain(conversationId);
@@ -140,8 +141,8 @@ test('ELITEA-0513: a pinned conversation is excluded from every date group, incl
   }
 });
 
-/* onetest: ELITEA-0514 — a folder bigger than one page pages its OWN conversations, independently of the date groups, when the UI scrolls its load-more sentinel */
-test('ELITEA-0514: a folder bigger than one page loads its remainder through the folder\'s own sentinel', async ({
+/* onetest: ELITEA-0514 — a folder bigger than one page pages its OWN conversations, independently of the date groups, through the folder's own "Show more" */
+test('ELITEA-0514: a folder bigger than one page loads its remainder through the folder\'s own "Show more"', async ({
   page,
 }) => {
   test.setTimeout(180_000);
@@ -179,31 +180,28 @@ test('ELITEA-0514: a folder bigger than one page loads its remainder through the
     expect(row?.conversations?.length, 'the folder\'s first page must be paged, not served whole').toBe(PAGE_SIZE);
     expect(row?.total ?? 0, 'the folder must report the rows it did NOT deliver').toBeGreaterThan(PAGE_SIZE);
 
-    // Expand the folder in the rail — the folder's own accordion toggle.
+    // Expand the folder in the sidebar list — folders start closed.
     const folderRowName = String(row?.name ?? uniq('bigfolder'));
-    const sidebar = page.getByTestId('chat-conversation-sidebar');
-    const folderToggle = sidebar.getByRole('button', { name: folderRowName });
+    const folderFrame = page.getByTestId('shell-chats').getByTestId('shell-chats-folder').filter({ hasText: folderRowName });
+    const folderToggle = folderFrame.locator('.shell-row-main');
     await expect(folderToggle).toBeVisible({ timeout: 15_000 });
     await folderToggle.click();
+    await expect(folderToggle).toHaveAttribute('aria-expanded', 'true');
 
+    // The folder's own subtree: its `li` holds its rows and its "Show more",
+    // and nothing of the date groups.
+    const folderBody = folderFrame.locator('xpath=ancestor::li[1]');
     const lastInPage = String(row?.conversations?.at(-1)?.id ?? '');
-    await expect(page.getByTestId(`conversation-item-${lastInPage}`)).toBeVisible({ timeout: 20_000 });
+    await expect(folderBody.locator(`[data-conversation-id="${lastInPage}"]`)).toBeVisible({ timeout: 20_000 });
 
-    // Same "walk up to the nearest ancestor holding the sentinel" technique
-    // `conversations.list.spec.ts` already uses for a date bucket's own
-    // remainder — the folder body is a different subtree, same shape.
-    await page.evaluate((rowId: string) => {
-      let node: Element | null = document.querySelector(`[data-testid="conversation-item-${rowId}"]`);
-      while (node !== null && node.querySelector('[data-testid="conversation-load-more-sentinel"]') === null) {
-        node = node.parentElement;
-      }
-      node?.querySelector('[data-testid="conversation-load-more-sentinel"]')?.scrollIntoView({ block: 'center' });
-    }, lastInPage);
+    const showMore = folderBody.getByTestId('shell-chats-more');
+    await expect(showMore, 'a folder with a remainder must offer its next page').toBeVisible({ timeout: 20_000 });
+    await showMore.locator('.shell-row-main').click();
 
     await expect
       .poll(() => followUps.length, {
         timeout: 30_000,
-        message: 'scrolling a folder\'s own remainder must fire a folder_id-scoped follow-up request',
+        message: 'a folder\'s "Show more" must fire a folder_id-scoped follow-up request',
       })
       .toBeGreaterThan(0);
     const followUp = new URL(followUps[0]!, BASE_URL);
@@ -212,16 +210,10 @@ test('ELITEA-0514: a folder bigger than one page loads its remainder through the
     );
 
     await expect
-      .poll(
-        () =>
-          page.evaluate((id: string) => {
-            const held = (node: Element): number => node.querySelectorAll('[data-testid^="conversation-item-"]').length;
-            let node: Element | null = document.querySelector(`[data-testid="conversation-item-${id}"]`);
-            while (node !== null && held(node) < 2) node = node.parentElement;
-            return node === null ? 0 : held(node);
-          }, lastInPage),
-        { timeout: 30_000, message: 'the folder must hold more rows once its second page lands' },
-      )
+      .poll(() => folderBody.locator('[data-conversation-id]').count(), {
+        timeout: 30_000,
+        message: 'the folder must hold more rows once its second page lands',
+      })
       .toBeGreaterThan(PAGE_SIZE);
   } finally {
     for (const id of ids) await deleteConversation(page.request, id);

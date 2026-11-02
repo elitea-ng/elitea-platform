@@ -26,7 +26,12 @@ COPY apps/elitea-web/src/ ./src/
 COPY apps/elitea-web/public/ ./public/
 
 ENV NODE_OPTIONS="--max-old-space-size=4096"
-RUN npm run build
+# The release version (publish.yml passes VERSION to every image) is baked into
+# the bundle as VITE_APP_VERSION, so the account menu can show it
+# (`shared/config/appVersion.ts`). Declared after `npm ci` so a new release
+# does not invalidate the dependency layer. Unset in a local or CI build: "dev".
+ARG VERSION=dev
+RUN VITE_APP_VERSION="${VERSION}" npm run build
 
 # ── Stage 1b: build the docs site (apps/elitea-docs, Astro Starlight) ────────
 # Its own stage and lockfile, so a docs edit never invalidates the SPA build

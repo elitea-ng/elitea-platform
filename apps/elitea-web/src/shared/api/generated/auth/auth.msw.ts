@@ -163,6 +163,15 @@ export const getPermissionListResponseMock = (): Permission[] =>
     enabled: faker.datatype.boolean(),
   }));
 
+export const getAdministrationPermissionListResponseMock = (): Permission[] =>
+  Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    enabled: faker.datatype.boolean(),
+  }));
+
 export const getListPersonalTokensResponseMock = (): PersonalAccessToken[] =>
   Array.from(
     { length: faker.number.int({ min: 1, max: 10 }) },
@@ -374,6 +383,32 @@ export const getPermissionListMockHandler = (
   );
 };
 
+export const getAdministrationPermissionListMockHandler = (
+  overrideResponse?:
+    | Permission[]
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<Permission[]> | Permission[]),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/auth/permissions/administration",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getAdministrationPermissionListResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListPersonalTokensMockHandler = (
   overrideResponse?:
     | PersonalAccessToken[]
@@ -480,6 +515,7 @@ export const getAuthMock = () => [
   getListNativeDevicesMockHandler(),
   getRevokeNativeDeviceMockHandler(),
   getPermissionListMockHandler(),
+  getAdministrationPermissionListMockHandler(),
   getListPersonalTokensMockHandler(),
   getCreatePersonalTokenMockHandler(),
   getGetPersonalTokenMockHandler(),

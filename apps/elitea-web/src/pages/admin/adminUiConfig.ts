@@ -91,6 +91,18 @@ export function adminUiUserName(): string {
   return name !== '' ? name : 'Admin';
 }
 
+/** The operator's email, when the handler injected one (the account menu's header). */
+export function adminUiUserEmail(): string | undefined {
+  const email = readAdminUiConfig().user_email;
+  return email !== undefined && email !== '' ? email : undefined;
+}
+
+/** The operator's user id, when the handler injected one: the theme preference is stored per user. */
+export function adminUiUserId(): string | undefined {
+  const id = readAdminUiConfig().user_id;
+  return id === undefined || id === null || id === '' ? undefined : String(id);
+}
+
 /**
  * A presentation-only permission probe. Named so no call site can mistake it
  * for an authorisation check.

@@ -24,8 +24,11 @@ export function providerDisplayName(type: string): string {
  * provider display name derived from `type`.
  */
 export function credentialDisplayName(credential: Credential): string {
-  if (credential.label !== undefined && credential.label.trim() !== '') return credential.label;
-  if (credential.eliteaTitle !== undefined && credential.eliteaTitle.trim() !== '') return credential.eliteaTitle;
+  // `typeof`, not `!== undefined`: the wire sends `label: null` for an
+  // unlabelled credential, and `null.trim()` took the whole list down.
+  const { label, eliteaTitle } = credential as { readonly label?: unknown; readonly eliteaTitle?: unknown };
+  if (typeof label === 'string' && label.trim() !== '') return label;
+  if (typeof eliteaTitle === 'string' && eliteaTitle.trim() !== '') return eliteaTitle;
   const dataTitle = credential.data?.['title'];
   if (typeof dataTitle === 'string' && dataTitle.trim() !== '') return dataTitle;
   return providerDisplayName(credential.type);

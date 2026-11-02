@@ -2,13 +2,15 @@ import CssBaseline from '@mui/material/CssBaseline';
 import { ThemeProvider } from '@mui/material/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from '@tanstack/react-router';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getGetAuthorDetailMockHandler, getListApplicationsMockHandler } from '@/shared/api/generated/applications/applications.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { getListTagsMockHandler } from '@/shared/api/generated/tags/tags.msw';
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
+
+import { SidePanelHarness } from '@/test/sidePanelHarness';
 
 import { server } from '../../../test/setup';
 import { AGENTS_TAB_ADMIN_PERMISSION } from '../lib/constants';
@@ -43,7 +45,9 @@ function renderPage(props: Partial<Parameters<typeof UserPublicPage>[0]> = {}) {
       >
         <CssBaseline />
         <QueryClientProvider client={queryClient}>
-          <Page />
+          <SidePanelHarness>
+            <Page />
+          </SidePanelHarness>
         </QueryClientProvider>
       </ThemeProvider>
     ),
@@ -74,12 +78,13 @@ afterEach(() => {
   resetGeneratedClient();
 });
 
-describe('UserPublicPage right-hand rail', () => {
-  it('renders the rail with the project tag chips', async () => {
+describe('UserPublicPage filters in the side panel', () => {
+  it('offers a Filters tab with the project tag chips', async () => {
     renderPage();
 
-    expect(await screen.findByTestId('entity-rail')).toBeInTheDocument();
-    expect(await screen.findByTestId('tags-panel-chip-alpha')).toBeInTheDocument();
+    const filters = await screen.findByTestId('side-panel-tab-filters');
+    expect(await within(filters).findByTestId('entity-list-filters')).toBeInTheDocument();
+    expect(await within(filters).findByTestId('tags-panel-chip-alpha')).toBeInTheDocument();
   });
 
   it('keys the author statistic off the TAB, since /user-public matches no route prefix', async () => {

@@ -97,7 +97,7 @@ describe('EditToolkit — Indexes "Run" tab settles over the REST test-tool run'
 
     renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
-    await screen.findByText('My GitHub');
+    await screen.findByRole('tablist', { name: 'My GitHub' });
     await user.click(await screen.findByRole('tab', { name: 'Indexes' }));
 
     const panel = await screen.findByTestId('edit-toolkit-indexes-tab-panel');

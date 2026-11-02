@@ -1,8 +1,9 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { getPermissionListMockHandler } from '@/shared/api/generated/auth/auth.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
@@ -10,6 +11,7 @@ import { Skills } from './Skills';
 import { renderSkillsRoute } from './__tests__/testRouter';
 
 const BASE = '/api/v2';
+const CREATE = 'models.applications.applications.create';
 const skill = {
   id: 'skill-1',
   project_id: 'project-1',
@@ -44,9 +46,10 @@ describe('Skills page', () => {
   });
 
   it('navigates to the create route from the primary action', async () => {
+    server.use(getPermissionListMockHandler([{ name: CREATE, enabled: true }]));
     const user = userEvent.setup();
     const { router } = renderSkillsRoute(<Skills />);
-    await user.click(await screen.findByRole('button', { name: 'Create skill' }));
+    await user.click(await screen.findByRole('button', { name: 'New skill' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/skills/create'));
   });
 
@@ -81,16 +84,25 @@ describe('Skills page', () => {
   });
 
   /**
-   * COMPOSITION ROOT — the title row is `widgets/page-header` now (issue
-   * 841). The page's only level-1 heading and both header actions must
-   * survive the move; `routes/__tests__/guardsIntegration.test.tsx` reads
-   * that heading as its "the page rendered" landmark.
+   * COMPOSITION ROOT — the shell's breadcrumb names the page now; the page
+   * draws only its toolbar: the tabs, import, and "+ New skill" for a caller
+   * who may create.
    */
-  it('renders its heading, import and create controls inside the shared page header', async () => {
+  it('renders its tabs, import and create controls in the page toolbar, and no heading of its own', async () => {
+    server.use(getPermissionListMockHandler([{ name: CREATE, enabled: true }]));
     renderSkillsRoute(<Skills />);
 
-    const header = await screen.findByTestId('page-header');
-    expect(header).toContainElement(screen.getByRole('heading', { name: 'Skills', level: 1 }));
-    expect(header).toContainElement(screen.getByRole('button', { name: 'Create skill' }));
+    const toolbar = await screen.findByTestId('page-toolbar');
+    expect(await within(toolbar).findByRole('button', { name: 'New skill' })).toBeInTheDocument();
+    expect(within(toolbar).getByRole('tablist')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  });
+
+  it('offers no "+ New skill" to a caller who may not create', async () => {
+    server.use(getPermissionListMockHandler([]));
+    renderSkillsRoute(<Skills />);
+
+    expect(await screen.findByText('Reviewer')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New skill' })).toBeNull();
   });
 });

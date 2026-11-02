@@ -374,6 +374,32 @@ test('@visual pipeline-editor-empty', async ({ page }) => {
 });
 
 /**
+ * The same document at 1280x800 (PR 1553): the editor folds its test-chat pane
+ * so the canvas keeps at least 480px (`useEditorPaneRoom`), and the General
+ * pane stays open. Pinned because the default 1602px shots above have room for
+ * both panes and would never show the folded state.
+ */
+test.describe('at 1280', () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+
+  test('@visual pipeline-editor-1280-chat-folded', async ({ page }) => {
+    await openEditor(page, EMPTY_GRAPH);
+    await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('button', { name: 'Expand the chat panel' })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('button', { name: 'Collapse the configuration panel' })).toBeVisible();
+    const canvas = await page.getByTestId('rf__wrapper').boundingBox();
+    expect(canvas?.width ?? 0).toBeGreaterThanOrEqual(480);
+    await settle(page);
+
+    await expect(page).toHaveScreenshot('pipeline-editor-1280-chat-folded.png', {
+      fullPage: false,
+      mask: volatileRegions(page),
+      ...SNAPSHOT_TOLERANCE,
+    });
+  });
+});
+
+/**
  * The light counterpart. `parity/screenshot-index.json` carries one
  * (`pipeline-flow-editor.light.jpeg`) and calls out what actually differs —
  * "canvas grid and node chrome invert, add-node FAB is magenta" — which is the

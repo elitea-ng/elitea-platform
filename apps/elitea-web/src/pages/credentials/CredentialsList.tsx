@@ -1,8 +1,10 @@
 /**
- * pages/credentials/CredentialsList.tsx — the credentials grid: search,
- * type filter, pagination, and (per credential) an owner icon, display
- * name, scope, and connection-status indicator. Ported from
- * `apps/elitea-ui/src/pages/Credentials/CredentialsList.jsx`.
+ * pages/credentials/CredentialsList.tsx — the credentials list page body:
+ * its toolbar (the count, the search in the route's `query`, the Filters
+ * button and "+ New credential"), the grid with pagination, and the type
+ * filter as the Filters tab of the shell's side panel. Per credential: an
+ * owner icon, display name, scope, and connection-status indicator. Ported
+ * from `apps/elitea-ui/src/pages/Credentials/CredentialsList.jsx`.
  * Manifest COPY-467, ACT-039 (batch connection test on load).
  *
  * DISCLOSED SCOPE REDUCTION (see this unit's final report): the baseline's
@@ -33,7 +35,8 @@ import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { EntityCardList, EntityEmptyState, entityTypeIcon, type EntityListItem } from '@/shared/ui/EntityCardList';
-import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
+import { combineSx } from '@/shared/ui/lib/combineSx';
+import { PageToolbar, pageBodySx, pageSx, useListSearchQuery } from '@/widgets/page-header';
 
 import { generateCredentialTagList, normalizeCredentialPage, useConfigurationsList, useCredentialValidation } from '@/features/credentials';
 
@@ -97,7 +100,7 @@ function ListStatus({ isLoading, isError, error }: ListStatusProps): ReactNode {
 }
 
 export function CredentialsList({ projectId, onSelectCredential, onCreateNew }: CredentialsListProps): ReactNode {
-  const [query, setQuery] = useState('');
+  const query = useListSearchQuery();
   const [selectedTypes, setSelectedTypes] = useState<readonly string[]>([]);
   const [page, setPage] = useState(0);
   const { batchValidateCredentials, getCredentialStatus } = useCredentialValidation();
@@ -161,23 +164,14 @@ export function CredentialsList({ projectId, onSelectCredential, onCreateNew }: 
   };
 
   return (
-    <Box sx={containerSx}>
-      <Box sx={mainColumnSx}>
-        <Box sx={toolbarSx}>
-          <SimpleSearchBar
-            value={query}
-            onChange={setQuery}
-            placeholder={t('credentials.list.search', 'Search credentials')}
-          />
-          <BaseBtn
-            variant="contained"
-            color="primary"
-            onClick={onCreateNew}
-            sx={createBtnSx}
-          >
-            {t('credentials.list.create', 'New credential')}
-          </BaseBtn>
-        </Box>
+    <Box sx={pageSx}>
+      <PageToolbar
+        summary={t('pages.credentials.count', '{{count}} credentials', { count: total })}
+        search={{ placeholder: t('credentials.list.search', 'Search credentials'), 'data-testid': 'credentials-search-input' }}
+        filters={{ activeCount: selectedTypes.length }}
+        primaryAction={{ label: t('credentials.list.create', 'New credential'), testId: 'credentials-create', onClick: onCreateNew }}
+      />
+      <Box sx={combineSx(pageBodySx, statusGutterSx)}>
         {(list.isLoading || list.isError) && (
           <ListStatus
             isLoading={list.isLoading}
@@ -188,7 +182,6 @@ export function CredentialsList({ projectId, onSelectCredential, onCreateNew }: 
         {!list.isLoading && !list.isError && (
           <EntityCardList
             items={cards}
-            railVisible={false}
             emptyState={
               <EntityEmptyState
                 art="credentials"
@@ -210,25 +203,23 @@ export function CredentialsList({ projectId, onSelectCredential, onCreateNew }: 
             onClick={() => {
               setPage((prev) => prev + 1);
             }}
+            sx={loadMoreSx}
           >
             {t('credentials.list.loadMore', 'Load more')}
           </BaseBtn>
         )}
       </Box>
-      <Box sx={sideColumnSx}>
-        <CredentialsTypesPanel
-          tagList={tagList}
-          selectedTypes={selectedTypes}
-          onToggleType={toggleType}
-        />
-      </Box>
+      <CredentialsTypesPanel
+        tagList={tagList}
+        selectedTypes={selectedTypes}
+        onToggleType={toggleType}
+        onClearTypes={() => setSelectedTypes([])}
+        isLoading={list.isLoading}
+      />
     </Box>
   );
 }
 
-const containerSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', gap: theme.spacing(3), width: '100%' });
-const mainColumnSx: SxProps<Theme> = (theme: Theme) => ({ flex: 1, display: 'flex', flexDirection: 'column', gap: theme.spacing(2) });
-const sideColumnSx: SxProps<Theme> = { width: '18.75rem', flexShrink: 0 };
-const toolbarSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', alignItems: 'center', gap: theme.spacing(2) });
-/** Without this the pill is a flex item that shrinks: the label wrapped onto two lines and clipped its own capsule. */
-const createBtnSx: SxProps<Theme> = { flexShrink: 0, whiteSpace: 'nowrap' };
+/** The status line sits in the toolbar's gutter, like the grid under it. */
+const statusGutterSx: SxProps<Theme> = (theme: Theme) => ({ '& > p': { paddingInline: theme.spacing(3), paddingTop: theme.spacing(2) } });
+const loadMoreSx: SxProps<Theme> = { alignSelf: 'center', marginBottom: '1.5rem' };

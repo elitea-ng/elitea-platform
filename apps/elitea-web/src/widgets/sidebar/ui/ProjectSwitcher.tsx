@@ -47,10 +47,8 @@ export interface ProjectSwitcherProps {
  * ("Project: Default Project") and nobody knew it could be clicked. Both
  * are restored here:
  *
- * - The arrow is `ExpandMoreIcon`, the same chevron the sibling sidebar
- *   dropdown (`widgets/create-button/ui/CreateEntityButton.tsx`, an
- *   identical `ClickAwayListener` + `Popper` + `Paper` shape) already
- *   rotates 180° on open, and the same icon `shared/ui/SingleSelect` hands
+ * - The arrow is `ExpandMoreIcon`, rotated 180° on open — the same icon
+ *   `shared/ui/SingleSelect` hands
  *   to MUI `Select` as its `IconComponent`. It is `aria-hidden`
  *   (decoration; the ARIA state below carries the meaning) and it is not
  *   rendered when `collapsed`, where the avatar is the whole control.
@@ -173,8 +171,8 @@ export function ProjectSwitcher({ projects, selectedProjectId, onSelect, collaps
                   height: '1rem',
                   flexShrink: 0,
                   // currentColor, not a pinned palette token. Every other icon
-                  // on this rail inherits — the nav items, both collapse
-                  // chevrons in Sidebar.tsx, and the create-button chevron —
+                  // on this rail inherits — the nav items and the collapse
+                  // toggle in SidebarHeader.tsx —
                   // and pinning one made this the only sidebar icon whose
                   // colour is an independent input. It rendered in the dark
                   // scheme and vanished in the light one, measured in the

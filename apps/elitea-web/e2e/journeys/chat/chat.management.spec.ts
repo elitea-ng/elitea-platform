@@ -70,8 +70,8 @@
  * through the bare `request` fixture the api fixture's own `createConversation`
  * records as unauthenticated here. A `deleteConversation` that answers 401 and
  * is not checked reads exactly like a sweep that worked. A test that FAILS
- * still leaves its rows, as every other chat journey already does; the rail
- * sorts newest-first, so M1's freshly created row stays at the top of the
+ * still leaves its rows, as every other chat journey already does; the
+ * sidebar list sorts newest-first, so M1's freshly created row stays at the top of the
  * group regardless.
  */
 import { test, expect } from '@playwright/test';
@@ -79,6 +79,7 @@ import type { APIRequestContext, Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
+import { openParticipants } from '../../fixtures/sidePanel';
 import {
   API_BASE,
   AUTOTEST_PREFIX,
@@ -172,37 +173,52 @@ function expectDefaultParticipants(participants: readonly ParticipantRow[], auth
 }
 
 /**
- * Opens the rail's date group that holds today's conversations.
+ * Opens the sidebar's date group that holds today's conversations.
  *
- * `DateGroup` starts collapsed, so its rows are mounted but not visible — a
- * plain `.click()` on a row would time out on "element is not visible" and
- * read like a missing row. Driven off `aria-expanded` rather than clicked
- * unconditionally, so a future default of "expanded" closes nothing.
+ * Today is open by default, but the open state is remembered per viewer, so
+ * this is driven off `aria-expanded` rather than assumed — a closed group's
+ * rows are not rendered, which would read like a missing row.
  */
 async function openTodayGroup(page: Page): Promise<void> {
-  const sidebar = page.getByTestId('chat-conversation-sidebar');
-  await expect(sidebar).toBeVisible({ timeout: 20_000 });
-  const today = sidebar.getByRole('button', { name: 'Today' });
+  const list = page.getByTestId('shell-chats');
+  await expect(list).toBeVisible({ timeout: 20_000 });
+  const today = list
+    .getByTestId('shell-chats-group')
+    .filter({ has: page.locator('.shell-group-caption', { hasText: /^Today$/ }) })
+    .locator('.shell-row-main');
   await expect(today).toBeVisible({ timeout: 20_000 });
   if ((await today.getAttribute('aria-expanded')) !== 'true') await today.click();
 }
 
-/** Opens the participants rail, which `ChatPage` mounts collapsed (baseline `NewChat.jsx:166`). */
+/**
+ * Opens one sidebar row's "⋯" menu. The button is only visible while the row
+ * is hovered, so the hover and the click are one retried gesture (see
+ * `chat.sharing.spec.ts`'s own `openRowMenu`).
+ */
+async function openRowMenu(page: Page, conversationId: string): Promise<void> {
+  const row = page.locator(`[data-conversation-id="${conversationId}"]`);
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  const menu = page.getByRole('menu');
+  await expect(async () => {
+    if ((await menu.count()) === 0) {
+      await row.hover();
+      await row.getByTestId('shell-conversation-more').click({ timeout: 5_000 });
+    }
+    await expect(menu).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: 40_000 });
+}
+
+/** Opens the participants: the shell side panel's Conversation tab. */
 async function openParticipantsRail(page: Page): Promise<void> {
-  const expand = page.getByRole('button', { name: 'Expand participants' });
-  await expect(expand).toBeVisible({ timeout: 20_000 });
-  await expand.click();
-  await expect(page.getByTestId('participants-container')).toBeVisible({ timeout: 10_000 });
+  await openParticipants(page);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// M1: delete a conversation from the rail
+// M1: delete a conversation from the sidebar list
 //
-// The regression this pins: `useConversationSidebar.deleteConversation` used
-// to filter only `conversations`/`pinnedConversations`, while the visible rows
-// render out of `dateGroups`/`folders` — so a successful DELETE left the row
-// on screen and the transcript open, and only a reload made the conversation
-// look gone. Both halves are asserted WITHOUT reloading, and a page-lifetime
+// The regression this pins: a successful DELETE once left the row on screen
+// and the transcript open, and only a reload made the conversation look
+// gone. Both halves are asserted WITHOUT reloading, and a page-lifetime
 // sentinel proves no reload happened, because a reload would make the
 // assertions pass against the very bug they exist for.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -214,15 +230,14 @@ test('M1: deleting a conversation removes its rail row, blanks the route and 404
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
   await openTodayGroup(page);
 
-  const row = page.getByTestId(`conversation-item-${conversationId}`);
-  await expect(row, 'a conversation created over the API must appear in the rail').toBeVisible({ timeout: 15_000 });
+  const row = page.locator(`[data-conversation-id="${conversationId}"]`);
+  await expect(row, 'a conversation created over the API must appear in the sidebar list').toBeVisible({ timeout: 15_000 });
   await expect(row).toContainText(name);
   await checkA11y(page);
 
-  // Open it: `deleteConversation` only navigates away from a transcript that
-  // is ACTIVE, and the sidebar's active conversation is set by a click, not by
-  // the route (`useConversationSidebar`'s restore-vs-click split).
-  await row.click();
+  // Open it: deleting the OPEN conversation is what navigates away from its
+  // transcript (`widgets/chat-rail/model/useRowActions.ts`'s `remove`).
+  await row.locator('.shell-row-main').click();
   await expect(page).toHaveURL(new RegExp(`/app/chat/${conversationId}$`), { timeout: 15_000 });
 
   // Anything set on this page object dies with a reload or a navigation that
@@ -231,53 +246,26 @@ test('M1: deleting a conversation removes its rail row, blanks the route and 404
     (window as unknown as { __eliteaMgmt?: string }).__eliteaMgmt = 'alive';
   });
 
-  /*
-   * The kebab is `display: none` until the row is hovered — `ConversationItem`
-   * drives its menu wrapper off `isHovering` state with no CSS `:hover`
-   * fallback (`ConversationItem.styles.ts`) — so hovering the row is the
-   * interaction that reveals what the next line clicks.
-   *
-   * This step used to carry a pointer-jiggle workaround (`mouse.move(0, 0)`
-   * then `row.hover()`) that forced `DateGroup` to re-render the row and
-   * refresh a STALE `deleteConversation` closure. `useConversationSidebar`
-   * read `activeConversation` from the closure its handler was built in, and a
-   * memoised `ConversationItem` — reached through `useRenderConversationItem`'s
-   * `useCallback([])` render-prop, which reads its inputs from a `useLatestRef`
-   * so its identity never changes — kept the closure captured BEFORE the row
-   * was selected. That closure's `activeConversation?.id === conversation.id`
-   * test was false, so the DELETE landed and the row vanished but the route
-   * stayed on the deleted transcript (flaked 2 runs in 3 under `--workers=3`).
-   * `deleteConversation` now reads the active conversation LIVE (via a ref), so
-   * the navigate-away branch is correct regardless of when the handler closure
-   * was created, and the jiggle is no longer needed.
-   */
-  const trigger = page.locator(`#conversation-menu-${conversationId}-trigger`);
-  await row.hover();
-  await expect(trigger).toBeVisible({ timeout: 5_000 });
-  await trigger.click();
+  await openRowMenu(page, conversationId);
+  await page.getByRole('menuitem', { name: 'Delete…' }).click();
 
-  const menu = page.locator(`#conversation-menu-${conversationId}-menu`);
-  await expect(menu).toBeVisible({ timeout: 5_000 });
-  await menu.getByRole('menuitem', { name: 'Delete' }).click();
-
-  // The first Delete only ARMS the confirmation — `ControlsDropdown` replaces
-  // the row in place with the message and a Cancel/Delete pair. A menu that
-  // deleted on the first click would fail here, since the row it needs is the
-  // one that only exists in the confirming state.
-  await expect(menu).toContainText("Are you sure to delete conversation? It can't be restored.");
-  await expect(menu.getByRole('menuitem', { name: 'Cancel' })).toBeVisible();
+  // "Delete…" only ASKS — a dialog with a Cancel/Delete pair. A menu that
+  // deleted on the first click would fail here, since the button it needs
+  // only exists in the dialog.
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText("This can't be undone.");
+  await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeVisible();
 
   const deleted = page.waitForResponse(
     (r) => r.url().includes(`${CONVERSATION_PATH}/${conversationId}`) && r.request().method() === 'DELETE',
     { timeout: 20_000 },
   );
-  await menu.getByRole('menuitem', { name: 'Delete' }).click();
+  await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
   expect((await deleted).status(), 'the confirmed delete must reach the server').toBe(204);
 
-  // The row leaves the rail and the route falls back to the blank composer —
-  // both in the SAME page lifetime.
+  // The row leaves the sidebar list and the route falls back to the blank
+  // composer — both in the SAME page lifetime.
   await expect(row).toHaveCount(0);
-  await expect(trigger).toHaveCount(0);
   // `toHaveURL`, not `waitForURL`: this is a client-side route change, and
   // `waitForURL` waits on a navigation lifecycle event that a history push
   // never fires. Retried polling of the address itself is what this asserts.
@@ -339,7 +327,7 @@ test('M2: an agent participant renders in the rail and the rail control removes 
 
   const agents = page.getByTestId('participants-section-Agents');
   await expect(agents, 'the attached agent must reach the rail').toBeVisible({ timeout: 15_000 });
-  await expect(agents).toContainText('Agents (1)');
+  await expect(agents).toContainText('Agents · 1');
   await expect(agents).toContainText(agentName);
   // Creation attaches the author. The rail must retain that user beside the agent.
   await expect(page.getByTestId('users-section')).toContainText(reader.name);
@@ -509,13 +497,12 @@ test('M3: a cold deep link resolves a foreign participant server-side and captio
 //
 // M1 above proves the CONFIRM path. Nothing proved the other one, and the two
 // share every step but the last click — which is exactly the shape in which a
-// destructive control goes wrong: `ControlsDropdown` replaces the menu row in
-// place with a Cancel/Delete pair, so "Cancel" is a sibling of the button that
-// deletes, one row apart. A Cancel wired to the same handler, or a first
-// "Delete" click that already deleted, both look correct until someone cancels.
+// destructive control goes wrong: the delete dialog's Cancel is a sibling of
+// the button that deletes. A Cancel wired to the same handler, or a "Delete…"
+// menu click that already deleted, both look correct until someone cancels.
 //
 // The server read at the end is what discriminates. A conversation whose row
-// stayed on the rail because the rail never refreshed reads exactly like one
+// stayed in the list because the list never refreshed reads exactly like one
 // that was not deleted, and only the store can tell the two apart.
 // ─────────────────────────────────────────────────────────────────────────────
 test('M1b: cancelling the delete confirmation leaves the conversation on the rail and in the store', async ({ page }) => {
@@ -526,30 +513,14 @@ test('M1b: cancelling the delete confirmation leaves the conversation on the rai
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
   await openTodayGroup(page);
 
-  const row = page.getByTestId(`conversation-item-${conversationId}`);
+  const row = page.locator(`[data-conversation-id="${conversationId}"]`);
   await expect(row).toBeVisible({ timeout: 15_000 });
   await expect(row).toContainText(name);
 
-  // The kebab is `display: none` until the row is hovered
-  // (`ConversationItem.styles.ts`'s `isHovering`-driven `menuWrapper`), and
-  // hovering itself reflows the row (`computeMainBodyWidth` shrinks
-  // `mainBody` by 32px to make room for it) — a single `hover()` then
-  // `click()` can lose the hover state to that reflow before the click
-  // lands, observed in CI as the trigger cycling "not stable" / "not
-  // visible" for the rest of the test's budget (M1, right above, hit the
-  // same shape for a different reason — see its own comment on the
-  // pointer-jiggle history). `toPass` re-issues the WHOLE gesture — a fresh
-  // hover, not just a fresh click — so a hover dropped mid-attempt is
-  // recovered rather than retried against a target that is still hidden.
-  const trigger = page.locator(`#conversation-menu-${conversationId}-trigger`);
-  const menu = page.locator(`#conversation-menu-${conversationId}-menu`);
-  await expect(async () => {
-    await row.hover();
-    await trigger.click({ timeout: 2_000 });
-    await expect(menu).toBeVisible({ timeout: 2_000 });
-  }).toPass({ timeout: 20_000 });
-  await menu.getByRole('menuitem', { name: 'Delete' }).click();
-  await expect(menu).toContainText("Are you sure to delete conversation? It can't be restored.");
+  await openRowMenu(page, conversationId);
+  await page.getByRole('menuitem', { name: 'Delete…' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText("This can't be undone.");
 
   // No DELETE may leave the browser at all — not before the confirmation, and
   // not because of the Cancel. Registered here so a request the arming click
@@ -561,13 +532,12 @@ test('M1b: cancelling the delete confirmation leaves the conversation on the rai
     }
   });
 
-  await menu.getByRole('menuitem', { name: 'Cancel' }).click();
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
 
-  // The confirmation closed and the menu went back to its ordinary rows — the
-  // Delete entry is offerable again, which is what "cancelled" means here.
-  await expect(menu).not.toContainText("Are you sure to delete conversation?");
+  // The confirmation closed, which is what "cancelled" means here.
+  await expect(dialog).toHaveCount(0);
 
-  // The row is still on the rail, in the same page lifetime.
+  // The row is still in the sidebar list, in the same page lifetime.
   await expect(row).toBeVisible();
   await expect(row).toContainText(name);
 
@@ -633,9 +603,9 @@ test('M2b: the composer’s picker finds an agent by name and attaches it to the
   const options = page.getByTestId('plus-submenu-item');
   await expect(options.first()).toBeVisible({ timeout: 15_000 });
 
-  // Its search narrows that list. `exact: true` matters: the conversation
-  // rail's own search bar reads "Search conversations..." and a substring
-  // placeholder match would find whichever of the two happened to be mounted.
+  // Its search narrows that list. `exact: true` matters: the sidebar's chat
+  // search reads "Search chats" and a looser placeholder match could find
+  // whichever search field happened to be mounted.
   const search = page.getByPlaceholder('Search...', { exact: true });
   await expect(search).toBeVisible();
   await search.fill(agentName);

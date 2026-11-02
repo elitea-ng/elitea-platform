@@ -1,13 +1,13 @@
 import type { ReactNode } from 'react';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { server } from '../../test/setup';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
-import { renderWithTheme } from '@/shared/ui/lib/testTheme';
+import { renderCredentialsRoute, withShellCrumbs } from './__tests__/testRouter';
 
 import { CreateCredential } from './CreateCredential';
 
@@ -35,7 +35,7 @@ afterEach(() => {
 
 function renderPage(ui: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return renderWithTheme(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  return renderCredentialsRoute(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
 }
 
 describe('CreateCredential (ROUTE-023/024 target)', () => {
@@ -72,7 +72,7 @@ describe('CreateCredential (ROUTE-023/024 target)', () => {
     expect(await screen.findByLabelText('Name')).toBeInTheDocument();
   });
 
-  it('renders "Configuration" instead of "Credential" for the settings-domain reuse (ROUTE-063/064)', async () => {
+  it('names the screen "New configuration" for the settings-domain reuse (ROUTE-063/064)', async () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(
       http.get(`${BASE}/configurations/available/`, () =>
@@ -80,15 +80,17 @@ describe('CreateCredential (ROUTE-023/024 target)', () => {
       ),
     );
     renderPage(
-      <CreateCredential
-        context={CONTEXT}
-        credentialType="openai"
-        configurationMode
-        onCreated={vi.fn()}
-        onCancelled={vi.fn()}
-      />,
+      withShellCrumbs(
+        <CreateCredential
+          context={CONTEXT}
+          credentialType="openai"
+          configurationMode
+          onCreated={vi.fn()}
+          onCancelled={vi.fn()}
+        />,
+      ),
     );
-    expect(await screen.findByText('Configuration')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('New configuration'));
   });
 
   it('threads prefillName through to the Name field', async () => {

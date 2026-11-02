@@ -1889,6 +1889,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/auth/native/authorize",
 		"GET /api/v2/auth/native/authorize/continue",
 		"GET /api/v2/auth/native/devices",
+		"GET /api/v2/auth/permissions/administration",
 		"GET /api/v2/auth/permissions/prompt_lib/{projectID}",
 		"GET /api/v2/auth/token/",
 		"GET /api/v2/auth/token/{tokenUUID}",
@@ -2428,6 +2429,7 @@ func TestProductionAuthCandidatesRejectEveryForgedCredentialShape(t *testing.T) 
 		path   string
 	}{
 		{method: http.MethodGet, path: "/api/v2/auth/permissions/prompt_lib/7"},
+		{method: http.MethodGet, path: "/api/v2/auth/permissions/administration"},
 		{method: http.MethodGet, path: "/api/v2/auth/token/"},
 		{method: http.MethodGet, path: "/api/v2/auth/token/00000000-0000-0000-0000-000000000001"},
 		{method: http.MethodPost, path: "/api/v2/auth/token/"},

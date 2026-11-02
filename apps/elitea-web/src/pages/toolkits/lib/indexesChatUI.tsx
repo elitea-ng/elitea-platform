@@ -9,9 +9,7 @@
  *
  * A `features/` file may import none of them (`no-upward-from-features` for
  * the two widgets, `no-sideways-features` for chat-messages); `pages/` may
- * import all three, through their barrels. Same reasoning
- * `processes/chat/ui/ChatConversationSidebar.tsx` works through for its own
- * one-layer-above placement.
+ * import all three, through their barrels.
  *
  * Both adapters below are shape bridges only — no behaviour is invented.
  * They exist because the `indexes` slice declared its DI contract against

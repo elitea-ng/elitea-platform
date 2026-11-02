@@ -17,8 +17,8 @@ import { useNavBlockerStore } from '../model/navBlocker.store';
  * typings, `useBlocker.d.ts`) is a strictly more robust replacement for the
  * old app's react-router `useBlocker` + `BLOCK_NAV_PATTERNS`
  * path-allowlist: it fires for EVERY navigation attempt through the router
- * (including `widgets/sidebar`'s `<Link>` clicks and
- * `widgets/create-button`'s `navigate()` calls) with no per-call-site
+ * (including `widgets/sidebar`'s `<Link>` clicks and its per-row "+"
+ * `navigate()` calls) with no per-call-site
  * wiring needed, so `SidebarBody`'s old per-click `navigateToPage` special
  * case (SHELL-011's "defers API cache reset" half — see `widgets/sidebar`'s
  * header) does not need re-implementing here.

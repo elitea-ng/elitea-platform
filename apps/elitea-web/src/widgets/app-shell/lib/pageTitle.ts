@@ -63,6 +63,28 @@ function settingsTitle(pathname: string, projectName: string): string {
 }
 
 /**
+ * Where the title row's crumb reads differently from the document title: it
+ * names the section as the sidebar row that opens it does (`navSections.ts`),
+ * so the two never disagree on screen. The document title keeps the old
+ * app's wording.
+ */
+const CRUMB_LABEL_BY_PREFIX: Readonly<Record<string, string>> = {
+  '/chat': 'Chats',
+  '/toolkits': 'Toolkits & Indexes',
+};
+
+/**
+ * The section a pathname is in, as the shell's title row names it: its label
+ * and the route its crumb links back to (the section's list). `undefined` on
+ * a pathname no section claims (the home redirect, onboarding).
+ */
+export function pageSection(pathname: string): { readonly label: string; readonly to: string } | undefined {
+  if (pathname === '/settings' || pathname.startsWith('/settings/')) return { label: 'Settings', to: '/settings' };
+  const section = SECTION_BY_PREFIX.find((entry) => pathname.startsWith(entry.prefix));
+  return section === undefined ? undefined : { label: CRUMB_LABEL_BY_PREFIX[section.prefix] ?? section.label, to: section.prefix };
+}
+
+/**
  * @param pathname current router pathname
  * @param searchName the `?name=` query param value, if present
  * @param projectName the selected project's display name (or `undefined` before one is known)
@@ -74,9 +96,7 @@ export function derivePageTitle(pathname: string, searchName: string, projectNam
 
   // `/agents-hub` is listed BEFORE `/agents` in SECTION_BY_PREFIX so this
   // find() resolves it correctly — `/agents-hub`.startsWith('/agents') is
-  // also true, the same substring-prefix hazard `widgets/create-button`'s
-  // `currentEntityFromPathname` documents and fixes the same way (ordering,
-  // proven by the analogous regression test in that widget).
+  // also true, so the order of the table is what resolves it.
   const section = SECTION_BY_PREFIX.find((entry) => pathname.startsWith(entry.prefix));
   if (!section) return project;
 

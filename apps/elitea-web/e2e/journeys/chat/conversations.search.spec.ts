@@ -1,5 +1,5 @@
 /**
- * Searching the conversation rail.
+ * Searching the sidebar's Chats list.
  *
  * Ported by use case from the legacy public suite. TWO legacy tests describe
  * the same use case from two files, and one journey closes both:
@@ -10,22 +10,20 @@
  *    (TC-CHAT-023)
  *
  * Both of them stopped at "an input appeared". That is the half of the feature
- * that cannot be wrong in an interesting way — `ConversationSearchButton` sets
- * one boolean and `Conversations.header` renders a `SimpleSearchBar` off it. The
- * half that can, and the half a user notices, is whether typing NARROWS the
- * list: `Conversations.tsx` hands the trimmed query up through
- * `onSearchQueryChange`, `useConversationSidebar` puts it on the grouped-listing
- * read, and the server answers with the matching rows. A search box wired to no
- * query, or wired to a query the listing never sends, looks exactly like a
- * working one until you type. So this journey types, and asserts both
- * directions: the row that matches stays, the row that does not goes.
+ * that cannot be wrong in an interesting way — the Chats caption's search
+ * button (`shell-chats-search`) opens `ChatsSearchField`. The half that can,
+ * and the half a user notices, is whether typing NARROWS the list: the rail's
+ * filter (`widgets/chat-rail/model/chatRail.tsx`) debounces the query onto the
+ * grouped-listing read, and the server answers with the matching rows. A
+ * search box wired to no query looks exactly like a working one until you
+ * type. So this journey types, and asserts both directions: the row that
+ * matches stays, the row that does not goes.
  *
- * The clear path is asserted too, because `SimpleSearchBar` debounces its
- * `onChange` (300 ms) but clears IMMEDIATELY on Escape, bypassing that debounce
- * — two code paths, and only the second one restores the full list.
+ * The clear path is asserted too: Escape empties the query and closes the
+ * field, and the full list comes back.
  */
 import { test, expect } from '@playwright/test';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
@@ -38,13 +36,35 @@ function uniqueName(tag: string): string {
   return `${AUTOTEST_PREFIX}${tag}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${SUFFIX}`;
 }
 
-/** See `chat.management.spec.ts`'s M1: `DateGroup` starts collapsed, so its rows are mounted but not visible. */
+/** Opens the sidebar's Today group (open by default; a remembered close is undone). */
 async function openTodayGroup(page: Page): Promise<void> {
-  const sidebar = page.getByTestId('chat-conversation-sidebar');
-  await expect(sidebar).toBeVisible({ timeout: 20_000 });
-  const today = sidebar.getByRole('button', { name: 'Today' });
+  const list = page.getByTestId('shell-chats');
+  await expect(list).toBeVisible({ timeout: 20_000 });
+  const today = list
+    .getByTestId('shell-chats-group')
+    .filter({ has: page.locator('.shell-group-caption', { hasText: /^Today$/ }) })
+    .locator('.shell-row-main');
   await expect(today).toBeVisible({ timeout: 20_000 });
   if ((await today.getAttribute('aria-expanded')) !== 'true') await today.click();
+}
+
+/**
+ * Brings a row into the Today group, paging it with "Show more" as needed:
+ * the group delivers its newest rows a page at a time and this file runs in
+ * parallel with journeys that seed the same group, so a row created a moment
+ * ago on another worker can sit on its second page.
+ */
+async function revealInToday(page: Page, row: Locator): Promise<void> {
+  const more = page
+    .getByTestId('shell-chats')
+    .getByTestId('shell-chats-group')
+    .filter({ has: page.locator('.shell-group-caption', { hasText: /^Today$/ }) })
+    .locator('xpath=ancestor::li[1]')
+    .getByTestId('shell-chats-more');
+  await expect(async () => {
+    if (!(await row.isVisible()) && (await more.isVisible())) await more.locator('.shell-row-main').click();
+    await expect(row).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
 }
 
 test('the rail’s search control narrows the list to the conversation it names', async ({ page }) => {
@@ -57,16 +77,16 @@ test('the rail’s search control narrows the list to the conversation it names'
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
   await openTodayGroup(page);
 
-  const keptRow = page.getByTestId(`conversation-item-${kept}`);
-  const droppedRow = page.getByTestId(`conversation-item-${dropped}`);
-  await expect(keptRow).toBeVisible({ timeout: 15_000 });
-  await expect(droppedRow).toBeVisible({ timeout: 15_000 });
+  const keptRow = page.locator(`[data-conversation-id="${kept}"]`);
+  const droppedRow = page.locator(`[data-conversation-id="${dropped}"]`);
+  await revealInToday(page, keptRow);
+  await revealInToday(page, droppedRow);
 
-  // The control is not an input until it is asked to be — the header renders
-  // the search bar only while `isSearchActive`.
-  const input = page.getByTestId('conversation-search-input');
+  // The control is not an input until it is asked to be — the list renders
+  // the search field only while the caption's search is open.
+  const input = page.getByTestId('shell-chats-search-input');
   await expect(input).toHaveCount(0);
-  await page.getByTestId('conversation-search-button').click();
+  await page.getByTestId('shell-chats-search').click();
   await expect(input).toBeVisible({ timeout: 10_000 });
   await expect(input).toBeEditable();
 
@@ -74,8 +94,8 @@ test('the rail’s search control narrows the list to the conversation it names'
 
   await input.fill(keptName);
 
-  // Polled, because the query is debounced by 300 ms and then travels to the
-  // server before the rail re-renders. `count()` states the absence — the row
+  // Polled, because the query is debounced and then travels to the server
+  // before the list re-renders. `count()` states the absence — the row
   // that no longer matches is unmounted, not merely hidden, so a visibility
   // assertion would wait for something that never attaches again.
   await expect
@@ -88,9 +108,10 @@ test('the rail’s search control narrows the list to the conversation it names'
   await expect(keptRow).toBeVisible();
   await expect(keptRow).toContainText(keptName);
 
-  // Escape clears immediately (`SimpleSearchBar`'s own bypass of its debounce)
-  // and the full list comes back — including the row the query had removed.
+  // Escape empties the query and closes the field, and the full list comes
+  // back — including the row the query had removed.
   await input.press('Escape');
+  await expect(input).toHaveCount(0);
   await openTodayGroup(page);
   await expect(droppedRow).toBeVisible({ timeout: 15_000 });
   await expect(keptRow).toBeVisible();

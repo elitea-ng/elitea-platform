@@ -95,7 +95,7 @@ async function moveDraggedConversationsToTarget(
   return successCount;
 }
 
-export interface DropAreaState {
+interface DropAreaState {
   readonly isValidDropTarget: boolean;
   readonly isActive: boolean;
 }

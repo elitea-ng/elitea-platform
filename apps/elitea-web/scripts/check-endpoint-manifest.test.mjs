@@ -876,7 +876,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // (admin routes, not in the manifest).
 // 460 -> 461 (issue 1498, ADR-0041 decision 3): createRunCapOverride, the
 // run cap override that the chat answer's CapOverrideAction calls.
-const GENERATED_OPERATION_COUNT = 461;
+// 461 -> 462 (PR 1553, the account menu): administrationPermissionList, the
+// caller's own administration-mode permissions that gate "Admin portal".
+const GENERATED_OPERATION_COUNT = 462;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1133,8 +1135,12 @@ const GENERATED_OPERATION_COUNT = 461;
  * 311 -> 312 (issue 1498, ADR-0041 decision 3): createRunCapOverride, the
  * chat answer's "Allow the next run past this cap" action
  * (features/chat-messages CapOverrideAction). Generated.
+ *
+ * 312 -> 314 (PR 1553, the account menu): auth.administrationPermissionList,
+ * which gates the account menu's "Admin portal" link, and
+ * discovery.getClientDiscovery, whose server_version the version line shows.
  */
-const MANIFEST_ENTRY_COUNT = 312;
+const MANIFEST_ENTRY_COUNT = 314;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

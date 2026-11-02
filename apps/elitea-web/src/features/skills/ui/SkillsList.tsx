@@ -32,11 +32,9 @@ export interface SkillsListProps {
   readonly onExport: (skill: SkillRecord) => void;
   /** Wired to the empty state's `+ Create` CTA. */
   readonly onCreate?: () => void;
-  /** `false` when the owning page already reserved the rail's width. */
-  readonly railVisible?: boolean;
 }
 
-export function SkillsList({ items, isLoading, isError, query, onSelect, onDelete, onExport, onCreate, railVisible }: SkillsListProps): ReactNode {
+export function SkillsList({ items, isLoading, isError, query, onSelect, onDelete, onExport, onCreate }: SkillsListProps): ReactNode {
   const listItems = useMemo<EntityListItem[]>(
     () =>
       items.map((skill) => ({
@@ -61,7 +59,6 @@ export function SkillsList({ items, isLoading, isError, query, onSelect, onDelet
       isLoading={isLoading}
       isError={isError}
       errorMessage={t('skills.list.error', 'Failed to load skills.')}
-      {...(railVisible === undefined ? {} : { railVisible })}
       emptyState={
         <EntityEmptyState
           art="skills"

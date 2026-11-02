@@ -6,35 +6,19 @@
  * persists; the ordering survives a reload.
  *
  * ─────────────────────────────────────────────────────────────────────────
- * WHY PART OF THIS FILE IS RED, AND MUST STAY RED
+ * WHAT THIS FILE ASSERTS
  * ─────────────────────────────────────────────────────────────────────────
  * The previous version of this file passed by never testing anything: 12
  * escape hatches (test.skip, two early returns, four `.catch(() => false)`
  * downgrades, three `.or()` fallbacks and two unfalsifiable assertions)
- * meant a blank page satisfied it. Every hatch is gone. What is left are
- * unconditional assertions, ONE of which still fails — a real, measured
- * product gap, not a test defect. Do NOT "fix" it by loosening the
- * assertion.
+ * meant a blank page satisfied it. Every hatch is gone; what is left are
+ * unconditional assertions. Do NOT loosen them.
  *
- * Gaps 2 and 3 below were the backend halves, and are CLOSED by #128: the
- * grouped listing now returns each folder's conversations and its date
- * groups, and a reorder PUT resolves and persists a position. Their two
- * tests are green and no longer annotated. Gap 1 is a UI-wiring gap and is
- * untouched — the first test stays test.fail() until a composition root
- * mounts <Conversations>.
- *
- * Gap 1 — the conversation-list sidebar is never mounted (UI wiring gap).
- *   `src/features/chat-conversation-list` has no importer anywhere in src:
- *   its root export is index.ts:97 (`export { Conversations }`) and the only
- *   route that could host it, src/routes/_shell/chat.tsx, renders
- *   processes/chat → src/pages/chat/index.tsx → `<ChatBox>` only; ChatBox's
- *   import list (src/widgets/chat-box/ui/ChatBox.tsx:17-58) contains no
- *   conversation list. Measured against the running stack: /app/chat exposes
- *   exactly these testids — sidebar-toggle, sidebar-connection-dot,
- *   sidebar-create-button, sidebar-notification-button, sidebar-agent-hub-button,
- *   sidebar-collapse-toggle, chat-input, chat-message-input,
- *   model-selector-button, model-selector-name — and zero buttons matching
- *   /folder/i. So no folder UI exists to drive.
+ * Gap 1 (CLOSED) — the folder UI was not mounted on any route. Folders now
+ *   live in the app sidebar's Chats list (`widgets/chat-rail`): "New folder"
+ *   on the Chats caption (`shell-chats-new-folder`), a named field for the
+ *   folder's name (`shell-chats-new-folder-name`), and the folder rows
+ *   (`shell-chats-folder`). The first test drives that path end to end.
  *
  * Gap 2 (CLOSED, #128) — moving a conversation into a folder had no
  *   server-side effect: PUT .../conversation/.../{id} with `folder_id`
@@ -50,12 +34,6 @@
  *
  * What ALSO works, and is asserted green below: folder create / list /
  * rename / delete round-trip through the real backend.
- *
- * Deliberately NOT asserted (no reachable selector exists yet, so an
- * assertion would be fiction rather than coverage): the folder-name field.
- * FolderItemEditor.tsx:87-97 renders StyledInputEnhancer with label="", no
- * placeholder and no data-testid, so it has no accessible name of any kind.
- * Naming a folder through the UI needs a `data-testid` added in src first.
  */
 import type { APIRequestContext } from '@playwright/test';
 import { test, expect } from '@playwright/test';
@@ -97,14 +75,9 @@ async function listFolders(request: APIRequestContext): Promise<readonly FolderR
 }
 
 /*
- * WAS blocked on #128 — the folder UI was not mounted. No composition root
- * rendered <Conversations>; `grep -rn "chat-conversation-list" src` outside
- * the slice returned only doc comments, and no testid on /app/chat matched
- * /folder/i. There was no 'Create folder' button to click.
- *
- * `processes/chat/ui/ChatConversationSidebar.tsx` is now that composition
- * root, rendered by `ChatWithEditors` as the chat surface's left column, so
- * the `test.fail()` this carried is gone.
+ * The sidebar's Chats caption offers "New folder"; it opens a name field at
+ * the top of the list. Escape (or leaving the field) cancels without a
+ * request; Enter creates the folder, which then shows as a folder row.
  */
 test('J10: the chat surface exposes the folder UI this journey needs', async ({ page }) => {
   // Real fixture: a conversation that the journey would drag into a folder.
@@ -114,65 +87,57 @@ test('J10: the chat surface exposes the folder UI this journey needs', async ({ 
   await page.goto(BASE_URL + '/app/chat');
   await page.waitForURL('**/chat**', { timeout: 15_000 });
 
-  // Single real selector — no .or() chain. src/features/chat-input/ui/
-  // UserInputEditableArea.tsx:117 is the only element carrying this testid.
+  // Single real selector — no .or() chain.
   await expect(page.getByTestId('chat-message-input')).toBeVisible({ timeout: 10_000 });
 
   await checkA11y(page);
 
-  // RED — Gap 1. The exact aria-label the real control carries
-  // (src/features/chat-conversation-list/ui/conversations/Conversations.header.tsx:137,
-  // and the collapsed-rail twin at :59). No fallback, no skip: this is the
-  // precondition for every remaining step of JRNY-010, and it is absent.
-  const createFolderButton = page.getByRole('button', { name: 'Create folder' });
-  await expect(createFolderButton, 'conversation-list sidebar is not mounted by any route — see Gap 1').toBeVisible({ timeout: 10_000 });
+  // No fallback, no skip: this is the precondition for every remaining step
+  // of JRNY-010.
+  const createFolderButton = page.getByTestId('shell-chats-new-folder');
+  await expect(createFolderButton, 'the sidebar Chats caption must offer "New folder"').toBeVisible({ timeout: 10_000 });
+  await expect(createFolderButton).toHaveAccessibleName('New folder');
   await expect(createFolderButton).toBeEnabled();
 
+  // Cancel first: Escape discards the field and creates nothing.
+  const folderPosts: string[] = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && request.url().includes('/elitea_core/folder/prompt_lib/')) folderPosts.push(request.url());
+  });
   await createFolderButton.click();
-
-  // The draft folder mounts FolderItem in edit mode (FolderItem.tsx:175 seeds
-  // `isFolderEditing` from `folder.isNew`), with the name field pre-filled.
-  const nameField = page.getByTestId('folder-name-input');
+  const nameField = page.getByTestId('shell-chats-new-folder-name');
   await expect(nameField).toBeVisible();
-  // The field now HAS an accessible name — it was rendered with `label=""`,
-  // no placeholder and no testid, so nothing could announce or target it.
-  await expect(nameField).toHaveAccessibleName('Folder name');
-  // Baseline parity: NewChat.jsx:1229-1238 seeds the draft with
-  // `DefaultFolderName` ('New folder'), which ConversationNameRegExp accepts.
-  await expect(nameField).toHaveValue('New folder');
-
-  const confirm = page.getByRole('button', { name: 'Confirm' });
-  const cancel = page.getByRole('button', { name: 'Cancel' });
-  await expect(cancel).toBeEnabled();
-
-  /*
-   * This assertion replaces an earlier `expect(Confirm).toBeDisabled()`, and
-   * it is deliberately STRONGER, not weaker.
-   *
-   * That assertion was written against an unmounted feature and predicted the
-   * draft would open with an EMPTY name. Measured against the real component,
-   * it opens with 'New folder' — the baseline's own default (NewChat.jsx:1232)
-   * — so Confirm starts enabled. Asserting the initial state therefore proved
-   * nothing about the gate it named; it only recorded a guess about the seed
-   * value, which is now asserted directly above.
-   *
-   * What the gate actually claims is that Confirm tracks
-   * `isFolderNameValid` (FolderItem.tsx:177 → ConversationNameRegExp). That is
-   * a transition, so it is tested as one: a name the regex rejects must
-   * disable Confirm, and a name it accepts must re-enable it. A control that
-   * merely started disabled could not tell those two states apart.
-   */
-  await expect(confirm).toBeEnabled();
-
-  await nameField.fill('ab'); // < 3 chars — ConversationNameRegExp rejects
-  await expect(confirm).toBeDisabled();
-
-  await nameField.fill(uniq('j10-folder'));
-  await expect(confirm).toBeEnabled();
-
-  // Cancel discards the draft rather than persisting it — the row disappears.
-  await cancel.click();
+  // The field HAS an accessible name, so it can be announced and targeted.
+  await expect(nameField).toHaveAccessibleName('New folder name');
+  await expect(nameField).toHaveValue('');
+  await expect(nameField).toBeFocused();
+  await nameField.press('Escape');
   await expect(nameField).toBeHidden();
+  expect(folderPosts, 'a cancelled folder name must not create a folder').toEqual([]);
+
+  // Then create: Enter saves the typed name, and the folder joins the list.
+  const folderName = uniq('j10-folder');
+  await createFolderButton.click();
+  await expect(nameField).toBeVisible();
+  const created = page.waitForResponse(
+    (response) => response.request().method() === 'POST' && response.url().includes('/elitea_core/folder/prompt_lib/'),
+    { timeout: 20_000 },
+  );
+  await nameField.fill(folderName);
+  await nameField.press('Enter');
+  const response = await created;
+  expect(response.status(), 'the folder the field names must be created on the server').toBe(201);
+  const folderId = ((await response.json()) as { id?: string }).id;
+  try {
+    await expect(nameField).toBeHidden();
+    await expect(
+      page.getByTestId('shell-chats').getByTestId('shell-chats-folder').filter({ hasText: folderName }),
+      'the new folder must show in the sidebar list',
+    ).toBeVisible({ timeout: 15_000 });
+    expect((await listFolders(page.request)).map((folder) => folder.name)).toContain(folderName);
+  } finally {
+    if (folderId !== undefined) await page.request.delete(`${FOLDER_ROOT}/${folderId}`);
+  }
 });
 
 test('J10: folder create/list/rename/delete round-trip through the backend', async ({ page }) => {

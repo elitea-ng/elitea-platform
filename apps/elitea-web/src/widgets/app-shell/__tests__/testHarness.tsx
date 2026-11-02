@@ -22,11 +22,9 @@ const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
 /**
  * Router + QueryClient + theme harness for widgets that use `useBlocker`
  * (which needs somewhere ELSE to navigate to in order to observe blocking)
- * and TanStack Query's `useQueryClient`. See
- * `widgets/create-button/__tests__/testRouter.tsx` for the base-case
- * rationale; this adds a second sibling route and a real `<Link>` so tests
- * can drive an actual navigation attempt through the router, which is what
- * `useBlocker` intercepts.
+ * and TanStack Query's `useQueryClient`. It has a second sibling route and
+ * a real `<Link>` so tests can drive an actual navigation attempt through
+ * the router, which is what `useBlocker` intercepts.
  *
  * The second route's path is a REAL registered pattern (`/help-center`,
  * R1's `_shell/help-center.tsx`), not an invented one: `router.tsx`'s

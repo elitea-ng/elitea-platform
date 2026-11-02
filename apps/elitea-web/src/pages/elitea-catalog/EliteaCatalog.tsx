@@ -17,15 +17,14 @@
  * (both were built that way before this shell existed). Hoisting a second
  * search box above them would either duplicate the control or require
  * rewriting both bodies — and the brief for this port is explicitly not to
- * rewrite either tab body. So the shell contributes the heading, the tabs and
- * the URL contract, and nothing else.
+ * rewrite either tab body. So the shell contributes the tabs and the URL
+ * contract, and nothing else; the shell's crumb names the page.
  */
 import type { ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
-import Typography from '@mui/material/Typography';
 
 import { useNavigate, useSearch } from '@tanstack/react-router';
 
@@ -70,13 +69,6 @@ export function EliteaCatalog(): ReactNode {
       sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, boxSizing: 'border-box' }}
     >
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, padding: '1.5rem 1.5rem 0 1.5rem' }}>
-        <Typography
-          variant="headingLarge"
-          component="h1"
-          data-testid="catalog-page-heading"
-        >
-          {t('pages.eliteaCatalog.title', 'Welcome to ELITEA Catalog!')}
-        </Typography>
         <Tabs
           value={activeTab}
           onChange={(_event, next: CatalogTab) => {

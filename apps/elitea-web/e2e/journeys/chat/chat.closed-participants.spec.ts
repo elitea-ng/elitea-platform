@@ -37,6 +37,7 @@
 import { test, expect } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
+import { openParticipants } from '../../fixtures/sidePanel';
 import {
   AUTOTEST_PREFIX,
   DEFAULT_PROJECT_ID,
@@ -54,9 +55,8 @@ function uniqueName(tag: string): string {
 }
 
 async function expandParticipants(page: import('@playwright/test').Page): Promise<void> {
-  const expand = page.getByRole('button', { name: 'Expand participants' });
-  if ((await expand.count()) > 0) await expand.click();
-  await expect(page.getByTestId('participants-container')).toBeVisible({ timeout: 15_000 });
+  // The participants are the side panel's Conversation tab.
+  await openParticipants(page);
 }
 
 /* elitea_issues: #5367 — a LOCAL (stdio) MCP participant groups under the MCPs

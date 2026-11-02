@@ -112,6 +112,7 @@ interface FolderWire {
   readonly total?: number;
   readonly offset?: number;
   readonly meta?: { readonly is_pinned?: boolean; readonly [key: string]: unknown };
+  readonly owner_id?: string | number; // creator (Go `Folder.OwnerID`); the rail's owner guard reads it
   readonly [key: string]: unknown;
 }
 
@@ -124,6 +125,7 @@ function normaliseFolder(wire: FolderWire): Folder {
     ...(wire.total !== undefined ? { total: wire.total } : {}),
     ...(wire.offset !== undefined ? { offset: wire.offset } : {}),
     ...(wire.meta?.is_pinned !== undefined ? { isPinned: wire.meta.is_pinned } : {}),
+    ...(wire.owner_id !== undefined ? { ownerId: String(wire.owner_id) } : {}),
     ...needsYouField(wire['needs_you']),
   };
 }
@@ -261,6 +263,7 @@ export interface FolderConversationsParams {
   readonly sort_order?: string;
   /** `local_work` pages the rail's "Local work" filter; absent pages the ordinary rail. */
   readonly source?: string;
+  readonly query?: string; // the rail's search, as on the first page
 }
 
 function folderConversationsQueryString(params: FolderConversationsParams): string {
@@ -273,6 +276,7 @@ function folderConversationsQueryString(params: FolderConversationsParams): stri
   if (params.sort_by !== undefined) query.set('sort_by', params.sort_by);
   if (params.sort_order !== undefined) query.set('sort_order', params.sort_order);
   if (params.source !== undefined) query.set('source', params.source);
+  if (params.query !== undefined && params.query !== '') query.set('query', params.query);
   return `?${query.toString()}`;
 }
 
@@ -295,6 +299,7 @@ export interface DateGroupConversationsParams {
   readonly sort_order?: string;
   /** `local_work` pages the rail's "Local work" filter; absent pages the ordinary rail. */
   readonly source?: string;
+  readonly query?: string; // the rail's search, as on the first page
 }
 
 function dateGroupConversationsQueryString(params: DateGroupConversationsParams): string {
@@ -307,6 +312,7 @@ function dateGroupConversationsQueryString(params: DateGroupConversationsParams)
   if (params.sort_by !== undefined) query.set('sort_by', params.sort_by);
   if (params.sort_order !== undefined) query.set('sort_order', params.sort_order);
   if (params.source !== undefined) query.set('source', params.source);
+  if (params.query !== undefined && params.query !== '') query.set('query', params.query);
   return `?${query.toString()}`;
 }
 

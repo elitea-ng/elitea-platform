@@ -52,13 +52,13 @@ describe('Pipelines', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/pipelines/latest'));
   });
 
-  it('shows the four public tabs on the public project, Admin hidden by default', async () => {
+  it('shows Latest on the public project; the placeholder My liked / Trending tabs and Admin are hidden', async () => {
     setConfig('1');
     renderPipelinesRoute(<Pipelines />, '/pipelines/latest', { projectId: '1' });
 
     expect(await screen.findByTestId('pipelines-tab-latest')).toBeInTheDocument();
-    expect(screen.getByTestId('pipelines-tab-my-liked')).toBeInTheDocument();
-    expect(screen.getByTestId('pipelines-tab-trending')).toBeInTheDocument();
+    expect(screen.queryByTestId('pipelines-tab-my-liked')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pipelines-tab-trending')).not.toBeInTheDocument();
     expect(screen.queryByTestId('pipelines-tab-admin')).not.toBeInTheDocument();
   });
 
@@ -80,16 +80,22 @@ describe('Pipelines', () => {
     expect(screen.queryByTestId('pipelines-tab-drafts')).not.toBeInTheDocument();
   });
 
-  it("clicking a tab navigates to its :tab URL and renders that tab's content", async () => {
+  it("clicking a tab navigates to its :tab URL", async () => {
     setConfig('1');
+    server.use(getPermissionListMockHandler([{ name: 'models.applications.applications.list', enabled: true }]));
     const user = userEvent.setup();
     const { router } = renderPipelinesRoute(<Pipelines />, '/pipelines/latest', { projectId: '1' });
 
-    await screen.findByTestId('pipelines-tab-trending');
-    await user.click(screen.getByTestId('pipelines-tab-trending'));
+    await user.click(await screen.findByTestId('pipelines-tab-admin'));
 
-    await waitFor(() => expect(router.state.location.pathname).toBe('/pipelines/trending'));
-    expect(await screen.findByTestId('pipelines-trending-unavailable')).toBeInTheDocument();
+    await waitFor(() => expect(router.state.location.pathname).toBe('/pipelines/admin'));
+  });
+
+  it('sends an old link to a hidden placeholder tab to the first tab', async () => {
+    setConfig('1');
+    const { router } = renderPipelinesRoute(<Pipelines />, '/pipelines/trending', { projectId: '1' });
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/pipelines/latest'));
   });
 
   it('shows the tab-badge count when usePipelinesData resolves one, e.g. "Latest (2)"', async () => {
@@ -133,13 +139,35 @@ describe('Pipelines', () => {
   });
 
   /** COMPOSITION ROOT — see `pages/agents/Applications.test.tsx` (issue 841). */
-  it('renders its tabs and its import control inside the shared page header', async () => {
+  it('renders its tabs and its import control inside the page toolbar, and no heading of its own', async () => {
     renderPipelinesRoute(<Pipelines />, '/pipelines/all', { projectId: '9' });
 
-    const header = await screen.findByTestId('page-header');
-    expect(header).toContainElement(await screen.findByTestId('pipelines-tab-all'));
-    expect(header).toContainElement(screen.getByRole('tablist', { name: 'Pipelines' }));
-    expect(header).toContainElement(screen.getByTestId('pipelines-import-button'));
+    const toolbar = await screen.findByTestId('page-toolbar');
+    expect(toolbar).toContainElement(await screen.findByTestId('pipelines-tab-all'));
+    expect(toolbar).toContainElement(screen.getByRole('tablist', { name: 'Pipelines' }));
+    expect(toolbar).toContainElement(screen.getByTestId('pipelines-import-button'));
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  });
+
+  it('offers "+ New pipeline" to a caller who may create, and opens the create page', async () => {
+    server.use(getPermissionListMockHandler([{ name: 'models.applications.applications.create', enabled: true }]));
+    const user = userEvent.setup();
+    const { router } = renderPipelinesRoute(<Pipelines />, '/pipelines/all', { projectId: '9' });
+
+    const visited: string[] = [];
+    router.subscribe('onBeforeNavigate', (event) => visited.push(event.toLocation.pathname));
+
+    await user.click(await screen.findByRole('button', { name: 'New pipeline' }));
+
+    // The fixture renders this page on every route, so the create route's own page is not there to stay on.
+    await waitFor(() => expect(visited).toContain('/pipelines/create'));
+  });
+
+  it('offers no create action without the create permission', async () => {
+    renderPipelinesRoute(<Pipelines />, '/pipelines/all', { projectId: '9' });
+
+    await screen.findByTestId('page-toolbar');
+    expect(screen.queryByTestId('pipelines-create')).toBeNull();
   });
 });
 
@@ -156,15 +184,6 @@ describe('Pipelines — header controls', () => {
     expect(await screen.findByTestId('pipeline-search-input')).toBeInTheDocument();
     expect(screen.getByTestId('pipeline-table-view-button')).toBeInTheDocument();
     expect(screen.getByTestId('pipeline-card-view-button')).toBeInTheDocument();
-  });
-
-  it('omits both on a tab whose body has no rows to act on', async () => {
-    setConfig('1');
-    renderPipelinesRoute(<Pipelines />, '/pipelines/trending', { projectId: '1' });
-
-    expect(await screen.findByTestId('pipelines-tab-trending')).toBeInTheDocument();
-    expect(screen.queryByTestId('pipeline-search-input')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('pipeline-table-view-button')).not.toBeInTheDocument();
   });
 
   it('hands the typed query to the tab body, which sends it to the server', async () => {

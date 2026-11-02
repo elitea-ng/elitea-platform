@@ -28,6 +28,8 @@ import { usePermissionSet } from '@/widgets/sidebar';
 import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
+import { usePageCrumbs } from '@/shared/ui/page-chrome';
+import { pageSx } from '@/widgets/page-header';
 
 import { useEditSkillVersionControls } from './lib/useEditSkillVersionControls';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
@@ -158,8 +160,6 @@ export function EditSkill(): ReactNode {
     },
   });
 
-
-
   // The test run POSTs `predict_llm` in its STREAMING mode
   // (`await_task_timeout: 0`, output over an `application_predict` socket
   // event). The route is served now, but that socket transport is not, so the
@@ -190,6 +190,8 @@ export function EditSkill(): ReactNode {
       setError(t('skills.edit.exportError', 'Failed to export the skill.'));
     }
   };
+
+  usePageCrumbs([{ label: detail.data?.name || t('skills.edit.title', 'Skill') }]);
 
   if (detail.isFetching && detail.data === undefined) {
     return <Typography>{t('skills.edit.loading', 'Loading skill…')}</Typography>;
@@ -326,7 +328,6 @@ export function EditSkill(): ReactNode {
   );
 }
 
-const pageSx: SxProps<Theme> = { height: '100%', display: 'flex', flexDirection: 'column' };
 const contentSx: SxProps<Theme> = { flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '1fr 1fr' };
 const formPaneSx: SxProps<Theme> = (theme: Theme) => ({ overflowY: 'auto', padding: theme.spacing(3) });
 const testPaneSx: SxProps<Theme> = (theme: Theme) => ({

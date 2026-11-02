@@ -39,6 +39,7 @@ import { openedFolders, type Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { MenuDivider, MenuHeader, MenuRow, MenuRowIcon, MenuRowText, pressToOpen } from '@/shared/ui/native-menu';
 import { ActivityGroupSummary } from '@/shared/ui/ConversationActivity';
+import { CHILD_INDENT, FolderClosedIcon, FolderOpenIcon, SectionCaption, ShellRow } from '@/widgets/chat-rail';
 
 import type { ShellAction } from '../lib/shellActions';
 import { folderContextActions } from '../lib/folderMenu';
@@ -47,10 +48,8 @@ import { useLocalNeedsYouCount, useLocalThreadUnreadTracking } from '../model/lo
 import { useContextMenu, type ContextAction } from '../model/useContextMenu';
 import { WORKSPACE_LIST_KEY } from '../model/useShellActions';
 import type { ShellLocation } from '../model/useShellLocation';
-import { FolderClosedIcon, FolderOpenIcon } from './folderIcons';
 import { MoveFolderDialog, type PendingMove } from './MoveFolderDialog';
 import { ProjectPickerSheet } from './ProjectPickerSheet';
-import { CHILD_INDENT, ShellRow, SectionCaption } from './rows';
 import { LocalThreadRow } from './LocalThreadRow';
 import { WorktreeTaskRow } from './WorktreeTaskRow';
 import { modKey } from './shortcutLabel';

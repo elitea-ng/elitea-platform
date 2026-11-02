@@ -16,6 +16,7 @@
 import { test, expect } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
+import { openParticipants } from '../../fixtures/sidePanel';
 import {
   AUTOTEST_PREFIX,
   DEFAULT_PROJECT_ID,
@@ -81,9 +82,7 @@ test('J-sidebar-version: switching between two chat agents shows each one\'s own
     await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
     await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 20_000 });
 
-    const expandParticipants = page.getByRole('button', { name: 'Expand participants' });
-    await expect(expandParticipants).toBeVisible({ timeout: 15_000 });
-    await expandParticipants.click();
+    await openParticipants(page);
     const agentsSection = page.getByTestId('participants-section-Agents');
     await expect(agentsSection).toBeVisible({ timeout: 15_000 });
 

@@ -108,3 +108,79 @@ func TestPermissionListDoesNotEscalateMissingResolverOrFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestAdministrationPermissionListResolvesTheCallersAdministrationMode(t *testing.T) {
+	resolver := permissionResolverFunc(func(
+		_ context.Context,
+		principal identity.User,
+		mode string,
+		projectID string,
+	) (identity.PermissionResolution, error) {
+		if principal.ID != "42" || mode != identity.PermissionModeAdministration || projectID != "" {
+			t.Fatalf("unexpected resolver input: principal=%+v mode=%q project=%q", principal, mode, projectID)
+		}
+		return identity.PermissionResolution{UserID: 42, Permissions: []string{"admin.users.view"}}, nil
+	})
+	h := v2auth.NewHandler(nil, v2auth.WithPermissionResolver(resolver))
+	req := httptest.NewRequest(http.MethodGet, "/permissions/administration", nil)
+	req = req.WithContext(identity.ContextWithUser(req.Context(), identity.User{ID: "42"}))
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var permissions []struct {
+		Name    string `json:"name"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&permissions); err != nil {
+		t.Fatal(err)
+	}
+	if len(permissions) != 1 || permissions[0].Name != "admin.users.view" || !permissions[0].Enabled {
+		t.Fatalf("permissions = %+v, want [admin.users.view enabled]", permissions)
+	}
+}
+
+func TestAdministrationPermissionListIsEmptyOnRefusalOrNoResolver(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		resolver identity.PermissionResolver
+	}{
+		{name: "missing resolver"},
+		{
+			name: "refusal",
+			resolver: permissionResolverFunc(func(context.Context, identity.User, string, string) (identity.PermissionResolution, error) {
+				return identity.PermissionResolution{}, errors.New("no administration role")
+			}),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := v2auth.NewHandler(nil, v2auth.WithPermissionResolver(test.resolver))
+			req := httptest.NewRequest(http.MethodGet, "/permissions/administration", nil)
+			req = req.WithContext(identity.ContextWithUser(req.Context(), identity.User{ID: "42"}))
+			rec := httptest.NewRecorder()
+			h.Routes().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+			}
+			var permissions []json.RawMessage
+			if err := json.NewDecoder(rec.Body).Decode(&permissions); err != nil {
+				t.Fatal(err)
+			}
+			if len(permissions) != 0 {
+				t.Fatalf("permissions = %s, want empty", permissions)
+			}
+		})
+	}
+}
+
+func TestAdministrationPermissionListRefusesAnAnonymousCaller(t *testing.T) {
+	h := v2auth.NewHandler(nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/permissions/administration", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}

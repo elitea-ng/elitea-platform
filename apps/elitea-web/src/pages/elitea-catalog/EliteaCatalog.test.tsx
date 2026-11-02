@@ -65,6 +65,12 @@ describe('EliteaCatalog shell', () => {
     expect(screen.queryByTestId('public-skills-catalog')).not.toBeInTheDocument();
   });
 
+  it('leaves the page name to the shell title row', async () => {
+    await renderCatalog('/elitea-catalog');
+    await screen.findByTestId('catalog-agents-tab');
+    expect(screen.queryByText('Welcome to ELITEA Catalog!')).toBeNull();
+  });
+
   it('renders the skills body when ?tab=skills', async () => {
     await renderCatalog('/elitea-catalog?tab=skills');
     expect(await screen.findByTestId('public-skills-catalog')).toBeInTheDocument();

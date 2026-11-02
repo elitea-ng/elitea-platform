@@ -1,21 +1,28 @@
 import type { ReactNode } from 'react';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { server } from '../../test/setup';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
-import { renderWithTheme } from '@/shared/ui/lib/testTheme';
+import { SidePanelHarness } from '@/test/sidePanelHarness';
 
 import { CredentialsList } from './CredentialsList';
+import { renderCredentialsRoute } from './__tests__/testRouter';
 
 const BASE = '/api/v2';
 
-function renderList(ui: ReactNode) {
+/** The list under a router (its search is the URL's `query`) and a side panel (its type filter is a Filters tab). */
+function renderList(ui: ReactNode, initialPath = '/credentials/all') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return renderWithTheme(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  return renderCredentialsRoute(
+    <QueryClientProvider client={client}>
+      <SidePanelHarness>{ui}</SidePanelHarness>
+    </QueryClientProvider>,
+    initialPath,
+  );
 }
 
 afterEach(() => {
@@ -82,15 +89,16 @@ describe('CredentialsList', () => {
   it('shows the "nothing found" message when a search yields no rows', async () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(http.get(`${BASE}/configurations/configurations/7`, () => HttpResponse.json({ items: [], total: 0, limit: 20, offset: 0 })));
-    renderList(
+    const { router } = renderList(
       <CredentialsList
         projectId="7"
         onSelectCredential={vi.fn()}
         onCreateNew={vi.fn()}
       />,
     );
-    fireEvent.change(screen.getByPlaceholderText('Search credentials'), { target: { value: 'nope' } });
+    fireEvent.change(await screen.findByPlaceholderText('Search credentials'), { target: { value: 'nope' } });
     expect(await screen.findByText('Nothing found.')).toBeInTheDocument();
+    expect(router.state.location.search).toMatchObject({ query: 'nope' });
   });
 
   it('renders loaded credentials, sorted pinned-first, with a type/scope subtitle, and fires ACT-039 batch validation on load', async () => {
@@ -151,7 +159,7 @@ describe('CredentialsList', () => {
     expect(onSelectCredential).toHaveBeenCalledWith('a');
   });
 
-  it('calls onCreateNew from the New credential button', () => {
+  it('calls onCreateNew from the New credential button', async () => {
     configureGeneratedClient({ baseUrl: BASE });
     server.use(http.get(`${BASE}/configurations/configurations/7`, () => HttpResponse.json({ items: [], total: 0, limit: 20, offset: 0 })));
     const onCreateNew = vi.fn();
@@ -162,7 +170,7 @@ describe('CredentialsList', () => {
         onCreateNew={onCreateNew}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'New credential' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'New credential' }));
     expect(onCreateNew).toHaveBeenCalledTimes(1);
   });
 
@@ -218,7 +226,7 @@ describe('CredentialsList', () => {
       />,
     );
     await screen.findByText('A cred');
-    fireEvent.click(screen.getByRole('button', { name: 'Openai' }));
+    fireEvent.click(await within(screen.getByTestId('side-panel-tab-filters')).findByRole('button', { name: 'Openai (1)' }));
     await waitFor(() => expect(urls.some((u) => u.includes('type=openai'))).toBe(true));
   });
 });

@@ -110,6 +110,7 @@ type DesktopLayoutStore = UseBoundStore<StoreApi<DesktopLayoutState>>;
 export const DEFAULT_INSPECTOR: Readonly<Record<InspectorPage, InspectorLayout>> = {
   local: defaultInspectorLayout('local'),
   chat: defaultInspectorLayout('chat'),
+  browse: defaultInspectorLayout('browse'),
 };
 
 /** The inspector is on screen: open, on a page with tabs, at least one of them not closed. */

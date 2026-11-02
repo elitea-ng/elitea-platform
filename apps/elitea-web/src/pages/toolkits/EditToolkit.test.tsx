@@ -1,3 +1,5 @@
+import type { ReactElement } from 'react';
+
 import { configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
@@ -7,6 +9,7 @@ import { getPermissionListMockHandler } from '@/shared/api/generated/auth/auth.m
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { installCodeMirrorTestPolyfills } from '@/shared/ui/lib/field/codeMirrorTestPolyfills';
+import { PageChromeProvider, useShellCrumbs } from '@/shared/ui/page-chrome';
 import { server } from '@/test/setup';
 
 import { EditToolkit } from './EditToolkit';
@@ -35,6 +38,23 @@ afterEach(() => {
   resetGeneratedClient();
 });
 
+/**
+ * The page names itself in the shell's title row (its crumb), not in a
+ * heading of its own: the probe shows what that row would say.
+ */
+function CrumbProbe(): ReactElement {
+  return <div data-testid="crumbs">{useShellCrumbs().map((crumb) => crumb.label).join(' / ')}</div>;
+}
+
+function withShell(page: ReactElement): ReactElement {
+  return (
+    <PageChromeProvider>
+      {page}
+      <CrumbProbe />
+    </PageChromeProvider>
+  );
+}
+
 function mockToolkitRow(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: 'tk-1',
@@ -50,16 +70,17 @@ function mockToolkitRow(overrides: Partial<Record<string, unknown>> = {}) {
 }
 
 describe('EditToolkit', () => {
-  it('fetches the real toolkit detail by id and shows its name as the title', async () => {
+  it('fetches the real toolkit detail by id and names the page after it in the shell title row', async () => {
     server.use(
       http.get('/api/v2/elitea_core/tools/prompt_lib/:projectId', () => HttpResponse.json({ rows: [mockToolkitRow()], total: 1 })),
       http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub' } } })),
     );
     const saveToolkit = vi.fn();
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
-    expect(await screen.findByText('My GitHub')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('My GitHub'));
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 
   /*
@@ -91,7 +112,7 @@ describe('EditToolkit', () => {
     );
     const saveToolkit = vi.fn();
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My GitHub');
     expect(screen.getByRole('tab', { name: 'Configuration' })).toBeInTheDocument();
@@ -114,7 +135,7 @@ describe('EditToolkit', () => {
     const saveToolkit = vi.fn();
     const user = userEvent.setup();
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My Artifacts');
     const indexesTab = await screen.findByRole('tab', { name: 'Indexes' });
@@ -162,7 +183,7 @@ describe('EditToolkit', () => {
     );
     const user = userEvent.setup();
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit: vi.fn() }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My Artifacts');
     await user.click(await screen.findByRole('tab', { name: 'Indexes' }));
@@ -201,7 +222,7 @@ describe('EditToolkit', () => {
     );
     const user = userEvent.setup();
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit: vi.fn() }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My Artifacts');
     await user.click(await screen.findByRole('tab', { name: 'Indexes' }));
@@ -219,7 +240,7 @@ describe('EditToolkit', () => {
     );
     const saveToolkit = vi.fn();
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My GitHub');
     expect(screen.getByLabelText('export toolkit')).toBeInTheDocument();
@@ -250,7 +271,7 @@ describe('EditToolkit', () => {
     );
     const saveToolkit = vi.fn();
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My GitHub');
     await waitFor(() => expect(screen.getByLabelText('export toolkit')).not.toBeDisabled());
@@ -269,7 +290,7 @@ describe('EditToolkit', () => {
     );
     const saveToolkit = vi.fn();
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My GitHub');
     await waitFor(() => expect(screen.getByLabelText('export toolkit')).toBeDisabled());
@@ -288,7 +309,7 @@ describe('EditToolkit', () => {
     );
     const saveToolkit = vi.fn();
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My GitHub');
     await waitFor(() => expect(screen.getByLabelText('delete entity')).toBeDisabled());
@@ -303,7 +324,7 @@ describe('EditToolkit', () => {
     );
     const saveToolkit = vi.fn();
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My GitHub');
     await waitFor(() => expect(screen.getByLabelText('export toolkit')).toBeDisabled());
@@ -326,7 +347,7 @@ describe('EditToolkit', () => {
     );
     const saveToolkit = vi.fn();
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My GitHub');
     expect(screen.getByRole('button', { name: 'More actions' })).toBeInTheDocument();
@@ -341,7 +362,7 @@ describe('EditToolkit', () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My GitHub');
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
@@ -363,9 +384,9 @@ describe('EditToolkit', () => {
     );
     const saveToolkit = vi.fn();
 
-    renderToolkitsRoute(<EditToolkit isMCP deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit isMCP deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
-    await waitFor(() => expect(screen.getByText('Edit MCP')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('Edit MCP'));
   });
 
   /**
@@ -396,7 +417,7 @@ describe('EditToolkit', () => {
     );
     const saveToolkit = vi.fn();
 
-    const { container } = renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    const { container } = renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My GitHub');
     await waitFor(() => expect(getCodeMirrorContent(container)).toHaveTextContent('REAL SAVED DESCRIPTION'));
@@ -410,7 +431,7 @@ describe('EditToolkit', () => {
     const saveToolkit = vi.fn().mockResolvedValue({ id: 'tk-1', type: 'github', name: 'My GitHub' });
     const user = userEvent.setup();
 
-    const { container } = renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    const { container } = renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My GitHub');
     const content = getCodeMirrorContent(container);
@@ -476,7 +497,7 @@ describe('EditToolkit', () => {
     const saveToolkit = vi.fn().mockResolvedValue({ id: 'tk-1', type: 'github', name: 'My GitHub', description: 'SAVED DESCRIPTION' });
     const user = userEvent.setup();
 
-    const { container } = renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    const { container } = renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My GitHub');
     const content = getCodeMirrorContent(container);
@@ -526,7 +547,7 @@ describe('EditToolkit', () => {
     const saveToolkit = vi.fn().mockResolvedValue({ id: 'tk-1' });
     const user = userEvent.setup();
 
-    const { container } = renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    const { container } = renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My GitHub');
     const saveButton = await screen.findByTestId('toolkit-save-button');
@@ -622,7 +643,7 @@ describe('EditToolkit save gate on the stored credential check', () => {
     const saveToolkit = vi.fn().mockResolvedValue({ id: 'tk-1' });
     const user = userEvent.setup();
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My GitHub');
     await editToolkitName(user);
@@ -657,7 +678,7 @@ describe('EditToolkit save gate on the stored credential check', () => {
     const saveToolkit = vi.fn().mockResolvedValue({ id: 'tk-1' });
     const user = userEvent.setup();
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     await screen.findByText('My GitHub');
     await editToolkitName(user);
@@ -710,7 +731,7 @@ describe('EditToolkit test pane', () => {
     );
 
     const user = userEvent.setup();
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit: vi.fn() }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     const pane = await screen.findByTestId('edit-toolkit-test-pane-slot');
     // It is no longer an empty Box: the panel is inside it.
@@ -746,7 +767,7 @@ describe('EditToolkit resets to the list when the id is not in this project', ()
       http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub' } } })),
     );
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-2' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit: vi.fn() }} />), '/toolkits/latest/tk-1', { projectId: 'proj-2' });
 
     // proj-2's own list came back and does not contain tk-1: the page must
     // navigate away rather than sit on a permanently blank detail view.
@@ -759,7 +780,7 @@ describe('EditToolkit resets to the list when the id is not in this project', ()
       http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub' } } })),
     );
 
-    renderToolkitsRoute(<EditToolkit deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-1' });
+    renderToolkitsRoute(withShell(<EditToolkit deps={{ saveToolkit: vi.fn() }} />), '/toolkits/latest/tk-1', { projectId: 'proj-1' });
 
     // The matching row loads normally — no redirect, the real detail renders.
     await screen.findByText('My GitHub');
@@ -772,7 +793,7 @@ describe('EditToolkit resets to the list when the id is not in this project', ()
       http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () => HttpResponse.json({ github: { metadata: { label: 'GitHub' } } })),
     );
 
-    renderToolkitsRoute(<EditToolkit isMCP deps={{ saveToolkit: vi.fn() }} />, '/toolkits/latest/tk-1', { projectId: 'proj-2' });
+    renderToolkitsRoute(withShell(<EditToolkit isMCP deps={{ saveToolkit: vi.fn() }} />), '/toolkits/latest/tk-1', { projectId: 'proj-2' });
 
     expect(await screen.findByTestId('mcps-list-route')).toBeInTheDocument();
   });

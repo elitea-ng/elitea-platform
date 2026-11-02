@@ -366,7 +366,7 @@ test('J25: unsaved-changes nav block: navigate away from dirty agent → dialog 
   // Navigate away via a real in-app link (no goto() fallback: a hard navigation
   // bypasses the router's blocker entirely, so falling back to one would test
   // nothing while still passing).
-  await page.getByRole('link', { name: /chat/i }).first().click();
+  await page.getByRole('navigation', { name: 'side-bar' }).getByRole('link', { name: 'Artifacts', exact: true }).click();
 
   // The blocker dialog must appear. It used to be wrapped in
   // `if (dialogVisible)`, so an app with NO nav blocker passed this journey.
@@ -504,7 +504,7 @@ test('J25: unsaved-changes nav block also guards the standalone agent EDIT page'
     const edited = `${name}-x`;
     await nameInput.fill(edited);
 
-    await page.getByRole('link', { name: /chat/i }).first().click();
+    await page.getByRole('navigation', { name: 'side-bar' }).getByRole('link', { name: 'Artifacts', exact: true }).click();
 
     const navBlockerDialog = page.getByRole('dialog');
     await expect(navBlockerDialog).toBeVisible({ timeout: 10_000 });

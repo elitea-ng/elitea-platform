@@ -31,7 +31,8 @@ function validate(raw: unknown): PersistedLayout {
     ...(typeof changesWidth === 'number' ? { width: clampInspectorWidth(changesWidth) } : {}),
   };
   const chat = parseInspectorLayout(stored['chat'], 'chat') ?? DEFAULT_INSPECTOR.chat;
-  return { sidebarOpen, changesOpen, inspector: { local, chat } };
+  const browse = parseInspectorLayout(stored['browse'], 'browse') ?? DEFAULT_INSPECTOR.browse;
+  return { sidebarOpen, changesOpen, inspector: { local, chat, browse } };
 }
 
 export function readPersistedLayout(): PersistedLayout | null {

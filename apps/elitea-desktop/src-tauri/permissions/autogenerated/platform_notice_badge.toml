@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-platform-notice-badge"
+description = "Enables the platform_notice_badge command without any pre-configured scope."
+commands.allow = ["platform_notice_badge"]
+
+[[permission]]
+identifier = "deny-platform-notice-badge"
+description = "Denies the platform_notice_badge command without any pre-configured scope."
+commands.deny = ["platform_notice_badge"]

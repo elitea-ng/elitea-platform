@@ -7,11 +7,13 @@ A toolkit is a configured integration with an external service, or with an Elite
 
 <Screenshot id="toolkits-list" alt="The Toolkits dashboard with type tiles" />
 
+The Toolkits page shows how many toolkits the project has, a search box, **Filters** and **+ New toolkit** in its toolbar; see [Page layout](/menus/page-layout). **Filters**, in the side panel, has the toolkit **Types** to filter by and the author card.
+
 ## Create a toolkit
 
 <Steps>
-  <Step title="Start creation">Select **+ Toolkit** from the Toolkits page, or **/toolkits/create** from anywhere.</Step>
-  <Step title="Pick a type">Choose a type from the categorized tile grid, or search by name.</Step>
+  <Step title="Start creation">Select **+ New toolkit** in the Toolkits page toolbar, or the **+** next to **Toolkits** in the sidebar.</Step>
+  <Step title="Pick a type">Choose a type from the categorized tile grid, or search by name with the search box in the toolbar.</Step>
   <Step title="Configure it">Give it a **Name** and **Description**, select or create a **Credential**, and set any type-specific parameters. For index-capable types, optionally select an **embedding model** to turn on indexing; indexes are kept in the platform's vector store, so there is no vector-storage setting.</Step>
   <Step title="Select tools">In **Tools**, turn on only the operations the toolkit needs — grouped as Read, Create & update, Delete, and Execute — then **Save**.</Step>
 </Steps>
@@ -23,10 +25,6 @@ A type the agent worker cannot build is served with its tile greyed out and a re
 <Note>
 Advanced users can switch a toolkit's configuration to **Raw JSON** editing from the form/JSON toggle.
 </Note>
-
-## Organize with folders
-
-The **Folders** panel on the right groups toolkits for easier navigation. Create a folder with **+ Folder**, then move a toolkit into it from the folder icon on its card (hover to reveal it). Removing a toolkit from a folder does not delete it — it just returns to the main list. Pin frequently used folders from their three-dot menu.
 
 ## Shared credentials in team projects
 
@@ -45,6 +43,8 @@ Toolkit types that carry an `index_data` tool (Artifact, the ADO family, Bitbuck
 MCP servers extend agents, pipelines, and conversations with tools from an external Model Context Protocol server, configured the same way as a toolkit. The MCPs menu is shown when your administrator has turned on MCP menu exposure.
 
 <Screenshot id="mcps-list" alt="The MCPs dashboard listing connected servers" />
+
+The MCPs page has the same layout as the Toolkits page; create a server with **+ New MCP**.
 
 - **Remote MCP** — an HTTP/HTTPS-based server. Provide its URL and authentication (a bearer token, OAuth client credentials, or custom headers), then load and select its tools.
 - **Pre-built MCP servers** — administrator-curated connections your project can enable directly. See [Pre-built MCP servers](/integrations/mcp/prebuilt-mcp-servers).

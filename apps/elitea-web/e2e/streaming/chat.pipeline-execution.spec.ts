@@ -59,6 +59,7 @@ import {
   fillComposer,
   readStoredTranscript,
 } from '../fixtures/api';
+import { ensureChatPanelExpanded } from '../fixtures/pipelines';
 
 const APPLICATIONS_RE = /\/elitea_core\/applications\/prompt_lib\/(\d+)/;
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
@@ -210,6 +211,7 @@ async function createPipelineWithGraph(page: Page, name: string, instructions: s
  */
 async function openTestChat(page: Page, pipeline: CreatedPipeline): Promise<string> {
   await page.goto(`${BASE_URL}/app/pipelines/latest/${pipeline.pipelineId}`);
+  await ensureChatPanelExpanded(page);
   const pane = page.getByTestId('edit-pipeline-test-chat');
   await expect(pane, 'the editor’s test chat must mount').toBeVisible({ timeout: 60_000 });
 

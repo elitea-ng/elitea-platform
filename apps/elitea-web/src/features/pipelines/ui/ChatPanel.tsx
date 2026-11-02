@@ -1,5 +1,5 @@
 import type { ReactNode, Ref } from 'react';
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef } from 'react';
 
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
@@ -10,6 +10,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 import { ViewRunHistoryButton } from '@/shared/ui/ViewRunHistoryButton';
 
+import { usePaneFold } from '../lib/hooks/useEditorPaneRoom';
 import { useIsSmallWindow } from '../lib/hooks/useIsSmallWindow';
 import { useIsPipelineYamlCodeDirty } from '../lib/hooks/useIsPipelineYamlCodeDirty';
 import type { ChatConversation } from '../lib/hooks/pipelineChat.types';
@@ -56,6 +57,8 @@ export interface ChatPanelProps {
   readonly settings: Readonly<Record<string, unknown>> & { readonly isStreaming?: boolean; readonly activeConversation?: ChatConversation | null };
   readonly display?: string | undefined;
   readonly onCollapsed?: ((collapsed: boolean) => void) | undefined;
+  /** Starts folded while the canvas lacks room (`useEditorPaneRoom`); a click overrides it. */
+  readonly autoFolded?: boolean | undefined;
   readonly setActiveConversation: (
     update: ChatConversation | null | ((prev: ChatConversation | null) => ChatConversation | null),
   ) => void;
@@ -77,9 +80,17 @@ export interface ChatPanelHandle {
   readonly stopRun: () => void;
 }
 
+/*
+ * Beside the flow editor the pane is exactly 20rem, not its content's width:
+ * the editor is `flex: 1` (a zero basis), so a pane sized by a long unwrapped
+ * line ("Save the pipeline to test it…") took ~440px and crushed the canvas
+ * to ~125px in the shell's 1032px page at a 1280px window. 20rem is also what
+ * `ConfigurationTab`'s editor `maxWidth` already reserves for it.
+ */
 const chatContainerSx = (isSmallWindow: boolean, collapsed: boolean, display: string | undefined): SxProps<Theme> => ({
   minWidth: isSmallWindow ? '100%' : collapsed ? '1.75rem' : '20rem',
-  width: isSmallWindow ? '100%' : collapsed ? '1.75rem' : undefined,
+  width: isSmallWindow ? '100%' : collapsed ? '1.75rem' : '20rem',
+  flexShrink: 0,
   maxWidth: '100%',
   position: 'relative',
   height: '100%',
@@ -138,29 +149,14 @@ function buildContextBudgetSlotProps(
 }
 
 export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function ChatPanel(props, ref): ReactNode {
-  const { restore, settings, display, onCollapsed, setActiveConversation, hasRunsInProgress, onShowHistory, renderChat, renderClearChatButton, renderContextBudget } = props;
+  const { restore, settings, display, onCollapsed, autoFolded = false, setActiveConversation, hasRunsInProgress, onShowHistory, renderChat, renderClearChatButton, renderContextBudget } = props;
   const { isStreaming, activeConversation } = settings;
   const boxRef = useRef<ChatBoxSlotHandle | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
   const { isSmallWindow } = useIsSmallWindow();
+  const { collapsed, toggle: onClickCollapsed } = usePaneFold(autoFolded, isSmallWindow, onCollapsed);
   const isPipelineDirty = useIsPipelineYamlCodeDirty();
 
   useImperativeHandle(ref, () => ({ stopRun: () => boxRef.current?.stopAll() }), []);
-
-  const onClickCollapsed = useCallback(() => {
-    setCollapsed((prev) => {
-      onCollapsed?.(!prev);
-      return !prev;
-    });
-  }, [onCollapsed]);
-
-  useEffect(() => {
-    if (isSmallWindow) {
-      setCollapsed(false);
-      onCollapsed?.(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSmallWindow]);
 
   const shouldDisableClear = computeShouldDisableClear(activeConversation, isStreaming);
 

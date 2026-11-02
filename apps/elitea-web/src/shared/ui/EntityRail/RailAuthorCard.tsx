@@ -23,8 +23,9 @@ import {
 /**
  * The rail's author card — ported from `apps/elitea-ui/src/[fsd]/entities/
  * author/ui/AuthorInformation.jsx` (card geometry at :91-99: `1px solid
- * border.table`, `padding 1rem 0.75rem`, `borderRadius .5rem`, `width
- * 19.5rem`, `background background.tabPanel`; 45px avatar at :60-64;
+ * border.table`, `padding 1rem 0.75rem`, `borderRadius .5rem`,
+ * `background background.tabPanel` — full width of the side panel rather than
+ * the baseline's fixed 19.5rem; 45px avatar at :60-64;
  * route-keyed statistic at :41-53, which lives in `./lib/railStatistics.ts`).
  *
  * WHEN it renders instead of `RailTrendingAuthors` is the CALLER's decision,
@@ -236,9 +237,8 @@ const cardSx: SxProps<Theme> = (theme: Theme) => ({
   paddingBlock: theme.spacing(2),
   paddingInline: theme.spacing(1.5),
   maxHeight: '50vh',
-  // `AuthorInformation.jsx`'s `mainContainer` — a fixed 19.5rem card with a
-  // 1rem gutter under it, not a full-bleed rail child.
-  width: '19.5rem',
+  // The panel's width: the side panel, not the card, sets the column.
+  width: '100%',
   marginBottom: theme.spacing(2),
   flexShrink: 0,
   boxSizing: 'border-box',

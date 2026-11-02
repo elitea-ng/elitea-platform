@@ -56,6 +56,8 @@ import { BASE_URL } from '../../playwright.config';
 import { AUTOTEST_PREFIX, expectStoredAssistantAnswer, fillComposer } from '../fixtures/api';
 import {
   COMPILER_LEGAL_NODE_ID,
+  ensureChatPanelExpanded,
+  foldEditorPanes,
   parseStoredGraph,
   readStoredPipelineVersion,
   storedNodeIds,
@@ -192,27 +194,6 @@ function page_listbox(select: Locator): Locator {
   return select.page().getByRole('listbox');
 }
 
-/**
- * Leave the chat panel EXPANDED, whichever state the save left it in.
- *
- * Not defensive padding: the save triggers a refetch of the pipeline detail,
- * and if that refetch ever blanks the editor (a spinner in place of the two
- * panels) their collapse state is local component state and does not
- * survive. Asserting on one specific button here made this journey fail with
- * "waiting for Expand the chat panel" while the page was showing
- * "Collapse the chat panel" — a message about the harness, not the feature.
- * What the journey actually needs is the pane open.
- */
-async function ensureChatPanelExpanded(page: Page): Promise<void> {
-  const expand = page.getByRole('button', { name: 'Expand the chat panel' });
-  const collapse = page.getByRole('button', { name: 'Collapse the chat panel' });
-  await expect(expand.or(collapse), 'the editor must still render its chat panel after a save').toBeVisible({
-    timeout: 60_000,
-  });
-  if ((await expand.count()) > 0) await expand.click();
-  await expect(collapse).toBeVisible({ timeout: 10_000 });
-}
-
 /** Click Save and wait for the version PUT to land — not merely for the click. */
 async function saveAndAwaitPersist(page: Page): Promise<void> {
   const persisted = page.waitForResponse(
@@ -343,14 +324,13 @@ test('a pipeline authored on the canvas runs its graph and answers in the editor
   // canvas is a transformed surface, so scrolling cannot move the node out
   // from under an overlay — the panel has to go. Collapsing it also runs the
   // editor's own `fitView`, which is what a user does for the same reason.
-  await page.getByRole('button', { name: 'Collapse the configuration panel' }).click();
-  await expect(page.getByRole('button', { name: 'Expand the configuration panel' })).toBeVisible({ timeout: 10_000 });
   // The chat pane is the other overlay on this row, and it is not needed
-  // until step 4. Collapsing it unmounts the slot (`ChatPanel` renders
+  // until step 4. Folded it unmounts the slot (`ChatPanel` renders
   // `renderChat` only while expanded), which is fine here and is why the
-  // conversation is not created until it is expanded again below.
-  await page.getByRole('button', { name: 'Collapse the chat panel' }).click();
-  await expect(page.getByRole('button', { name: 'Expand the chat panel' })).toBeVisible({ timeout: 10_000 });
+  // conversation is not created until it is expanded again below. At 1280px
+  // the editor already folds it (`useEditorPaneRoom`), so the fold is
+  // idempotent (`foldEditorPanes`).
+  await foldEditorPanes(page);
 
   // ONE `llm` node, added through the editor's own menu, then given the two
   // things it cannot run without — a distinctive id and a task that reads the

@@ -1,13 +1,9 @@
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 
-import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
-
-import Tab from '@mui/material/Tab';
-import Tabs from '@mui/material/Tabs';
 
 import { useNavigate, useParams } from '@tanstack/react-router';
 
@@ -21,12 +17,11 @@ import {
   type SkillRecord,
 } from '@/features/skills';
 import { t } from '@/shared/i18n';
-import { BaseBtn } from '@/shared/ui/BaseBtn';
+import { PERMISSIONS } from '@/shared/lib/permissions';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
-import { EntityListRail, RAIL_CONTENT_WIDTH, useEntityRailVisible, useRailTagSelection } from '@/shared/ui/EntityRail';
-import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
-import { PageHeader } from '@/widgets/page-header';
-import { usePermissionSet, useSidebarCollapsedStore } from '@/widgets/sidebar';
+import { EntityListFilters, useRailTagSelection } from '@/shared/ui/EntityRail';
+import { PageToolbar, pageBodySx, pageSx, useListSearchQuery } from '@/widgets/page-header';
+import { usePermissionSet } from '@/widgets/sidebar';
 
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 
@@ -72,27 +67,35 @@ function downloadMarkdown(content: string, filename: string): void {
  * Any other value resolves to `all`, so an old link cannot land on a blank tab.
  */
 export const SKILL_TABS = ['all', 'public'] as const;
+
+const SEARCH_TEST_ID = 'skill-search-input';
 export type SkillTab = (typeof SKILL_TABS)[number];
 
 export function resolveSkillTab(tab: string | undefined): SkillTab {
   return tab === 'public' ? 'public' : 'all';
 }
 
+/**
+ * The skills list page: one toolbar (the All / Public tabs, the search, the
+ * Filters button, Import and "+ New skill"), the selected tab below it, and
+ * the tag filter in the shell's side panel. The Public tab is the published
+ * catalog, which keeps its own search over the catalog's own request.
+ */
 export function Skills(): ReactNode {
   const navigate = useNavigate();
   const routeParams = useParams({ strict: false }) as { readonly tab?: string };
   const activeTab = resolveSkillTab(routeParams.tab);
   const projectId = useSelectedProjectId();
-  const [query, setQuery] = useState('');
+  const query = useListSearchQuery();
   const [pendingDelete, setPendingDelete] = useState<SkillRecord>();
   const [actionError, setActionError] = useState<string>();
   const skills = useSkills(projectId, query);
   const mutations = useSkillMutations(projectId);
-  const navRailCollapsed = useSidebarCollapsedStore((state) => state.collapsed);
-  const railVisible = useEntityRailVisible(navRailCollapsed);
   const { selectedTags } = useRailTagSelection();
   const permissions = usePermissionSet(projectId);
   const visibleSkills = useMemo(() => filterSkillsByTags(skills.data?.items ?? [], selectedTags), [skills.data, selectedTags]);
+  const title = t('skills.page.title', 'Skills');
+  const openCreate = (): void => void navigate({ to: '/skills/create' });
 
   const handleExport = async (skill: SkillRecord): Promise<void> => {
     if (!projectId) return;
@@ -104,93 +107,80 @@ export function Skills(): ReactNode {
     }
   };
 
-  const searchBar = (
-    <SimpleSearchBar
-      value={query}
-      onChange={setQuery}
-      placeholder={t('skills.page.search', 'Search skills')}
-    />
-  );
+  const onAllTab = activeTab === 'all';
+  const createAction = permissions.has(PERMISSIONS.applications.create)
+    ? { label: t('pages.skills.create', 'New skill'), testId: 'skills-create', onClick: openCreate }
+    : undefined;
 
   return (
     <Box sx={pageSx}>
-      <Box sx={contentWidthSx(railVisible)}>
-        <PageHeader
-          title={t('skills.page.title', 'Skills')}
-          titleComponent="h1"
-          showBorder={false}
-          sx={headerSx}
-          slots={{
-            actions: (
-              <>
-                <SkillImportButton
-                  isImporting={mutations.importFile.isPending}
-                  onImport={async (file) => {
-                    await mutations.importFile.mutateAsync(file);
-                  }}
-                />
-                <BaseBtn
-                  variant="contained"
-                  startIcon={<AddOutlinedIcon />}
-                  onClick={() => void navigate({ to: '/skills/create' })}
-                >
-                  {t('skills.page.create', 'Create skill')}
-                </BaseBtn>
-              </>
-            ),
-          }}
-        />
-        <Tabs
-          value={activeTab}
-          onChange={(_event, next: SkillTab) => {
-            void navigate({ to: '/skills/$tab', params: { tab: next } });
-          }}
-        >
-          <Tab
-            value="all"
-            label={t('skills.page.tabAll', 'Skills')}
+      <PageToolbar
+        tabs={{
+          items: [
+            { value: 'all', label: t('skills.page.tabAll', 'Skills') },
+            { value: 'public', label: t('skills.page.tabPublic', 'Public') },
+          ],
+          selectedIndex: SKILL_TABS.indexOf(activeTab),
+          onChange: (_event, index) => {
+            const next = SKILL_TABS[index];
+            if (next !== undefined) void navigate({ to: '/skills/$tab', params: { tab: next } });
+          },
+          ariaLabel: title,
+          testIdPrefix: 'skills-tab',
+        }}
+        search={onAllTab ? { placeholder: t('skills.page.search', 'Search skills'), 'data-testid': SEARCH_TEST_ID } : undefined}
+        filters={onAllTab ? { activeCount: selectedTags.length } : undefined}
+        secondaryActions={
+          <SkillImportButton
+            isImporting={mutations.importFile.isPending}
+            onImport={async (file) => {
+              await mutations.importFile.mutateAsync(file);
+            }}
           />
-          <Tab
-            value="public"
-            label={t('skills.page.tabPublic', 'Public')}
-          />
-        </Tabs>
+        }
+        primaryAction={createAction}
+      />
+      <Box sx={pageBodySx}>
+        {actionError && (
+          <Typography
+            role="alert"
+            sx={alertSx}
+          >
+            {actionError}
+          </Typography>
+        )}
         {activeTab === 'public' && (
           <PublicSkillsCatalog
             projectId={projectId}
             permissions={permissions}
           />
         )}
-        {activeTab === 'all' && !railVisible && searchBar}
-        {actionError && <Typography role="alert">{actionError}</Typography>}
-        {activeTab === 'all' && (
-        <SkillsList
-          items={visibleSkills}
-          isLoading={skills.isFetching && skills.data === undefined}
-          isError={skills.isError}
-          query={query}
-          onSelect={(skillId) => {
-            void navigate({
-              to: '/skills/$tab/$skillId',
-              params: { tab: 'all', skillId },
-            });
-          }}
-          onDelete={setPendingDelete}
-          onExport={(skill) => {
-            void handleExport(skill);
-          }}
-          onCreate={() => {
-            void navigate({ to: '/skills/create' });
-          }}
-          railVisible={false}
-        />
+        {onAllTab && (
+          <SkillsList
+            items={visibleSkills}
+            isLoading={skills.isFetching && skills.data === undefined}
+            isError={skills.isError}
+            query={query}
+            onSelect={(skillId) => {
+              void navigate({
+                to: '/skills/$tab/$skillId',
+                params: { tab: 'all', skillId },
+              });
+            }}
+            onDelete={setPendingDelete}
+            onExport={(skill) => {
+              void handleExport(skill);
+            }}
+            onCreate={openCreate}
+          />
         )}
       </Box>
-      <EntityListRail
-        projectId={projectId}
-        navRailCollapsed={navRailCollapsed}
-        search={searchBar}
-      />
+      {onAllTab && (
+        <EntityListFilters
+          projectId={projectId}
+          subject={title}
+        />
+      )}
       <DeleteEntityModal
         open={pendingDelete !== undefined}
         {...(pendingDelete ? { name: pendingDelete.name } : {})}
@@ -208,18 +198,4 @@ export function Skills(): ReactNode {
   );
 }
 
-const pageSx: SxProps<Theme> = (theme: Theme) => ({
-  display: 'flex',
-  flexDirection: 'column',
-  gap: theme.spacing(2),
-  padding: theme.spacing(3),
-});
-/** `CARD_LIST_WIDTH` (`apps/elitea-ui/src/common/constants.js:511`) — see `pages/agents/Applications.tsx` for the shared rationale. */
-const contentWidthSx = (railVisible: boolean): SxProps<Theme> => (theme: Theme) => ({
-  display: 'flex',
-  flexDirection: 'column',
-  gap: theme.spacing(2),
-  width: railVisible ? RAIL_CONTENT_WIDTH : '100%',
-});
-/** The page already pads its content column, so the header keeps no padding of its own. */
-const headerSx: SxProps<Theme> = { padding: 0 };
+const alertSx: SxProps<Theme> = (theme: Theme) => ({ paddingInline: theme.spacing(3), paddingTop: theme.spacing(2), color: theme.vars.palette.error.main });

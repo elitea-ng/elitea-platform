@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -56,6 +57,7 @@ func (r *FoldersRepo) List(ctx context.Context, projectID string) ([]folders.Fol
 			return nil, fmt.Errorf("folders: scan: %w", err)
 		}
 		f.ProjectID = projectID
+		f.OwnerID = strconv.Itoa(ownerID)
 		f.ParentID = "" // flat structure for now
 		f.Position = &position
 		items = append(items, f)
@@ -96,6 +98,7 @@ func (r *FoldersRepo) Create(ctx context.Context, projectID string, folder folde
 		return folders.Folder{}, fmt.Errorf("folders: create: %w", err)
 	}
 	f.ProjectID = projectID
+	f.OwnerID = strconv.FormatInt(actorID, 10)
 	f.Position = &position
 	return f, nil
 }
@@ -130,6 +133,7 @@ func (r *FoldersRepo) Update(ctx context.Context, projectID, folderID string, fo
 		return folders.Folder{}, fmt.Errorf("folders: update: %w", err)
 	}
 	f.ProjectID = projectID
+	f.OwnerID = strconv.FormatInt(actorID, 10)
 	f.Position = &position
 	return f, nil
 }

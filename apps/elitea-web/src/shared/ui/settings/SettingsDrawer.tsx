@@ -283,7 +283,7 @@ const drawerSx: SxProps<Theme> = (theme) => ({
 });
 
 /*
- * A fixed 60px bar, the same as PageHeader and DrawerPageHeader, so this
+ * A fixed 60px bar, the same as DrawerPageHeader, so this
  * column's rule lines up with the page header's rule beside it. The height
  * used to come from padding plus the title's line box; when `headingSmall`'s
  * leading moved from a fixed 24px to a 1.43 ratio (20px) the bar shrank to

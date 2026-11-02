@@ -73,8 +73,7 @@ function renderToolMenu(
   }
 
   const rootRoute = createRootRoute({ component: Root });
-  // Catch-all splat sibling — matches `widgets/create-button`'s
-  // `testRouter.tsx`'s own harness — so a `navigate({ to })` this component
+  // Catch-all splat sibling, so a `navigate({ to })` this component
   // makes to a route this bare tree doesn't declare (e.g. `/toolkits/create`,
   // the "create new toolkit" round trip's outbound half) still resolves to
   // something real instead of TanStack's not-found state, letting tests

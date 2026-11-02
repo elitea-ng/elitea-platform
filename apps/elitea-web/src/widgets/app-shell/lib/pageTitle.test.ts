@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { derivePageTitle } from './pageTitle';
+import { derivePageTitle, pageSection } from './pageTitle';
 
 describe('derivePageTitle', () => {
   it('returns project name alone for unknown path', () => {
@@ -64,5 +64,27 @@ describe('derivePageTitle', () => {
 
   it('handles undefined projectName gracefully', () => {
     expect(derivePageTitle('/chat', 'Conv', undefined)).toBe('Chat: Conv - ');
+  });
+});
+
+describe('pageSection', () => {
+  it('names the section and links its list', () => {
+    expect(pageSection('/agents/12')).toEqual({ label: 'Agents', to: '/agents' });
+    expect(pageSection('/agents-hub')).toEqual({ label: 'Agent HUB', to: '/agents-hub' });
+  });
+
+  it('names the chat and the toolkits as their sidebar rows do', () => {
+    expect(pageSection('/chat/72')).toEqual({ label: 'Chats', to: '/chat' });
+    expect(pageSection('/toolkits/all')).toEqual({ label: 'Toolkits & Indexes', to: '/toolkits' });
+    // The document title keeps the old wording.
+    expect(derivePageTitle('/chat', '', 'P')).toBe('Chat - P');
+  });
+
+  it('treats every settings tab as Settings', () => {
+    expect(pageSection('/settings/notifications')).toEqual({ label: 'Settings', to: '/settings' });
+  });
+
+  it('is undefined outside every known section', () => {
+    expect(pageSection('/unknown')).toBeUndefined();
   });
 });

@@ -1,16 +1,13 @@
 /**
- * The right-hand rail of the entity-list pages (`EntityRail.tsx`'s module
- * doc records why it lives in `shared/ui` — briefly: `features/toolkits`
- * and `pages/**` both need it, and `shared/` is the only layer both may
- * import under `.dependency-cruiser.cjs`).
+ * A list page's Filters — tags, then the author card or the trending authors —
+ * shown in the shell's right panel (`EntityListFilters.tsx`'s module doc). It
+ * lives in `shared/ui` because `features/toolkits` and `pages/**` both compose
+ * its parts, and `shared/` is the only layer both may import under
+ * `.dependency-cruiser.cjs`.
  */
-export { EntityRail, RAIL_CONTENT_WIDTH, RAIL_WIDTH_PX, isEntityRailVisible, useEntityRailVisible } from './EntityRail';
+export { EntityListFilters, filtersPanelSx } from './EntityListFilters';
 /** @public */
-export type { EntityRailProps } from './EntityRail';
-
-export { EntityListRail } from './EntityListRail';
-/** @public */
-export type { EntityListRailProps } from './EntityListRail';
+export type { EntityListFiltersProps } from './EntityListFilters';
 
 export { RailTagsPanel, RailTagsPanelView } from './RailTagsPanel';
 /** @public */

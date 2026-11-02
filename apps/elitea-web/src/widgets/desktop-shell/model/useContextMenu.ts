@@ -13,15 +13,15 @@ import type { ContextMenuItem } from '@/shared/desktop/appEvents';
 import { hostLog } from '@/shared/desktop/diagnostics';
 import { toWorkspaceIpcError } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
+import type { ContextAction } from '@/widgets/chat-rail';
 
 import { useAppIpc } from './appIpcContext';
 import { useDesktopLayout } from './desktopLayout.store';
 
-/** An entry of a submenu. */
-type ContextLeaf = { id: string; label: string; enabled?: boolean; run: () => void };
+export type { ContextAction };
 
-/** One entry the caller describes: what it says and does. A submenu holds one level of entries. */
-export type ContextAction = ContextLeaf | { separator: true } | { label: string; enabled?: boolean; submenu: readonly ContextLeaf[] };
+/** An entry of a submenu. */
+type ContextLeaf = Extract<ContextAction, { run: () => void }>;
 
 const leaf = (action: ContextLeaf): { id: string; label: string; enabled?: boolean } =>
   action.enabled === undefined ? { id: action.id, label: action.label } : { id: action.id, label: action.label, enabled: action.enabled };

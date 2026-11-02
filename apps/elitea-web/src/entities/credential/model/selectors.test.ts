@@ -54,6 +54,11 @@ describe('credentialDisplayName', () => {
     expect(credentialDisplayName(credential({ type: 'integration_github' }))).toBe('Github');
   });
 
+  it('treats a null label or title (the wire’s unlabelled credential) as absent, without throwing', () => {
+    const unlabelled = { ...credential({ type: 'openai' }), label: null, eliteaTitle: null } as unknown as Credential;
+    expect(credentialDisplayName(unlabelled)).toBe('Openai');
+  });
+
   it('treats a blank label as absent', () => {
     expect(credentialDisplayName(credential({ label: '   ', type: 'openai' }))).toBe('Openai');
   });

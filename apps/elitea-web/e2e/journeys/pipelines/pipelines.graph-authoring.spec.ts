@@ -58,7 +58,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { BASE_URL } from '../../../playwright.config';
 import { AUTOTEST_PREFIX } from '../../fixtures/api';
 import { checkA11y } from '../../fixtures/axe';
-import { parseStoredGraph, readStoredPipelineVersion, storedNodeIds } from '../../fixtures/pipelines';
+import { foldEditorPanes, parseStoredGraph, readStoredPipelineVersion, storedNodeIds } from '../../fixtures/pipelines';
 
 /** The create POST carries the project id; nothing here assumes project 1 (the chat persona owns its own — #290). */
 const APPLICATIONS_RE = /\/elitea_core\/applications\/prompt_lib\/(\d+)/;
@@ -135,10 +135,7 @@ async function createPipeline(page: Page, name: string): Promise<CreatedPipeline
 async function openCanvas(page: Page): Promise<void> {
   await expect(page.getByTestId('rf__wrapper')).toBeVisible({ timeout: 30_000 });
   await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 20_000 });
-  await page.getByRole('button', { name: 'Collapse the configuration panel' }).click();
-  await expect(page.getByRole('button', { name: 'Expand the configuration panel' })).toBeVisible({ timeout: 10_000 });
-  await page.getByRole('button', { name: 'Collapse the chat panel' }).click();
-  await expect(page.getByRole('button', { name: 'Expand the chat panel' })).toBeVisible({ timeout: 10_000 });
+  await foldEditorPanes(page);
 }
 
 /** Add one node of `label` through the editor's own menu — no store pokes. */

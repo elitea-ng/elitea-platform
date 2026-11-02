@@ -330,6 +330,18 @@ describe('permission filtering', () => {
     expect(screen.getByTestId('admin-nav').querySelectorAll('hr')).toHaveLength(1);
   });
 
+  it('scrolls its links in their own region, between a fixed header and footer', async () => {
+    // A short window (1024x600) cut the last links and the footer off: the
+    // layout clips, and nothing in the nav scrolled.
+    await mountAdmin();
+    const region = screen.getByTestId('admin-nav-scroll');
+    const style = window.getComputedStyle(region);
+    expect(style.overflowY).toBe('auto');
+    expect(style.minHeight).toBe('0px');
+    for (const link of screen.getAllByTestId(/^admin-nav-item-/)) expect(region).toContainElement(link);
+    expect(region).not.toContainElement(screen.getByTestId('admin-nav-user-button'));
+  });
+
   it('drops a group that loses every item, rather than rendering an empty one', () => {
     const groups = visibleAdminNavGroups((permission) =>
       ['admin.auth.users', 'configuration.roles.permissions.view', 'projects.projects.projects.view', 'configuration.secrets.secret.list', 'admin.moderation'].includes(
@@ -487,36 +499,33 @@ describe('collapsed state', () => {
     expect(within(nav).getByRole('link', { name: 'Schedules & Tasks' })).toBeInTheDocument();
   });
 
-  it('drops the theme toggle from the collapsed header, which has no room for it', async () => {
-    // Mutation survivor: `{!collapsed && <ThemeModeToggle />}` flipped keeps a
-    // three-button control in a 3.75rem rail, overlapping the logo. Nothing
-    // else here looked at the header's contents.
-    //
-    // The group is named 'Theme'. It was 'View toggle' — `TabGroupButton`'s
-    // generic default — until `ThemeModeToggle` began passing its own
-    // `ariaLabel`. A theme selector named "View toggle" told a screen-reader
-    // user nothing, so the NAME is the fix and this assertion follows it.
+  it('has no theme control: the console follows the theme set in the app', async () => {
+    // The theme is a user preference set in the app (Settings › Personalization
+    // or the account menu's Appearance); the console reads the same stored
+    // choice. A second control here could only disagree with it.
     await mountAdmin();
-    expect(screen.getByRole('group', { name: 'Theme' })).toBeInTheDocument();
-
-    await userEvent.click(screen.getByTestId('admin-nav-collapse-toggle'));
     expect(screen.queryByRole('group', { name: 'Theme' })).toBeNull();
+    await userEvent.click(screen.getByTestId('admin-nav-user-button'));
+    const menu = await screen.findByRole('menu', { name: 'Account menu' });
+    expect(within(menu).queryByText('Appearance')).toBeNull();
   });
 
-  it('sizes the theme toggle to the rail, not to three fixed 6.25rem buttons', async () => {
-    // jsdom has no layout, so assert the declarations that keep it inside the
-    // 13.75rem rail: the group fills its container and every segment may
-    // shrink (min-width 0) rather than holding a fixed 6.25rem (3 x 6.25rem
-    // = 18.75rem overflowed the rail's ~11.5rem content box). Labels stay
-    // visible; each segment keeps its accessible name.
+  it('offers Back to Elitea first, then the version and Sign out, in the account menu', async () => {
     await mountAdmin();
-    const group = screen.getByRole('group', { name: 'Theme' });
-    expect(getComputedStyle(group).width).toBe('100%');
-    for (const name of ['System', 'Dark', 'Light']) {
-      const button = within(group).getByRole('button', { name });
-      expect(button).toHaveTextContent(name);
-      expect(getComputedStyle(button).minWidth).toBe('0px');
-    }
+    await userEvent.click(screen.getByTestId('admin-nav-user-button'));
+    const menu = await screen.findByRole('menu', { name: 'Account menu' });
+    const items = within(menu).getAllByRole('menuitem');
+    expect(items[0]).toHaveTextContent('Back to Elitea');
+    expect(items[0]).toHaveAttribute('href', '/app/');
+    expect(within(menu).getByTestId('account-menu-version')).toHaveTextContent('Version dev');
+    expect(items.at(-1)).toHaveTextContent('Sign out');
+  });
+
+  it('collapsed: the avatar alone still opens the account menu', async () => {
+    await mountAdmin();
+    await userEvent.click(screen.getByTestId('admin-nav-collapse-toggle'));
+    await userEvent.click(screen.getByTestId('admin-nav-user-button'));
+    expect(await screen.findByTestId('admin-nav-logout')).toBeInTheDocument();
   });
 
   it('persists through localStorage, under its own key', async () => {
@@ -719,7 +728,7 @@ describe('user footer', () => {
     expect(adminApiBaseUrl()).toBe('https://api.example.test/v2');
   });
 
-  it('offers Logout behind the user menu', async () => {
+  it('offers Sign out behind the user menu', async () => {
     await mountAdmin();
     expect(screen.queryByTestId('admin-nav-logout')).toBeNull();
     await userEvent.click(screen.getByTestId('admin-nav-user-button'));

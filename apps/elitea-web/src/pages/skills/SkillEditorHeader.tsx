@@ -4,19 +4,19 @@ import { useMemo } from 'react';
 
 import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
 import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { AgentPipelineVersionSelector } from '@/features/agents';
 import { skillVersionKey, SkillEditorToolbar, type SkillRecord, type SkillVersion } from '@/features/skills';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
+import { PageToolbar } from '@/widgets/page-header';
 
 import { buildVersionKeyById, defaultVersionOptionId, selectedVersionOptionId, toSkillVersionOptions } from './lib/skillVersionOptions';
 
 /**
- * The skill editor's header: name, version dropdown, version-scoped write
- * controls (new version, set default, compare, restore, delete version —
+ * The skill editor's toolbar row (the skill's name is the shell's crumb):
+ * version dropdown, version-scoped write controls (new version, set default, compare, restore, delete version —
  * #874) and the save/discard/delete/export toolbar.
  *
  * Split out of `EditSkill.tsx` to stay under the §3.4 file-length budget
@@ -73,84 +73,79 @@ export function SkillEditorHeader(props: SkillEditorHeaderProps): ReactNode {
   // still accept but that offers the user nothing.
   const isNamedVersion = activeVersionObj !== undefined && activeVersionObj.name !== 'base';
   return (
-    <Box sx={headerSx}>
-      <Box sx={titleSx}>
-        <Typography variant="headingLarge" component="h1">{props.skill.name}</Typography>
-        {props.versions.length > 0 && (
-          <AgentPipelineVersionSelector
-            versions={versionOptions}
-            applicationVersionId={selectedVersionOptionId(props.versions, selectedVersion)}
-            defaultVersionId={defaultVersionOptionId(props.versions)}
-            onSelectVersion={(version) => {
-              const key = versionKeyById.get(version.id);
-              if (key !== undefined && key !== selectedVersion) props.onNavigateVersion(key);
-            }}
+    <PageToolbar
+      secondaryActions={
+        <>
+          <Box sx={versionSx}>
+            {props.versions.length > 0 && (
+              <AgentPipelineVersionSelector
+                versions={versionOptions}
+                applicationVersionId={selectedVersionOptionId(props.versions, selectedVersion)}
+                defaultVersionId={defaultVersionOptionId(props.versions)}
+                onSelectVersion={(version) => {
+                  const key = versionKeyById.get(version.id);
+                  if (key !== undefined && key !== selectedVersion) props.onNavigateVersion(key);
+                }}
+              />
+            )}
+            <BaseBtn
+              variant="secondary"
+              startIcon={<AddOutlinedIcon />}
+              onClick={props.onNewVersion}
+            >
+              {t('skills.edit.newVersion', 'New version')}
+            </BaseBtn>
+            {props.activeVersion && (
+              <BaseBtn
+                variant="secondary"
+                disabled={props.isSettingDefault}
+                onClick={() => props.onSetDefault(props.activeVersion ?? '')}
+              >
+                {t('skills.edit.setDefault', 'Set default')}
+              </BaseBtn>
+            )}
+            {props.versions.length >= 2 && (
+              <BaseBtn
+                variant="secondary"
+                data-testid="skill-compare-versions-button"
+                onClick={props.onCompare}
+              >
+                {t('skills.edit.compareVersions', 'Compare versions')}
+              </BaseBtn>
+            )}
+            {isNamedVersion && (
+              <>
+                <BaseBtn
+                  variant="secondary"
+                  data-testid="skill-restore-version-button"
+                  onClick={props.onRestore}
+                >
+                  {t('skills.edit.restoreVersion', 'Restore')}
+                </BaseBtn>
+                <BaseBtn
+                  variant="secondary"
+                  data-testid="skill-delete-version-button"
+                  onClick={props.onDeleteVersion}
+                >
+                  {t('skills.edit.deleteVersion', 'Delete version')}
+                </BaseBtn>
+              </>
+            )}
+          </Box>
+          <SkillEditorToolbar
+            isDirty={props.isDirty}
+            isSaving={props.isSaving}
+            canDelete
+            onSave={props.onSave}
+            onDiscard={props.onDiscard}
+            onDelete={props.onDelete}
+            onExport={props.onExport}
+            publishing={props.publishing}
           />
-        )}
-        <BaseBtn
-          variant="secondary"
-          startIcon={<AddOutlinedIcon />}
-          onClick={props.onNewVersion}
-        >
-          {t('skills.edit.newVersion', 'New version')}
-        </BaseBtn>
-        {props.activeVersion && (
-          <BaseBtn
-            variant="secondary"
-            disabled={props.isSettingDefault}
-            onClick={() => props.onSetDefault(props.activeVersion ?? '')}
-          >
-            {t('skills.edit.setDefault', 'Set default')}
-          </BaseBtn>
-        )}
-        {props.versions.length >= 2 && (
-          <BaseBtn
-            variant="secondary"
-            data-testid="skill-compare-versions-button"
-            onClick={props.onCompare}
-          >
-            {t('skills.edit.compareVersions', 'Compare versions')}
-          </BaseBtn>
-        )}
-        {isNamedVersion && (
-          <>
-            <BaseBtn
-              variant="secondary"
-              data-testid="skill-restore-version-button"
-              onClick={props.onRestore}
-            >
-              {t('skills.edit.restoreVersion', 'Restore')}
-            </BaseBtn>
-            <BaseBtn
-              variant="secondary"
-              data-testid="skill-delete-version-button"
-              onClick={props.onDeleteVersion}
-            >
-              {t('skills.edit.deleteVersion', 'Delete version')}
-            </BaseBtn>
-          </>
-        )}
-      </Box>
-      <SkillEditorToolbar
-        isDirty={props.isDirty}
-        isSaving={props.isSaving}
-        canDelete
-        onSave={props.onSave}
-        onDiscard={props.onDiscard}
-        onDelete={props.onDelete}
-        onExport={props.onExport}
-        publishing={props.publishing}
-      />
-    </Box>
+        </>
+      }
+    />
   );
 }
 
-const headerSx: SxProps<Theme> = (theme: Theme) => ({
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: theme.spacing(1),
-  padding: theme.spacing(1, 3),
-  borderBottom: `0.0625rem solid ${theme.vars.palette.border.lines}`,
-});
-const titleSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: 1 };
+const versionSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: 1 };

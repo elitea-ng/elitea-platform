@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -7,6 +9,7 @@ import { getCreateApplicationMockHandler } from '@/shared/api/generated/applicat
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 import { installCodeMirrorTestPolyfills } from '@/shared/ui/lib/field/codeMirrorTestPolyfills';
+import { PageChromeProvider, useShellCrumbs } from '@/shared/ui/page-chrome';
 import { useNavBlockerStore } from '@/widgets/app-shell';
 
 import { CreateApplication } from './CreateApplication';
@@ -63,7 +66,25 @@ afterEach(() => {
   resetGeneratedClient();
 });
 
+function CrumbProbe(): ReactNode {
+  return <div data-testid="crumbs">{useShellCrumbs().map((crumb) => crumb.label).join(' / ')}</div>;
+}
+
 describe('CreateApplication', () => {
+  it('names itself "New Agent" in the shell title row and draws no heading of its own', async () => {
+    renderAgentsRoute(
+      <PageChromeProvider>
+        <CreateApplication />
+        <CrumbProbe />
+      </PageChromeProvider>,
+      '/agents/create',
+      { projectId: '1' },
+    );
+
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('New Agent'));
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  });
+
   it('renders the Save/Cancel tab bar and the real CreateAgentForm (name/description fields)', async () => {
     renderAgentsRoute(<CreateApplication />, '/agents/create', { projectId: '1' });
 

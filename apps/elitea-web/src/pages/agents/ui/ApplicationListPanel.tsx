@@ -56,7 +56,6 @@ export interface ApplicationListPanelProps {
   readonly onLoadMore: () => void;
   /** Wired to the empty state's `+ Create` CTA when the caller can route to a create page. */
   readonly onCreate?: () => void;
-  readonly railVisible?: boolean;
 }
 
 export function ApplicationListPanel({
@@ -71,7 +70,6 @@ export function ApplicationListPanel({
   isLoadingMore,
   onLoadMore,
   onCreate,
-  railVisible = true,
 }: ApplicationListPanelProps): ReactNode {
   const items = useMemo<EntityListItem[]>(
     () =>
@@ -98,7 +96,6 @@ export function ApplicationListPanel({
         isLoading={isLoading}
         isError={isError}
         errorMessage={errorMessage}
-        railVisible={railVisible}
         emptyState={
           <EntityEmptyState
             title={emptyTitle}

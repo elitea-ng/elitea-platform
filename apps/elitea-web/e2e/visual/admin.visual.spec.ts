@@ -490,47 +490,30 @@ for (const route of ADMIN_ROUTES) {
 }
 
 /**
- * Switches to the light colour scheme through the admin SPA's OWN control, on
- * the page under test, then proves the switch took effect.
+ * Puts the console in the light scheme the way a user does now: through the
+ * stored theme preference. The console has no theme control of its own; it
+ * follows the choice made in the app (`AdminNavFooter.tsx`'s header), read
+ * from `el-mode` on this shared origin (`shared/brand/constants.ts`'s
+ * `modeStorageKey`) and from the server copy, which `keepThemeOffTheServer`
+ * answers as "never chosen" so the stored local choice stands.
  *
- * The admin nav header renders `shared/ui/ThemeModeToggle`
- * (`AdminNavHeader.tsx`), so — unlike the main app, whose toggle lives on
- * `/app/settings/personalization` and forces `routes.visual.spec.ts` to
- * navigate away and back — the control is right there. Using it rather than
- * writing the persisted key directly is the same rule #61 sets for the main
- * app's light shots: faking the attribute would make these test the stylesheet
- * while claiming to test the theme mechanism.
+ * Writing the stored preference is not faking the attribute: it is the input
+ * the console reads, and the poll below proves the console applied it.
  *
  * `data-el-scheme` (`shared/brand/constants.ts`'s `COLOR_SCHEME_ATTRIBUTE`) is
  * what MUI's `colorSchemeSelector` resolves against, so polling it is polling
  * the thing the stylesheet keys off.
  */
 async function useLightScheme(page: Page): Promise<void> {
-  // The click would otherwise store `light` for the persona every parallel
-  // worker shares (`fixtures/serverTheme.ts`). Only switching tests carry the
-  // stub: an intercepted page rasterises its text differently.
   await keepThemeOffTheServer(page);
-  const light = page
-    .getByTestId('admin-nav')
-    .getByRole('button', { name: 'Light', exact: true });
-  await expect(light).toBeVisible({ timeout: 20_000 });
-  await light.click();
-  await expect(light).toHaveAttribute('aria-pressed', 'true');
+  await page.evaluate(() => window.localStorage.setItem('el-mode', 'light'));
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await adminShellSettled(page);
   await expect
     .poll(() => page.evaluate(() => document.documentElement.getAttribute('data-el-scheme')), {
       timeout: 10_000,
     })
     .toBe('light');
-
-  // Undo the click's side effects on the CHROME, or they end up in the
-  // baseline: the pointer is left resting on the toggle, so MUI shows its
-  // `Light theme` Tooltip, and the button keeps focus, so it draws a focus
-  // ring. Both were in the first generated `admin-users-light` PNG. A tooltip
-  // in a reference is worse than cosmetic — it appears on a timer, so the
-  // baseline would be a race with its own enter delay.
-  await page.mouse.move(0, 0);
-  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-  await expect(page.getByRole('tooltip')).toHaveCount(0, { timeout: 10_000 });
 }
 
 /*
@@ -576,6 +559,57 @@ for (const route of ADMIN_ROUTES.filter((r) => r.light)) {
     });
   });
 }
+
+/*
+ * The console's chrome (PR 1553): the shared account menu at the nav's foot,
+ * which replaced the console's own theme switcher, and the nav at a short
+ * window, where its links scroll between the fixed header and the footer.
+ * Both on the Users page, whose landmark is already measured above.
+ */
+async function openUsers(page: Page): Promise<void> {
+  await page.goto(BASE_URL + '/admin/app/users', { waitUntil: 'domcontentloaded' });
+  await adminShellSettled(page);
+  await expect(page.getByRole('main').getByText('e2e-admin@autotest.local').first()).toBeVisible({ timeout: 20_000 });
+  await noProgressBar(page);
+}
+
+async function shootAdmin(page: Page, name: string): Promise<void> {
+  await settle(page);
+  await expect(page).toHaveScreenshot(`${name}.png`, {
+    fullPage: false,
+    mask: adminVolatileRegions(page),
+    stylePath: ADMIN_SCREENSHOT_STYLE,
+    ...SNAPSHOT_TOLERANCE,
+  });
+}
+
+test('@visual admin-account-menu', async ({ page }) => {
+  await openUsers(page);
+  await page.getByTestId('admin-nav-user-button').click();
+  const menu = page.getByRole('menu', { name: 'Account menu' });
+  await expect(menu).toBeVisible({ timeout: 10_000 });
+  await expect(menu.getByRole('menuitem', { name: 'Back to Elitea' })).toBeVisible();
+  await expect(menu.getByTestId('account-menu-version')).toBeVisible();
+  await shootAdmin(page, 'admin-account-menu');
+});
+
+test.describe('short window', () => {
+  test.use({ viewport: { width: 1024, height: 600 } });
+
+  test('@visual admin-nav-short-viewport', async ({ page }) => {
+    await openUsers(page);
+    const region = page.getByTestId('admin-nav-scroll');
+    // The links overflow at this height, and the region (not the page) scrolls.
+    await expect
+      .poll(() => region.evaluate((el) => el.scrollHeight > el.clientHeight), { timeout: 10_000 })
+      .toBe(true);
+    await region.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect(page.getByTestId('admin-nav-user-button')).toBeInViewport();
+    await shootAdmin(page, 'admin-nav-short-viewport');
+  });
+});
 
 /*
  * ── CLASSIFICATION: why a refusal screen gets a baseline and a stub does not ──

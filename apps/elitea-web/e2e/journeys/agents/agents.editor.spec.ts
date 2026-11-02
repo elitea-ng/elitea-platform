@@ -22,7 +22,7 @@
  *    `test_agent_search_no_results` and `test_view_toggle_table_and_card` —
  *    all four are `agents.list.spec.ts` (J14e). This file used to record them
  *    as product gaps: the list carried no search control and `ViewToggle` had
- *    no port. Both are real now (`widgets/page-header`'s `ListSearchField` and
+ *    no port. Both are real now (`widgets/page-header`'s `PageSearch` and
  *    `ListViewToggle`, mounted by `pages/agents/Applications.tsx`), so the use
  *    cases are journeys rather than disclosures.
  */

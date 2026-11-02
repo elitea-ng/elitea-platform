@@ -35562,6 +35562,30 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
 
+  /auth/permissions/administration:
+    get:
+      operationId: administrationPermissionList
+      summary: List the caller's administration-mode permissions
+      description: |
+        NOTE(W2): internal/api/v2/auth/handler.go (AdministrationPermissionList).
+        PLAIN ARRAY of {name, enabled}: the caller's OWN administration-mode
+        permissions, the set the admin console's boot gate reads. The account
+        menu shows its "Admin portal" link when the array is not empty.
+        Presentation only: every admin route resolves its permission again.
+        An empty array when the caller holds no administration role or the
+        resolver refuses or fails.
+      tags: [auth]
+      responses:
+        '200':
+          description: Permission array
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Permission'
+        '401': { $ref: '#/components/responses/401' }
+
   # NOTE(W1): the former /auth/permissions/prompt_lib/public/{public_project_id}
   # entry (publicPermissionList) was spec-only drift — no such /public/ segment
   # exists in the router, and the UI requests the public project's permissions

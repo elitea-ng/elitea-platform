@@ -107,6 +107,9 @@ the suite against a tenant the journeys had just written to produced seven
 
 `routes.visual.spec.ts` covers the MAIN app (`/app/**`) and
 `admin.visual.spec.ts` covers the ADMIN SPA (`/admin/app/**`, issue #229).
+(`shell.visual.spec.ts` photographs the main app's shared chrome on its own:
+the top bar and toolbar at 1280px, the Filters panel, the collapsed rail and
+the account menu; `brand` and `pipeline-editor` cover their own surfaces.)
 They are separate files because they need different things, not for tidiness:
 
 - **A different persona.** The `visual` project's default `storageState` is the

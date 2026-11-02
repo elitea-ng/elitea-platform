@@ -2,7 +2,7 @@
  * The inspector's layout, as data: which tabs sit in which of its (one or
  * two, stacked) groups, each group's active tab, the tabs the person closed,
  * the split between the groups and the panel's width. One layout per kind of
- * page (`InspectorPage`): Local work and the chat each keep their own.
+ * page (`InspectorPage`): Local work, the chat and the list pages each keep their own.
  *
  * The stored layout names every tab it has placed; what is on screen is the
  * stored layout narrowed to the tabs the page offers now (`viewOf`). A tab the
@@ -31,7 +31,7 @@ export interface InspectorLayout {
 export const INSPECTOR_WIDTH = { min: 260, max: 720 } as const;
 export const SPLIT_RANGE = { min: 0.2, max: 0.8 } as const;
 
-const TAB_ORDER: readonly InspectorTabId[] = ['changes', 'approvals', 'plan', 'processes', 'index', 'context', 'conversation'];
+const TAB_ORDER: readonly InspectorTabId[] = ['changes', 'approvals', 'plan', 'processes', 'index', 'context', 'conversation', 'filters'];
 const TAB_IDS = new Set<string>(TAB_ORDER);
 /**
  * Tabs a page offers only some of the time (Plan: once the agent keeps a
@@ -40,15 +40,17 @@ const TAB_IDS = new Set<string>(TAB_ORDER);
  */
 const ON_DEMAND: ReadonlySet<InspectorTabId> = new Set<InspectorTabId>(['plan', 'processes', 'context']);
 
-/** The tabs in their one fixed order (Changes, Approvals, Plan, Processes, Index, Context, Conversation), however the page registered them. */
+/** The tabs in their one fixed order (Changes, Approvals, Plan, Processes, Index, Context, Conversation, Filters), however the page registered them. */
 export function byTabOrder<T extends { readonly id: InspectorTabId }>(tabs: readonly T[]): T[] {
   return [...tabs].sort((a, b) => TAB_ORDER.indexOf(a.id) - TAB_ORDER.indexOf(b.id));
 }
 
+/** The chat's inspector keeps the participants rail's own width (276px, on the 8px grid); Local work its changes panel's; a list page's Filters the old tags rail's. */
+const DEFAULT_WIDTH: Readonly<Record<InspectorPage, number>> = { local: 360, chat: 280, browse: 300 };
+
 export function defaultInspectorLayout(page: InspectorPage): InspectorLayout {
   const tabs = TAB_ORDER.filter((id) => INSPECTOR_TAB_PAGE[id] === page && !ON_DEMAND.has(id));
-  // The chat's inspector keeps the participants rail's own width (276px, on the 8px grid); Local work its changes panel's.
-  return { groups: [{ tabs, active: tabs[0] ?? null }], closed: [], split: 0.5, width: page === 'chat' ? 280 : 360 };
+  return { groups: [{ tabs, active: tabs[0] ?? null }], closed: [], split: 0.5, width: DEFAULT_WIDTH[page] };
 }
 
 export function clampInspectorWidth(width: number): number {

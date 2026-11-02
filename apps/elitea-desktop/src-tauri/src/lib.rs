@@ -36,6 +36,7 @@ mod mcp_commands;
 mod menu;
 mod models;
 mod net;
+mod notices;
 mod pkce;
 mod platform;
 mod process_commands;
@@ -532,6 +533,8 @@ pub fn run() {
             labels::app_menu_labels_set,
             context_menu::context_menu_show,
             activity::activity_cloud_run,
+            notices::platform_notice_show,
+            notices::platform_notice_badge,
             net::http_fetch,
             net::http_read_body,
             net::http_cancel,

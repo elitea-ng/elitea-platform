@@ -20,8 +20,10 @@ import { useLivePipelineGraphAdmission } from '@/features/pipelines';
 import { PIPELINE_STARTER_TEMPLATE } from '@/shared/lib/pipelineStarterTemplate';
 import { areAgentLlmSettingsEqual, type AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { t } from '@/shared/i18n';
+import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { AgentModelSettings } from '@/widgets/agent-model-settings';
 import { disarmUnsavedChangesNavBlocker, useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
+import { PageToolbar, pageSx } from '@/widgets/page-header';
 
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { CreatePipelineAdmissionAlert } from './ui/CreatePipelineAdmissionAlert';
@@ -102,23 +104,6 @@ function areExtraFieldsEqual(a: CreatePipelineFormExtraFields, b: CreatePipeline
 function pipelineInstructions(authored: string): string {
   return authored.trim() === '' ? PIPELINE_STARTER_TEMPLATE : authored;
 }
-
-const pageSx: SxProps<Theme> = {
-  height: '100%',
-  display: 'flex',
-  flexDirection: 'column',
-};
-
-const tabBarSx: SxProps<Theme> = {
-  flexShrink: 0,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  borderBottom: 1,
-  borderColor: 'divider',
-  padding: '0 1.5rem',
-  minHeight: '3rem',
-};
 
 const contentSx: SxProps<Theme> = {
   flex: 1,
@@ -353,19 +338,23 @@ export function CreatePipeline(): ReactNode {
     void navigate({ to: '/pipelines/$tab', params: { tab: params.tab ?? 'latest' } });
   }, [navigate, params.tab]);
 
+  // The page's name is the shell's crumb (`Pipelines ▸ New Pipeline`).
+  usePageCrumbs([{ label: t('pages.pipelines.createPipeline.title', 'New Pipeline') }]);
+
   return (
     <FormProvider {...form}>
       <Box sx={pageSx}>
-        <Box sx={tabBarSx}>
-          <Typography variant="headingLarge" component="h1">{t('pages.pipelines.createPipeline.title', 'New Pipeline')}</Typography>
-          <CreateApplicationTabBar
-            onSave={handleSave}
-            onCancel={handleCancel}
-            canSave={form.formState.isValid && !isCreating && admission.isAdmissible}
-            isSaving={isCreating}
-            saveTestId="pipeline-save-button"
-          />
-        </Box>
+        <PageToolbar
+          secondaryActions={
+            <CreateApplicationTabBar
+              onSave={handleSave}
+              onCancel={handleCancel}
+              canSave={form.formState.isValid && !isCreating && admission.isAdmissible}
+              isSaving={isCreating}
+              saveTestId="pipeline-save-button"
+            />
+          }
+        />
         <Box sx={contentSx}>
           {createError !== undefined && (
             <Typography

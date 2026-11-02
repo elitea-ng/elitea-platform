@@ -42,7 +42,7 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
-import { SNAPSHOT_TOLERANCE, selectProject, settle, shellSettled, volatileRegions } from './lib/settle';
+import { SNAPSHOT_TOLERANCE, chatLandmark, selectProject, settle, shellSettled, volatileRegions } from './lib/settle';
 
 
 /** The pack id the guard reads back; nothing on any stack states it. */
@@ -150,8 +150,8 @@ test('@visual brand-second-pack-chat', async ({ page }) => {
   await page.goto(BASE_URL + '/app/chat', { waitUntil: 'domcontentloaded' });
   await shellSettled(page);
   // The same landmark `chat-empty-state` uses: it resolves only once the
-  // conversation listing answered, never on a stalled shell.
-  await expect(page.getByText('Still no conversations created.')).toBeVisible({ timeout: 20_000 });
+  // model catalogue answered, never on a stalled shell.
+  await expect(chatLandmark(page)).toBeVisible({ timeout: 20_000 });
   await assertSecondPackActive(page);
   await settle(page);
 

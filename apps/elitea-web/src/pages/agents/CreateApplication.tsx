@@ -18,8 +18,10 @@ import {
 import { CreateAgentForm } from '@/features/agents';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { t } from '@/shared/i18n';
+import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { AgentModelSettings } from '@/widgets/agent-model-settings';
 import { disarmUnsavedChangesNavBlocker, useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
+import { PageToolbar, pageSx } from '@/widgets/page-header';
 
 import {
   areExtraFieldsEqual,
@@ -29,23 +31,6 @@ import {
 } from './lib/createApplicationDraftState';
 import { agentSaveErrorMessage } from './lib/agentSaveErrorMessage';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
-
-const pageSx: SxProps<Theme> = {
-  height: '100%',
-  display: 'flex',
-  flexDirection: 'column',
-};
-
-const tabBarSx: SxProps<Theme> = {
-  flexShrink: 0,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  borderBottom: 1,
-  borderColor: 'divider',
-  padding: '0 1.5rem',
-  minHeight: '3rem',
-};
 
 const contentSx: SxProps<Theme> = {
   flex: 1,
@@ -306,18 +291,22 @@ export function CreateApplication(): ReactNode {
     void navigate({ to: '/agents/$tab', params: { tab: params.tab ?? 'latest' } });
   }, [navigate, params.tab]);
 
+  // The page's name is the shell's crumb (`Agents ▸ New Agent`).
+  usePageCrumbs([{ label: t('pages.agents.createApplication.title', 'New Agent') }]);
+
   return (
     <FormProvider {...form}>
       <Box sx={pageSx}>
-        <Box sx={tabBarSx}>
-          <Typography variant="headingLarge" component="h1">{t('pages.agents.createApplication.title', 'New Agent')}</Typography>
-          <CreateApplicationTabBar
-            onSave={handleSave}
-            onCancel={handleCancel}
-            canSave={form.formState.isValid && !isCreating}
-            isSaving={isCreating}
-          />
-        </Box>
+        <PageToolbar
+          secondaryActions={
+            <CreateApplicationTabBar
+              onSave={handleSave}
+              onCancel={handleCancel}
+              canSave={form.formState.isValid && !isCreating}
+              isSaving={isCreating}
+            />
+          }
+        />
         <Box sx={contentSx}>
           {createDraftError !== undefined && (
             <Box role="alert">

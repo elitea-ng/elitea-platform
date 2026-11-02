@@ -1,101 +1,60 @@
 /**
- * SidebarFooter.test.tsx — regression coverage for the catalogue pill
- * (R1: `Buttons.AgentHubButton` in the old app's `SidebarBody.jsx`). The
- * pill was previously dropped from this widget on a now-stale "no page to
- * link to yet" justification.
- *
- * It reads "Catalog" and points at `/elitea-catalog`, matching the baseline
- * after `/agents-hub` became a redirect source: `AgentHubButton.jsx`
- * navigates to `RouteDefinitions.EliteaCatalog` and renders the literal
- * label `Catalog`. Linking the pill at `/agents-hub` would still WORK — the
- * redirect would catch it — which is exactly why this needs asserting: a
- * pill costing every click an extra history hop looks identical on screen.
+ * SidebarFooter.test.tsx — the rail's foot: the account menu (Settings,
+ * Credentials, the Catalog, Help Center, as on the desktop) and the support
+ * assistant bar. The menu itself is covered in `widgets/account-menu`.
  */
 import userEvent from '@testing-library/user-event';
-import { screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { screen, within } from '@testing-library/react';
+import { http, HttpResponse } from 'msw';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+
+import { server } from '../../../test/setup';
 import { renderAtPath } from './testRouter';
-import { SidebarBottomLinks, SidebarFooterBar } from '../ui/SidebarFooter';
+import { SidebarAccount, SidebarFooterBar } from '../ui/SidebarFooter';
 
-describe('SidebarFooter — Catalog pill (R1)', () => {
-  it('always renders a "Catalog" link to /elitea-catalog, on an arbitrary page, next to Settings/Help Center', async () => {
-    await renderAtPath(
-      '/chat',
-      <>
-        <SidebarBottomLinks collapsed={false} />
-        <SidebarFooterBar collapsed={false} />
-      </>,
-    );
-    expect(screen.getByText('Settings')).toBeInTheDocument();
-    expect(screen.getByText('Catalog')).toBeInTheDocument();
-    expect(screen.getByText('Help Center')).toBeInTheDocument();
-    expect(screen.getByTestId('sidebar-agent-hub-button')).toHaveAttribute('href', '/elitea-catalog');
-  });
+beforeEach(() => {
+  configureGeneratedClient({ baseUrl: '/api/v2' });
+  server.use(
+    http.get('*/social/author', () => HttpResponse.json({ id: 3, name: 'Alex K', email: 'alex@example.com' })),
+    http.get('*/auth/permissions/administration', () => HttpResponse.json([])),
+    http.get('*/.well-known/elitea-client', () => HttpResponse.json({ server_version: '1.72' })),
+  );
+});
 
-  it('does not link at the legacy /agents-hub redirect source', async () => {
-    await renderAtPath('/chat', <SidebarBottomLinks collapsed={false} />);
-    expect(screen.getByTestId('sidebar-agent-hub-button')).not.toHaveAttribute('href', '/agents-hub');
-  });
+afterEach(() => {
+  resetGeneratedClient();
+});
 
-  it('still renders the Catalog pill when collapsed (icon-only, with a hover tooltip)', async () => {
+describe('SidebarAccount — the account menu at the rail\'s foot', () => {
+  it('holds Settings, Credentials, the Catalog and Help Center', async () => {
     const user = userEvent.setup();
-    await renderAtPath('/chat', <SidebarBottomLinks collapsed />);
-    const link = screen.getByTestId('sidebar-agent-hub-button');
-    expect(link).toBeInTheDocument();
-    expect(screen.queryByText('Catalog')).not.toBeInTheDocument();
-
-    await user.hover(link);
-    const tooltip = await screen.findByRole('tooltip', undefined, { timeout: 2000 });
-    expect(tooltip).toHaveTextContent('Catalog');
+    await renderAtPath('/chat', <SidebarAccount collapsed={false} credentials />);
+    await user.click(screen.getByTestId('shell-account'));
+    const menu = await screen.findByRole('menu', { name: 'Account menu' });
+    for (const name of ['Settings', 'Credentials', 'Catalog', 'Get help', 'Sign out']) {
+      expect(within(menu).getByRole('menuitem', { name })).toBeInTheDocument();
+    }
+    expect(screen.getByTestId('account-menu-version')).toHaveTextContent('Version dev');
   });
 
-  it('marks the Catalog link as the active page (aria-current) when already on /elitea-catalog', async () => {
-    await renderAtPath('/elitea-catalog', <SidebarBottomLinks collapsed={false} />);
-    expect(screen.getByTestId('sidebar-agent-hub-button')).toHaveAttribute('aria-current', 'page');
-  });
-
-  it('does not mark the Catalog link as active on other pages', async () => {
-    await renderAtPath('/chat', <SidebarBottomLinks collapsed={false} />);
-    expect(screen.getByTestId('sidebar-agent-hub-button')).not.toHaveAttribute('aria-current');
+  it('leaves Credentials out for a person who may not open them', async () => {
+    const user = userEvent.setup();
+    await renderAtPath('/chat', <SidebarAccount collapsed={false} />);
+    await user.click(screen.getByTestId('shell-account'));
+    const menu = await screen.findByRole('menu', { name: 'Account menu' });
+    expect(within(menu).getByRole('menuitem', { name: 'Catalog' })).toBeInTheDocument();
+    expect(within(menu).queryByRole('menuitem', { name: 'Credentials' })).not.toBeInTheDocument();
   });
 });
 
 /**
- * ARIA-CURRENT ON A NON-EXACT ACTIVE LINK.
- *
- * TanStack's <Link> sets aria-current only when the path matches EXACTLY. The
- * Settings link points at /settings/model-configuration but is styled active
- * for every /settings/* route. On /settings/secrets the sidebar therefore
- * showed it selected. Assistive technology was told nothing was current.
+ * The 3.25rem "Support Bot | ?" bar under the account menu
+ * (`SidebarBody.jsx`'s `styles.footerBlock`), there only when the deployment
+ * has a support assistant.
  */
-describe('SidebarFooter — the active page is announced, not only styled', () => {
-  it('marks Settings as the current page on a settings child route', async () => {
-    await renderAtPath('/settings/secrets', <SidebarBottomLinks collapsed={false} />);
-    expect(screen.getByText('Settings').closest('a')).toHaveAttribute('aria-current', 'page');
-  });
-
-  it('does not mark Settings as current on an unrelated route', async () => {
-    await renderAtPath('/chat', <SidebarBottomLinks collapsed={false} />);
-    expect(screen.getByText('Settings').closest('a')).not.toHaveAttribute('aria-current');
-  });
-
-  it('marks Help Center as the current page on /help-center', async () => {
-    await renderAtPath('/help-center', <SidebarFooterBar collapsed={false} />);
-    expect(screen.getByText('Help Center').closest('a')).toHaveAttribute('aria-current', 'page');
-  });
-});
-
-/**
- * THE FOOTER BAR IS A SEPARATE BLOCK FROM THE SETTINGS/CATALOG PAIR.
- *
- * `SidebarBody.jsx` renders Settings + Catalog inside the scrollable
- * column's `bottomSection`, and a 3.25rem bar OUTSIDE it holding either
- * "Support Bot | ?" or a full-width Help Center row. The port had all three
- * as plain stacked rows in one padded column, so the rail had no bottom bar
- * at all and the "Support Bot" hit area production shows did not exist.
- */
-describe('SidebarFooterBar — support assistant vs Help Center', () => {
+describe('SidebarFooterBar — the support assistant bar', () => {
   it('renders the Support Bot hit area and the help icon when an assistant handle is supplied', async () => {
     await renderAtPath(
       '/chat',
@@ -127,14 +86,12 @@ describe('SidebarFooterBar — support assistant vs Help Center', () => {
     expect(opened).toBe(1);
   });
 
-  it('falls back to the full-width Help Center row when no assistant is enabled', async () => {
-    await renderAtPath('/chat', <SidebarFooterBar collapsed={false} />);
-    expect(screen.queryByTestId('sidebar-support-assistant')).not.toBeInTheDocument();
-    expect(screen.getByText('Help Center')).toBeInTheDocument();
-  });
-
-  it('renders nothing at all while collapsed with no assistant (SidebarBody.jsx:304)', async () => {
-    const { container } = await renderAtPath('/chat', <SidebarFooterBar collapsed />);
-    expect(container.querySelector('a[href="/help-center"]')).toBeNull();
+  it('renders nothing without an assistant: Help Center is in the account menu', async () => {
+    for (const collapsed of [false, true]) {
+      const { container, unmount } = await renderAtPath('/chat', <SidebarFooterBar collapsed={collapsed} />);
+      expect(screen.queryByTestId('sidebar-support-assistant')).not.toBeInTheDocument();
+      expect(container.querySelector('a[href="/help-center"]')).toBeNull();
+      unmount();
+    }
   });
 });

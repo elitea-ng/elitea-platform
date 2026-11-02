@@ -9,7 +9,6 @@ import { t } from '@/shared/i18n';
 import { useLocationSearch } from '@/shared/lib/hooks/useLocationSearch';
 
 import { EntityCard } from './EntityCard';
-import { useEntityRailVisible } from '../EntityRail';
 import { EntityListPagination } from './EntityListPagination';
 import { EntityListTable } from './EntityListTable';
 import { ENTITY_LIST_VIEW, type EntityListItem, type EntityListTag, type EntityListView } from './model';
@@ -20,11 +19,12 @@ import { ENTITY_LIST_VIEW, type EntityListItem, type EntityListTag, type EntityL
  * and its pagination footer. The port of
  * `apps/elitea-ui/src/components/CardList.jsx` + `DataCards.jsx`.
  *
- * Geometry from the baseline's `DataCards`: the grid is
- * `calc(100% - 328px)` wide while the right rail is on screen (so cards and
- * rail never overlap — `CARD_LIST_WIDTH`, `common/constants.js:519`),
- * `padding: 1.25rem 0 0 1.5rem`, `gap: 1rem`, and a `-1rem` right margin
- * (`MARGIN_COMPENSATION`) so the last column can bleed into the gutter.
+ * Geometry: a `1rem` gap, and the page toolbar's own `1.5rem` side gutter
+ * (`widgets/page-header`), so the first column lines up under the tabs and
+ * the last one ends where the toolbar's primary action does. The grid takes
+ * the page's full width: the filters that used to float over its right edge
+ * (the baseline reserved `calc(100% - 328px)` for them) are in the shell's
+ * side panel now, beside the page rather than on top of it.
  *
  * The column count is CSS rather than the baseline's measured-width
  * arithmetic (`hooks/useCardLayout.js` + a `ResizeObserver`):
@@ -45,8 +45,6 @@ export interface EntityCardListProps {
   readonly emptyState?: ReactNode;
   /** Forces a view; by default the `?view=` search param decides (`ViewToggle` writes it). */
   readonly view?: EntityListView;
-  /** The rail is the shell's; when it is off screen the grid reclaims its width. Defaults to the rail's own visibility rule. */
-  readonly railVisible?: boolean;
   readonly onTagClick?: (tag: EntityListTag) => void;
   readonly pagination?: {
     readonly page: number;
@@ -87,11 +85,8 @@ function useSearchView(): EntityListView {
 }
 
 export function EntityCardList(props: EntityCardListProps): ReactNode {
-  const autoRailVisible = useEntityRailVisible();
-  const reserveRail = props.railVisible ?? autoRailVisible;
-
   return (
-    <Box sx={containerSx(reserveRail)}>
+    <Box sx={containerSx}>
       <ListStates {...props} />
     </Box>
   );
@@ -176,31 +171,18 @@ function ListSkeletons(): ReactNode {
   );
 }
 
-/**
- * `RIGHT_PANEL_WIDTH + 16` — the reservation `CardList.jsx`/`EmptyListBox.jsx`
- * use (`calc(100% - ${rightPanelWidth + 16}px)`), not `DataCards`' bare
- * `CARD_LIST_WIDTH`. The extra 16px is what keeps the last column clear of
- * the rail: the rail is `position: fixed` 12px from the viewport's right
- * edge, so a bare 328px reservation only avoids it while the app shell also
- * supplies its own right padding. This one does not depend on that.
- */
-const RAIL_WIDTH = '344px';
-
 /** `MIN_CARD_WIDTH` (`common/constants.js:352`) — the track floor `auto-fill` counts columns against. */
 const MIN_CARD_WIDTH = '300px';
 
-function containerSx(railVisible: boolean): SxProps<Theme> {
-  return {
-    boxSizing: 'border-box',
-    display: 'flex',
-    flexDirection: 'column',
-    minWidth: 0,
-    flex: 1,
-    width: railVisible ? `calc(100% - ${RAIL_WIDTH})` : '100%',
-    padding: '1.25rem 0 0 1.5rem',
-    marginRight: '-1rem',
-  };
-}
+const containerSx: SxProps<Theme> = {
+  boxSizing: 'border-box',
+  display: 'flex',
+  flexDirection: 'column',
+  minWidth: 0,
+  flex: 1,
+  width: '100%',
+  padding: '1.25rem 1.5rem 1.5rem',
+};
 
 const gridSx: SxProps<Theme> = {
   display: 'grid',

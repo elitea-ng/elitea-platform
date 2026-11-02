@@ -24,9 +24,7 @@ import { UnavailablePanel } from './UnavailablePanel';
  * `createFileRoute(...)` call — `src/routes/_shell/user-public/{agents,
  * pipelines,toolkits,mcps}.$*Id.tsx` (ROUTE-042..045) — not imported from
  * `src/routes/**`: that tree sits above `pages/user-public`'s own
- * composition (pages/routes mount pages, not the reverse), the same
- * cross-layer constraint `widgets/create-button/lib/routes.ts` documents
- * for its own duplicated `CREATE_ROUTES` catalogue. `src/app/router.tsx`'s
+ * composition (pages/routes mount pages, not the reverse). `src/app/router.tsx`'s
  * `declare module '@tanstack/react-router' { interface Register … } }`
  * ambient augmentation still type-checks every branch below against the
  * REAL registered route tree, so a typo or a route rename fails

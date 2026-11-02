@@ -11,8 +11,8 @@
  * duplicate's name client-side as `${source.name} (copy)` with no truncation
  * logic — and there IS no length cap to trip over. Grepped
  * `services/elitea-main/internal/api/v2/conversations/handler.go` (no
- * length validation on `name`) and this app's rename editor
- * (`ConversationItem.editor.tsx`, no `maxLength`/`inputProps` cap either).
+ * length validation on `name`) and the sidebar row's rename field
+ * (`widgets/chat-rail/ui/ConversationRow.tsx`, no `maxLength` cap either).
  * A name near legacy's "~50 characters" limit is not a distinguished case
  * here at all, so this pins the general claim instead: an arbitrarily long
  * name still duplicates successfully with the suffix appended.
@@ -21,22 +21,18 @@
  * Legacy: typing in the rail's search box re-rendered the whole page and
  * dropped the open conversation back to the empty/greeting state.
  *
- * NOT REPRODUCED in this app: the rail's search state
- * (`Conversations.tsx`'s `isSearchActive`/query) lives entirely inside the
- * LEFT rail component; the right-hand chat pane is a sibling route
- * component that reads `conversationId` from the URL, not from the rail's
- * search state — there is no shared state for a search keystroke to
+ * NOT REPRODUCED in this app: the sidebar Chats list's search state
+ * (`widgets/chat-rail/model/chatRail.tsx`'s filter) lives in the app
+ * sidebar; the chat pane reads `conversationId` from the URL, not from the
+ * list's search state — there is no shared state for a search keystroke to
  * clobber. Pinned directly: open a conversation with a real message, then
  * search, and assert the pane still shows that same conversation and its
  * transcript, not the greeting.
  *
  * #5062/#4996/#5008 (duplicate/offset/pinned-conversation lazy-load bugs)
- * are COVERED-EXISTING — see
- * `Conversations.helpers.test.ts :: mergeLoadMorePage > "drops a pinned or
- * already present conversation and advances the offset"` (dedup by id,
- * pinned-id exclusion, and offset advancing by the raw page length rather
- * than a fixed +10 all live in `mergeLoadMorePage`) and
- * `chat.sidebarGaps.spec.ts :: ELITEA-0513` (pinned conversation excluded
+ * are COVERED-EXISTING — see the rail's paging (`useConversationRail.hooks.ts`'s
+ * `useLoadMore`: dedup by id, pinned-id exclusion, offset from the bucket's
+ * own `offset`) and `chat.sidebarGaps.spec.ts :: ELITEA-0513` (pinned conversation excluded
  * from every date group server-side, across a reload).
  */
 import { test, expect } from '@playwright/test';
@@ -51,26 +47,34 @@ function uniqueName(tag: string): string {
   return `${AUTOTEST_PREFIX}${tag}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${SUFFIX}`;
 }
 
+/** The sidebar Chats list's row for a conversation. */
+function chatRow(page: Page, conversationId: string) {
+  return page.locator(`[data-conversation-id="${conversationId}"]`);
+}
+
+/** Opens the sidebar's Today group (open by default; a remembered close is undone). */
 async function openTodayGroup(page: Page): Promise<void> {
-  const sidebar = page.getByTestId('chat-conversation-sidebar');
-  await expect(sidebar).toBeVisible({ timeout: 20_000 });
-  const today = sidebar.getByRole('button', { name: 'Today' });
+  const list = page.getByTestId('shell-chats');
+  await expect(list).toBeVisible({ timeout: 20_000 });
+  const today = list
+    .getByTestId('shell-chats-group')
+    .filter({ has: page.locator('.shell-group-caption', { hasText: /^Today$/ }) })
+    .locator('.shell-row-main');
   await expect(today).toBeVisible({ timeout: 20_000 });
   if ((await today.getAttribute('aria-expanded')) !== 'true') await today.click();
 }
 
-/** Same gesture-retry shape as `chat.sharing.spec.ts`'s own `openRowMenu` — the hover and the
- * click are one retried unit so a lost `:hover` state (the row's mainBodyWidth/menuWrapper
- * layout shifts on hover, and a single hover can be un-done by CI CPU contention before the
- * click lands) re-hovers on the next attempt instead of retrying a click alone forever. */
+/** Same gesture-retry shape as `chat.sharing.spec.ts`'s own `openRowMenu` — the row's "⋯"
+ * is only visible while the row is hovered, so the hover and the click are one retried unit
+ * and a lost `:hover` re-hovers on the next attempt. */
 async function openRowMenu(page: Page, conversationId: string): Promise<void> {
-  const row = page.getByTestId(`conversation-item-${conversationId}`);
+  const row = chatRow(page, conversationId);
   await expect(row).toBeVisible({ timeout: 20_000 });
   const menu = page.getByRole('menu');
   await expect(async () => {
     if ((await menu.count()) === 0) {
       await row.hover();
-      await row.getByRole('button', { name: 'More actions' }).click({ timeout: 5_000 });
+      await row.getByTestId('shell-conversation-more').click({ timeout: 5_000 });
     }
     await expect(menu).toBeVisible({ timeout: 5_000 });
   }).toPass({ timeout: 40_000 });
@@ -109,7 +113,7 @@ test('#6562: duplicating a very long-named conversation succeeds with the suffix
   }
 });
 
-/* elitea_issues: #6133 — searching the rail narrows the LEFT list only; the currently
+/* elitea_issues: #6133 — searching the sidebar Chats list narrows that list only; the currently
  * open conversation (right pane, its messages) is untouched, never reset to the
  * greeting/empty state. */
 test('#6133: searching the conversation rail does not reset the currently open conversation', async ({ page }) => {
@@ -125,20 +129,20 @@ test('#6133: searching the conversation rail does not reset the currently open c
     // is not meaningful for a brand-new empty conversation, so instead assert the
     // route/selected-row stays pinned to `openedId` across a search keystroke.
     await openTodayGroup(page);
-    await expect(page.getByTestId(`conversation-item-${openedId}`)).toBeVisible({ timeout: 15_000 });
+    await expect(chatRow(page, openedId)).toBeVisible({ timeout: 15_000 });
 
-    await page.getByTestId('conversation-search-button').click();
-    const input = page.getByTestId('conversation-search-input');
+    await page.getByTestId('shell-chats-search').click();
+    const input = page.getByTestId('shell-chats-search-input');
     await expect(input).toBeVisible({ timeout: 10_000 });
     await input.fill(otherName);
     await expect
-      .poll(async () => page.getByTestId(`conversation-item-${openedId}`).count(), {
+      .poll(async () => chatRow(page, openedId).count(), {
         timeout: 15_000,
-        message: 'the search narrowed the rail as expected',
+        message: 'the search narrowed the sidebar list as expected',
       })
       .toBe(0);
 
-    // The URL — and therefore the open conversation — must be untouched by a rail search.
+    // The URL — and therefore the open conversation — must be untouched by a sidebar search.
     await expect(page).toHaveURL(new RegExp(`/chat/${openedId}$`));
     await expect(page.getByTestId('chat-input')).toBeVisible();
   } finally {

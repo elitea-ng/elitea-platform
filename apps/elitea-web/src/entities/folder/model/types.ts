@@ -53,6 +53,12 @@ export interface Folder {
   readonly total?: number;
   readonly offset?: number;
   readonly isPinned?: boolean;
+  /**
+   * The folder's creator, as a string (every consumer compares it with a
+   * string user id). Rename, pin and delete are theirs alone; the rail greys
+   * those items out for anyone else. Absent on a not-yet-persisted draft.
+   */
+  readonly ownerId?: string;
   /** Client contract 1.12: how many conversations of the whole folder need the person. */
   readonly needsYou?: number;
   /**

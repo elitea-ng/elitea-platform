@@ -3,15 +3,11 @@
  * in place while the configuration below it scrolls (onetest wave-1 agents
  * package: ELITEA-0106, ELITEA-0109).
  *
- * The hint sheet marked both "COVERED | agents.editor.spec.ts". That file
- * asserts the Name FIELD's value (`agent-name-input`, inside the form), not
- * a page HEADER distinct from it — this file covers the header itself:
- * `EditApplicationHeader` (`pages/agents/ui/EditApplicationHeader.tsx`, #897)
- * mounts a back-arrow `IconButton` beside the agent's name
- * (`data-testid="edit-application-header"`), and the enclosing bar
- * (`EditApplication.styles.ts`'s `tabBarSx`) is `position: sticky` so it
- * keeps its vertical position while the configuration panel scrolls beneath
- * it.
+ * The header is the shell's title row now (`widgets/app-shell`'s
+ * `ShellTopBar`): a breadcrumb `Agents ▸ <name>`, the name the page's heading
+ * (`shell-title`), and the "back arrow" its `Agents` crumb, a link to the
+ * list. The row sits above the page's scroll box, so it keeps its place while
+ * the configuration scrolls beneath it.
  */
 import { test, expect } from '@playwright/test';
 
@@ -37,14 +33,17 @@ test('J-header: the agent name is shown in a page header next to a back arrow', 
     await page.goto(`${BASE_URL}/app/agents/all/${agent.id}`);
     await expect(page.getByTestId('edit-application-configuration-tab-panel')).toBeVisible({ timeout: 20_000 });
 
-    const backArrow = page.getByRole('button', { name: /back/i });
-    await expect(backArrow, 'a back-arrow control must sit beside the header name').toBeVisible({ timeout: 10_000 });
-
-    const header = page.getByTestId('edit-application-header');
-    await expect(header, 'a dedicated header element must exist, separate from the editable Name field').toBeVisible({
+    const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
+    const title = crumbs.getByTestId('shell-title');
+    await expect(title, 'the title row must name the agent, apart from the editable Name field').toHaveText(name, {
       timeout: 10_000,
     });
-    await expect(header).toContainText(name);
+
+    // The way back sits beside the name: the section crumb, a link to the list.
+    const back = crumbs.getByRole('link', { name: 'Agents', exact: true });
+    await expect(back, 'a way back must sit beside the header name').toBeVisible();
+    await back.click();
+    await expect(page).toHaveURL(/\/app\/agents(\/|$|\?)/, { timeout: 15_000 });
   } finally {
     await deleteAgent(request, agent.id);
   }
@@ -66,8 +65,8 @@ test('J-header: the header stays fixed at the top while the configuration scroll
     const panel = page.getByTestId('edit-application-configuration-tab-panel');
     await expect(panel).toBeVisible({ timeout: 20_000 });
 
-    const header = page.getByTestId('edit-application-header');
-    await expect(header, 'a dedicated header element must exist to test stickiness on').toBeVisible({
+    const header = page.getByRole('navigation', { name: 'Breadcrumb' });
+    await expect(header.getByTestId('shell-title'), 'the title row must name the agent').toHaveText(name, {
       timeout: 10_000,
     });
 
