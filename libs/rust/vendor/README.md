@@ -307,7 +307,7 @@ comment), update this table, and rerun `cargo test -p elitea-office-core`.
 Drop the copy when an upstream release requires `zip` 9 or later.
 
 **Upstream.** The `zip` 9 move, on the current `zavora-ai/zavora-docx` default
-branch: UPSTREAM_ZAVORA_DOCX.
+branch: https://github.com/zavora-ai/zavora-docx/pull/3.
 
 ## `zavora-slide-opc/` — zavora-slide-opc 0.1.1 on zip 9
 
@@ -366,7 +366,7 @@ diff -r /tmp/zavora-slide-opc-0.1.1 vendor/zavora-slide-opc  # only Cargo.toml a
 Updating: as for `zavora-docx-opc` above.
 
 **Upstream.** The `zip` 9 move of `zavora-slide-opc` and `zavora-slide-xlsx`,
-on the current `zavora-ai/zavora-slide` default branch: UPSTREAM_ZAVORA_SLIDE.
+on the current `zavora-ai/zavora-slide` default branch: https://github.com/zavora-ai/zavora-slide/pull/3.
 
 ## `zavora-slide-xlsx/` — zavora-slide-xlsx 0.1.1 on zip 9
 
@@ -426,7 +426,7 @@ diff -r /tmp/zavora-slide-xlsx-0.1.1 vendor/zavora-slide-xlsx  # only Cargo.toml
 Updating: as for `zavora-docx-opc` above.
 
 **Upstream.** The `zip` 9 move of `zavora-slide-opc` and `zavora-slide-xlsx`,
-on the current `zavora-ai/zavora-slide` default branch: UPSTREAM_ZAVORA_SLIDE.
+on the current `zavora-ai/zavora-slide` default branch: https://github.com/zavora-ai/zavora-slide/pull/3.
 
 ## `calamine/` — calamine 0.36.2 (upstream 0.36.1 + zip 9)
 
@@ -479,7 +479,7 @@ is defensive: the fixture name decodes, and the tests prove that a workbook
 with such a name opens and reads. The skip keeps that true if a later zip
 refuses a name.
 
-**Upstream.** The skip, on the current `tafia/calamine` master: UPSTREAM_CALAMINE.
+**Upstream.** The skip, on the current `tafia/calamine` master: https://github.com/tafia/calamine/pull/772. Drop the skip here when xberg admits a calamine release that carries it.
 
 The archive's `Cargo.lock` is removed (see "Why no `Cargo.lock`" above).
 
@@ -636,7 +636,7 @@ review, and rerun `cargo test -p elitea-office-core` (the hostile corpus and
 the isolation test). Drop this copy when an upstream release requires `zip` 9.
 
 **Upstream.** The `zip` 9 move, the name handling above and the test-directory
-fixes, on the current `zavora-ai/zavora-xlsx` default branch: UPSTREAM_ZAVORA_XLSX.
+fixes, on the current `zavora-ai/zavora-xlsx` default branch: https://github.com/zavora-ai/zavora-xlsx/pull/2.
 
 ## Moving zip
 

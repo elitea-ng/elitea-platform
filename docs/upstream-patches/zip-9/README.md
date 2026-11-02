@@ -46,10 +46,16 @@ submission here reports a separate defect, which every release holds.
 | Upstream | Submitted | URL |
 | --- | --- | --- |
 | `xberg-io/xberg` | No | — |
-| `tafia/calamine` | No | — |
-| `zavora-ai/zavora-xlsx` | No | — |
-| `zavora-ai/zavora-docx` | No | — |
-| `zavora-ai/zavora-slide` | No | — |
+| `tafia/calamine` (doc-test issue) | No | — |
+| `tafia/calamine` (skip an entry whose name does not decode) | Yes, PR | https://github.com/tafia/calamine/pull/772 |
+| `zavora-ai/zavora-xlsx` (zip 9, name handling, test directories) | Yes, PR | https://github.com/zavora-ai/zavora-xlsx/pull/2 |
+| `zavora-ai/zavora-docx` | Yes, PR | https://github.com/zavora-ai/zavora-docx/pull/3 |
+| `zavora-ai/zavora-slide` | Yes, PR | https://github.com/zavora-ai/zavora-slide/pull/3 |
+
+The calamine PR is not a `zip` version change: master is already on `zip` 9.
+It restores the zip 8 behaviour, in which one entry whose name does not decode
+never aborted the open of a workbook. libs/rust/vendor/README.md records the
+same patch in the vendored copy.
 
 ## Note on xberg
 
