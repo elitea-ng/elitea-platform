@@ -14,7 +14,9 @@ package llmproxy
 //	        (string or content blocks), a shell call output, and an Anthropic
 //	        tool_result (the Messages route converts it to a
 //	        function_call_output). It masks them in place, so the provider
-//	        never receives a masked match.
+//	        never receives a masked match. A detector with `content:
+//	        tool_results` (the prompt_injection slot among them) reads the
+//	        tool results only (guardrail_slot.go).
 //	output  non-streamed: on the decoded answer, before the gateway writes it.
 //	        Streamed: per chunk, through guardrail.StreamFilter (stream.go
 //	        there documents the look-behind buffer and its latency).
@@ -248,8 +250,9 @@ func anthropicGuardrailErrorJSON(v *guardrail.Verdict) string {
 // Input stage
 
 // applyInputGuardrails runs the input stage on texts and writes the masked
-// values back. It returns false after it has written a refusal.
-func (h *Handler) applyInputGuardrails(w http.ResponseWriter, ctx *schemas.BifrostContext, provider, model, traffic string, texts []*string) bool {
+// values back. tools names the texts that are tool results
+// (guardrail_slot.go). It returns false after it has written a refusal.
+func (h *Handler) applyInputGuardrails(w http.ResponseWriter, ctx *schemas.BifrostContext, provider, model, traffic string, texts, tools []*string) bool {
 	pipe, refused := h.guardrailPipeline(ctx, provider, model, guardrail.StageInput, traffic)
 	if refused != nil {
 		writeGuardrailRefusal(w, refused)
@@ -258,7 +261,13 @@ func (h *Handler) applyInputGuardrails(w http.ResponseWriter, ctx *schemas.Bifro
 	if pipe == nil || len(texts) == 0 {
 		return true
 	}
-	if blocked := checkTargets(ctx, pipe, guardTargets{texts: texts}); blocked != nil {
+	var blocked *guardrail.Verdict
+	if pipe.ScopesToolResults() {
+		blocked = checkInputScoped(ctx, pipe, texts, tools)
+	} else {
+		blocked = checkTargets(ctx, pipe, guardTargets{texts: texts})
+	}
+	if blocked != nil {
 		writeGuardrailRefusal(w, blocked)
 		return false
 	}

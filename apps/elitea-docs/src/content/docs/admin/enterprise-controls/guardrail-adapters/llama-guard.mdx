@@ -1,0 +1,141 @@
+---
+title: "Llama Guard adapter"
+description: "Connect a self-hosted Llama Guard 3 or Llama Guard 4 model to the guardrail pipeline of the LLM gateway, with the detector type llama_guard."
+---
+
+The `llama_guard` detector sends the content to a Llama Guard class model that you operate. The model classifies the content against a list of hazard categories. The gateway reads the answer and applies the action of the detector. See [Content controls](/admin/enterprise-controls/content-controls#guardrail-pipeline) for the guardrail entry and its settings.
+
+## Prerequisites
+
+- A Llama Guard 3 or Llama Guard 4 model, served behind an OpenAI-compatible chat completions endpoint. vLLM, llama.cpp (`llama-server`) and Ollama are supported.
+- Network access from the LLM gateway to the endpoint.
+- Optional: a bearer token for the endpoint, kept as a secret of the public project. See [Secrets](/admin/secrets).
+- For the Hugging Face weights of Llama Guard: an access token with access to the gated `meta-llama` repository.
+
+## Run the classifier
+
+Use one of these examples. Each example starts a server on port 8000 or 11434 of the host.
+
+**vLLM** (GPU). Image `vllm/vllm-openai`:
+
+```sh
+podman run -d --name llama-guard --device nvidia.com/gpu=all -p 8000:8000 \
+  -e HF_TOKEN=<your Hugging Face token> \
+  docker.io/vllm/vllm-openai:latest \
+  --model meta-llama/Llama-Guard-4-12B --api-key <your endpoint token>
+```
+
+For a smaller GPU, use `meta-llama/Llama-Guard-3-8B` or `meta-llama/Llama-Guard-3-1B`. The endpoint is `http://<host>:8000/v1/chat/completions`.
+
+**llama.cpp** (CPU or GPU). Image `ghcr.io/ggml-org/llama.cpp:server`, with a GGUF file of Llama Guard 3:
+
+```sh
+podman run -d --name llama-guard -p 8000:8080 -v /models:/models:ro \
+  ghcr.io/ggml-org/llama.cpp:server \
+  -m /models/Llama-Guard-3-8B.Q4_K_M.gguf --host 0.0.0.0 --port 8080 --jinja
+```
+
+The `--jinja` flag makes the server apply the chat template of the model. The endpoint is `http://<host>:8000/v1/chat/completions`.
+
+**Ollama** (CPU or GPU). Image `ollama/ollama`, with the `llama-guard3` model:
+
+```sh
+podman run -d --name ollama -p 11434:11434 -v ollama:/root/.ollama docker.io/ollama/ollama:latest
+podman exec ollama ollama pull llama-guard3:8b
+```
+
+The endpoint is `http://<host>:11434/v1/chat/completions`. The model name is `llama-guard3:8b`.
+
+## How the gateway calls the model
+
+The gateway sends a chat completion request with `temperature` 0 and a small `max_tokens`. It sends plain messages. The chat template of the served model adds the category list and the instruction of Llama Guard.
+
+- **Input stage**: one `user` message with the content.
+- **Output stage**: a `user` message with a fixed placeholder, then an `assistant` message with the content. Llama Guard classifies the last turn, which is the answer.
+
+The model answers `safe`, or `unsafe` and the violated category codes on the next line, for example `unsafe` and `S1,S10`. Each code becomes one finding. A finding covers the full content and has the score 1. The model gives no calibrated score.
+
+## Allow the endpoint
+
+The call to the classifier is outbound traffic. Add the endpoint to an **Egress allowlist** entry. A private address is reachable only when the entry names that address or its block. A host name alone does not open it.
+
+Example entry data for a classifier at `llama-guard.internal`, with the address `10.20.0.15`:
+
+```json
+{ "egress": { "allowlist": ["llama-guard.internal:8000", "10.20.0.15/32"] } }
+```
+
+See [Egress allowlist](/admin/budgets-and-governance#egress-allowlist).
+
+## Detector settings
+
+| Setting | Meaning |
+| --- | --- |
+| `url` | The full chat completions URL, `http` or `https`. A URL with a user name or a password is refused. |
+| `model` | The served model name, for example `meta-llama/Llama-Guard-4-12B` or `llama-guard3:8b`. Required. |
+| `auth_secret` | Optional. A `{{secret.NAME}}` reference to a secret of the public project. The gateway sends it as `Authorization: Bearer <value>`. A raw value is refused. |
+| `categories` | Optional. The category codes that count, for example `["S1", "S10"]`. A code outside the list is not a finding. Empty means every code. |
+| `content` | Optional, input entries only. `tool_results` makes the detector read the tool results only. See [Prompt-injection slot](/admin/enterprise-controls/guardrail-adapters/prompt-injection). |
+
+Example entry:
+
+```json
+{
+  "guardrail": {
+    "stage": "input",
+    "timeout_ms": 3000,
+    "detectors": [
+      {
+        "name": "llama-guard",
+        "type": "llama_guard",
+        "action": "block",
+        "url": "http://llama-guard.internal:8000/v1/chat/completions",
+        "model": "meta-llama/Llama-Guard-4-12B",
+        "auth_secret": "{{secret.LLAMA_GUARD_TOKEN}}",
+        "categories": ["S1", "S2", "S9", "S10", "S11"]
+      }
+    ]
+  }
+}
+```
+
+## Labels
+
+Llama Guard 3 and Llama Guard 4 use the same 14 codes, from their model cards. The gateway maps each code to a label:
+
+| Code | Label | Category |
+| --- | --- | --- |
+| S1 | `violent_crimes` | Violent crimes |
+| S2 | `non_violent_crimes` | Non-violent crimes |
+| S3 | `sex_related_crimes` | Sex-related crimes |
+| S4 | `child_sexual_exploitation` | Child sexual exploitation |
+| S5 | `defamation` | Defamation |
+| S6 | `specialized_advice` | Specialized advice |
+| S7 | `privacy` | Privacy |
+| S8 | `intellectual_property` | Intellectual property |
+| S9 | `indiscriminate_weapons` | Indiscriminate weapons |
+| S10 | `hate` | Hate |
+| S11 | `suicide_self_harm` | Suicide and self-harm |
+| S12 | `sexual_content` | Sexual content |
+| S13 | `elections` | Elections |
+| S14 | `code_interpreter_abuse` | Code interpreter abuse |
+
+An unknown code becomes its lower-case form, for example `s15`. An `unsafe` answer without a code gets the label `unsafe`, unless `categories` is set. A detector in the prompt-injection slot labels every finding `prompt_injection`.
+
+## Latency
+
+Each detector run is one model call. The call reads the full content as a prompt and writes two or three tokens. On a GPU, the call takes approximately 50 to 300 ms for a few thousand tokens. On a CPU, it can take seconds. Set `timeout_ms` above the 99th percentile that you measure.
+
+On a streamed answer, a `block` detector runs on each window of `stream_window_bytes`. Each window is one model call. Use `flag` on the output stage to run one call when the stream ends. See [Streamed answers](/admin/enterprise-controls/content-controls#streamed-answers).
+
+## Fail mode
+
+- Use `fail_mode: closed` for a `block` entry when the policy must hold. A classifier outage then refuses requests with HTTP 503 `guardrail_unavailable`.
+- Use `fail_mode: open` with `flag` to measure the classifier first. A failure then records a verdict with the outcome `error_open`.
+- The gateway fails the detector when the answer is not `safe` or `unsafe`. Check this when you change the model or the chat template.
+
+## Limitations
+
+- `mask` replaces the full content, because Llama Guard gives no span.
+- The output stage does not send the user turn of the conversation. The model classifies the answer alone.
+- The categories that the model evaluates come from its chat template. `categories` only filters the codes in the answer.

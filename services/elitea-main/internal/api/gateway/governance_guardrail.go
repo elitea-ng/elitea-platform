@@ -95,6 +95,11 @@ func validateGuardrailData(data map[string]any) error {
 			return fmt.Errorf("guardrail.detectors[%d] must be an object", i)
 		}
 		name, err := validateGuardrailDetector(obj)
+		if err == nil {
+			typ, _ := obj["type"].(string)
+			action, _ := obj["action"].(string)
+			err = validateGuardrailScope(stage, typ, action, obj)
+		}
 		if err != nil {
 			return fmt.Errorf("guardrail.detectors[%d]: %w", i, err)
 		}
@@ -173,8 +178,12 @@ func validateGuardrailDetector(obj map[string]any) (string, error) {
 		return name, nil
 	case "http":
 		return name, validateGuardrailHTTP(obj)
+	case "llama_guard":
+		return name, validateGuardrailLlamaGuard(obj)
+	case "presidio":
+		return name, validateGuardrailPresidio(obj)
 	}
-	return "", errors.New(`type must be "regex", "secrets" or "http"`)
+	return "", errors.New(`type must be "regex", "secrets", "http", "llama_guard" or "presidio"`)
 }
 
 func validateGuardrailRegex(obj map[string]any) error {

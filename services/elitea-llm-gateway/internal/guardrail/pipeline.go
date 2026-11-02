@@ -139,9 +139,10 @@ func (p *Pipeline) runRow(ctx context.Context, row *Row, content string, parts [
 			findings, err = d.impl.detect(ctx, p.Env, p.Stage, content)
 		}
 		latency := time.Since(started)
+		findings = slotFindings(d, findings)
 		v := Verdict{
 			Stage: p.Stage, Row: row.Name, Detector: d.Name, DetectorType: d.Type,
-			Action: d.Action, FailMode: row.FailMode,
+			Action: d.Action, FailMode: row.FailMode, Slot: d.Slot,
 		}
 		if err != nil {
 			v.Labels = []string{LabelDetectorError}

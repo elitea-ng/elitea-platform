@@ -1,0 +1,110 @@
+---
+title: "Presidio adapter"
+description: "Connect a self-hosted Microsoft Presidio Analyzer to the guardrail pipeline of the LLM gateway, with the detector type presidio, to find and mask personal data."
+---
+
+The `presidio` detector sends the content to a Microsoft Presidio Analyzer that you operate. Presidio finds personal data (PII) and returns the position of each entity. The gateway converts the positions to spans, so a `mask` action replaces only the personal data. See [Content controls](/admin/enterprise-controls/content-controls#guardrail-pipeline) for the guardrail entry and its settings.
+
+## Prerequisites
+
+- A Presidio Analyzer service with its REST API.
+- Network access from the LLM gateway to the service.
+- Optional: a bearer token, when a proxy in front of the service asks for one. Keep the token as a secret of the public project. See [Secrets](/admin/secrets).
+
+## Run the classifier
+
+The image is `mcr.microsoft.com/presidio-analyzer`. The service listens on port 3000 in the container:
+
+```sh
+podman run -d --name presidio-analyzer -p 3000:3000 mcr.microsoft.com/presidio-analyzer:latest
+```
+
+Make sure that the service answers:
+
+```sh
+curl -s http://localhost:3000/health
+curl -s -X POST http://localhost:3000/analyze -H 'Content-Type: application/json' \
+  -d '{"text": "Mail john@example.com", "language": "en"}'
+```
+
+The endpoint for the detector is `http://<host>:3000/analyze`. The default image has the English models. For other languages, build an image with the matching spaCy model and Presidio configuration.
+
+## How the gateway calls the service
+
+The gateway sends `POST /analyze` with this body:
+
+```json
+{ "text": "…", "language": "en", "entities": ["EMAIL_ADDRESS", "US_SSN"], "score_threshold": 0.6 }
+```
+
+`entities` and `score_threshold` are sent only when the detector sets them. Presidio returns a list of results with `entity_type`, `start`, `end` and `score`. The `start` and `end` values count characters (Unicode code points). The gateway converts them to byte positions. The gateway fails the detector when a result has no span, a span outside the text, or a score outside 0 to 1.
+
+## Allow the endpoint
+
+The call to the service is outbound traffic. Add the endpoint to an **Egress allowlist** entry. A private address is reachable only when the entry names that address or its block. A host name alone does not open it.
+
+Example entry data for a service at `presidio-analyzer.internal`, with the address `10.20.0.16`:
+
+```json
+{ "egress": { "allowlist": ["presidio-analyzer.internal:3000", "10.20.0.16/32"] } }
+```
+
+See [Egress allowlist](/admin/budgets-and-governance#egress-allowlist).
+
+## Detector settings
+
+| Setting | Meaning |
+| --- | --- |
+| `url` | The full URL of `/analyze`, `http` or `https`. A URL with a user name or a password is refused. |
+| `language` | Optional. The language code of the text, for example `en` or `de`. Default `en`. |
+| `entities` | Optional. The Presidio entity types to find, in upper case, for example `["EMAIL_ADDRESS", "PHONE_NUMBER"]`. Empty means every entity type of the service. The gateway also drops results of other types. |
+| `min_score` | Optional. A number from 0 to 1. The gateway sends it as `score_threshold` and drops results with a lower score. |
+| `auth_secret` | Optional. A `{{secret.NAME}}` reference to a secret of the public project. The gateway sends it as `Authorization: Bearer <value>`. A raw value is refused. |
+| `content` | Optional, input entries only. `tool_results` makes the detector read the tool results only. |
+
+Example entry, which masks e-mail addresses and US social security numbers in answers:
+
+```json
+{
+  "guardrail": {
+    "stage": "output",
+    "timeout_ms": 2000,
+    "detectors": [
+      {
+        "name": "pii",
+        "type": "presidio",
+        "action": "mask",
+        "url": "http://presidio-analyzer.internal:3000/analyze",
+        "language": "en",
+        "entities": ["EMAIL_ADDRESS", "US_SSN", "CREDIT_CARD"],
+        "min_score": 0.6
+      }
+    ]
+  }
+}
+```
+
+The client then gets, for example, `Mail [REDACTED:email_address] today.`
+
+## Labels
+
+The label of a finding is the entity type in lower case, for example `email_address`, `phone_number`, `person`, `credit_card` or `us_ssn`. The list of entity types is in the Presidio documentation of supported entities. A custom recognizer adds its own entity type.
+
+A `presidio` detector cannot fill the [prompt-injection slot](/admin/enterprise-controls/guardrail-adapters/prompt-injection): it finds data, not instructions.
+
+## Latency
+
+Presidio runs on a CPU. A call takes approximately 10 to 50 ms for 1000 characters with the default recognizers. The time increases with the text length and with the number of recognizers.
+
+On a streamed answer, a `mask` detector runs on each window of `stream_window_bytes`. Each window is one call. A mask entry also delays the stream by the window. See [Streamed answers](/admin/enterprise-controls/content-controls#streamed-answers).
+
+## Fail mode
+
+- A `mask` entry has the default `fail_mode: closed`. A service outage then refuses requests with HTTP 503 `guardrail_unavailable`. This prevents the release of unmasked personal data.
+- Use `fail_mode: open` only for a `flag` entry, or when the availability of the model is more important than the mask.
+- Run two or more replicas of the service behind one address, so that a restart does not refuse requests.
+
+## Limitations
+
+- Presidio finds entities with patterns and a named-entity model. It can miss an entity, and it can find an entity that is not personal data. Test it on your own text before you use `block`.
+- The `score_threshold` of the service and the `min_score` of the gateway have the same value. The gateway applies it again, so a service that ignores the threshold gets the same result.

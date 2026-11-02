@@ -69,9 +69,12 @@ type Verdict struct {
 	Outcome      string   `json:"outcome"`
 	FailMode     string   `json:"fail_mode"`
 	Labels       []string `json:"labels"`
-	Findings     int      `json:"findings"`
-	MaxScore     float64  `json:"max_score"`
-	LatencyMS    int64    `json:"latency_ms"`
+	// Slot names the detector slot (slot.go), for example prompt_injection.
+	// The labels also carry it as slot:<name>.
+	Slot      string  `json:"slot,omitempty"`
+	Findings  int     `json:"findings"`
+	MaxScore  float64 `json:"max_score"`
+	LatencyMS int64   `json:"latency_ms"`
 	// Runs counts the detector runs merged into this verdict: one for a
 	// request body, one per evaluated window for a streamed answer.
 	Runs int `json:"runs"`
@@ -112,6 +115,7 @@ func (c *Collector) add(v Verdict, latency time.Duration) {
 	if c == nil {
 		return
 	}
+	v.Labels = withSlotLabel(v)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	key := v.Stage + "\x00" + v.Row + "\x00" + v.Detector

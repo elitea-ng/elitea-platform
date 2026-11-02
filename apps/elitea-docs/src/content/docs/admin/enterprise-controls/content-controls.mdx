@@ -21,7 +21,7 @@ An entry has these settings:
 | --- | --- | --- |
 | Scope | Projects, providers and models, as in the other governance entries. Agents of one project (`scope.agent_ids`), with exactly one project in `scope.project_ids`. Users are not permitted. | Every request |
 | `stage` | `input`: the request, before the provider call. `output`: the answer, streamed or not. | — (required) |
-| `detectors` | An ordered list of 1 to 16 detectors. Each detector has a `type` (`regex`, `secrets` or `http`) and an `action` (`block`, `mask` or `flag`). | — (required) |
+| `detectors` | An ordered list of 1 to 16 detectors. Each detector has a `type` (`regex`, `secrets`, `http`, `llama_guard` or `presidio`) and an `action` (`block`, `mask` or `flag`). On an input entry, `content: tool_results` makes a detector read the tool results only. | — (required) |
 | `timeout_ms` | 50 to 30000. The time limit for all detectors of the entry on one content. | 2000 |
 | `fail_mode` | `closed`: a detector failure or a timeout refuses the request. `open`: the request continues and the verdict records the failure. | `closed` when a detector blocks or masks; `open` when all detectors flag |
 | `apply_to_embeddings` | `true` applies an input entry to embedding requests too. | `false` |
@@ -54,6 +54,10 @@ The error message names the entry, the detector and the labels. It never contain
 - **`regex`** finds the `patterns` (1 to 64 expressions of at most 1024 bytes) and the `terms` (at most 1000 words or phrases, 64 KiB in total). The patterns use the RE2 syntax, which has linear time and no back-references. A pattern that matches an empty string is refused. A term matches without case, on word boundaries. Set a `label` to name the findings (default `custom`).
 - **`secrets`** uses the platform secret rules: `aws-access-key-id`, `aws-secret-access-key`, `private-key`, `github-token`, `github-fine-grained-token`, `gitlab-token`, `slack-token`, `slack-webhook`, `connection-string-password`, `password-assignment` and `jwt`. These are the rules that the desktop handoff uses. Set `rules` to use only some of them. The label of a finding is its rule id. When a rule names a secret group, a `mask` action replaces only the secret value, not the key name around it. The `private-key` rule matches the full PEM block, from the `BEGIN` line through the `END` line. A `mask` action replaces the header, the key body and the footer with one marker. When the text has no `END` line, the mask continues to the end of that message or tool result. In a request, a key without an `END` line does not mask the messages after it.
 - **`http`** sends the content to a classifier that you operate, with the [HTTP adapter contract](#http-adapter-contract).
+- **`llama_guard`** sends the content to a self-hosted Llama Guard 3 or 4 model. See [Llama Guard adapter](/admin/enterprise-controls/guardrail-adapters/llama-guard).
+- **`presidio`** sends the content to a self-hosted Presidio Analyzer and masks the personal data it finds. See [Presidio adapter](/admin/enterprise-controls/guardrail-adapters/presidio).
+
+A detector of an input entry can read the tool results only (`content: tool_results`), and it can fill the prompt-injection slot (`slot: prompt_injection`). See [Prompt-injection slot](/admin/enterprise-controls/guardrail-adapters/prompt-injection).
 
 Example entry, which masks secrets and blocks a confidential project name in answers:
 
@@ -174,11 +178,11 @@ For an agent run, the [run steps API](/admin/enterprise-controls/reconstruct-a-r
 5. Set the timeout, the fail mode and the stream window if the defaults do not apply.
 6. Save. The gateway applies the entry within its refresh interval (`LLM_GOVERNANCE_REFRESH_SEC`, 30 seconds by default).
 
-For an `http` detector, first create the secret in the public project and add the adapter host to the **Egress allowlist** entry.
+For an `http`, `llama_guard` or `presidio` detector, first create the secret in the public project and add the adapter host to the **Egress allowlist** entry.
 
 ### Limitations
 
-- The built-in detectors find patterns, terms and known secret formats. Harm categories and personal data need a classifier through the HTTP adapter.
+- The built-in detectors find patterns, terms and known secret formats. Harm categories and personal data need a classifier: the HTTP adapter, Llama Guard or Presidio.
 - Adapters for named classifier services are not available yet. Use the HTTP adapter with a small service that calls them.
 
 ## Output contracts
@@ -436,7 +440,7 @@ The rule applies to root agents, nested agents and pipeline LLM nodes. The rule 
 - The rule counts a read only when a toolkit or MCP tool returned a result. A file that a user attached is in its own envelope, but it does not turn on the rule.
 - A turn that continues after a pause, or that recovers after a worker restart, counts as a turn that read untrusted content.
 - Pipeline tool nodes do not use the rule. Use the pipeline `hitl` rule for them. See [Required approval in pipelines](/admin/enterprise-controls/runtime-safety#required-approval-in-pipelines).
-- A detector for prompt injection is not part of this release.
+- To add a prompt-injection classifier on tool results, use the [prompt-injection slot](/admin/enterprise-controls/guardrail-adapters/prompt-injection).
 
 ### Configure
 

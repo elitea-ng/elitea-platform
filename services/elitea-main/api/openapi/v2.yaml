@@ -8114,11 +8114,11 @@ components:
         stage: { type: string, enum: [input, output] }
         row: { type: string, description: The name of the guardrail governance entry. }
         detector: { type: string }
-        detector_type: { type: string, enum: [regex, secrets, http] }
+        detector_type: { type: string, enum: [regex, secrets, http, llama_guard, presidio] }
         action: { type: string, enum: [block, mask, flag] }
         outcome: { type: string, enum: [pass, flagged, masked, blocked, error_open, error_closed] }
         fail_mode: { type: string, enum: [open, closed] }
-        labels: { type: array, items: { type: string } }
+        labels: { type: array, items: { type: string }, description: "The finding labels. A detector in a slot also adds slot:<name>, for example slot:prompt_injection." }
         findings: { type: integer, format: int32 }
         max_score: { type: number, format: float }
         latency_ms: { type: integer, format: int64 }

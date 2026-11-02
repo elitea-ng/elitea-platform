@@ -15,6 +15,7 @@ import TextField from '@mui/material/TextField';
 
 import { t } from '@/shared/i18n';
 
+import { GuardrailSelfHostedFields } from './GovernanceGuardrailSelfHostedFields';
 import type { draftFieldErrors } from './governanceIdLists';
 import type { GovernanceDraft } from './useGatewayGovernancePage';
 
@@ -74,7 +75,7 @@ export function GuardrailFields({ draft, errors, onChange }: GuardrailFieldsProp
           errors.guardrailDetectors ??
           t(
             'pages.admin.governance.field.guardrailDetectorsHelp',
-            'An ordered JSON array. Each detector has a type (regex, secrets or http) and an action (block, mask or flag). An http detector takes its auth header from a {{secret.NAME}} reference, never a raw value.',
+            'An ordered JSON array. Each detector has a type (regex, secrets, http, llama_guard or presidio) and an action (block, mask or flag). An adapter takes its auth from a {{secret.NAME}} reference, never a raw value.',
           )
         }
         value={draft.guardrailDetectors}
@@ -84,6 +85,11 @@ export function GuardrailFields({ draft, errors, onChange }: GuardrailFieldsProp
         multiline
         minRows={4}
         slotProps={{ htmlInput: { 'data-testid': 'governance-guardrail-detectors', spellCheck: false } }}
+      />
+      <GuardrailSelfHostedFields
+        detectors={draft.guardrailDetectors}
+        isInput={isInput}
+        onDetectorsChange={(guardrailDetectors) => onChange({ guardrailDetectors })}
       />
       <TextField
         label={t('pages.admin.governance.field.guardrailTimeoutMs', 'Timeout (ms)')}
