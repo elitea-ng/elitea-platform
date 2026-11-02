@@ -11,6 +11,7 @@ use super::{
 };
 use crate::agents::pipeline::composition::MAX_PIPELINE_COMPOSITION_DEPTH;
 use elitea_agent_runtime::delegation::DelegationScope;
+use elitea_agent_runtime::toolkits::governed::GovernedOperationClient;
 
 pub(in crate::agents) const MAX_MATERIALIZATION_VERSION_BYTES: usize = 4 * 1024 * 1024;
 
@@ -103,6 +104,10 @@ pub(in crate::agents) struct ApplicationMaterializationPath {
     /// 3): its effective grants and its combined depth. A saved agent or
     /// pipeline built on this path is narrowed against it.
     delegation: DelegationScope,
+    /// The run's governed seam (ADR-0039, #1474): every nested agent and
+    /// saved pipeline on this path redeems its credentials through it.
+    /// `None` on a legacy run.
+    governed: Option<Arc<GovernedOperationClient>>,
 }
 
 impl Default for ApplicationMaterializationPath {
@@ -125,7 +130,24 @@ impl ApplicationMaterializationPath {
             native_graph_root: false,
             under_agent: false,
             delegation: DelegationScope::default(),
+            governed: None,
         }
+    }
+
+    /// This path with the run's governed seam (#1474). `None` keeps a legacy
+    /// path unchanged.
+    #[must_use]
+    pub(in crate::agents) fn with_governed(
+        mut self,
+        governed: Option<Arc<GovernedOperationClient>>,
+    ) -> Self {
+        self.governed = governed;
+        self
+    }
+
+    /// The run's governed seam on this path; `None` on a legacy run.
+    pub(in crate::agents) const fn governed(&self) -> Option<&Arc<GovernedOperationClient>> {
+        self.governed.as_ref()
     }
 
     /// This path under `scope`: the root's own grants and policy, or a

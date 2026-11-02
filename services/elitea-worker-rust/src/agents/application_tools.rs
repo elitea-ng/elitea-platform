@@ -68,8 +68,6 @@ use crate::toolkits::{
     AdmittedToolSnapshot, DelegatedAuthorizationCatalog, FrozenToolKind, FrozenToolSnapshot,
     FrozenToolSnapshotErrorCode, McpConnector, McpMaterializationErrorCode, ToolAdmissionPolicy,
     ToolBindingError, ToolsetMaterializationErrorCode, bind_toolsets,
-    materialize_configured_toolsets_with_tokens_and_authorization,
-    materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 use crate::transport::model_facade::{
     BoundModelFacade, ModelAdapterKind, ModelFacade, ModelFacadeError, ModelInvocation,
@@ -2925,6 +2923,18 @@ impl<'a> ApplicationToolDependencies<'a> {
         self
     }
 
+    /// The run's governed seam (#1474): every nested agent and saved
+    /// pipeline built under these dependencies redeems through it. `None`
+    /// keeps a legacy run unchanged.
+    #[must_use]
+    pub(super) fn with_governed(
+        mut self,
+        governed: Option<Arc<elitea_agent_runtime::toolkits::governed::GovernedOperationClient>>,
+    ) -> Self {
+        self.materialization = self.materialization.with_governed(governed);
+        self
+    }
+
     /// Admit saved PIPELINE children, namespaced under this conversation's
     /// durable thread (#973).
     #[must_use]
@@ -3787,19 +3797,27 @@ impl ApplicationAssemblyState<'_> {
         ),
         NativeAgentAssemblyError,
     > {
-        // A governed run (#1120): nested agents have no governed seam yet.
-        crate::transport::credential_redeemer::refuse_ungoverned_credentials(
-            self.runtime_context,
+        // A governed run (#1474): the nested agent's own frozen toolkits
+        // redeem through the run's governed seam, as on an ordinary agent.
+        let super::governed_nested::NestedToolsets {
+            configured: mut toolsets,
+            mcp: mut mcp_toolsets,
+            delegated_authorization,
+        } = super::governed_nested::materialize_nested_toolsets(
             frozen,
-        )?;
-        let (mut toolsets, mut delegated_authorization) =
-            materialize_configured_toolsets_with_tokens_and_authorization(
-                frozen,
-                &self.policy,
-                self.mcp_tokens,
-            )
-            .await
-            .map_err(toolset_error)?;
+            super::governed_nested::NestedToolsetInputs {
+                authority: self.runtime_context,
+                governed: self.materialization.governed(),
+                policy: &self.policy,
+                connector: &self.mcp_connector,
+                mcp_tokens: self.mcp_tokens,
+            },
+            &super::governed_nested::NestedErrorMapping {
+                configured: toolset_error,
+                mcp: mcp_toolset_error,
+            },
+        )
+        .await?;
         let mut sensitive_tools = sensitive_tools_for_kind(
             frozen,
             FrozenToolKind::Configured,
@@ -3807,18 +3825,6 @@ impl ApplicationAssemblyState<'_> {
             self.policy.as_ref(),
         )
         .await?;
-        let (mut mcp_toolsets, mcp_delegated_authorization) =
-            materialize_mcp_toolsets_with_tokens_and_authorization(
-                frozen,
-                self.mcp_connector.as_ref(),
-                &self.policy,
-                self.mcp_tokens,
-            )
-            .await
-            .map_err(|error| mcp_toolset_error(&error))?;
-        delegated_authorization
-            .merge(mcp_delegated_authorization)
-            .map_err(|()| invalid_configuration())?;
         sensitive_tools.merge(
             sensitive_tools_for_kind(
                 frozen,
