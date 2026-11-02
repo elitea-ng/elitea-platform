@@ -15,6 +15,8 @@ const PUBLIC_SURFACE = [
   'NotificationListItem',
   'parseNotificationMessage',
   'resolveNotificationHref',
+  'systemNoticeText',
+  'systemNoticesEnabled',
   'useBulkDeleteNotifications',
   'useBulkMarkSeenNotifications',
   'useDeleteNotification',

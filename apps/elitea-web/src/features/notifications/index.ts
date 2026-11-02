@@ -21,6 +21,7 @@ export {
 export type { NotificationMessageSegment } from './lib/routes';
 export { parseNotificationMessage, resolveNotificationHref } from './lib/routes';
 export { useNotificationsSSE } from './lib/useNotificationsSSE';
+export { systemNoticeText, systemNoticesEnabled } from './lib/systemNotices';
 export type { SoundNotificationConfig } from './lib/soundNotification';
 export type { UseSoundNotificationResult } from './lib/useSoundNotification';
 export { useSoundNotification } from './lib/useSoundNotification';

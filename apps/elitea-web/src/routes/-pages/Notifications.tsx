@@ -71,6 +71,7 @@ import { hasUnreadAmongSelected } from '@/entities/notification';
 import { NotificationsListBody } from '@/features/notifications/ui/NotificationsListBody';
 import { NotificationsTable } from '@/features/notifications/ui/NotificationsTable';
 import { NotificationsToast, type NotificationToastKind } from '@/features/notifications/ui/NotificationsToast';
+import { SystemNoticesToggle } from '@/features/notifications/ui/SystemNoticesToggle';
 import {
   NOTIFICATION_DEFAULT_PAGE_SIZE,
   NOTIFICATION_DEFAULT_SORT,
@@ -297,6 +298,12 @@ export function NotificationsPage() {
           </Box>
         }
       />
+      {/* The desktop's native notices: a literal MODE test, so the web build drops the switch. */}
+      {import.meta.env.MODE === 'desktop' && (
+        <Box sx={{ paddingInline: '1.5rem', paddingBlock: '0.75rem' }}>
+          <SystemNoticesToggle />
+        </Box>
+      )}
       <Box sx={styles.content}>
         {/* The list body is still the authority on the three NON-row states
           * — failed read, first load, empty list — and it must stay ahead of
