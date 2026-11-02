@@ -8114,7 +8114,7 @@ components:
         stage: { type: string, enum: [input, output] }
         row: { type: string, description: The name of the guardrail governance entry. }
         detector: { type: string }
-        detector_type: { type: string, enum: [regex, secrets, http, llama_guard, presidio] }
+        detector_type: { type: string, enum: [regex, secrets, http, azure_content_safety, bedrock_guardrails, model_armor, llama_guard, presidio] }
         action: { type: string, enum: [block, mask, flag] }
         outcome: { type: string, enum: [pass, flagged, masked, blocked, error_open, error_closed] }
         fail_mode: { type: string, enum: [open, closed] }

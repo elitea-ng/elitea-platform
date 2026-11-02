@@ -183,7 +183,10 @@ func validateGuardrailDetector(obj map[string]any) (string, error) {
 	case "presidio":
 		return name, validateGuardrailPresidio(obj)
 	}
-	return "", errors.New(`type must be "regex", "secrets", "http", "llama_guard" or "presidio"`)
+	if handled, err := validateGuardrailCloudDetector(typ, obj); handled {
+		return name, err
+	}
+	return "", errors.New(`type must be one of regex, secrets, http, azure_content_safety, bedrock_guardrails, model_armor, llama_guard, presidio`)
 }
 
 func validateGuardrailRegex(obj map[string]any) error {

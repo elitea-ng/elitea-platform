@@ -63,6 +63,11 @@ const (
 	TypeHTTP    = "http"
 )
 
+// DetectorTypes lists the detector types this gateway runs.
+func DetectorTypes() []string {
+	return []string{TypeRegex, TypeSecrets, TypeHTTP, TypeAzureContentSafety, TypeBedrockGuardrails, TypeModelArmor, TypeLlamaGuard, TypePresidio}
+}
+
 // Bounds. elitea-main refuses a row outside them on write; the gateway refuses
 // one that reached the table another way.
 const (
@@ -258,8 +263,14 @@ func parseDetector(obj map[string]any) (*Detector, error) {
 		d.impl, err = newLlamaGuardDetector(obj)
 	case TypePresidio:
 		d.impl, err = newPresidioDetector(obj)
+	case TypeAzureContentSafety:
+		d.impl, err = newAzureDetector(obj)
+	case TypeBedrockGuardrails:
+		d.impl, err = newBedrockDetector(obj)
+	case TypeModelArmor:
+		d.impl, err = newModelArmorDetector(obj)
 	default:
-		return nil, fmt.Errorf("type must be %q, %q, %q, %q or %q", TypeRegex, TypeSecrets, TypeHTTP, TypeLlamaGuard, TypePresidio)
+		return nil, fmt.Errorf("type must be one of %s", strings.Join(DetectorTypes(), ", "))
 	}
 	if err != nil {
 		return nil, err

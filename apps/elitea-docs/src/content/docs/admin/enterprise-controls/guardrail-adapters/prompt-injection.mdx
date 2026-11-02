@@ -96,9 +96,9 @@ Make sure that your version of the image supports the architecture of the model.
 
 | Classifier | Detector | Notes |
 | --- | --- | --- |
-| Azure AI Content Safety, Prompt Shields | The Azure adapter of the gateway | Detects attacks in documents. See the Azure adapter page in this section. |
-| AWS Bedrock Guardrails, prompt attack filter | The Bedrock adapter of the gateway | See the Bedrock adapter page in this section. |
-| Google Model Armor, `pi_and_jailbreak` filter | The Model Armor adapter of the gateway | See the Model Armor adapter page in this section. |
+| Azure AI Content Safety, Prompt Shields | `azure_content_safety` | Detects attacks in documents. Set `prompt_shields`. See [Azure AI Content Safety](/admin/enterprise-controls/guardrail-adapters/azure-content-safety). |
+| AWS Bedrock Guardrails, prompt attack filter | `bedrock_guardrails` | Turn on the prompt attack filter in the guardrail. See [AWS Bedrock Guardrails](/admin/enterprise-controls/guardrail-adapters/bedrock-guardrails). |
+| Google Model Armor, `pi_and_jailbreak` filter | `model_armor` | Turn on the filter in the template. See [Google Cloud Model Armor](/admin/enterprise-controls/guardrail-adapters/model-armor). |
 | Llama Guard 3 or 4 | `llama_guard` | Llama Guard classifies harm categories, not injection. Use it with `categories` for the harms that an injected instruction asks for, for example `S1`, `S2`, `S7` and `S14`. See [Llama Guard adapter](/admin/enterprise-controls/guardrail-adapters/llama-guard). |
 | Your own model | `http` | For example Llama Prompt Guard 2 or a DeBERTa prompt-injection model, through the HTTP adapter contract. |
 | A list of known phrases | `regex` | Use `terms` such as `ignore previous instructions`. This finds only known text. |

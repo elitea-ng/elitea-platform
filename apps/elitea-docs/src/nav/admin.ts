@@ -31,14 +31,49 @@ export const adminTab: NavTab = {
         { kind: 'page', slug: 'admin/enterprise-controls/shared-responsibility', title: 'Shared responsibility' },
         { kind: 'page', slug: 'admin/enterprise-controls/runtime-safety', title: 'Runtime safety' },
         { kind: 'page', slug: 'admin/enterprise-controls/content-controls', title: 'Content controls' },
-        { kind: 'page', slug: 'admin/enterprise-controls/guardrail-adapters/llama-guard', title: 'Llama Guard adapter' },
-        { kind: 'page', slug: 'admin/enterprise-controls/guardrail-adapters/presidio', title: 'Presidio adapter' },
-        { kind: 'page', slug: 'admin/enterprise-controls/guardrail-adapters/prompt-injection', title: 'Prompt-injection slot' },
         { kind: 'page', slug: 'admin/enterprise-controls/audit-evidence-and-retention', title: 'Audit evidence and retention' },
         { kind: 'page', slug: 'admin/enterprise-controls/least-privilege-and-trust', title: 'Least privilege and trust' },
         { kind: 'page', slug: 'admin/enterprise-controls/agent-lifecycle', title: 'Agent lifecycle' },
         { kind: 'page', slug: 'admin/enterprise-controls/evidence-guide', title: 'Evidence guide for auditors' },
         { kind: 'page', slug: 'admin/enterprise-controls/reconstruct-a-run', title: 'Reconstruct an agent run' },
+      ],
+      groups: [
+        {
+          kind: 'group',
+          title: 'Guardrail adapters',
+          pages: [
+            {
+              kind: 'page',
+              slug: 'admin/enterprise-controls/guardrail-adapters/azure-content-safety',
+              title: 'Azure AI Content Safety',
+            },
+            {
+              kind: 'page',
+              slug: 'admin/enterprise-controls/guardrail-adapters/bedrock-guardrails',
+              title: 'AWS Bedrock Guardrails',
+            },
+            {
+              kind: 'page',
+              slug: 'admin/enterprise-controls/guardrail-adapters/model-armor',
+              title: 'Google Cloud Model Armor',
+            },
+            {
+              kind: 'page',
+              slug: 'admin/enterprise-controls/guardrail-adapters/llama-guard',
+              title: 'Llama Guard',
+            },
+            {
+              kind: 'page',
+              slug: 'admin/enterprise-controls/guardrail-adapters/presidio',
+              title: 'Presidio',
+            },
+            {
+              kind: 'page',
+              slug: 'admin/enterprise-controls/guardrail-adapters/prompt-injection',
+              title: 'Prompt-injection slot',
+            },
+          ],
+        },
       ],
     },
   ],

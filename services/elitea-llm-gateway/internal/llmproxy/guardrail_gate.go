@@ -204,6 +204,12 @@ func (h *Handler) guardrailEnv() guardrail.Env {
 	if h.guardrailSecrets != nil {
 		env.ResolveSecret = h.guardrailSecrets
 	}
+	// A keyless model_armor detector uses the gateway's own Google identity.
+	// A guardrail row is platform configuration, so it is admitted like a
+	// platform credential: only when the operator armed workload identity.
+	if wi := h.workloadIdentity; wi.enabled && wi.tokens != nil {
+		env.GoogleAccessToken = wi.tokens.AccessToken
+	}
 	return env
 }
 

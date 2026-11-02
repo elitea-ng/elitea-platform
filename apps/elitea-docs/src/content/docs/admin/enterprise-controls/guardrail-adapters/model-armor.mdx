@@ -1,0 +1,118 @@
+---
+title: "Google Cloud Model Armor adapter"
+description: "Set up a model_armor guardrail detector: the Model Armor template, a service-account key or the gateway workload identity, the egress allowlist entry, the detector settings, the labels and the fail mode."
+---
+
+The `model_armor` detector sends the content of a [guardrail entry](/admin/enterprise-controls/content-controls#guardrail-pipeline) to Google Cloud Model Armor. Model Armor applies the filters of one template: responsible AI categories, prompt injection and jailbreak detection, Sensitive Data Protection, malicious URLs and child safety.
+
+- An input entry calls `sanitizeUserPrompt`.
+- An output entry calls `sanitizeModelResponse`.
+
+## Prerequisites
+
+- A Google Cloud project with the Model Armor API enabled.
+- Platform administrator access to **Admin › LLM Governance** and to the secrets of the public project.
+- Network access from the LLM gateway to the regional Model Armor endpoint.
+
+## Create the template
+
+<Steps>
+  <Step title="Enable the API">
+    Enable `modelarmor.googleapis.com` in the project.
+  </Step>
+  <Step title="Create a template">
+    In the console, open **Security › Model Armor** and create a template in a location, for example `us-central1`. Select the filters and their confidence levels. Copy the template name, for example `projects/acme-prod/locations/us-central1/templates/strict`.
+  </Step>
+  <Step title="Give access to the gateway identity">
+    Give the service account that the gateway uses the role **Model Armor User** (`roles/modelarmor.user`) on the project.
+  </Step>
+</Steps>
+
+## Credentials
+
+The gateway sends an OAuth access token with the `cloud-platform` scope. Select one of two sources with `auth_mode`.
+
+### Service-account key (`auth_mode: key`, the default)
+
+1. Create a key for the service account, as a JSON document.
+2. Create a secret in the public project, for example `MODEL_ARMOR_SA`, with the full JSON document as its value.
+3. Set `credentials_secret` to `{{secret.MODEL_ARMOR_SA}}`.
+
+The gateway exchanges the key for a token at the `token_uri` of the document (`https://oauth2.googleapis.com/token` by default) and keeps the token until it expires. The token exchange is outbound traffic too, so the token host must be on the egress allowlist.
+
+### Keyless (`auth_mode: workload_identity`)
+
+On GKE, the gateway can use the Google identity of its own pod, as for keyless [Vertex AI providers](/admin/llm-proxy#keyless-credentials-workload-identity).
+
+1. Bind the gateway's Kubernetes service account to a Google service account.
+2. Set `llmGateway.workloadIdentity.enabled: true` in the chart.
+3. Set `auth_mode` to `workload_identity`, and leave `credentials_secret` out.
+
+A guardrail entry is platform configuration that only a platform administrator writes, so the gateway accepts its own identity for it. When workload identity is not enabled, a keyless detector fails, and the fail mode of the entry applies.
+
+## Egress allowlist entry
+
+Add the regional endpoint to an **Egress allowlist** governance entry, under **Permitted destinations**:
+
+```text
+modelarmor.us-central1.rep.googleapis.com
+oauth2.googleapis.com
+```
+
+The second host is necessary only with a service-account key. When a host is not on the allowlist, the detector fails, and the fail mode of the entry applies.
+
+## Detector settings
+
+```json
+{
+  "guardrail": {
+    "stage": "input",
+    "timeout_ms": 3000,
+    "detectors": [
+      {
+        "name": "armor",
+        "type": "model_armor",
+        "action": "block",
+        "template": "projects/acme-prod/locations/us-central1/templates/strict",
+        "credentials_secret": "{{secret.MODEL_ARMOR_SA}}"
+      }
+    ]
+  }
+}
+```
+
+| Setting | Meaning |
+| --- | --- |
+| `template` | The template name, `projects/PROJECT/locations/LOCATION/templates/TEMPLATE`. Required. |
+| `auth_mode` | `key` (default) or `workload_identity`. |
+| `credentials_secret` | A `{{secret.NAME}}` reference to a service-account key document. Required for `key`. Not permitted for `workload_identity`. |
+| `endpoint` | The Model Armor endpoint. Default `https://modelarmor.LOCATION.rep.googleapis.com`, from the location of the template. |
+
+The admin form has an **Add a cloud classifier detector** section that writes this object for you.
+
+## Labels
+
+A filter result counts when its match state is `MATCH_FOUND`.
+
+| Model Armor filter | Label | Score | Span |
+| --- | --- | --- | --- |
+| Responsible AI: sexually explicit, hate speech, harassment, dangerous | `sexual`, `hate`, `harassment`, `dangerous` | confidence: `LOW_AND_ABOVE` 0.33, `MEDIUM_AND_ABOVE` 0.66, `HIGH` 1 | All of the content |
+| Prompt injection and jailbreak | `prompt_injection` | the same | All of the content |
+| Sensitive Data Protection, inspect template | `pii:<info type>`, for example `pii:email_address` | likelihood: `VERY_UNLIKELY` 0.1, `UNLIKELY` 0.3, `POSSIBLE` 0.5, `LIKELY` 0.7, `VERY_LIKELY` 0.9 | The finding position |
+| Sensitive Data Protection, de-identify template | `pii:<info type>` | 1 | All of the content |
+| Malicious URLs | `malicious_uri` | 1 | Each occurrence of the URL |
+| Child safety (CSAM) | `csam` | 1 | All of the content |
+
+For a Sensitive Data Protection finding, the gateway reads the byte range (UTF-8) and, when it is absent, the code point range. A `mask` action replaces only the finding. The verdict never records the matched text.
+
+When Model Armor reports an `invocationResult` other than `SUCCESS`, for example `PARTIAL`, the detector fails. A partial check never passes as clean.
+
+## Latency and cost
+
+Each check is one round trip to Model Armor, plus one token exchange when the cached token expires. On a streamed answer, an output entry with a `block` or `mask` action calls Model Armor for each window of text. A `flag` entry calls it one time when the stream ends. Google bills Model Armor by the volume of tokens checked. See [Model Armor pricing](https://cloud.google.com/security-command-center/pricing#model-armor-pricing).
+
+## Fail mode
+
+- Use `fail_mode: closed` on a `block` or `mask` entry when the check is a policy requirement. When Model Armor is not available, the gateway then refuses the request with HTTP 503.
+- Use `fail_mode: open` with a `flag` action to measure the results first.
+- An HTTP status other than 200, for example 403 for a missing role, is a detector failure.
