@@ -1053,11 +1053,15 @@ async fn unproven_resume(
         return Ok(None);
     }
     for (nested_thread, paused_at) in &nested {
-        let advanced = store
-            .load(nested_thread)
-            .await?
-            .is_none_or(|row| row.checkpoint_id != *paused_at);
-        if advanced {
+        // A pipeline the pause names with no row at all is a broken state,
+        // never progress: refused typed, not continued without the decision.
+        let latest = store.load(nested_thread).await?.ok_or_else(|| {
+            parallel_error(
+                "graph.parallel.corrupt_receipt",
+                "a pipeline the child's pause names has no checkpoint",
+            )
+        })?;
+        if latest.checkpoint_id != *paused_at {
             return Ok(None);
         }
     }

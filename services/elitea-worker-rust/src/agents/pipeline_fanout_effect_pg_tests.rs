@@ -5698,3 +5698,70 @@ member_wake_case!(
     "2",
     "committed"
 );
+
+/// FU-273 R1: a pipeline the member's pause names with no row left is a
+/// broken state, not progress. The reclaim refuses it typed; it never
+/// re-asks and never calls again.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_member_whose_paused_pipeline_has_no_row_is_refused_typed() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-273 proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let rig = MemberWakeRig {
+        pool: db.pool.clone(),
+        ledger: crate::agents::graph::fanout_test_ledger::TestLedger::new(),
+        depth: "1",
+        committed: false,
+    };
+    let request = mixed_request("continue");
+    let (parking, _) = rig.assembler(
+        1,
+        counting_connector(&Arc::new(AtomicUsize::new(0))),
+        Vec::new(),
+    );
+    let invocation = parking
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| panic!("assemble: {error}"));
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .unwrap_or_else(|error| panic!("the member's card parks the run: {error}"));
+    let key = cards[0]["interrupt_key"].as_str().expect("card key");
+    rig.ledger.decide(key, "approve", None);
+    let wake = member_wake_request(request);
+    rig.lose(&wake).await;
+    lost_attempt_pause(&db.pool).await;
+    let removed = sqlx::query(
+        "DELETE FROM elitea_runtime.agent_graph_checkpoints WHERE thread_id LIKE \
+         (SELECT thread_id FROM elitea_runtime.agent_graph_checkpoints \
+          WHERE metadata LIKE '%branch-receipt.v1%' AND metadata LIKE '%\"status\":\"paused\"%' \
+          LIMIT 1) || '/%'",
+    )
+    .execute(&db.pool)
+    .await
+    .expect("remove the member's paused pipeline rows")
+    .rows_affected();
+    assert_ne!(removed, 0, "the member's pipeline had rows");
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let (reclaim, _) = rig.assembler(3, counting_connector(&tool_calls), Vec::new());
+    let outcome = match recovered(&reclaim, &wake, MEMBER_WAKE_EXECUTION, 3).await {
+        Ok(invocation) => run_collecting(invocation).await.map(|(_, cards)| cards),
+        Err(error) => Err(error),
+    };
+    let error = outcome.expect_err("the broken member state ends the run typed");
+    assert!(error.contains("graph.parallel.corrupt_receipt"), "{error}");
+    assert_eq!(tool_calls.load(Ordering::Acquire), 0, "never called again");
+    assert_eq!(
+        rig.ledger.open_decisions(),
+        1,
+        "the decision is not consumed"
+    );
+    db.pool.close().await;
+}
