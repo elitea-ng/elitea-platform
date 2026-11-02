@@ -602,7 +602,7 @@ test('J25: unsaved-changes nav block: navigate away from a dirty pipeline → di
 
   // A real in-app link. A `goto()` fallback would bypass the router's blocker
   // entirely and pass against an app with no guard at all.
-  await page.getByRole('navigation', { name: 'side-bar' }).getByRole('link', { name: 'Credentials', exact: true }).click();
+  await page.getByRole('navigation', { name: 'side-bar' }).getByRole('link', { name: 'Artifacts', exact: true }).click();
 
   const navBlockerDialog = page.getByRole('dialog');
   await expect(navBlockerDialog).toBeVisible({ timeout: 10_000 });

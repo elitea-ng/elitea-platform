@@ -89,10 +89,10 @@ test('SB01: every main-rail icon shows its exact label as a tooltip when collaps
 
   const navRail = rail(page);
 
-  // `navSections()`'s own 7 items this case's steps enumerate — real label
+  // `navSections()`'s own items this case's steps enumerate — real label
   // for Toolkits ("Toolkits & Indexes"), see the file header. Credentials is
-  // one of the bottom links now, with the same collapsed tooltip.
-  const rows: readonly string[] = ['Chats', 'Agents', 'Pipelines', 'Credentials', 'Toolkits & Indexes', 'MCPs', 'Artifacts'];
+  // in the account menu now (`shell.account-menu.spec.ts`), not on the rail.
+  const rows: readonly string[] = ['Chats', 'Agents', 'Pipelines', 'Toolkits & Indexes', 'MCPs', 'Artifacts'];
 
   for (const label of rows) {
     const link = navRail.getByRole('link', { name: label, exact: true });
@@ -189,7 +189,8 @@ test('SB03: every main-rail item navigates to its own page', async ({ page }) =>
   const navRail = rail(page);
   const workshop = page.getByTestId('shell-elitea-workshop').getByRole('button').first();
   if ((await workshop.getAttribute('aria-expanded')) !== 'true') await workshop.click();
-  const labels: readonly string[] = ['Agents', 'Pipelines', 'Credentials', 'Toolkits & Indexes', 'MCPs', 'Artifacts'];
+  // Credentials is in the account menu now (`shell.account-menu.spec.ts`).
+  const labels: readonly string[] = ['Agents', 'Pipelines', 'Toolkits & Indexes', 'MCPs', 'Artifacts'];
 
   let previous: Locator | undefined;
   for (const label of labels) {

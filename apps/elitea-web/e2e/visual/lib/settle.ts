@@ -56,8 +56,9 @@ export function volatileRegions(page: Page): Locator[] {
  * (and so the nav is at full length), the project name proves the project list
  * resolved (and so the switcher is not showing its "No projects" fallback).
  *
- * `Credentials` is chosen over the other gated items only because it is gated
- * and unambiguous; any of `PERMISSION_GROUPS`' entries would do. `Applications`
+ * The rail's `Agents` link is used because it is gated and, scoped to the
+ * rail, unambiguous; any of `PERMISSION_GROUPS`' entries would do.
+ * (`Credentials` was the landmark until it moved into the account menu.) `Applications`
  * and `Skills` would NOT — `requiredPermissionsFor` returns undefined for them,
  * so they render during load too.
  *
@@ -83,7 +84,9 @@ export async function shellSettled(
   page: Page,
   projectName = DEFAULT_PROJECT_NAME,
 ): Promise<void> {
-  await expect(page.getByRole('link', { name: 'Credentials', exact: true })).toBeVisible({
+  await expect(
+    page.getByRole('navigation', { name: 'side-bar' }).getByRole('link', { name: 'Agents', exact: true }),
+  ).toBeVisible({
     timeout: 20_000,
   });
   // The selected project's NAME, not merely that the switcher exists: the

@@ -490,47 +490,30 @@ for (const route of ADMIN_ROUTES) {
 }
 
 /**
- * Switches to the light colour scheme through the admin SPA's OWN control, on
- * the page under test, then proves the switch took effect.
+ * Puts the console in the light scheme the way a user does now: through the
+ * stored theme preference. The console has no theme control of its own; it
+ * follows the choice made in the app (`AdminNavFooter.tsx`'s header), read
+ * from `el-mode` on this shared origin (`shared/brand/constants.ts`'s
+ * `modeStorageKey`) and from the server copy, which `keepThemeOffTheServer`
+ * answers as "never chosen" so the stored local choice stands.
  *
- * The admin nav header renders `shared/ui/ThemeModeToggle`
- * (`AdminNavHeader.tsx`), so — unlike the main app, whose toggle lives on
- * `/app/settings/personalization` and forces `routes.visual.spec.ts` to
- * navigate away and back — the control is right there. Using it rather than
- * writing the persisted key directly is the same rule #61 sets for the main
- * app's light shots: faking the attribute would make these test the stylesheet
- * while claiming to test the theme mechanism.
+ * Writing the stored preference is not faking the attribute: it is the input
+ * the console reads, and the poll below proves the console applied it.
  *
  * `data-el-scheme` (`shared/brand/constants.ts`'s `COLOR_SCHEME_ATTRIBUTE`) is
  * what MUI's `colorSchemeSelector` resolves against, so polling it is polling
  * the thing the stylesheet keys off.
  */
 async function useLightScheme(page: Page): Promise<void> {
-  // The click would otherwise store `light` for the persona every parallel
-  // worker shares (`fixtures/serverTheme.ts`). Only switching tests carry the
-  // stub: an intercepted page rasterises its text differently.
   await keepThemeOffTheServer(page);
-  const light = page
-    .getByTestId('admin-nav')
-    .getByRole('button', { name: 'Light', exact: true });
-  await expect(light).toBeVisible({ timeout: 20_000 });
-  await light.click();
-  await expect(light).toHaveAttribute('aria-pressed', 'true');
+  await page.evaluate(() => window.localStorage.setItem('el-mode', 'light'));
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await adminShellSettled(page);
   await expect
     .poll(() => page.evaluate(() => document.documentElement.getAttribute('data-el-scheme')), {
       timeout: 10_000,
     })
     .toBe('light');
-
-  // Undo the click's side effects on the CHROME, or they end up in the
-  // baseline: the pointer is left resting on the toggle, so MUI shows its
-  // `Light theme` Tooltip, and the button keeps focus, so it draws a focus
-  // ring. Both were in the first generated `admin-users-light` PNG. A tooltip
-  // in a reference is worse than cosmetic — it appears on a timer, so the
-  // baseline would be a race with its own enter delay.
-  await page.mouse.move(0, 0);
-  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-  await expect(page.getByRole('tooltip')).toHaveCount(0, { timeout: 10_000 });
 }
 
 /*

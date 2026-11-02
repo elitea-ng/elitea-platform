@@ -696,9 +696,9 @@ test('@visual chat-empty-rail-collapsed', async ({ page }) => {
   // `{!collapsed && …}`, so this is the inverse of the assertion
   // `shellSettled()` just made, on the same element.
   //
-  // NOT the nav label: `SidebarNavItem` does render icon-only when collapsed
-  // (`showLabel={!collapsed}`), but the `<a>` keeps `aria-label="Credentials"`,
-  // so `getByRole('link', { name: 'Credentials' })` stays matched and visible.
+  // NOT a nav label: `SidebarNavItem` does render icon-only when collapsed
+  // (`showLabel={!collapsed}`), but the `<a>` keeps its `aria-label`, so a
+  // `getByRole('link', { name })` stays matched and visible.
   // Measured, not assumed — that was this spec's first draft and it failed all
   // three attempts with the locator resolving 24 times to the collapsed link.
   await expect(page.locator('button').filter({ hasText: 'Default Project' }).first()).toBeHidden({
