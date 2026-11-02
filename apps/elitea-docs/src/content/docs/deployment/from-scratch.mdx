@@ -149,6 +149,10 @@ kubectl apply -f internal-ca.yaml
 
 The chart's defaults name `ClusterIssuer`s. The values in [Step 6](#step-6-write-the-values-file) switch both references to these namespaced `Issuer`s, which read their CA from the platform's own namespace and need no access to cert-manager's namespace.
 
+<Note title="Or let the chart make both Issuers">
+Set `certManager.issuers.create: true` and skip `internal-ca.yaml`. The chart then renders the same internal CA chain and the `elitea-runtime-ca` Issuer over the Secret `elitea-runtime-ca`, namespaced, and every mTLS block names them (`certManager.issuers.internal` and `.runtime`); the per-block `issuerRef` overrides in Step 6 are then not needed. You still create the Secret `elitea-runtime-ca` from the Step 4 material: the chart never generates the runtime CA. On an existing install, delete the hand-made Issuers and the `elitea-internal-ca` Certificate first: Helm does not adopt objects it did not create. See [Configuration](/deployment/configuration#release-wide-settings).
+</Note>
+
 <Warning title="Who can create a Certificate can impersonate a service">
 Anyone allowed to create a cert-manager `Certificate` or read Secrets in this namespace can mint a NATS or runtime identity. Limit those RBAC rights to the deployer and operators.
 </Warning>
@@ -185,7 +189,7 @@ dbInit:
 Without `externallyManaged: true` the chart refuses to render. Otherwise the install would look healthy and then fail every agent turn with "The durable agent checkpoint store is unavailable".
 </Tab>
 <Tab title="The chart prepares the rest">
-Create the role and the platform database yourself as above. Then let the `dbInit` hook create the agent-state database before each install and upgrade. It needs an administrator DSN with the `CREATE DATABASE` right **for the platform database**:
+Create the role and the platform database yourself as above. Then let the `dbInit` hook create the agent-state database before each install and upgrade. It needs an administrator DSN **for the platform database**, whose role has the `CREATEDB` attribute (or is a superuser) and is a member of the application role (`GRANT elitea_v2 TO postgres;`). Without `CREATEDB` the Job fails with "permission denied to create database":
 
 ```bash
 DSN='postgres://postgres:<pw>@pg.internal:5432/elitea_v2?sslmode=require'
@@ -196,9 +200,15 @@ kubectl -n elitea create secret generic \
 ```yaml
 dbInit:
   enabled: true
-  appRole: elitea_v2
-  agentStateDatabase: elitea_v2_agentstate
+  # Both optional. Empty, the Job reads them at run time: the database from
+  # the worker's agent-checkpoint-connection DSN, the owner from the user of
+  # the elitea-main-db DSN. Set, each is checked against that DSN, and the Job
+  # fails on a mismatch instead of creating a database the worker never opens.
+  # appRole: elitea_v2
+  # agentStateDatabase: elitea_v2_agentstate
 ```
+
+The Job reads URL-form DSNs only (`postgres://user:pass@host:port/db?params`). With a keyword DSN (`host=… dbname=…`), set both values.
 
 With CloudNativePG, a Cluster with `enableSuperuserAccess: true` publishes a Secret of this shape. Point `dbInit.database.existingSecret` at it.
 </Tab>
@@ -239,6 +249,10 @@ On AWS with IRSA, or on any cloud with workload identity, skip the Secret, remov
 ## Step 4: Mint the secrets
 
 Nothing secret belongs in a values file: a Helm value renders into a ConfigMap. The chart only takes **names** of Secrets you create.
+
+<Note title="Secrets from a secret manager">
+This step creates Kubernetes Secrets by hand. To fill them from a secret manager through the chart's `externalSecrets` block instead, run `deploy/scripts/mint-secrets.sh`: it mints the same material as **one flat JSON object** for `externalSecrets.remoteKey` with `externalSecrets.sharedProperties: true`. [Deploy on GKE with Argo CD](/deployment/gke-argocd#steps) shows it end to end. Mint once: a new run over a live install rotates the vault master key and the PAT keys.
+</Note>
 
 ### Generate the material
 
@@ -439,6 +453,8 @@ For three nodes, layer the chart's `values-nats-ha.yaml` (`-f values-nats-ha.yam
 ## Step 6: Write the values file
 
 This is a complete production values file for the install on this page. Every `elitea.example.com` and every value in angle brackets is yours to replace. The chart checks the combinations while it renders and names the field when something is missing or contradictory.
+
+The file states each URL-derived value in full, so you can see every one. A shorter file sets `global.publicUrl: https://elitea.example.com` and `global.trustedProxyCidrs` once, and leaves out `DEPLOYMENT_URL`, `ELITEA_TRUSTED_PROXY_CIDRS`, `OIDC_REDIRECT_URI`, `public_origin`, `trusted_proxy_cidrs`, `GATEWAY_SELF_LLM_ORIGINS`, `worker.runtime.publicBaseUrl` and the ingress hosts; the chart fills each one that is empty. It derives the worker identity as `spiffe://<host>/ns/<namespace>/sa/agent-worker`, so keep `worker.runtimeSession.expectedIdentity` when your worker certificate carries another SAN (the Step 4 script mints `…/sa/worker`). See [Configuration](/deployment/configuration#release-wide-settings).
 
 ```yaml
 # values-prod.yaml
@@ -969,4 +985,4 @@ The test that matters. If it hangs or fails, use the table below.
 
 Continue with [Post-install configuration](/deployment/configuration) and [Day-2 operations](/deployment/operations).
 
-{/* source: deploy/helm/elitea/values.yaml (postgresql, dbInit, objectInit, agentStateMigrations, networkPolicies, main.env, main.runtime, llmGateway, worker, vector); deploy/helm/elitea/templates/guards.yaml; deploy/helm/elitea/values-standalone.yaml; deploy/helm/elitea/values-auth-minimal.yaml (public_origin); deploy/helm/elitea/templates/main/ingress.yaml (one `/` rule); deploy/gateway-api/httproute.yaml; deploy/helm/elitea/values-nats-ha.yaml; deploy/helm/elitea/NATS.md; deploy/scripts/gen-runtime-certs.sh; services/elitea-main/pkg/ssewriter/keepalive.go (25-second keepalive); docs/UPGRADING.md (runtime-redis removed, NATS mTLS, auth document v2, Form sign-in off, one chart with NATS bundled, one edge route, Helm 4). The values file on this page renders with `helm template` against the in-repo chart. */}
+{/* source: deploy/helm/elitea/templates/_globals.tpl (global.*, certManager.issuers); deploy/helm/elitea/templates/dbInit/job.yaml (DSN-derived names); deploy/scripts/mint-secrets.sh; deploy/helm/elitea/values.yaml (postgresql, dbInit, objectInit, agentStateMigrations, networkPolicies, main.env, main.runtime, llmGateway, worker, vector); deploy/helm/elitea/templates/guards.yaml; deploy/helm/elitea/values-standalone.yaml; deploy/helm/elitea/values-auth-minimal.yaml (public_origin); deploy/helm/elitea/templates/main/ingress.yaml (one `/` rule); deploy/gateway-api/httproute.yaml; deploy/helm/elitea/values-nats-ha.yaml; deploy/helm/elitea/NATS.md; deploy/scripts/gen-runtime-certs.sh; services/elitea-main/pkg/ssewriter/keepalive.go (25-second keepalive); docs/UPGRADING.md (runtime-redis removed, NATS mTLS, auth document v2, Form sign-in off, one chart with NATS bundled, one edge route, Helm 4). The values file on this page renders with `helm template` against the in-repo chart. */}

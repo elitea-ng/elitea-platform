@@ -23,7 +23,6 @@ spec:
     size: 256
     rotationPolicy: Always
   issuerRef:
-    name: {{ .Values.egressProxy.audit.issuerRef.name }}
-    kind: {{ .Values.egressProxy.audit.issuerRef.kind }}
+    {{- include "elitea.issuerRef" (dict "ctx" $ "ref" .Values.egressProxy.audit.issuerRef "ca" "runtime") | nindent 4 }}
     group: cert-manager.io
 {{- end }}

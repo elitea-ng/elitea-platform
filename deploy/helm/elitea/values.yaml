@@ -68,6 +68,86 @@ image:
   # Applied to every component's pod spec.
   pullSecrets: []
 
+# ── One value, many places (#1460) ──────────────────────────────────────────
+#
+# `global` holds the settings that several components must agree on. Each
+# derived value below is written ONLY where its own key is empty, so a value
+# you set yourself always wins (templates/_globals.tpl, elitea.applyGlobals).
+# Empty (the default) derives nothing, and the chart renders as before.
+global:
+  # The origin browsers open, e.g. https://elitea.example.com: a scheme and a
+  # host (an optional port), no path, no trailing slash. When set, it fills:
+  #   main.env.DEPLOYMENT_URL                         <publicUrl>
+  #   main.env.OIDC_REDIRECT_URI                      <publicUrl>/auth/oidc/callback
+  #                                                   (only with OIDC_ISSUER_URL set)
+  #   main.fileConfig.authConfig.document.public_origin  <publicUrl>
+  #                                                   (only with a document)
+  #   llmGateway.env.GATEWAY_SELF_LLM_ORIGINS         <publicUrl>/llm,
+  #                                                   http://elitea-main:<port>/llm
+  #   worker.runtime.publicBaseUrl                    <publicUrl>
+  #   worker.runtimeSession.expectedIdentity          spiffe://<host>/ns/<release
+  #                                                   namespace>/sa/agent-worker
+  #   main.ingress.hosts (and tls[].hosts when empty) [<host>]
+  # The SPIFFE ID is the one deploy/scripts/mint-secrets.sh puts in the worker
+  # certificate for the same URL and namespace. A worker certificate minted
+  # with another ID needs expectedIdentity set to that ID.
+  publicUrl: ""
+  # The proxies (ingress, load balancer) whose X-Forwarded-For elitea-main
+  # believes, as CIDRs. Fills main.env.ELITEA_TRUSTED_PROXY_CIDRS and the
+  # authentication document's trusted_proxy_cidrs, where each is empty.
+  trustedProxyCidrs: []
+  # An OTLP/HTTP collector outside this chart, e.g. http://collector.obs:4318.
+  # Every component's OTEL_EXPORTER_OTLP_ENDPOINT defaults, in this order, to:
+  # the component's own env value, this value, the bundled collector
+  # (http://<otelCollector fullname>:<httpPort>, while otelCollector.enabled).
+  # With none of them, OTEL_SDK_DISABLED defaults to "true", so no component
+  # exports to localhost and logs a refused connection every few seconds.
+  otelEndpoint: ""
+
+# ── cert-manager issuers for the in-cluster mTLS hops (#1460) ───────────────
+#
+# Two certificate authorities sign the in-cluster mTLS certificates (the NATS
+# CA is separate, under nats.security):
+#   internal  elitea-main -> LLM gateway, DeepWiki and Inventory (server and
+#             facade client certificates).
+#   runtime   the CA elitea-main's runtime listeners verify clients against:
+#             elitea-vector and Qdrant, the sub-application callback clients,
+#             the egress proxy's audit client. It MUST be the CA whose
+#             certificate is runtime-ca.crt in the runtime material Secret.
+# Every mTLS block (llmGateway.mtls, deepwiki.mtls, inventory.mtls,
+# <provider>.callbackClient.certManager, egressProxy.audit, vector.mtls) takes
+# its issuerRef from here when its own issuerRef.name is empty (the default).
+# A block's own issuerRef still wins.
+certManager:
+  issuers:
+    # false (the default): the issuers exist outside this chart, as before.
+    # true: this chart renders them, NAMESPACED, in the release namespace:
+    #   internal  Issuer <internal.name>-selfsigned -> Certificate
+    #             <internal.name> (isCA, Secret <internal.name>) -> Issuer
+    #             <internal.name>. A new CA, private to this release.
+    #   runtime   Issuer <runtime.name> (CA issuer) that signs with the
+    #             kubernetes.io/tls Secret <runtime.caSecretName>: the runtime
+    #             CA certificate and KEY. The chart NEVER generates this CA:
+    #             elitea-main verifies runtime clients against runtime-ca.crt,
+    #             so a second CA would fail every handshake. mint-secrets.sh
+    #             writes the Secret's two values; with externalSecrets the
+    #             chart renders its ExternalSecret too.
+    # A kind left empty is Issuer with create: true, ClusterIssuer without.
+    create: false
+    internal:
+      name: elitea-internal-ca
+      kind: ""
+      # Lifetime of the CA certificate the chart creates (create: true). A
+      # renewed CA has a new key; plan its rotation as a maintenance window.
+      duration: 43800h    # 5y
+      renewBefore: 8760h  # 1y
+    runtime:
+      name: elitea-runtime-ca
+      kind: ""
+      # The kubernetes.io/tls Secret (tls.crt = runtime-ca.crt, tls.key =
+      # runtime-ca.key) the runtime CA Issuer signs with (create: true).
+      caSecretName: elitea-runtime-ca
+
 # ── Secrets from an external secret manager ─────────────────────────────────
 #
 # Every credential this chart consumes is a REFERENCE to a Kubernetes Secret:
@@ -137,6 +217,24 @@ externalSecrets:
   remoteKey: ""
   # Optional remote version for mode 3 (empty = latest).
   version: ""
+  # Mode 3 only. true: a value that several Secrets carry is read from ONE
+  # flat property and fanned out to every Secret that needs it, instead of
+  # one "<Secret>/<key>" property per copy (deploy/scripts/mint-secrets.sh
+  # writes this layout):
+  #   runtime-ca.crt                <runtime material>/runtime-ca.crt,
+  #                                 <worker material>/runtime-ca.crt and, with
+  #                                 certManager.issuers.create, the runtime CA
+  #                                 Secret's tls.crt
+  #   runtime-ca.key                the runtime CA Secret's tls.key
+  #                                 (certManager.issuers.create only)
+  #   command-signing-keyring.json  <runtime material>/... and <worker
+  #                                 material>/command-signing-keyring.json
+  #   gateway-identity-secret       llmGateway.secrets.GATEWAY_IDENTITY_SECRET
+  #                                 and main.secrets.GATEWAY_IDENTITY_SECRET
+  # The Secret names are the ones this release reads. A key mapped with
+  # secrets.<Secret>.keys.<key> or secrets.<Secret>.remoteKey still wins.
+  # false (the default) keeps the "<Secret>/<key>" property names.
+  sharedProperties: false
   # Per-Secret settings, keyed by the Kubernetes Secret name:
   #   <name>:
   #     enabled: false        # keep providing this Secret yourself (e.g. the
@@ -377,7 +475,7 @@ pgbouncer:
   maxPreparedStatements: 1000
   resources:
     requests:
-      cpu: 10m
+      cpu: 50m
       memory: 32Mi
     limits:
       cpu: "1"
@@ -1710,6 +1808,11 @@ natsBootstrap:
 # agentStateDatabase below and the database in postgresql.existingSecret's DSN;
 # the role is appRole. Put `?sslmode=require` on every DSN for a server that
 # accepts only TLS (pgx, libpq and the Rust services' sqlx all honour it).
+#
+# THE ROLE NEEDS CREATEDB. The Job connects with dbInit.database (an admin DSN)
+# and runs CREATE DATABASE ... OWNER <appRole>: that role needs the CREATEDB
+# attribute (or superuser), and membership in <appRole>. A role without it
+# fails the Job with "permission denied to create database".
 dbInit:
   enabled: true
 
@@ -1739,11 +1842,21 @@ dbInit:
   # Without it the worker claims an execution, runs the agent, and then fails
   # delivery with "The durable agent checkpoint store is unavailable" — it must
   # match the database in the worker's agent-checkpoint-connection material.
-  agentStateDatabase: "elitea_v2_agentstate"
+  #
+  # Empty (the default, #1460): the Job reads it at run time from the database
+  # in that DSN (worker.materialSecretName / agent-checkpoint-connection, or
+  # agentStateMigrations.databaseSecret without the worker). A value set here
+  # is checked against the same DSN, and the Job fails on a mismatch instead
+  # of creating a database the worker never opens. The render cannot do this:
+  # the DSNs are in Secrets.
+  agentStateDatabase: ""
 
-  # The role that OWNS the agent-state database created below — normally the
-  # same role elitea-main connects as. Empty creates it owned by the admin.
-  appRole: "elitea_v2"
+  # The role that OWNS the agent-state database created below — the role
+  # elitea-main connects as. Empty (the default): the Job reads it from the
+  # user in postgresql.existingSecret's DSN, and a value set here is checked
+  # against that user. When no DSN can be read, empty creates the database
+  # owned by the admin role.
+  appRole: ""
 
   image:
     repository: docker.io/library/postgres
@@ -1758,7 +1871,7 @@ dbInit:
   runAsGroup: 999
   resources:
     requests:
-      cpu: 10m
+      cpu: 50m
       memory: 64Mi
     limits:
       cpu: "1"
@@ -1817,7 +1930,7 @@ objectInit:
   runAsGroup: 1000
   resources:
     requests:
-      cpu: 10m
+      cpu: 50m
       memory: 32Mi
     limits:
       cpu: "1"
@@ -2001,7 +2114,7 @@ kedaCleanup:
   timeoutSeconds: 120
   resources:
     requests:
-      cpu: 10m
+      cpu: 50m
       memory: 32Mi
     limits:
       memory: 64Mi
@@ -4288,7 +4401,7 @@ web:
 
   resources:
     requests:
-      cpu: 10m
+      cpu: 50m
       memory: 32Mi
     limits:
       cpu: "200m"
@@ -5287,9 +5400,10 @@ llmGateway:
     duration: 2160h    # 90d
     renewBefore: 360h  # 15d
     issuerRef:
-      # A cluster-shared internal (private-CA) issuer — NOT created by this chart.
-      name: elitea-internal-ca
-      kind: ClusterIssuer
+      # Empty: certManager.issuers.internal (the internal CA). Set a name (and
+      # kind) to use another issuer for this hop only.
+      name: ""
+      kind: ""
     # Where the server cert secret is mounted in the gateway container. The
     # gateway serves TLS from tls.crt/tls.key and verifies client certs against
     # ca.crt (mTLS require-and-verify).
@@ -5441,11 +5555,11 @@ deepwiki:
       duration: 2160h    # 90d
       renewBefore: 360h  # 15d
       issuerRef:
-        # NOT created by this chart. An issuer backed by the RUNTIME CA, the
-        # CA elitea-main's platform listener verifies clients against — the
-        # same issuer as vector.mtls.issuerRef.
-        name: elitea-runtime-ca
-        kind: ClusterIssuer
+        # Empty: certManager.issuers.runtime. Any other issuer must be backed
+        # by the RUNTIME CA, the CA elitea-main's platform listener verifies
+        # clients against — the same issuer as vector.mtls.issuerRef.
+        name: ""
+        kind: ""
 
   # The provider pod is TWO containers (ADR-0023 H2): the Go sub-application
   # host, which serves the SPI, composes and uploads, and the Rust-native
@@ -5652,10 +5766,10 @@ deepwiki:
     duration: 2160h    # 90d
     renewBefore: 360h  # 15d
     issuerRef:
-      # A cluster-shared internal (private-CA) issuer — NOT created by this
-      # chart. The same issuer the llmGateway hop uses.
-      name: elitea-internal-ca
-      kind: ClusterIssuer
+      # Empty: certManager.issuers.internal, the issuer the llmGateway hop
+      # uses too.
+      name: ""
+      kind: ""
     mountPath: /etc/deepwiki/tls
 
   # probes: httpGet on the admin port — liveness /healthz, readiness /readyz
@@ -5823,9 +5937,9 @@ inventory:
       duration: 2160h    # 90d
       renewBefore: 360h  # 15d
       issuerRef:
-        # NOT created by this chart; the runtime-CA issuer, as for DeepWiki.
-        name: elitea-runtime-ca
-        kind: ClusterIssuer
+        # Empty: certManager.issuers.runtime, as for DeepWiki.
+        name: ""
+        kind: ""
 
   # The provider pod is up to TWO containers (ADR-0023 H2): the Go
   # sub-application host, which serves the SPI, composes and uploads, and — for
@@ -6016,10 +6130,10 @@ inventory:
     duration: 2160h    # 90d
     renewBefore: 360h  # 15d
     issuerRef:
-      # A cluster-shared internal (private-CA) issuer — NOT created by this
-      # chart. The same issuer the llmGateway and DeepWiki hops use.
-      name: elitea-internal-ca
-      kind: ClusterIssuer
+      # Empty: certManager.issuers.internal, the issuer the llmGateway and
+      # DeepWiki hops use too.
+      name: ""
+      kind: ""
     mountPath: /etc/inventory/tls
 
   # probes: httpGet on the admin port — liveness /healthz, readiness /readyz
@@ -6254,11 +6368,11 @@ egressProxy:
     duration: 2160h    # 90d
     renewBefore: 360h  # 15d
     issuerRef:
-      # NOT created by this chart. An issuer backed by the RUNTIME CA (the CA
-      # elitea-main's control listener verifies clients against), as for
-      # vector.mtls.issuerRef.
-      name: elitea-runtime-ca
-      kind: ClusterIssuer
+      # Empty: certManager.issuers.runtime. Any other issuer must be backed by
+      # the RUNTIME CA (the CA elitea-main's control listener verifies clients
+      # against), as for vector.mtls.issuerRef.
+      name: ""
+      kind: ""
     mountPath: /etc/elitea-egress-proxy/audit-tls
     # Empty: <elitea-main fullname>:<main.runtime control port>.
     target: ""
@@ -6364,8 +6478,8 @@ egressProxy:
 # another switch moved is the silent failure this chart exists to prevent.
 # Chat itself does not need it.
 #
-# TRUST. Every certificate below is issued by mtls.issuerRef, which MUST be an
-# issuer backed by the RUNTIME CA — the CA whose certificate is runtime-ca.crt
+# TRUST. Every certificate below is issued by mtls.issuerRef (empty:
+# certManager.issuers.runtime), which MUST be an issuer backed by the RUNTIME CA — the CA whose certificate is runtime-ca.crt
 # in main's runtime material and in worker.materialSecretName:
 #   * elitea-main's control listener verifies the introspection client
 #     certificate against runtime-ca.crt;
@@ -6488,10 +6602,10 @@ vector:
     duration: 2160h    # 90d
     renewBefore: 360h  # 15d
     issuerRef:
-      # NOT created by this chart. An issuer backed by the RUNTIME CA (see
-      # TRUST above), not the provider hops' elitea-internal-ca.
-      name: elitea-runtime-ca
-      kind: ClusterIssuer
+      # Empty: certManager.issuers.runtime. Any other issuer must be backed by
+      # the RUNTIME CA (see TRUST above), not the provider hops' internal CA.
+      name: ""
+      kind: ""
     mountPath: /etc/elitea-vector/tls
     clientMountPath: /etc/elitea-vector/client-tls
 
@@ -7063,7 +7177,7 @@ worker:
 
     resources:
       requests:
-        cpu: 10m
+        cpu: 50m
         memory: 64Mi
       limits:
         cpu: 500m
@@ -7312,13 +7426,6 @@ worker:
       agentstate_max_connections: 8
       agentstate_acquire_timeout_millis: 30000
 
-  resources:
-      requests:
-        cpu: 20m
-        memory: 64Mi
-      limits:
-        cpu: 500m
-        memory: 256Mi
 
   resources:
     requests:

@@ -27,6 +27,13 @@ The chart has no `latest` tag; pin `--version`. The chart's own defaults do not
 render on their own. The values only you know (the authentication document, the
 public project, the deployment URL, the gateway's origins and egress posture)
 are listed together in one refusal, so a first `helm template` is the checklist.
+`global.publicUrl` fills every URL-shaped value at once, and the chart refuses
+a value that still holds a `<...>` placeholder.
+
+On GKE with Argo CD, layer your values over the chart's own `values-gke.yaml`
+at the pinned version and mint the secrets with `deploy/scripts/mint-secrets.sh`:
+[Deploy on GKE with Argo CD](https://elitea-ng.github.io/elitea-platform/deployment/gke-argocd)
+has the prerequisites and the symptoms.
 
 ## What you bring
 
@@ -35,7 +42,8 @@ are listed together in one refusal, so a first `helm template` is the checklist.
 | Kubernetes, Helm 4.3+ (Helm 3.8+ renders too) | |
 | PostgreSQL | Plain PostgreSQL. No extension is needed: every vector is in Qdrant. |
 | S3-compatible object storage | The bucket must exist before the first sync. |
-| cert-manager | Issues the bundled NATS CA and the in-cluster mTLS certificates. |
+| cert-manager | Issues the bundled NATS CA and the in-cluster mTLS certificates. `certManager.issuers.create: true` makes the two mTLS issuers too. |
+| KEDA (optional) | Scales the worker on its JetStream backlog. Without it the worker scales on CPU, and the install notes say so. |
 | An ingress controller or Gateway API, DNS and TLS | One `/` route to elitea-main. |
 | An OIDC or SAML identity provider | |
 
@@ -59,6 +67,8 @@ gh attestation verify oci://ghcr.io/elitea-ng/charts/elitea:<version> \
 - [Production deployment overview](https://elitea-ng.github.io/elitea-platform/deployment/overview)
 - [Deploy from scratch](https://elitea-ng.github.io/elitea-platform/deployment/from-scratch): every Secret, certificate authority and database step, with a complete values file
 - [Install with Helm](https://elitea-ng.github.io/elitea-platform/deployment/helm-install)
+- [Deploy on GKE with Argo CD](https://elitea-ng.github.io/elitea-platform/deployment/gke-argocd)
+- [Release-wide settings](https://elitea-ng.github.io/elitea-platform/deployment/configuration#release-wide-settings): `global.*`, `certManager.issuers`, the OpenTelemetry defaults
 - [Verify release artifacts](https://elitea-ng.github.io/elitea-platform/deployment/verify-artifacts)
 - [Upgrading](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md): read the entries between your version and the new one before an upgrade
 

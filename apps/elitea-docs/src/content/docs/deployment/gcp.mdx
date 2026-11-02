@@ -81,7 +81,11 @@ CREATE DATABASE elitea_v2 OWNER elitea_v2;
 CREATE DATABASE elitea_v2_agentstate OWNER elitea_v2;
 ```
 
-Set `DB_HOST` to the instance's private IP when you run the mint script, so both DSNs point at it.
+Set `DB_HOST` to the instance's private IP when you run the mint script, so both DSNs point at it. With secrets in Secret Manager, use `deploy/scripts/mint-secrets.sh` instead: it writes the one flat JSON secret that `values-gke.yaml` reads, and you pass the two DSNs to it ([Deploy on GKE with Argo CD](/deployment/gke-argocd#steps)).
+
+To let the chart's `dbInit` hook create the agent-state database instead (from-scratch Step 2, the other tab), give it an admin DSN whose role has the `CREATEDB` attribute and membership in `elitea_v2` (Cloud SQL's `postgres` user has `CREATEDB`; grant the membership as above). Leave `dbInit.appRole` and `dbInit.agentStateDatabase` empty: the Job reads them from the DSNs.
+
+**Certificate authorities.** `values-gke.yaml` sets `certManager.issuers.create: true`: the chart makes the `elitea-internal-ca` chain and the `elitea-runtime-ca` Issuer itself, so you do not apply from-scratch Step 1's `internal-ca.yaml`. You still provide the runtime CA keypair, as the Secret `elitea-runtime-ca` (from Secret Manager, `runtime-ca.crt` and `runtime-ca.key`).
 
 ## GCS bucket with no keys
 
@@ -152,7 +156,7 @@ networkPolicies:
       - ipBlock: {cidr: 130.211.0.0/22}
 ```
 
-`main.ingress.gke` adds a **BackendConfig** (`timeoutSec: 3600`, so a streamed answer outlives the load balancer's 30-second default; an HTTP health check on `/healthz` port 8080; connection draining; the optional Cloud Armor policy) and a **FrontendConfig** (HTTP to HTTPS redirect, the optional SSL policy). `main.ingress.certManager` has cert-manager issue the `tls` Secret the load balancer serves. Add Google's ranges to `ELITEA_TRUSTED_PROXY_CIDRS` too.
+`main.ingress.gke` adds a **BackendConfig** (`timeoutSec: 3600`, so a streamed answer outlives the load balancer's 30-second default; an HTTP health check on `/healthz` port 8080; connection draining; the optional Cloud Armor policy) and a **FrontendConfig** (HTTP to HTTPS redirect, the optional SSL policy). `main.ingress.certManager` has cert-manager issue the `tls` Secret the load balancer serves. Add Google's ranges to `global.trustedProxyCidrs` too (it fills `ELITEA_TRUSTED_PROXY_CIDRS` and the authentication document's list). `global.publicUrl` fills the Ingress host and the TLS host when you leave `main.ingress.hosts` and `tls[].hosts` empty.
 
 Behind a CDN or proxy, issue the origin certificate through that provider's cert-manager issuer (`certManager.issuerKind`, `issuerGroup`) and attach a Cloud Armor policy that admits only the proxy's ranges; [Deploy on GKE with Argo CD](/deployment/gke-argocd#edge-ip-dns-tls-and-an-optional-proxy) has the commands. elitea-main writes a comment into every idle stream after 25 seconds, inside a proxy's idle timeout of about 100 seconds.
 </Tab>
@@ -254,9 +258,13 @@ Then open a chat as any user, pick a shared model and send a message.
 
 ## Checklist for the values file
 
-On top of the from-scratch values file (the chart's `values-gke.yaml` has all of this, plus the edge and `externalSecrets`):
+On top of the from-scratch values file (the chart's `values-gke.yaml` has all of this, plus the edge, `externalSecrets` and `certManager.issuers.create`):
 
 ```yaml
+global:
+  publicUrl: https://elitea.example.com
+  trustedProxyCidrs: ["<pod CIDR>", 35.191.0.0/16, 130.211.0.0/22]
+
 networkPolicies:
   main:
     ingressFrom:            # the GKE Ingress; see "The edge" for a Gateway
@@ -270,7 +278,6 @@ main:
   env:
     STORAGE_BACKEND: "gcs"
     STORAGE_CONTAINER: "<project>-elitea-artifacts"
-    ELITEA_TRUSTED_PROXY_CIDRS: "<pod CIDR>,35.191.0.0/16,130.211.0.0/22"
     ELITEA_ALLOW_PROJECT_OWN_LLMS: "false"
   # remove S3_ACCESS_KEY / S3_SECRET_KEY from main.secrets
 
@@ -282,4 +289,6 @@ llmGateway:
     enabled: true
 ```
 
-{/* source: deploy/helm/elitea/values.yaml (main.env GCS_ENDPOINT, main.serviceAccount, llmGateway.serviceAccount, llmGateway.workloadIdentity, sandboxKubernetes.runtimeClass); deploy/helm/elitea/env-drift-allowlist.txt (GOOGLE_APPLICATION_CREDENTIALS not wired); services/elitea-main/internal/infra/storage/gcs/backend.go (ADC, no presign, lifecycle); services/elitea-llm-gateway/internal/account (workload identity for platform credentials); deploy/helm/elitea-sandbox-runtime/README.md (not needed on GKE); deploy/helm/elitea/values-gke.yaml; deploy/helm/elitea/values.yaml (main.ingress.gke, main.ingress.certManager, sandboxRuntime); deploy/helm/tests/render-gke-ingress.sh; docs/UPGRADING.md (GKE Ingress support and SSE keepalives, one edge route). GKE Gateway policies are GKE product behaviour, not tested by this repository: verify against Google's GKE Gateway documentation for your GKE version. */}
+After the install, `helm get notes elitea -n elitea` prints the `gcloud` Workload Identity bindings for the two service accounts above, with this release's namespace and Kubernetes service account names.
+
+{/* source: deploy/helm/elitea/templates/NOTES.txt (Workload Identity commands); deploy/helm/elitea/templates/_globals.tpl (global.*); deploy/helm/elitea/values.yaml (main.env GCS_ENDPOINT, main.serviceAccount, llmGateway.serviceAccount, llmGateway.workloadIdentity, sandboxKubernetes.runtimeClass); deploy/helm/elitea/env-drift-allowlist.txt (GOOGLE_APPLICATION_CREDENTIALS not wired); services/elitea-main/internal/infra/storage/gcs/backend.go (ADC, no presign, lifecycle); services/elitea-llm-gateway/internal/account (workload identity for platform credentials); deploy/helm/elitea-sandbox-runtime/README.md (not needed on GKE); deploy/helm/elitea/values-gke.yaml; deploy/helm/elitea/values.yaml (main.ingress.gke, main.ingress.certManager, sandboxRuntime); deploy/helm/tests/render-gke-ingress.sh; docs/UPGRADING.md (GKE Ingress support and SSE keepalives, one edge route). GKE Gateway policies are GKE product behaviour, not tested by this repository: verify against Google's GKE Gateway documentation for your GKE version. */}

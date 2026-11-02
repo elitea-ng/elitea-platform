@@ -81,10 +81,39 @@ spec:
                 secretKeyRef:
                   name: {{ required "dbInit.database.existingSecret is required (it needs the CREATE DATABASE right)" $d.database.existingSecret }}
                   key: {{ required "dbInit.database.key is required" $d.database.key }}
+            # Empty: read from the DSNs below at run time (#1460). Set: checked
+            # against them.
             - name: AGENT_STATE_DB
-              value: {{ required "dbInit.agentStateDatabase is required" $d.agentStateDatabase | quote }}
+              value: {{ $d.agentStateDatabase | default "" | quote }}
             - name: APP_ROLE
-              value: {{ $d.appRole | quote }}
+              value: {{ $d.appRole | default "" | quote }}
+            {{- with .Values.postgresql.existingSecret }}
+            # The DSN elitea-main connects with: its user is the role that
+            # must own the agent-state database.
+            - name: APP_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.postgresql.key }}
+                  optional: true
+            {{- end }}
+            {{- if and .Values.worker.enabled .Values.worker.materialSecretName }}
+            # The DSN the worker's checkpointer opens: its database is the one
+            # this Job must create.
+            - name: AGENT_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.worker.materialSecretName }}
+                  key: agent-checkpoint-connection
+                  optional: true
+            {{- else if and .Values.agentStateMigrations.enabled .Values.agentStateMigrations.databaseSecret.name }}
+            - name: AGENT_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.agentStateMigrations.databaseSecret.name }}
+                  key: {{ .Values.agentStateMigrations.databaseSecret.key }}
+                  optional: true
+            {{- end }}
             - name: WAIT_ATTEMPTS
               value: {{ $d.waitAttempts | quote }}
             - name: WAIT_INTERVAL
@@ -106,6 +135,36 @@ spec:
                 echo "  waiting for PostgreSQL ($attempt/$WAIT_ATTEMPTS)…"
                 sleep "$WAIT_INTERVAL"
               done
+
+              # The agent-state database and its owner, from the DSNs the
+              # worker and elitea-main use (#1460). URL form only
+              # (postgres://user:pass@host:port/db?params); a keyword=value
+              # DSN is not read, and then the values must be set.
+              dsn_user() { printf '%s' "$1" | sed -nE 's#^[a-zA-Z]+://([^:@/]+)(:[^@/]*)?@.*#\1#p'; }
+              dsn_db() { printf '%s' "$1" | sed -nE 's#^[a-zA-Z]+://[^/]+/([^?]+).*#\1#p'; }
+              if [ -n "${AGENT_DSN:-}" ]; then
+                dsn_agent_db="$(dsn_db "$AGENT_DSN")"
+                if [ -z "$AGENT_STATE_DB" ]; then
+                  AGENT_STATE_DB="$dsn_agent_db"
+                elif [ -n "$dsn_agent_db" ] && [ "$dsn_agent_db" != "$AGENT_STATE_DB" ]; then
+                  echo "ERROR: dbInit.agentStateDatabase is \"$AGENT_STATE_DB\", but the worker's agent-checkpoint-connection opens \"$dsn_agent_db\". The worker would never use the database this Job creates. Leave dbInit.agentStateDatabase empty (it is read from the DSN), or make the two agree." >&2
+                  exit 1
+                fi
+              fi
+              if [ -n "${APP_DSN:-}" ]; then
+                dsn_app_role="$(dsn_user "$APP_DSN")"
+                if [ -z "$APP_ROLE" ]; then
+                  APP_ROLE="$dsn_app_role"
+                elif [ -n "$dsn_app_role" ] && [ "$dsn_app_role" != "$APP_ROLE" ]; then
+                  echo "ERROR: dbInit.appRole is \"$APP_ROLE\", but postgresql.existingSecret connects as \"$dsn_app_role\". The agent-state database must be owned by the role the platform connects as. Leave dbInit.appRole empty (it is read from the DSN), or make the two agree." >&2
+                  exit 1
+                fi
+              fi
+              if [ -z "$AGENT_STATE_DB" ]; then
+                echo "ERROR: no agent-state database name. Set dbInit.agentStateDatabase, or provide the worker's agent-checkpoint-connection DSN (postgres://user:pass@host/<database>)." >&2
+                exit 1
+              fi
+              echo "agent-state database: $AGENT_STATE_DB, owner: ${APP_ROLE:-<the admin role>}"
 
               # The DSN names the platform database; the agent-state one is
               # created beside it on the same server.

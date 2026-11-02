@@ -35,7 +35,7 @@ shapes=(
   "staging|-f $CHART/values-staging.yaml ${POSTURE[*]}"
   "standalone|-f $CHART/values-standalone.yaml ${POSTURE[*]} --set main.autoscaling.maxReplicas=3"
   "auth-minimal|-f $CHART/values-auth-minimal.yaml ${POSTURE[*]}"
-  "gke|-f $CHART/values-gke.yaml"
+  "gke|-f $CHART/values-gke.yaml -f deploy/helm/tests/fixtures/gke-operator-values.yaml"
   "nats-ha|-f $CHART/values-staging.yaml -f $CHART/values-nats-ha.yaml ${POSTURE[*]}"
   "nats-off|-f $CHART/values-staging.yaml ${POSTURE[*]} --set nats.enabled=false --set natsBootstrap.enabled=false --set-string natsClient.service=my-nats"
   "sandbox-runtime|-f $CHART/values-staging.yaml ${POSTURE[*]} --set sandboxRuntime.enabled=true --set sandboxRuntime.mode=containerd"

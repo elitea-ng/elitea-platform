@@ -11,6 +11,11 @@
     3. externalSecrets.remoteKey — one remote secret for the whole install, a
        FLAT JSON object whose properties are "<Secret>/<key>"
        ("elitea-main-db/database-url").
+       With externalSecrets.sharedProperties, a key that several Secrets
+       carry with one value reads ONE property instead (.shared, from
+       elitea.externalSecrets.sharedProperties: "runtime-ca.crt",
+       "runtime-ca.key", "command-signing-keyring.json",
+       "gateway-identity-secret").
 
   The property names keep their dots: ESO's GCP, AWS and Vault providers try the
   property as a literal JSON key before reading it as a gjson path, so
@@ -27,7 +32,8 @@
 {{- else if .mapped.remoteKey -}}
 {{- toJson (dict "key" .mapped.remoteKey "property" ($k.property | default .key) "version" (.mapped.version | default "")) -}}
 {{- else if .es.remoteKey -}}
-{{- toJson (dict "key" .es.remoteKey "property" ($k.property | default (printf "%s/%s" .secret .key)) "version" (.es.version | default "")) -}}
+{{- $flat := printf "%s/%s" .secret .key -}}
+{{- toJson (dict "key" .es.remoteKey "property" ($k.property | default (get (.shared | default dict) $flat) | default $flat) "version" (.es.version | default "")) -}}
 {{- else -}}
 {{- fail (printf "externalSecrets: no remote reference for key %q of Secret %q. Set externalSecrets.remoteKey (one remote secret for the install, property %q), externalSecrets.secrets.%s.remoteKey (one remote secret for this Secret, property %q), or externalSecrets.secrets.%s.keys.%s.remoteKey." .key .secret (printf "%s/%s" .secret .key) .secret .key .secret .key) -}}
 {{- end -}}

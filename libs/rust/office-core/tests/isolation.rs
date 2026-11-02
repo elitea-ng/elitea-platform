@@ -174,12 +174,15 @@ fn only_this_crate_depends_on_the_zavora_crates() {
     // the false-green class of issue #423.
     let own = fs::canonicalize(crate_dir()).unwrap();
     let root = fs::canonicalize(crate_dir().join("../../..")).unwrap();
-    // Walk the whole repository. A fixed list of roots was the guard's real
-    // coverage boundary: it held `desktop`, which does not exist, and it
-    // missed `scripts/runtime/fixtures/code-data-processing`. `collect` skips
-    // `target`, `node_modules`, `.git` and `vendor` by name.
-    let mut manifests: Vec<PathBuf> = Vec::new();
-    collect(&root, &mut manifests, 0);
+    // Every manifest of the repository. A fixed list of roots was the guard's
+    // real coverage boundary: it held `desktop`, which does not exist, and it
+    // missed `scripts/runtime/fixtures/code-data-processing`. A plain
+    // directory walk was the next boundary: it entered untracked trees such
+    // as the agent git worktrees under `.claude/worktrees/*/`, whose own
+    // `libs/rust/office-core/Cargo.toml` names the zavora crates, so the test
+    // failed in any checkout with a worktree. `manifests` reads the tracked
+    // set from git, as scripts/ci/check-zip-pin.sh does, and skips `vendor/`.
+    let manifests = manifests(&root);
     // Non-vacuity floor. The walk found 39 manifests when this was written.
     assert!(
         manifests.len() > 36,
@@ -189,7 +192,7 @@ fn only_this_crate_depends_on_the_zavora_crates() {
     let mut foreign = 0;
     let mut entries = 0;
     for m in manifests {
-        // `collect` skips `vendor/`: the vendored crates ARE the zavora
+        // `manifests` skips `vendor/`: the vendored crates ARE the zavora
         // crates, and they name each other legitimately. `own` covers
         // `office-core/fuzz`, which is part of this crate.
         if m.starts_with(&own) {
@@ -294,6 +297,51 @@ fn the_dependency_scan_catches_a_leak() {
     );
 }
 
+/// The `Cargo.toml` files the repository tracks, outside any `vendor/`
+/// directory: the vendored crates ARE the zavora crates, and they name each
+/// other legitimately.
+///
+/// The list comes from `git ls-files`, so an untracked tree under the root
+/// (an agent worktree, a scratch clone, a build output) is never read. When
+/// git is not available, for example in an exported source tree, the
+/// fallback walks the directory tree and skips every hidden directory, which
+/// is where worktrees and tool state live. Either way the non-vacuity floors
+/// in the caller fail a list that came back short, so neither path can pass
+/// on an empty scan.
+fn manifests(root: &Path) -> Vec<PathBuf> {
+    let in_vendor = |rel: &Path| rel.components().any(|c| c.as_os_str() == "vendor");
+    let tracked = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "-z", "--", "*Cargo.toml"])
+        .output();
+    match tracked {
+        Ok(out) if out.status.success() && !out.stdout.is_empty() => out
+            .stdout
+            .split(|b| *b == 0)
+            .filter(|rel| !rel.is_empty())
+            .map(|rel| PathBuf::from(String::from_utf8_lossy(rel).into_owned()))
+            // `ls-files` lists an index entry that the working tree deleted;
+            // there is nothing to read for it.
+            .filter(|rel| !in_vendor(rel) && root.join(rel).is_file())
+            .map(|rel| root.join(rel))
+            .collect(),
+        other => {
+            eprintln!(
+                "git ls-files is unavailable ({}); walking the tree and skipping hidden directories",
+                match other {
+                    Ok(out) => format!("exit {}", out.status),
+                    Err(e) => e.to_string(),
+                }
+            );
+            let mut out = Vec::new();
+            collect(root, &mut out, 0);
+            out
+        }
+    }
+}
+
+/// The fallback walk for `manifests`.
 fn collect(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     for e in rd.flatten() {
@@ -304,8 +352,11 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
             // there. The deepest manifest is
             // `libs/rust/local-tools/tests/fixtures/projects/cargo/Cargo.toml`,
             // 7 directories down; `depth < 8` reaches it and keeps one level
-            // of headroom. The old limit of 4 missed it.
-            if depth < 8 && !matches!(name.as_str(), "target" | "node_modules" | ".git" | "vendor")
+            // of headroom. A hidden directory (`.git`, or `.claude`, which
+            // holds the agent worktrees) is never a source tree here.
+            if depth < 8
+                && !name.starts_with('.')
+                && !matches!(name.as_str(), "target" | "node_modules" | "vendor")
             {
                 collect(&p, out, depth + 1);
             }

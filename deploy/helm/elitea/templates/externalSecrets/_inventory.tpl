@@ -177,6 +177,13 @@
 {{- include "elitea.externalSecrets.add" (dict "inv" $inv "name" $d.name "keys" (list $d.key) "consumer" "agent-state migrate Job") -}}
 {{- end -}}
 
+{{- /* ── the runtime CA issuer: templates/certManager/issuers.yaml ── */ -}}
+{{- /* No pod reads it: cert-manager's CA Issuer signs with it. */ -}}
+{{- $issuers := dig "issuers" dict ($v.certManager | default dict) -}}
+{{- if $issuers.create -}}
+{{- include "elitea.externalSecrets.add" (dict "inv" $inv "name" $issuers.runtime.caSecretName "keys" (list "tls.crt" "tls.key") "type" "kubernetes.io/tls" "consumer" "runtime CA Issuer (certManager.issuers.create)") -}}
+{{- end -}}
+
 {{- /* ── the sandbox supervisor: templates/sandbox/supervisor.yaml ── */ -}}
 {{- $sk := $v.sandboxKubernetes | default dict -}}
 {{- if and ($sk.supervisor | default dict).enabled $sk.supervisor.materialSecret -}}
@@ -198,6 +205,7 @@
 {{- $_ := set $e "keys" (concat $e.keys (.keys | default list) | uniq | sortAlpha) -}}
 {{- $_ := set $e "open" (or $e.open (.open | default false)) -}}
 {{- $_ := set $e "consumers" (append $e.consumers .consumer | uniq) -}}
+{{- if .type -}}{{- $_ := set $e "type" .type -}}{{- end -}}
 {{- $_ := set .inv .name $e -}}
 {{- end -}}
 {{- end }}
@@ -291,5 +299,50 @@
 {{- if include "elitea-egress-proxy.auditEnabled" . -}}
 {{- $names = append $names $v.egressProxy.audit.clientSecretName -}}
 {{- end -}}
+{{- if dig "issuers" "create" false ($v.certManager | default dict) -}}
+{{- /* The internal CA's own Secret (templates/certManager/issuers.yaml). */ -}}
+{{- $names = append $names $v.certManager.issuers.internal.name -}}
+{{- end -}}
 {{- $names | toJson -}}
+{{- end }}
+
+{{/*
+  elitea.externalSecrets.sharedProperties — with externalSecrets.sharedProperties
+  (mode 3), the keys that several Secrets carry with ONE value, as JSON
+  {"<Secret>/<key>": "<flat property>"}. Built from the Secret names this
+  release reads, so a renamed material Secret still fans out. A property name
+  has no "/", so it never collides with a "<Secret>/<key>" one.
+  deploy/scripts/mint-secrets.sh writes exactly these property names.
+*/}}
+{{- define "elitea.externalSecrets.sharedProperties" -}}
+{{- $v := .Values -}}
+{{- $out := dict -}}
+{{- if and $v.externalSecrets.sharedProperties $v.externalSecrets.remoteKey -}}
+{{- $material := list -}}
+{{- if and $v.main.enabled $v.main.runtime.enabled $v.main.runtime.material.secretName -}}
+{{- $material = append $material $v.main.runtime.material.secretName -}}
+{{- end -}}
+{{- if and $v.worker.enabled $v.worker.materialSecretName -}}
+{{- $material = append $material $v.worker.materialSecretName -}}
+{{- end -}}
+{{- range $secret := $material -}}
+{{- $_ := set $out (printf "%s/runtime-ca.crt" $secret) "runtime-ca.crt" -}}
+{{- $_ := set $out (printf "%s/command-signing-keyring.json" $secret) "command-signing-keyring.json" -}}
+{{- end -}}
+{{- $issuers := dig "issuers" dict ($v.certManager | default dict) -}}
+{{- if $issuers.create -}}
+{{- $_ := set $out (printf "%s/tls.crt" $issuers.runtime.caSecretName) "runtime-ca.crt" -}}
+{{- $_ := set $out (printf "%s/tls.key" $issuers.runtime.caSecretName) "runtime-ca.key" -}}
+{{- end -}}
+{{- range $c := list "llmGateway" "main" -}}
+{{- $comp := get $v $c -}}
+{{- $ref := get ($comp.secrets | default dict) "GATEWAY_IDENTITY_SECRET" -}}
+{{- if and $comp.enabled $ref (kindIs "map" $ref) -}}
+{{- if and $ref.secretName $ref.key -}}
+{{- $_ := set $out (printf "%s/%s" $ref.secretName $ref.key) "gateway-identity-secret" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $out | toJson -}}
 {{- end }}

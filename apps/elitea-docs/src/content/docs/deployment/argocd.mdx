@@ -22,7 +22,8 @@ flowchart LR
     Root["elitea-platform (root)"] -->|renders| Dir["deploy/argocd/applications/*.yaml"]
     Dir --> Elitea["elitea: one chart, one release"]
     Elitea --> Hooks["PreSync: ExternalSecrets, migrations, workload session"]
-    Hooks --> Nats["wave -10: NATS, its certificates, the bootstrap Job"]
+    Hooks --> Issuers["wave -15: certManager.issuers, when create"]
+    Issuers --> Nats["wave -10: NATS, its certificates, the bootstrap Job"]
     Nats --> Vector["wave -5: elitea-vector, Qdrant"]
     Vector --> Platform["wave 0: the platform"]
     Platform --> Worker["wave 1: the worker"]
@@ -33,7 +34,8 @@ flowchart LR
 | Phase | Objects | Why this order |
 |---|---|---|
 | `PreSync` | the ExternalSecrets, when `externalSecrets.enabled` (wave `-30`); the database preparation, the platform and agent-state migrations; the workload-session Job (wave `10`) | The Secrets exist before the Jobs that read them. A failed migration aborts the sync, and the previous pods keep serving. |
-| wave `-10` | the NATS StatefulSet and Services, its CA `Issuer`, server and route certificates, NetworkPolicy, and the `elitea-nats-bootstrap` Job, a `Sync` hook | The streams, KV buckets and the scheduler's consumer exist before anything that dials them. The Job is a `Sync` hook, not `PostSync`: `PostSync` would wait for workloads that wait for the streams it creates. It is idempotent, and Argo CD deletes it once it succeeds. |
+| wave `-15` | with `certManager.issuers.create: true`: the internal CA chain (a self-signed Issuer, a CA Certificate, the CA Issuer) and the runtime CA Issuer | Every mTLS Certificate of the later waves names one of them. |
+| wave `-10` | the NATS StatefulSet and Services, its CA `Issuer`, server and route certificates, NetworkPolicy, and the `elitea-nats-bootstrap` Job, a `Sync` hook | The streams, KV buckets and the scheduler's consumer exist before anything that dials them. The Job is a `Sync` hook, not `PostSync`: `PostSync` would wait for workloads that wait for the streams it creates. It waits for NATS itself (up to `NATS_CONNECT_WAIT`, 300 seconds), and its pod restarts in place (`restartPolicy: OnFailure`) until the Job's `backoffLimit`, so a slow NATS start does not fail the sync. It is idempotent, and Argo CD deletes it once it succeeds. |
 | wave `-5` | elitea-vector and Qdrant | The indexing runtime's store, ready before the worker. |
 | wave `0` | elitea-main, elitea-web, the scheduler, the LLM gateway, the OTel collector, the edge objects | The platform. |
 | wave `1` | the agent worker | After everything it calls. |
@@ -56,7 +58,7 @@ Installs that ran `elitea-nats`, `elitea-nats-bootstrap` and `elitea` as separat
 `postgresql.existingSecret` and `postgresql.key` — the one database Secret every component derives its `DATABASE_URL` from. NATS needs no parameter: the chart runs it as Service `elitea-nats` in the Application's namespace and issues each client its certificate.
 </Step>
 <Step title="The empty parameters you must fill in">
-`llmGateway.env.GATEWAY_SELF_LLM_ORIGINS` and `llmGateway.egressPosture` ship empty in git on purpose — neither can get a safe chart default — and so does the namespace of whatever forwards outside traffic to elitea-main (`networkPolicies.main.ingressFrom`). Left empty, the chart refuses to render and the Application reports `SyncFailed` naming the field, rather than installing a gateway with a disarmed guard.
+`llmGateway.env.GATEWAY_SELF_LLM_ORIGINS` and `llmGateway.egressPosture` ship empty in git on purpose — neither can get a safe chart default — and so does the namespace of whatever forwards outside traffic to elitea-main (`networkPolicies.main.ingressFrom`). Left empty, the chart refuses to render and the Application reports `SyncFailed` naming the field, rather than installing a gateway with a disarmed guard. Setting `global.publicUrl` fills `GATEWAY_SELF_LLM_ORIGINS` (see [Configuration](/deployment/configuration#release-wide-settings)).
 </Step>
 </Steps>
 
@@ -121,6 +123,28 @@ In an air-gapped cluster, mirror the published OCI chart instead: it already car
 
 `deploy/argocd/examples/gke/` has the full Application, the repository registration and an example `ClusterSecretStore`.
 
+## Layer values from your repository
+
+`values-gke.yaml` ships inside the published chart, so `valueFiles: [values-gke.yaml]` always reads the copy of the version you pin. To keep your own values in your GitOps repository too, use a multi-source Application: the chart is one source, your repository a second source with `ref: values`, and `$values/...` names your file. Do not copy `values-gke.yaml` into your repository: a copy does not move with `targetRevision`.
+
+```yaml
+spec:
+  sources:
+    - repoURL: ghcr.io/elitea-ng/charts
+      chart: elitea
+      targetRevision: "1.2.3"
+      helm:
+        releaseName: elitea
+        valueFiles:
+          - values-gke.yaml                    # inside the chart, at 1.2.3
+          - $values/elitea/values/elitea.yaml  # yours; later files win
+    - repoURL: https://git.example.com/your-org/elitea-gitops.git
+      targetRevision: main
+      ref: values
+```
+
+A chart from this git repository (`path: deploy/helm/elitea`) at a release tag works the same way: name `values-gke.yaml` relative to the chart path, and keep `targetRevision` on the tag. The chart refuses to render while your values leave a `<...>` placeholder of `values-gke.yaml`, and the Application reports `SyncFailed` with every path.
+
 ## Image tag promotion
 
 Every first-party image and every chart is stamped with the same release version by `.github/workflows/publish.yml` (a stable release you dispatch from `main`, or a `-nightly.`/`-dev.` pre-release, which never moves `latest`) — one tag for the whole platform, because a per-component tag could only ever express a mistake. Promoting a release is changing the chart version an `Application` pulls:
@@ -150,4 +174,4 @@ The `deploy/argocd/` and `deploy/helm/` in this repository are the **template**.
 `syncPolicy.automated` with `prune: true` and `selfHeal: true` is set on every Application here, including the root. Removing a file from `applications/` is a production deletion of that Application and everything it manages — review those diffs as such.
 </Note>
 
-{/* source: deploy/argocd/app-of-apps.yaml; deploy/argocd/applications/elitea.yaml; deploy/argocd/examples/gke/; deploy/helm/elitea/Chart.yaml (dependencies); deploy/helm/elitea/templates/nats/, templates/natsBootstrap/job.yaml (wave -10, Sync hook); deploy/helm/elitea/templates/externalSecrets/externalsecrets.yaml (PreSync, wave -30); deploy/helm/tests/render-nats-security.sh (argocd wave checks); docs/UPGRADING.md ("One chart: NATS bundled"); deploy/README.md (composition decision, publish.yml stamping) */}
+{/* source: deploy/helm/elitea/templates/certManager/issuers.yaml (wave -15); deploy/helm/elitea/templates/_globals.tpl (publicUrl, placeholders); deploy/helm/elitea/files/nats-bootstrap.sh (NATS_CONNECT_WAIT); deploy/argocd/app-of-apps.yaml; deploy/argocd/applications/elitea.yaml; deploy/argocd/examples/gke/; deploy/helm/elitea/Chart.yaml (dependencies); deploy/helm/elitea/templates/nats/, templates/natsBootstrap/job.yaml (wave -10, Sync hook); deploy/helm/elitea/templates/externalSecrets/externalsecrets.yaml (PreSync, wave -30); deploy/helm/tests/render-nats-security.sh (argocd wave checks); docs/UPGRADING.md ("One chart: NATS bundled"); deploy/README.md (composition decision, publish.yml stamping) */}
