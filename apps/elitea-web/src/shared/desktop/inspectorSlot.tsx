@@ -13,8 +13,7 @@
  * does not show (another tab of its group is active, the panel is hidden)
  * renders nothing.
  *
- * Outside the desktop frame there is no inspector: `useInspectorSlot()` is
- * `null`. The web shell has a side panel of its own (`widgets/app-shell`'s
+ * Outside the desktop frame there is no inspector. The web shell has a side panel of its own (`widgets/app-shell`'s
  * `WebSidePanel`) with the same contract, so a page that only needs "a right
  * panel, wherever this build keeps it" — the list pages' Filters, the chat's
  * Conversation — reads `useSidePanelSlot()` instead: the desktop inspector or
@@ -71,11 +70,6 @@ export interface InspectorSlot {
 const InspectorSlotContext = createContext<InspectorSlot | null>(null);
 
 export const InspectorSlotProvider = InspectorSlotContext.Provider;
-
-/** The frame's inspector, or `null` outside the desktop frame. */
-export function useInspectorSlot(): InspectorSlot | null {
-  return useContext(InspectorSlotContext);
-}
 
 /** The right panel of whichever shell is on screen: the desktop inspector or the web side panel. */
 export interface SidePanelSlot extends InspectorSlot {

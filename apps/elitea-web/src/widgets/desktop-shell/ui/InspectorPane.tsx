@@ -38,6 +38,7 @@ import {
   type InspectorTarget,
 } from '@/shared/desktop/inspectorSlot';
 import { t } from '@/shared/i18n';
+import { useRegistrationStack } from '@/shared/lib/registrationStack';
 
 import { byTabOrder, viewOf, type InspectorGroupView } from '../lib/inspectorLayout';
 import { SIDEBAR_TINT_OPACITY } from '../lib/sidebarTint';
@@ -59,8 +60,6 @@ export interface InspectorHost {
   readonly setWindowBody: (tab: InspectorTabId, node: HTMLElement | null) => void;
 }
 
-let nextRegistration = 0;
-
 function withEntry<K, V>(map: ReadonlyMap<K, V>, key: K, value: V | null): ReadonlyMap<K, V> {
   if (value === null ? !map.has(key) : map.get(key) === value) return map;
   const next = new Map(map);
@@ -71,25 +70,20 @@ function withEntry<K, V>(map: ReadonlyMap<K, V>, key: K, value: V | null): Reado
 
 /** The frame's side of the slot: the tabs offered, where each shown tab renders, and the tabs' windows. */
 export function useInspectorHost(appIpc: AppIpc | undefined): InspectorHost {
-  const [registrations, setRegistrations] = useState<readonly { readonly key: number; readonly info: InspectorTabInfo }[]>([]);
+  const [stack, registrations] = useRegistrationStack<InspectorTabInfo>();
   const [bodies, setBodies] = useState<ReadonlyMap<InspectorTabId, HTMLElement>>(new Map());
   const [windowBodies, setWindowBodies] = useState<ReadonlyMap<InspectorTabId, HTMLElement>>(new Map());
 
-  const register = useCallback((info: InspectorTabInfo) => {
-    nextRegistration += 1;
-    const key = nextRegistration;
-    setRegistrations((current) => [...current, { key, info }]);
-    return () => setRegistrations((current) => current.filter((entry) => entry.key !== key));
-  }, []);
+  const register = stack.register;
 
   // The newest registration of each tab wins; the page is the newest tab's.
   // Sorted, so a tab re-registering (its attention or subject changed) keeps its place in the ⋯ menu.
   const { page, tabs } = useMemo(() => {
     const newest = registrations.at(-1);
     if (newest === undefined) return { page: null, tabs: [] };
-    const kind = INSPECTOR_TAB_PAGE[newest.info.id];
+    const kind = INSPECTOR_TAB_PAGE[newest.id];
     const byId = new Map<InspectorTabId, InspectorTabInfo>();
-    registrations.forEach(({ info }) => {
+    registrations.forEach((info) => {
       if (INSPECTOR_TAB_PAGE[info.id] === kind) byId.set(info.id, info);
     });
     return { page: kind, tabs: byTabOrder(Array.from(byId.values())) };

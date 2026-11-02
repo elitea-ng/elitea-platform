@@ -15,10 +15,12 @@
  * which sits over the frame rather than in its main column) there is no title
  * row, so `PageCrumbFallback` draws the heading in the page instead.
  */
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react';
 
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
+
+import { useRegistrationStack } from '@/shared/lib/registrationStack';
 
 /** One crumb after the section: its label, and the route it links to (none for the last one). */
 export interface PageCrumb {
@@ -34,19 +36,9 @@ interface PageChrome {
 
 const PageChromeContext = createContext<PageChrome | null>(null);
 
-let nextRegistration = 0;
-
 export function PageChromeProvider({ children }: { readonly children: ReactNode }): ReactNode {
-  const [registrations, setRegistrations] = useState<readonly { readonly key: number; readonly crumbs: readonly PageCrumb[] }[]>([]);
-
-  const register = useCallback((crumbs: readonly PageCrumb[]) => {
-    nextRegistration += 1;
-    const key = nextRegistration;
-    setRegistrations((current) => [...current, { key, crumbs }]);
-    return () => setRegistrations((current) => current.filter((entry) => entry.key !== key));
-  }, []);
-
-  const value = useMemo<PageChrome>(() => ({ crumbs: registrations.at(-1)?.crumbs ?? [], register }), [registrations, register]);
+  const [stack, registrations] = useRegistrationStack<readonly PageCrumb[]>();
+  const value = useMemo<PageChrome>(() => ({ crumbs: registrations.at(-1) ?? [], register: stack.register }), [registrations, stack]);
   return <PageChromeContext.Provider value={value}>{children}</PageChromeContext.Provider>;
 }
 
@@ -70,7 +62,7 @@ export function useShellCrumbs(): readonly PageCrumb[] {
 }
 
 /** `true` inside a shell that draws the page title. */
-function useHasPageChrome(): boolean {
+export function useHasPageChrome(): boolean {
   return useContext(PageChromeContext) !== null;
 }
 

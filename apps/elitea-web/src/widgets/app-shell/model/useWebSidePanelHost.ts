@@ -17,6 +17,7 @@ import { useCallback, useMemo, useState } from 'react';
 import useMediaQuery from '@mui/material/useMediaQuery';
 
 import type { InspectorTabId, InspectorTabInfo, InspectorTarget, SidePanelSlot } from '@/shared/desktop/inspectorSlot';
+import { useRegistrationStack } from '@/shared/lib/registrationStack';
 import { createStorage } from '@/shared/lib/storage';
 
 const OPEN_KEY = 'sidePanel.open';
@@ -59,27 +60,20 @@ export interface WebSidePanelHost {
   readonly setBody: (node: HTMLElement | null) => void;
 }
 
-let nextRegistration = 0;
-
 export function useWebSidePanelHost(): WebSidePanelHost {
   const narrow = useMediaQuery(SIDE_PANEL_NARROW_QUERY);
   const wide = useMediaQuery(SIDE_PANEL_WIDE_QUERY);
   const [storedOpen, setStoredOpen] = useState<boolean | null>(readStoredOpen);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [registrations, setRegistrations] = useState<readonly { readonly key: number; readonly info: InspectorTabInfo }[]>([]);
+  const [stack, registrations] = useRegistrationStack<InspectorTabInfo>();
   const [chosen, setChosen] = useState<InspectorTabId | null>(null);
   const [body, setBody] = useState<HTMLElement | null>(null);
 
-  const register = useCallback((info: InspectorTabInfo) => {
-    nextRegistration += 1;
-    const key = nextRegistration;
-    setRegistrations((current) => [...current, { key, info }]);
-    return () => setRegistrations((current) => current.filter((entry) => entry.key !== key));
-  }, []);
+  const register = stack.register;
 
   const tabs = useMemo(() => {
     const byId = new Map<InspectorTabId, InspectorTabInfo>();
-    registrations.forEach(({ info }) => byId.set(info.id, info));
+    registrations.forEach((info) => byId.set(info.id, info));
     return Array.from(byId.values());
   }, [registrations]);
 
