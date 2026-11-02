@@ -18,6 +18,7 @@ import type { ComponentProps, ReactNode } from 'react';
 import { useState } from 'react';
 
 import { ParticipantsWrapper } from '@/features/chat-participants';
+import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { SidePanelTab, useSidePanelSlot } from '@/shared/ui/side-panel';
 import { t } from '@/shared/i18n';
 import type { ChatBoxProps } from '@/widgets/chat-box';
@@ -42,6 +43,10 @@ export interface ChatParticipantsPanelProps {
 
 export function ChatParticipantsPanel({ activeConversation, activeParticipant, projectId, isMcpVisible, handlers }: ChatParticipantsPanelProps): ReactNode {
   const inspector = useSidePanelSlot() !== null;
+  // The open conversation names itself in the shell's title row (`Chat ▸ name`).
+  // The desktop frame's title row reads the chat rail instead and ignores this.
+  const conversationName = activeConversation === undefined || activeConversation.isNew ? '' : (activeConversation.name ?? '');
+  usePageCrumbs(conversationName === '' ? [] : [{ label: conversationName }]);
   // Baseline default: collapsed (`NewChat.jsx:166`). The inspector never collapses.
   const [collapsed, setCollapsed] = useState(true);
 
