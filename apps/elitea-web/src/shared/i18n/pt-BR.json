@@ -4950,5 +4950,15 @@
   "desktop.chats.unpin": "Desafixar",
   "desktop.chats.untitled": "Chat sem título",
   "desktop.chats.yesterday": "Ontem",
-  "desktop.shell.workshop": "Oficina"
+  "desktop.shell.workshop": "Oficina",
+  "desktop.account.appearance": "Aparência",
+  "desktop.account.getHelp": "Obter ajuda",
+  "desktop.account.language": "Idioma",
+  "desktop.account.menu": "Menu da conta",
+  "desktop.account.reportBug": "Relatar um bug",
+  "desktop.account.signOut": "Sair",
+  "desktop.account.troubleshoot": "Solução de problemas",
+  "desktop.account.usage": "Uso",
+  "desktop.account.whatsNew": "Novidades",
+  "desktop.shell.settings": "Configurações"
 }

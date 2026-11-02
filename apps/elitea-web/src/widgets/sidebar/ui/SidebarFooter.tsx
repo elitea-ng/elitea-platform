@@ -1,89 +1,48 @@
 import type { ReactNode } from 'react';
 
-import { Link, useRouterState } from '@tanstack/react-router';
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 
 import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
-import { GearIcon } from '@/shared/ui/icons/gear-icon';
-import { KeyIcon } from '@/shared/ui/icons/key-icon';
-import { ResourcesIcon } from '@/shared/ui/icons/resources-icon';
-import agentHubIconUrl from '@/shared/ui/icons/svg/agent-hub-icon.svg?url';
 import { t } from '@/shared/i18n';
+import { ResourcesIcon } from '@/shared/ui/icons/resources-icon';
+import { AccountMenu, type AccountMenuItem } from '@/widgets/account-menu';
 
 /**
- * The rail's two bottom blocks, ported from `SidebarBody.jsx`'s own bottom
- * half — which is TWO blocks, not one:
+ * The rail's foot: the account menu (`widgets/account-menu`, the same one the
+ * desktop app has) and, when the deployment has a support assistant, the
+ * "Support Bot | ?" bar under it (`SidebarBody.jsx`'s `styles.footerBlock`).
  *
- *  1. `styles.bottomSection` (`flex: 1; justify-content: flex-end`) INSIDE
- *     the scrollable column: `Buttons.SettingsButton`, a FULL-BLEED divider
- *     (`catalogDivider`, `marginInline: -1rem`), then
- *     `Buttons.AgentHubButton`. That `flex: 1` is what pins the pair to the
- *     bottom of the nav column instead of letting it sit directly under the
- *     last nav group.
- *  2. `styles.footerBlock` — a 3.25rem bar OUTSIDE the scroll area with a
- *     full-width top rule, split by a vertical divider into the "Support
- *     Bot" hit area and the Help Center "?" icon button
- *     (`Buttons.ResourcesButton`, the NON-`fullWidth` variant). When the
- *     deployment has no support assistant, the bar degrades to
- *     `styles.helpCenterFooter`: the same top rule with the full-width
- *     "Help Center" row in it.
- *
- * All three used to be plain stacked rows in one padded column here, which
- * is why the rail showed "Settings / Catalog / Help Center" bunched directly
- * under Artifacts with no bottom bar at all.
+ * Settings, Credentials, the Catalog and Help Center were rows here; they
+ * live in the account menu now, beside the version and Sign out, as on the
+ * desktop. The assistant bar stays a bar: it opens an assistant, not a page.
  */
 
 /** `SidebarBody.jsx`'s `styles.footerBlock` height. */
 const FOOTER_BAR_HEIGHT = '3.25rem';
 
-/**
- * `AgentHubButton.jsx` paints the catalogue pill's icon and label with the
- * `background.button.agentHub.{icon,text}Gradient` tokens, not a flat
- * colour: the icon through a CSS mask, the label through
- * `background-clip: text`. The port had substituted `palette.primary.main`
- * for both, which rendered the row in the primary CYAN while production
- * shows the violet gradient.
- */
-const agentHubIconMask = `url("${agentHubIconUrl}")`;
-
-export interface SidebarBottomLinksProps {
+export interface SidebarAccountProps {
   collapsed: boolean;
-  /** Credentials, when the person may open them (`visibleNavSections`); the account things sit down here, as on the desktop. */
+  /** Credentials, when the person may open them (`visibleNavSections`). */
   credentials?: boolean;
 }
 
-/** Block 1 — Credentials and Settings + full-bleed divider + Catalog, pinned to the bottom of the nav column. */
-export function SidebarBottomLinks({ collapsed, credentials = false }: SidebarBottomLinksProps): ReactNode {
+/** The account menu at the rail's foot, outside the scroll area. */
+export function SidebarAccount({ collapsed, credentials = false }: SidebarAccountProps): ReactNode {
   const pathname = useRouterState({ select: (routerState) => routerState.location.pathname });
-
+  const navigate = useNavigate();
+  const items: AccountMenuItem[] = [
+    ...(credentials ? [{ value: 'credentials', label: t('widgets.sidebar.nav.credentials', 'Credentials'), url: '/credentials' }] : []),
+    { value: 'catalog', label: t('widgets.sidebar.eliteaCatalog', 'Catalog'), url: '/elitea-catalog' },
+    { value: 'help', label: t('widgets.sidebar.helpCenter', 'Help Center'), url: '/help-center' },
+  ];
+  const selected = ['/settings', '/credentials', '/elitea-catalog', '/help-center'].some((path) => pathname.startsWith(path));
   return (
-    <Box sx={bottomSectionSx}>
-      <Box sx={sectionSx}>
-        {credentials && (
-          <FooterLink
-            to="/credentials"
-            icon={<KeyIcon style={{ width: '1rem', height: '1rem' }} />}
-            label={t('widgets.sidebar.nav.credentials', 'Credentials')}
-            collapsed={collapsed}
-            active={pathname.startsWith('/credentials')}
-          />
-        )}
-        <FooterLink
-          to="/settings/model-configuration"
-          icon={<GearIcon style={{ width: '1rem', height: '1rem' }} />}
-          label={t('widgets.sidebar.settings', 'Settings')}
-          collapsed={collapsed}
-          active={pathname.startsWith('/settings')}
-        />
-        <Box sx={catalogDividerSx} />
-        <CatalogLink
-          collapsed={collapsed}
-          active={pathname === '/elitea-catalog'}
-        />
-      </Box>
+    <Box sx={accountSx(collapsed)}>
+      <AccountMenu items={items} go={(to) => void navigate({ to })} platform="web" collapsed={collapsed} selected={selected} />
     </Box>
   );
 }
@@ -99,22 +58,8 @@ export function SidebarFooterBar({ collapsed, onToggleAssistant }: SidebarFooter
   const pathname = useRouterState({ select: (routerState) => routerState.location.pathname });
   const onHelp = pathname === '/help-center';
 
-  if (onToggleAssistant === undefined) {
-    // `SidebarBody.jsx:304-310` — no assistant, and the rail is expanded:
-    // the bar is just the full-width Help Center row under the same rule.
-    if (collapsed) return null;
-    return (
-      <Box sx={helpCenterFooterSx}>
-        <FooterLink
-          to="/help-center"
-          icon={<ResourcesIcon style={{ width: '1.25rem', height: '1.25rem' }} />}
-          label={t('widgets.sidebar.helpCenter', 'Help Center')}
-          collapsed={false}
-          active={onHelp}
-        />
-      </Box>
-    );
-  }
+  // No assistant: nothing here. Help Center is in the account menu.
+  if (onToggleAssistant === undefined) return null;
 
   const supportLabel = t('widgets.sidebar.supportBot', 'Support Bot');
   return (
@@ -159,168 +104,15 @@ export function SidebarFooterBar({ collapsed, onToggleAssistant }: SidebarFooter
   );
 }
 
-interface CatalogLinkProps {
-  collapsed: boolean;
-  active: boolean;
-}
-
-/**
- * Ported from `ui/button/AgentHubButton.jsx` — an always-visible, ungated
- * pill (no `PERMISSION_GROUPS` entry in the old app either) navigating to
- * `/elitea-catalog`. Cosmetically distinct from the plain `FooterLink` rows
- * around it, matching the old app's own `background.button.agentHub.*`
- * token family (default/active/hover + inset box-shadow variants) and its
- * icon/text GRADIENTS.
- */
-function CatalogLink({ collapsed, active }: CatalogLinkProps): ReactNode {
-  const label = t('widgets.sidebar.eliteaCatalog', 'Catalog');
-  return (
-    <Tooltip
-      title={collapsed ? label : ''}
-      placement="right"
-      enterDelay={500}
-      enterNextDelay={500}
-    >
-      <Box
-        component={Link}
-        to="/elitea-catalog"
-        aria-current={active ? 'page' : undefined}
-        data-testid="sidebar-agent-hub-button"
-        sx={(theme: Theme) => ({
-          width: collapsed ? '2rem' : '100%',
-          height: '2rem',
-          padding: collapsed ? '0.5rem 0' : '0.5rem',
-          borderRadius: theme.vars.shape.radiusMd,
-          background: active
-            ? theme.vars.palette.background.button.agentHub.active
-            : theme.vars.palette.background.button.agentHub.default,
-          boxShadow: active
-            ? theme.vars.palette.background.button.agentHub.shadowActive
-            : theme.vars.palette.background.button.agentHub.shadowDefault,
-          display: 'flex',
-          justifyContent: collapsed ? 'center' : 'flex-start',
-          alignItems: 'center',
-          gap: '0.5rem',
-          boxSizing: 'border-box',
-          textDecoration: 'none',
-          '&:hover': {
-            background: theme.vars.palette.background.button.agentHub.hover,
-            boxShadow: theme.vars.palette.background.button.agentHub.shadowHover,
-          },
-        })}
-      >
-        <Box sx={catalogIconSx} />
-        {!collapsed && (
-          <Typography
-            variant="labelSmall"
-            sx={catalogLabelSx}
-          >
-            {label}
-          </Typography>
-        )}
-      </Box>
-    </Tooltip>
-  );
-}
-
-interface FooterLinkProps {
-  to: string;
-  icon: ReactNode;
-  label: string;
-  collapsed: boolean;
-  active: boolean;
-}
-
-function FooterLink({ to, icon, label, collapsed, active }: FooterLinkProps): ReactNode {
-  return (
-    <Tooltip
-      title={collapsed ? label : ''}
-      placement="right"
-      enterDelay={500}
-      enterNextDelay={500}
-    >
-      <Box
-        component={Link}
-        to={to}
-        // `active` drives the styling below, but TanStack's <Link> only sets
-        // aria-current on an EXACT path match. "Settings" points at
-        // /settings/model-configuration and is active for every /settings/*
-        // route, so assistive technology was told nothing was current while
-        // the sidebar showed it selected. The main nav items above already
-        // carry aria-current="page"; these three did not.
-        aria-current={active ? 'page' : undefined}
-        sx={(theme: Theme) => ({
-          width: collapsed ? '2rem' : '100%',
-          height: '2rem',
-          padding: collapsed ? '0.5rem 0' : '0.5rem',
-          borderRadius: theme.vars.shape.radiusMd,
-          background: active ? theme.vars.palette.background.button.drawerMenu.selected : 'transparent',
-          '&:hover': { backgroundColor: theme.vars.palette.background.button.drawerMenu.hover },
-          display: 'flex',
-          justifyContent: collapsed ? 'center' : 'flex-start',
-          alignItems: 'center',
-          gap: '0.5rem',
-          boxSizing: 'border-box',
-          color: active ? theme.vars.palette.text.secondary : theme.vars.palette.text.metrics,
-          textDecoration: 'none',
-        })}
-      >
-        {icon}
-        {!collapsed && <Typography variant="labelSmall">{label}</Typography>}
-      </Box>
-    </Tooltip>
-  );
-}
-
-/** `SidebarBody.jsx`'s `styles.bottomSection`. */
-const bottomSectionSx = { flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' } as const;
-
-/** `SidebarBody.jsx`'s `styles.section` — the same padding/gap the nav groups use. */
-const sectionSx = {
-  paddingBlock: '0.5rem',
-  paddingInline: '1rem',
-  gap: '0.5rem',
-  display: 'flex',
-  flexDirection: 'column',
-  boxSizing: 'border-box',
-} as const;
-
-/** `styles.catalogDivider` — negative inline margin bleeds it to the rail's full width. */
-const catalogDividerSx = (theme: Theme) => ({
-  marginInline: '-1rem',
-  height: '0.0625rem',
-  backgroundColor: theme.vars.palette.border.sidebarDivider,
-});
-
-const catalogIconSx = (theme: Theme) => ({
-  width: '1rem',
-  height: '1rem',
+/** The account row: a rule above it, the rail's inline padding. */
+const accountSx = (collapsed: boolean) => (theme: Theme) => ({
   flexShrink: 0,
-  background: theme.vars.palette.background.button.agentHub.iconGradient,
-  WebkitMaskImage: agentHubIconMask,
-  maskImage: agentHubIconMask,
-  WebkitMaskRepeat: 'no-repeat',
-  maskRepeat: 'no-repeat',
-  WebkitMaskSize: 'contain',
-  maskSize: 'contain',
-  WebkitMaskPosition: 'center',
-  maskPosition: 'center',
+  paddingBlock: '0.25rem',
+  paddingInline: collapsed ? '0.25rem' : '0.5rem',
+  borderTop: `0.0625rem solid ${theme.vars.palette.border.sidebarDivider}`,
 });
 
-const catalogLabelSx = (theme: Theme) => ({
-  flex: 1,
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  textAlign: 'left',
-  background: theme.vars.palette.background.button.agentHub.textGradient,
-  WebkitBackgroundClip: 'text',
-  backgroundClip: 'text',
-  WebkitTextFillColor: 'transparent',
-  color: 'transparent',
-});
-
-/** The 1px top rule both footer variants carry (`styles.footerBlock`/`styles.helpCenterFooter`'s `:before`). */
+/** The bar's 1px top rule (`styles.footerBlock`'s `:before`). */
 const footerRuleSx = (theme: Theme) => ({
   position: 'relative',
   flexShrink: 0,
@@ -334,8 +126,6 @@ const footerRuleSx = (theme: Theme) => ({
     backgroundColor: theme.vars.palette.border.sidebarDivider,
   },
 });
-
-const helpCenterFooterSx = (theme: Theme) => ({ ...footerRuleSx(theme), padding: '0.5rem 1rem' });
 
 const footerBlockSx = (theme: Theme) => ({
   ...footerRuleSx(theme),

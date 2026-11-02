@@ -4950,5 +4950,15 @@
   "desktop.chats.unpin": "ביטול הצמדה",
   "desktop.chats.untitled": "צ'אט ללא כותרת",
   "desktop.chats.yesterday": "אתמול",
-  "desktop.shell.workshop": "סדנה"
+  "desktop.shell.workshop": "סדנה",
+  "desktop.account.appearance": "מראה",
+  "desktop.account.getHelp": "קבלת עזרה",
+  "desktop.account.language": "שפה",
+  "desktop.account.menu": "תפריט חשבון",
+  "desktop.account.reportBug": "דיווח על באג",
+  "desktop.account.signOut": "התנתקות",
+  "desktop.account.troubleshoot": "פתרון בעיות",
+  "desktop.account.usage": "שימוש",
+  "desktop.account.whatsNew": "מה חדש",
+  "desktop.shell.settings": "הגדרות"
 }

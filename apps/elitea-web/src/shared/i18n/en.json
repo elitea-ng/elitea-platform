@@ -5449,7 +5449,6 @@
   "pages.admin.governance.field.guardrailPresidio": "Presidio Analyzer",
   "pages.admin.governance.field.guardrailSlotHelp": "Prompt-injection slot: the detector reads tool results only, and every finding gets the label prompt_injection. The slot allows block and flag.",
   "pages.admin.governance.field.guardrailSlotToggle": "{{name}}: prompt-injection slot",
-
   "pages.admin.governance.cloud.secretHelp": "A {{ref}} reference to a secret of the public project. A raw value is refused.",
   "pages.admin.governance.cloud.title": "Add a cloud classifier detector",
   "pages.admin.governance.cloud.type": "Classifier",
@@ -5603,5 +5602,21 @@
   "features.agents.citations.tooltip": "The agent cites the tool results it uses as [1], [2]. The chat shows how many sources an answer cites and which statements have no citation. It is not a confidence score.",
   "features.chatMessages.grounding.more": "{{count}} more not shown.",
   "features.chatMessages.grounding.sourcesCited": "{{cited}} of {{available}} sources cited",
-  "features.chatMessages.grounding.uncited": "{{count}} statements without a citation"
+  "features.chatMessages.grounding.uncited": "{{count}} statements without a citation",
+  "desktop.account.getHelp": "Get help",
+  "desktop.account.reportBug": "Report a bug",
+  "desktop.shell.settings": "Settings",
+  "desktop.account.usage": "Usage",
+  "desktop.account.appearance": "Appearance",
+  "desktop.account.language": "Language",
+  "desktop.account.whatsNew": "What’s new",
+  "desktop.account.troubleshoot": "Troubleshoot",
+  "desktop.account.menu": "Account menu",
+  "desktop.account.signOut": "Sign out",
+  "pages.admin.nav.backToApp": "Back to Elitea",
+  "widgets.accountMenu.adminPortal": "Admin portal",
+  "widgets.accountMenu.copied": "Copied",
+  "widgets.accountMenu.copyVersion": "Copy",
+  "widgets.accountMenu.server": "Server",
+  "widgets.accountMenu.version": "Version"
 }

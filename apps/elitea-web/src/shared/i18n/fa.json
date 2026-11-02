@@ -4950,5 +4950,15 @@
   "desktop.chats.unpin": "برداشتن سنجاق",
   "desktop.chats.untitled": "چت بدون عنوان",
   "desktop.chats.yesterday": "دیروز",
-  "desktop.shell.workshop": "کارگاه"
+  "desktop.shell.workshop": "کارگاه",
+  "desktop.account.appearance": "ظاهر",
+  "desktop.account.getHelp": "دریافت کمک",
+  "desktop.account.language": "زبان",
+  "desktop.account.menu": "منوی حساب",
+  "desktop.account.reportBug": "گزارش یک باگ",
+  "desktop.account.signOut": "خروج",
+  "desktop.account.troubleshoot": "عیب‌یابی",
+  "desktop.account.usage": "مصرف",
+  "desktop.account.whatsNew": "تازه‌ها",
+  "desktop.shell.settings": "تنظیمات"
 }

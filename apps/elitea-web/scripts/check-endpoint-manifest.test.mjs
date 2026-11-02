@@ -1136,10 +1136,11 @@ const GENERATED_OPERATION_COUNT = 462;
  * chat answer's "Allow the next run past this cap" action
  * (features/chat-messages CapOverrideAction). Generated.
  *
- * 312 -> 313 (PR 1553, the account menu): auth.administrationPermissionList,
- * which gates the account menu's "Admin portal" link.
+ * 312 -> 314 (PR 1553, the account menu): auth.administrationPermissionList,
+ * which gates the account menu's "Admin portal" link, and
+ * discovery.getClientDiscovery, whose server_version the version line shows.
  */
-const MANIFEST_ENTRY_COUNT = 313;
+const MANIFEST_ENTRY_COUNT = 314;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

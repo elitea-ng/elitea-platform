@@ -4950,5 +4950,15 @@
   "desktop.chats.unpin": "고정 해제",
   "desktop.chats.untitled": "제목 없는 채팅",
   "desktop.chats.yesterday": "어제",
-  "desktop.shell.workshop": "워크숍"
+  "desktop.shell.workshop": "워크숍",
+  "desktop.account.appearance": "모양",
+  "desktop.account.getHelp": "도움말 보기",
+  "desktop.account.language": "언어",
+  "desktop.account.menu": "계정 메뉴",
+  "desktop.account.reportBug": "버그 신고",
+  "desktop.account.signOut": "로그아웃",
+  "desktop.account.troubleshoot": "문제 해결",
+  "desktop.account.usage": "사용량",
+  "desktop.account.whatsNew": "새로운 기능",
+  "desktop.shell.settings": "설정"
 }

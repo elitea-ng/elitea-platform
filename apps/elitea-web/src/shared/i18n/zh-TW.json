@@ -4950,5 +4950,15 @@
   "desktop.chats.unpin": "取消固定",
   "desktop.chats.untitled": "無標題聊天",
   "desktop.chats.yesterday": "昨天",
-  "desktop.shell.workshop": "工作坊"
+  "desktop.shell.workshop": "工作坊",
+  "desktop.account.appearance": "外觀",
+  "desktop.account.getHelp": "獲取幫助",
+  "desktop.account.language": "語言",
+  "desktop.account.menu": "賬戶選單",
+  "desktop.account.reportBug": "報告錯誤",
+  "desktop.account.signOut": "登出",
+  "desktop.account.troubleshoot": "故障排查",
+  "desktop.account.usage": "用量",
+  "desktop.account.whatsNew": "新功能",
+  "desktop.shell.settings": "設定"
 }

@@ -17,7 +17,7 @@ import { computeIsSelectedProjectPublic, navSections, selectedNavItem, visibleNa
 import { useCreateGate } from '../model/useCreateGate';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { SidebarChats } from './SidebarChats';
-import { SidebarBottomLinks, SidebarFooterBar } from './SidebarFooter';
+import { SidebarAccount, SidebarFooterBar } from './SidebarFooter';
 import { SidebarHeader } from './SidebarHeader';
 import { SidebarNavItem } from './SidebarNavItem';
 
@@ -46,7 +46,8 @@ function useNavItems(permissions: ReadonlySet<string>, projectId: string | undef
  * their list (`SidebarChats.tsx`), the place rows — Applications, Artifacts
  * and the "Workshop" (agents, pipelines, skills, toolkits, MCPs) — each with
  * its "+" where the person may create one (`useCreateGate`), and at the
- * bottom Credentials, Settings and the Catalog, over the Help bar.
+ * bottom the account menu (Settings, Credentials, the Catalog, help, the
+ * version and Sign out, as on the desktop), over the Support Bot bar.
  *
  * Collapsed (64px) the rail keeps the icons — one per place, and one "New
  * chat" — and leaves the chat list out.
@@ -90,11 +91,9 @@ export function SidebarBody({ collapsed, onToggleCollapsed, permissions, project
             </Box>
           </Box>
         )}
-
-        {/* Inside the scroll column with `flex: 1`, so these sit at the bottom of the rail. */}
-        <SidebarBottomLinks collapsed={collapsed} credentials={hasCredentials} />
       </Box>
 
+      <SidebarAccount collapsed={collapsed} credentials={hasCredentials} />
       <SidebarFooterBar collapsed={collapsed} onToggleAssistant={onToggleAssistant} />
     </Box>
   );

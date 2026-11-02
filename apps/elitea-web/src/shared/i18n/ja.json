@@ -4950,5 +4950,15 @@
   "desktop.chats.unpin": "ピン留めを解除",
   "desktop.chats.untitled": "無題のチャット",
   "desktop.chats.yesterday": "昨日",
-  "desktop.shell.workshop": "ワークショップ"
+  "desktop.shell.workshop": "ワークショップ",
+  "desktop.account.appearance": "外観",
+  "desktop.account.getHelp": "ヘルプを表示",
+  "desktop.account.language": "言語",
+  "desktop.account.menu": "アカウントメニュー",
+  "desktop.account.reportBug": "バグを報告",
+  "desktop.account.signOut": "サインアウト",
+  "desktop.account.troubleshoot": "トラブルシューティング",
+  "desktop.account.usage": "使用状況",
+  "desktop.account.whatsNew": "新機能",
+  "desktop.shell.settings": "設定"
 }

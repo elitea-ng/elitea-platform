@@ -1,6 +1,7 @@
 /**
- * The account menu at the sidebar's foot: the person and tenant on the
- * button, the moved Elitea items, the language choice and the bug report.
+ * The account menu at the sidebar's foot: the person on the button, the
+ * moved Elitea items, the language choice, the version line, the admin
+ * portal gate, and the desktop's bug report.
  */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -14,26 +15,28 @@ import { createStorage, clearNamespace } from '@/shared/lib/storage';
 
 import { server } from '../../../test/setup';
 
-import type { EliteaItem } from '../lib/eliteaSections';
-import type { ShellAction } from '../lib/shellActions';
-import { AccountMenu } from '../ui/AccountMenu';
+import { AccountMenu, type AccountMenuItem } from '../ui/AccountMenu';
 
 const globals = globalThis as unknown as Record<string, unknown>;
-const ITEMS: EliteaItem[] = [
+const ITEMS: AccountMenuItem[] = [
   { value: 'credentials', label: 'Credentials', url: '/credentials' },
   { value: 'catalog', label: 'Catalog', url: '/elitea-catalog' },
   { value: 'help', label: 'Help Center', url: '/help-center' },
 ];
 
-function mount() {
-  const run = vi.fn<(action: ShellAction) => void>();
+function mount(platform: 'web' | 'desktop' = 'desktop', collapsed = false) {
+  const go = vi.fn<(to: string) => void>();
   const reload = vi.fn<() => void>();
   render(
     <AppProviders>
-      <AccountMenu items={ITEMS} run={run} reload={reload} />
+      <AccountMenu items={ITEMS} go={go} platform={platform} collapsed={collapsed} reload={reload} />
     </AppProviders>,
   );
-  return { run, reload };
+  return { go, reload };
+}
+
+function administration(names: string[]) {
+  server.use(http.get('*/auth/permissions/administration', () => HttpResponse.json(names.map((name) => ({ name, enabled: true })))));
 }
 
 beforeEach(() => {
@@ -42,6 +45,8 @@ beforeEach(() => {
   configureGeneratedClient({ baseUrl: '/api/v2' });
   clearNamespace();
   server.use(http.get('*/social/author', () => HttpResponse.json({ id: 3, name: 'Alex K', email: 'alex@example.com', avatar: '' })));
+  administration([]);
+  server.use(http.get('*/.well-known/elitea-client', () => HttpResponse.json({ server_version: '1.72' })));
 });
 
 afterEach(() => {
@@ -54,7 +59,7 @@ afterEach(() => {
 describe('AccountMenu', () => {
   it('names the person on the button and opens the account items from the menu', async () => {
     const user = userEvent.setup();
-    const { run } = mount();
+    const { go } = mount();
     const button = screen.getByTestId('shell-account');
     await waitFor(() => expect(button).toHaveTextContent('Alex K'));
     await user.click(button);
@@ -64,7 +69,7 @@ describe('AccountMenu', () => {
     expect(within(menu).getByRole('menuitem', { name: 'Get help' })).toBeInTheDocument();
     expect(within(menu).getByRole('menuitem', { name: 'Sign out' })).toBeInTheDocument();
     await user.click(within(menu).getByRole('menuitem', { name: 'Catalog' }));
-    expect(run).toHaveBeenCalledWith({ type: 'go', to: '/elitea-catalog' });
+    expect(go).toHaveBeenCalledWith('/elitea-catalog');
   });
 
   it('names an account that has only an email by its email', async () => {
@@ -103,5 +108,72 @@ describe('AccountMenu', () => {
     await user.click(screen.getByRole('button', { name: 'Report a bug' }));
     expect(open).toHaveBeenCalledOnce();
     expect(String(open.mock.calls[0]?.[0])).toMatch(/^https:\/\/github\.com\/elitea-ng\/elitea-platform\/issues\/new\?/);
+  });
+
+  it('shows the web build version and the server version, and copies them', async () => {
+    const user = userEvent.setup();
+    const copy = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: copy }, configurable: true });
+    server.use(http.get('*/.well-known/elitea-client', () => HttpResponse.json({ server_version: '1.72' })));
+    mount('web');
+    await user.click(screen.getByTestId('shell-account'));
+    const row = await screen.findByTestId('account-menu-version');
+    await waitFor(() => expect(row).toHaveTextContent('Version dev · Server 1.72'));
+    await user.click(row);
+    expect(copy).toHaveBeenCalledWith('Version dev · Server 1.72');
+    await waitFor(() => expect(row).toHaveTextContent('Copied'));
+  });
+
+  it('leaves the server out when the discovery document does not answer', async () => {
+    const user = userEvent.setup();
+    server.use(http.get('*/.well-known/elitea-client', () => new HttpResponse(null, { status: 503 })));
+    mount('web');
+    await user.click(screen.getByTestId('shell-account'));
+    const row = await screen.findByTestId('account-menu-version');
+    expect(row).toHaveTextContent('Version dev');
+    expect(row).not.toHaveTextContent('Server');
+  });
+
+  it('offers no admin portal to a person without an administration permission', async () => {
+    const user = userEvent.setup();
+    mount('web');
+    await user.click(screen.getByTestId('shell-account'));
+    const menu = await screen.findByRole('menu', { name: 'Account menu' });
+    await within(menu).findByRole('menuitem', { name: 'Settings' });
+    expect(within(menu).queryByRole('menuitem', { name: /Admin portal/ })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('shell-account-admin-portal')).not.toBeInTheDocument();
+  });
+
+  it('links an administrator to the admin portal on this origin (web)', async () => {
+    administration(['admin.users.view']);
+    const user = userEvent.setup();
+    mount('web');
+    await user.click(screen.getByTestId('shell-account'));
+    const portal = await screen.findByTestId('shell-account-admin-portal');
+    expect(portal).toHaveAttribute('href', '/admin/app/');
+    expect(portal).toHaveTextContent('Admin portal');
+  });
+
+  it('opens the admin portal in the browser on the desktop', async () => {
+    administration(['admin.users.view']);
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const user = userEvent.setup();
+    mount('desktop');
+    await user.click(screen.getByTestId('shell-account'));
+    const portal = await screen.findByTestId('shell-account-admin-portal');
+    expect(portal).not.toHaveAttribute('href');
+    await user.click(portal);
+    expect(open).toHaveBeenCalledWith('/admin/app/', '_blank', 'noopener');
+  });
+
+  it('collapsed (web rail): the avatar alone opens the same menu, with no bug button', async () => {
+    const user = userEvent.setup();
+    mount('web', true);
+    const button = screen.getByTestId('shell-account');
+    await waitFor(() => expect(button).toHaveTextContent('AK'));
+    expect(button).not.toHaveTextContent('Alex K');
+    expect(screen.queryByTestId('shell-report-bug')).not.toBeInTheDocument();
+    await user.click(button);
+    expect(await screen.findByRole('menu', { name: 'Account menu' })).toBeInTheDocument();
   });
 });

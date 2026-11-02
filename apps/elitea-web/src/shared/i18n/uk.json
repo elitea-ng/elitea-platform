@@ -4950,5 +4950,15 @@
   "desktop.chats.unpin": "Відкріпити",
   "desktop.chats.untitled": "Чат без назви",
   "desktop.chats.yesterday": "Учора",
-  "desktop.shell.workshop": "Майстерня"
+  "desktop.shell.workshop": "Майстерня",
+  "desktop.account.appearance": "Вигляд",
+  "desktop.account.getHelp": "Отримати допомогу",
+  "desktop.account.language": "Мова",
+  "desktop.account.menu": "Меню облікового запису",
+  "desktop.account.reportBug": "Повідомити про помилку",
+  "desktop.account.signOut": "Вийти",
+  "desktop.account.troubleshoot": "Усунення несправностей",
+  "desktop.account.usage": "Використання",
+  "desktop.account.whatsNew": "Що нового",
+  "desktop.shell.settings": "Налаштування"
 }

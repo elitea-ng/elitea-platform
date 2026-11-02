@@ -57,12 +57,16 @@ function renderSidebar(permissions: ReadonlySet<string> = allPermissions) {
 }
 
 describe('Sidebar', () => {
-  it('renders the Chats, every place and Credentials when every permission is granted (SHELL-001..009)', async () => {
+  it('renders the Chats, every place and the account menu when every permission is granted (SHELL-001..009)', async () => {
+    const user = userEvent.setup();
     await renderSidebar();
     expect(screen.getByTestId('shell-chats-caption')).toHaveTextContent('Chats');
-    for (const label of ['Agents', 'Pipelines', 'Skills', 'Toolkits & Indexes', 'MCPs', 'Credentials', 'Applications', 'Artifacts']) {
+    for (const label of ['Agents', 'Pipelines', 'Skills', 'Toolkits & Indexes', 'MCPs', 'Applications', 'Artifacts']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+    // Credentials is in the account menu, as on the desktop.
+    await user.click(screen.getByTestId('shell-account'));
+    expect(await screen.findByRole('menuitem', { name: 'Credentials' })).toBeInTheDocument();
   });
 
   it('hides permission-gated entries when their permission is missing (SHELL-010)', async () => {

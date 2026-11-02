@@ -4950,5 +4950,15 @@
   "desktop.chats.unpin": "ان پن",
   "desktop.chats.untitled": "بے عنوان چیٹ",
   "desktop.chats.yesterday": "کل",
-  "desktop.shell.workshop": "ورکشاپ"
+  "desktop.shell.workshop": "ورکشاپ",
+  "desktop.account.appearance": "ظاہری شکل",
+  "desktop.account.getHelp": "مدد حاصل کریں",
+  "desktop.account.language": "زبان",
+  "desktop.account.menu": "اکاؤنٹ مینو",
+  "desktop.account.reportBug": "بگ رپورٹ کریں",
+  "desktop.account.signOut": "سائن آؤٹ کریں",
+  "desktop.account.troubleshoot": "مسائل کا حل",
+  "desktop.account.usage": "استعمال",
+  "desktop.account.whatsNew": "نیا کیا ہے",
+  "desktop.shell.settings": "ترتیبات"
 }

@@ -36,7 +36,10 @@ export function menuRowSx(theme: Theme, active = false) {
   } as const;
 }
 
-export function MenuRow(props: MenuItemProps): React.JSX.Element {
+/** A row; `component: 'a'` with `href` makes it a real link (a middle click opens a tab). */
+export type MenuRowProps = MenuItemProps & { readonly component?: 'a' | 'li' | undefined; readonly href?: string | undefined };
+
+export function MenuRow(props: MenuRowProps): React.JSX.Element {
   return <MenuItem {...props} sx={(theme: Theme) => menuRowSx(theme)} />;
 }
 

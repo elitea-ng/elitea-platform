@@ -7,7 +7,7 @@
  * Applications, Artifacts and the "Workshop" group (agents, pipelines,
  * skills, toolkits and MCPs) — the Chats caption, the Chats list and the
  * place rows are the web sidebar's own (`widgets/chat-rail`), each place
- * with its "+" — and the account menu at the bottom (`AccountMenu.tsx`),
+ * with its "+" — and the account menu at the bottom (`widgets/account-menu`),
  * which also carries Credentials, Catalog and help.
  *
  * A folder belongs to one project and shows under it; moving it to another
@@ -28,6 +28,7 @@ import type { Project } from '@/entities/project';
 import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { ChatsCaption, ChatsSection, NavRows, SectionCaption, useChatsSectionOpen, useStartChat } from '@/widgets/chat-rail';
+import { AccountMenu } from '@/widgets/account-menu';
 import { computeIsSelectedProjectPublic, NotificationBell, useCreateGate } from '@/widgets/sidebar';
 
 import { ACCOUNT_MENU_ITEMS, eliteaItems, selectedEliteaItem, type EliteaItem, type EliteaItemValue } from '../lib/eliteaSections';
@@ -38,7 +39,6 @@ import { useContextMenu } from '../model/useContextMenu';
 import { useDesktopBell } from '../model/useDesktopNotifications';
 import type { ShellLocation } from '../model/useShellLocation';
 import { useSwitchProject } from '../model/useSwitchProject';
-import { AccountMenu } from './AccountMenu';
 import { LocalWorkSection } from './LocalWorkSection';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { modKey } from './shortcutLabel';
@@ -214,7 +214,9 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
       <Box sx={(theme: Theme) => ({ paddingX: 1, paddingY: 0.5, borderTop: `1px solid ${theme.vars.palette.divider}` })}>
         <AccountMenu
           items={items.filter((item) => ACCOUNT_MENU_ITEMS.has(item.value))}
-          run={run}
+          go={(to) => run({ type: 'go', to })}
+          platform="desktop"
+          settingsShortcut={`${modKey()},`}
           selected={location.pathname.startsWith('/settings') || ACCOUNT_MENU_ITEMS.has(selectedEliteaItem(location.pathname, items) ?? 'chat')}
         />
       </Box>

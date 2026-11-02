@@ -4950,5 +4950,15 @@
   "desktop.chats.unpin": "Losmaken",
   "desktop.chats.untitled": "Naamloze chat",
   "desktop.chats.yesterday": "Gisteren",
-  "desktop.shell.workshop": "Werkplaats"
+  "desktop.shell.workshop": "Werkplaats",
+  "desktop.account.appearance": "Weergave",
+  "desktop.account.getHelp": "Hulp krijgen",
+  "desktop.account.language": "Taal",
+  "desktop.account.menu": "Accountmenu",
+  "desktop.account.reportBug": "Een bug melden",
+  "desktop.account.signOut": "Uitloggen",
+  "desktop.account.troubleshoot": "Probleemoplossing",
+  "desktop.account.usage": "Gebruik",
+  "desktop.account.whatsNew": "Wat is er nieuw",
+  "desktop.shell.settings": "Instellingen"
 }

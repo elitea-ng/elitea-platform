@@ -778,6 +778,20 @@
       ]
     },
     {
+      "$comment": "The public discovery document, root-mounted beside /api/v2 (HttpRequestOptions.originRoot). The account menu reads server_version for its version line, once the menu has opened.",
+      "id": "discovery.getClientDiscovery",
+      "method": "GET",
+      "path": "/.well-known/elitea-client",
+      "originRoot": true,
+      "operationId": "getClientDiscovery",
+      "source": "generated",
+      "responseSchema": "DiscoveryDocument",
+      "fixture": null,
+      "usedBy": [
+        "widgets/account-menu"
+      ]
+    },
+    {
       "id": "auth.permissionList",
       "method": "GET",
       "path": "/auth/permissions/prompt_lib/{project_id}",

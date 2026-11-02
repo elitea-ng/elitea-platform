@@ -4950,5 +4950,15 @@
   "desktop.chats.unpin": "إلغاء التثبيت",
   "desktop.chats.untitled": "دردشة بلا عنوان",
   "desktop.chats.yesterday": "أمس",
-  "desktop.shell.workshop": "الورشة"
+  "desktop.shell.workshop": "الورشة",
+  "desktop.account.appearance": "المظهر",
+  "desktop.account.getHelp": "الحصول على مساعدة",
+  "desktop.account.language": "اللغة",
+  "desktop.account.menu": "قائمة الحساب",
+  "desktop.account.reportBug": "الإبلاغ عن خطأ",
+  "desktop.account.signOut": "تسجيل الخروج",
+  "desktop.account.troubleshoot": "استكشاف الأخطاء وإصلاحها",
+  "desktop.account.usage": "الاستخدام",
+  "desktop.account.whatsNew": "الجديد",
+  "desktop.shell.settings": "الإعدادات"
 }
