@@ -105,6 +105,13 @@ import type { APIRequestContext, APIResponse } from '@playwright/test';
 
 test.use({ storageState: STORAGE_STATE.admin });
 
+// A catalogue case publishes, polls the catalogue for up to 20 s, then
+// withdraws and deletes in `finally`. On a slow WebKit shard that passed the
+// default 30 s: the test was torn down before its cleanup, the published
+// agents stayed, and the autotest sweep (API-FX3) failed on them. 90 s leaves
+// the cleanup its own time.
+test.describe.configure({ timeout: 90_000 });
+
 /** A name no other worker, engine or run can collide with. */
 function autotestName(tag: string): string {
   return `${AUTOTEST_PREFIX}${tag}_${Math.random().toString(36).slice(2, 8)}`;
