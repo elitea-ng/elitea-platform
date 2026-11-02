@@ -561,6 +561,57 @@ for (const route of ADMIN_ROUTES.filter((r) => r.light)) {
 }
 
 /*
+ * The console's chrome (PR 1553): the shared account menu at the nav's foot,
+ * which replaced the console's own theme switcher, and the nav at a short
+ * window, where its links scroll between the fixed header and the footer.
+ * Both on the Users page, whose landmark is already measured above.
+ */
+async function openUsers(page: Page): Promise<void> {
+  await page.goto(BASE_URL + '/admin/app/users', { waitUntil: 'domcontentloaded' });
+  await adminShellSettled(page);
+  await expect(page.getByRole('main').getByText('e2e-admin@autotest.local').first()).toBeVisible({ timeout: 20_000 });
+  await noProgressBar(page);
+}
+
+async function shootAdmin(page: Page, name: string): Promise<void> {
+  await settle(page);
+  await expect(page).toHaveScreenshot(`${name}.png`, {
+    fullPage: false,
+    mask: adminVolatileRegions(page),
+    stylePath: ADMIN_SCREENSHOT_STYLE,
+    ...SNAPSHOT_TOLERANCE,
+  });
+}
+
+test('@visual admin-account-menu', async ({ page }) => {
+  await openUsers(page);
+  await page.getByTestId('admin-nav-user-button').click();
+  const menu = page.getByRole('menu', { name: 'Account menu' });
+  await expect(menu).toBeVisible({ timeout: 10_000 });
+  await expect(menu.getByRole('menuitem', { name: 'Back to Elitea' })).toBeVisible();
+  await expect(menu.getByTestId('account-menu-version')).toBeVisible();
+  await shootAdmin(page, 'admin-account-menu');
+});
+
+test.describe('short window', () => {
+  test.use({ viewport: { width: 1024, height: 600 } });
+
+  test('@visual admin-nav-short-viewport', async ({ page }) => {
+    await openUsers(page);
+    const region = page.getByTestId('admin-nav-scroll');
+    // The links overflow at this height, and the region (not the page) scrolls.
+    await expect
+      .poll(() => region.evaluate((el) => el.scrollHeight > el.clientHeight), { timeout: 10_000 })
+      .toBe(true);
+    await region.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect(page.getByTestId('admin-nav-user-button')).toBeInViewport();
+    await shootAdmin(page, 'admin-nav-short-viewport');
+  });
+});
+
+/*
  * ── CLASSIFICATION: why a refusal screen gets a baseline and a stub does not ──
  *
  * `check-visual-coverage.mjs` enforces only `wiringStatus: wired`, on the

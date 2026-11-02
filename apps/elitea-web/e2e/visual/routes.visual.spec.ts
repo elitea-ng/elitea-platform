@@ -73,7 +73,7 @@ import { test, expect, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
 import { keepThemeOffTheServer } from '../fixtures/serverTheme';
-import { SNAPSHOT_TOLERANCE, selectProject, settle, shellSettled, volatileRegions } from './lib/settle';
+import { SNAPSHOT_TOLERANCE, chatLandmark, selectProject, settle, shellSettled, volatileRegions } from './lib/settle';
 
 
 /*
@@ -141,23 +141,13 @@ const ROUTES: readonly VisualRoute[] = [
     // @covers /chat
     name: 'chat-empty-state',
     path: '/app/chat',
-    // CHANGED, and this is a real defect fix rather than a tidy-up. The
-    // previous landmark was `getByTestId('chat-input').or(getByRole(
-    // 'textbox')).first()`, audited under #174 and KEPT on the strength of a
-    // blanket-stall measurement. Re-measured with the shell allowed through
-    // and the stall held for five minutes, `chat-input` resolves in BOTH
-    // states — the composer is chrome, not data — so it could not have
-    // distinguished a loaded chat page from a loading one.
-    //
-    // And there is something to distinguish, measured: with this route's API
-    // stalled the conversation sidebar (mounted by #128) renders a row
-    // SKELETON and the model chip reads "NONE"; loaded, the sidebar reads
-    // "Still no conversations created." and the chip reads the seeded model
-    // name. Sampled at 3/8/15/22/30/40s under a sustained stall, neither ever
-    // converged — chip stayed "NONE", the empty-state text never appeared.
-    //
-    // The conversation empty state is the landmark: loaded YES, stalled no.
-    landmark: (page) => page.getByText('Still no conversations created.'),
+    // The model chip naming a real model (`chatLandmark` in lib/settle.ts).
+    // Measured under #174 with the shell allowed through and the API stalled:
+    // the composer (`chat-input`) renders in both states, so it is chrome, not
+    // data; the chip reads "None" stalled and the seeded model loaded. The
+    // landmark was the conversation column's empty text until PR 1553 moved
+    // the chat list into the sidebar, where it is masked as volatile.
+    landmark: (page) => chatLandmark(page),
     light: true,
   },
   {
@@ -687,7 +677,7 @@ for (const route of ROUTES.filter((r) => r.light)) {
 test('@visual chat-empty-rail-collapsed', async ({ page }) => {
   await page.goto(BASE_URL + '/app/chat', { waitUntil: 'domcontentloaded' });
   await shellSettled(page);
-  await expect(page.getByText('Still no conversations created.')).toBeVisible({ timeout: 20_000 });
+  await expect(chatLandmark(page)).toBeVisible({ timeout: 20_000 });
 
   // The real control (`SidebarHeader`'s `sidebar-toggle`), not a store poke.
   await page.getByTestId('sidebar-toggle').click();
@@ -724,12 +714,10 @@ test('@visual chat-empty-rail-collapsed', async ({ page }) => {
  *    means seeding to a known list state. Recorded as an EXEMPT entry in
  *    scripts/check-visual-coverage.mjs, which prints it on every run.
  *
- *    Now more tractable than when it was written, and worth saying why: the
- *    conversation sidebar is actually mounted (#128), and the `/chat` landmark
- *    above is proof it renders from resolved data ("Still no conversations
- *    created." is the empty branch of that very list). A seed that creates a
- *    FIXED set of conversations before the visual project runs would make the
- *    list deterministic and unblock all four shots.
+ *    Now more tractable than when it was written: the conversation list is
+ *    the sidebar's (`shell-chats`, PR 1553) and every shot masks it, so only
+ *    the transcript itself would still need a FIXED seed before the visual
+ *    project runs to unblock all four shots.
  *
  *  - `/help-center` (2 shots). Still EXEMPT, but no longer for the reason
  *    written here before unit A14. `useResourcesConfig` now HAS a backend: the

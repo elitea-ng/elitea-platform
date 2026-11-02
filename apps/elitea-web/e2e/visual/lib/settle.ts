@@ -45,6 +45,9 @@ export function volatileRegions(page: Page): Locator[] {
     // has when the shutter opens — other journeys add and remove them — and
     // their relative-date groups move with the clock.
     page.locator('[data-testid="shell-chats"]'),
+    // The account menu's version line names the build under test, which every
+    // release and every PR build changes.
+    page.locator('[data-testid="account-menu-version"]'),
   ];
 }
 
@@ -56,15 +59,19 @@ export function volatileRegions(page: Page): Locator[] {
  * (and so the nav is at full length), the project name proves the project list
  * resolved (and so the switcher is not showing its "No projects" fallback).
  *
- * The rail's `Agents` link is used because it is gated and, scoped to the
- * rail, unambiguous; any of `PERMISSION_GROUPS`' entries would do.
- * (`Credentials` was the landmark until it moved into the account menu.) `Applications`
+ * The rail's `Artifacts` link is used because it is gated (`artifacts.view`),
+ * scoped to the rail it is unambiguous, and it is a top-level row: the gated
+ * places that remain (Agents, Pipelines, Toolkits) sit inside the Workshop
+ * group, which is closed until opened, so their links are not on screen.
+ * (`Credentials` was the landmark until it moved into the account menu; its
+ * first replacement, `Agents`, failed every `/app/**` shot for the Workshop
+ * reason.) `Applications`
  * and `Skills` would NOT — `requiredPermissionsFor` returns undefined for them,
  * so they render during load too.
  *
  * MEASURED (shell-allowed stall vs. full stall, on
  * `/settings/create-personal-token`, which has no data of its own):
- *   Credentials nav link       loaded YES  stalled no   <- permission-gated
+ *   Credentials nav link       loaded YES  stalled no   <- permission-gated (Artifacts is gated the same way)
  *   resolved project name      loaded YES  stalled no
  *   "No projects" fallback     loaded no   stalled YES
  *   Applications nav link      loaded YES  stalled YES  <- ungated, no good
@@ -85,7 +92,7 @@ export async function shellSettled(
   projectName = DEFAULT_PROJECT_NAME,
 ): Promise<void> {
   await expect(
-    page.getByRole('navigation', { name: 'side-bar' }).getByRole('link', { name: 'Agents', exact: true }),
+    page.getByRole('navigation', { name: 'side-bar' }).getByRole('link', { name: 'Artifacts', exact: true }),
   ).toBeVisible({
     timeout: 20_000,
   });
@@ -109,6 +116,19 @@ export async function shellSettled(
   // fixtures the routes that name them use), so the project is now CHOSEN here,
   // through the switcher, and the wait becomes the assertion that it took.
   await ensureProjectSelected(page, projectName);
+}
+
+/**
+ * The `/app/chat` landmark: the composer's model chip naming a real model.
+ *
+ * The page's old landmark, the conversation column's "Still no conversations
+ * created.", went with that column (PR 1553): the chat list is the sidebar's
+ * now, and it is masked as volatile. The chip is the other half of the old
+ * measurement: under a stalled API it reads the empty-catalogue fallback
+ * "None", loaded it reads the project's default model.
+ */
+export function chatLandmark(page: Page): Locator {
+  return page.getByTestId('model-selector-name').filter({ hasNotText: /^\s*none\s*$/i });
 }
 
 /**
