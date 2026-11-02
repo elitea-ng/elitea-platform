@@ -42,7 +42,7 @@ import Snackbar from '@mui/material/Snackbar';
 
 import { t } from '@/shared/i18n';
 
-import { ARCHIVED_PATH, ChatRailProvider, openConversationId, PINNED_GROUP, useChatRail, useChatRailFilter, type ChatRail } from '../model/chatRail';
+import { ARCHIVED_PATH, ChatRailProvider, openConversationId, PINNED_GROUP, useChatRail, useChatRailFilter, useRailDemand, type ChatRail } from '../model/chatRail';
 import { useChatDisclosures } from '../model/useChatDisclosures';
 import { useRowActions } from '../model/useRowActions';
 import { chatGroupKey } from '../model/useSectionOpen';
@@ -146,6 +146,7 @@ function TailRows({ empty, searching, pathname }: { readonly empty: boolean; rea
 
 function ChatsList(props: ChatsSectionProps & { readonly rail: ChatRail }): React.JSX.Element {
   const { rail, pathname } = props;
+  useRailDemand();
   const errors = useErrorReport(rail, props.onError);
   const filter = useChatRailFilter();
   const openId = openConversationId(pathname);

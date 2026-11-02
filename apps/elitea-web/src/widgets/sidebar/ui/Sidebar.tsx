@@ -30,8 +30,8 @@ export interface SidebarProps {
 
 /**
  * SHELL-001..012 — the sidebar's outer chrome: the permanent `Drawer`, and
- * the chat list's data (`ChatRailProvider`, read while the rail is open —
- * collapsed, it shows no chats). Ported from
+ * the chat list's data (`ChatRailProvider`, kept across a collapse and read
+ * only while the Chats list is on screen). Ported from
  * `[fsd]/widgets/sidebar-root/ui/Sidebar.jsx` / `[fsd]/app/layout/MainSidebar.jsx`. Consumed by `widgets/app-shell`, which
  * supplies the four data props (project list, selected project, and
  * permission set — none of which this widget fetches itself beyond its own
@@ -77,7 +77,8 @@ export function Sidebar({ permissions, projects, selectedProjectId, onSelectProj
           paper: { sx: { boxSizing: 'border-box', width: `${width}px`, background: 'transparent' } },
         }}
       >
-        <ChatRailProvider projectId={selectedProjectId} enabled={!collapsed}>
+        {/* Above the collapse branch, so collapsing keeps the rail's rows and search; `lazy` reads only while the Chats list is on screen. */}
+        <ChatRailProvider projectId={selectedProjectId} enabled lazy>
           <SidebarBody
             collapsed={collapsed}
             onToggleCollapsed={toggle}

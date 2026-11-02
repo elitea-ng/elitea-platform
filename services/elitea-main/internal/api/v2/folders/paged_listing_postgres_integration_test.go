@@ -328,3 +328,26 @@ func TestGroupedListingKeepsLocalWorkThreadsBehindTheirFilter(t *testing.T) {
 		t.Fatalf("a search found %v, want all 3 with the local work thread marked", sources)
 	}
 }
+
+// A FOLDER NAMES ITS OWNER. Rename, pin and delete are the owner's alone
+// (the repository's `owner_id=$actor` guard), and the rail greys those items
+// out for everyone else by comparing this field with the caller's id. The
+// listing never carried it, so the rail's comparison read `undefined` and the
+// three items were disabled even for the folder's own creator.
+func TestGroupedListingNamesEachFoldersOwner(t *testing.T) {
+	pool := newPinnedListingPool(t)
+	folders := []handler.Folder{{ID: "5", ProjectID: "1", Name: "autotest_owned_folder", OwnerID: "7"}}
+
+	var listing struct {
+		Folders []struct {
+			Name    string `json:"name"`
+			OwnerID string `json:"owner_id"`
+		} `json:"folders"`
+	}
+	if err := json.Unmarshal(callFolders(t, pool, folders, "?grouped=true"), &listing); err != nil {
+		t.Fatal(err)
+	}
+	if len(listing.Folders) != 1 || listing.Folders[0].OwnerID != "7" {
+		t.Fatalf("folders=%+v, want autotest_owned_folder owned by 7", listing.Folders)
+	}
+}

@@ -12,8 +12,15 @@
  * The shell provides it while the person can use the chat (the Chats row is
  * in the sidebar's list). `ChatsSection` outside a provider (its own tests)
  * holds a rail of its own.
+ *
+ * The rail's state (rows, search, filter) lives as long as the provider, so
+ * collapsing the sidebar or the Chats list keeps it. A `lazy` provider (the
+ * web sidebar, mounted on every page) reads the listing and follows its live
+ * stream only while a Chats list is on screen (`useRailDemand`); otherwise it
+ * reads whenever it is `enabled` (the desktop, whose title row names the open
+ * conversation from the rail).
  */
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import type { Conversation } from '@/entities/conversation';
 import { useConversationRail } from '@/features/chat-conversation-list';
@@ -34,6 +41,8 @@ const SEARCH_DEBOUNCE_MS = 300;
 
 const ChatRailContext = createContext<ChatRail | null>(null);
 const ChatRailFilterContext = createContext<ChatRailFilter | null>(null);
+/** Registers one on-screen reader of a lazy rail; returns its release. */
+const RailDemandContext = createContext<(() => () => void) | null>(null);
 
 function useDebounced(value: string, delayMs: number): string {
   const [settled, setSettled] = useState(value);
@@ -44,22 +53,41 @@ function useDebounced(value: string, delayMs: number): string {
   return settled;
 }
 
-function RailHolder({ projectId, children }: { readonly projectId: string | undefined; readonly children: ReactNode }): React.JSX.Element {
+export interface ChatRailProviderProps {
+  readonly projectId: string | undefined;
+  /** Whether the person can use the chat here at all; `false` provides no rail. */
+  readonly enabled: boolean;
+  /** Read only while a Chats list is on screen (`useRailDemand`). */
+  readonly lazy?: boolean;
+  readonly children: ReactNode;
+}
+
+export function ChatRailProvider({ projectId, enabled, lazy = false, children }: ChatRailProviderProps): React.JSX.Element {
+  const [readers, setReaders] = useState(0);
+  const demand = useCallback(() => {
+    setReaders((count) => count + 1);
+    return () => setReaders((count) => count - 1);
+  }, []);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [localWorkOnly, setLocalWorkOnly] = useState(false);
   const searchQuery = useDebounced(searchOpen ? query.trim() : '', SEARCH_DEBOUNCE_MS);
-  const rail = useConversationRail({ projectId, searchQuery, localWorkOnly });
+  const rail = useConversationRail({ projectId, searchQuery, localWorkOnly, enabled: enabled && (!lazy || readers > 0) });
   const filter = useMemo(() => ({ searchOpen, setSearchOpen, query, setQuery, localWorkOnly, setLocalWorkOnly }), [searchOpen, query, localWorkOnly]);
+  if (!enabled) return <>{children}</>;
   return (
-    <ChatRailFilterContext.Provider value={filter}>
-      <ChatRailContext.Provider value={rail}>{children}</ChatRailContext.Provider>
-    </ChatRailFilterContext.Provider>
+    <RailDemandContext.Provider value={demand}>
+      <ChatRailFilterContext.Provider value={filter}>
+        <ChatRailContext.Provider value={rail}>{children}</ChatRailContext.Provider>
+      </ChatRailFilterContext.Provider>
+    </RailDemandContext.Provider>
   );
 }
 
-export function ChatRailProvider({ projectId, enabled, children }: { readonly projectId: string | undefined; readonly enabled: boolean; readonly children: ReactNode }): React.JSX.Element {
-  return enabled ? <RailHolder projectId={projectId}>{children}</RailHolder> : <>{children}</>;
+/** A Chats list on screen: a lazy rail reads (and follows its stream) while one is mounted. */
+export function useRailDemand(): void {
+  const demand = useContext(RailDemandContext);
+  useEffect(() => demand?.(), [demand]);
 }
 
 /** The shell's chat rail, or `null` outside a provider (or without the chat). */

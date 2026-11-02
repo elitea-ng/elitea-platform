@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Project } from '@/entities/project';
+import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { PERMISSION_GROUPS, PERMISSIONS } from '@/shared/lib/permissions';
 import { server } from '@/test/setup';
@@ -119,6 +120,46 @@ describe('Sidebar', () => {
     expect(container.querySelector('a[href="/agents"]')).not.toBeNull();
     expect(screen.getByTestId('sidebar-new-chat')).toHaveAccessibleName('New chat');
     expect(screen.queryByTestId('shell-chats-caption')).not.toBeInTheDocument();
+  });
+
+  describe('the chat list reads only while it is on screen', () => {
+    let listingReads: number;
+    beforeEach(() => {
+      configureGeneratedClient({ baseUrl: '/api/v2' });
+      listingReads = 0;
+      server.use(
+        http.get('*/auth/permissions/prompt_lib/:projectId', () => HttpResponse.json([{ name: 'models.chat.folders.get', enabled: true }])),
+        http.get('*/elitea_core/folder/prompt_lib/:projectId', () => {
+          listingReads += 1;
+          return HttpResponse.json({ pinned: { conversations: [] }, folders: [], date_groups: [], total_folders: 0 });
+        }),
+      );
+    });
+    afterEach(() => resetGeneratedClient());
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 100));
+
+    it('reads while the Chats list is on screen', async () => {
+      await renderSidebar();
+      await vi.waitFor(() => expect(listingReads).toBeGreaterThan(0));
+    });
+
+    it('reads nothing while the rail is collapsed', async () => {
+      window.localStorage.setItem('el.sidebar.collapsed', '1');
+      await renderSidebar();
+      await settle();
+      expect(listingReads).toBe(0);
+    });
+
+    it('reads nothing while the Chats list is closed, and reads once it opens', async () => {
+      const user = userEvent.setup();
+      window.localStorage.setItem('el.desktop.chatsOpen', 'false');
+      await renderSidebar();
+      await settle();
+      expect(listingReads).toBe(0);
+
+      await user.click(screen.getByTestId('shell-chats-toggle'));
+      await vi.waitFor(() => expect(listingReads).toBeGreaterThan(0));
+    });
   });
 
   it('the Agents nav link points at /agents', async () => {

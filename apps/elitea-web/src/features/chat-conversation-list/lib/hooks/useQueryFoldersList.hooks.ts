@@ -54,6 +54,12 @@ export interface UseQueryFoldersListParams {
   /** `local_work` lists only desktop Local work threads (the rail's filter); absent lists the ordinary rail, which leaves them out. */
   readonly source?: string;
   /**
+   * `false` neither reads the listing nor follows the live activity stream
+   * (the rows already held stay). The sidebar's rail is mounted on every page
+   * but read only while its Chats list is on screen. Default `true`.
+   */
+  readonly enabled?: boolean;
+  /**
    * Baseline: `useSortQueryParamsFromUrl({defaultSortOrder: 'desc',
    * defaultSortBy: 'updated_at'})` reads the CURRENT URL's `sort_by`/
    * `sort_order` query params — a router-level concern `features/` may not
@@ -99,6 +105,7 @@ export function useQueryFoldersList(params: UseQueryFoldersListParams): UseQuery
     skipSetConversation,
     searchQuery,
     source,
+    enabled = true,
     sortBy = 'updated_at',
     sortOrder = 'desc',
   } = params;
@@ -116,14 +123,14 @@ export function useQueryFoldersList(params: UseQueryFoldersListParams): UseQuery
   const hasGetPermission = useHasPermission(projectId, PERMISSIONS.chat.folders.get);
 
   // Client contract 1.12: the rows' activity follows the project's live frames.
-  useConversationActivityLiveEvents(projectId);
+  useConversationActivityLiveEvents(enabled ? projectId : undefined);
 
   const query = folderApi.useList(
     {
       projectId: projectId ?? '',
       params: { sort_by: sortBy, sort_order: sortOrder, ...(searchQuery ? { query: searchQuery } : {}), ...(source ? { source } : {}) },
     },
-    { enabled: projectId !== undefined && hasGetPermission },
+    { enabled: enabled && projectId !== undefined && hasGetPermission },
   );
 
   /**

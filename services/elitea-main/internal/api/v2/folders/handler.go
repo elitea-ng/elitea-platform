@@ -31,6 +31,12 @@ type Folder struct {
 	ProjectID string `json:"project_id"`
 	Name      string `json:"name"`
 	ParentID  string `json:"parent_id,omitempty"`
+	// OwnerID is the user who created the folder. Rename, pin and delete
+	// are theirs alone (the repository's `owner_id=$actor` guard), and the
+	// rail greys those menu items out for everyone else by comparing this
+	// with the caller's id — so the listing has to carry it. Server-set:
+	// a create or update body's value is never read.
+	OwnerID string `json:"owner_id,omitempty"`
 	// Position orders the sidebar, DESCENDING: the highest position renders
 	// first. That is the legacy ordering (`order_by(desc(position),
 	// created_at)`, folder.py:325-328) and the one the web client's own
@@ -682,6 +688,9 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 			"total":         total,
 			"offset":        offset,
 			"needs_you":     countNeedsYou(convs, paused),
+		}
+		if f.OwnerID != "" {
+			row["owner_id"] = f.OwnerID
 		}
 		if f.Position != nil {
 			row["position"] = *f.Position

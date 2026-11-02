@@ -147,6 +147,30 @@ describe('foldersList', () => {
   });
 
   /*
+   * DEFECT: the normaliser dropped a folder's `owner_id`, so the rail's owner
+   * guard compared `undefined` with the caller's id and greyed out Rename, Pin
+   * and Delete on every folder, the caller's own included.
+   */
+  it('carries a folder’s wire `owner_id` through as a string `ownerId`', async () => {
+    server.use(
+      http.get(`${BASE}/elitea_core/folder/prompt_lib/7`, () =>
+        HttpResponse.json({
+          pinned: { conversations: [] },
+          date_groups: [],
+          folders: [
+            { id: 'f1', name: 'Mine', owner_id: '7', conversations: [] },
+            { id: 'f2', name: 'Numeric', owner_id: 9, conversations: [] },
+            { id: 'f3', name: 'Unowned', conversations: [] },
+          ],
+          total_folders: 3,
+        }),
+      ),
+    );
+    const result = await foldersList({ projectId: 7 });
+    expect(result.folders.map((folder) => folder.ownerId)).toEqual(['7', '9', undefined]);
+  });
+
+  /*
    * DEFECT: the bucket wire shape declared only `name`/`conversations`, so the
    * normaliser dropped the `total`/`offset` pair the grouped listing sends per
    * date group — the same pair it already kept for a folder. Downstream, a

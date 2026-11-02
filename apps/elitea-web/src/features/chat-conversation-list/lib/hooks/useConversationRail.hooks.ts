@@ -94,10 +94,21 @@ function useContainers() {
 
 type Containers = ReturnType<typeof useContainers>;
 
+/** What narrows the listing; every follow-up page is read under the same filter as the first. */
+interface ListingFilter {
+  readonly query?: string;
+  readonly source?: string;
+}
+
+function pageFilter(query: string | undefined, source: string | undefined): ListingFilter {
+  return { ...(query !== undefined ? { query } : {}), ...(source !== undefined ? { source } : {}) };
+}
+
 /** The next page of one date group or folder, merged the way the web rail merges it. */
-function useLoadMore(projectId: string | undefined, containers: Containers, toastError: (message: string) => void) {
+function useLoadMore(projectId: string | undefined, filter: ListingFilter, containers: Containers, toastError: (message: string) => void) {
   const { dateGroups, folders, pinned, setDateGroups, setFolders } = containers;
   const loading = useRef(new Set<string>());
+  const { query, source } = filter;
   const load = useCallback(
     async (key: string, read: () => Promise<LoadMorePage>, apply: (page: LoadMorePage, pinnedIds: ReadonlySet<string>) => void) => {
       if (loading.current.has(key)) return;
@@ -117,22 +128,22 @@ function useLoadMore(projectId: string | undefined, containers: Containers, toas
       const group = dateGroups.find((candidate) => candidate.name === groupName);
       if (projectId === undefined || group === undefined || !hasMore(group)) return;
       const offset = group.offset ?? group.conversations.length;
-      void load(`group:${groupName}`, () => folderApi.conversationsByDateGroup({ projectId, dateGroup: groupName, limit: PAGE_SIZE, offset }), (page, pinnedIds) =>
+      void load(`group:${groupName}`, () => folderApi.conversationsByDateGroup({ projectId, dateGroup: groupName, limit: PAGE_SIZE, offset, ...pageFilter(query, source) }), (page, pinnedIds) =>
         setDateGroups((prev) => prev.map((g) => (g.name === groupName ? { ...g, ...mergeLoadMorePage(g, page, pinnedIds) } : g))),
       );
     },
-    [dateGroups, load, projectId, setDateGroups],
+    [dateGroups, load, projectId, query, setDateGroups, source],
   );
   const loadMoreInFolder = useCallback(
     (folderId: string) => {
       const folder = folders.find((candidate) => candidate.id === folderId);
       if (projectId === undefined || folder === undefined || !hasMore(folder)) return;
       const offset = folder.offset ?? folder.conversations.length;
-      void load(`folder:${folderId}`, () => folderApi.conversationsByFolder({ projectId, folderId, limit: PAGE_SIZE, offset }), (page, pinnedIds) =>
+      void load(`folder:${folderId}`, () => folderApi.conversationsByFolder({ projectId, folderId, limit: PAGE_SIZE, offset, ...pageFilter(query, source) }), (page, pinnedIds) =>
         setFolders((prev) => prev.map((f) => (f.id === folderId ? { ...f, ...mergeLoadMorePage(f, page, pinnedIds) } : f))),
       );
     },
-    [folders, load, projectId, setFolders],
+    [folders, load, projectId, query, setFolders, source],
   );
   return { loadMoreInGroup, loadMoreInFolder };
 }
@@ -176,9 +187,11 @@ export interface ConversationRailOptions {
   readonly searchQuery?: string;
   /** Only the Local work threads. */
   readonly localWorkOnly?: boolean;
+  /** `false` pauses the listing and its live stream; the rows held stay. Default `true`. */
+  readonly enabled?: boolean;
 }
 
-export function useConversationRail({ projectId, searchQuery, localWorkOnly = false }: ConversationRailOptions): ConversationRail {
+export function useConversationRail({ projectId, searchQuery, localWorkOnly = false, enabled = true }: ConversationRailOptions): ConversationRail {
   const containers = useContainers();
   const [error, setError] = useState<string | undefined>(undefined);
   const toastError = useCallback((message: string) => setError(message), []);
@@ -187,6 +200,8 @@ export function useConversationRail({ projectId, searchQuery, localWorkOnly = fa
   const queryClient = useQueryClient();
   const invalidate = useCallback(() => void queryClient.invalidateQueries({ queryKey: FOLDER_LIST_KEY }), [queryClient]);
 
+  const query = searchQuery !== undefined && searchQuery !== '' ? searchQuery : undefined;
+  const source = localWorkOnly ? LOCAL_WORK_SOURCE : undefined;
   const listing = useQueryFoldersList({
     projectId,
     toastError,
@@ -195,8 +210,9 @@ export function useConversationRail({ projectId, searchQuery, localWorkOnly = fa
     setPinnedConversations: containers.setPinned,
     // The route says which conversation is open; the listing's own pick would only highlight the last one used.
     skipSetConversation: true,
-    ...(searchQuery !== undefined && searchQuery !== '' ? { searchQuery } : {}),
-    ...(localWorkOnly ? { source: LOCAL_WORK_SOURCE } : {}),
+    enabled,
+    ...(query !== undefined ? { searchQuery: query } : {}),
+    ...(source !== undefined ? { source } : {}),
   });
 
   // The rail has no "active conversation" state of its own (the route is the selection).
@@ -213,7 +229,7 @@ export function useConversationRail({ projectId, searchQuery, localWorkOnly = fa
   const pin = useCallback((conversation: Conversation, shouldPin: boolean) => void onPinConversation(conversation, shouldPin), [onPinConversation]);
   const { rename, remove } = useEdits(projectId, containers.transform, toastError, invalidate);
   const { createFolder, moveToFolder } = useConversationRailFolders(projectId, containers, toastError, invalidate);
-  const { loadMoreInGroup, loadMoreInFolder } = useLoadMore(projectId, containers, toastError);
+  const { loadMoreInGroup, loadMoreInFolder } = useLoadMore(projectId, pageFilter(query, source), containers, toastError);
   const extras = useConversationRailExtras(projectId, containers, toastError, invalidate);
   const { transform } = containers;
   const removeRow = useCallback((conversationId: string) => transform((items) => items.filter((item) => item.id !== conversationId)), [transform]);
@@ -225,12 +241,7 @@ export function useConversationRail({ projectId, searchQuery, localWorkOnly = fa
   );
 
   const canModifyFolder = useCallback(
-    (folder: FolderListItem) => {
-      // The listing names a folder's owner `owner_id` (the folder entity, `authorId`).
-      const raw = folder as { readonly authorId?: string; readonly owner_id?: string | number };
-      const owner = raw.authorId ?? raw.owner_id;
-      return currentUserId !== undefined && owner !== undefined && String(owner) === currentUserId;
-    },
+    (folder: FolderListItem) => currentUserId !== undefined && folder.ownerId !== undefined && folder.ownerId === currentUserId,
     [currentUserId],
   );
 
