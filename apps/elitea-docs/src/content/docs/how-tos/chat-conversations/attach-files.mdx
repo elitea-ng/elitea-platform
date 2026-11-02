@@ -25,6 +25,10 @@ Type a message describing what you want done with the file, then send.
 The exact file-type allowlist and the maximum file size or count per message are configured per deployment rather than fixed in the client — this page does not state specific numbers because they could not be verified against a single value in source. If a file is rejected, the composer's error message names the limit that applies on your deployment.
 </Note>
 
+## Spreadsheets with unusual internal file names
+
+An `.xlsx`, `.xlsb` or `.ods` file is a ZIP archive. Some tools write archive entries whose names are not UTF-8. Text extraction skips only an entry whose name cannot be decoded, and still reads the sheets. An edit that opens a workbook and saves it again refuses a workbook with such an entry. It returns a "malformed document" error, so the save can never drop that part without a warning.
+
 ## Where attached files go
 
 Every file you attach uploads to a shared `attachments` bucket automatically — you don't configure a bucket yourself. You can browse, download or delete anything in it from the Artifacts menu; see [Artifacts](/menus/artifacts) for bucket management and retention. By default a bucket's files expire after 30 days, but this can be changed per bucket.

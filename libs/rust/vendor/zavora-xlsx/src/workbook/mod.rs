@@ -456,18 +456,23 @@ impl Workbook {
             "docProps/",
         ];
         let mut passthrough = Vec::new();
-        let entry_names: Vec<String> = (0..zip.archive.len())
-            .filter_map(|i| {
-                // Elitea patch (zip 9): `ZipFile::name` returns
-                // `Result<Cow<str>, ZipError>`, not `&str`. An entry whose
-                // name does not decode is skipped, as an entry that does not
-                // open already was.
-                zip.archive
-                    .by_index_raw(i)
-                    .ok()
-                    .and_then(|e| e.name().ok().map(std::borrow::Cow::into_owned))
-            })
-            .collect();
+        let mut entry_names: Vec<String> = Vec::with_capacity(zip.archive.len());
+        for i in 0..zip.archive.len() {
+            // An entry that does not open is skipped, as upstream does.
+            let Ok(entry) = zip.archive.by_index_raw(i) else {
+                continue;
+            };
+            // Elitea patch (zip 9): `ZipFile::name` returns
+            // `Result<Cow<str>, ZipError>`, not `&str`, because zip 9 decodes
+            // a name on demand. The collected parts are written back on save,
+            // and zip 9 writes a name only from a `str`, so a part whose name
+            // does not decode cannot be preserved under its own bytes.
+            // Skipping it would lose the part silently on the next save, so
+            // the open fails with the typed `Error::Zip` instead. zip 9.1
+            // decodes a name that is not UTF-8 as CP437, which maps every
+            // byte, so such a part is kept under that reading.
+            entry_names.push(entry.name()?.into_owned());
+        }
         for name in &entry_names {
             if !known_prefixes
                 .iter()
