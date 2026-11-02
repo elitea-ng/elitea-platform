@@ -116,6 +116,18 @@ const (
 	// the revision and the sha256 of the text. The text is never in the
 	// event.
 	TypeConfigChanged EventType = "ai.elitea.security.v1.config.changed"
+	// TypeIdentityLinkChanged is an operator change of a user's federated
+	// identity link (issue #1460), written by `elitea-main oidc-relink`. The
+	// actions are identity.oidc_link.replaced (an account's OIDC subject
+	// replaced by a new one), identity.oidc_link.cleared (the subject removed,
+	// so that the next login links the account again by email) and
+	// identity.oidc_link.added (a new subject on an account with no OIDC
+	// link). ResourceType is "user" and ResourceID the user id, PrincipalRef
+	// the operator, and the reasons are the codes provider_namespace:oidc and
+	// via:oidc-relink. No subject is in the event, and no digest of one: a
+	// subject is often guessable (a numeric id, an email address), so its
+	// unsalted digest would disclose it.
+	TypeIdentityLinkChanged EventType = "ai.elitea.security.v1.identity.link.changed"
 )
 
 // OCSF class and category uids (https://schema.ocsf.io).
@@ -123,6 +135,7 @@ const (
 	OCSFCategoryIAM                 = 3
 	OCSFCategoryApplicationActivity = 6
 
+	OCSFClassAccountChange        = 3001
 	OCSFClassEntityManagement     = 3004
 	OCSFClassAuthorizeSession     = 3003
 	OCSFClassUserAccessManagement = 3005
@@ -152,6 +165,7 @@ var ocsfClasses = map[EventType]int{
 	TypeAgentBreaker:            OCSFClassEntityManagement,
 	TypeAgentCapOverride:        OCSFClassAPIActivity,
 	TypeConfigChanged:           OCSFClassEntityManagement,
+	TypeIdentityLinkChanged:     OCSFClassAccountChange,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.

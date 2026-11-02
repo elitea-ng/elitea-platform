@@ -748,7 +748,10 @@ func TestAhaTenantHostsAreAllowedByDefault(t *testing.T) {
 				"base_url": test.baseURL,
 				"api_key":  "aha-token",
 			})
-			egressRefused := outcome.Message == "This provider endpoint is not permitted by the platform's configuration."
+			egressRefused := strings.Contains(outcome.Message, handler.ToolkitCheckAllowlistEnv)
+			if egressRefused && !strings.Contains(outcome.Message, "example.invalid") {
+				t.Fatalf("the refusal %q does not name the refused host", outcome.Message)
+			}
 			if egressRefused != test.refused {
 				t.Fatalf("egress refusal = %v, want %v (outcome %+v)", egressRefused, test.refused, outcome)
 			}

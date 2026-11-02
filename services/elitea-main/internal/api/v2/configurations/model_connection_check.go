@@ -136,7 +136,7 @@ func modelConnectionMessageFor(reason, detail string) string {
 	}
 	switch {
 	case reason == "egress_not_allowed":
-		detail = connectionCheckMessages[reason]
+		detail = egressNotAllowedMessage(detail)
 	case reason == "timeout" && detail == "":
 		detail = "The model did not answer within 30 seconds."
 	}

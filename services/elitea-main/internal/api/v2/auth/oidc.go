@@ -512,11 +512,16 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, errIdentityConflict) {
-			// The subject and the address name two different accounts. Only an
-			// operator can decide which one survives, so the login stops here
-			// rather than picking one.
-			slog.Warn("OIDC: refused a login that names two accounts", "sub", claims.Sub)
-			http.Error(w, "this identity is already linked to another account", http.StatusConflict)
+			// The subject and the address name two different accounts, or the
+			// account the address names may not be adopted by this login.
+			// Only an operator can decide, so the login stops here rather
+			// than picking one. Each cause gets its own answer and remedy
+			// (oidcIdentityConflictMessage); only the re-created-subject
+			// case names `elitea-main oidc-relink` (#1460).
+			cause := identityConflictCauseOf(err)
+			slog.Warn("OIDC: refused a login that names two accounts",
+				"sub", claims.Sub, "cause", cause.String(), "provider", runtime.origin)
+			http.Error(w, oidcIdentityConflictMessage(cause), http.StatusConflict)
 			return
 		}
 		if errors.Is(err, errEmailNotVerified) {
@@ -558,8 +563,112 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 var errUserSuspended = errors.New("user account is suspended")
 
 // errIdentityConflict means the provider subject and the email claim name two
-// different accounts. The login stops; only an operator can merge them.
+// different accounts, or that the account the address names may not be
+// adopted by this login. The login stops; only an operator can resolve it.
+// Every conflict the resolution returns is an *identityConflictError, which
+// matches errIdentityConflict under errors.Is and carries the cause.
 var errIdentityConflict = errors.New("provider identity conflicts with the email claim")
+
+// identityConflictCause is why a login was refused with errIdentityConflict.
+// The causes need different remedies, so the 409 must not name one remedy for
+// all of them.
+type identityConflictCause int
+
+const (
+	// conflictUnknown is a bare errIdentityConflict (a caller outside this
+	// file). It gets the generic answer.
+	conflictUnknown identityConflictCause = iota
+	// conflictOIDCSubjectHeld: another OIDC subject holds the account the
+	// address names. The usual cause is an identity provider that deleted
+	// and re-created the user, so the user has a new `sub`. The operator
+	// remedy is `elitea-main oidc-relink`.
+	conflictOIDCSubjectHeld
+	// conflictSAMLSubjectHeld: a SAML subject holds the account. Cross-protocol
+	// adoption is refused (see joinAccountByEmail); oidc-relink does not apply.
+	conflictSAMLSubjectHeld
+	// conflictSCIMAdoptionRefused: the account is SCIM-provisioned and has no
+	// federated link, and this provider's adopt_scim_users is off
+	// (identityrepo.AdoptionGuard).
+	conflictSCIMAdoptionRefused
+	// conflictEmailTaken: the subject is linked, and its new address belongs
+	// to a different account (reuseLinkedAccount's address repair).
+	conflictEmailTaken
+	// conflictConcurrentChange: the account or the link changed while the
+	// login ran (a concurrent delete, or a concurrent first login of the
+	// same subject). A retry decides it.
+	conflictConcurrentChange
+)
+
+func (c identityConflictCause) String() string {
+	switch c {
+	case conflictOIDCSubjectHeld:
+		return "oidc_subject_holds_account"
+	case conflictSAMLSubjectHeld:
+		return "saml_subject_holds_account"
+	case conflictSCIMAdoptionRefused:
+		return "scim_adoption_refused"
+	case conflictEmailTaken:
+		return "email_held_by_another_account"
+	case conflictConcurrentChange:
+		return "concurrent_change"
+	default:
+		return "unknown"
+	}
+}
+
+// identityConflictError is errIdentityConflict with its cause.
+type identityConflictError struct {
+	cause identityConflictCause
+}
+
+func newIdentityConflict(cause identityConflictCause) error {
+	return &identityConflictError{cause: cause}
+}
+
+func (e *identityConflictError) Error() string {
+	return errIdentityConflict.Error() + " (" + e.cause.String() + ")"
+}
+
+func (e *identityConflictError) Is(target error) bool { return target == errIdentityConflict }
+
+// identityConflictCauseOf returns the cause err carries, conflictUnknown for
+// a bare errIdentityConflict.
+func identityConflictCauseOf(err error) identityConflictCause {
+	var conflict *identityConflictError
+	if errors.As(err, &conflict) {
+		return conflict.cause
+	}
+	return conflictUnknown
+}
+
+// identityConflictLinkedMessage is the first sentence of the 409 for an
+// account another subject holds. It is the old body, unchanged.
+const identityConflictLinkedMessage = "this identity is already linked to another account"
+
+// oidcIdentityConflictMessage is the 409 body for each cause. None names the
+// other account or any of its identifiers.
+func oidcIdentityConflictMessage(cause identityConflictCause) string {
+	switch cause {
+	case conflictOIDCSubjectHeld:
+		return identityConflictLinkedMessage + ". If your identity provider re-created your user, " +
+			"ask an administrator to relink your account (elitea-main oidc-relink)."
+	case conflictSAMLSubjectHeld:
+		return identityConflictLinkedMessage + ": the account with this email address signs in through SAML. " +
+			"Sign in through that provider, or ask an administrator to resolve the conflict."
+	case conflictSCIMAdoptionRefused:
+		return "the account with this email address is provisioned by the directory (SCIM), " +
+			"and this identity provider may not sign in to directory accounts. " +
+			"An administrator can allow it with the provider's adopt_scim_users setting " +
+			"(OIDC_ADOPT_SCIM_USERS for the provider configured through environment variables)."
+	case conflictEmailTaken:
+		return "the email address your identity provider now sends belongs to another account. " +
+			"Ask an administrator to resolve the conflict."
+	case conflictConcurrentChange:
+		return "your account changed while you signed in. Sign in again."
+	default:
+		return identityConflictLinkedMessage + ". Ask an administrator to resolve the conflict."
+	}
+}
 
 // errEmailNotVerified means a subject with no link asked to join an account by
 // email alone. The identity provider did not state that the address is verified.
@@ -601,11 +710,11 @@ func oidcAdoptsSCIMUsers() bool {
 //
 // THE ONLY ACCEPTED PROOF IS AN EXPLICIT `"email_verified": true`. An ABSENT
 // claim is not proof, and OIDC_REQUIRE_EMAIL_VERIFIED does not make it one.
-// That variable gates joinAccountByEmail — the step where an unknown subject
-// ADOPTS an existing account — and nothing else. A brand new subject with no
-// `email_verified` claim still provisions a new account with the variable set
-// to true, so reading the variable here would report a verification that no
-// component performed. An operator whose provider omits the claim names the
+// That variable gates joinAccountByEmail — the first login of an unknown
+// subject, which adopts an existing account or creates a new one — and nothing
+// else. With the variable off, a subject with no `email_verified` claim still
+// gets an account, so reading the variable here would report a verification
+// that no component performed. An operator whose provider omits the claim names the
 // login by `oidc:<sub>` instead, and reads that value off
 // `GET /api/v2/social/author`.
 //
@@ -777,7 +886,7 @@ func reuseLinkedAccount(
 	if errors.As(err, &conflict) && conflict.Code == "23505" {
 		// A DIFFERENT account already holds this address. Writing it here would
 		// need the two accounts merged, which only an operator can decide.
-		return 0, false, errIdentityConflict
+		return 0, false, newIdentityConflict(conflictEmailTaken)
 	}
 	if err != nil {
 		return 0, false, fmt.Errorf("touch provider identity: %w", err)
@@ -875,9 +984,9 @@ func joinAccountByEmail(
 		email, name, federatedRefPatterns(), adoptSCIMUsers,
 	).Scan(&userID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// The address matched a row the conflict clause refused. Read which of
-		// the two reasons it was, so the caller reports the right one.
-		return 0, refusedEmailReason(ctx, tx, email)
+		// The address matched a row the conflict clause refused. Read which
+		// reason it was, so the caller reports the right one.
+		return 0, refusedEmailReason(ctx, tx, email, adoptSCIMUsers)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("upsert user: %w", err)
@@ -906,29 +1015,50 @@ func joinAccountByEmail(
 		return 0, fmt.Errorf("read linked provider: %w", err)
 	}
 	if ownerID != userID {
-		return 0, errIdentityConflict
+		return 0, newIdentityConflict(conflictConcurrentChange)
 	}
 	return userID, nil
 }
 
 // refusedEmailReason names why the email upsert wrote no row. The conflict
-// clause has two arms, and the caller must report the right one.
+// clause refuses a suspended row and a row the adoption guard refuses
+// (identityrepo.AdoptionGuard), and the caller must report the right one.
 //
-// A suspended account is reported as suspended. Every other outcome is reported
-// as a conflict, and that answer withholds the account. Two outcomes reach it:
-// another OIDC subject already holds the account, or a concurrent change removed
-// the row.
-func refusedEmailReason(ctx context.Context, tx pgx.Tx, email string) error {
-	var suspended bool
+// A suspended account is reported as suspended. Every other outcome is a
+// conflict with its cause, read in the guard's order: an OIDC subject holds
+// the account, a SAML subject holds it, or it is SCIM-provisioned and this
+// provider does not adopt SCIM users. A row that is gone, or that none of
+// those describe any more, was changed concurrently. No answer names the
+// other account.
+func refusedEmailReason(ctx context.Context, tx pgx.Tx, email string, adoptSCIMUsers bool) error {
+	var suspended, oidcHeld, samlHeld, scim bool
 	err := tx.QueryRow(ctx,
-		`SELECT suspended FROM auth_core__user
-		 WHERE lower(email) = lower($1::text)
-		 ORDER BY (email = $1::text) DESC, id
+		`SELECT account.suspended,
+		        EXISTS (SELECT 1 FROM auth_core__user_provider AS bound
+		                WHERE bound.user_id = account.id AND bound.provider_ref LIKE $2::text),
+		        EXISTS (SELECT 1 FROM auth_core__user_provider AS bound
+		                WHERE bound.user_id = account.id AND bound.provider_ref LIKE $3::text),
+		        EXISTS (SELECT 1 FROM elitea_auth.scim_users AS scim WHERE scim.user_id = account.id)
+		 FROM auth_core__user AS account
+		 WHERE lower(account.email) = lower($1::text)
+		 ORDER BY (account.email = $1::text) DESC, account.id
 		 LIMIT 1`,
-		email,
-	).Scan(&suspended)
-	if err == nil && suspended {
+		email, OIDCProviderRefPrefix+"%", SAMLProviderRefPrefix+"%",
+	).Scan(&suspended, &oidcHeld, &samlHeld, &scim)
+	switch {
+	case err != nil:
+		// pgx.ErrNoRows is a concurrent delete. Any other read error leaves
+		// the cause unknown, and a retry is the right answer for it too.
+		return newIdentityConflict(conflictConcurrentChange)
+	case suspended:
 		return errUserSuspended
+	case oidcHeld:
+		return newIdentityConflict(conflictOIDCSubjectHeld)
+	case samlHeld:
+		return newIdentityConflict(conflictSAMLSubjectHeld)
+	case scim && !adoptSCIMUsers:
+		return newIdentityConflict(conflictSCIMAdoptionRefused)
+	default:
+		return newIdentityConflict(conflictConcurrentChange)
 	}
-	return errIdentityConflict
 }
