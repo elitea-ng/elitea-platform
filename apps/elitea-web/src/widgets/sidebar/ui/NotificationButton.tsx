@@ -16,6 +16,7 @@ import NotificationsNoneOutlined from '@mui/icons-material/NotificationsNoneOutl
 
 import { NOTIFICATIONS_QUERY_ROOT, useNotificationsList, useNotificationsSSE } from '@/features/notifications';
 import { t } from '@/shared/i18n';
+import { selectPersonalProjectId } from '@/shared/lib/personalProject';
 
 import { NotificationPopoverContent } from './NotificationPopoverContent';
 
@@ -49,12 +50,8 @@ import { NotificationPopoverContent } from './NotificationPopoverContent';
  * **Personal-project scoping:** notifications are scoped to
  * `personal_project_id`, matching the rest of this Wave-2 unit
  * (`routes/_shell/settings/notifications.tsx`, `routes/_shell/settings/
- * tokens.tsx`). Neither route may be imported from a widget (R-L1), so the
- * small `PersonalProjectIdContext`/`isPersonalProjectIdContext`/
- * `selectPersonalProjectId` trio below is a duplicate of the identical
- * shim those two files each already carry independently — this codebase's
- * established convention for a seam with no shared accessor and near-zero
- * reuse value (documented at each of those two call sites).
+ * tokens.tsx`), read through `shared/lib/personalProject`'s
+ * `selectPersonalProjectId`, the one reader the shell's surfaces share.
  *
  * **Live push is SSE, not socket.io (issue #92):** the old app's
  * `useSocket(sioEvents.notifications_notify, ...)` subscription is gone;
@@ -104,20 +101,6 @@ import { NotificationPopoverContent } from './NotificationPopoverContent';
  * accurate old-app position for whoever next revisits the sidebar header.
  * See `SidebarBody.tsx`'s own doc comment for the mount-point wiring.
  */
-interface PersonalProjectIdContext {
-  readonly auth?: {
-    readonly getUser?: () => { readonly personal_project_id?: string } | undefined;
-  };
-}
-
-function isPersonalProjectIdContext(value: unknown): value is PersonalProjectIdContext {
-  return typeof value === 'object' && value !== null;
-}
-
-function selectPersonalProjectId(context: unknown): string | undefined {
-  if (!isPersonalProjectIdContext(context)) return undefined;
-  return context.auth?.getUser?.()?.personal_project_id;
-}
 
 /**
  * How often the badge query polls once the live stream is gone for good. One

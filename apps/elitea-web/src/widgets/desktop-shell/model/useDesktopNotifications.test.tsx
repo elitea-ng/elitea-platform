@@ -93,4 +93,11 @@ describe('useDesktopNotifications', () => {
     // The count still reaches the Dock badge.
     expect(notices.unread).toBe(2);
   });
+
+  it('sets the Dock badge back to zero when the feed goes away', async () => {
+    const { hook, notices } = mount();
+    await waitFor(() => expect(notices.unread).toBe(1));
+    hook.unmount();
+    await waitFor(() => expect(notices.unread).toBe(0));
+  });
 });

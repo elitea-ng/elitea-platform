@@ -9,10 +9,10 @@ import { useNavigate } from '@tanstack/react-router';
 
 import { isPublicProject } from '@/entities/project';
 import { useForkConversation } from '@/features/chat-conversation-list';
-import type { SocialAuthorProfile } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { unwrapBody } from '@/shared/api/unwrap';
 import { getConfig } from '@/shared/config';
+import { personalProjectIdOf } from '@/shared/lib/personalProject';
 
 import { conversationShareLink, copyText } from '../lib/conversationLink';
 import type { ConversationRowActions } from '../lib/conversationMenu';
@@ -26,11 +26,11 @@ export interface RowRights {
 /** Neither the public project nor the person's own: a chat in it may be public. */
 function useCanChangeVisibility(projectId: string | undefined): boolean {
   const author = useGetCurrentAuthor();
-  const personal = (unwrapBody(author.data) as SocialAuthorProfile | undefined)?.personal_project_id;
+  const personal = personalProjectIdOf(unwrapBody(author.data));
   if (projectId === undefined) return false;
   const config = getConfig();
   if (config.status === 'ok' && isPublicProject(projectId, config.config.vite_public_project_id)) return false;
-  return personal === undefined || String(personal) !== projectId;
+  return personal === undefined || personal !== projectId;
 }
 
 export function useRowActions(rail: ChatRail, openId: string, projectId: string | undefined, rights: RowRights, onError: (message: string) => void): ConversationRowActions {

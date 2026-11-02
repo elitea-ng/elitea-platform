@@ -25,9 +25,16 @@ export interface PlatformNotice {
   setUnread(unread: number): Promise<void>;
 }
 
+/**
+ * `text` on one line, at most `max` CODE POINTS (the host's limits count
+ * Rust `char`s), the last an `…` when it was longer. A UTF-16 `slice` could
+ * cut an emoji in half, and the lone surrogate left behind is not valid JSON
+ * text for the host: the whole notice was refused. A lone surrogate already
+ * in the text becomes U+FFFD for the same reason.
+ */
 function clip(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
+  const points = Array.from(text.replace(/\s+/g, ' ').trim(), (point) => (/^[\uD800-\uDFFF]$/.test(point) ? '\uFFFD' : point));
+  return points.length <= max ? points.join('') : `${points.slice(0, max - 1).join('').trimEnd()}…`;
 }
 
 export function createPlatformNotice(invoke: HostInvoke): PlatformNotice {

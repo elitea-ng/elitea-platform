@@ -11,8 +11,14 @@
  *  - the Dock badge — the unread count, beside the approvals waiting.
  *
  * It listens like the web bell does: the stream signals, the list says what;
- * once the stream's reconnects are spent, the list is polled slowly. The rows
- * already unread when the app starts are not announced again.
+ * once the stream's reconnects are spent, the list is polled slowly — in the
+ * background too, since a native notice is shown only while the window is
+ * NOT focused (a poll paused there would announce nothing). The rows already
+ * unread when the app starts are not announced again.
+ *
+ * The Dock badge is the host's and outlives this hook, so it is set back to
+ * zero when the feed ends: signed out (no personal project) or unmounted (the
+ * frame leaves, a deployment switch).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -20,10 +26,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 
 import { NOTIFICATIONS_QUERY_ROOT, systemNoticesEnabled, systemNoticeText, useNotificationsList, useNotificationsSSE, type NormalizedNotification } from '@/features/notifications';
-import type { SocialAuthorProfile } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { unwrapBody } from '@/shared/api/unwrap';
 import { platformNotice, type PlatformNotice } from '@/shared/desktop/platformNotice';
+import { personalProjectIdOf } from '@/shared/lib/personalProject';
 
 const SLOW_POLL_MS = 60_000;
 /** A burst (a reconnect after a long sleep) shows this many notices, not one per row. */
@@ -76,8 +82,7 @@ function useNativeNotices(rows: readonly NormalizedNotification[] | undefined, h
 
 function usePersonalProjectId(): string | undefined {
   const author = useGetCurrentAuthor();
-  const id = (unwrapBody(author.data) as SocialAuthorProfile | undefined)?.personal_project_id;
-  return id === undefined ? undefined : String(id);
+  return personalProjectIdOf(unwrapBody(author.data));
 }
 
 /** `notices` stands in for the host (tests); by default the desktop host's, none in a plain browser tab. */
@@ -93,19 +98,21 @@ export function useDesktopNotifications(notices?: PlatformNotice): DesktopNotifi
   const { streamDead } = useNotificationsSSE(projectId, onNotify);
   const list = useNotificationsList(
     { projectId: projectId ?? '', pageSize: 10, params: { only_new: true } },
-    { enabled: projectId !== undefined, refetchInterval: streamDead ? SLOW_POLL_MS : false, refetchIntervalInBackground: false },
+    { enabled: projectId !== undefined, refetchInterval: streamDead ? SLOW_POLL_MS : false, refetchIntervalInBackground: streamDead },
   );
   // Every read is authoritative: a push only lights the dot until the list says otherwise.
   const { data, dataUpdatedAt } = list;
   useEffect(() => {
     if (data !== undefined) setPushed(false);
   }, [data, dataUpdatedAt]);
-  const unread = data?.total ?? 0;
+  const unread = projectId === undefined ? 0 : (data?.total ?? 0);
   const hasUnread = pushed || unread > 0;
   useEffect(() => resolveBellStore().setState({ projectId, hasUnread }), [projectId, hasUnread]);
   useEffect(() => {
     void host?.setUnread(unread).catch(() => undefined);
   }, [host, unread]);
+  // The badge is the host's: clear it when this feed goes away.
+  useEffect(() => () => void host?.setUnread(0).catch(() => undefined), [host]);
   useNativeNotices(data?.rows, host);
   return { projectId, rows: data?.rows ?? [] };
 }
