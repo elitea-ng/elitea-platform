@@ -58,6 +58,17 @@
         "configuration_model": "embedding",
         "title": "Embedding Model"
       },
+      "image_description_prompt": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Image Description Prompt"
+      },
       "limit": {
         "anyOf": [
           {
@@ -68,6 +79,17 @@
           }
         ],
         "title": "Limit"
+      },
+      "process_images": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Process Images"
       },
       "project": {
         "title": "Project",
@@ -435,6 +457,28 @@
         ],
         "configuration_model": "embedding",
         "title": "Embedding Model"
+      },
+      "image_description_prompt": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Image Description Prompt"
+      },
+      "process_images": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Process Images"
       },
       "project": {
         "title": "Project",

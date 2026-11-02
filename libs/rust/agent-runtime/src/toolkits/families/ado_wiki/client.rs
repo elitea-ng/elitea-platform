@@ -10,6 +10,7 @@ use crate::toolkits::families::ado::client::{
 };
 use crate::toolkits::families::ado::config::AdoToolkitConfig;
 use crate::toolkits::families::ado::format::as_dict;
+use crate::toolkits::families::ado::image_defaults::AdoImageDefaults;
 
 const WIKI_API: &str = "7.0";
 const PROJECTS_API: &str = "7.0";
@@ -51,6 +52,9 @@ pub(crate) struct RenameWikiPage<'a> {
 pub(crate) struct AdoWikiClient {
     ado: AdoClient,
     default_wiki: Option<Box<str>>,
+    /// The instance's `process_images` and `image_description_prompt`
+    /// defaults (#985).
+    pub(super) images: AdoImageDefaults,
 }
 
 impl AdoWikiClient {
@@ -63,7 +67,18 @@ impl AdoWikiClient {
     }
 
     pub(crate) fn with_client(ado: AdoClient, default_wiki: Option<Box<str>>) -> Self {
-        Self { ado, default_wiki }
+        Self {
+            ado,
+            default_wiki,
+            images: AdoImageDefaults::default(),
+        }
+    }
+
+    /// The same client, with the instance's image defaults.
+    #[must_use]
+    pub(crate) fn with_image_defaults(mut self, images: AdoImageDefaults) -> Self {
+        self.images = images;
+        self
     }
 
     pub(crate) fn default_wiki(&self) -> Option<&str> {

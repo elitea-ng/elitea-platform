@@ -14,6 +14,7 @@ use crate::toolkits::families::ado::client::{
 };
 use crate::toolkits::families::ado::config::AdoToolkitConfig;
 use crate::toolkits::families::ado::format::{as_dict, python_json_string};
+use crate::toolkits::families::ado::image_defaults::AdoImageDefaults;
 use crate::toolkits::families::ado::work_items::{
     DEFAULT_SEARCH_FIELDS, FieldDefinition, WORK_ITEMS_API, create_work_item,
     format_work_item_type_fields, get_work_item, id_text, transform_work_item, update_work_item,
@@ -55,6 +56,9 @@ pub(crate) struct AdoBoardsClient {
     /// The artifact store and chat model the run lends, when it lends them
     /// (`attach_file_to_work_item`, `get_image_by_url`).
     pub(super) attachments: Option<AttachmentHost>,
+    /// The instance's `process_images` and `image_description_prompt`
+    /// defaults (#985).
+    pub(super) images: AdoImageDefaults,
     relation_types: Mutex<Option<BTreeMap<String, String>>>,
     type_fields: Mutex<BTreeMap<String, Vec<FieldDefinition>>>,
 }
@@ -73,9 +77,17 @@ impl AdoBoardsClient {
             ado,
             limit,
             attachments: None,
+            images: AdoImageDefaults::default(),
             relation_types: Mutex::new(None),
             type_fields: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// The same client, with the instance's image defaults.
+    #[must_use]
+    pub(crate) fn with_image_defaults(mut self, images: AdoImageDefaults) -> Self {
+        self.images = images;
+        self
     }
 
     /// The same client, lent the run's artifact store and chat model.

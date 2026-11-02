@@ -4,8 +4,9 @@
  * wave 4 package W1.
  *
  * ── The pipeline, in the order the cases walk it ───────────────────────────
- *   1. CONFIGURE — `process_images` is an argument of the tool, not a field of
- *      the toolkit; `get_comments` defaults it to false (2599, 2610).
+ *   1. CONFIGURE — `process_images` is an argument of the tool, and the
+ *      toolkit instance can set its default (#985); `get_comments` defaults it
+ *      to false when neither names it (2599, 2610).
  *   2. DETECT — `_embed_comment_image_descriptions` scans `renderedText`/`text`
  *      for `<img src>` and for `![](…)`, and `get_comments` forces
  *      `$expand=renderedText` so the HTML is there to scan (2600).
@@ -423,9 +424,8 @@ test('many images in one comment are each described once, and a repeat is dedupl
   }
 });
 
-/* onetest: ELITEA-2610 — two toolkit instances in one agent each answer to their OWN call, which is as far
- * as configuration flexibility goes today: `process_images` is a tool argument and not a toolkit setting,
- * so an instance cannot carry a default at all. */
+/* onetest: ELITEA-2610 — two toolkit instances in one agent each answer to their OWN call: the call's
+ * `process_images` argument overrides whatever the instance sets (#985). */
 test('two toolkit instances each honour their own call', async ({ page }) => {
   test.setTimeout(360_000);
   const agent = await createAdoAgent(page, 'instances', {
@@ -463,21 +463,17 @@ test('two toolkit instances each honour their own call', async ({ page }) => {
 });
 
 /* onetest: ELITEA-2610 — a toolkit INSTANCE configured with process_images must apply it to every call
- * that omits the argument, so two instances can differ without the model deciding. */
+ * that omits the argument, so two instances can differ without the model deciding. The ado_boards and
+ * ado_wiki settings carry `process_images` and `image_description_prompt` (#985), and the native
+ * runtime applies them as the default of each call that omits the argument. The file-level fixme
+ * (ADO_NATIVE_GAP) still parks this case until the native family describes images. */
 test('a toolkit instance can default process_images for its own calls', async ({ page }) => {
-  test.fail(
-    true,
-    'ELITEA-2610: product gap — process_images is a tool ARGUMENT only; the ado_boards settings schema ' +
-      'has no such field, so an instance cannot default it and the model decides every call (#985)',
-  );
   test.setTimeout(360_000);
   const agent = await createAdoAgent(page, 'instdefault', {
     type: 'ado_boards',
     selectedTools: [...BOARDS_TOOLS],
     // What the case asks for: the INSTANCE turns image processing on, and a
-    // call that names no argument inherits it. The create route applies
-    // catalogue defaults and drops nothing, so this key reaches the stored row
-    // and is simply never read.
+    // call that names no argument inherits it (#985).
     settings: { ...BOARDS_SETTINGS, process_images: true, image_description_prompt: SHORT_PROMPT },
   });
   try {

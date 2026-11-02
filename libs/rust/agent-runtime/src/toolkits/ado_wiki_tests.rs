@@ -370,3 +370,49 @@ async fn every_tool_keeps_the_sdk_contract() {
         .expect("complete ado_wiki toolset");
     super::sdk_conformance::assert_sdk_conformance("ado_wiki", &tools(&toolset).await);
 }
+
+#[tokio::test]
+async fn the_instance_image_settings_parse_and_a_wrong_argument_is_refused() {
+    // #985: `process_images` and `image_description_prompt` may be set on the
+    // instance. A wrongly typed setting or argument is refused before any call.
+    let (_, images) = AdoWikiToolkitConfig::parse(&settings(
+        &json!({"process_images":false,"image_description_prompt":"short caption"}),
+    ))
+    .expect("valid image settings")
+    .into_parts();
+    for invalid in [
+        json!({"process_images":"no"}),
+        json!({"image_description_prompt":3}),
+    ] {
+        assert!(
+            AdoWikiToolkitConfig::parse(&settings(&invalid)).is_err(),
+            "{invalid} must be refused"
+        );
+    }
+    let transport = FixtureTransport::new(|_, _| panic!("no request for invalid arguments"));
+    let client = Arc::new(wiki(transport, Some("Team.wiki")).with_image_defaults(images));
+    let toolset = build_with_client("wiki", &[], &policy(&[]), client).expect("toolset");
+    let served = tools(&toolset).await;
+    for (name, arguments) in [
+        (
+            "get_wiki_page_by_path",
+            json!({"page_name":"/p","process_images":"yes"}),
+        ),
+        (
+            "get_wiki_page_by_id",
+            json!({"page_id":1,"image_description_prompt":1}),
+        ),
+        (
+            "get_wiki_page",
+            json!({"page_path":"/p","process_images":0}),
+        ),
+    ] {
+        assert!(
+            tool(&served, name)
+                .execute(context(), arguments.clone())
+                .await
+                .is_err(),
+            "{name} {arguments}"
+        );
+    }
+}

@@ -1280,3 +1280,98 @@ async fn a_work_item_that_keeps_changing_is_reported_as_uploaded_but_not_linked(
         3
     );
 }
+
+/// The toolset over `boards` with the image defaults that `extra` settings
+/// parse to, as `build_ado_boards_toolset` composes them (#985).
+async fn image_default_tools(
+    transport: Arc<FixtureTransport>,
+    extra: &Value,
+) -> Vec<Arc<dyn adk_core::Tool>> {
+    let (_, images) = AdoBoardsToolkitConfig::parse(&settings(extra))
+        .expect("valid image settings")
+        .into_parts();
+    let client = Arc::new(boards(transport).with_image_defaults(images));
+    let toolset = build_with_client("boards", &[], &policy(&[]), client).expect("toolset");
+    tools(&toolset).await
+}
+
+#[tokio::test]
+async fn the_instance_process_images_is_the_default_of_a_get_comments_call() {
+    // `process_images` asks for the rendered comment HTML. The instance turns
+    // it on; a call that omits the argument (or sends null) inherits it, and a
+    // call that names it overrides it.
+    let transport = FixtureTransport::new(|_, _| ok(json!({"comments":[]})));
+    let served = image_default_tools(
+        transport.clone(),
+        &json!({"process_images":true,"image_description_prompt":"short caption"}),
+    )
+    .await;
+    for arguments in [
+        json!({"work_item_id":5}),
+        json!({"work_item_id":5,"process_images":null}),
+        json!({"work_item_id":5,"process_images":false}),
+        json!({"work_item_id":5,"process_images":true,"image_description_prompt":"other"}),
+    ] {
+        tool(&served, "get_comments")
+            .execute(context(), arguments)
+            .await
+            .expect("comments");
+    }
+    let expands = transport
+        .requests()
+        .iter()
+        .map(|request| request.query_value("$expand").map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        expands,
+        [
+            Some("renderedText".to_owned()),
+            Some("renderedText".to_owned()),
+            Some("none".to_owned()),
+            Some("renderedText".to_owned()),
+        ]
+    );
+
+    // Without the setting, get_comments keeps the SDK default (off).
+    let transport = FixtureTransport::new(|_, _| ok(json!({"comments":[]})));
+    let served = image_default_tools(transport.clone(), &json!({})).await;
+    tool(&served, "get_comments")
+        .execute(context(), json!({"work_item_id":5}))
+        .await
+        .expect("comments");
+    assert_eq!(transport.requests()[0].query_value("$expand"), Some("none"));
+}
+
+#[tokio::test]
+async fn image_settings_and_arguments_of_the_wrong_type_are_refused() {
+    for invalid in [
+        json!({"process_images":"yes"}),
+        json!({"image_description_prompt":["a"]}),
+    ] {
+        let Err(error) = AdoBoardsToolkitConfig::parse(&settings(&invalid)) else {
+            panic!("{invalid} must be refused");
+        };
+        assert_eq!(error.code(), AdoConfigErrorCode::InvalidConfiguration);
+    }
+    let transport = FixtureTransport::new(|_, _| panic!("no request for invalid arguments"));
+    let served = image_default_tools(transport, &json!({"process_images":true})).await;
+    for (name, arguments) in [
+        (
+            "get_comments",
+            json!({"work_item_id":5,"process_images":"no"}),
+        ),
+        ("get_work_item", json!({"id":5,"process_images":1})),
+        (
+            "get_work_item",
+            json!({"id":5,"image_description_prompt":false}),
+        ),
+    ] {
+        assert!(
+            tool(&served, name)
+                .execute(context(), arguments.clone())
+                .await
+                .is_err(),
+            "{name} {arguments}"
+        );
+    }
+}

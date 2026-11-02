@@ -428,7 +428,12 @@ pub(crate) fn build_ado_boards_toolset(
             "Azure DevOps tools that need the artifact store or chat model are left out"
         );
     }
-    let client = Arc::new(AdoBoardsClient::new(config.into_inner())?.with_attachments(attachments));
+    let (config, images) = config.into_parts();
+    let client = Arc::new(
+        AdoBoardsClient::new(config)?
+            .with_image_defaults(images)
+            .with_attachments(attachments),
+    );
     build_with_client(toolkit_name, &selected, policy, client)
 }
 
@@ -556,8 +561,8 @@ async fn dispatch(
             )?;
             // Accepted for the SDK call shape; see the tool description.
             optional_bool(arguments, "parse_attachments", false)?;
-            optional_bool(arguments, "process_images", true)?;
-            optional_str(arguments, "image_description_prompt", MAX_TEXT_BYTES)?;
+            client.images.process_images(arguments, true)?;
+            client.images.image_description_prompt(arguments)?;
             let fields = optional_string_list(arguments, "fields")?;
             client
                 .get_work_item(
@@ -611,7 +616,7 @@ async fn dispatch(
                     "image_description_prompt",
                 ],
             )?;
-            optional_str(arguments, "image_description_prompt", MAX_TEXT_BYTES)?;
+            client.images.image_description_prompt(arguments)?;
             client
                 .get_comments(GetComments {
                     work_item_id: required_id(arguments, "work_item_id")?,
@@ -621,7 +626,8 @@ async fn dispatch(
                         optional_str(arguments, "expand", MAX_IDENTIFIER_BYTES)?.unwrap_or("none"),
                     ),
                     order: optional_str(arguments, "order", MAX_IDENTIFIER_BYTES)?,
-                    process_images: optional_bool(arguments, "process_images", false)?,
+                    // The call's argument, else the instance setting (#985).
+                    process_images: client.images.process_images(arguments, false)?,
                 })
                 .await
         }

@@ -228,7 +228,8 @@ pub(crate) fn build_ado_wiki_toolset(
     policy: &Arc<ToolAdmissionPolicy>,
 ) -> Result<BasicToolset, AdoToolsetError> {
     let selected = config.selected_tools().to_vec();
-    let client = Arc::new(AdoWikiClient::new(config.into_inner())?);
+    let (config, images) = config.into_parts();
+    let client = Arc::new(AdoWikiClient::new(config)?.with_image_defaults(images));
     build_with_client(toolkit_name, &selected, policy, client)
 }
 
@@ -300,8 +301,8 @@ async fn dispatch(
                     "recursion_level",
                 ],
             )?;
-            optional_str(arguments, "image_description_prompt", MAX_TEXT_BYTES)?;
-            optional_bool(arguments, "process_images", true)?;
+            client.images.image_description_prompt(arguments)?;
+            client.images.process_images(arguments, true)?;
             let recursion_level = optional_str(arguments, "recursion_level", MAX_IDENTIFIER_BYTES)?
                 .unwrap_or("oneLevel");
             if !RECURSION_LEVELS.contains(&recursion_level) {
@@ -336,8 +337,8 @@ async fn dispatch(
                     "process_images",
                 ],
             )?;
-            optional_str(arguments, "image_description_prompt", MAX_TEXT_BYTES)?;
-            optional_bool(arguments, "process_images", true)?;
+            client.images.image_description_prompt(arguments)?;
+            client.images.process_images(arguments, true)?;
             client
                 .page_content(
                     wiki,
@@ -355,8 +356,8 @@ async fn dispatch(
                     "process_images",
                 ],
             )?;
-            optional_str(arguments, "image_description_prompt", MAX_TEXT_BYTES)?;
-            optional_bool(arguments, "process_images", true)?;
+            client.images.image_description_prompt(arguments)?;
+            client.images.process_images(arguments, true)?;
             client
                 .page_content(wiki, PageAddress::Id(required_id(arguments, "page_id")?))
                 .await

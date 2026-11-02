@@ -26,6 +26,10 @@ Under the credential field, choose an existing **ado** credential, or select **C
 If you plan to index this source, set an **embedding model**. Indexes are kept in the platform's vector store, so there is no vector-storage setting to pick. Leave it empty to use the toolkit without indexing.
 </Step>
 
+<Step title="Set the image defaults (optional)">
+**Process Images** and **Image Description Prompt** set the default of the `process_images` and `image_description_prompt` arguments for **Get wiki page**, **Get wiki page by path** and **Get wiki page by id**. A call that sets an argument overrides the toolkit value. Leave a field empty to keep each tool's own default: on. Two toolkits of this type in one agent can have different defaults.
+</Step>
+
 <Step title="Save">
 Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
 </Step>
@@ -59,6 +63,10 @@ The category of a tool decides when a run needs human approval to call it. See [
 </Accordion>
 
 ## Common issues
+
+<Note>
+The agent worker does not yet describe images inline in wiki pages. With `process_images` on, the page content comes back with its image references unchanged. To have an image described, use an indexed wiki: indexing with `process_images` describes the attachment pictures.
+</Note>
 
 <Note>
 The Indexes tab only appears when the configured worker can run this type's `index_data` tool; if the worker can't, the tab is hidden and shows the worker's refusal message. `index_data` itself can't be run from the Test tools pane — use the Indexes tab.
