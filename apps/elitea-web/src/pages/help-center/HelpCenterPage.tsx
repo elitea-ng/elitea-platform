@@ -66,9 +66,11 @@ export function resolveLinks(
 }
 
 /** Theme-aware sx values — MUI calls these functions with the theme. */
+// `100%` of the shell's scroll box, not `100vh`: under the shell's title row
+// a viewport-tall page overflowed by that row and scrolled twice.
 const pageSx: SxProps<Theme> = (t: Theme): SystemStyleObject<Theme> => ({
   width: '100%',
-  height: '100vh',
+  height: '100%',
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
