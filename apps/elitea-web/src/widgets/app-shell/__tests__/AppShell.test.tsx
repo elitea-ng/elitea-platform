@@ -483,8 +483,9 @@ describe('AppShell', () => {
    * answered against a user who has no personal project yet, and both come
    * back empty. Nothing re-asked: `staleTime` is 30s and both queries had
    * SUCCEEDED, so the shell opened on "Project: No projects" with every
-   * permission-gated nav row missing — Chats, Toolkits & Indexes, MCPs, Credentials,
-   * Artifacts — until the user reloaded the page.
+   * permission-gated nav row missing — Chats, Toolkits & Indexes, MCPs,
+   * Artifacts — until the user reloaded the page. (Credentials is in the
+   * account menu now, not on the rail.)
    *
    * Both handlers below answer empty ONCE and then the real thing, which is
    * the sequence the server actually produces. A test whose handlers answered
@@ -530,7 +531,6 @@ describe('AppShell', () => {
     openWorkshop();
     expect(await screen.findByText('Toolkits & Indexes')).toBeInTheDocument();
     expect(screen.getByText('MCPs')).toBeInTheDocument();
-    expect(screen.getByText('Credentials')).toBeInTheDocument();
     expect(screen.getByText('Artifacts')).toBeInTheDocument();
   });
 
@@ -607,7 +607,6 @@ describe('AppShell', () => {
       openWorkshop();
       expect(await screen.findByText('Toolkits & Indexes')).toBeInTheDocument();
       expect(screen.getByText('MCPs')).toBeInTheDocument();
-      expect(screen.getByText('Credentials')).toBeInTheDocument();
       expect(screen.getByText('Artifacts')).toBeInTheDocument();
 
       // The author query is what had to be asked again; the two lists follow

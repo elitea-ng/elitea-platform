@@ -80,12 +80,15 @@ interface AccountButtonProps {
 function AccountButton({ identity, tenant, collapsed, label, expanded, selected, testId, onOpen }: AccountButtonProps): React.JSX.Element {
   // An SSO account may carry only an email.
   const name = identity.name || identity.email || '';
+  // The visible text leads the name (WCAG 2.5.3, axe `label-content-name-mismatch`):
+  // a bare "Account menu" hid the name and tenant a sighted voice-control user reads.
+  const visible = tenant === undefined || collapsed ? name : `${name} · ${tenant}`;
   const button = (
     <ButtonBase
       data-testid={testId}
       aria-haspopup="menu"
       aria-expanded={expanded}
-      aria-label={label}
+      aria-label={visible === '' ? label : `${visible}, ${label}`}
       {...pressToOpen(onOpen)}
       sx={(theme: Theme) => ({
         flex: collapsed ? '0 0 auto' : 1,
@@ -103,7 +106,8 @@ function AccountButton({ identity, tenant, collapsed, label, expanded, selected,
     >
       <Avatar
         src={identity.avatar || undefined}
-        alt={name}
+        alt=""
+        aria-hidden
         sx={(theme: Theme) => ({ width: '1.5rem', height: '1.5rem', fontSize: theme.typography.labelSmall.fontSize })}
       >
         {initials(name)}
