@@ -5532,5 +5532,10 @@
   "pages.admin.governance.type.guardrail": "Content guardrail",
   "pages.admin.governance.help.guardrail": "Detectors that check the request or the answer. Each detector blocks, masks or flags what it finds. Every matching entry runs, and each check is recorded without the matched text.",
   "pages.admin.governance.field.detectorsJsonError": "The detectors must be valid JSON.",
-  "pages.admin.governance.field.detectorsShapeError": "The detectors must be a JSON array with one object or more."
+  "pages.admin.governance.field.detectorsShapeError": "The detectors must be a JSON array with one object or more.",
+  "features.agents.citations.label": "Require citations",
+  "features.agents.citations.tooltip": "The agent cites the tool results it uses as [1], [2]. The chat shows how many sources an answer cites and which statements have no citation. It is not a confidence score.",
+  "features.chatMessages.grounding.more": "{{count}} more not shown.",
+  "features.chatMessages.grounding.sourcesCited": "{{cited}} of {{available}} sources cited",
+  "features.chatMessages.grounding.uncited": "{{count}} statements without a citation"
 }

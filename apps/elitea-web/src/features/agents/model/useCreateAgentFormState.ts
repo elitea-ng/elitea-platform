@@ -41,6 +41,10 @@ export interface CreateAgentFormState {
   readonly outputContract: unknown;
   /** #1500 — writes `meta.output_contract`; `null` clears it. */
   readonly onOutputContractChange: (next: OutputContract | null) => void;
+  /** ADR-0043 decision 5 — `meta.citations` as stored. */
+  readonly citations: unknown;
+  /** Writes `meta.citations`; `null` clears it. */
+  readonly onCitationsChange: (next: 'required' | null) => void;
   /** #307 — replaces the baseline's `setFieldValue('version_details.conversation_starters', ...)` inside `ConversationStarters.jsx` itself. */
   readonly onConversationStartersChange: (next: readonly string[]) => void;
 }
@@ -95,6 +99,10 @@ function deriveVariablesFromInstructions(
 /** Split out of the hook so its optional chain does not count against the hook's complexity budget. */
 function storedOutputContract(values: AgentDraftValues): unknown {
   return values.version_details?.meta?.['output_contract'];
+}
+
+function storedCitations(values: AgentDraftValues): unknown {
+  return values.version_details?.meta?.['citations'];
 }
 
 /**
@@ -202,6 +210,11 @@ export function useCreateAgentFormState(values: AgentDraftValues, onFieldChange:
     [onFieldChange],
   );
 
+  const onCitationsChange = useCallback(
+    (next: 'required' | null) => onFieldChange('version_details.meta.citations', next),
+    [onFieldChange],
+  );
+
   const onConversationStartersChange = useCallback(
     (next: readonly string[]) => onFieldChange('version_details.conversation_starters', next),
     [onFieldChange],
@@ -226,6 +239,8 @@ export function useCreateAgentFormState(values: AgentDraftValues, onFieldChange:
     onStepLimitChange,
     outputContract: storedOutputContract(values),
     onOutputContractChange,
+    citations: storedCitations(values),
+    onCitationsChange,
     onConversationStartersChange,
   };
 }

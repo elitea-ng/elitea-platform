@@ -75,6 +75,7 @@ pub mod edit_profile;
 pub mod egress;
 pub mod exact_number;
 pub mod graph;
+pub mod grounding;
 pub mod host;
 pub mod image_result;
 pub mod instruction_authority;

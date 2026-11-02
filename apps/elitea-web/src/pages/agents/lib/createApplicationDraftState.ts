@@ -1,7 +1,7 @@
 import { areAgentLlmSettingsEqual, type AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type { OutputContract } from '@/shared/api/generated/model';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
-import { areOutputContractsEqual } from '@/shared/ui/OutputContractField';
+import { areOutputContractsEqual, readOutputContract } from '@/shared/ui/OutputContractField';
 
 /**
  * The draft state `pages/agents/CreateApplication.tsx` holds outside its RHF
@@ -42,6 +42,8 @@ export interface CreateAgentFormExtraFields {
   readonly llmSettings: AgentLlmSettings | undefined;
   /** `meta.output_contract` (#1500). `null` is no contract and is not sent. */
   readonly outputContract: OutputContract | null;
+  /** `meta.citations` (ADR-0043 decision 5). `null` is off and is not sent. */
+  readonly citations?: 'required' | null | undefined;
 }
 
 /**
@@ -62,6 +64,7 @@ export function areExtraFieldsEqual(a: CreateAgentFormExtraFields, b: CreateAgen
   if (a.welcomeMessage !== b.welcomeMessage) return false;
   if (a.stepLimit !== b.stepLimit) return false;
   if (!areOutputContractsEqual(a.outputContract, b.outputContract)) return false;
+  if ((a.citations ?? null) !== (b.citations ?? null)) return false;
   // Key by key, never by identity: the picker hands back a fresh object on
   // every change, so an identity check would report "dirty" forever.
   if (!areAgentLlmSettingsEqual(a.llmSettings, b.llmSettings)) return false;
@@ -112,4 +115,18 @@ export function mapCreateErrorToFieldErrors(error: unknown): CreateApplicationFi
     else if (loc.includes('description')) fieldErrors.description = entry.msg;
   }
   return fieldErrors;
+}
+
+/**
+ * The create page's ADR-0043 fields: `meta.output_contract` and
+ * `meta.citations`. Any other path leaves the fields as they are.
+ */
+export function applyContentControlField(
+  previous: CreateAgentFormExtraFields,
+  path: string,
+  value: unknown,
+): CreateAgentFormExtraFields {
+  if (path === 'version_details.meta.output_contract') return { ...previous, outputContract: readOutputContract(value) };
+  if (path === 'version_details.meta.citations') return { ...previous, citations: value === 'required' ? 'required' : null };
+  return previous;
 }

@@ -11,6 +11,7 @@ import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { InfoLabelWithTooltip } from '@/shared/ui/InfoLabelWithTooltip';
 import { OutputContractField, readOutputContract } from '@/shared/ui/OutputContractField';
+import { CitationsField, type CitationsValue } from './CitationsField';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
 
 /**
@@ -52,6 +53,9 @@ export interface ApplicationAdvanceSettingsProps {
   readonly outputContract?: unknown;
   readonly showOutputContract?: boolean | undefined;
   readonly onOutputContractChange?: ((next: OutputContract | null) => void) | undefined;
+  /** `meta.citations` (ADR-0043 decision 5); shown with `showOutputContract`. */
+  readonly citations?: unknown;
+  readonly onCitationsChange?: ((next: CitationsValue) => void) | undefined;
   readonly sx?: SxProps<Theme> | undefined;
 }
 
@@ -99,6 +103,8 @@ export function ApplicationAdvanceSettings({
   outputContract,
   onOutputContractChange,
   showOutputContract,
+  citations,
+  onCitationsChange,
   sx,
 }: ApplicationAdvanceSettingsProps): ReactNode {
   const handleChange = useCallback(
@@ -158,6 +164,9 @@ export function ApplicationAdvanceSettings({
               disabled={disabled}
               testIdPrefix="agent-output-contract"
             />
+          )}
+          {showOutputContract === true && onCitationsChange !== undefined && (
+            <CitationsField value={citations} onChange={onCitationsChange} disabled={disabled} />
           )}
           {showIgnoreProjectContext && (
             <Box sx={toggleRowSx}>

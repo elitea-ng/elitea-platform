@@ -103,6 +103,7 @@ impl ModelFacade {
             primary,
             summary: None,
             output_contract: None,
+            grounding: None,
         })
     }
 
@@ -160,6 +161,10 @@ pub(crate) struct BoundModelFacade {
     /// when the agent or node declares one. Built once per binding; each
     /// final answer gets its own retry.
     output_contract: Option<Arc<dyn adk_rust::Llm>>,
+    /// The model that numbers the request's sources for a root agent that
+    /// must cite (ADR-0043 decision 5). It wraps the output contract model
+    /// when there is one.
+    grounding: Option<Arc<dyn adk_rust::Llm>>,
 }
 
 enum BoundProviderModel {
@@ -185,6 +190,21 @@ impl BoundModelFacade {
                     scope,
                 ),
             ) as Arc<dyn adk_rust::Llm>
+        });
+        self
+    }
+
+    /// Number the sources of every request of this binding and record the
+    /// count for the final message's grounding indicator (ADR-0043 decision
+    /// 5). Call it after [`Self::with_output_contract`]. `None` leaves the
+    /// binding as it is.
+    #[must_use]
+    pub(crate) fn with_grounding(mut self, execution_id: Option<String>) -> Self {
+        self.grounding = execution_id.map(|execution_id| {
+            Arc::new(crate::agents::grounding_model::GroundingModel::new(
+                self.adk_model(),
+                execution_id,
+            )) as Arc<dyn adk_rust::Llm>
         });
         self
     }
@@ -230,8 +250,9 @@ impl BoundOrdinaryAgentModel for BoundModelFacade {
     }
 
     fn adk_model(&self) -> Arc<dyn adk_rust::Llm> {
-        self.output_contract
+        self.grounding
             .clone()
+            .or_else(|| self.output_contract.clone())
             .unwrap_or_else(|| self.primary_model())
     }
 

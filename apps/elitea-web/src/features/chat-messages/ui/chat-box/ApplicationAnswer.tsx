@@ -37,6 +37,8 @@ import { messageNodeRecoveryBinding } from '../../lib/nodeRecoveryBinding';
 import { NodeRecoveryNotice } from './NodeRecoveryNotice';
 import { SkippedCapabilitiesNotice } from './SkippedCapabilitiesNotice';
 import { skippedCapabilitiesOf } from '../../lib/skippedCapabilities';
+import { GroundingIndicator } from './GroundingIndicator';
+import { groundingOf } from '../../lib/grounding';
 import { ApplicationAnswerActions } from './ApplicationAnswerActions';
 import { replyActionsRevealSx } from './ReplyActionButton';
 import { ApplicationAnswerLoading } from './ApplicationAnswerLoading';
@@ -124,7 +126,11 @@ export function ApplicationAnswer({
   const currentSpokenRange = speakingMessageId === messageId ? spokenRange : undefined;
   const requiresConfirmationSignal = answer.requiresConfirmation;
 
-  const { responseMetadata, skippedCapabilities: persistedSkipped } = answer;
+  const { responseMetadata, skippedCapabilities: persistedSkipped, grounding: persistedGrounding } = answer;
+  const grounding = useMemo(
+    () => groundingOf({ responseMetadata, grounding: persistedGrounding }),
+    [responseMetadata, persistedGrounding],
+  );
   const skippedCapabilities = useMemo(
     () => skippedCapabilitiesOf({ responseMetadata, skippedCapabilities: persistedSkipped }),
     [responseMetadata, persistedSkipped],
@@ -333,6 +339,8 @@ export function ApplicationAnswer({
             )}
         </Box>
       )}
+
+      {!isProcessing && grounding && <GroundingIndicator grounding={grounding} answer={answer.content} />}
 
       {shouldRenderAnswerBlock && (
         // Below the text (`ApplicationAnswerActions`' module doc), the time and

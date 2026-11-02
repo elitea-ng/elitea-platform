@@ -91,6 +91,12 @@ export const VersionMeta = zod.object({
     .describe(
       "The shape the agent's final answer must have (ADR-0043 decision 2). Null or absent is no contract. A save with an invalid contract is refused with 422 OUTPUT_CONTRACT_INVALID.\n",
     ),
+  citations: zod
+    .enum(["off", "required"])
+    .nullish()
+    .describe(
+      "Whether the agent must cite its sources (ADR-0043 decision 5). With `required`, the worker numbers the tool results the model sees, asks the model to cite them as [n], and stores a grounding indicator on the answer (`meta.grounding` of the message). Null, absent or `off` is no citation rule. A save with another value is refused with 400. Pipelines and nested agents ignore it.\n",
+    ),
 });
 
 export type VersionMeta = zod.input<typeof VersionMeta>;

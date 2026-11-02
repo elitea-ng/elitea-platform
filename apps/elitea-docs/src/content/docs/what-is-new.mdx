@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Grounding indicators
+
+An agent can now cite its sources. In the agent editor, open **Advanced** and select **Require citations**. The worker numbers each tool result that the model sees, and the model cites the results as `[1]`, `[2]`. Under the answer, the chat shows **N of M sources cited** and **K statements without a citation**. Click the second part to see those statements. The message keeps the indicator as `meta.grounding`, and each run records a `grounding_check` step without the answer text. There is still no confidence score: a cited source does not prove the statement. An answer without tool results has no indicator. **Upgrade every worker before you turn on citations.** See [Grounding indicators](/admin/enterprise-controls/content-controls#grounding-indicators).
+
 ## Clearer egress refusals and an OIDC relink command
 
 **Test connection now names the host that the egress allowlist refused**, and tells where to add it: first a governance entry under **Admin › LLM Governance** (type **Egress allowlist**), then the `GATEWAY_EGRESS_ALLOWLIST` floor of the LLM gateway. The machine-readable reason (`egress_not_allowed`) does not change. A toolkit check names the refused host and `ELITEA_TOOLKIT_CHECK_ALLOWLIST`, with one message for every refusal; the elitea-main log gives the reason and says whether an allowlist entry can help. A refused listing of a provider's models names the refused host too. Vertex AI needs its regional host, for example `europe-west4-aiplatform.googleapis.com`. See [When the egress allowlist refuses a provider](/admin/llm-proxy#when-the-egress-allowlist-refuses-a-provider).
