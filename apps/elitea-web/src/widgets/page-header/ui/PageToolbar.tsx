@@ -79,9 +79,9 @@ export function PageToolbar({ tabs, summary, search, filters, viewToggle, second
   return (
     <Box
       data-testid="page-toolbar"
-      sx={combineSx(toolbarSx, sx)}
+      sx={combineSx(toolbarSx, tabs === undefined ? undefined : toolbarWithTabsSx, sx)}
     >
-      <Box sx={leftSx}>
+      <Box sx={combineSx(leftSx, tabs === undefined ? undefined : leftWithTabsSx)}>
         {searchLeads && searchBox}
         {tabs === undefined ? (
           summary !== undefined && (
@@ -125,6 +125,12 @@ function PageToolbarTabBar({ tabs }: { readonly tabs: PageToolbarTabsConfig }): 
       value={tabs.selectedIndex ?? false}
       onChange={tabs.onChange}
       aria-label={tabs.ariaLabel}
+      // More tabs than room (Agents has six beside a full action cluster):
+      // they scroll under arrows instead of running under the actions.
+      variant="scrollable"
+      scrollButtons="auto"
+      allowScrollButtonsMobile
+      slotProps={{ scrollButtons: { sx: tabScrollButtonSx } }}
     >
       {tabs.items.map((tab) => (
         <BaseTab
@@ -187,10 +193,23 @@ const toolbarSx: SxProps<Theme> = {
   containerName: 'page-toolbar',
 };
 
-const leftSx: SxProps<Theme> = { minWidth: 0, display: 'flex', alignItems: 'center', alignSelf: 'stretch' };
+const leftSx: SxProps<Theme> = { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', display: 'flex', alignItems: 'center', alignSelf: 'stretch' };
+
+/** Tabs keep room for two or three of themselves; past that they scroll. */
+const leftWithTabsSx: SxProps<Theme> = { minWidth: 'min(16rem, 35%)' };
+
+/**
+ * With tabs beside it the search folds to its icon earlier (below 992px) —
+ * the tabs need the width more than an idle search box does. It opens again
+ * on focus or with a query, as at the general fold (`PageSearch`).
+ */
+const toolbarWithTabsSx: SxProps<Theme> = {
+  '@container page-toolbar (max-width: 62rem)': {
+    '& [data-testid="page-search"]:not(:focus-within):not(:has(input:not(:placeholder-shown)))': { width: '2.5rem' },
+  },
+};
 
 const actionsSx: SxProps<Theme> = {
-  flexGrow: 1,
   display: 'flex',
   justifyContent: 'flex-end',
   alignItems: 'center',
@@ -198,5 +217,8 @@ const actionsSx: SxProps<Theme> = {
   flexShrink: 0,
   paddingBlock: '0.5rem',
 };
+
+/** Narrow scroll arrows, so a hidden one leaves little room before the first tab. */
+const tabScrollButtonSx: SxProps<Theme> = { width: '1.75rem', flexShrink: 0 };
 
 const noWrapSx: SxProps<Theme> = { flexShrink: 0, whiteSpace: 'nowrap' };

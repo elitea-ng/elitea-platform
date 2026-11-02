@@ -23,7 +23,7 @@ import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
  * stack with one entry per debounced keystroke.
  *
  * `/` (outside a text field) and ⌘F / Ctrl+F focus the box, as in a native
- * app's list. Below a 900px wide toolbar the box folds to its icon and opens
+ * app's list. Below a 720px wide toolbar the box folds to its icon and opens
  * again while it has focus (`PageToolbar` is the size container).
  */
 export interface PageSearchProps {
@@ -93,7 +93,7 @@ const fieldSx: SxProps<Theme> = {
   width: '16rem',
   flexShrink: 0,
   transition: 'width 0.15s ease',
-  '@container page-toolbar (max-width: 56.25rem)': {
+  '@container page-toolbar (max-width: 45rem)': {
     width: '2.5rem',
     '&:focus-within, &:has(input:not(:placeholder-shown))': { width: '16rem' },
   },
