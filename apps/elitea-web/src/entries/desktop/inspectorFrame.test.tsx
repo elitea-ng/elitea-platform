@@ -104,6 +104,7 @@ beforeEach(() => {
     inspector: {
       local: { groups: [{ tabs: ['changes', 'approvals', 'index'], active: 'changes' }], closed: [], split: 0.5, width: 360 },
       chat: { groups: [{ tabs: ['conversation'], active: 'conversation' }], closed: [], split: 0.5, width: 280 },
+      browse: { groups: [{ tabs: ['filters'], active: 'filters' }], closed: [], split: 0.5, width: 300 },
     },
     paletteOpen: false,
     hostMenu: false,

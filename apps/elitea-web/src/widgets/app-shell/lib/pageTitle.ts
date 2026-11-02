@@ -63,6 +63,17 @@ function settingsTitle(pathname: string, projectName: string): string {
 }
 
 /**
+ * The section a pathname is in, as the shell's title row names it: its label
+ * and the route its crumb links back to (the section's list). `undefined` on
+ * a pathname no section claims (the home redirect, onboarding).
+ */
+export function pageSection(pathname: string): { readonly label: string; readonly to: string } | undefined {
+  if (pathname === '/settings' || pathname.startsWith('/settings/')) return { label: 'Settings', to: '/settings' };
+  const section = SECTION_BY_PREFIX.find((entry) => pathname.startsWith(entry.prefix));
+  return section === undefined ? undefined : { label: section.label, to: section.prefix };
+}
+
+/**
  * @param pathname current router pathname
  * @param searchName the `?name=` query param value, if present
  * @param projectName the selected project's display name (or `undefined` before one is known)

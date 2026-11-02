@@ -5,8 +5,12 @@
  * `useIsFromSpecificPageHooks.jsx`) are attributed to `any` because they
  * are reachable from more than one screen.
  *
+ * `query` is not in that manifest: it is the page toolbar's search text
+ * (`widgets/page-header`'s `PageSearch`), shared by every list page and type
+ * gallery, so it is shell-wide too.
+ *
  * Mounted on `_shell/route.tsx` so every shell-wrapped route inherits these
- * 24 keys as part of its typed search (TanStack Router composes a leaf
+ * 25 keys as part of its typed search (TanStack Router composes a leaf
  * route's search type from every ancestor's `validateSearch`). `auth-callback`
  * sits outside `_shell` and does not get this scope (parity: the old popup
  * page reads only `auth_state`).
@@ -27,6 +31,7 @@ export const commonSearchSchema = pickParams(
   'message_id',
   'name',
   'project_id',
+  'query',
   'return_url',
   'save_toolkit',
   'sort_by',

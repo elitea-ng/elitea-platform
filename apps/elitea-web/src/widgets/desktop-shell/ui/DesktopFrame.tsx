@@ -8,7 +8,9 @@
  * changes panel; every other page (the Elitea features, Settings) gets a slim
  * title row: the window's drag region, the name of what is open
  * (`PageTitle.tsx`: `Chats ▸ folder ▸ conversation`, or the page's name) and
- * the sidebar and inspector toggles. Settings opens as a dialog over the
+ * the sidebar and inspector toggles; a page names itself there
+ * (`shared/ui/page-chrome`) instead of drawing a heading of its own. Settings
+ * opens as a dialog over the
  * page it was opened from (`SettingsDialog.tsx`). The sidebar is the way to everything, so
  * the row has no "back" button. A page with an inspector (the chat's
  * participants, Local work's changes, approvals and index) contributes tabs
@@ -30,6 +32,7 @@ import Tooltip from '@mui/material/Tooltip';
 
 import type { Project } from '@/entities/project';
 import { t } from '@/shared/i18n';
+import { PageChromeProvider } from '@/shared/ui/page-chrome';
 import { computeIsSelectedProjectPublic } from '@/widgets/sidebar';
 
 import { eliteaItems } from '../lib/eliteaSections';
@@ -143,30 +146,33 @@ export function DesktopFrame({ children, permissions, projects, selectedProjectI
             {inSettings ? (
               <PageSnapshot from={pageSnapshot} />
             ) : (
-              <Box
-                ref={mainRef}
-                component="main"
-                sx={(theme: Theme) => ({
-                  flex: 1,
-                  minWidth: 0,
-                  height: '100vh',
-                  display: mainHidden ? 'none' : 'flex',
-                  flexDirection: 'column',
-                  background: theme.vars.palette.background.default,
-                  position: 'relative',
-                })}
-              >
-                {!location.inFolders && (
-                  <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
-                    <TitleBarSpacer leading={!sidebarOpen} logo={false} trailing={<InspectorToggle host={inspector} />}>
-                      <ShowSidebarButton />
-                      <PageTitle pathname={location.pathname} items={items} projectId={selectedProjectId} />
-                    </TitleBarSpacer>
-                  </Box>
-                )}
-                <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative' }}>{children}</Box>
-                {banners}
-              </Box>
+              // The page's crumbs reach the title row; the Settings dialog shows its pages without one.
+              <PageChromeProvider>
+                <Box
+                  ref={mainRef}
+                  component="main"
+                  sx={(theme: Theme) => ({
+                    flex: 1,
+                    minWidth: 0,
+                    height: '100vh',
+                    display: mainHidden ? 'none' : 'flex',
+                    flexDirection: 'column',
+                    background: theme.vars.palette.background.default,
+                    position: 'relative',
+                  })}
+                >
+                  {!location.inFolders && (
+                    <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
+                      <TitleBarSpacer leading={!sidebarOpen} logo={false} trailing={<InspectorToggle host={inspector} />}>
+                        <ShowSidebarButton />
+                        <PageTitle pathname={location.pathname} items={items} projectId={selectedProjectId} />
+                      </TitleBarSpacer>
+                    </Box>
+                  )}
+                  <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative' }}>{children}</Box>
+                  {banners}
+                </Box>
+              </PageChromeProvider>
             )}
             {inSettings && <SettingsDialog returnTo={returnTo} banners={banners}>
                 {children}
