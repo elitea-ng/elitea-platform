@@ -3844,6 +3844,7 @@ impl AgentEventProjector {
             ));
         }
         self.record_output_step(&content, output_limited, occurred_at);
+        let grounding = self.grounding_indicator(&content, occurred_at);
         let mut batch = ProjectedAgentEventBatch::new();
         let (response, result_ref) =
             if content.len() > INLINE_TEXT_CHUNK_BYTES {
@@ -3910,6 +3911,7 @@ impl AgentEventProjector {
                 "result_ref_v1": result_ref,
                 "pipeline_static_v1": self.static_pause_proof,
                 "pipeline_static_tools_v1": static_inventory,
+                "grounding": grounding,
             }),
             occurred_at,
         )?)?;
@@ -3941,7 +3943,11 @@ impl AgentEventProjector {
                 .ok_or_else(AgentEventProjectionError::invalid_state)?
                 .remove("result_ref_v1");
         }
-        for key in ["pipeline_static_v1", "pipeline_static_tools_v1"] {
+        for key in [
+            "pipeline_static_v1",
+            "pipeline_static_tools_v1",
+            "grounding",
+        ] {
             if response_metadata.get(key).is_some_and(Value::is_null) {
                 response_metadata
                     .as_object_mut()
@@ -7168,6 +7174,9 @@ mod code_debug;
 
 #[path = "events_run_steps.rs"]
 mod run_steps;
+
+#[path = "grounding_events.rs"]
+mod grounding_events;
 
 #[cfg(test)]
 mod fanout_member_tier_tests {

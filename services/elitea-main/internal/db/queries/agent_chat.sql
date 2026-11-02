@@ -2918,7 +2918,7 @@ WHERE id = sqlc.arg(message_group_id)::bigint;
 -- name: FinalizeCurrentAgentFullMessage :execrows
 UPDATE chat_message_group
 SET is_streaming = FALSE,
-    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts' - 'authorization_requests' - 'output_limit_reached' - 'pipeline_static_v1' - 'pipeline_static_tools_v1')
+    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts' - 'authorization_requests' - 'output_limit_reached' - 'pipeline_static_v1' - 'pipeline_static_tools_v1' - 'grounding')
         || jsonb_build_object(
             'thread_id', sqlc.arg(thread_id)::text,
             'references', sqlc.arg(references_json)::jsonb,
@@ -2947,6 +2947,9 @@ SET is_streaming = FALSE,
             ELSE '{}'::jsonb END
         || CASE WHEN jsonb_typeof(sqlc.arg(skipped_capabilities)::jsonb) = 'object'
             THEN jsonb_build_object('skipped_capabilities', sqlc.arg(skipped_capabilities)::jsonb)
+            ELSE '{}'::jsonb END
+        || CASE WHEN jsonb_typeof(sqlc.arg(grounding)::jsonb) = 'object'
+            THEN jsonb_build_object('grounding', sqlc.arg(grounding)::jsonb)
             ELSE '{}'::jsonb END,
     updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
 WHERE id = sqlc.arg(message_group_id)::bigint;

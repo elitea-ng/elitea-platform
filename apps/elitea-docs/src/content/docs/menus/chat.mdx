@@ -64,6 +64,8 @@ The conversation reads like a chat: your own messages sit on the right in a tint
 
 Under each reply is one row of actions: **Copy**, **Good** and **Bad** (with a comment once you vote), **Read out**, **Regenerate**, and **⋯** for **Remember this**, **Open as document**, **Fork from here** and **Delete**. The row always shows under the latest reply; under older replies it appears when you point at the reply or tab to it. Your own messages get the same kind of row, with **Copy**, **Edit**, **Fork** and **Delete**, shown when you point at the message. Each row ends with when the message was sent, and a reply that drew on your saved memories also shows **Using N memories** there.
 
+An agent with **Require citations** shows a line under its reply: **N of M sources cited** and, when some statements have no citation, **K statements without a citation**. Click the second part to see those statements. There is no line when the agent saw no tool result. The line is not a confidence score: a cited source does not prove the statement. See [Grounding indicators](/admin/enterprise-controls/content-controls#grounding-indicators).
+
 If the model thought before answering, a **Thought for …** line sits above the reply. It stays folded while the model works and after it answers; click it to see the steps.
 
 ## Stop a reply and queue messages

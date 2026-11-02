@@ -2771,6 +2771,13 @@ export const getCreateApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            citations: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                faker.helpers.arrayElement(["off", "required"] as const),
+                null,
+              ]),
+              undefined,
+            ]),
           },
           null,
         ]),
@@ -3072,6 +3079,13 @@ export const getCreateApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            citations: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                faker.helpers.arrayElement(["off", "required"] as const),
+                null,
+              ]),
+              undefined,
+            ]),
           },
           null,
         ]),
@@ -3328,6 +3342,13 @@ export const getListPublicApplicationsResponseMock = (
           ]),
           undefined,
         ]),
+        citations: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            faker.helpers.arrayElement(["off", "required"] as const),
+            null,
+          ]),
+          undefined,
+        ]),
       },
       null,
     ]),
@@ -3499,6 +3520,13 @@ export const getGetApplicationResponseMock = (
                   undefined,
                 ]),
               },
+              null,
+            ]),
+            undefined,
+          ]),
+          citations: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              faker.helpers.arrayElement(["off", "required"] as const),
               null,
             ]),
             undefined,
@@ -3703,6 +3731,13 @@ export const getGetApplicationResponseMock = (
                     undefined,
                   ]),
                 },
+                null,
+              ]),
+              undefined,
+            ]),
+            citations: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                faker.helpers.arrayElement(["off", "required"] as const),
                 null,
               ]),
               undefined,
@@ -4017,6 +4052,13 @@ export const getEditApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            citations: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                faker.helpers.arrayElement(["off", "required"] as const),
+                null,
+              ]),
+              undefined,
+            ]),
           },
           null,
         ]),
@@ -4316,6 +4358,13 @@ export const getGetPublicApplicationResponseMock = (
                   undefined,
                 ]),
               },
+              null,
+            ]),
+            undefined,
+          ]),
+          citations: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              faker.helpers.arrayElement(["off", "required"] as const),
               null,
             ]),
             undefined,
@@ -4840,6 +4889,13 @@ export const getGetApplicationVersionDetailResponseMock = (
           ]),
           undefined,
         ]),
+        citations: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            faker.helpers.arrayElement(["off", "required"] as const),
+            null,
+          ]),
+          undefined,
+        ]),
       },
       null,
     ]),
@@ -5126,6 +5182,13 @@ export const getUpdateApplicationVersionResponseMock = (
                 undefined,
               ]),
             },
+            null,
+          ]),
+          undefined,
+        ]),
+        citations: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            faker.helpers.arrayElement(["off", "required"] as const),
             null,
           ]),
           undefined,
@@ -5419,6 +5482,13 @@ export const getGetApplicationVersionDetailExpandedResponseMock =
                     undefined,
                   ]),
                 },
+                null,
+              ]),
+              undefined,
+            ]),
+            citations: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                faker.helpers.arrayElement(["off", "required"] as const),
                 null,
               ]),
               undefined,
@@ -5734,6 +5804,13 @@ export const getSaveApplicationNewVersionResponseMock = (
                 undefined,
               ]),
             },
+            null,
+          ]),
+          undefined,
+        ]),
+        citations: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            faker.helpers.arrayElement(["off", "required"] as const),
             null,
           ]),
           undefined,
@@ -6159,6 +6236,16 @@ export const getImportWizardResponseMock = (
                       ]),
                       undefined,
                     ]),
+                    citations: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        faker.helpers.arrayElement([
+                          "off",
+                          "required",
+                        ] as const),
+                        null,
+                      ]),
+                      undefined,
+                    ]),
                   },
                   null,
                 ]),
@@ -6535,6 +6622,16 @@ export const getImportWizardResponseMock = (
                             undefined,
                           ]),
                         },
+                        null,
+                      ]),
+                      undefined,
+                    ]),
+                    citations: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        faker.helpers.arrayElement([
+                          "off",
+                          "required",
+                        ] as const),
                         null,
                       ]),
                       undefined,
@@ -7085,6 +7182,13 @@ export const getForkAgentResponseMock = (
                         undefined,
                       ]),
                     },
+                    null,
+                  ]),
+                  undefined,
+                ]),
+                citations: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    faker.helpers.arrayElement(["off", "required"] as const),
                     null,
                   ]),
                   undefined,

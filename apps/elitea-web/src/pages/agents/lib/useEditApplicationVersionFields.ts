@@ -76,6 +76,12 @@ export interface EditApplicationVersionFields {
    * `null` so that None clears a stored contract.
    */
   readonly outputContract: OutputContract | null;
+  /**
+   * `meta.citations` (ADR-0043 decision 5): `'required'` makes the agent cite
+   * its sources and the chat show a grounding indicator. `null` is off, and a
+   * save sends `null` so that unticking clears a stored value.
+   */
+  readonly citations?: 'required' | null | undefined;
 }
 
 export interface EditApplicationVersionFieldsState {
@@ -129,7 +135,18 @@ function fromVersion(version: ApplicationVersionDetail | undefined): EditApplica
     tags: toTags(version),
     notes: typeof metaRecord['notes'] === 'string' ? metaRecord['notes'] : '',
     outputContract: readOutputContract(metaRecord['output_contract']),
+    citations: citationsOf(metaRecord['citations']),
   };
+}
+
+/** `meta.citations` as the field holds it: `'required'` or off (`null`). */
+function citationsOf(raw: unknown): 'required' | null {
+  return raw === 'required' ? 'required' : null;
+}
+
+/** The ADR-0043 fields: the output contract and the citation setting. */
+function areContentControlsEqual(a: EditApplicationVersionFields, b: EditApplicationVersionFields): boolean {
+  return areOutputContractsEqual(a.outputContract, b.outputContract) && (a.citations ?? null) === (b.citations ?? null);
 }
 
 function areEqual(a: EditApplicationVersionFields, b: EditApplicationVersionFields): boolean {
@@ -137,7 +154,7 @@ function areEqual(a: EditApplicationVersionFields, b: EditApplicationVersionFiel
   if (a.welcomeMessage !== b.welcomeMessage) return false;
   if (a.stepLimit !== b.stepLimit) return false;
   if (a.notes !== b.notes) return false;
-  if (!areOutputContractsEqual(a.outputContract, b.outputContract)) return false;
+  if (!areContentControlsEqual(a, b)) return false;
   // Key by key, never by identity: the settings dialog hands back a fresh
   // object each time, so identity would report "dirty" from the first render.
   if (!areAgentLlmSettingsEqual(a.llmSettings, b.llmSettings)) return false;
@@ -241,6 +258,9 @@ export function useEditApplicationVersionFields(
         return true;
       case 'version_details.meta.output_contract':
         setFields((previous) => ({ ...previous, outputContract: readOutputContract(value) }));
+        return true;
+      case 'version_details.meta.citations':
+        setFields((previous) => ({ ...previous, citations: citationsOf(value) }));
         return true;
       case 'version_details.meta.step_limit':
         setFields((previous) => ({ ...previous, stepLimit: typeof value === 'number' ? value : undefined }));

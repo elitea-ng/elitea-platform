@@ -3662,6 +3662,8 @@ components:
                 Client contract 1.14. On a user's message: true when it
                 tagged `@everyone` (the send's `sending_to_everyone`); absent
                 otherwise.
+            grounding:
+              $ref: '#/components/schemas/GroundingIndicator'
         message_items:
           type: array
           description: Omitted, not empty, for a group with no attachments.
@@ -10047,6 +10049,55 @@ components:
           format: date-time
           description: An unused grant expires one hour after it was granted.
 
+    GroundingIndicator:
+      type: object
+      description: >-
+        On an agent's answer (ADR-0043 decision 5): how many sources the
+        answer cites and which statements have no citation. Present only when
+        the agent's version sets `meta.citations` to `required` and the model
+        saw at least one tool result; absent, not zero, otherwise. There is
+        no confidence score. A cited source does not prove that the source
+        supports the statement. Main stores the worker's value after it
+        checks the shape (internal/infra/db/repos/agent_grounding.go).
+      required: [version, sources_available, sources_cited, claim_spans, uncited_spans, uncited, invalid_markers]
+      properties:
+        version: { type: integer, enum: [1] }
+        sources_available:
+          type: integer
+          minimum: 1
+          description: The tool results the model saw, numbered 1, 2, 3 in request order.
+        sources_cited:
+          type: integer
+          minimum: 0
+          description: The distinct sources the answer cites with a valid `[n]` marker.
+        claim_spans:
+          type: integer
+          minimum: 0
+          description: >-
+            The statements of the answer: sentences outside code blocks,
+            headings and tables that are not questions or lead-ins ending
+            with a colon.
+        uncited_spans:
+          type: integer
+          minimum: 0
+          description: The statements without a valid citation marker.
+        uncited:
+          type: array
+          maxItems: 64
+          description: >-
+            The first 64 statements without a citation, in answer order, as
+            UTF-16 code unit offsets into the stored answer text.
+          items:
+            type: object
+            required: [start, end]
+            properties:
+              start: { type: integer, minimum: 0 }
+              end: { type: integer, minimum: 1 }
+        invalid_markers:
+          type: integer
+          minimum: 0
+          description: Markers whose number names no source.
+
     VersionMeta:
       type: object
       properties:
@@ -10121,6 +10172,17 @@ components:
             The shape the agent's final answer must have (ADR-0043 decision
             2). Null or absent is no contract. A save with an invalid
             contract is refused with 422 OUTPUT_CONTRACT_INVALID.
+        citations:
+          type: string
+          enum: ['off', required]
+          nullable: true
+          description: >
+            Whether the agent must cite its sources (ADR-0043 decision 5).
+            With `required`, the worker numbers the tool results the model
+            sees, asks the model to cite them as [n], and stores a grounding
+            indicator on the answer (`meta.grounding` of the message). Null,
+            absent or `off` is no citation rule. A save with another value is
+            refused with 400. Pipelines and nested agents ignore it.
       additionalProperties: true
       x-elitea-passthrough: >-
         NOTE(W2): DB jsonb column `application_versions.meta` round-trips

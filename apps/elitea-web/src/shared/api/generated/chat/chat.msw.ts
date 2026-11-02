@@ -1018,6 +1018,24 @@ export const getListConversationMessagesResponseMock = (
           faker.datatype.boolean(),
           undefined,
         ]),
+        grounding: faker.helpers.arrayElement([
+          {
+            version: faker.helpers.arrayElement([1] as const),
+            sources_available: faker.number.int({ min: 1 }),
+            sources_cited: faker.number.int({ min: 0 }),
+            claim_spans: faker.number.int({ min: 0 }),
+            uncited_spans: faker.number.int({ min: 0 }),
+            uncited: Array.from(
+              { length: faker.number.int({ min: 1, max: 64 }) },
+              (_, i) => i + 1,
+            ).map(() => ({
+              start: faker.number.int({ min: 0 }),
+              end: faker.number.int({ min: 1 }),
+            })),
+            invalid_markers: faker.number.int({ min: 0 }),
+          },
+          undefined,
+        ]),
       },
       undefined,
     ]),

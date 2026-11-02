@@ -3532,6 +3532,14 @@
                         "category": {
                           "type": "string"
                         },
+                        "citations": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "off",
+                            "required"
+                          ]
+                        },
                         "icon_meta": {
                           "type": "object",
                           "open": true
@@ -3771,6 +3779,14 @@
                           },
                           "category": {
                             "type": "string"
+                          },
+                          "citations": {
+                            "type": "string",
+                            "nullable": true,
+                            "enum": [
+                              "off",
+                              "required"
+                            ]
                           },
                           "icon_meta": {
                             "type": "object",
@@ -7381,6 +7397,67 @@
                       "metadata": {
                         "type": "object",
                         "properties": {
+                          "grounding": {
+                            "type": "object",
+                            "required": [
+                              "claim_spans",
+                              "invalid_markers",
+                              "sources_available",
+                              "sources_cited",
+                              "uncited",
+                              "uncited_spans",
+                              "version"
+                            ],
+                            "properties": {
+                              "claim_spans": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "invalid_markers": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "sources_available": {
+                                "type": "integer",
+                                "minimum": 1
+                              },
+                              "sources_cited": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "uncited": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "required": [
+                                    "end",
+                                    "start"
+                                  ],
+                                  "properties": {
+                                    "end": {
+                                      "type": "integer",
+                                      "minimum": 1
+                                    },
+                                    "start": {
+                                      "type": "integer",
+                                      "minimum": 0
+                                    }
+                                  }
+                                },
+                                "max_items": 64
+                              },
+                              "uncited_spans": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "version": {
+                                "type": "integer",
+                                "enum": [
+                                  "1"
+                                ]
+                              }
+                            }
+                          },
                           "mentioned_user_ids": {
                             "type": "array",
                             "items": {
@@ -8146,6 +8223,14 @@
                           },
                           "category": {
                             "type": "string"
+                          },
+                          "citations": {
+                            "type": "string",
+                            "nullable": true,
+                            "enum": [
+                              "off",
+                              "required"
+                            ]
                           },
                           "icon_meta": {
                             "type": "object",

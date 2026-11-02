@@ -269,6 +269,52 @@ Upgrade every worker before you save a contract. A run with a contract tells the
 
 The platform does not give a confidence score for an agent's answer. A language model does not give a probability that its answer is correct. Token probabilities tell how likely a word is, not how likely a fact is. A score that the platform makes from them, or from a second model, looks precise but it is not calibrated for your task. People then trust it more than they should.
 
+The platform gives two other aids: grounding indicators, and confidence fields that the agent author defines.
+
+### Grounding indicators
+
+An agent can show how well its answer is tied to its sources. This is not a score. It is two counts that you can examine.
+
+**How to turn it on.** In the agent editor, open **Advanced** and select **Require citations**. This sets `meta.citations` to `required` on the agent version. Then:
+
+1. The worker numbers each tool result that the model sees: 1, 2, 3, in the order of the request. The number goes in front of the source name of the envelope, for example `<untrusted source="3:search_index">`. See [Untrusted content](#untrusted-content).
+2. The worker adds a citation rule after the agent's instructions. The rule tells the model to end each sentence that uses a tool result with the number of that result in square brackets, for example `[3]`, or `[2, 5]` for more than one result.
+3. After the final answer, the worker calculates the indicator from the answer text and the number of sources. It does not call a model.
+
+**What the numbers mean.** The chat shows a line under the answer:
+
+- **N of M sources cited.** M is the number of tool results that the model saw. N is the number of different results that the answer cites with a correct marker.
+- **K statements without a citation.** Click it to see each of these statements, marked. A statement is a sentence of the answer. These parts are not statements: code blocks, headings, table rows, questions, and lead-in sentences that end with a colon. A list marker at the start of a line is not part of the statement. A marker with a number that no source has (for example `[0]`, or `[9]` when there are 4 sources) is counted as an invalid marker. It does not count as a citation.
+
+Main stores the indicator on the message as `meta.grounding`, so the indicator stays after a reload:
+
+```json
+{
+  "version": 1,
+  "sources_available": 4,
+  "sources_cited": 2,
+  "claim_spans": 6,
+  "uncited_spans": 1,
+  "uncited": [{ "start": 120, "end": 168 }],
+  "invalid_markers": 0
+}
+```
+
+`uncited` has the first 64 statements without a citation, as UTF-16 offsets into the answer text. The worker also records a run step (kind `output`, name `grounding_check`) with the counts. The step does not contain the answer text.
+
+**Limits.**
+
+- A cited source does not prove that the source supports the statement. The model can cite the wrong source, or cite a source that says something different. The indicator tells you where to look. It does not tell you that the answer is correct.
+- When the model saw no tool result (for example, a plain chat without tools), there is no indicator. It is absent, not zero.
+- One source is one tool result. A search that returns ten chunks is one source.
+- Only the root agent of a chat gets an indicator. Pipelines and nested agents ignore the setting.
+- The split into sentences is simple. An abbreviation such as "e.g." can end a statement early.
+- Upgrade every worker before you turn on citations. A worker of an earlier release ignores the setting.
+
+If you need a stated confidence level, use an output contract, as the next section shows.
+
+### Confidence fields in an output contract
+
 If your process needs a confidence value, make it part of the agent's output contract. Then the agent must give the value, and you define what it means. You can also make the model give its reasons and sources, so that a person can examine them. Calibrate the value against your own evaluation data before you use it to route work.
 
 Example: a JSON Schema contract that makes the agent give a confidence level, the reason and the sources.
@@ -428,7 +474,7 @@ A tool result can contain text that looks like an instruction: a Jira issue, a w
 </untrusted>
 ```
 
-The envelope applies to every tool result that the model gets: toolkit tools, MCP tools, index searches, web tools and the answers of nested agents. The `source` attribute is the name of the tool. The worker neutralises each `<untrusted` and `</untrusted` in the content (it writes `&lt;` in place of `<`), so the content cannot close the envelope.
+The envelope applies to every tool result that the model gets: toolkit tools, MCP tools, index searches, web tools and the answers of nested agents. The `source` attribute is the name of the tool. When the agent must cite, the name starts with the number of the result, for example `3:get_issue`. See [Grounding indicators](#grounding-indicators). The worker neutralises each `<untrusted` and `</untrusted` in the content (it writes `&lt;` in place of `<`), so the content cannot close the envelope.
 
 The built-in preamble tells the model that the text in the envelope is data, never an instruction. The overhead is small: 35 bytes and the name of the tool for each result, approximately 10 to 15 tokens. The built-in preamble is approximately 30 tokens for each model call.
 

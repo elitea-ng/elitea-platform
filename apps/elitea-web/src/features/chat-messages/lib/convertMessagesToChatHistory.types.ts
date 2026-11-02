@@ -17,6 +17,8 @@ export interface ChatMessage {
   readonly responseMetadata?: Readonly<Record<string, unknown>> | undefined;
   /** Persisted `meta.skipped_capabilities`: what this turn was configured with but could not serve. Live turns carry it in `responseMetadata`. */
   readonly skippedCapabilities?: unknown;
+  /** Persisted `meta.grounding` (ADR-0043 decision 5): the grounding indicator of a citing agent's answer. Live turns carry it in `responseMetadata`. */
+  readonly grounding?: unknown;
   readonly resultChunk?: unknown;
   readonly assembledResult?: string | undefined;
   readonly continuedResultPrefix?: string | undefined;

@@ -42,6 +42,7 @@
  */
 import * as zod from "zod";
 import { AttachmentMessageItem } from "./attachmentMessageItem.zod";
+import { GroundingIndicator } from "./groundingIndicator.zod";
 
 export const ConversationMessage = zod
   .object({
@@ -76,6 +77,7 @@ export const ConversationMessage = zod
           .describe(
             "Client contract 1.14. On a user's message: true when it tagged `@everyone` (the send's `sending_to_everyone`); absent otherwise.",
           ),
+        grounding: GroundingIndicator.optional(),
       })
       .optional(),
     message_items: zod

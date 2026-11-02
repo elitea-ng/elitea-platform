@@ -581,6 +581,12 @@ impl RunStepRecorder {
         })
     }
 
+    /// The execution this recorder records for.
+    #[must_use]
+    pub(crate) fn execution_id(&self) -> &str {
+        &self.execution_id
+    }
+
     fn with_state<T>(&self, apply: impl FnOnce(&mut RecorderState) -> T) -> T {
         let mut state = self
             .state
