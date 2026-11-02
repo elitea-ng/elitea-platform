@@ -9,16 +9,13 @@
  *    (TC-CHAT-022)
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * WHICH SIDEBAR, AND WHY THE STARTING STATE IS SEEDED
+ * WHAT IS DRIVEN, AND WHY THE STARTING STATE IS SEEDED
  * ─────────────────────────────────────────────────────────────────────────────
- * `/app/chat` has TWO collapsible columns, and their controls share their
- * English wording: the shell nav rail (`widgets/sidebar`, toggle
- * `sidebar-collapse-toggle`) and the conversation rail
- * (`features/chat-conversation-list`, an unlabelled `IconButton` inside
- * `chat-conversation-sidebar`). Both say "Collapse sidebar". This file is about
- * the SHELL rail — the one the legacy test drove, which it recognised by
- * whether the "Agents" row showed its text label. Everything here is addressed
- * by test id or scoped to the shell, never by that shared string alone.
+ * The shell nav rail (`widgets/sidebar`, toggle `sidebar-collapse-toggle`) —
+ * the one the legacy test drove, which it recognised by whether the "Agents"
+ * row showed its text label. The conversations live in the same rail, in its
+ * Chats section (`widgets/chat-rail`, `shell-chats`), as buttons rather than
+ * links, so the "Agents" link is addressed by role and name inside the rail.
  *
  * The collapsed flag is PERSISTED (`el.sidebar.collapsed`, `collapsedPersistence.ts`),
  * so the rail's state on arrival is whatever the last run left. A test that
@@ -69,8 +66,8 @@ test('the shell rail collapses and expands from the chat, and reaches the Agents
   const toggle = page.getByTestId('sidebar-collapse-toggle');
   await expect(toggle).toBeVisible({ timeout: 15_000 });
 
-  // Scoped to the shell rail (`Sidebar.tsx:64-66`'s `nav[aria-label="side-bar"]`),
-  // never to the page: the conversation rail beside it holds rows of its own.
+  // Scoped to the shell rail (`Sidebar.tsx`'s `nav[aria-label="side-bar"]`),
+  // never to the page.
   const rail = page.getByRole('navigation', { name: 'side-bar' });
   // Expanded: the row carries its text label. This is the legacy test's own
   // discriminator, and it is the one the collapse really removes.

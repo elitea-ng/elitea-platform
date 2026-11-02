@@ -83,7 +83,8 @@ test('J3: session expiry triggers re-auth popup and retries original request', a
   //    401-ing so the retry can land, then assert the page recovered with
   //    real content rather than an error state.
   await page.unroute('**/api/v2/**');
-  await expect(page.getByTestId('sidebar-create-button')).toBeEnabled({ timeout: 20_000 });
+  // The sidebar's New chat shows once the permission query succeeds.
+  await expect(page.getByTestId('shell-chats-new')).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/something went wrong|unauthorized/i)).toHaveCount(0);
 });
 

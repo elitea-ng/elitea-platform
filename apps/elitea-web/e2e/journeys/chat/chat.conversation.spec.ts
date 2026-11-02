@@ -29,15 +29,12 @@
  *    server (or a deterministic stub emitter) in the E2E compose file; that
  *    is a stack change, not a spec change.
  *
- * 2. THERE IS NO CONVERSATION LIST IN THE APP.
- *    `src/features/chat-conversation-list/**` is imported by nothing outside
- *    itself (verified: every hit for the slice name outside the slice is a
- *    doc comment or `shared/api/endpoints.manifest.json`). The shell sidebar
- *    renders nav entries only. So JRNY-011's literal acceptance — "the list
- *    row updates live" — has no UI surface to observe at all. J11 below
- *    asserts the half that does exist end to end (the rename persists and
- *    the renamed conversation opens at its own deep link) instead of
- *    pretending to observe a list.
+ * 2. THE LIST IS NOT WHAT J11 OBSERVES.
+ *    The conversation list lives in the app sidebar's Chats section
+ *    (`widgets/chat-rail`, `shell-chats`); its rows are covered by
+ *    `conversations.list.spec.ts`. J11 below asserts the server-side half of
+ *    JRNY-011 end to end (the rename persists and the renamed conversation
+ *    opens at its own deep link), not the list row's live update.
  *
  * 3. `/chat` NEVER NAVIGATES TO `/chat/:newId`.
  *    `src/pages/chat/index.tsx` documents this as a known gap (`ChatBoxProps`
@@ -253,8 +250,8 @@ test('J9: the edit-and-regenerate control opens a blank-gated editor on the user
 // ─────────────────────────────────────────────────────────────────────────────
 // Journey 11: Server-side rename
 //
-// "Live update in the conversation list" has no UI surface (module header,
-// note 2). The reachable half of the journey is asserted instead: a rename
+// "Live update in the conversation list" is not observed here (module
+// header, note 2). The server-side half of the journey is asserted: a rename
 // performed outside the tab persists, and the renamed conversation opens at
 // its own deep link `/app/chat/:conversationId`.
 //

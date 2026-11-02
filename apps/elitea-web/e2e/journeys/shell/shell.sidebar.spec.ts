@@ -10,8 +10,8 @@
  * icon-outline case ELITEA-1024, and the Bare-persona personalization cases,
  * which need a real model turn).
  *
- * `SidebarNavItem.tsx` wraps every rail row in a `Tooltip` whose title is the
- * row's own label exactly while the label text is hidden (collapsed rail) —
+ * Collapsed, the rail is icons only (`SidebarNavItem.tsx`), each wrapped in a
+ * `Tooltip` whose title is the row's own label —
  * the same mechanism `chat.navigation.spec.ts` already exercises for the
  * "Agents" row alone. This file asserts the EXACT tooltip text for every
  * main-rail row (ELITEA-1021) and the Applications row specifically in both
@@ -79,13 +79,8 @@ test('SB01: every main-rail icon shows its exact label as a tooltip when collaps
   await page.goto(BASE_URL + '/app/chat', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
 
-  // The a11y sweep runs EXPANDED, before the collapse below, so it does not
-  // exercise the create button's collapsed state either way. That state's
-  // own axe `button-name` gap (ELITEA-1046, issue #904) is fixed now —
-  // `CreateEntityTrigger` wraps the collapsed icon in a `Tooltip`, which
-  // supplies the accessible name — verified directly in
-  // `shell.create-button.spec.ts`'s CB11, not repeated here since this
-  // test's subject is the NAV ROWS' tooltips, not the create button.
+  // The a11y sweep runs EXPANDED, before the collapse below; the collapsed
+  // rail's New chat icon is covered by `shell.create-button.spec.ts` CR05.
   await checkA11y(page);
 
   const toggle = page.getByTestId('sidebar-collapse-toggle');
@@ -95,7 +90,8 @@ test('SB01: every main-rail icon shows its exact label as a tooltip when collaps
   const navRail = rail(page);
 
   // `navSections()`'s own 7 items this case's steps enumerate — real label
-  // for Toolkits ("Toolkits & Indexes"), see the file header.
+  // for Toolkits ("Toolkits & Indexes"), see the file header. Credentials is
+  // one of the bottom links now, with the same collapsed tooltip.
   const rows: readonly string[] = ['Chats', 'Agents', 'Pipelines', 'Credentials', 'Toolkits & Indexes', 'MCPs', 'Artifacts'];
 
   for (const label of rows) {
@@ -172,7 +168,8 @@ const ERROR_BOUNDARY_TEXT = /something went wrong|unexpected error/i;
 /* ────────────────────────────────────────────────────────────────────────
  * onetest: ELITEA-1026 — every main-rail item still navigates to its own
  * page, none broken/missing/unresponsive. Broader than `chat.navigation.
- * spec.ts`'s single Agents click: this walks all 7 rows.
+ * spec.ts`'s single Agents click: this walks every place row, opening the
+ * Workshop group (agents, pipelines, toolkits, MCPs) first.
  *
  * The proof is state-independent on purpose: `Toolkits & Indexes` redirects
  * to its OWN create page when the project holds no toolkit yet
@@ -180,10 +177,9 @@ const ERROR_BOUNDARY_TEXT = /something went wrong|unexpected error/i;
  * fixed "list must render" assertion would be true or false depending on
  * what OTHER journeys left in the shared project, not on whether this row's
  * navigation works. Every stop is instead checked the same three ways: the
- * URL changed, the clicked row is now the rail's OWN active item (a real
- * `Mui-selected` class MUI applies from the `selected` prop this row's own
- * navigation state computes — `SidebarNavItem.tsx`), the PREVIOUSLY active
- * row is not, and the route did not resolve to the error boundary.
+ * clicked row is now the rail's current page (`aria-current="page"`), the
+ * PREVIOUSLY current row is not, and the route did not resolve to the error
+ * boundary. The walk ends on the Chats caption, which starts a new chat.
  * ──────────────────────────────────────────────────────────────────────── */
 test('SB03: every main-rail item navigates to its own page', async ({ page }) => {
   await seedCollapsed(page, false);
@@ -191,16 +187,18 @@ test('SB03: every main-rail item navigates to its own page', async ({ page }) =>
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
 
   const navRail = rail(page);
-  const labels: readonly string[] = ['Agents', 'Pipelines', 'Credentials', 'Toolkits & Indexes', 'MCPs', 'Artifacts', 'Chats'];
+  const workshop = page.getByTestId('shell-elitea-workshop').getByRole('button').first();
+  if ((await workshop.getAttribute('aria-expanded')) !== 'true') await workshop.click();
+  const labels: readonly string[] = ['Agents', 'Pipelines', 'Credentials', 'Toolkits & Indexes', 'MCPs', 'Artifacts'];
 
-  let previous = navRail.getByRole('link', { name: 'Chats', exact: true });
+  let previous: Locator | undefined;
   for (const label of labels) {
     const link = navRail.getByRole('link', { name: label, exact: true });
     await link.click();
 
-    await expect(link, `${label} must become the rail's active item`).toHaveClass(/Mui-selected/, { timeout: 15_000 });
-    if (label !== 'Chats') {
-      await expect(previous, `the previously active row must lose Mui-selected`).not.toHaveClass(/Mui-selected/);
+    await expect(link, `${label} must become the rail's current page`).toHaveAttribute('aria-current', 'page', { timeout: 15_000 });
+    if (previous !== undefined) {
+      await expect(previous, `the previously current row must not be current any more`).not.toHaveAttribute('aria-current', 'page');
     }
     await expect(page.getByText(ERROR_BOUNDARY_TEXT)).toHaveCount(0);
     // Typography spec rev. 2 §4.6: every page the rail reaches paints its
@@ -212,8 +210,10 @@ test('SB03: every main-rail item navigates to its own page', async ({ page }) =>
   // …and the shell's controls survive the WCAG 1.4.12 text-spacing overrides.
   await expectTextSpacingSurvives(page, 'app shell');
 
-  // Closing the loop: the case's own steps start from Chat, and the last
-  // stop above returns there — the composer must be back too.
+  // Closing the loop: the case's own steps start from Chat; the Chats caption
+  // returns there with a new chat, the composer back too.
+  await page.getByTestId('shell-chats-caption').click();
+  await expect(page).toHaveURL(/\/chat\?create=1/, { timeout: 15_000 });
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
 
   await checkA11y(page);

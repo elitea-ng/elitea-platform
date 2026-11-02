@@ -41,6 +41,10 @@ export function volatileRegions(page: Page): Locator[] {
     // the shutter opens. It used to be a constant red only because it read the
     // noop socket.io client — the defect it now no longer has.
     page.locator('[data-testid="sidebar-connection-dot"]'),
+    // The sidebar's chat list holds whatever conversations the shared project
+    // has when the shutter opens — other journeys add and remove them — and
+    // their relative-date groups move with the clock.
+    page.locator('[data-testid="shell-chats"]'),
   ];
 }
 
@@ -63,8 +67,7 @@ export function volatileRegions(page: Page): Locator[] {
  *   resolved project name      loaded YES  stalled no
  *   "No projects" fallback     loaded no   stalled YES
  *   Applications nav link      loaded YES  stalled YES  <- ungated, no good
- *   sidebar-create-button      loaded YES  stalled YES  <- always present
- * The first two are the landmark; the last two are why the obvious choices are
+ * The first two are the landmark; the last is why the obvious choice is
  * not. See `../routes.visual.spec.ts`'s header for the full method note.
  *
  * It lives HERE, beside `settle()` and the base mask list, for the reason that

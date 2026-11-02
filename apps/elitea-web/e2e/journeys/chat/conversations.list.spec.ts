@@ -1,5 +1,5 @@
 /**
- * The conversation rail as a LIST: everything the project holds is on it, a row
+ * The sidebar's Chats list (`widgets/chat-rail`): everything the project holds is on it, a row
  * opens the conversation it names, and moving between two rows really moves
  * between two conversations.
  *
@@ -14,11 +14,10 @@
  * `chat.conversation.spec.ts`'s J11 already opens a conversation by DEEP LINK,
  * which is a different thing from opening one by clicking its row: the deep
  * link exercises the route's own resolution from a cold URL, the click
- * exercises the rail's row-to-route wiring. `useConversationSidebar` keeps a
- * "restore vs click" split precisely because those two paths differ, and M1
- * in `chat.management.spec.ts` documents a defect that lived entirely in the
- * click one (a stale closure left the route on a conversation the rail had
- * already removed). So the click is asserted here on its own.
+ * exercises the sidebar row's row-to-route wiring. M1 in
+ * `chat.management.spec.ts` documents a defect that lived entirely in the
+ * click path (the route stayed on a conversation the list had already
+ * removed). So the click is asserted here on its own.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHAT MAKES "IT NAVIGATED" MEAN SOMETHING
@@ -31,7 +30,7 @@
  * so what is asserted is that the page went and fetched that conversation.
  */
 import { test, expect } from '@playwright/test';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL } from '../../../playwright.config';
@@ -64,22 +63,51 @@ function uniqueName(tag: string): string {
 }
 
 /**
- * Opens the rail's date group that holds today's conversations.
+ * The sidebar caption of a date group the server named. The listing's names
+ * ("Today", "Yesterday", "This week", "This month", "Older") are shown as the
+ * sidebar's own captions (`widgets/chat-rail/ui/ChatsSection.tsx`'s
+ * `groupCaption`).
+ */
+function groupCaption(serverName: string): string {
+  switch (serverName.toLowerCase().replaceAll(' ', '_')) {
+    case 'this_week':
+      return 'Previous 7 days';
+    case 'this_month':
+      return 'Previous 30 days';
+    default:
+      return serverName;
+  }
+}
+
+/** A date group's frame in the sidebar Chats list (`shell-chats-group`), by the group's server name. */
+function groupFrame(page: Page, groupName: string): Locator {
+  const caption = groupCaption(groupName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return page
+    .getByTestId('shell-chats')
+    .getByTestId('shell-chats-group')
+    .filter({ has: page.locator('.shell-group-caption', { hasText: new RegExp(`^${caption}$`) }) });
+}
+
+/**
+ * Opens the sidebar's date group the server named.
  *
- * `DateGroup` starts collapsed, so its rows are mounted but not visible — a
- * plain `.click()` on a row would time out on "element is not visible" and read
- * like a missing row. Driven off `aria-expanded` rather than clicked
- * unconditionally, so a future default of "expanded" closes nothing.
- * (Same helper, same reasoning, as `chat.management.spec.ts`'s M1.)
+ * Only Pinned and Today are open by default (and the open state is remembered
+ * per viewer); a closed group renders no rows at all, so a row in it would
+ * read like a missing row. Driven off `aria-expanded` rather than clicked
+ * unconditionally, so an open group is never closed.
  */
 async function openGroup(page: Page, groupName: string): Promise<void> {
-  const sidebar = page.getByTestId('chat-conversation-sidebar');
-  await expect(sidebar).toBeVisible({ timeout: 20_000 });
-  const header = sidebar.getByRole('button', { name: groupName, exact: true });
-  await expect(header, `the rail must render the "${groupName}" group the server named`).toBeVisible({
+  await expect(page.getByTestId('shell-chats')).toBeVisible({ timeout: 20_000 });
+  const header = groupFrame(page, groupName).locator('.shell-row-main');
+  await expect(header, `the sidebar must render the "${groupName}" group the server named`).toBeVisible({
     timeout: 20_000,
   });
   if ((await header.getAttribute('aria-expanded')) !== 'true') await header.click();
+}
+
+/** The sidebar row of a conversation; its main button opens it. */
+function chatRow(page: Page, conversationId: string): Locator {
+  return page.locator(`[data-conversation-id="${conversationId}"]`);
 }
 
 /** The group every conversation created during a run belongs to. */
@@ -97,7 +125,7 @@ async function openTodayGroup(page: Page): Promise<void> {
  * would hang, and a test that hangs teaches nothing about the rail.
  */
 async function reopenFromRail(page: Page, conversationId: string): Promise<void> {
-  await page.getByTestId(`conversation-item-${conversationId}`).click();
+  await chatRow(page, conversationId).locator('.shell-row-main').click();
   await expect(page).toHaveURL(new RegExp(`/app/chat/${conversationId}$`), { timeout: 15_000 });
   await expect(page.getByTestId('chat-message-input')).toBeEditable({ timeout: 15_000 });
   await expect(page.getByText('Something went wrong.')).toHaveCount(0);
@@ -111,7 +139,7 @@ async function openFromRail(page: Page, conversationId: string): Promise<void> {
       response.request().method() === 'GET',
     { timeout: 30_000 },
   );
-  await page.getByTestId(`conversation-item-${conversationId}`).click();
+  await chatRow(page, conversationId).locator('.shell-row-main').click();
   expect((await fetched).status(), 'the route must resolve the conversation it navigated to').toBe(200);
   // `toHaveURL`, not `waitForURL`: a history push fires no navigation
   // lifecycle event for `waitForURL` to wait on.
@@ -135,7 +163,7 @@ test('every conversation the project holds is on the rail, and a row opens the o
   // All three, each carrying its OWN name — the rail is keyed by conversation
   // id, so a list that rendered three rows with one name would fail here.
   for (const [index, id] of ids.entries()) {
-    const row = page.getByTestId(`conversation-item-${id}`);
+    const row = chatRow(page, id);
     await expect(row, 'a conversation created over the API must appear in the rail').toBeVisible({
       timeout: 15_000,
     });
@@ -174,8 +202,8 @@ test('the rail moves from one open conversation to another', async ({ page }) =>
 
   // Both rows are still on the rail after all that — a navigation that
   // re-rendered the list from the open conversation alone would lose one.
-  await expect(page.getByTestId(`conversation-item-${first}`)).toBeVisible();
-  await expect(page.getByTestId(`conversation-item-${second}`)).toBeVisible();
+  await expect(chatRow(page, first)).toBeVisible();
+  await expect(chatRow(page, second)).toBeVisible();
 
   await deleteConversation(page.request, first);
   await deleteConversation(page.request, second);
@@ -200,7 +228,7 @@ test('the rail moves from one open conversation to another', async ({ page }) =>
  * ─────────────────────────────────────────────────────────────────────────────
  * WHAT THE BUCKET'S OWN ARITHMETIC MEANS
  * ─────────────────────────────────────────────────────────────────────────────
- * The rail pages a bucket: `LoadMoreSentinel` fires `date_group=…&offset=…`
+ * The list pages a bucket: its "Show more" row fetches `date_group=…&offset=…`
  * once a bucket reports more rows than it delivered. It never could, until
  * issue 852 — the grouped listing answered with every conversation of every
  * bucket and a `total` equal to that same count, so "there is more" was not
@@ -316,23 +344,20 @@ test('the rail places each conversation in the date group the server assigned, i
     for (const groupName of new Set(groupOf.values())) await openGroup(page, groupName);
 
     for (const id of serverOrder) {
-      // Visible, not merely attached: a row sitting in a COLLAPSED bucket is
-      // mounted but hidden, so visibility here is what says the row is under
-      // the header the server named.
+      // Visible under its own group: a CLOSED group renders no rows, and only
+      // the groups the server named were opened above.
       await expect(
-        page.getByTestId(`conversation-item-${id}`),
+        groupFrame(page, String(groupOf.get(id))).locator('xpath=ancestor::li[1]').locator(`[data-conversation-id="${id}"]`),
         `the conversation must be visible under the "${String(groupOf.get(id))}" group the server assigned it`,
       ).toBeVisible({ timeout: 20_000 });
     }
 
     const rendered = await page
-      .getByTestId('chat-conversation-sidebar')
-      .locator('[data-testid^="conversation-item-"]')
-      .evaluateAll((nodes) =>
-        nodes.map((node) => (node.getAttribute('data-testid') ?? '').replace('conversation-item-', '')),
-      );
-    // Filtered to the date-group rows: the same rail also renders the pinned
-    // section and every folder, and the server partitions a conversation into
+      .getByTestId('shell-chats')
+      .locator('[data-conversation-id]')
+      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-conversation-id') ?? ''));
+    // Filtered to the date-group rows: the same list also renders the pinned
+    // group and every folder, and the server partitions a conversation into
     // exactly one of the three, so this selects the bucket rows and nothing
     // else.
     const fromBuckets = new Set(serverOrder);
@@ -349,9 +374,9 @@ test('the rail places each conversation in the date group the server assigned, i
 // issue 852: the rail pages a bucket that is bigger than one page
 //
 // This is the inversion of what this file used to pin. The grouped listing set
-// every bucket's `total` to the number of rows it had just delivered, so
-// `LoadMoreSentinel`'s `hasMore` was false for every bucket that has ever
-// existed: it never mounted, `onLoadMoreInGroup` never fired, and the
+// every bucket's `total` to the number of rows it had just delivered, so the
+// list's `hasMore` was false for every bucket that has ever existed: the
+// next-page control never appeared, the load-more never fired, and the
 // `?date_group=…&offset=…` read the server has served since the folders
 // handler was fixed had no caller at all. A project longer than one page did
 // not load slowly; it never loaded the rest.
@@ -371,7 +396,7 @@ test('a date bucket bigger than one page reports the remainder, and the rail fet
   for (let i = 0; i < PAGE_SIZE + 4; i += 1) ids.push(await createConversation(page.request, uniqueName(`page${i}`)));
 
   try {
-    // Recorded per bucket: the rail holds a sentinel per bucket, and a
+    // Recorded per bucket: the list pages each bucket on its own, and a
     // follow-up fired by SOME OTHER bucket says nothing about this one.
     const followUps = new Map<string, string[]>();
     page.on('request', (request) => {
@@ -411,50 +436,18 @@ test('a date bucket bigger than one page reports the remainder, and the rail fet
     const bucketName = String(bucket?.name);
     await openGroup(page, bucketName);
 
-    const sidebar = page.getByTestId('chat-conversation-sidebar');
+    // The bucket's own subtree: its group's `li` holds its rows and its
+    // "Show more" (`shell-chats-more`), and nothing of the pinned group or
+    // the folders, which the same list also renders.
+    const bucketBody = groupFrame(page, bucketName).locator('xpath=ancestor::li[1]');
+    const bucketRowCount = (): Promise<number> => bucketBody.locator('[data-conversation-id]').count();
 
-    /*
-     * How many rows THIS bucket holds, taken from the bucket's own subtree.
-     *
-     * The rail also renders the pinned section and every folder, so a count
-     * over the whole sidebar would already be past one page before any paging
-     * happened. The bucket's body is found by walking up from a row it
-     * carries to the first ancestor that holds more than one row — not to the
-     * one that holds the sentinel, which is unmounted again the moment the
-     * bucket is exhausted.
-     */
-    const bucketRowCount = (rowId: string): Promise<number> =>
-      page.evaluate((id: string) => {
-        const held = (node: Element): number => node.querySelectorAll('[data-testid^="conversation-item-"]').length;
-        let node: Element | null = document.querySelector(`[data-testid="conversation-item-${id}"]`);
-        while (node !== null && held(node) < 2) node = node.parentElement;
-        return node === null ? 0 : held(node);
-      }, rowId);
-
-    /*
-     * THE SENTINEL, not the last row.
-     *
-     * The sentinel sits UNDER the bucket's last row and is `visibility:
-     * hidden`, and the rail is its own scroll container: scrolling the last
-     * row into view parks that row against the container's bottom edge and
-     * leaves the sentinel clipped just below it, where no intersection is
-     * reported (the observer's 50px `rootMargin` widens the viewport, not the
-     * intermediate scroller). So the bucket's own sentinel is centred
-     * directly — found by walking up from the bucket's last row to the
-     * nearest ancestor that holds one, which is that bucket's collapse body.
-     * A `scrollIntoViewIfNeeded` on the sentinel would refuse it for being
-     * invisible, and `waitForTimeout` would only be waiting for a scroll to
-     * happen without saying so.
-     */
     const lastInBucket = String((bucket?.conversations ?? []).at(-1)?.id ?? '');
-    await expect(sidebar.getByTestId(`conversation-item-${lastInBucket}`)).toBeVisible({ timeout: 20_000 });
-    await page.evaluate((rowId: string) => {
-      let node: Element | null = document.querySelector(`[data-testid="conversation-item-${rowId}"]`);
-      while (node !== null && node.querySelector('[data-testid="conversation-load-more-sentinel"]') === null) {
-        node = node.parentElement;
-      }
-      node?.querySelector('[data-testid="conversation-load-more-sentinel"]')?.scrollIntoView({ block: 'center' });
-    }, lastInBucket);
+    await expect(bucketBody.locator(`[data-conversation-id="${lastInBucket}"]`)).toBeVisible({ timeout: 20_000 });
+    // A bucket with a remainder ends in "Show more", which fetches its next page.
+    const showMore = bucketBody.getByTestId('shell-chats-more');
+    await expect(showMore, 'a bucket with a remainder must offer its next page').toBeVisible({ timeout: 20_000 });
+    await showMore.locator('.shell-row-main').click();
 
     await expect
       .poll(() => followUps.get(bucketName)?.length ?? 0, {
@@ -469,7 +462,7 @@ test('a date bucket bigger than one page reports the remainder, and the rail fet
 
     // …and the rows it fetched really reach the screen.
     await expect
-      .poll(() => bucketRowCount(lastInBucket), {
+      .poll(() => bucketRowCount(), {
         timeout: 30_000,
         message: 'the bucket must hold more rows than its first page carried once the second page lands',
       })
