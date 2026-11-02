@@ -27,7 +27,7 @@ use super::resume::{
 };
 use super::static_pause::{StaticPauseCatalog, fanout_static_pause_id, fanout_static_resume};
 use crate::agents::events::{
-    pipeline_clarifying_event_binding, pipeline_hitl_event_binding,
+    NestedPipelineCheckpoint, pipeline_clarifying_event_binding, pipeline_hitl_event_binding,
     pipeline_mcp_auth_event_binding, pipeline_tool_event_binding,
 };
 
@@ -142,6 +142,37 @@ fn application_member_card(
 /// resumed through the Agent's nested decision registry, not the bindings here.
 pub(crate) fn is_application_member_pause(pause: &ParallelBranchPause) -> bool {
     application_member_card(pause).is_some()
+}
+
+/// The nested pipeline checkpoints (thread, checkpoint) a pipeline child's
+/// pause names, down to its paused node. Empty for any other pause.
+pub(crate) fn nested_pause_checkpoints(pause: &ParallelBranchPause) -> Vec<(String, String)> {
+    let pairs = |nested: &[NestedPipelineCheckpoint]| {
+        nested
+            .iter()
+            .map(|nested| {
+                (
+                    nested.thread_id().to_owned(),
+                    nested.checkpoint_id().to_owned(),
+                )
+            })
+            .collect()
+    };
+    let event = pause_event(pause);
+    let thread = pause.thread_id.as_str();
+    if let Ok(binding) = pipeline_hitl_event_binding(&event, FANOUT_CHILD_AUTHOR, thread) {
+        return pairs(binding.nested_checkpoints());
+    }
+    if let Ok(binding) = pipeline_tool_event_binding(&event, FANOUT_CHILD_AUTHOR, thread) {
+        return pairs(binding.nested_checkpoints());
+    }
+    if let Ok(binding) = pipeline_clarifying_event_binding(&event, FANOUT_CHILD_AUTHOR, thread) {
+        return pairs(binding.nested_checkpoints());
+    }
+    if let Ok(binding) = pipeline_mcp_auth_event_binding(&event, FANOUT_CHILD_AUTHOR, thread) {
+        return pairs(binding.nested_checkpoints());
+    }
+    Vec::new()
 }
 
 /// Classify and bind the child's pause. Exactly one typed binding accepts

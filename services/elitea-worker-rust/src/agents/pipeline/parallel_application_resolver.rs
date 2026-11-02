@@ -64,9 +64,7 @@ impl NativePipelineApplicationResolver {
             } if runtimes.has_direct_tool_recovery() => {
                 NativePipelineApplicationParticipant::Pipeline {
                     definition: definition.clone(),
-                    runtimes: runtimes
-                        .clone()
-                        .with_direct_tool_recovery(Arc::clone(journals)),
+                    runtimes: runtimes.clone().with_branch_journals(journals),
                     events: events.clone(),
                     display_name: display_name.clone(),
                 }

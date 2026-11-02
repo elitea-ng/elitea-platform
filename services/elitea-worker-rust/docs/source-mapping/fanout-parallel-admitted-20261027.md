@@ -228,7 +228,7 @@ refused the model-checkpoint reclaim (473c27f27), the answered child was parked 
 - FU-247: inline `llm` branches — landed on `feat/graph-fanout-inline-llm-branches`
   ([mapping](fanout-inline-llm-branches-20261028.md)).
 - FU-248: effectful direct nodes inside saved child pipelines — landed on `fix/fu248-child-effectful-direct-nodes`
-  ([mapping](child-effectful-direct-nodes-20261030.md)); two levels below a fan-out member stays refused typed (FU-264).
+  ([mapping](child-effectful-direct-nodes-20261030.md)); two levels below a fan-out member runs since FU-264 ([mapping](member-child-depth2-journals-20261102.md)).
 - FU-249: a Parallel inside a saved child pipeline or an Agent's pipeline tool (refused typed
   `graph.fanout.parallel_in_child_pipeline` / Main bound `parallel_in_child_pipeline`); needs a capability-preserving
   appender through the activation/static-resume/scope chain, reused by Map-in-child.
