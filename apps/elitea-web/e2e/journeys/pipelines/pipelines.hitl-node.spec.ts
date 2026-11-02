@@ -149,13 +149,14 @@ test('the HITL node\'s Input picker is enabled only when the user message is F-S
   // F-String — only then does the tooltip's stated condition ("Available
   // only when the User message type is set to F-String") hold.
   //
-  // The card is wider than the canvas at 1280px (the 248px sidebar and both
-  // editor side panes leave the canvas under 300px), and its Type select sits
-  // at the card's right edge, under the chat pane. "Fit view" (the canvas's
-  // own control) brings the whole card into the canvas first, as a user would.
-  await page.getByRole('button', { name: /fit view/i }).click();
+  // Opened from the keyboard, as MUI Select allows: at 1280px the canvas is a
+  // ~240px column between the editor's two panes, the editor fits the whole
+  // graph into it, and the new card lands in its lower-left corner, where the
+  // canvas's own zoom controls sit over part of it. A pointer click there
+  // lands on "Zoom In"; focus and Enter reach the select itself.
   const messageType = card.getByRole('combobox', { name: 'Type' });
-  await messageType.click();
+  await messageType.focus();
+  await page.keyboard.press('Enter');
   await page.getByRole('option', { name: 'F-String', exact: true }).click();
 
   await expect(inputPicker).toBeEnabled({ timeout: 10_000 });
