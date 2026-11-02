@@ -72,6 +72,9 @@ type CurrentExecutor struct {
 	// nil with credential governance off.
 	mandates ScheduleMandates
 	gate     MandateGate
+	// freezer freezes the toolkit's governed credential under the
+	// mandate's binding (governed_credentials.go); nil leaves none frozen.
+	freezer CredentialFreezer
 }
 
 func NewCurrentExecutor(
@@ -150,6 +153,17 @@ func (executor *CurrentExecutor) ExecuteScheduled(
 		toolkit.Type != candidate.ToolkitType ||
 		toolkit.Settings == nil {
 		return ExecutionOutcome{}, ErrScheduleDependency
+	}
+
+	if governed {
+		var refused *ExecutionOutcome
+		ctx, refused, err = executor.freezeCredentials(ctx, candidate)
+		if err != nil {
+			return ExecutionOutcome{}, dependencyError(ctx, err)
+		}
+		if refused != nil {
+			return *refused, nil
+		}
 	}
 
 	settings, credentialOK := scheduledToolkitSettings(candidate, toolkit.Settings)

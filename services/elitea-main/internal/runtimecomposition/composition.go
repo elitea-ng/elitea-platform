@@ -2114,6 +2114,17 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 				return nil, executorErr
 			}
 			executor.WithMandates(dependencies.IndexScheduleMandates, dependencies.IndexScheduleMandateGate)
+			if dependencies.IndexScheduleMandateGate != nil {
+				// A governed index run's toolkit credential is frozen under
+				// its mandate's binding and redeemed from the broker (#1473).
+				freezer, freezerErr := governedAgentCredentials(dependencies.CredentialProfile, dependencies.AdmissionPool)
+				if freezerErr != nil {
+					return nil, fmt.Errorf("construct governed index credentials: %w", freezerErr)
+				}
+				if freezer != nil {
+					executor.WithCredentialFreezer(freezer)
+				}
+			}
 			notifications, notificationErr :=
 				repos.NewCurrentIndexScheduleNotificationRepository(
 					dependencies.ControlPool,

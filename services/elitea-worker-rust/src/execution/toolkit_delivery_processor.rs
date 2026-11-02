@@ -1012,6 +1012,25 @@ where
             Ok(Err(error)) => return IndexRunEnd::Failure(runtime_context_failure(&error)),
             Err(error) => return IndexRunEnd::Failure(lease_failure(&error)),
         };
+        // A governed run reads its source with the toolkit credential it
+        // redeems from the broker, never the claimed one (#1473). A legacy
+        // run has no governed client and reads its claimed configuration.
+        let governed = crate::transport::credential_redeemer::governed_client(
+            &self.platform,
+            &authorized.shared_runtime_context(),
+        );
+        let governed_configuration = match lease
+            .run_pre_invocation(crate::indexing::governed::governed_toolkit_configuration(
+                governed.as_deref(),
+                inputs.toolkit_configuration.as_bytes(),
+                inputs.tool_parameters.as_bytes(),
+            ))
+            .await
+        {
+            Ok(Ok(configuration)) => configuration,
+            Ok(Err(failure)) => return IndexRunEnd::Failure(failure),
+            Err(error) => return IndexRunEnd::Failure(lease_failure(&error)),
+        };
         let execution = authorized.execution();
         let probe = lease.state_probe();
         let clock = Arc::clone(&self.clock);
@@ -1033,7 +1052,11 @@ where
         });
         let run = IndexRun {
             command: index,
-            toolkit_configuration: inputs.toolkit_configuration.as_bytes(),
+            toolkit_configuration: governed_configuration
+                .as_ref()
+                .map_or(inputs.toolkit_configuration.as_bytes(), |entry| {
+                    entry.as_slice()
+                }),
             tool_parameters: inputs.tool_parameters.as_bytes(),
             parsed: inputs.parsed.as_ref(),
             embedding_binding: inputs

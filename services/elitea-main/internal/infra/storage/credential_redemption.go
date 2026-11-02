@@ -72,10 +72,11 @@ WHERE c.claim_id = $1
   AND ws.expires_at > clock_timestamp()
   AND ws.revoked_at IS NULL
   AND j.desired_state = 'RUNNING'
-  -- A node-recovery inspection claim reads; it never runs a tool. Only the
-  -- agent lanes run governed toolkits (the worker refuses the toolkit lane).
+  -- A node-recovery inspection claim reads; it never runs a tool. The
+  -- agent lanes run governed toolkits (the worker refuses the toolkit
+  -- lane), and a governed index run reads its one toolkit's source (#1473).
   AND c.recovery_mode <> 'NODE_RECOVERY'
-  AND j.capability_id IN ('agent.execute.application.v1', 'agent.execute.adhoc.v1')`,
+  AND j.capability_id IN ('agent.execute.application.v1', 'agent.execute.adhoc.v1', 'index.ingest.v1')`,
 		claim.ClaimID, claim.ExecutionID, claim.Generation, workloadID, claim.FenceToken,
 	).Scan(&run.TenantProjectID, &run.ActorID, &run.ConversationUUID, &run.ResponseMessageID, &run.ContextBytes, &digest)
 	if errors.Is(err, pgx.ErrNoRows) {

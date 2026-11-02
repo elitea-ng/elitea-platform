@@ -367,8 +367,26 @@ func (s *EliteaClientTokenService) resolveTokenValue(
 	case runtimeContextInitiatorSchedule:
 		// A governed scheduled run never gets the project system token
 		// (#1122): it runs under its mandate, through the broker and the
-		// claim-bound routes, or not at all.
-		if s.projectIssuer == nil || governedRun {
+		// claim-bound routes, or not at all. Its client token is a run
+		// token (#1473): it names the run's attribution actor and that
+		// actor's token row, like a user-initiated governed run, and is
+		// valid only for the model gateway and the run project's
+		// artifacts, while this claim's lease is live. The actor's own
+		// token is read only for its row and never leaves Main.
+		if governedRun {
+			if s.runTokens == nil {
+				return EliteaClientTokenContext{}, runtimeContextUnavailable(runtimeContextStageExecutionMode)
+			}
+			token, err = s.actorIssuer.IssueToken(ctx, actorID)
+			if err != nil || len(token) == 0 || len(token) > maxEliteaClientTokenBytes {
+				if contextErr := ctx.Err(); contextErr != nil {
+					return EliteaClientTokenContext{}, contextErr
+				}
+				return EliteaClientTokenContext{}, runtimeContextUnavailable(runtimeContextStageActorPATIssuance)
+			}
+			break
+		}
+		if s.projectIssuer == nil {
 			return EliteaClientTokenContext{}, runtimeContextUnavailable(runtimeContextStageExecutionMode)
 		}
 		token, expectedPrincipalID, err = issueProjectSystemToken(
@@ -396,8 +414,9 @@ func (s *EliteaClientTokenService) resolveTokenValue(
 		// A governed run gets a run token in place of the PAT (#1461):
 		// it names the same actor and token row, so usage attributes as
 		// before, but it reaches /llm and its project's artifacts only, and
-		// only while this claim's lease is live. Only a user-initiated run
-		// reaches here: a governed scheduled run was refused above.
+		// only while this claim's lease is live. A governed scheduled run
+		// reaches here with its actor's token row (#1473), never the
+		// project system token.
 		token, err = s.runTokens.Issue(runtoken.Binding{
 			ExecutionID: claim.ExecutionID,
 			Generation:  claim.Generation,

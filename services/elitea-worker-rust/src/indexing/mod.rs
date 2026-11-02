@@ -27,6 +27,7 @@
 //! `elitea-vector` token), write a vector of another embedding space than
 //! the command expects, or write index metadata.
 
+pub(crate) mod governed;
 pub(crate) mod image_fit;
 pub(crate) mod inputs;
 pub(crate) mod model_steps;
@@ -43,6 +44,8 @@ mod connector_picture_tests;
 mod embedded_picture_tests;
 #[cfg(test)]
 mod figma_tests;
+#[cfg(test)]
+mod governed_tests;
 #[cfg(test)]
 mod memory_host_tests;
 #[cfg(test)]

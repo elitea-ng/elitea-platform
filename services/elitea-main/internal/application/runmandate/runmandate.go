@@ -262,7 +262,7 @@ func (s *Service) Admit(ctx context.Context, mandateID string, target Target) (s
 		// between the two reads: refused, and the next fire reads again.
 		return securitycontext.RunAuthority{}, ErrMandateNotUsable
 	}
-	authority := securitycontext.RunAuthority{MandateID: m.ID, MandateEpoch: m.RevocationEpoch}
+	authority := securitycontext.RunAuthority{MandateID: m.ID, MandateEpoch: m.RevocationEpoch, AgentBindingID: m.AgentBindingID}
 	if m.SubjectUserID != nil {
 		authority.SubjectUserID = *m.SubjectUserID
 	}

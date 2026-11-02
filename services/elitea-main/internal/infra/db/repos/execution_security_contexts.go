@@ -209,13 +209,13 @@ func bindMandateAuthority(ctx context.Context, rows rowFunc, built *securitycont
 		subject                    *int64
 		mandateEpoch, bindingEpoch int64
 		bindingID, delegationID    string
-		versionID                  int64
+		applicationID, versionID   int64
 		digest                     []byte
 		delegationEpoch            *int64
 	)
 	err := rows(ctx, `
 SELECT m.subject_user_id, m.revocation_epoch, b.id::text, b.revocation_epoch, b.definition_digest,
-       b.application_version_id, coalesce(m.delegation_id::text, ''), d.revocation_epoch
+       b.application_id, b.application_version_id, coalesce(m.delegation_id::text, ''), d.revocation_epoch
 FROM elitea_identity.mandates AS m
 JOIN elitea_identity.agent_identity_bindings AS b
   ON b.id = m.agent_binding_id AND b.tenant_project_id = m.tenant_project_id AND b.state = 'active'
@@ -228,7 +228,7 @@ WHERE m.id::text = $1 AND m.tenant_project_id = $2 AND m.state = 'active'
   AND m.not_before <= $3 AND m.expires_at > $3
   AND m.kind IN ('autonomous', 'delegated_background')`,
 		authority.MandateID, facts.tenantProjectID, facts.admittedAt,
-	).Scan(&subject, &mandateEpoch, &bindingID, &bindingEpoch, &digest, &versionID, &delegationID, &delegationEpoch)
+	).Scan(&subject, &mandateEpoch, &bindingID, &bindingEpoch, &digest, &applicationID, &versionID, &delegationID, &delegationEpoch)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrRunAuthorityNotUsable
 	}
@@ -267,6 +267,12 @@ WHERE m.id::text = $1 AND m.tenant_project_id = $2 AND m.state = 'active'
 	built.AgentBindingID, built.AgentBindingEpoch = bindingID, bindingEpoch
 	built.DefinitionDigest = runtimedomain.Digest(digestArray(digest))
 	built.MandateID, built.MandateEpoch = authority.MandateID, mandateEpoch
+	if facts.applicationVersionID == 0 {
+		// A run that executes no agent version (a scheduled index run,
+		// #1473) names the agent its mandate binds, so the broker's agent
+		// binding gate compares the binding with that agent.
+		built.ApplicationID, built.ApplicationVersionID = applicationID, versionID
+	}
 	if delegationID != "" {
 		built.DelegationID, built.DelegationEpoch = delegationID, *delegationEpoch
 	}
