@@ -1,0 +1,110 @@
+---
+title: "AWS Bedrock Guardrails adapter"
+description: "Set up a bedrock_guardrails guardrail detector: the Bedrock guardrail, the IAM credentials, the egress allowlist entry, the detector settings, the labels and the fail mode."
+---
+
+The `bedrock_guardrails` detector sends the content of a [guardrail entry](/admin/enterprise-controls/content-controls#guardrail-pipeline) to the Amazon Bedrock `ApplyGuardrail` API. Bedrock applies the policies of one guardrail that you configure in AWS: content filters, prompt attack detection, denied topics, word filters and sensitive information filters.
+
+You do not need to use a Bedrock model. The detector checks content for every provider.
+
+## Prerequisites
+
+- An AWS account with Amazon Bedrock in the region that you use.
+- Platform administrator access to **Admin › LLM Governance** and to the secrets of the public project.
+- Network access from the LLM gateway to the Bedrock runtime endpoint.
+
+## Create the AWS resources
+
+<Steps>
+  <Step title="Create a guardrail">
+    In the Bedrock console, open **Guardrails** and create a guardrail. Configure the policies that you need. For prompt attacks, turn on the **Prompt attack** content filter.
+  </Step>
+  <Step title="Publish a version">
+    Create a version of the guardrail, or use `DRAFT` for tests. Copy the guardrail id (or its ARN) and the version.
+  </Step>
+  <Step title="Create an IAM user or role for the gateway">
+    Give it the permission `bedrock:ApplyGuardrail` on the guardrail ARN, and nothing more. Create an access key for it.
+  </Step>
+</Steps>
+
+## Credentials
+
+The gateway signs each call with AWS Signature Version 4, with the service name `bedrock` and the region of the detector.
+
+1. Create two secrets in the public project, for example `AWS_GUARDRAIL_KEY_ID` and `AWS_GUARDRAIL_SECRET`, with the access key id and the secret access key.
+2. For temporary credentials, also create a secret with the session token.
+3. Set the detector fields to `{{secret.NAME}}` references. The admin API refuses raw values.
+
+The gateway does not use the pod identity (IAM roles for service accounts or web identity) for this detector. The gateway refuses ambient AWS identity on purpose, so that a missing key never sends a request that AWS bills to the platform account.
+
+## Egress allowlist entry
+
+The call to AWS is outbound traffic. Add the runtime host of the region to an **Egress allowlist** governance entry, under **Permitted destinations**:
+
+```text
+bedrock-runtime.us-east-1.amazonaws.com
+```
+
+When you use a VPC interface endpoint, set `endpoint` and add that host instead. When the host is not on the allowlist, the detector fails, and the fail mode of the entry applies.
+
+## Detector settings
+
+```json
+{
+  "guardrail": {
+    "stage": "output",
+    "timeout_ms": 3000,
+    "detectors": [
+      {
+        "name": "bedrock",
+        "type": "bedrock_guardrails",
+        "action": "mask",
+        "region": "us-east-1",
+        "guardrail_identifier": "abc123def456",
+        "guardrail_version": "3",
+        "access_key_id_secret": "{{secret.AWS_GUARDRAIL_KEY_ID}}",
+        "secret_access_key_secret": "{{secret.AWS_GUARDRAIL_SECRET}}"
+      }
+    ]
+  }
+}
+```
+
+| Setting | Meaning |
+| --- | --- |
+| `region` | The AWS region, for example `us-east-1`. Required. |
+| `guardrail_identifier` | The guardrail id or the guardrail ARN. Required. |
+| `guardrail_version` | A version number or `DRAFT`. Required. |
+| `access_key_id_secret` | A `{{secret.NAME}}` reference to the access key id. Required. |
+| `secret_access_key_secret` | A `{{secret.NAME}}` reference to the secret access key. Required. |
+| `session_token_secret` | A `{{secret.NAME}}` reference to a session token. Optional. |
+| `endpoint` | The runtime endpoint. Default `https://bedrock-runtime.REGION.amazonaws.com`. Set it for a VPC endpoint. |
+
+The gateway sets `source` from the stage of the entry: `INPUT` for an input entry and `OUTPUT` for an output entry. The admin form has an **Add a cloud classifier detector** section that writes this object for you.
+
+## Labels
+
+An assessment entry counts when Bedrock reports it as detected.
+
+| Bedrock assessment | Label | Score | Span |
+| --- | --- | --- | --- |
+| Content filter `HATE`, `INSULTS`, `SEXUAL`, `VIOLENCE`, `MISCONDUCT` | `hate`, `insults`, `sexual`, `violence`, `misconduct` | confidence: `LOW` 0.33, `MEDIUM` 0.66, `HIGH` 1 | All of the content |
+| Content filter `PROMPT_ATTACK` | `prompt_injection` | the same | All of the content |
+| Denied topic | `denied_topic` | 1 | All of the content |
+| Custom word | `blocked_word` | 1 | Each occurrence |
+| Managed word list (profanity) | `profanity` | 1 | Each occurrence |
+| PII entity, for example `EMAIL` | `pii:email` | 1 | Each occurrence |
+| Custom regex, for example `Employee Id` | `regex:employee_id` | 1 | Each occurrence |
+| Bedrock intervened, but no assessment above applies | `bedrock_intervened` | 1 | All of the content |
+
+Bedrock returns the matched text of word and sensitive information entries, not a position. The gateway finds that text in the content to get the spans, and then drops the text. A `mask` action therefore replaces only the matches. The verdict never records the matched text. Contextual grounding and automated reasoning results are ignored: a guardrail entry has no grounding source.
+
+## Latency and cost
+
+Each check is one round trip to Bedrock. On a streamed answer, an output entry with a `block` or `mask` action calls Bedrock for each window of text. A `flag` entry calls Bedrock one time when the stream ends. Bedrock bills each policy by text units. See [Amazon Bedrock pricing](https://aws.amazon.com/bedrock/pricing/).
+
+## Fail mode
+
+- Use `fail_mode: closed` on a `block` or `mask` entry when the check is a policy requirement. When Bedrock is not available, the gateway then refuses the request with HTTP 503. A `mask` entry that fails open would release the raw text.
+- Use `fail_mode: open` with a `flag` action to measure the results first.
+- An HTTP status other than 200, for example 403 for a missing permission or 429 for throttling, is a detector failure.

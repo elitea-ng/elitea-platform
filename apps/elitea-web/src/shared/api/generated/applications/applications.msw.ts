@@ -1896,6 +1896,9 @@ export const getListRunStepsResponseMock = (
         "regex",
         "secrets",
         "http",
+        "azure_content_safety",
+        "bedrock_guardrails",
+        "model_armor",
       ] as const),
       action: faker.helpers.arrayElement(["block", "mask", "flag"] as const),
       outcome: faker.helpers.arrayElement([

@@ -30,6 +30,11 @@ type Env struct {
 	// ResolveSecret resolves a {{secret.NAME}} reference for an adapter's
 	// auth header. Nil makes an adapter with an auth secret fail.
 	ResolveSecret func(ctx context.Context, ref string) (string, error)
+	// GoogleAccessToken mints a cloud-platform access token from the
+	// gateway's own Google identity (internal/workloadidentity). The gateway
+	// sets it only when GATEWAY_WORKLOAD_IDENTITY_ENABLED is true. Nil makes
+	// a keyless model_armor detector fail.
+	GoogleAccessToken func(ctx context.Context) (string, error)
 }
 
 // detectorImpl is the detector interface: content in; spans, labels and

@@ -1,0 +1,118 @@
+---
+title: "Azure AI Content Safety adapter"
+description: "Set up an azure_content_safety guardrail detector: the Content Safety resource, the resource key, the egress allowlist entry, the detector settings, the labels and the fail mode."
+---
+
+The `azure_content_safety` detector sends the content of a [guardrail entry](/admin/enterprise-controls/content-controls#guardrail-pipeline) to Azure AI Content Safety. It can use three Azure features:
+
+- **Harm categories**: Hate, Sexual, Violence and SelfHarm, with a severity threshold for each category (`text:analyze`).
+- **Blocklists**: the term lists that you keep in the Content Safety resource (`text:analyze`).
+- **Prompt Shields**: the detection of prompt attacks and jailbreaks (`text:shieldPrompt`).
+
+The gateway uses the REST API version `2024-09-01`.
+
+## Prerequisites
+
+- An Azure subscription.
+- Platform administrator access to **Admin › LLM Governance** and to the secrets of the public project.
+- Network access from the LLM gateway to your resource endpoint.
+
+## Create the Azure resource
+
+<Steps>
+  <Step title="Create a Content Safety resource">
+    In the Azure portal, create a **Content Safety** resource (Azure AI services). Select a region near your gateway. Prompt Shields is not available in all regions. Read the region list in the Azure documentation.
+  </Step>
+  <Step title="Copy the endpoint and a key">
+    Open **Keys and Endpoint**. Copy the endpoint, for example `https://acme-cs.cognitiveservices.azure.com`, and one key.
+  </Step>
+  <Step title="Create the blocklists (optional)">
+    Create each blocklist in the resource, for example with the Content Safety Studio. Write down the blocklist names.
+  </Step>
+</Steps>
+
+## Credentials
+
+The gateway sends the resource key in the `Ocp-Apim-Subscription-Key` header.
+
+1. Create a secret in the public project, for example `AZURE_CONTENT_SAFETY_KEY`, with the key as its value.
+2. Set `api_key_secret` to `{{secret.AZURE_CONTENT_SAFETY_KEY}}`. The admin API refuses a raw key.
+
+The gateway reads the secret value from the secrets vault for each call. To rotate the key, change the secret. You do not change the entry.
+
+Keyless Microsoft Entra authentication is not supported. The gateway has no Azure identity of its own, and it does not use an ambient cloud identity for a guardrail.
+
+## Egress allowlist entry
+
+The call to Azure is outbound traffic. Add the resource host to an **Egress allowlist** governance entry, under **Permitted destinations**:
+
+```text
+acme-cs.cognitiveservices.azure.com
+```
+
+You can also add `*.cognitiveservices.azure.com`. When the host is not on the allowlist, the detector fails, and the fail mode of the entry applies.
+
+## Detector settings
+
+```json
+{
+  "guardrail": {
+    "stage": "input",
+    "timeout_ms": 3000,
+    "detectors": [
+      {
+        "name": "azure",
+        "type": "azure_content_safety",
+        "action": "block",
+        "endpoint": "https://acme-cs.cognitiveservices.azure.com",
+        "api_key_secret": "{{secret.AZURE_CONTENT_SAFETY_KEY}}",
+        "categories": { "Hate": 4, "Sexual": 4, "Violence": 4, "SelfHarm": 2 },
+        "blocklists": ["codenames"],
+        "prompt_shields": true
+      }
+    ]
+  }
+}
+```
+
+| Setting | Meaning |
+| --- | --- |
+| `endpoint` | The resource endpoint. It must be an `https` URL with no user name, query or fragment. |
+| `api_key_secret` | A `{{secret.NAME}}` reference to the resource key. Required. |
+| `categories` | The harm categories to check, each with the lowest severity that is a finding. The keys are `Hate`, `Sexual`, `Violence` and `SelfHarm`. |
+| `output_type` | `FourSeverityLevels` (default: the severities 0, 2, 4 and 6) or `EightSeverityLevels` (0 to 7). The threshold must be from 1 to the highest severity of the scale. |
+| `blocklists` | At most 10 blocklist names of the resource. |
+| `prompt_shields` | `true` runs Prompt Shields. |
+
+Set at least one of `categories`, `blocklists` and `prompt_shields`. The admin form has an **Add a cloud classifier detector** section that writes this object for you.
+
+On the input stage, Prompt Shields reads the content as the user prompt. On the output stage, it reads the content as a document, which is the shape for indirect attacks.
+
+## Labels
+
+| Azure result | Label | Score |
+| --- | --- | --- |
+| Hate at or above the threshold | `hate` | severity ÷ 6 (four levels) or ÷ 7 (eight levels) |
+| Sexual at or above the threshold | `sexual` | the same |
+| Violence at or above the threshold | `violence` | the same |
+| SelfHarm at or above the threshold | `self_harm` | the same |
+| A blocklist match | `blocklist` | 1 |
+| Prompt Shields: attack detected | `prompt_injection` | 1 |
+
+Azure returns no position for these results. A finding therefore covers all of the content, and a `mask` action replaces all of it. The verdict records the labels. It never records the content or the matched blocklist term.
+
+## Long content
+
+Azure accepts at most 10000 characters (Unicode code points) for each call. The gateway splits longer content into parts of 10000 characters and sends one call for each part. A finding then covers its part. Content longer than 80000 characters is a detector failure, and the fail mode applies. An input entry reads all the messages of a request, so a long conversation can reach this limit. Use a `regex` or `secrets` detector for very long content.
+
+## Latency and cost
+
+Each call is one round trip to Azure. With categories and Prompt Shields, the gateway makes two calls for each part, one after the other. Set `timeout_ms` for the full entry with this in mind. On a streamed answer, an output entry with a `block` or `mask` action calls Azure for each window of text. A `flag` entry calls Azure one time when the stream ends.
+
+Azure bills each call by the number of text records. See [Azure AI Content Safety pricing](https://azure.microsoft.com/pricing/details/cognitive-services/content-safety/).
+
+## Fail mode
+
+- Use `fail_mode: closed` on a `block` entry when the check is a policy requirement. When Azure is not available, the gateway then refuses the request with HTTP 503.
+- Use `fail_mode: open` with a `flag` action to measure the results before you block. A failure then records an `error_open` verdict, and the request continues.
+- An HTTP status other than 200 from Azure, for example 401 for a wrong key or 429 for a rate limit, is a detector failure.

@@ -174,7 +174,10 @@ func validateGuardrailDetector(obj map[string]any) (string, error) {
 	case "http":
 		return name, validateGuardrailHTTP(obj)
 	}
-	return "", errors.New(`type must be "regex", "secrets" or "http"`)
+	if handled, err := validateGuardrailCloudDetector(typ, obj); handled {
+		return name, err
+	}
+	return "", errors.New(`type must be one of regex, secrets, http, azure_content_safety, bedrock_guardrails, model_armor`)
 }
 
 func validateGuardrailRegex(obj map[string]any) error {

@@ -49,7 +49,14 @@ export const RunGuardrailVerdict = zod
     stage: zod.enum(["input", "output"]),
     row: zod.string().describe("The name of the guardrail governance entry."),
     detector: zod.string(),
-    detector_type: zod.enum(["regex", "secrets", "http"]),
+    detector_type: zod.enum([
+      "regex",
+      "secrets",
+      "http",
+      "azure_content_safety",
+      "bedrock_guardrails",
+      "model_armor",
+    ]),
     action: zod.enum(["block", "mask", "flag"]),
     outcome: zod.enum([
       "pass",

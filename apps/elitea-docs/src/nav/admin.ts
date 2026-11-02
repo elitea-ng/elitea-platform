@@ -37,6 +37,29 @@ export const adminTab: NavTab = {
         { kind: 'page', slug: 'admin/enterprise-controls/evidence-guide', title: 'Evidence guide for auditors' },
         { kind: 'page', slug: 'admin/enterprise-controls/reconstruct-a-run', title: 'Reconstruct an agent run' },
       ],
+      groups: [
+        {
+          kind: 'group',
+          title: 'Guardrail adapters',
+          pages: [
+            {
+              kind: 'page',
+              slug: 'admin/enterprise-controls/guardrail-adapters/azure-content-safety',
+              title: 'Azure AI Content Safety',
+            },
+            {
+              kind: 'page',
+              slug: 'admin/enterprise-controls/guardrail-adapters/bedrock-guardrails',
+              title: 'AWS Bedrock Guardrails',
+            },
+            {
+              kind: 'page',
+              slug: 'admin/enterprise-controls/guardrail-adapters/model-armor',
+              title: 'Google Cloud Model Armor',
+            },
+          ],
+        },
+      ],
     },
   ],
 };

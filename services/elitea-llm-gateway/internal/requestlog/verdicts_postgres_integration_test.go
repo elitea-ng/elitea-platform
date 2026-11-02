@@ -1,7 +1,8 @@
 package requestlog
 
 // verdicts_postgres_integration_test.go runs the verdict INSERT and the prune
-// against a REAL PostgreSQL, with the SHIPPED DDL (shared migration 0214). A
+// against a REAL PostgreSQL, with the SHIPPED DDL (shared migrations 0214 and
+// 0217). A
 // unit test with a fake execer cannot report a wrong column name or a value a
 // CHECK constraint refuses.
 //
@@ -33,13 +34,15 @@ func TestPostgresGuardrailVerdictsInsertAndPrune(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	path := filepath.Join("..", "..", "..", "elitea-main", "migrations", "shared", "0214_guardrail_pipeline.sql")
-	ddl, err := os.ReadFile(path) //nolint:gosec // a fixed in-repo path
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, string(ddl)); err != nil {
-		t.Fatalf("apply 0214: %v", err)
+	for _, file := range []string{"0214_guardrail_pipeline.sql", "0217_guardrail_cloud_detector_types.sql"} {
+		path := filepath.Join("..", "..", "..", "elitea-main", "migrations", "shared", file)
+		ddl, err := os.ReadFile(path) //nolint:gosec // a fixed in-repo path
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, string(ddl)); err != nil {
+			t.Fatalf("apply %s: %v", file, err)
+		}
 	}
 	execution := "exec-verdict-it-" + time.Now().Format("150405.000000000")
 	t.Cleanup(func() {
@@ -55,6 +58,8 @@ func TestPostgresGuardrailVerdictsInsertAndPrune(t *testing.T) {
 				Outcome: "masked", FailMode: "closed", Labels: []string{"github-token"}, Findings: 1, LatencyMS: 3, Runs: 2},
 			{Stage: "input", Row: "adapter", Detector: "http", DetectorType: "http", Action: "flag",
 				Outcome: "error_open", FailMode: "open", Labels: []string{"detector_error"}, LatencyMS: 50, Runs: 1},
+			{Stage: "input", Row: "cloud", Detector: "azure", DetectorType: guardrail.TypeAzureContentSafety, Action: "block",
+				Outcome: "blocked", FailMode: "closed", Labels: []string{guardrail.LabelPromptInjection}, Findings: 1, LatencyMS: 80, Runs: 1},
 		},
 	}}
 	if err := store.writeVerdicts(ctx, records); err != nil {
@@ -66,8 +71,17 @@ func TestPostgresGuardrailVerdictsInsertAndPrune(t *testing.T) {
 		WHERE execution_id = $1 AND project_id = 3 AND user_id = 8`, execution).Scan(&count, &labels); err != nil {
 		t.Fatal(err)
 	}
-	if count != 2 {
-		t.Fatalf("stored %d verdicts; want 2", count)
+	if count != 3 {
+		t.Fatalf("stored %d verdicts; want 3", count)
+	}
+	// 0217 widened detector_type: the longest cloud type is stored whole.
+	var cloudType string
+	if err := pool.QueryRow(ctx, `SELECT detector_type FROM gateway.guardrail_verdicts
+		WHERE execution_id = $1 AND detector = 'azure'`, execution).Scan(&cloudType); err != nil {
+		t.Fatal(err)
+	}
+	if cloudType != guardrail.TypeAzureContentSafety {
+		t.Fatalf("detector_type = %q", cloudType)
 	}
 	if _, err := store.pruneVerdicts(ctx, time.Now().Add(-time.Hour)); err != nil {
 		t.Fatalf("prune: %v", err)
