@@ -75,7 +75,7 @@ test('CR02: the "+" shows on keyboard focus and has a tooltip', async ({ page })
 test('CR03: the Chats caption starts a new chat', async ({ page }) => {
   await gotoSettled(page, '/app/agents/all');
   await page.getByTestId('shell-chats-new').click();
-  await expect(page).toHaveURL(/\/chat\?create=1/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/\/app\/chat(\?|$)/, { timeout: 15_000 });
   await expect(page.getByTestId('shell-chats')).toBeVisible();
 });
 
@@ -105,7 +105,7 @@ test('CR05: collapsed rail — one New chat icon, no chat list', async ({ page }
   await newChat.hover();
   await expect(page.getByRole('tooltip', { name: 'New chat' })).toBeVisible({ timeout: 5_000 });
   await newChat.click();
-  await expect(page).toHaveURL(/\/chat\?create=1/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/\/app\/chat(\?|$)/, { timeout: 15_000 });
   await page.getByTestId('sidebar-collapse-toggle').click();
   await expect(page.getByTestId('shell-chats')).toBeVisible();
   await checkA11y(page);

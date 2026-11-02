@@ -69,6 +69,9 @@ test('the shell rail collapses and expands from the chat, and reaches the Agents
   // Scoped to the shell rail (`Sidebar.tsx`'s `nav[aria-label="side-bar"]`),
   // never to the page.
   const rail = page.getByRole('navigation', { name: 'side-bar' });
+  // Agents sits in the Workshop group, closed until opened.
+  const workshop = page.getByTestId('shell-elitea-workshop').getByRole('button').first();
+  if ((await workshop.getAttribute('aria-expanded')) !== 'true') await workshop.click();
   // Expanded: the row carries its text label. This is the legacy test's own
   // discriminator, and it is the one the collapse really removes.
   const agents = rail.getByRole('link', { name: AGENTS_ROW, exact: true });

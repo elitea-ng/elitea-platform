@@ -110,6 +110,25 @@ function chatRow(page: Page, conversationId: string): Locator {
   return page.locator(`[data-conversation-id="${conversationId}"]`);
 }
 
+/**
+ * Brings a conversation's row into the rail, paging its date group as needed.
+ *
+ * A date group delivers its first page (ten rows), newest first, and the file
+ * runs `fullyParallel` against one shared project: the paging test below seeds
+ * fourteen conversations into the same "Today" group, so a row created a moment
+ * earlier on another worker can sit on the group's second page. A row there is
+ * not a missing row; "Show more" is how a viewer reaches it, so the helper uses
+ * it until the row renders.
+ */
+async function revealRow(page: Page, conversationId: string, groupName = 'Today'): Promise<void> {
+  const row = chatRow(page, conversationId);
+  const more = groupFrame(page, groupName).locator('xpath=ancestor::li[1]').getByTestId('shell-chats-more');
+  await expect(async () => {
+    if (!(await row.isVisible()) && (await more.isVisible())) await more.locator('.shell-row-main').click();
+    await expect(row).toBeVisible({ timeout: 2_000 });
+  }, `conversation ${conversationId} must be reachable in the "${groupName}" group`).toPass({ timeout: 30_000 });
+}
+
 /** The group every conversation created during a run belongs to. */
 async function openTodayGroup(page: Page): Promise<void> {
   await openGroup(page, 'Today');
@@ -133,6 +152,7 @@ async function reopenFromRail(page: Page, conversationId: string): Promise<void>
 
 /** Clicks a rail row and returns only once the ROUTE has fetched that conversation. */
 async function openFromRail(page: Page, conversationId: string): Promise<void> {
+  await revealRow(page, conversationId);
   const fetched = page.waitForResponse(
     (response) =>
       response.url().includes(`${CONVERSATION_PATH}/${conversationId}`) &&
@@ -163,10 +183,8 @@ test('every conversation the project holds is on the rail, and a row opens the o
   // All three, each carrying its OWN name — the rail is keyed by conversation
   // id, so a list that rendered three rows with one name would fail here.
   for (const [index, id] of ids.entries()) {
+    await revealRow(page, id);
     const row = chatRow(page, id);
-    await expect(row, 'a conversation created over the API must appear in the rail').toBeVisible({
-      timeout: 15_000,
-    });
     await expect(row).toContainText(names[index] as string);
   }
 

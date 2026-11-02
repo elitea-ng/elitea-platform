@@ -327,7 +327,7 @@ test('M2: an agent participant renders in the rail and the rail control removes 
 
   const agents = page.getByTestId('participants-section-Agents');
   await expect(agents, 'the attached agent must reach the rail').toBeVisible({ timeout: 15_000 });
-  await expect(agents).toContainText('Agents (1)');
+  await expect(agents).toContainText('Agents · 1');
   await expect(agents).toContainText(agentName);
   // Creation attaches the author. The rail must retain that user beside the agent.
   await expect(page.getByTestId('users-section')).toContainText(reader.name);

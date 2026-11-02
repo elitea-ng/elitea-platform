@@ -74,15 +74,18 @@ test('J3: session expiry triggers re-auth popup and retries original request', a
     { timeout: 15_000 },
   );
 
-  // 2. Completing re-auth in the popup must close it...
+  // 2. Completing re-auth in the popup must close it... The fake expiry is
+  //    lifted BEFORE the popup completes: the waiting requests retry the
+  //    moment re-auth resolves, and a 401 still being served then (the old
+  //    order) failed the project list's retry and left the page on
+  //    "No projects", which is the stub's doing, not the product's.
+  await page.unroute('**/api/v2/**');
   await popup.getByLabel('Subject').fill('e2e-member@autotest.local');
   await popup.getByRole('button', { name: 'Authorize', exact: true }).click();
   await popup.waitForEvent('close', { timeout: 15_000 });
 
-  // 3. ...and the original request must be retried and succeed. Stop
-  //    401-ing so the retry can land, then assert the page recovered with
-  //    real content rather than an error state.
-  await page.unroute('**/api/v2/**');
+  // 3. ...and the original request must be retried and succeed: the page
+  //    recovered with real content rather than an error state.
   // The sidebar's New chat shows once the permission query succeeds.
   await expect(page.getByTestId('shell-chats-new')).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/something went wrong|unauthorized/i)).toHaveCount(0);

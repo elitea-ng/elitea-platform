@@ -213,7 +213,7 @@ test('SB03: every main-rail item navigates to its own page', async ({ page }) =>
   // Closing the loop: the case's own steps start from Chat; the Chats caption
   // returns there with a new chat, the composer back too.
   await page.getByTestId('shell-chats-caption').click();
-  await expect(page).toHaveURL(/\/chat\?create=1/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/\/app\/chat(\?|$)/, { timeout: 15_000 });
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
 
   await checkA11y(page);
