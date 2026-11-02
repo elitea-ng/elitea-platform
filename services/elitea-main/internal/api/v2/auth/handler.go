@@ -73,6 +73,7 @@ func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Use(noStore)
 	r.Get("/permissions/prompt_lib/{projectID}", h.PermissionList)
+	r.Get("/permissions/administration", h.AdministrationPermissionList)
 	r.Get("/token/", h.TokenList)
 	r.Get("/token/{tokenUUID}", h.TokenGet)
 	r.Post("/token/", h.TokenCreate)
@@ -109,6 +110,40 @@ func (h *Handler) PermissionList(w http.ResponseWriter, r *http.Request) {
 			user,
 			auth.PermissionModeDefault,
 			projectID,
+		)
+		if err == nil {
+			result = make([]Permission, 0, len(resolution.Permissions))
+			for _, p := range resolution.Permissions {
+				result = append(result, Permission{Name: p, Enabled: true})
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// AdministrationPermissionList answers the caller's own administration-mode
+// permissions, the set the admin SPA's boot gate reads (adminui.Handler's
+// resolvePermissions). The user app shows its "Admin portal" link when the
+// list is not empty.
+//
+// It is presentation only, like the admin SPA's injected list: every admin
+// route resolves its permission again. A missing resolver, a refusal or a
+// failure answers an empty list, never more than the caller holds.
+func (h *Handler) AdministrationPermissionList(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		apierr.Write(w, apierr.Unauthorized("not authenticated"))
+		return
+	}
+
+	result := []Permission{}
+	if h.permissions != nil {
+		resolution, err := h.permissions.ResolvePermissions(
+			r.Context(),
+			user,
+			auth.PermissionModeAdministration,
+			"",
 		)
 		if err == nil {
 			result = make([]Permission, 0, len(resolution.Permissions))

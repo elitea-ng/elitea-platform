@@ -766,6 +766,18 @@
       ]
     },
     {
+      "id": "auth.administrationPermissionList",
+      "method": "GET",
+      "path": "/auth/permissions/administration",
+      "operationId": "administrationPermissionList",
+      "source": "generated",
+      "responseSchema": "Permission[]",
+      "fixture": null,
+      "usedBy": [
+        "widgets/account-menu"
+      ]
+    },
+    {
       "id": "auth.permissionList",
       "method": "GET",
       "path": "/auth/permissions/prompt_lib/{project_id}",

@@ -1558,6 +1558,196 @@ export function usePermissionList<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type administrationPermissionListResponse200 = {
+  data: Permission[];
+  status: 200;
+};
+
+export type administrationPermissionListResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type administrationPermissionListResponseSuccess =
+  administrationPermissionListResponse200 & {
+    headers: Headers;
+  };
+export type administrationPermissionListResponseError =
+  administrationPermissionListResponse401 & {
+    headers: Headers;
+  };
+
+export type administrationPermissionListResponse =
+  | administrationPermissionListResponseSuccess
+  | administrationPermissionListResponseError;
+
+export const getAdministrationPermissionListUrl = () => {
+  return `/auth/permissions/administration`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/auth/handler.go (AdministrationPermissionList).
+ * PLAIN ARRAY of {name, enabled}: the caller's OWN administration-mode
+ * permissions, the set the admin console's boot gate reads. The account
+ * menu shows its "Admin portal" link when the array is not empty.
+ * Presentation only: every admin route resolves its permission again.
+ * An empty array when the caller holds no administration role or the
+ * resolver refuses or fails.
+ * @summary List the caller's administration-mode permissions
+ */
+export const administrationPermissionList = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<administrationPermissionListResponse> => {
+  return eliteaFetch<administrationPermissionListResponse>(
+    getAdministrationPermissionListUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getAdministrationPermissionListQueryKey = () => {
+  return [`/auth/permissions/administration`] as const;
+};
+
+export const getAdministrationPermissionListQueryOptions = <
+  TData = Awaited<ReturnType<typeof administrationPermissionList>>,
+  TError = N401Response,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof administrationPermissionList>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getAdministrationPermissionListQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof administrationPermissionList>>
+  > = ({ signal }) =>
+    administrationPermissionList({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof administrationPermissionList>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type AdministrationPermissionListQueryResult = NonNullable<
+  Awaited<ReturnType<typeof administrationPermissionList>>
+>;
+export type AdministrationPermissionListQueryError = N401Response;
+
+export function useAdministrationPermissionList<
+  TData = Awaited<ReturnType<typeof administrationPermissionList>>,
+  TError = N401Response,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof administrationPermissionList>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof administrationPermissionList>>,
+          TError,
+          Awaited<ReturnType<typeof administrationPermissionList>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAdministrationPermissionList<
+  TData = Awaited<ReturnType<typeof administrationPermissionList>>,
+  TError = N401Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof administrationPermissionList>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof administrationPermissionList>>,
+          TError,
+          Awaited<ReturnType<typeof administrationPermissionList>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAdministrationPermissionList<
+  TData = Awaited<ReturnType<typeof administrationPermissionList>>,
+  TError = N401Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof administrationPermissionList>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the caller's administration-mode permissions
+ */
+
+export function useAdministrationPermissionList<
+  TData = Awaited<ReturnType<typeof administrationPermissionList>>,
+  TError = N401Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof administrationPermissionList>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getAdministrationPermissionListQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type listPersonalTokensResponse200 = {
   data: PersonalAccessToken[];
   status: 200;
