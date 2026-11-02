@@ -222,8 +222,7 @@ func jiraClient(t *testing.T, tokenURL, redirectURI string) *Client {
 		Provider: "jira", Flavor: FlavorAtlassian, ClientID: "client", ClientSecret: "client-secret",
 		AuthorizeURL: tokenURL + "/authorize", TokenURL: tokenURL + "/oauth/token", RedirectURI: redirectURI,
 		Scopes: []string{"read:jira-work", "offline_access"}, Timeout: 5 * time.Second,
-		APIURL: tokenURL,
-	}, nil)
+	}, gatewayTransportTo(t, tokenURL))
 	require.NoError(t, err)
 	return c
 }
@@ -551,7 +550,7 @@ func TestConsentFlow(t *testing.T) {
 		require.Equal(t, result.GrantID, snap.ID)
 		// #1464: the target site's gateway base is stored with the grant,
 		// and the token source releases it.
-		require.Equal(t, srv.URL+"/ex/jira/"+tCloudID, snap.APIBase)
+		require.Equal(t, AtlassianAPIURL+"/ex/jira/"+tCloudID, snap.APIBase)
 
 		_, err = consent.Callback(ctx, CallbackRequest{Provider: "jira", State: state, Code: "code-1"}, asUser(tUser))
 		require.ErrorIs(t, note(err), ErrStateInvalid, "a reused state was accepted")

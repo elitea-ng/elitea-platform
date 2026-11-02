@@ -167,6 +167,12 @@ func (executor *CurrentExecutor) ExecuteScheduled(
 	}
 
 	settings, credentialOK := scheduledToolkitSettings(candidate, toolkit.Settings)
+	if governed {
+		// A governed run uses the toolkit's own stored reference, the one
+		// freezeCredentials froze under the mandate's binding. A schedule's
+		// credential title never selects a governed credential.
+		settings, credentialOK = cloneScheduleSettings(toolkit.Settings), true
+	}
 	if !credentialOK {
 		return scheduleInitializationFailure(
 			scheduleCredentialFailureReason,
@@ -189,26 +195,30 @@ func (executor *CurrentExecutor) ExecuteScheduled(
 	}
 
 	// The returned map may contain plaintext and is deliberately discarded.
-	// Durable inputs are produced separately in ReferenceMode below.
-	preflight, err := executor.settings.Resolve(
-		ctx,
-		configurationapp.CurrentToolkitSettingsRequest{
-			ToolkitType: toolkit.Type,
-			Settings:    cloneScheduleSettings(settings),
-			ProjectID:   int32(candidate.ProjectID),
-			UserID:      int32(accessUserID),
-			Mode:        configurationapp.CurrentToolkitSettingsClaimMode,
-		},
-	)
-	if err != nil || preflight == nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return ExecutionOutcome{}, contextErr
+	// Durable inputs are produced separately in ReferenceMode below. A
+	// governed run decrypts nothing in Main: its credential comes from the
+	// broker, and its frozen inputs below check the settings instead.
+	if !governed {
+		preflight, err := executor.settings.Resolve(
+			ctx,
+			configurationapp.CurrentToolkitSettingsRequest{
+				ToolkitType: toolkit.Type,
+				Settings:    cloneScheduleSettings(settings),
+				ProjectID:   int32(candidate.ProjectID),
+				UserID:      int32(accessUserID),
+				Mode:        configurationapp.CurrentToolkitSettingsClaimMode,
+			},
+		)
+		if err != nil || preflight == nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return ExecutionOutcome{}, contextErr
+			}
+			return scheduleInitializationFailure(
+				scheduleCredentialFailureReason,
+			), nil
 		}
-		return scheduleInitializationFailure(
-			scheduleCredentialFailureReason,
-		), nil
+		clear(preflight)
 	}
-	clear(preflight)
 
 	// Use the same saved toolkit snapshot for the exact index lookup (the
 	// registry) and frozen durable inputs. Re-reading the toolkit here could mix

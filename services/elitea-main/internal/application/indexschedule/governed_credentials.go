@@ -15,6 +15,7 @@ import (
 	"errors"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 )
 
@@ -39,12 +40,19 @@ func (executor *CurrentExecutor) WithCredentialFreezer(freezer CredentialFreezer
 }
 
 // freezeCredentials freezes the candidate's toolkit credential under the
-// mandate admitMandate put in ctx. It answers the context the admission
-// must run in, or the outcome of a refused occurrence. An error is a
+// mandate admitMandate put in ctx. It answers the context the rest of the
+// fire must run in, or the outcome of a refused occurrence. An error is a
 // dependency failure.
+//
+// The answered context is marked configurations.WithGovernedRun, as the
+// agent admission marks its resolution. Every later step of the fire (the
+// settings check, the frozen inputs) then never runs the legacy title
+// expansion: a configuration reference resolves only through its exact
+// credential reference, to its target, and no secret is decrypted in Main.
 func (executor *CurrentExecutor) freezeCredentials(
 	ctx context.Context, candidate Candidate,
 ) (context.Context, *ExecutionOutcome, error) {
+	ctx = configurationapp.WithGovernedRun(ctx)
 	authority, ok := securitycontext.RunAuthorityFrom(ctx)
 	if executor.freezer == nil || !ok || authority.AgentBindingID == "" {
 		// Nothing is frozen: the broker then denies every credential use of

@@ -24,11 +24,11 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use super::adapters::with_credential;
+use super::adapters::{atlassian_settings, with_credential};
 use super::client::{Redeemed, credential_reference_id};
 use super::{
-    AuthAdapter, BoundOperation, BoundToolInvocation, CredentialClass, CredentialEnvelope,
-    GovernedError, GovernedOperationClient, admit_material,
+    AuthAdapter, BoundOperation, BoundToolInvocation, CredentialEnvelope, GovernedError,
+    GovernedOperationClient, admit_material,
 };
 
 /// The tool call id an index run's redemption names: the run has no model
@@ -49,11 +49,11 @@ pub fn index_operation(provider_type: &str) -> Option<&'static str> {
     }
 }
 
-/// The keys an Atlassian configuration may carry a credential under.
-const ATLASSIAN_CREDENTIAL_KEYS: [&str; 4] = ["token", "api_key", "username", "password"];
-
 /// `settings` with the envelope's material as the index source's only
 /// credential, in the shape the index connector of `provider_type` reads.
+/// Jira and Confluence use the tool lane's own rule (the Atlassian
+/// adapter's `atlassian_settings`): an OAuth token also moves the base URL to the
+/// Atlassian API gateway and marks the toolkit Cloud (#1464).
 ///
 /// # Errors
 ///
@@ -67,41 +67,16 @@ pub fn index_settings(
     settings: &Map<String, Value>,
     envelope: &CredentialEnvelope,
 ) -> Result<Map<String, Value>, GovernedError> {
-    let class = admit_material(adapter, envelope)?;
     let missing = || GovernedError::MaterialNotAllowed;
     match adapter.provider_type() {
-        provider @ ("jira" | "confluence") => {
-            let configuration = format!("{provider}_configuration");
-            match class {
-                CredentialClass::StaticSecret => {
-                    let token = envelope.material("token").ok_or_else(missing)?;
-                    match envelope.material("username") {
-                        Some(username) => with_credential(
-                            settings,
-                            &configuration,
-                            &ATLASSIAN_CREDENTIAL_KEYS,
-                            &[("username", username), ("api_key", token)],
-                        ),
-                        None => with_credential(
-                            settings,
-                            &configuration,
-                            &ATLASSIAN_CREDENTIAL_KEYS,
-                            &[("token", token)],
-                        ),
-                    }
-                }
-                CredentialClass::OauthDelegated => {
-                    let token = envelope.material("access_token").ok_or_else(missing)?;
-                    with_credential(
-                        settings,
-                        &configuration,
-                        &ATLASSIAN_CREDENTIAL_KEYS,
-                        &[("token", token)],
-                    )
-                }
-            }
-        }
+        provider @ ("jira" | "confluence") => atlassian_settings(
+            adapter,
+            settings,
+            &format!("{provider}_configuration"),
+            envelope,
+        ),
         "qtest" => {
+            admit_material(adapter, envelope)?;
             let token = envelope.material("token").ok_or_else(missing)?;
             with_credential(
                 settings,
@@ -114,6 +89,7 @@ pub fn index_settings(
             // The index connector uses a configured access token before any
             // client credential: the app secret is removed, so the
             // envelope's delegated token is the only credential.
+            admit_material(adapter, envelope)?;
             let token = envelope.material("access_token").ok_or_else(missing)?;
             with_credential(
                 settings,
@@ -403,5 +379,85 @@ mod tests {
         let configuration = &settings["sharepoint_configuration"];
         assert_eq!(configuration["access_token"], "delegated");
         assert!(configuration.get("client_secret").is_none());
+    }
+
+    /// #1464: a governed OAuth index run reads Jira and Confluence through
+    /// the Atlassian API gateway (`/ex/<product>/<cloud id>`), exactly as
+    /// the tool lane does; a static PAT keeps the site URL. The connectors
+    /// parse the settings the run hands them, so the base they call is the
+    /// base asserted here.
+    #[test]
+    fn an_oauth_index_run_reads_through_the_gateway_and_a_pat_the_site() {
+        use elitea_connectors::confluence::config::ConfluenceConnectorConfig;
+        use elitea_connectors::jira::config::JiraConnectorConfig;
+
+        const CLOUD_ID: &str = "11223344-a1b2-c3d4-e5f6-77889900aabb";
+        let registry = reference_registry();
+        for provider in ["jira", "confluence"] {
+            let adapter = registry.adapter(provider).expect("adapter");
+            let configuration = format!("{provider}_configuration");
+            let settings = object(&json!({ configuration.clone(): {
+                "base_url": "https://acme.atlassian.net/",
+                "token": "claim-time-secret",
+            }}));
+            let gateway = format!("https://api.atlassian.com/ex/{provider}/{CLOUD_ID}");
+            let oauth = index_settings(
+                adapter.as_ref(),
+                &settings,
+                &material(
+                    EnvelopeKind::OauthAccess,
+                    &[("access_token", "oauth-token"), ("api_base", &gateway)],
+                    TARGET,
+                ),
+            )
+            .expect("oauth settings");
+            assert_eq!(oauth[&configuration]["token"], "oauth-token");
+            assert_eq!(oauth["cloud"], true);
+            let pat = index_settings(
+                adapter.as_ref(),
+                &settings,
+                &material(EnvelopeKind::Static, &[("token", "pat")], TARGET),
+            )
+            .expect("static settings");
+            assert_eq!(pat[&configuration]["token"], "pat");
+            if provider == "jira" {
+                let config = JiraConnectorConfig::parse(&oauth).expect("jira oauth");
+                assert_eq!(config.base_url().as_str().trim_end_matches('/'), gateway);
+                assert!(config.cloud());
+                let config = JiraConnectorConfig::parse(&pat).expect("jira pat");
+                assert_eq!(config.base_url().as_str(), "https://acme.atlassian.net/");
+            } else {
+                let config = ConfluenceConnectorConfig::parse(&oauth).expect("confluence oauth");
+                assert_eq!(config.api_root().as_str(), format!("{gateway}/wiki"));
+                let config = ConfluenceConnectorConfig::parse(&pat).expect("confluence pat");
+                assert_eq!(
+                    config.api_root().as_str(),
+                    "https://acme.atlassian.net/wiki"
+                );
+            }
+        }
+    }
+
+    /// An OAuth envelope whose `api_base` is not the gateway path of the
+    /// toolkit's own product refuses the index run, as it refuses a tool
+    /// call.
+    #[test]
+    fn an_oauth_index_run_without_its_gateway_base_is_refused() {
+        let registry = reference_registry();
+        let adapter = registry.adapter("jira").expect("jira");
+        for material_pairs in [
+            vec![("access_token", "oauth-token")],
+            vec![
+                ("access_token", "oauth-token"),
+                ("api_base", "https://evil.example/ex/jira/abc"),
+            ],
+        ] {
+            let refused = index_settings(
+                adapter.as_ref(),
+                &jira_settings(),
+                &material(EnvelopeKind::OauthAccess, &material_pairs, TARGET),
+            );
+            assert_eq!(refused, Err(GovernedError::MaterialNotAllowed));
+        }
     }
 }

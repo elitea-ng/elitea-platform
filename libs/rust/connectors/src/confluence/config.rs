@@ -8,8 +8,8 @@ use serde_json::{Map, Value};
 use url::Url;
 
 use crate::atlassian::{
-    AtlassianConfigError, AtlassianConfigErrorCode, Common, MAX_IDENTITY_BYTES, optional_flag,
-    optional_text, safe_identifier, text_list,
+    ATLASSIAN_GATEWAY_HOST, AtlassianConfigError, AtlassianConfigErrorCode, Common,
+    MAX_IDENTITY_BYTES, optional_flag, optional_text, safe_identifier, text_list,
 };
 
 pub(crate) const PROVIDER: &str = "Confluence";
@@ -53,11 +53,16 @@ impl ConfluenceConnectorConfig {
         // An Atlassian URL without `/wiki` gets it (the library tests the URL
         // text, so `jira.com` counts too). Decided from the host and the
         // path, never the serialized URL: `https://wikiteam.atlassian.net`
-        // has `/wiki` in its text (`//wikiteam`) and no `/wiki` path.
+        // has `/wiki` in its text (`//wikiteam`) and no `/wiki` path. The
+        // Atlassian API gateway of a governed 3LO token
+        // (`api.atlassian.com/ex/confluence/<cloud id>`, #1464) serves the
+        // same REST paths under `/wiki` too.
         let mut api_root = base_url.clone();
-        let hosted = base_url
-            .host_str()
-            .is_some_and(|host| host.contains("atlassian.net") || host.contains("jira.com"));
+        let hosted = base_url.host_str().is_some_and(|host| {
+            host == ATLASSIAN_GATEWAY_HOST
+                || host.contains("atlassian.net")
+                || host.contains("jira.com")
+        });
         let has_wiki = base_url
             .path_segments()
             .is_some_and(|mut segments| segments.any(|segment| segment == "wiki"));
@@ -317,6 +322,18 @@ mod tests {
         );
         assert!(!server.cloud());
         assert_eq!(server.space(), None);
+
+        // #1464: the Atlassian API gateway base of a governed 3LO token
+        // serves the REST paths under `/wiki` too.
+        let gateway = ConfluenceConnectorConfig::parse(&settings(
+            None,
+            "https://api.atlassian.com/ex/confluence/11223344-a1b2-c3d4-e5f6-77889900aabb",
+        ))
+        .expect("gateway");
+        assert_eq!(
+            gateway.api_root().as_str(),
+            "https://api.atlassian.com/ex/confluence/11223344-a1b2-c3d4-e5f6-77889900aabb/wiki"
+        );
 
         assert!(
             ConfluenceConnectorConfig::parse(&json!({}).as_object().cloned().unwrap()).is_err()

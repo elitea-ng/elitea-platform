@@ -11,6 +11,7 @@ use crate::toolkits::families::https_base_url::{
     self, BasePath, BaseUrlError, host_matches_domain,
 };
 use crate::toolkits::is_reserved_platform_header;
+use elitea_connectors::atlassian::ATLASSIAN_GATEWAY_HOST;
 
 const MAX_URL_BYTES: usize = 2 * 1_024;
 const MAX_SECRET_BYTES: usize = 16 * 1_024;
@@ -157,7 +158,7 @@ impl ConfluenceToolkitConfig {
         // same REST paths under `/wiki` too.
         let mut api_root = base_url.clone();
         let text = base_url.as_str();
-        let gateway = base_url.host_str() == Some("api.atlassian.com");
+        let gateway = base_url.host_str() == Some(ATLASSIAN_GATEWAY_HOST);
         if (gateway || text.contains("atlassian.net") || text.contains("jira.com"))
             && !text.contains("/wiki")
         {

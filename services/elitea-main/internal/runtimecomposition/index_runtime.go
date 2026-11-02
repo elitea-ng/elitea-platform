@@ -127,6 +127,15 @@ func newCurrentIndexRuntime(
 	if err != nil {
 		return nil, err
 	}
+	// A governed index run (indexschedule, WithGovernedRun) resolves a
+	// configuration reference only to its exact credential reference's
+	// target; the source is read only under that mark.
+	grants := repos.NewCredentialGrants(pool, nil)
+	governedTargets, err := configurationapp.NewGovernedConfigurationTargets(grants, grants)
+	if err != nil {
+		return nil, err
+	}
+	settings.WithGovernedConfigurations(governedTargets)
 	// The embedding binding is resolved entirely from the Configurations rows
 	// this graph already owns. It used to additionally require a LiteLLM
 	// administration client to ask whether a `{projectID}_{model}` group had

@@ -26,6 +26,7 @@ mod qtest;
 mod sharepoint;
 
 pub use aha::AhaAdapter;
+pub(crate) use atlassian::atlassian_settings;
 pub use atlassian::{ConfluenceAdapter, JiraAdapter};
 pub use mcp::McpAdapter;
 pub use qtest::QtestAdapter;

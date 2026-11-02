@@ -20,6 +20,7 @@ import (
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/provideroauth"
 )
 
 // WorkerEgressSources reads what a worker command's public egress policy is
@@ -177,6 +178,11 @@ WHERE execution_id = $1`, executionID).Scan(&contextBytes, &digest)
 	}
 	var targetIDs []string
 	var digestOnly []int64
+	// The frozen (reference, toolkit) pairs the Atlassian gateway branch
+	// reads: reference "" is a toolkit whose reference the broker resolves
+	// from the one usable grant.
+	var frozenRefs []string
+	var frozenToolkits []int64
 	for _, frozen := range stored.GetCredentialReferences() {
 		switch {
 		case frozen.GetTargetBindingId() != "":
@@ -186,8 +192,13 @@ WHERE execution_id = $1`, executionID).Scan(&contextBytes, &digest)
 		case frozen.GetCredentialReferenceId() == "" && frozen.GetToolkitId() > 0:
 			digestOnly = append(digestOnly, frozen.GetToolkitId())
 		}
+		reference := frozen.GetCredentialReferenceId()
+		if frozen.GetToolkitId() > 0 && (reference == "" || agentIdentityIsUUID(reference)) {
+			frozenRefs = append(frozenRefs, reference)
+			frozenToolkits = append(frozenToolkits, frozen.GetToolkitId())
+		}
 	}
-	if len(targetIDs) == 0 && len(digestOnly) == 0 {
+	if len(targetIDs) == 0 && len(digestOnly) == 0 && len(frozenToolkits) == 0 {
 		return nil, nil
 	}
 	binding := stored.GetAgentBindingId()
@@ -209,18 +220,26 @@ WHERE $3::text <> '' AND g.tenant_project_id = $1 AND g.agent_binding_id = NULLI
   AND 'use' = ANY (g.capabilities)
 UNION
 -- #1464: an Atlassian 3LO token is used at the API gateway, not at the
--- target site.
+-- target site. Only the reference the run actually froze counts (or, for a
+-- toolkit frozen without one, the reference of its usable grant), and only
+-- while that reference is active and the agent binding holds an active,
+-- unexpired use grant for it: what the broker would release.
 SELECT $5::text, ''
-FROM elitea_identity.credential_references AS r
-WHERE r.tenant_project_id = $1 AND r.class = 'oauth_delegated' AND r.provider_type = ANY($6::text[])
-  AND (r.target_binding_id = ANY($2::uuid[])
-       OR ($3::text <> '' AND EXISTS (
-           SELECT 1 FROM elitea_identity.credential_use_grants AS g
-           WHERE g.tenant_project_id = $1 AND g.agent_binding_id = NULLIF($3, '')::uuid
-             AND g.toolkit_id = ANY($4::bigint[]) AND g.credential_reference_id = r.id
-             AND g.state = 'active' AND 'use' = ANY (g.capabilities))))`,
+FROM unnest($7::text[], $8::bigint[]) AS f(reference_id, toolkit_id)
+JOIN elitea_identity.credential_use_grants AS g
+  ON g.tenant_project_id = $1 AND g.agent_binding_id = NULLIF($3, '')::uuid
+ AND g.toolkit_id = f.toolkit_id
+ AND (f.reference_id = '' OR g.credential_reference_id = NULLIF(f.reference_id, '')::uuid)
+ AND g.state = 'active' AND (g.expires_at IS NULL OR g.expires_at > clock_timestamp())
+ AND 'use' = ANY (g.capabilities)
+JOIN elitea_identity.credential_references AS r
+  ON r.id = g.credential_reference_id AND r.tenant_project_id = $1
+ AND r.target_binding_id = g.target_binding_id
+WHERE $3::text <> '' AND r.state = 'active' AND r.class = 'oauth_delegated'
+  AND r.provider_type = ANY($6::text[])`,
 		stored.GetTenantProjectId(), targetIDs, binding, digestOnly,
-		workeregress.GovernedOAuthGatewayURL, workeregress.GovernedOAuthGatewayProviders())
+		provideroauth.AtlassianAPIURL, provideroauth.AtlassianGatewayProviders(),
+		frozenRefs, frozenToolkits)
 	if err != nil {
 		return nil, fmt.Errorf("worker egress: read the governed credential targets: %w", err)
 	}
