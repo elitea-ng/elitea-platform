@@ -204,12 +204,15 @@ const leftSx: SxProps<Theme> = { flex: '1 1 auto', minWidth: 0, overflow: 'hidde
 const leftWithTabsSx: SxProps<Theme> = { minWidth: 'min(10rem, 25%)' };
 
 /**
- * With tabs beside it the search folds to its icon earlier (below 992px) —
+ * With tabs beside it the search folds to its icon earlier (below 896px) —
  * the tabs need the width more than an idle search box does. It opens again
- * on focus or with a query, as at the general fold (`PageSearch`).
+ * on focus or with a query, as at the general fold (`PageSearch`). The fold
+ * sits under 984px on purpose: that is the toolbar of a 1280px window with the
+ * sidebar open, the most common laptop size, where the box must stay a box and
+ * the tabs scroll instead.
  */
 const toolbarWithTabsSx: SxProps<Theme> = {
-  '@container page-toolbar (max-width: 62rem)': {
+  '@container page-toolbar (max-width: 56rem)': {
     '& [data-testid="page-search"]:not(:focus-within):not(:has(input:not(:placeholder-shown)))': { width: '2.5rem' },
   },
 };

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 import KeyboardDoubleArrowLeftIcon from '@mui/icons-material/KeyboardDoubleArrowLeft';
 import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArrowRight';
@@ -7,6 +7,7 @@ import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 
 import { BrandLogoMark } from '@/shared/ui/brand-logo';
+import { useAnchoredTooltip } from '@/shared/ui/lib/useAnchoredTooltip';
 import { t } from '@/shared/i18n';
 
 import { NotificationButton } from './NotificationButton';
@@ -20,8 +21,8 @@ export interface SidebarHeaderProps {
 /**
  * The rail's top row: the logo (it toggles the rail too), the notifications
  * bell and the collapse toggle — an ordinary button in the row, not a circle
- * pinned over the rail's edge. Collapsed, the row stacks the logo over the
- * toggle; the bell waits for the rail to open again.
+ * pinned over the rail's edge. Collapsed, the row stacks the logo, the bell
+ * and the toggle.
  *
  * The logo is `BrandLogoMark` (ADR-0024 WP3): a served pack's own
  * `assets.logoMark`, else the compiled orb. `SidebarConnectionDot` sits on it
@@ -29,12 +30,11 @@ export interface SidebarHeaderProps {
  */
 export function SidebarHeader({ collapsed, onToggleCollapsed }: SidebarHeaderProps): ReactNode {
   const toggleLabel = collapsed ? t('widgets.sidebar.expand', 'Expand sidebar') : t('widgets.sidebar.collapse', 'Collapse sidebar');
-  // Controlled, and closed by the click: the toggle moves when the rail
-  // changes width, out from under the pointer, so no `mouseleave` ever came
-  // and its tooltip stayed on screen over the collapsed rail.
-  const [tipOpen, setTipOpen] = useState(false);
+  // The toggle moves when the rail changes width, out from under the pointer,
+  // so its tooltip is closed by the click and by the pointer moving elsewhere.
+  const tip = useAnchoredTooltip<HTMLButtonElement>();
   const toggle = (): void => {
-    setTipOpen(false);
+    tip.close();
     onToggleCollapsed();
   };
   return (
@@ -64,8 +64,8 @@ export function SidebarHeader({ collapsed, onToggleCollapsed }: SidebarHeaderPro
       {!collapsed && <Box sx={{ flex: 1 }} />}
       {/* Collapsed too: the bell is the only way to the notifications, so the narrow rail keeps it as an icon. */}
       <NotificationButton />
-      <Tooltip title={toggleLabel} placement={collapsed ? 'right' : 'bottom'} open={tipOpen} onOpen={() => setTipOpen(true)} onClose={() => setTipOpen(false)}>
-        <IconButton size="small" data-testid="sidebar-collapse-toggle" aria-label={toggleLabel} aria-expanded={!collapsed} onClick={toggle}>
+      <Tooltip title={toggleLabel} placement={collapsed ? 'right' : 'bottom'} {...tip.tooltipProps}>
+        <IconButton ref={tip.anchorRef} size="small" data-testid="sidebar-collapse-toggle" aria-label={toggleLabel} aria-expanded={!collapsed} onClick={toggle}>
           {collapsed ? <KeyboardDoubleArrowRightIcon fontSize="small" /> : <KeyboardDoubleArrowLeftIcon fontSize="small" />}
         </IconButton>
       </Tooltip>

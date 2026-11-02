@@ -20,6 +20,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 
 import { t } from '@/shared/i18n';
+import { useAnchoredTooltip } from '@/shared/ui/lib/useAnchoredTooltip';
 
 import type { WebSidePanelHost } from '../model/useWebSidePanelHost';
 
@@ -27,6 +28,9 @@ const WEB_SIDE_PANEL_WIDTH_PX = 320;
 
 function PanelContent({ host }: { readonly host: WebSidePanelHost }): ReactNode {
   const closeLabel = t('shell.sidePanel.close', 'Close panel');
+  // The panel opens beside a pointer that never entered this button; its
+  // tooltip then sat over the panel's own first controls.
+  const closeTip = useAnchoredTooltip<HTMLButtonElement>();
   return (
     <>
       <Box sx={headerSx}>
@@ -52,12 +56,16 @@ function PanelContent({ host }: { readonly host: WebSidePanelHost }): ReactNode 
             );
           })}
         </Box>
-        <Tooltip title={closeLabel}>
+        <Tooltip title={closeLabel} {...closeTip.tooltipProps}>
           <IconButton
+            ref={closeTip.anchorRef}
             size="small"
             aria-label={closeLabel}
             data-testid="side-panel-close"
-            onClick={() => host.setOpen(false)}
+            onClick={() => {
+              closeTip.close();
+              host.setOpen(false);
+            }}
           >
             <CloseIcon fontSize="inherit" />
           </IconButton>
