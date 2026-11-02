@@ -5025,3 +5025,224 @@ async fn postgres_a_continuation_without_its_paused_writer_is_refused_typed_on_r
     };
     continuation_scenario(&url, false, "1", "started").await;
 }
+
+// ---------------------------------------------------------------------------
+// FU-264 / FU-267: a fan-out member's saved child (depth 1) or the saved
+// pipeline its Agent node runs (depth 2) is lost around an effectful direct
+// call; the reclaim resumes the Parallel and the member's branch journals
+// decide the call.
+// ---------------------------------------------------------------------------
+
+const MEMBER_DIRECT_TEST: &str =
+    "agents::pipeline_tests::fanout_effect_pg_tests::postgres_member_child_direct_process";
+
+fn member_direct_assembler(
+    pool: &sqlx::PgPool,
+    depth: &str,
+    then_llm: bool,
+    outcomes: Vec<TestModelGatewayOutcome>,
+    connector: Arc<dyn McpConnector>,
+) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
+    let (platform, model_facade, captured) = member_child_runtime(depth, outcomes, then_llm);
+    (
+        PipelineNativeAgentAssembler::postgres(
+            pool.clone(),
+            SessionLimits::default(),
+            CheckpointLimits::default(),
+            Arc::new(
+                ToolAdmissionPolicy::new(&[], &std::collections::BTreeMap::new())
+                    .expect("empty tool policy"),
+            ),
+            platform,
+            model_facade,
+        )
+        .with_mcp_connector(connector)
+        .with_fixed_parallel_for_tests(),
+        captured,
+    )
+}
+
+/// One phase of a [`member_direct_scenario`], in its own process.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_member_child_direct_process() {
+    let Ok(database) = std::env::var(DATABASE_ENV) else {
+        return;
+    };
+    assert!(
+        database.starts_with("elitea_rust_session_")
+            && database
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    );
+    let pool = connect(&database).await;
+    let depth = std::env::var(DEPTH_ENV).expect("depth");
+    let mode = std::env::var(MODE_ENV).expect("mode");
+    let committed = mode == "committed";
+    let request = mixed_request("continue");
+    if std::env::var(PHASE_ENV).expect("phase") == "crash" {
+        // `committed`: the call returns and its journal commits; the process
+        // dies at the child's next model request. `started`: it dies inside
+        // the call, once its Started record is durable.
+        let (assembler, _) = if committed {
+            member_direct_assembler(
+                &pool,
+                &depth,
+                true,
+                vec![TestModelGatewayOutcome::ExitProcess(CRASH_EXIT_CODE)],
+                pipeline_connector(),
+            )
+        } else {
+            member_direct_assembler(
+                &pool,
+                &depth,
+                false,
+                Vec::new(),
+                Arc::new(JournalCrashingConnector { pool: pool.clone() }),
+            )
+        };
+        let invocation = assembler
+            .assemble(claim(&request, 1))
+            .await
+            .unwrap_or_else(|error| panic!("crash: assemble: {error}"));
+        let outcome = run_to_end(invocation).await;
+        panic!("crash: the process outlived its crash point: {outcome:?}");
+    }
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let connector = Arc::new(PipelineMcpConnector {
+        connections: Arc::new(AtomicUsize::new(0)),
+        tool_calls: Arc::clone(&tool_calls),
+        read_only: false,
+    });
+    let outcomes = if committed {
+        vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+            "summarized",
+        ))]
+    } else {
+        Vec::new()
+    };
+    let (assembler, captured) =
+        member_direct_assembler(&pool, &depth, committed, outcomes, connector);
+    let invocation = recovered(&assembler, &request, EXECUTION, 2)
+        .await
+        .unwrap_or_else(|error| panic!("recover: the reclaim recovers: {error}"));
+    run_to_end(invocation)
+        .await
+        .unwrap_or_else(|error| panic!("recover: the fan-out joins: {error}"));
+    let entries = joined(&pool).await.expect("joined entries");
+    let second = entries
+        .iter()
+        .find(|entry| entry["branch_id"] == "second")
+        .unwrap_or_else(|| panic!("the member's entry: {entries:?}"));
+    if committed {
+        // R: the committed result replays; the call never runs again.
+        assert_eq!(second["status"], "succeeded", "{entries:?}");
+        assert_eq!(tool_calls.load(Ordering::Acquire), 0, "recover: replayed");
+        assert_eq!(model_requests(&captured), 1, "recover: only the next step");
+    } else {
+        // C -> F: the call may have run; the branch fails typed, never repeated.
+        assert_eq!(second["status"], "failed", "{entries:?}");
+        assert_eq!(second["error"]["code"], MAY_HAVE_STARTED, "{entries:?}");
+        assert_eq!(
+            tool_calls.load(Ordering::Acquire),
+            0,
+            "recover: not repeated"
+        );
+    }
+}
+
+/// Two processes on real PostgreSQL: lose the member's call at `depth` in
+/// `mode`, then reclaim. `committed` also removes the child's row saved after
+/// the call: the process was lost between the journal's commit and the
+/// child's next save.
+async fn member_direct_scenario(url: &str, depth: &str, mode: &str) {
+    let db = IsolatedPostgres::create(url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let phase = |phase: &'static str| {
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
+            .args([
+                "--exact",
+                MEMBER_DIRECT_TEST,
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(DATABASE_ENV, &db.database_name)
+            .env(DEPTH_ENV, depth)
+            .env(MODE_ENV, mode)
+            .env(PHASE_ENV, phase);
+        command
+    };
+    let output = run_phase("crash", phase("crash"));
+    assert_eq!(
+        output.status.code(),
+        Some(CRASH_EXIT_CODE),
+        "crash: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let journals = journal_threads(&db.pool).await;
+    assert_eq!(
+        journals.len(),
+        1,
+        "one journal for the one call: {journals:?}"
+    );
+    if mode == "committed" {
+        let removed = sqlx::query(
+            "DELETE FROM elitea_runtime.agent_graph_checkpoints \
+             WHERE writer_claim_id = 'claim-1' AND pending_nodes LIKE '%\"after\"%'",
+        )
+        .execute(&db.pool)
+        .await
+        .expect("remove the row saved after the call")
+        .rows_affected();
+        assert_eq!(removed, 1, "the child saved one row after the call");
+    }
+    let output = run_phase("recover", phase("recover"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "recover: {stdout} {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "recover ran its assertions: {stdout}"
+    );
+    assert_eq!(journal_threads(&db.pool).await, journals, "no new journal");
+    db.pool.close().await;
+}
+
+macro_rules! member_direct_case {
+    ($name:ident, $depth:literal, $mode:literal) => {
+        #[tokio::test(flavor = "current_thread")]
+        async fn $name() {
+            let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+                eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the member direct-call proof");
+                return;
+            };
+            member_direct_scenario(&url, $depth, $mode).await;
+        }
+    };
+}
+
+// FU-267: depth 1, a started call ends the member typed, never repeated.
+member_direct_case!(
+    postgres_a_member_child_call_lost_after_it_started_ends_the_member_typed,
+    "1",
+    "started"
+);
+member_direct_case!(
+    postgres_two_levels_below_a_member_a_started_call_ends_the_member_typed,
+    "2",
+    "started"
+);
+member_direct_case!(
+    postgres_two_levels_below_a_member_a_committed_call_replays_without_calling_again,
+    "2",
+    "committed"
+);
