@@ -53,9 +53,10 @@ export interface ApplicationAdvanceSettingsProps {
   readonly outputContract?: unknown;
   readonly showOutputContract?: boolean | undefined;
   readonly onOutputContractChange?: ((next: OutputContract | null) => void) | undefined;
-  /** `meta.citations` (ADR-0043 decision 5); shown with `showOutputContract`. */
-  readonly citations?: unknown;
-  readonly onCitationsChange?: ((next: CitationsValue) => void) | undefined;
+  /** `meta.citations` (ADR-0043 decision 5) and its setter; shown with `showOutputContract`. */
+  readonly citations?:
+    | { readonly value: unknown; readonly onChange: (next: CitationsValue) => void }
+    | undefined;
   readonly sx?: SxProps<Theme> | undefined;
 }
 
@@ -104,7 +105,6 @@ export function ApplicationAdvanceSettings({
   onOutputContractChange,
   showOutputContract,
   citations,
-  onCitationsChange,
   sx,
 }: ApplicationAdvanceSettingsProps): ReactNode {
   const handleChange = useCallback(
@@ -165,8 +165,8 @@ export function ApplicationAdvanceSettings({
               testIdPrefix="agent-output-contract"
             />
           )}
-          {showOutputContract === true && onCitationsChange !== undefined && (
-            <CitationsField value={citations} onChange={onCitationsChange} disabled={disabled} />
+          {showOutputContract === true && citations !== undefined && (
+            <CitationsField value={citations.value} onChange={citations.onChange} disabled={disabled} />
           )}
           {showIgnoreProjectContext && (
             <Box sx={toggleRowSx}>

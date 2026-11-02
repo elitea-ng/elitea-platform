@@ -392,7 +392,7 @@ export function CreateAgentForm({
           modelSettingsSlot={modelSettingsSlot}
           outputContract={state.outputContract} onOutputContractChange={state.onOutputContractChange}
           showOutputContract={showOutputContract}
-          citations={state.citations} onCitationsChange={state.onCitationsChange}
+          citations={{ value: state.citations, onChange: state.onCitationsChange }}
         />
       </Box>
     </Box>
