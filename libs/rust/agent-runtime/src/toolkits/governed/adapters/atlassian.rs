@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use adk_core::Toolset;
+use elitea_connectors::atlassian::ATLASSIAN_GATEWAY_HOST;
 use serde_json::{Map, Value};
 
 use super::{base_url_target, with_credential};
@@ -29,8 +30,6 @@ const CREDENTIAL_KEYS: [&str; 4] = ["token", "api_key", "username", "password"];
 const STATIC_KEYS: &[&str] = &["token", "username"];
 const OAUTH_KEYS: &[&str] = &["access_token", "api_base"];
 
-/// The Atlassian API gateway host a 3LO token is used at.
-pub(crate) const ATLASSIAN_GATEWAY_HOST: &str = "api.atlassian.com";
 /// The longest Atlassian cloud id accepted in a gateway path.
 const MAX_CLOUD_ID_BYTES: usize = 64;
 
@@ -253,8 +252,10 @@ fn gateway_base(api_base: &str, product: &str) -> Option<String> {
 /// a static token with an account name is Basic (`username` + `api_key`), a
 /// static token alone or an OAuth access token is Bearer (`token`). An
 /// OAuth token also replaces the site URL with its gateway base and marks
-/// the toolkit Cloud (3LO exists only for Atlassian Cloud).
-fn atlassian_settings(
+/// the toolkit Cloud (3LO exists only for Atlassian Cloud). The tool lane
+/// (`build_client`) and the index lane (`index::index_settings`) both use
+/// this one function, so the two lanes send a token to the same place.
+pub(crate) fn atlassian_settings(
     adapter: &dyn AuthAdapter,
     settings: &Map<String, Value>,
     configuration: &str,

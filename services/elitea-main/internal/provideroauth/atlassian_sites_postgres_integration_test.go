@@ -39,7 +39,7 @@ func TestConsentStoresTheGatewayBaseAndTheTokenSourceReleasesIt(t *testing.T) {
 	require.NoError(t, err)
 	token, err := source.AccessToken(ctx, tKey)
 	require.NoError(t, err)
-	require.Equal(t, srv.URL+"/ex/jira/"+tCloudID, token.APIBase)
+	require.Equal(t, AtlassianAPIURL+"/ex/jira/"+tCloudID, token.APIBase)
 
 	// A stored base this client could not have written is never released.
 	_, err = pool.Exec(ctx, `UPDATE elitea_identity.provider_oauth_grants SET api_base_url = 'https://evil.example/ex/jira/x'`)

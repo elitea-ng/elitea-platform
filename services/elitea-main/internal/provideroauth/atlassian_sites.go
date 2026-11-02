@@ -15,9 +15,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -38,6 +40,12 @@ var cloudIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 
 // atlassianProducts maps a provider type to its API gateway product segment.
 var atlassianProducts = map[string]string{"jira": "jira", "confluence": "confluence"}
+
+// AtlassianGatewayProviders answers, sorted, the provider types whose
+// oauth_delegated token is used at AtlassianAPIURL, not at the target site.
+func AtlassianGatewayProviders() []string {
+	return slices.Sorted(maps.Keys(atlassianProducts))
+}
 
 // APIBaseResolver answers the API base a consented token must call. An
 // authorizer that has no API gateway does not implement it.
@@ -62,7 +70,7 @@ func (c *Client) ResolveAPIBase(ctx context.Context, accessToken, site string) (
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.APIURL+accessibleResourcesPath, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, AtlassianAPIURL+accessibleResourcesPath, nil)
 	if err != nil {
 		return "", ErrProviderUnavailable
 	}
@@ -99,7 +107,7 @@ func (c *Client) ResolveAPIBase(ctx context.Context, accessToken, site string) (
 }
 
 func (c *Client) apiBase(product, cloudID string) string {
-	return c.cfg.APIURL + "/ex/" + product + "/" + cloudID
+	return AtlassianAPIURL + "/ex/" + product + "/" + cloudID
 }
 
 // validAPIBase reports whether base is one this client could have stored:
@@ -110,7 +118,7 @@ func (c *Client) validAPIBase(base string) bool {
 	if c.cfg.Flavor != FlavorAtlassian || !ok {
 		return false
 	}
-	cloudID, ok := strings.CutPrefix(base, c.cfg.APIURL+"/ex/"+product+"/")
+	cloudID, ok := strings.CutPrefix(base, AtlassianAPIURL+"/ex/"+product+"/")
 	return ok && cloudIDPattern.MatchString(cloudID)
 }
 
@@ -119,7 +127,7 @@ func (c *Client) validAPIBase(base string) bool {
 // the same.
 func siteOrigin(raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && !(u.Scheme == "http" && loopback(u.Hostname()))) {
+	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && (u.Scheme != "http" || !loopback(u.Hostname()))) {
 		return "", errors.New("not a site URL")
 	}
 	path := strings.TrimSuffix(u.Path, "/")

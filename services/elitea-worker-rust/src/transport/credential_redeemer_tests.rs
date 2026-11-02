@@ -63,7 +63,16 @@ impl ContentFake for Arc<Fake> {
             None => pb::redeem_credential_response_v1::Result::Envelope(pb::CredentialEnvelopeV1 {
                 redemption_id: "redemption-1".to_owned(),
                 kind: pb::CredentialEnvelopeKindV1::OauthAccess as i32,
-                material: [("access_token".to_owned(), "envelope-token".to_owned())].into(),
+                // An Atlassian 3LO envelope names its gateway base (#1464).
+                material: [
+                    ("access_token".to_owned(), "envelope-token".to_owned()),
+                    (
+                        "api_base".to_owned(),
+                        "https://api.atlassian.com/ex/jira/11223344-a1b2-c3d4-e5f6-77889900aabb"
+                            .to_owned(),
+                    ),
+                ]
+                .into(),
                 not_after_unix_millis: 4_102_444_800_000,
                 target_identity: TARGET.to_owned(),
                 obligations: Vec::new(),
