@@ -422,6 +422,25 @@ impl PipelineNodeRuntimes {
         self
     }
 
+    /// A fan-out member's saved child, and every saved pipeline beneath it,
+    /// journal their direct tool nodes through the member's branch family
+    /// (FU-248 at the first level, FU-264 below it): this level's journals
+    /// and its own Agent nodes' participants, recursively.
+    pub(crate) fn with_branch_journals(
+        mut self,
+        journals: &Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>,
+    ) -> Self {
+        self.direct_tool_recovery = Some(Arc::clone(journals));
+        if let Some(rebound) = self
+            .application
+            .as_ref()
+            .and_then(|application| application.for_branch_journals(Arc::clone(journals)))
+        {
+            self.application = Some(rebound);
+        }
+        self
+    }
+
     pub(in crate::agents) fn with_code(mut self, runtime: Arc<dyn CodeSandboxRuntime>) -> Self {
         self.code = Some(runtime);
         self
@@ -3490,5 +3509,94 @@ mod result_trace_binding_tests {
             panic!("an unclaimed trace entry must refuse the graph");
         };
         assert_eq!(error.code(), "graph.pipeline.invalid_configuration");
+    }
+}
+
+#[cfg(test)]
+mod branch_journal_tests {
+    use std::sync::{Arc, Mutex};
+
+    use adk_rust::graph::{Checkpointer, GraphError};
+    use async_trait::async_trait;
+
+    use super::PipelineNodeRuntimes;
+    use crate::agents::graph::application::{
+        ApplicationExecutionError, PipelineApplicationResolver, PipelineApplicationSelection,
+        ResolvedApplicationParticipant,
+    };
+    use crate::agents::graph::node_recovery::NodeRecoveryPolicy;
+    use crate::agents::graph::node_recovery_runtime::{
+        NodeAttemptActivation, NodeAttemptJournal, NodeRecoveryFactory,
+    };
+
+    struct Journals;
+    #[async_trait]
+    impl NodeRecoveryFactory for Journals {
+        async fn open(
+            &self,
+            _: &NodeAttemptActivation,
+            _: &NodeRecoveryPolicy,
+        ) -> Result<NodeAttemptJournal, GraphError> {
+            Err(GraphError::Other("not opened in this test".to_owned()))
+        }
+    }
+
+    /// A nested level's resolver: it records the journals it was rebound to
+    /// and hands out a rebound copy.
+    struct Nested {
+        rebound_to: Arc<Mutex<Option<Arc<dyn NodeRecoveryFactory>>>>,
+    }
+    impl PipelineApplicationResolver for Nested {
+        fn resolve(
+            &self,
+            _: &PipelineApplicationSelection,
+            _: Arc<dyn Checkpointer>,
+        ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
+            Err(ApplicationExecutionError::Unavailable)
+        }
+        fn for_branch_journals(
+            &self,
+            journals: Arc<dyn NodeRecoveryFactory>,
+        ) -> Option<Arc<dyn PipelineApplicationResolver>> {
+            *self.rebound_to.lock().expect("record") = Some(journals);
+            Some(Arc::new(Self {
+                rebound_to: Arc::clone(&self.rebound_to),
+            }))
+        }
+    }
+
+    /// FU-264: a member's branch journals reach this level's direct nodes AND
+    /// every saved pipeline beneath it (the level's own Agent nodes).
+    #[test]
+    fn branch_journals_reach_the_nested_saved_pipelines() {
+        let recorded = Arc::new(Mutex::new(None));
+        let root: Arc<dyn NodeRecoveryFactory> = Arc::new(Journals);
+        let branch: Arc<dyn NodeRecoveryFactory> = Arc::new(Journals);
+        let nested: Arc<dyn PipelineApplicationResolver> = Arc::new(Nested {
+            rebound_to: Arc::clone(&recorded),
+        });
+        let runtimes = PipelineNodeRuntimes::new(None, None, Some(Arc::clone(&nested)))
+            .with_direct_tool_recovery(Arc::clone(&root));
+        // A3: the run's own binding (outside any member) never rebinds the
+        // nested levels; they keep the root's journals they were bound with.
+        assert!(Arc::ptr_eq(
+            runtimes.application.as_ref().expect("resolver"),
+            &nested
+        ));
+        assert!(recorded.lock().expect("read").is_none());
+
+        let member = runtimes.with_branch_journals(&branch);
+        assert!(Arc::ptr_eq(
+            member.direct_tool_recovery.as_ref().expect("journals"),
+            &branch
+        ));
+        assert!(
+            !Arc::ptr_eq(member.application.as_ref().expect("resolver"), &nested),
+            "the nested resolver is the rebound one"
+        );
+        assert!(Arc::ptr_eq(
+            recorded.lock().expect("read").as_ref().expect("rebound to"),
+            &branch
+        ));
     }
 }

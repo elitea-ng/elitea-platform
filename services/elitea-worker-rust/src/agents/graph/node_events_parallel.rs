@@ -204,6 +204,20 @@ impl PipelineNodeEventSender {
                 DESCENDANT_CHECKPOINT_THREAD_KEY.to_owned(),
                 current.checkpoint_thread_id().to_owned(),
             );
+            // FU-264: a call of the member's own child pipeline (its Agent
+            // node) is named relative to the proved branch thread, as that
+            // child's node events are (`project_node_event`); every tier
+            // below it resolves against its own projector's thread.
+            if local.is_some() && current.checkpoint_thread_id() == scope.owned_thread {
+                event.provider_metadata.insert(
+                    crate::agents::events::FANOUT_MEMBER_THREAD_KEY.to_owned(),
+                    serde_json::json!({
+                        "call": current.parent_call_id(),
+                        "thread": scope.branch_root_thread,
+                    })
+                    .to_string(),
+                );
+            }
         } else {
             let original_root = event.invocation_id.clone();
             crate::agents::pipeline::scoped_applications::stamp_root_scope_projection(

@@ -1719,17 +1719,146 @@ fn mixed_request(on_error: &str) -> super::super::request::AgentExecutionRequest
     request
 }
 
-/// FU-248: a member whose saved child pipeline starts at an effectful direct
-/// MCP node runs that call once, behind the run's journal scoped to the
-/// child's visit, under either On Error (it used to be refused as
-/// `graph.fanout.child_tool_unavailable`).
+/// FU-264: the saved pipeline a member's `second` branch runs at `depth`:
+/// `1` is the effectful direct pipeline itself (application 5); `2` is a
+/// middle pipeline (application 5) whose Agent node runs it (application 7).
+/// `then_llm`: an llm node follows the direct call.
+fn member_child_runtime(
+    depth: &str,
+    outcomes: Vec<TestModelGatewayOutcome>,
+    then_llm: bool,
+) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
+    let direct = child_direct_pipeline(then_llm, false);
+    if depth == "2" {
+        saved_runtime_with3(
+            outcomes,
+            answering_pipeline(),
+            Some(member_middle_pipeline()),
+            Some(direct),
+        )
+    } else {
+        saved_runtime_with(outcomes, answering_pipeline(), Some(direct))
+    }
+}
+
+/// A middle saved pipeline whose Agent node runs application 7 (FU-264).
+fn member_middle_pipeline() -> Value {
+    deep_flow(child_direct_middle(false))
+}
+
+/// [`member_middle_pipeline`] whose answer is text (its inner pipeline
+/// answers text, not the direct call's object).
+fn member_middle_text_pipeline() -> Value {
+    deep_flow(middle_pipeline())
+}
+
+/// `middle` with its Agent node pointed at application 7 (`deep-flow`).
+fn deep_flow(mut middle: Value) -> Value {
+    let instructions = middle["instructions"]
+        .as_str()
+        .expect("instructions")
+        .replace("tool: inner-flow", "tool: deep-flow");
+    middle["instructions"] = json!(instructions);
+    let tool = &mut middle["tools"][0];
+    tool["name"] = json!("deep-flow");
+    tool["toolkit_name"] = json!("deep-flow");
+    tool["settings"] = json!({"application_id": 7, "application_version_id": 8});
+    middle
+}
+
+/// FU-264 (P4): a member whose saved child runs its own Agent node (a saved
+/// pipeline one level further down, nothing effectful in it) completes and
+/// projects: the inner call is a tier beneath the member's tier, named
+/// against the member's branch thread. On main this projection was refused.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_member_whose_child_runs_an_agent_node_completes_and_projects_the_inner_tier() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let (platform, model_facade, captured) = saved_runtime_with3(
+        Vec::new(),
+        answering_pipeline(),
+        Some(member_middle_text_pipeline()),
+        Some(answering_pipeline()),
+    );
+    let assembler = PipelineNativeAgentAssembler::postgres(
+        db.pool.clone(),
+        SessionLimits::default(),
+        CheckpointLimits::default(),
+        Arc::new(
+            ToolAdmissionPolicy::new(&[], &std::collections::BTreeMap::new())
+                .expect("empty tool policy"),
+        ),
+        platform,
+        model_facade,
+    )
+    .with_fixed_parallel_for_tests();
+    let request = mixed_request("stop");
+    let invocation = assembler
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the fan-out: {error}"));
+    let (frames, completion) = run_frames(invocation).await;
+    completion.unwrap_or_else(|error| panic!("the fan-out completes and projects: {error}"));
+    assert_eq!(model_requests(&captured), 0);
+    // The inner call opens and closes under the member's tier.
+    let inner = |kind: &str| {
+        frames
+            .iter()
+            .filter(|(frame, metadata)| {
+                frame == kind && metadata["metadata"]["original_name"] == "deep-flow"
+            })
+            .map(|(_, metadata)| metadata["metadata"]["parent_agent_path"].clone())
+            .collect::<Vec<_>>()
+    };
+    for kind in ["agent_tool_start", "agent_tool_end"] {
+        let paths = inner(kind);
+        assert_eq!(paths.len(), 1, "{kind}: {frames:?}");
+        let path = paths[0].as_array().expect("parent path");
+        assert_eq!(
+            path.len(),
+            1,
+            "{kind}: one tier above the inner call: {path:?}"
+        );
+        assert_eq!(
+            path[0]["name"], "direct-flow",
+            "{kind}: the member's tier: {path:?}"
+        );
+    }
+    let entries = joined(&db.pool).await.expect("joined entries");
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry["status"].as_str() == Some("succeeded")),
+        "{entries:?}"
+    );
+    db.pool.close().await;
+}
+
+/// FU-248 / FU-264: a member whose saved child pipeline (or the saved
+/// pipeline its Agent node runs, one level further down) starts at an
+/// effectful direct MCP node runs that call once, behind the member's branch
+/// journals scoped to the visit, under either On Error (it used to be refused
+/// as `graph.fanout.child_tool_unavailable`; two levels down, FU-264).
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_a_member_whose_child_calls_an_effectful_direct_tool_runs_it_once() {
     let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
         return;
     };
-    for on_error in ["continue", "stop"] {
+    for (depth, on_error) in [
+        ("1", "continue"),
+        ("1", "stop"),
+        ("2", "continue"),
+        ("2", "stop"),
+    ] {
         let db = IsolatedPostgres::create(&url).await;
         install_schema(&db.pool).await;
         sqlx::raw_sql(CHECKPOINT_MIGRATION)
@@ -1737,11 +1866,7 @@ async fn postgres_a_member_whose_child_calls_an_effectful_direct_tool_runs_it_on
             .await
             .expect("apply checkpoint migration");
         let tool_calls = Arc::new(AtomicUsize::new(0));
-        let (platform, model_facade, captured) = saved_runtime_with(
-            Vec::new(),
-            answering_pipeline(),
-            Some(direct_effect_pipeline()),
-        );
+        let (platform, model_facade, captured) = member_child_runtime(depth, Vec::new(), false);
         let assembler = PipelineNativeAgentAssembler::postgres(
             db.pool.clone(),
             SessionLimits::default(),
@@ -1764,13 +1889,13 @@ async fn postgres_a_member_whose_child_calls_an_effectful_direct_tool_runs_it_on
             .assemble(claim(&request, 1))
             .await
             .unwrap_or_else(|error| panic!("assemble the mixed fan-out: {error}"));
-        let members = run_to_end(invocation)
-            .await
-            .unwrap_or_else(|error| panic!("{on_error}: the fan-out completes: {error}"));
+        let members = run_to_end(invocation).await.unwrap_or_else(|error| {
+            panic!("depth {depth} {on_error}: the fan-out completes: {error}")
+        });
         assert_eq!(
             tool_calls.load(Ordering::Acquire),
             1,
-            "{on_error}: once: {:?} {members:?}",
+            "depth {depth} {on_error}: once: {:?} {members:?}",
             joined(&db.pool).await
         );
         assert_eq!(model_requests(&captured), 0, "{on_error}");
@@ -4137,7 +4262,12 @@ async fn postgres_a_member_child_sensitive_direct_call_pauses_then_runs_once_or_
         );
         return;
     };
-    for (action, calls) in [("approve", 1), ("reject", 0)] {
+    for (depth, action, calls) in [
+        ("1", "approve", 1),
+        ("1", "reject", 0),
+        ("2", "approve", 1),
+        ("2", "reject", 0),
+    ] {
         let db = IsolatedPostgres::create(&url).await;
         install_schema(&db.pool).await;
         sqlx::raw_sql(CHECKPOINT_MIGRATION)
@@ -4146,11 +4276,7 @@ async fn postgres_a_member_child_sensitive_direct_call_pauses_then_runs_once_or_
             .expect("apply checkpoint migration");
         let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
         let tool_calls = Arc::new(AtomicUsize::new(0));
-        let (platform, model_facade, captured) = saved_runtime_with(
-            Vec::new(),
-            answering_pipeline(),
-            Some(direct_effect_pipeline()),
-        );
+        let (platform, model_facade, captured) = member_child_runtime(depth, Vec::new(), false);
         let assembler = |claim: u64| {
             PipelineNativeAgentAssembler::postgres(
                 db.pool.clone(),
@@ -4173,9 +4299,9 @@ async fn postgres_a_member_child_sensitive_direct_call_pauses_then_runs_once_or_
             .assemble(claim(&request, 1))
             .await
             .unwrap_or_else(|error| panic!("{action}: assemble: {error}"));
-        let (_, cards) = run_collecting(invocation)
-            .await
-            .unwrap_or_else(|error| panic!("{action}: the member's card parks the run: {error}"));
+        let (_, cards) = run_collecting(invocation).await.unwrap_or_else(|error| {
+            panic!("depth {depth} {action}: the member's card parks the run: {error}")
+        });
         assert_eq!(cards.len(), 1, "{action}: {cards:?}");
         assert_eq!(cards[0]["fanout_v1"]["member"], "second", "{cards:?}");
         assert_eq!(cards[0]["kind"], "tool_guard", "{cards:?}");
