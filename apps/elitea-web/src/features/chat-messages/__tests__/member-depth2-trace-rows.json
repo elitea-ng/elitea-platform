@@ -1,0 +1,308 @@
+[
+  {
+    "id": 1294,
+    "message_group_id": 298,
+    "kind": "thinking_step",
+    "tool_name": null,
+    "parent_agent_name": null,
+    "parent_agent_call_id": null,
+    "started_at": "2026-11-02T18:31:40.580890Z",
+    "finished_at": "2026-11-02T18:31:40.580890Z",
+    "is_error": false,
+    "attrs": {}
+  },
+  {
+    "id": 1295,
+    "message_group_id": 298,
+    "kind": "tool_call",
+    "tool_name": "FP child direct",
+    "parent_agent_name": null,
+    "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+    "started_at": "2026-11-02T18:32:04.981293Z",
+    "finished_at": "2026-11-02T18:32:05.108621Z",
+    "is_error": false,
+    "attrs": {
+      "metadata": {
+        "agent_type": "pipeline",
+        "display_name": "FP child direct",
+        "toolkit_type": "pipeline",
+        "original_name": "FP child direct",
+        "sibling_ordinal": 1,
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101"
+      },
+      "tool_meta": {
+        "name": "FP child direct",
+        "metadata": {
+          "agent_type": "pipeline",
+          "display_name": "FP child direct",
+          "toolkit_type": "pipeline",
+          "original_name": "FP child direct",
+          "sibling_ordinal": 1,
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101"
+        },
+        "display_name": "FP child direct"
+      }
+    }
+  },
+  {
+    "id": 1296,
+    "message_group_id": 298,
+    "kind": "thinking_step",
+    "tool_name": null,
+    "parent_agent_name": null,
+    "parent_agent_call_id": null,
+    "started_at": "2026-11-02T18:31:40.583648Z",
+    "finished_at": "2026-11-02T18:31:40.583648Z",
+    "is_error": false,
+    "attrs": {}
+  },
+  {
+    "id": 1297,
+    "message_group_id": 298,
+    "kind": "thinking_step",
+    "tool_name": null,
+    "parent_agent_name": "FP child direct",
+    "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+    "started_at": "2026-11-02T18:31:40.588623Z",
+    "finished_at": "2026-11-02T18:31:40.588623Z",
+    "is_error": false,
+    "attrs": {
+      "parent_agent_name": "FP child direct",
+      "parent_agent_path": [
+        {
+          "name": "FP child direct",
+          "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+          "sibling_ordinal": 1
+        }
+      ],
+      "response_metadata": {
+        "metadata": {
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "name": "FP child direct",
+              "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "sibling_ordinal": 1
+            }
+          ],
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101"
+        }
+      },
+      "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101"
+    }
+  },
+  {
+    "id": 1298,
+    "message_group_id": 298,
+    "kind": "tool_call",
+    "tool_name": "FP direct reverse",
+    "parent_agent_name": "FP child direct",
+    "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+    "started_at": "2026-11-02T18:31:40.588623Z",
+    "finished_at": "2026-11-02T18:32:05.046566Z",
+    "is_error": false,
+    "attrs": {
+      "metadata": {
+        "agent_type": "pipeline",
+        "display_name": "FP direct reverse",
+        "toolkit_type": "pipeline",
+        "original_name": "FP direct reverse",
+        "sibling_ordinal": 1,
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "name": "FP child direct",
+            "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+            "sibling_ordinal": 1
+          }
+        ],
+        "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101"
+      },
+      "tool_meta": {
+        "name": "FP direct reverse",
+        "metadata": {
+          "agent_type": "pipeline",
+          "display_name": "FP direct reverse",
+          "toolkit_type": "pipeline",
+          "original_name": "FP direct reverse",
+          "sibling_ordinal": 1,
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "name": "FP child direct",
+              "call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101",
+              "sibling_ordinal": 1
+            }
+          ],
+          "parent_agent_call_id": "fo1_e80722351357f86ca4d8a101f2986358d3e738f73c52c45a4daffda526ee6101"
+        },
+        "display_name": "FP direct reverse"
+      }
+    }
+  },
+  {
+    "id": 1299,
+    "message_group_id": 298,
+    "kind": "thinking_step",
+    "tool_name": null,
+    "parent_agent_name": "FP child direct",
+    "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+    "started_at": "2026-11-02T18:31:40.590378Z",
+    "finished_at": "2026-11-02T18:31:40.590378Z",
+    "is_error": false,
+    "attrs": {
+      "parent_agent_name": "FP child direct",
+      "parent_agent_path": [
+        {
+          "name": "FP child direct",
+          "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+          "sibling_ordinal": 2
+        }
+      ],
+      "response_metadata": {
+        "metadata": {
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "name": "FP child direct",
+              "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+              "sibling_ordinal": 2
+            }
+          ],
+          "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d"
+        }
+      },
+      "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d"
+    }
+  },
+  {
+    "id": 1300,
+    "message_group_id": 298,
+    "kind": "tool_call",
+    "tool_name": "FP direct reverse",
+    "parent_agent_name": "FP child direct",
+    "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+    "started_at": "2026-11-02T18:31:40.590378Z",
+    "finished_at": "2026-11-02T18:34:30.580069Z",
+    "is_error": false,
+    "attrs": {
+      "metadata": {
+        "agent_type": "pipeline",
+        "display_name": "FP direct reverse",
+        "toolkit_type": "pipeline",
+        "original_name": "FP direct reverse",
+        "sibling_ordinal": 2,
+        "parent_agent_name": "FP child direct",
+        "parent_agent_path": [
+          {
+            "name": "FP child direct",
+            "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+            "sibling_ordinal": 2
+          }
+        ],
+        "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d"
+      },
+      "tool_meta": {
+        "name": "FP direct reverse",
+        "metadata": {
+          "agent_type": "pipeline",
+          "display_name": "FP direct reverse",
+          "toolkit_type": "pipeline",
+          "original_name": "FP direct reverse",
+          "sibling_ordinal": 2,
+          "parent_agent_name": "FP child direct",
+          "parent_agent_path": [
+            {
+              "name": "FP child direct",
+              "call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+              "sibling_ordinal": 2
+            }
+          ],
+          "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d"
+        },
+        "display_name": "FP direct reverse"
+      }
+    }
+  },
+  {
+    "id": 1301,
+    "message_group_id": 298,
+    "kind": "thinking_step",
+    "tool_name": null,
+    "parent_agent_name": null,
+    "parent_agent_call_id": null,
+    "started_at": "2026-11-02T18:32:04.981293Z",
+    "finished_at": "2026-11-02T18:32:04.981293Z",
+    "is_error": false,
+    "attrs": {}
+  },
+  {
+    "id": 1302,
+    "message_group_id": 298,
+    "kind": "thinking_step",
+    "tool_name": null,
+    "parent_agent_name": null,
+    "parent_agent_call_id": null,
+    "started_at": "2026-11-02T18:32:31.006612Z",
+    "finished_at": "2026-11-02T18:32:31.006612Z",
+    "is_error": false,
+    "attrs": {}
+  },
+  {
+    "id": 1303,
+    "message_group_id": 298,
+    "kind": "tool_call",
+    "tool_name": "FP child direct",
+    "parent_agent_name": null,
+    "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d",
+    "started_at": "2026-11-02T18:34:30.517039Z",
+    "finished_at": "2026-11-02T18:34:30.639418Z",
+    "is_error": false,
+    "attrs": {
+      "metadata": {
+        "agent_type": "pipeline",
+        "display_name": "FP child direct",
+        "toolkit_type": "pipeline",
+        "original_name": "FP child direct",
+        "sibling_ordinal": 2,
+        "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d"
+      },
+      "tool_meta": {
+        "name": "FP child direct",
+        "metadata": {
+          "agent_type": "pipeline",
+          "display_name": "FP child direct",
+          "toolkit_type": "pipeline",
+          "original_name": "FP child direct",
+          "sibling_ordinal": 2,
+          "parent_agent_call_id": "fo1_8bfa472392cf34a0b213d1dd9d33cb9a359dc801ce082664b260a47f3874975d"
+        },
+        "display_name": "FP child direct"
+      }
+    }
+  },
+  {
+    "id": 1304,
+    "message_group_id": 298,
+    "kind": "thinking_step",
+    "tool_name": null,
+    "parent_agent_name": null,
+    "parent_agent_call_id": null,
+    "started_at": "2026-11-02T18:34:30.517039Z",
+    "finished_at": "2026-11-02T18:34:30.517039Z",
+    "is_error": false,
+    "attrs": {}
+  },
+  {
+    "id": 1305,
+    "message_group_id": 298,
+    "kind": "thinking_step",
+    "tool_name": null,
+    "parent_agent_name": null,
+    "parent_agent_call_id": null,
+    "started_at": "2026-11-02T18:34:30.697046Z",
+    "finished_at": "2026-11-02T18:34:30.697046Z",
+    "is_error": false,
+    "attrs": {}
+  }
+]

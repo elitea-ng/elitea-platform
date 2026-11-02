@@ -207,11 +207,21 @@ async fn parallel_events_preserve_ancestor_attribution_and_original_identity() {
         projected.provider_metadata[DESCENDANT_CHECKPOINT_THREAD_KEY],
         "hashed-branch/owned"
     );
+    // FU-264: the member's own child is named against the proved branch
+    // thread, as its node events are.
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &projected.provider_metadata[crate::agents::events::FANOUT_MEMBER_THREAD_KEY]
+        )
+        .unwrap(),
+        serde_json::json!({"call": "local-call", "thread": "hashed-branch"})
+    );
     let mut restored = projected;
     for key in [
         DESCENDANT_CONTAINER_INVOCATION_KEY,
         DESCENDANT_PARENT_CALL_KEY,
         DESCENDANT_CHECKPOINT_THREAD_KEY,
+        crate::agents::events::FANOUT_MEMBER_THREAD_KEY,
     ] {
         restored.provider_metadata.remove(key);
     }

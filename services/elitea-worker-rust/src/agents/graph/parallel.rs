@@ -13,7 +13,7 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use adk_rust::graph::checkpoint::Checkpointer;
+use adk_rust::graph::checkpoint::{Checkpointer, RetentionPolicy};
 use adk_rust::graph::{
     Checkpoint, CompiledGraph, ExecutionConfig, GraphError, Node, NodeContext, NodeOutput, State,
 };
@@ -825,14 +825,10 @@ impl AdkParallelBranchRuntime {
                 ));
             }
             let replay = match latest {
-                Some(saved) => restored_outcome(
-                    self,
-                    &branch,
-                    &child.thread_id,
-                    &child.checkpointer,
-                    saved,
-                    true,
-                )?,
+                Some(saved) => {
+                    restored_replay(self, &branch, &child.thread_id, &child.checkpointer, saved)
+                        .await?
+                }
                 None => None,
             };
             prepared.push(PreparedParallelBranch {
@@ -1003,6 +999,146 @@ fn restored_outcome(
     })
 }
 
+/// FU-273: the child's own truth when its latest rows were saved by a resume
+/// of a pause inside its saved pipelines that never reached a receipt of its
+/// own (none, or one carried from that pause), and none of the pipelines the
+/// pause names saved past its own paused checkpoint: nothing durable shows
+/// the decision applied (its resume controls bind to the pause row).
+///
+/// The pause row is returned: the child stays parked there and its decision
+/// is re-delivered against that row, so the paused call's node journal
+/// decides. A lost attempt's newer row is never a frontier the child
+/// continues from without its decision, and the decision is never answered
+/// as applied. `None`: the latest row is the truth.
+async fn unproven_resume(
+    runtime: &dyn ParallelBranchRuntime,
+    branch: &ParallelBranchDefinition,
+    thread_id: &str,
+    store: &Arc<dyn Checkpointer>,
+    latest: &Checkpoint,
+) -> Result<Option<Checkpoint>, GraphError> {
+    if !resumed_without_receipt(latest)? {
+        return Ok(None);
+    }
+    let history = store.list(thread_id).await?;
+    let start = history.len().saturating_sub(MAX_ANSWERED_PAUSE_SCAN);
+    let Some(saved) = history
+        .into_iter()
+        .skip(start)
+        .rev()
+        .filter(|saved| saved.thread_id == thread_id)
+        .find_map(|saved| match resumed_without_receipt(&saved) {
+            Ok(true) => None,
+            Ok(false) => Some(Ok(saved)),
+            Err(error) => Some(Err(error)),
+        })
+        .transpose()?
+    else {
+        return Ok(None);
+    };
+    let Some(BranchReceipt::Paused { interrupt }) = BranchReceiptCheckpointer::receipt(&saved)?
+    else {
+        return Ok(None);
+    };
+    let pause = ParallelBranchPause {
+        thread_id: thread_id.to_owned(),
+        checkpoint_id: saved.checkpoint_id.clone(),
+        interrupt,
+        checkpointer: Arc::clone(store),
+    };
+    // Proves the pause shape as a restore does.
+    runtime.pause_cards(branch, &pause)?;
+    let nested = super::parallel_cards::nested_pause_checkpoints(&pause);
+    if nested.is_empty() {
+        return Ok(None);
+    }
+    for (nested_thread, paused_at) in &nested {
+        // A pipeline the pause names with no row at all is a broken state,
+        // never progress: refused typed, not continued without the decision.
+        let latest = store.load(nested_thread).await?.ok_or_else(|| {
+            parallel_error(
+                "graph.parallel.corrupt_receipt",
+                "a pipeline the child's pause names has no checkpoint",
+            )
+        })?;
+        if latest.checkpoint_id != *paused_at {
+            return Ok(None);
+        }
+    }
+    Ok(Some(saved))
+}
+
+/// The branch's checkpoints as they stood at its pause row: a decision
+/// re-delivered after a lost resume binds to that row (FU-273). Read-only.
+struct PauseRowView {
+    inner: Arc<dyn Checkpointer>,
+    pause: Checkpoint,
+}
+
+#[async_trait]
+impl Checkpointer for PauseRowView {
+    async fn save(&self, _checkpoint: &Checkpoint) -> Result<String, GraphError> {
+        Err(read_only_pause())
+    }
+
+    async fn load(&self, thread: &str) -> Result<Option<Checkpoint>, GraphError> {
+        if thread == self.pause.thread_id {
+            return Ok(Some(self.pause.clone()));
+        }
+        self.inner.load(thread).await
+    }
+
+    async fn load_by_id(&self, id: &str) -> Result<Option<Checkpoint>, GraphError> {
+        self.inner.load_by_id(id).await
+    }
+
+    async fn list(&self, thread: &str) -> Result<Vec<Checkpoint>, GraphError> {
+        self.inner.list(thread).await
+    }
+
+    async fn delete(&self, _thread: &str) -> Result<(), GraphError> {
+        Err(read_only_pause())
+    }
+
+    async fn prune(&self, _thread: &str, _policy: &RetentionPolicy) -> Result<usize, GraphError> {
+        Err(read_only_pause())
+    }
+}
+
+fn read_only_pause() -> GraphError {
+    parallel_error(
+        "graph.parallel.corrupt_occurrence",
+        "a re-delivered decision's pause view is read-only",
+    )
+}
+
+/// A restored child's replay: its pause when a lost resume left it unproven
+/// (FU-273), otherwise its latest row.
+async fn restored_replay(
+    runtime: &dyn ParallelBranchRuntime,
+    branch: &ParallelBranchDefinition,
+    thread_id: &str,
+    store: &Arc<dyn Checkpointer>,
+    saved: Checkpoint,
+) -> Result<Option<ParallelBranchOutcome>, GraphError> {
+    match unproven_resume(runtime, branch, thread_id, store, &saved).await? {
+        Some(pause) => restored_outcome(runtime, branch, thread_id, store, pause, false),
+        None => restored_outcome(runtime, branch, thread_id, store, saved, true),
+    }
+}
+
+/// A row saved mid-run: frontier left, and no receipt of its own.
+fn resumed_without_receipt(saved: &Checkpoint) -> Result<bool, GraphError> {
+    Ok(!saved.pending_nodes.is_empty()
+        && match BranchReceiptCheckpointer::receipt(saved)? {
+            None => true,
+            Some(BranchReceipt::Paused { .. }) => {
+                BranchReceiptCheckpointer::receipt_is_carried(saved)
+            }
+            Some(_) => false,
+        })
+}
+
 /// The member ordinal is 1-based (contract §3.1).
 fn card_identities(
     activation: &ParallelActivation,
@@ -1158,6 +1294,15 @@ impl ParallelChildren {
                 checkpoint_id: None,
             });
         };
+        let saved = unproven_resume(
+            self.runtime.as_ref(),
+            &branch.branch,
+            &branch.thread_id,
+            &branch.store,
+            &saved,
+        )
+        .await?
+        .unwrap_or(saved);
         let checkpoint_id = saved.checkpoint_id.clone();
         Ok(
             match restored_outcome(
@@ -1367,7 +1512,30 @@ async fn run_child(
     span: &tracing::Span,
     board: Option<&CardBoard>,
 ) -> Result<ChildRun, GraphError> {
-    let latest = branch.store.load(&branch.thread_id).await?;
+    let mut store = Arc::clone(&branch.store);
+    let latest = match branch.store.load(&branch.thread_id).await? {
+        Some(saved) => Some(
+            match unproven_resume(
+                runtime,
+                &branch.branch,
+                &branch.thread_id,
+                &branch.store,
+                &saved,
+            )
+            .await?
+            {
+                Some(pause) => {
+                    store = Arc::new(PauseRowView {
+                        inner: Arc::clone(&branch.store),
+                        pause: pause.clone(),
+                    });
+                    pause
+                }
+                None => saved,
+            },
+        ),
+        None => None,
+    };
     let latest_id = latest
         .as_ref()
         .map(|saved| saved.checkpoint_id.clone())
@@ -1377,7 +1545,7 @@ async fn run_child(
             runtime,
             &branch.branch,
             &branch.thread_id,
-            &branch.store,
+            &store,
             saved,
             decisions.is_empty(),
         )?,

@@ -229,6 +229,53 @@ func TestDecideVersusParkAdmitsExactlyOneWakeJob(t *testing.T) {
 	}
 }
 
+// TestASecondDecisionWaitsForTheRunningWake (FU-273, E1): wakes of one
+// parked response are serialized. While a wake runs (or was lost and is being
+// reclaimed under its own execution), a decision on another card only queues;
+// its wake is admitted once the running wake parks again. So a decided but
+// unACKed card can only be applied by the reclaim of the wake that took it.
+func TestASecondDecisionWaitsForTheRunningWake(t *testing.T) {
+	w := newWakeHarness(t)
+	response := w.newResponse()
+	w.parkable(response)
+	first := w.raise(response, "fanout-interrupt-card-v1.json")
+	second := w.raise(response, "fanout-interrupt-card-v1.json")
+	if s, err := w.park(response, 0); err != nil || s.WakeQueued {
+		t.Fatalf("park: %+v %v", s, err)
+	}
+	if _, err := w.decide(interruptOwner, response, first, "first-"+first[:8], "approve", ""); err != nil {
+		t.Fatal(err)
+	}
+	if admitted := w.sweep(); admitted != 1 {
+		t.Fatalf("the first wake: %d admitted", admitted)
+	}
+	var running string
+	if err := w.pool.QueryRow(t.Context(), `SELECT wake_execution_id FROM elitea_runtime.execution_interrupt_wakes
+WHERE root_response_id = $1::uuid AND decision_revision = 1`, response).Scan(&running); err != nil {
+		t.Fatal(err)
+	}
+	// A decision on the other card while the first wake runs: recorded, but
+	// no wake is even queued (the response is not parked).
+	if _, err := w.decide(interruptOwner, response, second, "second-"+second[:8], "approve", ""); err != nil {
+		t.Fatal(err)
+	}
+	if admitted := w.sweep(); admitted != 0 {
+		t.Fatalf("a second wake was admitted beside the running one: %d", admitted)
+	}
+	if got := w.wakes(response); len(got) != 1 || !strings.HasPrefix(got[0], "ADMITTED:1:") {
+		t.Fatalf("wakes = %v", got)
+	}
+	// Only the running wake's own park, having seen revision 1, queues the
+	// next wake for the later decision.
+	w.executions[response] = running
+	if s, err := w.park(response, 1); err != nil || !s.WakeQueued {
+		t.Fatalf("the running wake parks: %+v %v", s, err)
+	}
+	if got := w.wakes(response); len(got) != 2 || !strings.HasPrefix(got[1], "QUEUED:2:") {
+		t.Fatalf("wakes after the park = %v", got)
+	}
+}
+
 // TestLostAdmitIsSweptExactlyOnce: the after-commit kick never ran (a crash
 // between commit and admit). The periodic sweep admits the queued wake once,
 // as an ordinary continuation job carrying only the wake marker.

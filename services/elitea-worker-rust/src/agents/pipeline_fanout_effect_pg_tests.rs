@@ -1719,17 +1719,146 @@ fn mixed_request(on_error: &str) -> super::super::request::AgentExecutionRequest
     request
 }
 
-/// FU-248: a member whose saved child pipeline starts at an effectful direct
-/// MCP node runs that call once, behind the run's journal scoped to the
-/// child's visit, under either On Error (it used to be refused as
-/// `graph.fanout.child_tool_unavailable`).
+/// FU-264: the saved pipeline a member's `second` branch runs at `depth`:
+/// `1` is the effectful direct pipeline itself (application 5); `2` is a
+/// middle pipeline (application 5) whose Agent node runs it (application 7).
+/// `then_llm`: an llm node follows the direct call.
+fn member_child_runtime(
+    depth: &str,
+    outcomes: Vec<TestModelGatewayOutcome>,
+    then_llm: bool,
+) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
+    let direct = child_direct_pipeline(then_llm, false);
+    if depth == "2" {
+        saved_runtime_with3(
+            outcomes,
+            answering_pipeline(),
+            Some(member_middle_pipeline()),
+            Some(direct),
+        )
+    } else {
+        saved_runtime_with(outcomes, answering_pipeline(), Some(direct))
+    }
+}
+
+/// A middle saved pipeline whose Agent node runs application 7 (FU-264).
+fn member_middle_pipeline() -> Value {
+    deep_flow(child_direct_middle(false))
+}
+
+/// [`member_middle_pipeline`] whose answer is text (its inner pipeline
+/// answers text, not the direct call's object).
+fn member_middle_text_pipeline() -> Value {
+    deep_flow(middle_pipeline())
+}
+
+/// `middle` with its Agent node pointed at application 7 (`deep-flow`).
+fn deep_flow(mut middle: Value) -> Value {
+    let instructions = middle["instructions"]
+        .as_str()
+        .expect("instructions")
+        .replace("tool: inner-flow", "tool: deep-flow");
+    middle["instructions"] = json!(instructions);
+    let tool = &mut middle["tools"][0];
+    tool["name"] = json!("deep-flow");
+    tool["toolkit_name"] = json!("deep-flow");
+    tool["settings"] = json!({"application_id": 7, "application_version_id": 8});
+    middle
+}
+
+/// FU-264 (P4): a member whose saved child runs its own Agent node (a saved
+/// pipeline one level further down, nothing effectful in it) completes and
+/// projects: the inner call is a tier beneath the member's tier, named
+/// against the member's branch thread. On main this projection was refused.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_member_whose_child_runs_an_agent_node_completes_and_projects_the_inner_tier() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let (platform, model_facade, captured) = saved_runtime_with3(
+        Vec::new(),
+        answering_pipeline(),
+        Some(member_middle_text_pipeline()),
+        Some(answering_pipeline()),
+    );
+    let assembler = PipelineNativeAgentAssembler::postgres(
+        db.pool.clone(),
+        SessionLimits::default(),
+        CheckpointLimits::default(),
+        Arc::new(
+            ToolAdmissionPolicy::new(&[], &std::collections::BTreeMap::new())
+                .expect("empty tool policy"),
+        ),
+        platform,
+        model_facade,
+    )
+    .with_fixed_parallel_for_tests();
+    let request = mixed_request("stop");
+    let invocation = assembler
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the fan-out: {error}"));
+    let (frames, completion) = run_frames(invocation).await;
+    completion.unwrap_or_else(|error| panic!("the fan-out completes and projects: {error}"));
+    assert_eq!(model_requests(&captured), 0);
+    // The inner call opens and closes under the member's tier.
+    let inner = |kind: &str| {
+        frames
+            .iter()
+            .filter(|(frame, metadata)| {
+                frame == kind && metadata["metadata"]["original_name"] == "deep-flow"
+            })
+            .map(|(_, metadata)| metadata["metadata"]["parent_agent_path"].clone())
+            .collect::<Vec<_>>()
+    };
+    for kind in ["agent_tool_start", "agent_tool_end"] {
+        let paths = inner(kind);
+        assert_eq!(paths.len(), 1, "{kind}: {frames:?}");
+        let path = paths[0].as_array().expect("parent path");
+        assert_eq!(
+            path.len(),
+            1,
+            "{kind}: one tier above the inner call: {path:?}"
+        );
+        assert_eq!(
+            path[0]["name"], "direct-flow",
+            "{kind}: the member's tier: {path:?}"
+        );
+    }
+    let entries = joined(&db.pool).await.expect("joined entries");
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry["status"].as_str() == Some("succeeded")),
+        "{entries:?}"
+    );
+    db.pool.close().await;
+}
+
+/// FU-248 / FU-264: a member whose saved child pipeline (or the saved
+/// pipeline its Agent node runs, one level further down) starts at an
+/// effectful direct MCP node runs that call once, behind the member's branch
+/// journals scoped to the visit, under either On Error (it used to be refused
+/// as `graph.fanout.child_tool_unavailable`; two levels down, FU-264).
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_a_member_whose_child_calls_an_effectful_direct_tool_runs_it_once() {
     let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
         return;
     };
-    for on_error in ["continue", "stop"] {
+    for (depth, on_error) in [
+        ("1", "continue"),
+        ("1", "stop"),
+        ("2", "continue"),
+        ("2", "stop"),
+    ] {
         let db = IsolatedPostgres::create(&url).await;
         install_schema(&db.pool).await;
         sqlx::raw_sql(CHECKPOINT_MIGRATION)
@@ -1737,11 +1866,7 @@ async fn postgres_a_member_whose_child_calls_an_effectful_direct_tool_runs_it_on
             .await
             .expect("apply checkpoint migration");
         let tool_calls = Arc::new(AtomicUsize::new(0));
-        let (platform, model_facade, captured) = saved_runtime_with(
-            Vec::new(),
-            answering_pipeline(),
-            Some(direct_effect_pipeline()),
-        );
+        let (platform, model_facade, captured) = member_child_runtime(depth, Vec::new(), false);
         let assembler = PipelineNativeAgentAssembler::postgres(
             db.pool.clone(),
             SessionLimits::default(),
@@ -1764,13 +1889,13 @@ async fn postgres_a_member_whose_child_calls_an_effectful_direct_tool_runs_it_on
             .assemble(claim(&request, 1))
             .await
             .unwrap_or_else(|error| panic!("assemble the mixed fan-out: {error}"));
-        let members = run_to_end(invocation)
-            .await
-            .unwrap_or_else(|error| panic!("{on_error}: the fan-out completes: {error}"));
+        let members = run_to_end(invocation).await.unwrap_or_else(|error| {
+            panic!("depth {depth} {on_error}: the fan-out completes: {error}")
+        });
         assert_eq!(
             tool_calls.load(Ordering::Acquire),
             1,
-            "{on_error}: once: {:?} {members:?}",
+            "depth {depth} {on_error}: once: {:?} {members:?}",
             joined(&db.pool).await
         );
         assert_eq!(model_requests(&captured), 0, "{on_error}");
@@ -4137,7 +4262,12 @@ async fn postgres_a_member_child_sensitive_direct_call_pauses_then_runs_once_or_
         );
         return;
     };
-    for (action, calls) in [("approve", 1), ("reject", 0)] {
+    for (depth, action, calls) in [
+        ("1", "approve", 1),
+        ("1", "reject", 0),
+        ("2", "approve", 1),
+        ("2", "reject", 0),
+    ] {
         let db = IsolatedPostgres::create(&url).await;
         install_schema(&db.pool).await;
         sqlx::raw_sql(CHECKPOINT_MIGRATION)
@@ -4146,11 +4276,7 @@ async fn postgres_a_member_child_sensitive_direct_call_pauses_then_runs_once_or_
             .expect("apply checkpoint migration");
         let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
         let tool_calls = Arc::new(AtomicUsize::new(0));
-        let (platform, model_facade, captured) = saved_runtime_with(
-            Vec::new(),
-            answering_pipeline(),
-            Some(direct_effect_pipeline()),
-        );
+        let (platform, model_facade, captured) = member_child_runtime(depth, Vec::new(), false);
         let assembler = |claim: u64| {
             PipelineNativeAgentAssembler::postgres(
                 db.pool.clone(),
@@ -4173,9 +4299,9 @@ async fn postgres_a_member_child_sensitive_direct_call_pauses_then_runs_once_or_
             .assemble(claim(&request, 1))
             .await
             .unwrap_or_else(|error| panic!("{action}: assemble: {error}"));
-        let (_, cards) = run_collecting(invocation)
-            .await
-            .unwrap_or_else(|error| panic!("{action}: the member's card parks the run: {error}"));
+        let (_, cards) = run_collecting(invocation).await.unwrap_or_else(|error| {
+            panic!("depth {depth} {action}: the member's card parks the run: {error}")
+        });
         assert_eq!(cards.len(), 1, "{action}: {cards:?}");
         assert_eq!(cards[0]["fanout_v1"]["member"], "second", "{cards:?}");
         assert_eq!(cards[0]["kind"], "tool_guard", "{cards:?}");
@@ -4898,4 +5024,744 @@ async fn postgres_a_continuation_without_its_paused_writer_is_refused_typed_on_r
         return;
     };
     continuation_scenario(&url, false, "1", "started").await;
+}
+
+// ---------------------------------------------------------------------------
+// FU-264 / FU-267: a fan-out member's saved child (depth 1) or the saved
+// pipeline its Agent node runs (depth 2) is lost around an effectful direct
+// call; the reclaim resumes the Parallel and the member's branch journals
+// decide the call.
+// ---------------------------------------------------------------------------
+
+const MEMBER_DIRECT_TEST: &str =
+    "agents::pipeline_tests::fanout_effect_pg_tests::postgres_member_child_direct_process";
+
+fn member_direct_assembler(
+    pool: &sqlx::PgPool,
+    depth: &str,
+    then_llm: bool,
+    outcomes: Vec<TestModelGatewayOutcome>,
+    connector: Arc<dyn McpConnector>,
+) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
+    let (platform, model_facade, captured) = member_child_runtime(depth, outcomes, then_llm);
+    (
+        PipelineNativeAgentAssembler::postgres(
+            pool.clone(),
+            SessionLimits::default(),
+            CheckpointLimits::default(),
+            Arc::new(
+                ToolAdmissionPolicy::new(&[], &std::collections::BTreeMap::new())
+                    .expect("empty tool policy"),
+            ),
+            platform,
+            model_facade,
+        )
+        .with_mcp_connector(connector)
+        .with_fixed_parallel_for_tests(),
+        captured,
+    )
+}
+
+/// One phase of a [`member_direct_scenario`], in its own process.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_member_child_direct_process() {
+    let Ok(database) = std::env::var(DATABASE_ENV) else {
+        return;
+    };
+    assert!(
+        database.starts_with("elitea_rust_session_")
+            && database
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    );
+    let pool = connect(&database).await;
+    let depth = std::env::var(DEPTH_ENV).expect("depth");
+    let mode = std::env::var(MODE_ENV).expect("mode");
+    let committed = mode == "committed";
+    let request = mixed_request("continue");
+    if std::env::var(PHASE_ENV).expect("phase") == "crash" {
+        // `committed`: the call returns and its journal commits; the process
+        // dies at the child's next model request. `started`: it dies inside
+        // the call, once its Started record is durable.
+        let (assembler, _) = if committed {
+            member_direct_assembler(
+                &pool,
+                &depth,
+                true,
+                vec![TestModelGatewayOutcome::ExitProcess(CRASH_EXIT_CODE)],
+                pipeline_connector(),
+            )
+        } else {
+            member_direct_assembler(
+                &pool,
+                &depth,
+                false,
+                Vec::new(),
+                Arc::new(JournalCrashingConnector { pool: pool.clone() }),
+            )
+        };
+        let invocation = assembler
+            .assemble(claim(&request, 1))
+            .await
+            .unwrap_or_else(|error| panic!("crash: assemble: {error}"));
+        let outcome = run_to_end(invocation).await;
+        panic!("crash: the process outlived its crash point: {outcome:?}");
+    }
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let connector = Arc::new(PipelineMcpConnector {
+        connections: Arc::new(AtomicUsize::new(0)),
+        tool_calls: Arc::clone(&tool_calls),
+        read_only: false,
+    });
+    let outcomes = if committed {
+        vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+            "summarized",
+        ))]
+    } else {
+        Vec::new()
+    };
+    let (assembler, captured) =
+        member_direct_assembler(&pool, &depth, committed, outcomes, connector);
+    let invocation = recovered(&assembler, &request, EXECUTION, 2)
+        .await
+        .unwrap_or_else(|error| panic!("recover: the reclaim recovers: {error}"));
+    run_to_end(invocation)
+        .await
+        .unwrap_or_else(|error| panic!("recover: the fan-out joins: {error}"));
+    let entries = joined(&pool).await.expect("joined entries");
+    let second = entries
+        .iter()
+        .find(|entry| entry["branch_id"] == "second")
+        .unwrap_or_else(|| panic!("the member's entry: {entries:?}"));
+    if committed {
+        // R: the committed result replays; the call never runs again.
+        assert_eq!(second["status"], "succeeded", "{entries:?}");
+        assert_eq!(tool_calls.load(Ordering::Acquire), 0, "recover: replayed");
+        assert_eq!(model_requests(&captured), 1, "recover: only the next step");
+    } else {
+        // C -> F: the call may have run; the branch fails typed, never repeated.
+        assert_eq!(second["status"], "failed", "{entries:?}");
+        assert_eq!(second["error"]["code"], MAY_HAVE_STARTED, "{entries:?}");
+        assert_eq!(
+            tool_calls.load(Ordering::Acquire),
+            0,
+            "recover: not repeated"
+        );
+    }
+}
+
+/// Two processes on real PostgreSQL: lose the member's call at `depth` in
+/// `mode`, then reclaim. `committed` also removes the child's row saved after
+/// the call: the process was lost between the journal's commit and the
+/// child's next save.
+async fn member_direct_scenario(url: &str, depth: &str, mode: &str) {
+    let db = IsolatedPostgres::create(url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let phase = |phase: &'static str| {
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
+            .args([
+                "--exact",
+                MEMBER_DIRECT_TEST,
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(DATABASE_ENV, &db.database_name)
+            .env(DEPTH_ENV, depth)
+            .env(MODE_ENV, mode)
+            .env(PHASE_ENV, phase);
+        command
+    };
+    let output = run_phase("crash", phase("crash"));
+    assert_eq!(
+        output.status.code(),
+        Some(CRASH_EXIT_CODE),
+        "crash: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let journals = journal_threads(&db.pool).await;
+    assert_eq!(
+        journals.len(),
+        1,
+        "one journal for the one call: {journals:?}"
+    );
+    if mode == "committed" {
+        let removed = sqlx::query(
+            "DELETE FROM elitea_runtime.agent_graph_checkpoints \
+             WHERE writer_claim_id = 'claim-1' AND pending_nodes LIKE '%\"after\"%'",
+        )
+        .execute(&db.pool)
+        .await
+        .expect("remove the row saved after the call")
+        .rows_affected();
+        assert_eq!(removed, 1, "the child saved one row after the call");
+    }
+    let output = run_phase("recover", phase("recover"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "recover: {stdout} {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "recover ran its assertions: {stdout}"
+    );
+    assert_eq!(journal_threads(&db.pool).await, journals, "no new journal");
+    db.pool.close().await;
+}
+
+macro_rules! member_direct_case {
+    ($name:ident, $depth:literal, $mode:literal) => {
+        #[tokio::test(flavor = "current_thread")]
+        async fn $name() {
+            let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+                eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the member direct-call proof");
+                return;
+            };
+            member_direct_scenario(&url, $depth, $mode).await;
+        }
+    };
+}
+
+// FU-267: depth 1, a started call ends the member typed, never repeated.
+member_direct_case!(
+    postgres_a_member_child_call_lost_after_it_started_ends_the_member_typed,
+    "1",
+    "started"
+);
+member_direct_case!(
+    postgres_two_levels_below_a_member_a_started_call_ends_the_member_typed,
+    "2",
+    "started"
+);
+member_direct_case!(
+    postgres_two_levels_below_a_member_a_committed_call_replays_without_calling_again,
+    "2",
+    "committed"
+);
+
+// ---------------------------------------------------------------------------
+// FU-273: a member's approved sensitive call lost inside the call on its
+// wake. The reclaim must never raise a new card for the decided call: the
+// call's journal decides it (Started -> may have started, 0 calls).
+// ---------------------------------------------------------------------------
+
+/// The member child's MCP tool, which hangs once called (its journal's
+/// Started record is durable by then): the wake is lost inside the call.
+struct HangingConnector {
+    reached: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl McpConnector for HangingConnector {
+    async fn connect(
+        &self,
+        _config: &RemoteMcpConfig,
+    ) -> Result<Arc<dyn Toolset>, McpMaterializationError> {
+        Ok(Arc::new(BasicToolset::new(
+            "fixture_mcp",
+            vec![Arc::new(HangingTool {
+                inner: PipelineMcpTool {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    read_only: false,
+                },
+                reached: Arc::clone(&self.reached),
+            })],
+        )))
+    }
+}
+
+struct HangingTool {
+    inner: PipelineMcpTool,
+    reached: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl Tool for HangingTool {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn description(&self) -> &str {
+        self.inner.description()
+    }
+    fn parameters_schema(&self) -> Option<Value> {
+        self.inner.parameters_schema()
+    }
+    fn is_read_only(&self) -> bool {
+        false
+    }
+    async fn execute(
+        &self,
+        _context: Arc<dyn ToolContext>,
+        _arguments: Value,
+    ) -> adk_rust::Result<Value> {
+        self.reached.notify_one();
+        std::future::pending::<()>().await;
+        unreachable!("the wake is lost inside the call")
+    }
+}
+
+/// One row of the parked member's branch thread: its checkpoint, its receipt
+/// status, and whether the row owns that receipt (a receipt carried from an
+/// earlier row, or none, is not the row's own).
+#[derive(Debug)]
+struct MemberBranchRow {
+    checkpoint_id: String,
+    receipt: Option<String>,
+    owned: bool,
+}
+
+/// The rows, oldest first, of the branch thread that saved a pause receipt.
+async fn member_branch_rows(pool: &sqlx::PgPool) -> Vec<MemberBranchRow> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT checkpoint_id, metadata FROM elitea_runtime.agent_graph_checkpoints \
+         WHERE thread_id = (SELECT thread_id FROM elitea_runtime.agent_graph_checkpoints \
+           WHERE metadata LIKE '%branch-receipt.v1%' AND metadata LIKE '%\"status\":\"paused\"%' \
+           LIMIT 1) \
+         ORDER BY save_ordinal",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("read the member branch rows");
+    rows.into_iter()
+        .map(|(checkpoint_id, metadata)| {
+            let metadata: Value = serde_json::from_str(&metadata).expect("metadata JSON");
+            let receipt = metadata["elitea.graph.parallel.branch-receipt.v1"]["status"]
+                .as_str()
+                .map(str::to_owned);
+            let owned = metadata["elitea.graph.parallel.branch-receipt-checkpoint.v1"].as_str()
+                == Some(checkpoint_id.as_str());
+            MemberBranchRow {
+                checkpoint_id,
+                receipt,
+                owned,
+            }
+        })
+        .collect()
+}
+
+/// Main admits each fan-out wake as its own execution; its node journals are
+/// keyed by it (`node_attempts.rs` journal identity).
+const MEMBER_WAKE_EXECUTION: &str = "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d";
+
+/// What the reclaim of a lost member wake must do with the approved call.
+struct MemberWakeOutcome {
+    cards: Vec<Value>,
+    second: Option<Value>,
+    /// Tool calls the reclaim made.
+    calls: usize,
+    /// Model requests the reclaim made.
+    model_requests: usize,
+}
+
+/// FU-273 at `depth`: park the member's sensitive call, approve it, lose the
+/// wake under its own execution, reclaim it. `mode` is where it was lost:
+/// - `started`: inside the approved call, its journal's Started record durable;
+/// - `undispatched`: as `started`, with the journal removed (lost before the
+///   Started append);
+/// - `committed`: at the model step after the call; the member child's row
+///   saved after the call is removed (lost between the journal's commit and
+///   the child's save).
+async fn member_wake_lost_on_the_approved_call(
+    url: &str,
+    depth: &str,
+    mode: &str,
+) -> MemberWakeOutcome {
+    let db = IsolatedPostgres::create(url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let rig = MemberWakeRig {
+        pool: db.pool.clone(),
+        ledger: crate::agents::graph::fanout_test_ledger::TestLedger::new(),
+        depth,
+        committed: mode == "committed",
+    };
+    let request = mixed_request("continue");
+    let (parking, _) = rig.assembler(
+        1,
+        counting_connector(&Arc::new(AtomicUsize::new(0))),
+        Vec::new(),
+    );
+    let invocation = parking
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| panic!("assemble: {error}"));
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .unwrap_or_else(|error| panic!("the member's card parks the run: {error}"));
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    let key = cards[0]["interrupt_key"]
+        .as_str()
+        .expect("card key")
+        .to_owned();
+    rig.ledger.decide(&key, "approve", None);
+    let wake = member_wake_request(request);
+    rig.lose(&wake).await;
+    assert_eq!(
+        journal_threads(&db.pool).await.len(),
+        1,
+        "the call's journal"
+    );
+    let pause_checkpoint = lost_attempt_pause(&db.pool).await;
+    narrow_lost_wake(&db.pool, mode).await;
+    // The reclaim of the wake.
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let outcomes = if rig.committed {
+        vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+            "summarized",
+        ))]
+    } else {
+        Vec::new()
+    };
+    let (reclaim, captured) = rig.assembler(3, counting_connector(&tool_calls), outcomes);
+    let invocation = recovered(&reclaim, &wake, MEMBER_WAKE_EXECUTION, 3)
+        .await
+        .unwrap_or_else(|error| panic!("the lost wake recovers: {error}"));
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .unwrap_or_else(|error| panic!("the recovered wake ends: {error}"));
+    let second = joined(&db.pool).await.and_then(|entries| {
+        entries
+            .into_iter()
+            .find(|entry| entry["branch_id"] == "second")
+    });
+    let settled = if mode == "started" {
+        "failed"
+    } else {
+        "completed"
+    };
+    assert_settled_once(&db.pool, &rig.ledger, key, &pause_checkpoint, settled).await;
+    db.pool.close().await;
+    MemberWakeOutcome {
+        cards,
+        second,
+        calls: tool_calls.load(Ordering::Acquire),
+        model_requests: model_requests(&captured),
+    }
+}
+
+/// The FU-273 run's fixed parts.
+struct MemberWakeRig<'a> {
+    pool: sqlx::PgPool,
+    ledger: Arc<crate::agents::graph::fanout_test_ledger::TestLedger>,
+    depth: &'a str,
+    /// The member child runs a model step after the call (`committed`).
+    committed: bool,
+}
+
+impl MemberWakeRig<'_> {
+    fn assembler(
+        &self,
+        claim: u64,
+        connector: Arc<dyn McpConnector>,
+        outcomes: Vec<TestModelGatewayOutcome>,
+    ) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
+        let (platform, model_facade, captured) =
+            member_child_runtime(self.depth, outcomes, self.committed);
+        let assembler = PipelineNativeAgentAssembler::postgres(
+            self.pool.clone(),
+            SessionLimits::default(),
+            CheckpointLimits::default(),
+            sensitive_pipeline_mcp_policy(),
+            platform,
+            model_facade,
+        )
+        .with_mcp_connector(connector)
+        .with_fixed_parallel_for_tests()
+        .with_fanout_decisions_for_tests(self.ledger.client(claim));
+        (assembler, captured)
+    }
+
+    /// The wake, under its own execution, lost inside the approved call or,
+    /// `committed`, at the member child's model step after it.
+    async fn lose(&self, wake: &super::super::request::AgentExecutionRequest) {
+        if self.committed {
+            let lost_calls = Arc::new(AtomicUsize::new(0));
+            let (lost, lost_requests) = self.assembler(
+                2,
+                counting_connector(&lost_calls),
+                vec![TestModelGatewayOutcome::Pending],
+            );
+            let invocation = lost
+                .assemble(claim_for(wake, MEMBER_WAKE_EXECUTION, 2, false))
+                .await
+                .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
+            lose_at_first_model_request(invocation, &lost_requests).await;
+            assert_eq!(lost_calls.load(Ordering::Acquire), 1, "the call ran once");
+            return;
+        }
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let (lost, _) = self.assembler(
+            2,
+            Arc::new(HangingConnector {
+                reached: Arc::clone(&reached),
+            }),
+            Vec::new(),
+        );
+        let invocation = lost
+            .assemble(claim_for(wake, MEMBER_WAKE_EXECUTION, 2, false))
+            .await
+            .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
+        let run = run_collecting(invocation);
+        tokio::pin!(run);
+        tokio::select! {
+            outcome = &mut run => panic!("the wake ended before its call: {outcome:?}"),
+            () = reached.notified() => {}
+            () = tokio::time::sleep(Duration::from_secs(30)) => panic!("the call never started"),
+        }
+    }
+}
+
+fn counting_connector(tool_calls: &Arc<AtomicUsize>) -> Arc<dyn McpConnector> {
+    Arc::new(PipelineMcpConnector {
+        connections: Arc::new(AtomicUsize::new(0)),
+        tool_calls: Arc::clone(tool_calls),
+        read_only: false,
+    })
+}
+
+/// The fan-out wake of the parked `request`.
+fn member_wake_request(
+    request: super::super::request::AgentExecutionRequest,
+) -> super::super::request::AgentExecutionRequest {
+    let mut wake = request;
+    wake.payload.user_input = super::super::request::UserInput::Text(String::new());
+    wake.payload.meta.insert(
+        crate::agents::graph::fanout_wake::FANOUT_WAKE_META_KEY.to_owned(),
+        json!({"schema": "elitea.pipeline.fanout-wake.v1",
+            "response_message_id": "10000000-0000-4000-8000-000000000043",
+            "decision_revision": 1,
+            "parked_execution_id": EXECUTION,
+            "parked_generation": GENERATION}),
+    );
+    wake
+}
+
+/// E3: the lost attempt saved rows after the member's pause, none with a
+/// receipt of its own. The reclaim keeps the member parked at that pause and
+/// re-delivers its decision; those rows are never a frontier it continues
+/// from without the decision. Returns the pause row.
+async fn lost_attempt_pause(pool: &sqlx::PgPool) -> String {
+    let before = member_branch_rows(pool).await;
+    let pause = before
+        .iter()
+        .rposition(|row| row.owned)
+        .expect("the member's own pause row");
+    assert_eq!(
+        before[pause].receipt.as_deref(),
+        Some("paused"),
+        "{before:?}"
+    );
+    assert!(
+        pause + 1 < before.len(),
+        "the lost attempt's rows: {before:?}"
+    );
+    before[pause].checkpoint_id.clone()
+}
+
+/// Narrow the loss to `mode`, as FU-248's crash matrix does.
+async fn narrow_lost_wake(pool: &sqlx::PgPool, mode: &str) {
+    match mode {
+        "committed" => {
+            let removed = sqlx::query(
+                "DELETE FROM elitea_runtime.agent_graph_checkpoints \
+                 WHERE thread_id LIKE 'p1:%/%' AND pending_nodes LIKE '%\"after\"%'",
+            )
+            .execute(pool)
+            .await
+            .expect("remove the row saved after the call")
+            .rows_affected();
+            assert_eq!(removed, 1, "the member child saved one row after the call");
+        }
+        "undispatched" => {
+            let removed = sqlx::query(
+                "DELETE FROM elitea_runtime.agent_graph_checkpoints WHERE thread_id LIKE 'n1:%'",
+            )
+            .execute(pool)
+            .await
+            .expect("remove the journal")
+            .rows_affected();
+            assert_ne!(removed, 0, "the call's journal existed");
+        }
+        _ => {}
+    }
+}
+
+/// E3: no pause after the decided one; the member ends on its own `settled`
+/// receipt. E2: the decision is acknowledged once, only with that proof from the
+/// member's own rows.
+async fn assert_settled_once(
+    pool: &sqlx::PgPool,
+    ledger: &crate::agents::graph::fanout_test_ledger::TestLedger,
+    key: String,
+    pause_checkpoint: &str,
+    settled: &str,
+) {
+    let after = member_branch_rows(pool).await;
+    let owned = after.iter().filter(|row| row.owned).collect::<Vec<_>>();
+    assert_eq!(
+        owned.len(),
+        2,
+        "the pause and the settlement only: {after:?}"
+    );
+    assert_eq!(owned[0].checkpoint_id, pause_checkpoint, "{after:?}");
+    assert_eq!(owned[1].receipt.as_deref(), Some(settled), "{after:?}");
+    assert_eq!(
+        ledger.acks(),
+        vec![(
+            key,
+            elitea_agent_runtime::graph::fanout::runner::AckResult::Applied {
+                child_checkpoint_id: owned[1].checkpoint_id.clone(),
+            }
+        )],
+        "{after:?}"
+    );
+    assert_eq!(ledger.open_decisions(), 0);
+}
+
+macro_rules! member_wake_case {
+    ($name:ident, $depth:literal, $mode:literal) => {
+        #[tokio::test(flavor = "current_thread")]
+        async fn $name() {
+            let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+                eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-273 proof");
+                return;
+            };
+            let outcome = member_wake_lost_on_the_approved_call(&url, $depth, $mode).await;
+            assert!(
+                outcome.cards.is_empty(),
+                "no card raised again: {:?}",
+                outcome.cards
+            );
+            let second = outcome.second.expect("the member's joined entry");
+            match $mode {
+                // C -> F: the call may have run; never repeated, typed.
+                "started" => {
+                    assert_eq!(outcome.calls, 0, "the approved call is never repeated");
+                    assert_eq!(second["status"], "failed", "{second}");
+                    assert_eq!(second["error"]["code"], MAY_HAVE_STARTED, "{second}");
+                }
+                // I: no Started record; the call runs once.
+                "undispatched" => {
+                    assert_eq!(outcome.calls, 1, "runs once");
+                    assert_eq!(second["status"], "succeeded", "{second}");
+                }
+                // R: the committed result replays; only the next step runs.
+                "committed" => {
+                    assert_eq!(outcome.calls, 0, "replayed, never called again");
+                    assert_eq!(outcome.model_requests, 1, "only the next step");
+                    assert_eq!(second["status"], "succeeded", "{second}");
+                }
+                other => panic!("unknown mode {other}"),
+            }
+        }
+    };
+}
+
+member_wake_case!(
+    postgres_a_member_wake_lost_inside_its_approved_call_never_asks_again,
+    "1",
+    "started"
+);
+member_wake_case!(
+    postgres_two_levels_below_a_member_a_wake_lost_inside_its_approved_call_never_asks_again,
+    "2",
+    "started"
+);
+member_wake_case!(
+    postgres_a_member_wake_lost_before_its_approved_call_runs_it_once,
+    "1",
+    "undispatched"
+);
+member_wake_case!(
+    postgres_two_levels_below_a_member_a_wake_lost_before_its_approved_call_runs_it_once,
+    "2",
+    "undispatched"
+);
+member_wake_case!(
+    postgres_a_member_wake_lost_after_its_approved_call_committed_replays_it,
+    "1",
+    "committed"
+);
+member_wake_case!(
+    postgres_two_levels_below_a_member_a_wake_lost_after_its_approved_call_committed_replays_it,
+    "2",
+    "committed"
+);
+
+/// FU-273 R1: a pipeline the member's pause names with no row left is a
+/// broken state, not progress. The reclaim refuses it typed; it never
+/// re-asks and never calls again.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_member_whose_paused_pipeline_has_no_row_is_refused_typed() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-273 proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let rig = MemberWakeRig {
+        pool: db.pool.clone(),
+        ledger: crate::agents::graph::fanout_test_ledger::TestLedger::new(),
+        depth: "1",
+        committed: false,
+    };
+    let request = mixed_request("continue");
+    let (parking, _) = rig.assembler(
+        1,
+        counting_connector(&Arc::new(AtomicUsize::new(0))),
+        Vec::new(),
+    );
+    let invocation = parking
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| panic!("assemble: {error}"));
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .unwrap_or_else(|error| panic!("the member's card parks the run: {error}"));
+    let key = cards[0]["interrupt_key"].as_str().expect("card key");
+    rig.ledger.decide(key, "approve", None);
+    let wake = member_wake_request(request);
+    rig.lose(&wake).await;
+    lost_attempt_pause(&db.pool).await;
+    let removed = sqlx::query(
+        "DELETE FROM elitea_runtime.agent_graph_checkpoints WHERE thread_id LIKE \
+         (SELECT thread_id FROM elitea_runtime.agent_graph_checkpoints \
+          WHERE metadata LIKE '%branch-receipt.v1%' AND metadata LIKE '%\"status\":\"paused\"%' \
+          LIMIT 1) || '/%'",
+    )
+    .execute(&db.pool)
+    .await
+    .expect("remove the member's paused pipeline rows")
+    .rows_affected();
+    assert_ne!(removed, 0, "the member's pipeline had rows");
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let (reclaim, _) = rig.assembler(3, counting_connector(&tool_calls), Vec::new());
+    let outcome = match recovered(&reclaim, &wake, MEMBER_WAKE_EXECUTION, 3).await {
+        Ok(invocation) => run_collecting(invocation).await.map(|(_, cards)| cards),
+        Err(error) => Err(error),
+    };
+    let error = outcome.expect_err("the broken member state ends the run typed");
+    assert!(error.contains("graph.parallel.corrupt_receipt"), "{error}");
+    assert_eq!(tool_calls.load(Ordering::Acquire), 0, "never called again");
+    assert_eq!(
+        rig.ledger.open_decisions(),
+        1,
+        "the decision is not consumed"
+    );
+    db.pool.close().await;
 }

@@ -248,8 +248,7 @@ All against real PostgreSQL, except the pinned-identity test, which is a unit te
   - The outcome is R or C, or at minimum the registered terminal.
 - **Raised by the orchestrator, not this change:** migration 0206's upgrade from a current-platform database, and #1501
   counting only node-used toolkits as a pipeline root's grants.
-- **FU-264:** an effectful direct node in a saved child two levels below a fan-out member. The inner child's threads
-  belong to the member branch family, and the lent root journals refuse them typed, so the call never runs twice but
-  does not run yet.
+- **FU-264 (done):** an effectful direct node in a saved child two levels below a fan-out member now runs behind the
+  member branch family's journals ([mapping](member-child-depth2-journals-20261102.md)).
 - Code nodes in saved children keep their pre-existing refusal ("Scoped Code requires its current fenced node writer").
   That is outside this change.
