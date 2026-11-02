@@ -86,7 +86,7 @@ You can also add `*.cognitiveservices.azure.com`. When the host is not on the al
 
 Set at least one of `categories`, `blocklists` and `prompt_shields`. The admin form has an **Add a cloud classifier detector** section that writes this object for you.
 
-On the input stage, Prompt Shields reads the content as the user prompt. On the output stage, it reads the content as a document, which is the shape for indirect attacks.
+Prompt Shields reads the user messages of the input stage as the user prompt. It reads the tool results of the input stage, and the answer on the output stage, as documents. This is document attack detection, the check for indirect attacks. A detector in the prompt-injection slot reads tool results only, so it always sends documents.
 
 ## Labels
 
@@ -103,11 +103,11 @@ Azure returns no position for these results. A finding therefore covers all of t
 
 ## Long content
 
-Azure accepts at most 10000 characters (Unicode code points) for each call. The gateway splits longer content into parts of 10000 characters and sends one call for each part. A finding then covers its part. Content longer than 80000 characters is a detector failure, and the fail mode applies. An input entry reads all the messages of a request, so a long conversation can reach this limit. Use a `regex` or `secrets` detector for very long content.
+Azure accepts at most 10000 characters for each call. The gateway puts the messages into units of at most 10000 characters and sends one call for each unit. A finding covers its unit. A long conversation is not a detector failure: the detector reads the 16 newest units and records the label `partial_coverage`. See [How a detector reads the content](/admin/enterprise-controls/content-controls#how-a-detector-reads-the-content).
 
 ## Latency and cost
 
-Each call is one round trip to Azure. With categories and Prompt Shields, the gateway makes two calls for each part, one after the other. Set `timeout_ms` for the full entry with this in mind. On a streamed answer, an output entry with a `block` or `mask` action calls Azure for each window of text. A `flag` entry calls Azure one time when the stream ends.
+Each call is one round trip to Azure. With categories and Prompt Shields, the gateway makes two calls for each unit, at the same time. The calls of different units also run at the same time, at most 4 units at a time. All calls share the `timeout_ms` of the entry. On a streamed answer, an output entry with a `block` or `mask` action calls Azure for each window of text. A `flag` entry calls Azure one time when the stream ends.
 
 Azure bills each call by the number of text records. See [Azure AI Content Safety pricing](https://azure.microsoft.com/pricing/details/cognitive-services/content-safety/).
 

@@ -98,6 +98,15 @@ type presidioResult struct {
 	Score      *float64 `json:"score"`
 }
 
+// presidioMaxChars is the text of one /analyze call. Presidio has no hard
+// limit below the spaCy max_length (1 000 000 characters), but its time
+// grows with the text and the row timeout bounds the call. The pipeline
+// sends units of at most this size (units.go). A PII entity that crosses the
+// border of two units of one long part can be missed.
+const presidioMaxChars = 100000
+
+func (d *presidioDetector) textLimit() int { return presidioMaxChars }
+
 func (d *presidioDetector) detect(ctx context.Context, env Env, _ string, content string) ([]Finding, error) {
 	body := presidioRequest{Text: content, Language: d.language, Entities: d.entities}
 	if d.minScore > 0 {

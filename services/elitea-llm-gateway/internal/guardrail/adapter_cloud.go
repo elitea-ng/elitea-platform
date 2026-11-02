@@ -10,7 +10,8 @@ package guardrail
 //
 //   - The call is EGRESS. The endpoint host must be on the gateway's egress
 //     allowlist. Env.HTTPClient never follows a redirect.
-//   - The response body is bounded (maxAdapterResponseBytes).
+//   - The response body is bounded (maxAdapterResponseBytes). egressPost
+//     (adapter_post.go) sends every call.
 //   - The row timeout bounds the call. A failure is an error, and the row's
 //     fail mode applies.
 //   - An error message names the failure. It never contains the content, a
@@ -19,23 +20,16 @@ package guardrail
 //     span, or Whole when the vendor returns no location.
 //
 // A vendor result that reports a prompt attack or a jailbreak always has the
-// label LabelPromptInjection.
+// label SlotPromptInjection ("prompt_injection", slot.go).
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 )
-
-// LabelPromptInjection is the label of a cloud adapter finding that reports a
-// prompt attack or a jailbreak.
-const LabelPromptInjection = "prompt_injection"
 
 // maxLocateMatch bounds the vendor match text that locateAll searches for.
 const maxLocateMatch = 4096
@@ -82,47 +76,6 @@ func resolveSecret(ctx context.Context, env Env, field, ref string) (string, err
 		return "", fmt.Errorf("%w: %s does not resolve", errAdapter, field)
 	}
 	return value, nil
-}
-
-// cloudPost sends one JSON POST to target and returns the body of a 200
-// answer. prepare adds the auth headers (and, for SigV4, signs the request).
-func cloudPost(ctx context.Context, env Env, target string, body []byte, prepare func(*http.Request) error) ([]byte, error) {
-	if env.HTTPClient == nil || env.EgressAllows == nil || !env.EgressAllows(target) {
-		return nil, fmt.Errorf("%w: the adapter host is not on the egress allowlist", errAdapter)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("%w: build request", errAdapter)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if prepare != nil {
-		if err := prepare(req); err != nil {
-			return nil, err
-		}
-	}
-	resp, err := env.HTTPClient.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("%w: timeout", errAdapter)
-		}
-		return nil, fmt.Errorf("%w: request failed", errAdapter)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		// The vendor error body is not read into the message: it can quote
-		// the request.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAdapterResponseBytes))
-		return nil, fmt.Errorf("%w: status %d", errAdapter, resp.StatusCode)
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAdapterResponseBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("%w: read response", errAdapter)
-	}
-	if len(raw) > maxAdapterResponseBytes {
-		return nil, fmt.Errorf("%w: response is larger than %d bytes", errAdapter, maxAdapterResponseBytes)
-	}
-	return raw, nil
 }
 
 // locateAll returns the byte spans of every occurrence of match in content.
@@ -185,24 +138,6 @@ func vendorLabel(prefix, name, fallback string) string {
 		return fallback
 	}
 	return label
-}
-
-// codePointChunks splits content into parts of at most limit Unicode code
-// points. A part never splits a character.
-func codePointChunks(content string, limit int) []bound {
-	if content == "" {
-		return []bound{{0, 0}}
-	}
-	var out []bound
-	start, count := 0, 0
-	for i := range content {
-		if count == limit {
-			out = append(out, bound{start: start, end: i})
-			start, count = i, 0
-		}
-		count++
-	}
-	return append(out, bound{start: start, end: len(content)})
 }
 
 // codePointSpan converts a half-open range of Unicode code points to byte

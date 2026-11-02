@@ -20,7 +20,9 @@ package guardrail
 //   - auth_mode "key" (default): credentials_secret is a {{secret.NAME}}
 //     reference to a Google service-account key document. The token exchange
 //     uses the same client as the call. The token_uri host of the document
-//     must be on the egress allowlist too.
+//     must be on the egress allowlist at the time of EACH exchange. The
+//     adapter caches the tokens, not the token sources, in a bounded LRU
+//     cache (keyToken).
 //   - auth_mode "workload_identity": the gateway's own Google identity (GKE
 //     Workload Identity through Application Default Credentials), the
 //     keyless mode that Vertex AI platform credentials use
@@ -34,7 +36,7 @@ package guardrail
 //
 //   - rai: one finding per matched type. sexually_explicit is "sexual",
 //     hate_speech is "hate", harassment and dangerous keep their name.
-//   - pi_and_jailbreak: LabelPromptInjection.
+//   - pi_and_jailbreak: SlotPromptInjection.
 //   - sdp: inspect findings are "pii:<info type>" (for example
 //     pii:email_address) with a byte span. The adapter reads byteRange (UTF-8
 //     bytes, the encoding of the request) and falls back to codepointRange.
@@ -49,6 +51,7 @@ package guardrail
 // SUCCESS is an error, so a partial check never passes as clean.
 
 import (
+	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -62,6 +65,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -76,8 +80,10 @@ const (
 	modelArmorDefaultTokenURI = "https://oauth2.googleapis.com/token"
 	modelArmorAuthKey         = "key"
 	modelArmorAuthKeyless     = "workload_identity"
-	// modelArmorMaxSources bounds the cached token sources of one detector.
-	modelArmorMaxSources = 4
+	// modelArmorMaxTokens bounds the cached tokens of one detector (LRU).
+	modelArmorMaxTokens = 64
+	// modelArmorTokenMargin is the validity a cached token must still have.
+	modelArmorTokenMargin = time.Minute
 )
 
 // modelArmorTemplate is the shape of a template resource name. The location
@@ -100,8 +106,7 @@ type ModelArmorConfig struct {
 type modelArmorDetector struct {
 	cfg ModelArmorConfig
 
-	mu      sync.Mutex
-	sources map[string]oauth2.TokenSource
+	tokens *tokenCache
 }
 
 func newModelArmorDetector(obj map[string]any) (detectorImpl, error) {
@@ -139,7 +144,7 @@ func newModelArmorDetector(obj map[string]any) (detectorImpl, error) {
 	default:
 		return nil, fmt.Errorf("auth_mode must be %q or %q", modelArmorAuthKey, modelArmorAuthKeyless)
 	}
-	return &modelArmorDetector{cfg: cfg, sources: map[string]oauth2.TokenSource{}}, nil
+	return &modelArmorDetector{cfg: cfg, tokens: newTokenCache(modelArmorMaxTokens)}, nil
 }
 
 // ModelArmorDataItem is the DataItem of a sanitize request.
@@ -254,6 +259,15 @@ var modelArmorRAILabels = map[string]string{
 	"dangerous":         "dangerous",
 }
 
+// modelArmorMaxChars is the text of one sanitize call. The Model Armor
+// filters read at most 65 536 tokens (Sensitive Data Protection: 0.5 MB),
+// and skip the filter when the text is longer. 32 000 characters stay below
+// that limit also at two tokens per character. The pipeline sends units of
+// at most this size (units.go).
+const modelArmorMaxChars = 32000
+
+func (d *modelArmorDetector) textLimit() int { return modelArmorMaxChars }
+
 func (d *modelArmorDetector) detect(ctx context.Context, env Env, stage, content string) ([]Finding, error) {
 	req := ModelArmorRequest{UserPromptData: &ModelArmorDataItem{Text: content}}
 	method := "sanitizeUserPrompt"
@@ -275,7 +289,7 @@ func (d *modelArmorDetector) detect(ctx context.Context, env Env, stage, content
 	if err != nil {
 		return nil, err
 	}
-	raw, err := cloudPost(ctx, env, target, body, func(r *http.Request) error {
+	raw, err := egressPost(ctx, env, target, body, func(r *http.Request) error {
 		r.Header.Set("Authorization", "Bearer "+token)
 		return nil
 	})
@@ -331,7 +345,7 @@ func modelArmorFindings(resp *ModelArmorResponse, content string) []Finding {
 			}
 		}
 		if r := fr.PIAndJailbreakFilterResult; r.matched() {
-			out = append(out, Finding{Whole: true, Label: LabelPromptInjection, Score: modelArmorConfidence(r.ConfidenceLevel)})
+			out = append(out, Finding{Whole: true, Label: SlotPromptInjection, Score: modelArmorConfidence(r.ConfidenceLevel)})
 		}
 		if r := fr.SDPFilterResult; r != nil {
 			if in := r.InspectResult; in != nil {
@@ -419,62 +433,106 @@ func (d *modelArmorDetector) token(ctx context.Context, env Env) (string, error)
 	if err != nil {
 		return "", err
 	}
-	src, err := d.keySource(env, doc)
-	if err != nil {
-		return "", err
-	}
-	return awaitToken(ctx, src)
+	return d.keyToken(ctx, env, doc)
 }
 
-// keySource returns the cached token source of a key document, or builds
-// one. The cache key is the hash of the document, so a rotated key gets a
-// new source. The token exchange uses env.HTTPClient.
-func (d *modelArmorDetector) keySource(env Env, doc string) (oauth2.TokenSource, error) {
+// keyToken returns an access token for a key document. A cached token that
+// is valid for at least modelArmorTokenMargin is used as it is. Otherwise
+// the adapter makes a token exchange with THIS request's env: the token_uri
+// must be on the egress allowlist at the time of each exchange, and the
+// exchange uses env.HTTPClient. The exchanges of one key are serialised, so
+// parallel unit calls make one exchange.
+func (d *modelArmorDetector) keyToken(ctx context.Context, env Env, doc string) (string, error) {
 	sum := sha256.Sum256([]byte(doc))
-	key := hex.EncodeToString(sum[:])
-	d.mu.Lock()
-	src, ok := d.sources[key]
-	d.mu.Unlock()
-	if ok {
-		return src, nil
+	entry := d.tokens.entry(hex.EncodeToString(sum[:]))
+	select {
+	case entry.lock <- struct{}{}:
+	case <-ctx.Done():
+		return "", fmt.Errorf("%w: timeout", errAdapter)
+	}
+	defer func() { <-entry.lock }()
+	if tok := entry.tok; tok != nil && time.Until(tok.Expiry) > modelArmorTokenMargin {
+		return tok.AccessToken, nil
 	}
 	var meta serviceAccountDoc
 	if err := json.Unmarshal([]byte(doc), &meta); err != nil || meta.Type != "service_account" {
 		// The parse error is not returned: it can quote the private key.
-		return nil, fmt.Errorf("%w: credentials_secret is not a Google service-account key document", errAdapter)
+		return "", fmt.Errorf("%w: credentials_secret is not a Google service-account key document", errAdapter)
 	}
 	tokenURI := strings.TrimSpace(meta.TokenURI)
 	if tokenURI == "" {
 		tokenURI = modelArmorDefaultTokenURI
 	}
 	if u, err := url.Parse(tokenURI); err != nil || u.Scheme != "https" || u.Host == "" {
-		return nil, fmt.Errorf("%w: the token_uri of credentials_secret is not an https URL", errAdapter)
+		return "", fmt.Errorf("%w: the token_uri of credentials_secret is not an https URL", errAdapter)
 	}
 	if env.HTTPClient == nil || env.EgressAllows == nil || !env.EgressAllows(tokenURI) {
-		return nil, fmt.Errorf("%w: the token_uri host is not on the egress allowlist", errAdapter)
+		return "", fmt.Errorf("%w: the token_uri host is not on the egress allowlist", errAdapter)
 	}
-	// The source outlives this request, so it is built with a background
-	// context that carries only the HTTP client.
-	authCtx := context.WithValue(context.Background(), oauth2.HTTPClient, env.HTTPClient)
-	creds, err := google.CredentialsFromJSONWithType(authCtx, []byte(doc), google.ServiceAccount, modelArmorScope)
+	conf, err := google.JWTConfigFromJSON([]byte(doc), modelArmorScope)
 	if err != nil {
-		return nil, fmt.Errorf("%w: credentials_secret could not be loaded", errAdapter)
+		return "", fmt.Errorf("%w: credentials_secret could not be loaded", errAdapter)
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if existing, ok := d.sources[key]; ok {
-		return existing, nil
+	conf.TokenURL = tokenURI
+	// The source lives for this exchange only. Its context carries only the
+	// HTTP client of this request.
+	authCtx := context.WithValue(context.Background(), oauth2.HTTPClient, env.HTTPClient)
+	tok, err := awaitToken(ctx, conf.TokenSource(authCtx))
+	if err != nil {
+		return "", err
 	}
-	if len(d.sources) < modelArmorMaxSources {
-		d.sources[key] = creds.TokenSource
+	entry.tok = tok
+	return tok.AccessToken, nil
+}
+
+// tokenEntry is the cached token of one key document. lock is a mutex that
+// a waiter can leave when its context ends.
+type tokenEntry struct {
+	lock chan struct{}
+	tok  *oauth2.Token
+}
+
+// tokenCache is a bounded LRU cache of token entries, keyed by the hash of a
+// key document. A rotated key gets a new entry; the least recently used
+// entry goes when the cache is full.
+type tokenCache struct {
+	mu    sync.Mutex
+	limit int
+	order *list.List // front: most recently used; values are cacheItem
+	items map[string]*list.Element
+}
+
+type cacheItem struct {
+	key   string
+	entry *tokenEntry
+}
+
+func newTokenCache(limit int) *tokenCache {
+	return &tokenCache{limit: limit, order: list.New(), items: map[string]*list.Element{}}
+}
+
+// entry returns the entry of key, and creates it when it is not cached.
+func (c *tokenCache) entry(key string) *tokenEntry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if el, ok := c.items[key]; ok {
+		c.order.MoveToFront(el)
+		return el.Value.(cacheItem).entry
 	}
-	return creds.TokenSource, nil
+	e := &tokenEntry{lock: make(chan struct{}, 1)}
+	c.items[key] = c.order.PushFront(cacheItem{key: key, entry: e})
+	for c.order.Len() > c.limit {
+		last := c.order.Back()
+		c.order.Remove(last)
+		delete(c.items, last.Value.(cacheItem).key)
+	}
+	return e
 }
 
 // awaitToken reads one token and gives up when ctx ends. An oauth2 token
 // source takes no context, so the read runs in a goroutine; the client's own
 // timeout bounds that goroutine.
-func awaitToken(ctx context.Context, src oauth2.TokenSource) (string, error) {
+func awaitToken(ctx context.Context, src oauth2.TokenSource) (*oauth2.Token, error) {
 	type result struct {
 		tok *oauth2.Token
 		err error
@@ -487,10 +545,10 @@ func awaitToken(ctx context.Context, src oauth2.TokenSource) (string, error) {
 	select {
 	case r := <-done:
 		if r.err != nil || r.tok == nil || r.tok.AccessToken == "" {
-			return "", fmt.Errorf("%w: the service-account token exchange failed", errAdapter)
+			return nil, fmt.Errorf("%w: the service-account token exchange failed", errAdapter)
 		}
-		return r.tok.AccessToken, nil
+		return r.tok, nil
 	case <-ctx.Done():
-		return "", fmt.Errorf("%w: timeout", errAdapter)
+		return nil, fmt.Errorf("%w: timeout", errAdapter)
 	}
 }

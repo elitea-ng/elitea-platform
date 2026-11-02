@@ -59,7 +59,7 @@ func TestPostgresGuardrailVerdictsInsertAndPrune(t *testing.T) {
 			{Stage: "input", Row: "adapter", Detector: "http", DetectorType: "http", Action: "flag",
 				Outcome: "error_open", FailMode: "open", Labels: []string{"detector_error"}, LatencyMS: 50, Runs: 1},
 			{Stage: "input", Row: "cloud", Detector: "azure", DetectorType: guardrail.TypeAzureContentSafety, Action: "block",
-				Outcome: "blocked", FailMode: "closed", Labels: []string{guardrail.LabelPromptInjection}, Findings: 1, LatencyMS: 80, Runs: 1},
+				Outcome: "blocked", FailMode: "closed", Labels: []string{guardrail.SlotPromptInjection}, Findings: 1, LatencyMS: 80, Runs: 1},
 		},
 	}}
 	if err := store.writeVerdicts(ctx, records); err != nil {

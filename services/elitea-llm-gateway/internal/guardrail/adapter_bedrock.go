@@ -23,7 +23,7 @@ package guardrail
 // Mapping of the assessments to findings:
 //
 //   - contentPolicy filters: HATE, INSULTS, SEXUAL, VIOLENCE, MISCONDUCT have
-//     the lower-case type as label; PROMPT_ATTACK has LabelPromptInjection.
+//     the lower-case type as label; PROMPT_ATTACK has SlotPromptInjection.
 //     Score from the confidence: NONE 0, LOW 0.33, MEDIUM 0.66, HIGH 1.
 //   - topicPolicy topics: label "denied_topic", score 1.
 //   - wordPolicy: custom words "blocked_word", managed lists "profanity",
@@ -202,6 +202,14 @@ func (d *bedrockDetector) target() string {
 		"/version/" + d.cfg.GuardrailVersion + "/apply"
 }
 
+// bedrockMaxChars is the text of one ApplyGuardrail call: 25 text units of
+// 1 000 characters. ApplyGuardrail has a quota in text units per second, and
+// 25 is the lowest default of that quota, so one call never exceeds it. The
+// pipeline sends units of at most this size (units.go).
+const bedrockMaxChars = 25000
+
+func (d *bedrockDetector) textLimit() int { return bedrockMaxChars }
+
 func (d *bedrockDetector) detect(ctx context.Context, env Env, stage, content string) ([]Finding, error) {
 	source := "INPUT"
 	if stage == StageOutput {
@@ -235,7 +243,7 @@ func (d *bedrockDetector) detect(ctx context.Context, env Env, stage, content st
 		}
 		return nil
 	}
-	raw, err := cloudPost(ctx, env, d.target(), body, sign)
+	raw, err := egressPost(ctx, env, d.target(), body, sign)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +268,7 @@ func bedrockFindings(resp *BedrockApplyResponse, content string) []Finding {
 				}
 				label := vendorLabel("", f.Type, "content_filter")
 				if f.Type == "PROMPT_ATTACK" {
-					label = LabelPromptInjection
+					label = SlotPromptInjection
 				}
 				out = append(out, Finding{Whole: true, Label: label, Score: bedrockConfidence(f.Confidence)})
 			}

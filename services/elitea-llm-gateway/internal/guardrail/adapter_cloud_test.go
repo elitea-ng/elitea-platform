@@ -37,21 +37,6 @@ func cloudPipeline(t *testing.T, stage string, env Env, detector map[string]any)
 	return &Pipeline{Stage: stage, Rows: []*Row{row}, Env: env, Collector: col}, col
 }
 
-func TestCodePointChunks(t *testing.T) {
-	content := strings.Repeat("é", 5) + "ab"
-	parts := codePointChunks(content, 3)
-	if len(parts) != 3 {
-		t.Fatalf("parts = %v", parts)
-	}
-	got := []string{content[parts[0].start:parts[0].end], content[parts[1].start:parts[1].end], content[parts[2].start:parts[2].end]}
-	if got[0] != "ééé" || got[1] != "ééa" || got[2] != "b" {
-		t.Fatalf("parts = %q", got)
-	}
-	if p := codePointChunks("", 3); len(p) != 1 || p[0] != (bound{}) {
-		t.Fatalf("empty content parts = %v", p)
-	}
-}
-
 func TestCodePointAndByteSpans(t *testing.T) {
 	content := "héllo Alice"
 	if b, ok := codePointSpan(content, 6, 11); !ok || content[b.start:b.end] != "Alice" {

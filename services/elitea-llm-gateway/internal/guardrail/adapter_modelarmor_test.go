@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -26,6 +28,7 @@ type modelArmorMock struct {
 	response    string
 	status      int
 	tokenStatus int
+	expiresIn   int // seconds; 0 means 3600
 }
 
 func (m *modelArmorMock) handler(t *testing.T) http.HandlerFunc {
@@ -43,7 +46,11 @@ func (m *modelArmorMock) handler(t *testing.T) http.HandlerFunc {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"access_token":"sa-token","token_type":"Bearer","expires_in":3600}`))
+			expires := m.expiresIn
+			if expires == 0 {
+				expires = 3600
+			}
+			_, _ = fmt.Fprintf(w, `{"access_token":"sa-token","token_type":"Bearer","expires_in":%d}`, expires)
 			return
 		}
 		m.paths = append(m.paths, r.URL.Path)
@@ -146,7 +153,7 @@ func TestModelArmorKeyModeMapsFilterResults(t *testing.T) {
 	for _, f := range found {
 		byLabel[f.Label] = f
 	}
-	if f := byLabel[LabelPromptInjection]; !f.Whole || f.Score != 1 {
+	if f := byLabel[SlotPromptInjection]; !f.Whole || f.Score != 1 {
 		t.Errorf("prompt injection: %+v", f)
 	}
 	if f := byLabel["hate"]; !f.Whole || f.Score != 0.66 {
@@ -298,5 +305,74 @@ func TestModelArmorDefaultEndpointAndBadConfig(t *testing.T) {
 		if _, err := newModelArmorDetector(o); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// TestModelArmorChecksEgressOnEveryTokenExchange: a token exchange after the
+// token_uri host left the egress allowlist fails. No cached token source
+// keeps the first request's egress decision.
+func TestModelArmorChecksEgressOnEveryTokenExchange(t *testing.T) {
+	// A token valid for 30 s is below the cache margin: each call exchanges.
+	m := &modelArmorMock{response: modelArmorMatch, expiresIn: 30}
+	srv := cloudServer(t, m.handler(t))
+	env := modelArmorEnv(t, srv)
+	d, err := newModelArmorDetector(modelArmorObj(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.detect(context.Background(), env, StageInput, "x"); err != nil || m.tokenCalls != 1 {
+		t.Fatalf("first call: %v, token exchanges %d", err, m.tokenCalls)
+	}
+	allowed := env.EgressAllows
+	env.EgressAllows = func(u string) bool { return allowed(u) && !strings.HasSuffix(u, "/token") }
+	if _, err := d.detect(context.Background(), env, StageInput, "x"); err == nil || !strings.Contains(err.Error(), "token_uri") {
+		t.Fatalf("an exchange ran with the token host off the allowlist: %v", err)
+	}
+	if m.tokenCalls != 1 {
+		t.Fatalf("token exchanges = %d, want 1", m.tokenCalls)
+	}
+}
+
+// TestModelArmorCachesTokensOfManyKeys: a valid token is reused, also with
+// more keys than the old cache of four sources held.
+func TestModelArmorCachesTokensOfManyKeys(t *testing.T) {
+	m := &modelArmorMock{response: modelArmorMatch}
+	srv := cloudServer(t, m.handler(t))
+	env := modelArmorEnv(t, srv)
+	docs := make([]string, 6)
+	for i := range docs {
+		docs[i] = serviceAccountKey(t, srv.URL+"/token")
+	}
+	var current string
+	env.ResolveSecret = func(context.Context, string) (string, error) { return current, nil }
+	d, err := newModelArmorDetector(modelArmorObj(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for round := 0; round < 2; round++ {
+		for _, doc := range docs {
+			current = doc
+			if _, err := d.detect(context.Background(), env, StageInput, "x"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if m.tokenCalls != len(docs) {
+		t.Fatalf("token exchanges = %d, want %d", m.tokenCalls, len(docs))
+	}
+}
+
+func TestTokenCacheEvictsLeastRecentlyUsed(t *testing.T) {
+	c := newTokenCache(2)
+	a, b := c.entry("a"), c.entry("b")
+	if c.entry("a") != a {
+		t.Fatal("a cached entry was not reused")
+	}
+	c.entry("c") // b is the least recently used
+	if c.entry("a") != a || c.order.Len() != 2 {
+		t.Fatal("the recently used entry was evicted")
+	}
+	if c.entry("b") == b {
+		t.Fatal("the least recently used entry was kept")
 	}
 }

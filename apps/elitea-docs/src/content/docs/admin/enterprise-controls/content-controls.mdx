@@ -22,7 +22,7 @@ An entry has these settings:
 | Scope | Projects, providers and models, as in the other governance entries. Agents of one project (`scope.agent_ids`), with exactly one project in `scope.project_ids`. Users are not permitted. | Every request |
 | `stage` | `input`: the request, before the provider call. `output`: the answer, streamed or not. | — (required) |
 | `detectors` | An ordered list of 1 to 16 detectors. Each detector has a `type` (`regex`, `secrets`, `http`, `azure_content_safety`, `bedrock_guardrails`, `model_armor`, `llama_guard` or `presidio`) and an `action` (`block`, `mask` or `flag`). On an input entry, `content: tool_results` makes a detector read the tool results only. | — (required) |
-| `timeout_ms` | 50 to 30000. The time limit for all detectors of the entry on one content. | 2000 |
+| `timeout_ms` | 50 to 30000. The time limit for all detectors of the entry on one check. All the calls of the entry share this one limit. | 2000 |
 | `fail_mode` | `closed`: a detector failure or a timeout refuses the request. `open`: the request continues and the verdict records the failure. | `closed` when a detector blocks or masks; `open` when all detectors flag |
 | `apply_to_embeddings` | `true` applies an input entry to embedding requests too. | `false` |
 | `stream_window_bytes` | 64 to 8192. The look-behind buffer of a streamed answer for an output entry. | 256 |
@@ -33,7 +33,7 @@ Put the settings in the `guardrail` object of the entry data, as in the example 
 
 The gateway applies the entries as follows:
 
-1. **Every matching entry runs.** The narrowest entry does not replace the wider ones. The entries run from the widest scope to the narrowest, and then by name. The detectors of an entry run in their order.
+1. **Every matching entry runs.** The narrowest entry does not replace the wider ones. The entries run from the widest scope to the narrowest, and then by name. The detectors of an entry run in their order. A block in an entry stops the check before a later entry sends content to its classifier.
 2. **Every detector reads the original content.** The gateway collects the spans of all `mask` detectors and replaces them one time, with `[REDACTED:<label>]`.
 3. **A `block` result stops the check** and refuses the request or the answer. A `flag` result changes nothing and adds a verdict.
 4. **The input stage runs before the provider call.** It reads the message text, the Responses instructions and the tool results in all formats: a chat `tool` message, a Responses `function_call_output` (text or content parts), a shell call output, and an Anthropic `tool_result`. A blocked request does not reach the provider. A masked request goes to the provider with the markers.
@@ -62,6 +62,26 @@ The error message names the entry, the detector and the labels. It never contain
   A cloud classifier result that reports a prompt attack or a jailbreak has the label `prompt_injection`. Credentials are `{{secret.NAME}}` references, and each call goes through the egress allowlist, as for the `http` detector.
 - **`llama_guard`** sends the content to a self-hosted Llama Guard 3 or 4 model. See [Llama Guard adapter](/admin/enterprise-controls/guardrail-adapters/llama-guard).
 - **`presidio`** sends the content to a self-hosted Presidio Analyzer and masks the personal data it finds. See [Presidio adapter](/admin/enterprise-controls/guardrail-adapters/presidio).
+
+#### How a detector reads the content
+
+The gateway sends the content to a detector in calls. The size of one call depends on the detector:
+
+- **`regex` and `http`** read all the messages and tool results of the check in one call, joined by blank lines. So an `http` detector makes one call for each check.
+- **`secrets`** reads each message and each tool result alone. A match never crosses from one message to the next.
+- **The cloud and self-hosted classifiers** have a size limit for one call. The gateway puts whole messages together into units up to that limit. A unit never mixes tool results with other messages. A message that is longer than the limit goes into two or more units, cut at a space when one is near. A finding without a position covers its unit, not all of the request.
+
+| Detector | Limit for one call |
+| --- | --- |
+| `azure_content_safety` | 10000 characters |
+| `bedrock_guardrails` | 25000 characters |
+| `model_armor` | 32000 characters |
+| `llama_guard` | 16000 characters |
+| `presidio` | 100000 characters |
+
+The gateway counts characters as UTF-16 code units. A character outside the Basic Multilingual Plane, for example an emoji, counts as two.
+
+A classifier makes at most 16 calls for one check, and at most 4 calls at the same time. All the calls share the `timeout_ms` of the entry. When a check needs more than 16 units, the classifier reads the 16 newest units, which are the end of the conversation. The verdict then has the label `partial_coverage`. A long conversation is thus not a detector failure. In a normal conversation, an earlier request sent the older messages as its newest messages, and the classifier read them then. A client can send a history that it wrote itself. Use a `regex` or `secrets` detector when every character of a long request must be read.
 
 A detector of an input entry can read the tool results only (`content: tool_results`), and it can fill the prompt-injection slot (`slot: prompt_injection`). See [Prompt-injection slot](/admin/enterprise-controls/guardrail-adapters/prompt-injection).
 

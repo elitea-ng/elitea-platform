@@ -38,7 +38,7 @@ The gateway sends an OAuth access token with the `cloud-platform` scope. Select 
 2. Create a secret in the public project, for example `MODEL_ARMOR_SA`, with the full JSON document as its value.
 3. Set `credentials_secret` to `{{secret.MODEL_ARMOR_SA}}`.
 
-The gateway exchanges the key for a token at the `token_uri` of the document (`https://oauth2.googleapis.com/token` by default) and keeps the token until it expires. The token exchange is outbound traffic too, so the token host must be on the egress allowlist.
+The gateway exchanges the key for a token at the `token_uri` of the document (`https://oauth2.googleapis.com/token` by default). It keeps the token until one minute before it expires. The token exchange is outbound traffic too, so the token host must be on the egress allowlist. The gateway checks the allowlist at each token exchange. When you remove the token host from the allowlist, the next token exchange fails.
 
 ### Keyless (`auth_mode: workload_identity`)
 
@@ -109,7 +109,9 @@ When Model Armor reports an `invocationResult` other than `SUCCESS`, for example
 
 ## Latency and cost
 
-Each check is one round trip to Model Armor, plus one token exchange when the cached token expires. On a streamed answer, an output entry with a `block` or `mask` action calls Model Armor for each window of text. A `flag` entry calls it one time when the stream ends. Google bills Model Armor by the volume of tokens checked. See [Model Armor pricing](https://cloud.google.com/security-command-center/pricing#model-armor-pricing).
+Each call reads at most 32000 characters. The Model Armor filters read at most 65536 tokens, and skip a longer text. The gateway puts the messages into units of 32000 characters, and sends one call for each unit. See [How a detector reads the content](/admin/enterprise-controls/content-controls#how-a-detector-reads-the-content).
+
+Each call is one round trip to Model Armor, plus one token exchange when the cached token expires. On a streamed answer, an output entry with a `block` or `mask` action calls Model Armor for each window of text. A `flag` entry calls it one time when the stream ends. Google bills Model Armor by the volume of tokens checked. See [Model Armor pricing](https://cloud.google.com/security-command-center/pricing#model-armor-pricing).
 
 ## Fail mode
 

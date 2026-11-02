@@ -149,6 +149,15 @@ func llamaGuardMessages(stage, content string) []llamaGuardMessage {
 	return []llamaGuardMessage{{Role: "user", Content: content}}
 }
 
+// llamaGuardMaxChars is the text of one call. The context window is the one
+// of the served model and its server setting (vLLM max_model_len, llama.cpp
+// --ctx-size). 16 000 characters (about 4 000 to 5 000 tokens of English
+// text, plus the template) fit a server with an 8 192 token context. The
+// pipeline sends units of at most this size (units.go).
+const llamaGuardMaxChars = 16000
+
+func (d *llamaGuardDetector) textLimit() int { return llamaGuardMaxChars }
+
 func (d *llamaGuardDetector) detect(ctx context.Context, env Env, stage, content string) ([]Finding, error) {
 	raw, err := d.ep.post(ctx, env, llamaGuardRequest{
 		Model: d.model, Messages: llamaGuardMessages(stage, content),

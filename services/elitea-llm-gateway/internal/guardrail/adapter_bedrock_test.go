@@ -100,7 +100,7 @@ func TestBedrockApplyGuardrailMapsAssessments(t *testing.T) {
 		t.Fatalf("labels = %s, want %s", got, want)
 	}
 	// Whole findings mask everything; check the spans on a flag row instead.
-	if out != MaskMarker(LabelPromptInjection) {
+	if out != MaskMarker(SlotPromptInjection) {
 		t.Fatalf("masked = %q", out)
 	}
 	if len(m.reqs) != 1 || m.reqs[0].Source != "OUTPUT" || m.reqs[0].Content[0].Text.Text != content {
@@ -134,7 +134,7 @@ func TestBedrockSpansFromMatchText(t *testing.T) {
 			t.Errorf("%s: finding %+v", label, f)
 		}
 	}
-	if f := byLabel[LabelPromptInjection]; !f.Whole || f.Score != 1 {
+	if f := byLabel[SlotPromptInjection]; !f.Whole || f.Score != 1 {
 		t.Errorf("prompt attack: %+v", f)
 	}
 	if f := byLabel["insults"]; f.Score != 0.66 {

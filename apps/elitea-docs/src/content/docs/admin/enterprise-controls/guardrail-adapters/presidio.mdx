@@ -94,7 +94,7 @@ A `presidio` detector cannot fill the [prompt-injection slot](/admin/enterprise-
 
 ## Latency
 
-Presidio runs on a CPU. A call takes approximately 10 to 50 ms for 1000 characters with the default recognizers. The time increases with the text length and with the number of recognizers.
+Presidio runs on a CPU. A call takes approximately 10 to 50 ms for 1000 characters with the default recognizers. The time increases with the text length and with the number of recognizers. Each call reads at most 100000 characters. The gateway puts the messages into units of that size, and sends one call for each unit. See [How a detector reads the content](/admin/enterprise-controls/content-controls#how-a-detector-reads-the-content).
 
 On a streamed answer, a `mask` detector runs on each window of `stream_window_bytes`. Each window is one call. A mask entry also delays the stream by the window. See [Streamed answers](/admin/enterprise-controls/content-controls#streamed-answers).
 
@@ -107,4 +107,5 @@ On a streamed answer, a `mask` detector runs on each window of `stream_window_by
 ## Limitations
 
 - Presidio finds entities with patterns and a named-entity model. It can miss an entity, and it can find an entity that is not personal data. Test it on your own text before you use `block`.
+- A message longer than 100000 characters goes into two or more units. An entity across the cut between two units can be missed.
 - The `score_threshold` of the service and the `min_score` of the gateway have the same value. The gateway applies it again, so a service that ignores the threshold gets the same result.

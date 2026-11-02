@@ -51,8 +51,7 @@ func responsesToolResultTexts(req *schemas.BifrostResponsesRequest) []*string {
 	return out
 }
 
-// checkInputScoped runs the input stage when a detector reads tool results
-// only. It marks each text that is in tools, runs guardrail.CheckInput and
+// checkInputScoped runs the input stage. It marks each text that is in tools, runs guardrail.CheckInput and
 // writes the masked values back. It returns the refusing verdict, or nil.
 func checkInputScoped(ctx context.Context, pipe *guardrail.Pipeline, texts, tools []*string) *guardrail.Verdict {
 	isTool := make(map[*string]bool, len(tools))

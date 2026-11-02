@@ -101,7 +101,9 @@ Bedrock returns the matched text of word and sensitive information entries, not 
 
 ## Latency and cost
 
-Each check is one round trip to Bedrock. On a streamed answer, an output entry with a `block` or `mask` action calls Bedrock for each window of text. A `flag` entry calls Bedrock one time when the stream ends. Bedrock bills each policy by text units. See [Amazon Bedrock pricing](https://aws.amazon.com/bedrock/pricing/).
+Each call reads at most 25000 characters (25 text units). The gateway puts the messages into units of that size, and sends one call for each unit. The `ApplyGuardrail` quota counts text units for each second. Parallel calls of one check use that quota together, so set the quota above the size of your longest checks. See [How a detector reads the content](/admin/enterprise-controls/content-controls#how-a-detector-reads-the-content).
+
+Each call is one round trip to Bedrock. On a streamed answer, an output entry with a `block` or `mask` action calls Bedrock for each window of text. A `flag` entry calls Bedrock one time when the stream ends. Bedrock bills each policy by text units. See [Amazon Bedrock pricing](https://aws.amazon.com/bedrock/pricing/).
 
 ## Fail mode
 

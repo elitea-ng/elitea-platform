@@ -9,23 +9,24 @@ package guardrail
 //   - POST {endpoint}/contentsafety/text:analyze runs the harm categories
 //     (Hate, Sexual, Violence, SelfHarm) and the named blocklists.
 //   - POST {endpoint}/contentsafety/text:shieldPrompt runs Prompt Shields.
-//     On the input stage the content is the userPrompt. On the output stage
-//     it is one entry of documents.
+//     User content on the input stage is the userPrompt. A unit of tool
+//     results (input stage) and a model answer (output stage) are one entry
+//     of documents: document attack detection, the check for indirect
+//     attacks.
 //
 // Auth is the resource key in the Ocp-Apim-Subscription-Key header, from a
 // {{secret.NAME}} reference. Keyless Microsoft Entra auth is not supported:
 // the gateway has no Azure identity of its own, and it refuses ambient
 // identity (internal/workloadidentity).
 //
-// Both operations accept at most 10 000 Unicode code points per text. The
-// adapter splits longer content into parts of that size, at character
-// boundaries, and sends one call per part (at most azureMaxParts parts per
-// operation). A finding then covers the bytes of its part. With one part the
-// finding is Whole.
+// Both operations accept at most 10 000 characters per text. The adapter is
+// a boundedReader: the pipeline sends it units of at most that size
+// (units.go), and the unit calls run in parallel. The two operations of one
+// unit also run in parallel. All calls share the row deadline.
 //
 // Neither operation returns an offset (the 2024-09-01 responses carry
 // severities, blocklist ids and booleans only). So no UTF-16 offset needs a
-// conversion, and every finding covers its whole part.
+// conversion, and every finding covers its whole unit.
 //
 // Score: severity / the highest severity of the output type (6 for
 // FourSeverityLevels, 7 for EightSeverityLevels). A blocklist match and a
@@ -39,6 +40,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"sync"
 )
 
 // TypeAzureContentSafety is the detector type of the Azure AI Content Safety
@@ -48,9 +50,6 @@ const TypeAzureContentSafety = "azure_content_safety"
 const (
 	azureAPIVersion    = "2024-09-01"
 	azureMaxCodePoints = 10000
-	// azureMaxParts bounds the calls per operation: 8 parts of 10 000 code
-	// points. Longer content is an error, and the fail mode applies.
-	azureMaxParts      = 8
 	azureMaxBlocklists = 10
 	azureKeyHeader     = "Ocp-Apim-Subscription-Key"
 
@@ -208,43 +207,62 @@ type AzureShieldResponse struct {
 	} `json:"documentsAnalysis"`
 }
 
+// textLimit is the Azure limit on one text: 10 000 characters. The pipeline
+// sends units of at most this size (units.go).
+func (d *azureDetector) textLimit() int { return azureMaxCodePoints }
+
 func (d *azureDetector) detect(ctx context.Context, env Env, stage, content string) ([]Finding, error) {
-	parts := codePointChunks(content, azureMaxCodePoints)
-	if len(parts) > azureMaxParts {
-		return nil, fmt.Errorf("%w: content is longer than %d code points", errAdapter, azureMaxParts*azureMaxCodePoints)
-	}
+	// A model answer is not a user prompt. Prompt Shields reads it as a
+	// document, the shape for indirect attacks.
+	return d.check(ctx, env, content, stage == StageOutput)
+}
+
+// detectToolResults reads a unit of tool results. Prompt Shields reads it
+// as a document (document attack detection): a tool result is data that
+// reached the model, not a prompt that the user wrote.
+func (d *azureDetector) detectToolResults(ctx context.Context, env Env, _ string, content string) ([]Finding, error) {
+	return d.check(ctx, env, content, true)
+}
+
+// check runs text:analyze and text:shieldPrompt on one text. The two calls
+// run in parallel and share the deadline of ctx. Every finding covers the
+// whole text: neither operation returns an offset.
+func (d *azureDetector) check(ctx context.Context, env Env, text string, document bool) ([]Finding, error) {
 	key, err := resolveSecret(ctx, env, "api_key_secret", d.cfg.APIKeySecret)
 	if err != nil {
 		return nil, err
 	}
 	auth := func(r *http.Request) error { r.Header.Set(azureKeyHeader, key); return nil }
-	var out []Finding
-	for _, p := range parts {
-		text := content[p.start:p.end]
-		var labels []labelScore
-		if len(d.categories) > 0 || len(d.cfg.Blocklists) > 0 {
-			found, err := d.analyze(ctx, env, text, auth)
-			if err != nil {
-				return nil, err
-			}
-			labels = append(labels, found...)
-		}
-		if d.cfg.PromptShield {
-			attack, err := d.shield(ctx, env, stage, text, auth)
-			if err != nil {
-				return nil, err
-			}
-			if attack {
-				labels = append(labels, labelScore{LabelPromptInjection, 1})
-			}
-		}
-		for _, l := range labels {
-			if len(parts) == 1 {
-				out = append(out, Finding{Whole: true, Label: l.label, Score: l.score})
-			} else {
-				out = append(out, Finding{Start: p.start, End: p.end, Label: l.label, Score: l.score})
-			}
-		}
+	runAnalyze := len(d.categories) > 0 || len(d.cfg.Blocklists) > 0
+	var (
+		wg                    sync.WaitGroup
+		analyzed              []labelScore
+		attack                bool
+		analyzeErr, shieldErr error
+	)
+	if d.cfg.PromptShield {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			attack, shieldErr = d.shield(ctx, env, text, document, auth)
+		}()
+	}
+	if runAnalyze {
+		analyzed, analyzeErr = d.analyze(ctx, env, text, auth)
+	}
+	wg.Wait()
+	if analyzeErr != nil {
+		return nil, analyzeErr
+	}
+	if shieldErr != nil {
+		return nil, shieldErr
+	}
+	out := make([]Finding, 0, len(analyzed)+1)
+	for _, l := range analyzed {
+		out = append(out, Finding{Whole: true, Label: l.label, Score: l.score})
+	}
+	if attack {
+		out = append(out, Finding{Whole: true, Label: SlotPromptInjection, Score: 1})
 	}
 	return out, nil
 }
@@ -261,7 +279,7 @@ func (d *azureDetector) analyze(ctx context.Context, env Env, text string, auth 
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode request", errAdapter)
 	}
-	raw, err := cloudPost(ctx, env, d.cfg.Endpoint+"/contentsafety/text:analyze?api-version="+azureAPIVersion, body, auth)
+	raw, err := egressPost(ctx, env, d.cfg.Endpoint+"/contentsafety/text:analyze?api-version="+azureAPIVersion, body, auth)
 	if err != nil {
 		return nil, err
 	}
@@ -297,18 +315,18 @@ func (d *azureDetector) analyze(ctx context.Context, env Env, text string, auth 
 	return out, nil
 }
 
-func (d *azureDetector) shield(ctx context.Context, env Env, stage, text string, auth func(*http.Request) error) (bool, error) {
+// shield runs Prompt Shields on text: as the userPrompt, or as one entry of
+// documents when document is true.
+func (d *azureDetector) shield(ctx context.Context, env Env, text string, document bool, auth func(*http.Request) error) (bool, error) {
 	req := AzureShieldRequest{UserPrompt: text}
-	if stage == StageOutput {
-		// A model answer is not a user prompt. Prompt Shields reads it as a
-		// document, the shape for indirect attacks.
+	if document {
 		req = AzureShieldRequest{Documents: []string{text}}
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return false, fmt.Errorf("%w: encode request", errAdapter)
 	}
-	raw, err := cloudPost(ctx, env, d.cfg.Endpoint+"/contentsafety/text:shieldPrompt?api-version="+azureAPIVersion, body, auth)
+	raw, err := egressPost(ctx, env, d.cfg.Endpoint+"/contentsafety/text:shieldPrompt?api-version="+azureAPIVersion, body, auth)
 	if err != nil {
 		return false, err
 	}

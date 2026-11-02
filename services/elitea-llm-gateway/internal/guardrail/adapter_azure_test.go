@@ -3,7 +3,9 @@ package guardrail
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -127,7 +129,7 @@ func TestAzureOutputStageShieldsAsDocument(t *testing.T) {
 	}
 	p, _ := cloudPipeline(t, StageOutput, cloudEnv(srv), obj)
 	_, blocked := p.Check(context.Background(), "answer")
-	if blocked == nil || blocked.Outcome != OutcomeBlocked || blocked.Labels[0] != LabelPromptInjection {
+	if blocked == nil || blocked.Outcome != OutcomeBlocked || blocked.Labels[0] != SlotPromptInjection {
 		t.Fatalf("blocked = %+v", blocked)
 	}
 	if len(m.analyze) != 0 || len(m.shield) != 1 || m.shield[0].UserPrompt != "" || m.shield[0].Documents[0] != "answer" {
@@ -149,6 +151,8 @@ func TestAzureSplitsLongContentByCodePoints(t *testing.T) {
 	if blocked != nil {
 		t.Fatalf("blocked: %+v", blocked)
 	}
+	// The two unit calls run in parallel, so their order is not fixed.
+	sort.Slice(m.analyze, func(i, j int) bool { return len(m.analyze[i].Text) > len(m.analyze[j].Text) })
 	if len(m.analyze) != 2 || utf8.RuneCountInString(m.analyze[0].Text) != azureMaxCodePoints ||
 		m.analyze[1].Text != "é" {
 		t.Fatalf("parts sent = %d", len(m.analyze))
@@ -162,13 +166,126 @@ func TestAzureSplitsLongContentByCodePoints(t *testing.T) {
 	}
 }
 
-func TestAzureRefusesTooLongContent(t *testing.T) {
-	m := &azureMock{}
+// TestAzureLongConversationIsNotAnError: a conversation longer than
+// maxDetectorCalls units of 10 000 characters is not a detector error. The
+// detector reads the newest units and the verdict records partial coverage.
+func TestAzureLongConversationIsNotAnError(t *testing.T) {
+	m := &azureMock{shielded: `{"userPromptAnalysis":{"attackDetected":false}}`}
 	srv := cloudServer(t, m.handler(t))
-	d, _ := newAzureDetector(map[string]any{"endpoint": srv.URL, "api_key_secret": "{{secret.K}}", "prompt_shields": true})
-	_, err := d.detect(context.Background(), cloudEnv(srv), StageInput, strings.Repeat("a", azureMaxParts*azureMaxCodePoints+1))
-	if err == nil || len(m.shield) != 0 {
-		t.Fatalf("over-long content: err %v, calls %d", err, len(m.shield))
+	obj := map[string]any{
+		"type": TypeAzureContentSafety, "action": "block", "endpoint": srv.URL,
+		"api_key_secret": "{{secret.K}}", "prompt_shields": true,
+	}
+	p, col := cloudPipeline(t, StageInput, cloudEnv(srv), obj)
+	// 40 messages of 6 000 characters: 240 000 characters, one unit each.
+	parts := make([]string, 40)
+	for i := range parts {
+		parts[i] = fmt.Sprintf("message %02d ", i) + strings.Repeat("a", 6000-11)
+	}
+	if _, blocked := p.CheckInput(context.Background(), parts, nil); blocked != nil {
+		t.Fatalf("a long conversation failed the row: %+v", blocked)
+	}
+	if len(m.shield) != maxDetectorCalls {
+		t.Fatalf("calls = %d, want %d", len(m.shield), maxDetectorCalls)
+	}
+	newest := false
+	for _, r := range m.shield {
+		if strings.HasPrefix(r.UserPrompt, "message 00 ") {
+			t.Fatal("the oldest message was read before the newest ones")
+		}
+		if textCost(r.UserPrompt) > azureMaxCodePoints {
+			t.Fatalf("a unit has %d characters", textCost(r.UserPrompt))
+		}
+		newest = newest || strings.HasPrefix(r.UserPrompt, "message 39 ")
+	}
+	if !newest {
+		t.Fatal("the newest message was not read")
+	}
+	v := col.Verdicts()
+	if len(v) != 1 || v[0].Outcome != OutcomePass || !containsString(v[0].Labels, LabelPartialCoverage) {
+		t.Fatalf("verdict = %+v", v)
+	}
+}
+
+// TestAzureShieldsToolResultsAsDocuments: user content is the userPrompt, a
+// tool result is a document (document attack detection).
+func TestAzureShieldsToolResultsAsDocuments(t *testing.T) {
+	m := &azureMock{shielded: `{"userPromptAnalysis":{"attackDetected":false},"documentsAnalysis":[{"attackDetected":false}]}`}
+	srv := cloudServer(t, m.handler(t))
+	obj := map[string]any{
+		"type": TypeAzureContentSafety, "action": "block", "endpoint": srv.URL,
+		"api_key_secret": "{{secret.K}}", "prompt_shields": true,
+	}
+	p, _ := cloudPipeline(t, StageInput, cloudEnv(srv), obj)
+	parts := []string{"user question", "tool output one", "tool output two", "user follow-up"}
+	if _, blocked := p.CheckInput(context.Background(), parts, []bool{false, true, true, false}); blocked != nil {
+		t.Fatalf("blocked: %+v", blocked)
+	}
+	var prompts, docs []string
+	for _, r := range m.shield {
+		if r.UserPrompt != "" {
+			prompts = append(prompts, r.UserPrompt)
+		}
+		docs = append(docs, r.Documents...)
+	}
+	sort.Strings(prompts)
+	if strings.Join(prompts, "|") != "user follow-up|user question" ||
+		strings.Join(docs, "|") != "tool output one"+segmentSeparator+"tool output two" {
+		t.Fatalf("userPrompt %q, documents %q", prompts, docs)
+	}
+	// The slot reads tool results only, and also as a document.
+	slot := map[string]any{
+		"type": TypeAzureContentSafety, "action": "block", "endpoint": srv.URL, "api_key_secret": "{{secret.K}}",
+		"prompt_shields": true, "content": ContentToolResults, "slot": SlotPromptInjection,
+	}
+	m.shield = nil
+	p, _ = cloudPipeline(t, StageInput, cloudEnv(srv), slot)
+	if _, blocked := p.CheckInput(context.Background(), parts, []bool{false, true, true, false}); blocked != nil {
+		t.Fatalf("blocked: %+v", blocked)
+	}
+	if len(m.shield) != 1 || m.shield[0].UserPrompt != "" || len(m.shield[0].Documents) != 1 {
+		t.Fatalf("slot requests = %+v", m.shield)
+	}
+}
+
+// TestAzureUnitCallsRunInParallel: the unit calls and the two operations of
+// a unit share the row deadline. The mock answers only when four calls are
+// in flight, so serial calls time out.
+func TestAzureUnitCallsRunInParallel(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		waiting int
+		release = make(chan struct{})
+	)
+	srv := cloudServer(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		waiting++
+		if waiting == 4 {
+			close(release)
+		}
+		mu.Unlock()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "text:analyze") {
+			_, _ = w.Write([]byte(`{"categoriesAnalysis":[]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"userPromptAnalysis":{"attackDetected":false}}`))
+	})
+	obj := map[string]any{
+		"type": TypeAzureContentSafety, "action": "block", "endpoint": srv.URL, "api_key_secret": "{{secret.K}}",
+		"prompt_shields": true, "categories": map[string]any{"Hate": 2.0},
+	}
+	p, col := cloudPipeline(t, StageInput, cloudEnv(srv), obj)
+	parts := []string{strings.Repeat("a", azureMaxCodePoints), strings.Repeat("b", azureMaxCodePoints)}
+	if _, blocked := p.CheckInput(context.Background(), parts, nil); blocked != nil {
+		t.Fatalf("parallel calls did not finish in the row deadline: %+v", blocked)
+	}
+	if v := col.Verdicts(); len(v) != 1 || v[0].Outcome != OutcomePass {
+		t.Fatalf("verdict = %+v", v)
 	}
 }
 

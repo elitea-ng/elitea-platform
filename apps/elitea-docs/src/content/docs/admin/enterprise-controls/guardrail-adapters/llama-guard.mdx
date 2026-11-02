@@ -124,7 +124,7 @@ An unknown code becomes its lower-case form, for example `s15`. An `unsafe` answ
 
 ## Latency
 
-Each detector run is one model call. The call reads the full content as a prompt and writes two or three tokens. On a GPU, the call takes approximately 50 to 300 ms for a few thousand tokens. On a CPU, it can take seconds. Set `timeout_ms` above the 99th percentile that you measure.
+Each call reads at most 16000 characters, approximately 4000 to 5000 tokens of English text. This fits a server with a context of 8192 tokens. The gateway puts the messages into units of that size, and sends one call for each unit. See [How a detector reads the content](/admin/enterprise-controls/content-controls#how-a-detector-reads-the-content). Each call reads its unit as a prompt and writes two or three tokens. On a GPU, the call takes approximately 50 to 300 ms for a few thousand tokens. On a CPU, it can take seconds. Set `timeout_ms` above the 99th percentile that you measure.
 
 On a streamed answer, a `block` detector runs on each window of `stream_window_bytes`. Each window is one model call. Use `flag` on the output stage to run one call when the stream ends. See [Streamed answers](/admin/enterprise-controls/content-controls#streamed-answers).
 
@@ -136,6 +136,7 @@ On a streamed answer, a `block` detector runs on each window of `stream_window_b
 
 ## Limitations
 
-- `mask` replaces the full content, because Llama Guard gives no span.
+- `mask` replaces the full unit, because Llama Guard gives no span.
+- Set the context of the server (vLLM `--max-model-len`, llama.cpp `--ctx-size`) to 8192 tokens or more. A smaller context refuses a full unit, and the detector fails.
 - The output stage does not send the user turn of the conversation. The model classifies the answer alone.
 - The categories that the model evaluates come from its chat template. `categories` only filters the codes in the answer.

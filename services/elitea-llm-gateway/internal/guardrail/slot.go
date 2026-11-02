@@ -10,7 +10,7 @@ package guardrail
 // tool results of the request: a Chat `tool` message, a Responses
 // function_call_output, custom_tool_call_output or shell call output, and an
 // Anthropic tool_result. The gateway marks those parts
-// (internal/llmproxy/guardrail_slot.go). An output row refuses
+// (internal/llmproxy/guardrail_slot.go) on every request. An output row refuses
 // `tool_results`: an answer has no tool results.
 //
 // # slot: prompt_injection
@@ -27,19 +27,19 @@ package guardrail
 // the labels hold `slot:prompt_injection`, also on a pass. The labels are the
 // part of the verdict that gateway.guardrail_verdicts stores.
 //
-// # Two runs on one request
+// # One run, in row order
 //
-// CheckInput runs the input stage twice: once with the `all` detectors on
-// every part, then once with the `tool_results` detectors on the tool-result
-// parts only. Both runs read the original parts. Their mask spans are merged
-// and applied once, as in one run. Each run applies the row timeout on its
-// own. A request without a tool result does not run the `tool_results`
-// detectors and writes no verdict for them.
+// CheckInput runs the rows in order, and the detectors of a row in order. A
+// detector reads the parts in its scope: every part, or the tool-result
+// parts only. The `all` and the `tool_results` detectors of a row share ONE
+// row deadline. A block in an earlier row stops the run before a later row
+// sends content anywhere. Every detector reads the original parts. The mask
+// spans are merged and applied once. A request without a tool result does
+// not run the `tool_results` detectors and writes no verdict for them.
 
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 // Content scopes of a detector.
@@ -48,8 +48,9 @@ const (
 	ContentToolResults = "tool_results"
 )
 
-// SlotPromptInjection is the prompt-injection slot and the label of its
-// findings.
+// SlotPromptInjection is the prompt-injection slot, the label of its
+// findings, and the label of every adapter finding that reports a prompt
+// attack or a jailbreak.
 const SlotPromptInjection = "prompt_injection"
 
 // SlotLabel is the verdict label that names a slot.
@@ -119,95 +120,11 @@ func withSlotLabel(v Verdict) []string {
 	return append(append([]string(nil), v.Labels...), SlotLabel(v.Slot))
 }
 
-func contentAllDetectors(d *Detector) bool { return d.Content != ContentToolResults }
-
-func toolResultDetectors(d *Detector) bool { return d.Content == ContentToolResults }
-
-// ScopesToolResults reports whether a detector of the pipeline reads tool
-// results only. The gateway then marks the tool-result parts and calls
-// CheckInput.
-func (p *Pipeline) ScopesToolResults() bool {
-	if !p.Active() {
-		return false
-	}
-	for _, row := range p.Rows {
-		for _, d := range row.Detectors {
-			if d.Content == ContentToolResults {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // CheckInput is CheckAll for the input stage with content scopes. toolResult
 // marks the parts that are tool results. The `all` detectors read every
 // part; the `tool_results` detectors read the marked parts only. It returns
 // each part masked, or the refusing verdict. A part with no mark is not a
 // tool result.
 func (p *Pipeline) CheckInput(ctx context.Context, parts []string, toolResult []bool) ([]string, *Verdict) {
-	if !p.Active() || len(parts) == 0 {
-		return parts, nil
-	}
-	spans := make([][]span, len(parts))
-
-	all := make([]int, len(parts))
-	for i := range parts {
-		all[i] = i
-	}
-	if blocked := p.runSubset(ctx, parts, all, contentAllDetectors, spans); blocked != nil {
-		return nil, blocked
-	}
-	var tools []int
-	for i := range parts {
-		if i < len(toolResult) && toolResult[i] {
-			tools = append(tools, i)
-		}
-	}
-	if len(tools) > 0 {
-		if blocked := p.runSubset(ctx, parts, tools, toolResultDetectors, spans); blocked != nil {
-			return nil, blocked
-		}
-	}
-	out := make([]string, len(parts))
-	for i, part := range parts {
-		out[i] = applyMasks(part, spans[i])
-	}
-	return out, nil
-}
-
-// runSubset runs the filtered detectors on the parts named by idx, joined as
-// CheckAll joins them, and adds the mask spans to spans by part.
-func (p *Pipeline) runSubset(ctx context.Context, parts []string, idx []int, filter detectorFilter, spans [][]span) *Verdict {
-	var b strings.Builder
-	bounds := make([]bound, len(idx))
-	for n, i := range idx {
-		if n > 0 {
-			b.WriteString(segmentSeparator)
-		}
-		start := b.Len()
-		b.WriteString(parts[i])
-		bounds[n] = bound{start: start, end: b.Len()}
-	}
-	var res result
-	if len(idx) == 1 {
-		res = p.run(ctx, b.String(), filter)
-	} else {
-		res = p.runParts(ctx, b.String(), bounds, filter)
-	}
-	if res.blocked != nil {
-		return res.blocked
-	}
-	for _, s := range res.spans {
-		for n, bd := range bounds {
-			if s.end <= bd.start || s.start >= bd.end {
-				continue
-			}
-			plen := bd.end - bd.start
-			spans[idx[n]] = append(spans[idx[n]], span{
-				start: clamp(s.start-bd.start, 0, plen), end: clamp(s.end-bd.start, 0, plen), label: s.label,
-			})
-		}
-	}
-	return nil
+	return p.checkParts(ctx, parts, toolResult)
 }

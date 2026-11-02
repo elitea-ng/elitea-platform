@@ -130,7 +130,7 @@ The refusal is HTTP 400 with the code `guardrail_blocked`. The message names the
 
 ## Latency
 
-The gateway runs the input stage two times when an entry has a slot detector: first the other detectors on all the text, then the slot detectors on the tool results. Each run has the full `timeout_ms` of the entry. The slot detectors send one call for all the tool results of the request, joined by blank lines.
+The gateway runs the entries in their order, and the detectors of an entry in their order. A slot detector reads the tool results only. The other detectors read all the text. All the detectors of an entry share the `timeout_ms` of the entry. A cloud or self-hosted classifier puts the tool results into units up to its size limit. It reads at most the 16 newest units, and records the label `partial_coverage` when it skips older ones. See [How a detector reads the content](/admin/enterprise-controls/content-controls#how-a-detector-reads-the-content).
 
 A request carries the full history, so each model call of an agent sends all the earlier tool results again. A long run sends more text to the classifier on each step. Measure the latency of the classifier at the size of your longest runs.
 

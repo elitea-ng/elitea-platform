@@ -267,13 +267,10 @@ func (h *Handler) applyInputGuardrails(w http.ResponseWriter, ctx *schemas.Bifro
 	if pipe == nil || len(texts) == 0 {
 		return true
 	}
-	var blocked *guardrail.Verdict
-	if pipe.ScopesToolResults() {
-		blocked = checkInputScoped(ctx, pipe, texts, tools)
-	} else {
-		blocked = checkTargets(ctx, pipe, guardTargets{texts: texts})
-	}
-	if blocked != nil {
+	// The tool results are always marked: a tool_results detector reads them
+	// only, and an adapter can read them in another way (Azure Prompt
+	// Shields reads them as documents).
+	if blocked := checkInputScoped(ctx, pipe, texts, tools); blocked != nil {
 		writeGuardrailRefusal(w, blocked)
 		return false
 	}
