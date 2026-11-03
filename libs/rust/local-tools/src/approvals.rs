@@ -68,7 +68,7 @@
 //! | one of the person's hooks running ([`crate::hooks`], #1237) | not asked (the person wrote it in host data); sandboxed as configured, capped by the policy; never run when the policy turns the shell off, or where its sandbox cannot hide what the session denies |
 //! | a repository-proposed hook (`.elitea/hooks.json`, `.claude/settings.json`) | never runs until the person trusts it (copied into host data for that file's digest); a changed file asks again |
 //! | a `PreToolUse` hook's `deny` | the call is refused (`hook_denied`) after layers 1–2, before layer 3 |
-//! | a `PreToolUse` hook's `ask` ([`HOOK_ASK_PAYLOAD_KEY`]) | an allow from layers 3–5 is asked instead; never remembered; a deny stays a deny. In an unattended turn ([`RulesEngine::set_unattended`]) a grant with `hook_asks` allows it ([`Source::Grant`]); without `hook_asks` it is declined at once |
+//! | a `PreToolUse` hook's `ask` ([`HOOK_ASK_PAYLOAD_KEY`]) | an allow from layers 3–5 is asked instead; never remembered; a deny stays a deny. In an unattended turn ([`RulesEngine::set_unattended`]) a grant with `hook_asks` allows it ([`Source::Grant`]); without `hook_asks` it is asked as in every other turn |
 //! | a `PreToolUse` hook's `allow` | changes nothing: hooks tighten, never loosen |
 //! | a `PreToolUse` hook's `modified_input` | checked against the tool's schema, then decided by every layer like the model's own input |
 //! | a nested agent of the agent (#1239: a cloud child turn, `startLocalChildTurn`) | allowed and shown as a sub-agent lane. It is not a session tool, so no call reaches this engine: it runs in the cloud under the person's own grants, and the child's sensitive tools pause on the platform and are confirmed through the same approval card as a remote toolkit call; not offered in plan mode |
@@ -174,7 +174,8 @@ pub enum PermissionProfile {
     /// the plan.
     Plan,
     /// Build, but every call that would be asked runs without the
-    /// question ([`Source::Bypass`]): the person chose to run unattended.
+    /// question ([`Source::Bypass`]): the person chose bypass mode. An
+    /// unattended grant ([`Unattended`]) never sets it.
     /// The policy ceiling and every deny (a forbidden rule's included) stay
     /// final, and a `PreToolUse` hook's ask is still asked.
     Bypass,
@@ -461,29 +462,24 @@ pub enum Source {
 }
 
 /// The answers an unattended turn's grant gives (ADR-0045 decision 1) that
-/// the rules engine applies. The turn also runs in
-/// [`PermissionProfile::Bypass`], which answers the rules' own asks.
+/// the rules engine applies. A grant does not set
+/// [`PermissionProfile::Bypass`]: the rules' own asks go to the person as
+/// in every other turn, unless the person also chose bypass mode.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Unattended {
     /// The grant answers a `PreToolUse` hook's ask with "allow". Without
-    /// it, a hook's ask is declined at once: nobody is there to answer.
+    /// it, a hook's ask goes to the person, who has the ask's wait to
+    /// answer.
     pub hook_asks: bool,
 }
 
 /// Told of every question the engine answered inline for the person: an
-/// ask that [`PermissionProfile::Bypass`] allowed ([`Source::Bypass`]), an
-/// ask the unattended grant answered ([`Source::Grant`]), and a hook's ask
-/// that an unattended turn declined at once (`declined_by_default`). The
+/// ask that [`PermissionProfile::Bypass`] allowed ([`Source::Bypass`]) and
+/// a hook's ask the unattended grant answered ([`Source::Grant`]). The
 /// host records each as a HITL exchange.
 pub trait AnswerSink: Send + Sync {
     /// `call_id` is the tool call's id; `decision` is the inline answer.
-    fn answered(
-        &self,
-        call_id: &str,
-        call: &ToolCall,
-        decision: &Decision,
-        declined_by_default: bool,
-    );
+    fn answered(&self, call_id: &str, call: &ToolCall, decision: &Decision);
 }
 
 impl From<RuleScope> for Source {
@@ -992,39 +988,27 @@ impl RulesEngine {
         }
     }
 
-    /// [`Self::with_hook_ask`] in a turn with `unattended`: the hook's ask
-    /// is answered at once. A grant with `hook_asks` allows the call
-    /// ([`Source::Grant`]); without it the call is declined
-    /// ([`Source::Hook`]), the question's default. A deny stays a deny.
-    /// The second value is `true` when the default declined the call.
+    /// [`Self::with_hook_ask`] in a turn with `unattended`. A grant with
+    /// `hook_asks` answers the hook's ask of an allowed call with "allow"
+    /// ([`Source::Grant`]). Without `hook_asks`, the hook's ask goes to the
+    /// person as in every other turn. A rule's own ask stays an ask, and a
+    /// deny stays a deny: the grant answers only the hook.
     #[must_use]
     pub fn with_unattended_hook_ask(
         decision: Decision,
         hook: &str,
         unattended: Unattended,
-    ) -> (Decision, bool) {
-        if decision.verdict == Verdict::Deny {
-            return (decision, false);
-        }
-        if unattended.hook_asks {
+    ) -> Decision {
+        if unattended.hook_asks && decision.verdict == Verdict::Allow {
             let mut granted = Decision::new(
                 Verdict::Allow,
                 Source::Grant,
                 format!("the unattended grant answers your hook `{hook}`"),
             );
             granted.rule = decision.rule;
-            (granted, false)
+            granted
         } else {
-            (
-                Decision::new(
-                    Verdict::Deny,
-                    Source::Hook,
-                    format!(
-                        "your hook `{hook}` asks for your approval, and nobody answers in an unattended turn"
-                    ),
-                ),
-                true,
-            )
+            Self::with_hook_ask(decision, hook)
         }
     }
 
@@ -2143,19 +2127,18 @@ impl ApprovalChannel for RuleApprovals {
             .and_then(Value::as_str)
             .map(str::to_owned);
         let mut decision = self.engine.decide(&call);
-        let mut declined_by_default = false;
         if let Some(hook) = &hook_ask {
-            if let Some(unattended) = self.engine.unattended() {
-                (decision, declined_by_default) =
-                    RulesEngine::with_unattended_hook_ask(decision, hook, unattended);
-            } else {
-                decision = RulesEngine::with_hook_ask(decision, hook);
-            }
+            decision = match self.engine.unattended() {
+                Some(unattended) => {
+                    RulesEngine::with_unattended_hook_ask(decision, hook, unattended)
+                }
+                None => RulesEngine::with_hook_ask(decision, hook),
+            };
         }
-        if (matches!(decision.source, Source::Bypass | Source::Grant) || declined_by_default)
+        if matches!(decision.source, Source::Bypass | Source::Grant)
             && let Some(sink) = self.engine.answer_sink()
         {
-            sink.answered(&request.subject, &call, &decision, declined_by_default);
+            sink.answered(&request.subject, &call, &decision);
         }
         match decision.verdict {
             Verdict::Allow => Ok(decided("approve", &decision)),
@@ -3456,21 +3439,14 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct Answers(Mutex<Vec<(String, Source, Verdict, bool)>>);
+    struct Answers(Mutex<Vec<(String, Source, Verdict)>>);
 
     impl super::AnswerSink for Answers {
-        fn answered(
-            &self,
-            call_id: &str,
-            _call: &ToolCall,
-            decision: &super::Decision,
-            declined_by_default: bool,
-        ) {
+        fn answered(&self, call_id: &str, _call: &ToolCall, decision: &super::Decision) {
             self.0.lock().expect("lock").push((
                 call_id.to_owned(),
                 decision.source,
                 decision.verdict,
-                declined_by_default,
             ));
         }
     }
@@ -3481,31 +3457,52 @@ mod tests {
         asked
     }
 
-    /// An unattended turn answers a hook's ask at once: the grant's
-    /// `hook_asks` allows it (source `grant`), without it the default
-    /// declines it. A deny stays a deny, nobody is asked, and the sink
-    /// hears each inline answer (bypass included).
-    #[tokio::test]
-    async fn an_unattended_turn_answers_a_hooks_ask_by_its_grant_and_never_asks() {
-        let (_dir, engine) = engine_with_rules(
-            policy(),
-            r#"{"version":1,"rules":[{"pattern":["git","reset"],"decision":"prompt"}]}"#,
-            NONE,
-        );
+    const GIT_RESET_PROMPTS: &str =
+        r#"{"version":1,"rules":[{"pattern":["git","reset"],"decision":"prompt"}]}"#;
+
+    /// A channel whose person answers `answer`, with the inline answers
+    /// recorded.
+    fn unattended_channel(
+        answer: ApprovalOutcome,
+    ) -> (
+        tempfile::TempDir,
+        Arc<RulesEngine>,
+        Arc<Answers>,
+        Arc<ScriptedPrompt>,
+        RuleApprovals,
+    ) {
+        let (dir, engine) = engine_with_rules(policy(), GIT_RESET_PROMPTS, NONE);
         let engine = Arc::new(engine);
         let answers = Arc::new(Answers::default());
         engine.set_answer_sink(Some(answers.clone()));
         let prompt = Arc::new(ScriptedPrompt {
-            answer: ApprovalOutcome::Deferred,
+            answer,
             seen: Mutex::new(Vec::new()),
         });
         let channel = RuleApprovals::new(engine.clone(), prompt.clone());
-        engine.set_profile(PermissionProfile::Bypass);
+        (dir, engine, answers, prompt, channel)
+    }
+
+    fn approved_by_person() -> ApprovalOutcome {
+        ApprovalOutcome::Decided {
+            action: "approve".to_owned(),
+            value: json!({}),
+        }
+    }
+
+    /// A grant with `hook_asks` answers a hook's ask of an allowed call at
+    /// once (source `grant`). The grant does not imply bypass mode: a
+    /// rule's own ask goes to the person, also when a hook asks too, and
+    /// the person's answer is used. A deny stays a deny.
+    #[tokio::test]
+    async fn an_unattended_grant_answers_only_a_hooks_ask_and_the_person_answers_the_rest() {
+        let (_dir, engine, answers, prompt, channel) = unattended_channel(approved_by_person());
         engine.set_unattended(Some(super::Unattended { hook_asks: true }));
         assert_eq!(
             engine.unattended(),
             Some(super::Unattended { hook_asks: true })
         );
+        assert_eq!(engine.profile(), PermissionProfile::Build);
         let granted = channel
             .request(hook_asked(&file(ToolKind::WriteFile, "a")))
             .await
@@ -3513,14 +3510,22 @@ mod tests {
         assert!(
             matches!(granted, ApprovalOutcome::Decided { ref action, ref value } if action == "approve" && value["source"] == "grant")
         );
-        // A rule's ask is bypassed; the sink hears it as bypass.
-        let bypassed = channel
+        assert!(prompt.seen.lock().expect("lock").is_empty());
+        // A rule's ask reaches the person, and the person's answer is used.
+        let asked = channel
             .request(request(&shell("git reset --hard")))
             .await
-            .expect("bypassed");
+            .expect("asked");
         assert!(
-            matches!(bypassed, ApprovalOutcome::Decided { ref action, .. } if action == "approve")
+            matches!(asked, ApprovalOutcome::Decided { ref action, .. } if action == "approve")
         );
+        assert_eq!(prompt.seen.lock().expect("lock").len(), 1);
+        // A rule's ask that a hook also asks is not the grant's to answer.
+        channel
+            .request(hook_asked(&shell("git reset --hard")))
+            .await
+            .expect("asked");
+        assert_eq!(prompt.seen.lock().expect("lock").len(), 2);
         // A deny stays a deny, and is no inline answer.
         let denied = channel
             .request(hook_asked(&shell("rm x")))
@@ -3529,34 +3534,68 @@ mod tests {
         assert!(
             matches!(denied, ApprovalOutcome::Decided { ref action, .. } if action == "reject")
         );
-        engine.set_unattended(Some(super::Unattended { hook_asks: false }));
-        let declined = channel
-            .request(hook_asked(&file(ToolKind::WriteFile, "a")))
-            .await
-            .expect("declined");
-        assert!(
-            matches!(declined, ApprovalOutcome::Decided { ref action, .. } if action == "reject")
-        );
-        assert!(
-            prompt.seen.lock().expect("lock").is_empty(),
-            "nobody is asked"
-        );
+        assert_eq!(prompt.seen.lock().expect("lock").len(), 2);
         assert_eq!(
             *answers.0.lock().expect("lock"),
-            [
-                ("call-1".to_owned(), Source::Grant, Verdict::Allow, false),
-                ("call-1".to_owned(), Source::Bypass, Verdict::Allow, false),
-                ("call-1".to_owned(), Source::Hook, Verdict::Deny, true),
-            ]
+            [("call-1".to_owned(), Source::Grant, Verdict::Allow)]
         );
-        // Attended again: the hook's ask goes to the person.
-        engine.set_unattended(None);
+    }
+
+    /// A grant without `hook_asks` declines nothing at once: the hook's
+    /// ask reaches the person, and the person's answer is used.
+    #[tokio::test]
+    async fn an_unattended_grant_without_hook_asks_sends_a_hooks_ask_to_the_person() {
+        let (_dir, engine, answers, prompt, channel) = unattended_channel(approved_by_person());
+        engine.set_unattended(Some(super::Unattended { hook_asks: false }));
+        let answered = channel
+            .request(hook_asked(&file(ToolKind::WriteFile, "a")))
+            .await
+            .expect("answered");
+        assert!(
+            matches!(answered, ApprovalOutcome::Decided { ref action, .. } if action == "approve")
+        );
+        let seen = prompt.seen.lock().expect("lock");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].payload["source"], "hook");
+        assert!(answers.0.lock().expect("lock").is_empty());
+    }
+
+    /// Bypass mode is the person's own choice, separate from the grant: in
+    /// it a rule's ask is allowed inline (source `bypass`) and a hook's ask
+    /// is still the grant's or the person's.
+    #[tokio::test]
+    async fn bypass_mode_with_an_unattended_grant_still_asks_a_hooks_ask() {
+        let (_dir, engine, answers, prompt, channel) =
+            unattended_channel(ApprovalOutcome::Deferred);
+        engine.set_profile(PermissionProfile::Bypass);
+        engine.set_unattended(Some(super::Unattended { hook_asks: false }));
+        let bypassed = channel
+            .request(request(&shell("git reset --hard")))
+            .await
+            .expect("bypassed");
+        assert!(
+            matches!(bypassed, ApprovalOutcome::Decided { ref action, .. } if action == "approve")
+        );
+        assert!(prompt.seen.lock().expect("lock").is_empty());
         let asked = channel
             .request(hook_asked(&file(ToolKind::WriteFile, "a")))
             .await
             .expect("asked");
         assert_eq!(asked, ApprovalOutcome::Deferred);
         assert_eq!(prompt.seen.lock().expect("lock").len(), 1);
+        assert_eq!(
+            *answers.0.lock().expect("lock"),
+            [("call-1".to_owned(), Source::Bypass, Verdict::Allow)]
+        );
+        // Attended again: the hook's ask goes to the person.
+        engine.set_unattended(None);
+        engine.set_profile(PermissionProfile::Build);
+        let asked = channel
+            .request(hook_asked(&file(ToolKind::WriteFile, "a")))
+            .await
+            .expect("asked");
+        assert_eq!(asked, ApprovalOutcome::Deferred);
+        assert_eq!(prompt.seen.lock().expect("lock").len(), 2);
     }
 
     #[tokio::test]

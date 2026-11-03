@@ -1,9 +1,13 @@
 //! Unattended turns (ADR-0045 decisions 1, 3 and 4; #1435, #1436).
 //!
 //! The person gives one grant at the start of a turn ([`UnattendedGrant`]).
-//! The grant answers the questions it names, and every other question takes
-//! its default at once, so the turn never waits for a person who is not
-//! there. The grant implies bypass mode for the local rules' asks.
+//! The grant answers at once only the questions it names, with `source`
+//! `grant`: "Continue?" at the step limit (`continue_step_limit`), a
+//! `PreToolUse` hook's ask (`hook_asks`) and a remote toolkit confirmation
+//! (`remote_confirmations`). Every other question goes to the person as in
+//! a turn without a grant, and takes its default past its wait. The grant
+//! does not imply bypass mode: the local rules' asks follow the turn's own
+//! `bypass` (the person's Bypass mode), as in every other turn.
 //!
 //! The turn is the root of a chain. When the turn ends at a cap that the
 //! grant covers ([`next_step`]), the host starts the next turn of the chain
@@ -12,9 +16,13 @@
 //! continuation past one of its limits (409 `chain_limit_reached`). The
 //! commit of the chain's last turn carries its [`ChainOutcome`].
 //!
-//! Every question also has a wait when a person answers it (decision 3):
+//! Every question that a person answers has a wait (decision 3):
 //! [`RULE_ASK_WAIT`] for a rule's or a hook's ask, [`REMOTE_CONFIRMATION_WAIT`]
-//! for a remote toolkit confirmation. Past the wait the default answers.
+//! for a remote toolkit confirmation, [`PLAN_WAIT`] for a plan and the
+//! runtime's `CONTINUE_TIMEOUT` for "Continue?". Past the wait the default
+//! answers (`source` `timeout`). In an unattended turn a question of a kind
+//! without its own wait gets [`RULE_ASK_WAIT`], so the waits bound every
+//! turn of a chain; the platform's chain deadline refuses the next turn.
 
 use std::time::Duration;
 
@@ -55,7 +63,7 @@ pub const SOURCE_GRANT: &str = "grant";
 /// The `source` of a HITL exchange that bypass mode answered.
 pub const SOURCE_BYPASS: &str = "bypass";
 /// The `source` of a HITL exchange that its default answered: nobody
-/// answered within the wait, or an unattended turn had nobody to ask.
+/// answered within the wait.
 pub const SOURCE_TIMEOUT: &str = "timeout";
 
 /// The platform's refusal of a grant (422). The platform owns the chain
@@ -122,10 +130,12 @@ pub struct UnattendedGrant {
     /// The chain continues after the 512 tool-call cap.
     #[serde(default)]
     pub continue_tool_call_cap: bool,
-    /// A `PreToolUse` hook's ask is allowed.
+    /// A `PreToolUse` hook's ask is allowed. Without it, the person
+    /// answers the hook's ask.
     #[serde(default)]
     pub hook_asks: bool,
-    /// A remote toolkit confirmation is approved.
+    /// A remote toolkit confirmation is approved. Without it, the person
+    /// answers the confirmation.
     #[serde(default)]
     pub remote_confirmations: bool,
     #[serde(default)]

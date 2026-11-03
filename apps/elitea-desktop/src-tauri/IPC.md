@@ -537,8 +537,8 @@ an MCP sign-in in its own 10 minutes (the call fails). The card then
 closes (`approval_closed`). Each entry of the commit's `hitl_exchanges`
 carries `source`: `person` (the person answered), `grant` (an unattended
 grant answered), `bypass` (bypass mode allowed a rule's ask) or `timeout`
-(the default answered: the wait ran out, or an unattended turn had nobody
-to ask; `decision` is then `timeout`, a plan card's `decline`). A commit
+(the default answered: the wait ran out; `decision` is then `timeout`, a
+plan card's `decline`). A commit
 carries at most 64 exchanges; past that, the `bypass` ones give way first.
 
 **Unattended turns** (ADR-0045 decisions 1, 3 and 4; #1435, #1436).
@@ -556,8 +556,12 @@ person before the start:
 }
 ```
 
-- The grant implies bypass mode for the rules' asks
-  (`bypass_approvals` is not needed). `plan_mode` with `unattended` is
+- The grant does not imply bypass mode. The rules' asks follow
+  `bypass_approvals` as in a turn without a grant: without it the person
+  answers them (or the wait declines them), with it they are allowed
+  (`source: "bypass"`). Bypass mode is a separate opt-in; the grant never
+  sets it, also not on a continuation (a continuation keeps the root
+  turn's `bypass_approvals`). `plan_mode` with `unattended` is
   refused with `invalid_request`, and so is a grant id that is not a UUID,
   a deadline of 0 seconds, or a spend that is not more than 0. The host
   does not check the platform's maximums: the platform checks the grant
@@ -566,16 +570,22 @@ person before the start:
   higher than the platform allows." A continuation keeps the chain's stored
   limits; the platform ignores the limits it carries again.
 - The grant answers at once what it names. `hook_asks` allows a hook's
-  ask (`source: "grant"`). `remote_confirmations` approves a remote
+  ask of a call that the rules allow (`source: "grant"`); a rule's own ask
+  stays the person's. `remote_confirmations` approves a remote
   confirmation; the retry carries `confirmation.source: "grant"`, and the
   platform records it as the grant's decision. `continue_step_limit`
   continues at the step limit (at most 3 times a turn, as a person's
   answer would), and each continue is an exchange with `source: "grant"`.
-- Every other question takes its default at once, with no card: a hook's
-  ask is declined, a remote confirmation is declined
-  (`confirmation_timeout`), "Continue?" stops the turn, and an MCP sign-in
-  fails. The policy ceiling, every deny, the OS sandbox and the run caps
-  do not change.
+- Every other question goes to the person as in a turn without a grant:
+  a card shows, and the person's answer is used (`source: "person"`). When
+  nobody answers within the question's wait (**Waits**, above), its default
+  answers (`source: "timeout"`): a hook's or a rule's ask is declined after
+  30 minutes, a remote confirmation after 15 minutes
+  (`confirmation_timeout`), "Continue?" stops the turn after 10 minutes, a
+  plan is declined after 30 minutes, and an MCP sign-in fails after its
+  own wait. In an unattended turn a question without a wait of its own
+  gets 30 minutes, so the waits bound every turn of the chain. The policy
+  ceiling, every deny, the OS sandbox and the run caps do not change.
 - A sub-agent of the turn inherits the grant.
 - **The chain.** The first turn is the chain's root. When a turn ends at
   the 512 tool-call cap with `continue_tool_call_cap`, or at the step limit
@@ -2718,7 +2728,8 @@ rule or remembered choice answers it, and `allow_always` answers once.
 session, within the same execution, from the host's prompt "Continue from
 where you stopped." (`status` `running` with `continued`), at most 3 times a
 turn. An unattended grant with `continue_step_limit` answers it without a
-card (`source: "grant"`); an unattended turn without it stops at once.
+card (`source: "grant"`); an unattended turn without it asks the person,
+as every other turn does.
 `deny`, no answer within 10 minutes, or a fourth limit end the turn
 normally: what happened is committed as one turn (its `hitl_exchanges` hold
 each question as kind `continue`), and `status` `done` carries

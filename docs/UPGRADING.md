@@ -23,6 +23,14 @@ A turn without a grant is unchanged byte for byte. To refuse every grant
 until all workers are upgraded, set **Configuration › Approvals ›
 Unattended Grants** to off.
 
+**Behaviour: a grant answers only what it names.** On the desktop, a grant
+does not imply bypass mode. A local rule's ask, and a hook's ask or a
+remote toolkit confirmation that the grant does not cover, go to the
+person as in a turn without a grant. Past the question's wait (30 minutes
+for a rule's or a hook's ask, 15 minutes for a remote confirmation) the
+default declines it, and the ledger records `timed_out`. Bypass mode stays
+a separate opt-in (`bypass_approvals`). No operator action is necessary.
+
 ## Grounding indicators (#1500, ADR-0043 decision 5)
 
 A new agent version meta key, `meta.citations` (`"off"`, `"required"` or

@@ -505,8 +505,8 @@ pub async fn call(
 enum Declined {
     /// The person declined, with their feedback when they wrote one (#1225).
     ByPerson(Option<String>),
-    /// Nobody answered within the wait, or nobody was there to ask (an
-    /// unattended turn whose grant does not cover confirmations).
+    /// Nobody answered within the wait ([`super::unattended::REMOTE_CONFIRMATION_WAIT`]),
+    /// also in an unattended turn whose grant does not cover confirmations.
     TimedOut,
 }
 

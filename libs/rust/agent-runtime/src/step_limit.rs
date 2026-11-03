@@ -66,7 +66,9 @@ pub fn reached(error: &AdkError) -> bool {
 /// Who answers "Continue?" at the step limit.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ContinuePolicy {
-    /// The host asks the person through its [`ApprovalChannel`].
+    /// The host asks the person through its [`ApprovalChannel`], also in
+    /// an unattended turn whose grant does not cover the step limit. The
+    /// question waits [`CONTINUE_TIMEOUT`] at most.
     #[default]
     Ask,
     /// An unattended grant answers "continue" without a question.

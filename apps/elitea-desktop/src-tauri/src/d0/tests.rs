@@ -10139,7 +10139,7 @@ async fn an_unattended_grant_confirms_a_remote_call() {
     assert_eq!(commit["hitl_exchanges"][0]["kind"], "tool_confirmation");
     assert_eq!(commit["hitl_exchanges"][0]["source"], "grant");
     assert_eq!(commit["chain_outcome"], "completed");
-    // The turn ran in bypass mode, and left it.
+    // The grant is not bypass mode: the folder's session stays in Build.
     assert_eq!(
         h.host
             .local_session_for_tests(&h.workspace_id, h.folder.path().to_owned())
@@ -10148,32 +10148,108 @@ async fn an_unattended_grant_confirms_a_remote_call() {
     );
 }
 
-/// Without `remote_confirmations` the confirmation takes its default at
-/// once: the call is declined, nobody is asked, and nothing is retried.
+/// Without `remote_confirmations` the confirmation is not declined at
+/// once: it reaches the person, as in every other turn, and the person's
+/// answer is used. The retry is the person's (no `source: "grant"`).
 #[tokio::test]
-async fn an_unattended_turn_declines_what_its_grant_does_not_answer() {
+async fn an_unattended_turn_asks_the_person_what_its_grant_does_not_answer() {
     let server = serve(platform(agent_details(), &[])).await;
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
     h.host
-        .start(unattended_request(&h, json!({})))
+        .start(unattended_request(&h, json!({"continue_step_limit": true})))
+        .await
+        .unwrap();
+    let events = until_event(&h, "chain_ended").await;
+    assert_eq!(of_kind(&events, "approval_request").len(), 1);
+    let remote: Vec<Value> = seen(&h.server, "/remote_toolkit_call/prompt_lib/1/3")
+        .iter()
+        .map(|req| serde_json::from_str(&req.body).unwrap())
+        .collect();
+    assert_eq!(remote.len(), 2);
+    assert_eq!(remote[1]["confirmation"]["approved"], true);
+    assert!(remote[1]["confirmation"].get("source").is_none());
+    let commit = &commit_bodies(&h.server)[0];
+    assert_eq!(commit["hitl_exchanges"][0]["kind"], "tool_confirmation");
+    assert_eq!(commit["hitl_exchanges"][0]["source"], "person");
+    assert_eq!(commit["hitl_exchanges"][0]["decision"], "approve");
+    assert_eq!(commit["chain_outcome"], "completed");
+}
+
+/// A model that runs `git reset --hard`, then answers.
+async fn git_reset_platform() -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-reset",
+                    "run_command",
+                    &json!({"command": "git reset --hard"}),
+                ),
+                _ => say("Done."),
+            };
+        }
+        inner(req)
+    })
+    .await
+}
+
+/// An unattended grant does not imply bypass mode: a command a rule asks
+/// about reaches the person, and the person's answer (here: deny) is used.
+/// Only the person's own bypass mode allows it without a question.
+#[tokio::test]
+async fn an_unattended_grant_without_bypass_sends_a_rules_ask_to_the_person() {
+    let rules = r#"{"version":1,"rules":[{"pattern":["git","reset"],"decision":"prompt"}]}"#;
+    let h = harness(git_reset_platform().await, allowed(), UiDecision::Deny).await;
+    write_rules(
+        &h.workspaces.data_dir(&h.workspace_id).join("rules.json"),
+        rules,
+    );
+    h.host
+        .start(unattended_request(
+            &h,
+            json!({"continue_step_limit": true, "continue_tool_call_cap": true}),
+        ))
+        .await
+        .unwrap();
+    let events = until_event(&h, "chain_ended").await;
+    let asked = of_kind(&events, "approval_request");
+    assert_eq!(asked.len(), 1, "{:?}", h.emitter.kinds());
+    assert_eq!(asked[0]["tool"], "run_command");
+    let commit = &commit_bodies(&h.server)[0];
+    assert_eq!(commit["hitl_exchanges"][0]["kind"], "command_approval");
+    assert_eq!(commit["hitl_exchanges"][0]["source"], "person");
+    assert_eq!(commit["hitl_exchanges"][0]["decision"], "reject");
+    assert!(
+        llm_bodies(&h.server)[1].to_string().contains("rejected"),
+        "the person's denial reaches the model"
+    );
+
+    // The same grant with the person's bypass mode: no question.
+    let h = harness(git_reset_platform().await, allowed(), UiDecision::Deny).await;
+    write_rules(
+        &h.workspaces.data_dir(&h.workspace_id).join("rules.json"),
+        rules,
+    );
+    h.host
+        .start(TurnRequest {
+            bypass: true,
+            ..unattended_request(&h, json!({"continue_step_limit": true}))
+        })
         .await
         .unwrap();
     let events = until_event(&h, "chain_ended").await;
     assert!(of_kind(&events, "approval_request").is_empty());
-    assert_eq!(
-        seen(&h.server, "/remote_toolkit_call/prompt_lib/1/3").len(),
-        1
-    );
-    let results = of_kind(&events, "tool_result");
-    assert!(results.iter().any(|r| r["ok"] == false));
     let commit = &commit_bodies(&h.server)[0];
-    assert_eq!(commit["hitl_exchanges"][0]["source"], "timeout");
-    assert_eq!(commit["hitl_exchanges"][0]["decision"], "timeout");
+    assert_eq!(commit["hitl_exchanges"][0]["source"], "bypass");
+    assert_eq!(commit["hitl_exchanges"][0]["decision"], "approve");
     assert_eq!(
-        commit["tool_calls"]["call-remote"]["tool_output"]
-            .as_str()
-            .map(|o| o.contains("confirmation_timeout")),
-        Some(true)
+        h.host
+            .local_session_for_tests(&h.workspace_id, h.folder.path().to_owned())
+            .profile(),
+        elitea_local_tools::approvals::PermissionProfile::Build,
+        "the session leaves bypass mode with the turn"
     );
 }
 

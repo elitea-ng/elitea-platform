@@ -212,16 +212,17 @@ pub struct TurnRequest {
     /// cannot see images refuses the turn (`model_no_vision`).
     pub images: Vec<ImagePick>,
     /// An unattended turn (ADR-0045): its grant and its place in its chain.
-    /// It runs in bypass mode; never with `plan_mode`.
+    /// The grant does not imply bypass mode (only `bypass` does); never
+    /// with `plan_mode`.
     pub unattended: Option<UnattendedTurn>,
 }
 
 impl TurnRequest {
-    /// Whether the turn runs in bypass mode: asked for, or implied by an
-    /// unattended grant.
+    /// Whether the turn runs in bypass mode: only when the person asked
+    /// for it (`bypass`). An unattended grant does not imply it.
     #[must_use]
     pub const fn bypasses(&self) -> bool {
-        self.bypass || self.unattended.is_some()
+        self.bypass
     }
 }
 
@@ -520,9 +521,10 @@ fn stop_processes_soon(session: &Arc<LocalSession>) {
     }
 }
 
-/// Ends bypass mode on a session when its run ends, however it ends: the
-/// session's engine is the folder's, and a later question outside a turn
-/// start (a rule check, a child's session) is asked again.
+/// Ends bypass mode and the unattended grant on a session when its run
+/// ends, however it ends: the session's engine is the folder's, and a later
+/// question outside a turn start (a rule check, a child's session) is asked
+/// again.
 struct EndBypass(Arc<LocalSession>);
 
 impl Drop for EndBypass {
@@ -1227,7 +1229,7 @@ impl AgentHost {
             .unattended
             .as_ref()
             .map(|grant| grant.rule_answers());
-        let bypass = bypass || unattended.is_some();
+        let ends = bypass || unattended.is_some();
         workspace.prompt.bind(Some(binding));
         workspace.session.set_profile(if bypass {
             PermissionProfile::Bypass
@@ -1240,7 +1242,7 @@ impl AgentHost {
             ChildHold {
                 _claim: claim,
                 prompt: workspace.prompt.clone(),
-                _bypass: bypass.then(|| EndBypass(workspace.session.clone())),
+                _bypass: ends.then(|| EndBypass(workspace.session.clone())),
             },
         ))
     }
@@ -2588,8 +2590,8 @@ impl AgentHost {
         let session = workspace.session.clone();
         // The turn's permission profile (#1225): plan mode until the person
         // accepts the plan (`exit_plan_mode`), which switches it to Build
-        // within this run; bypass mode for the whole run (an unattended
-        // grant implies it, ADR-0045).
+        // within this run; bypass mode for the whole run when the person
+        // chose it (an unattended grant does not imply it, ADR-0045).
         session.set_profile(if request.plan_mode {
             PermissionProfile::Plan
         } else if request.bypasses() {
@@ -2603,8 +2605,8 @@ impl AgentHost {
                 .as_ref()
                 .map(|turn| turn.grant.rule_answers()),
         );
-        let _bypass =
-            (request.bypasses() && !request.plan_mode).then(|| EndBypass(session.clone()));
+        let _bypass = ((request.bypasses() && !request.plan_mode) || request.unattended.is_some())
+            .then(|| EndBypass(session.clone()));
         // The turn's spilled outputs are its conversation's: read_output in
         // another thread of this folder does not see them.
         session.set_conversation(Some(&conversation));
