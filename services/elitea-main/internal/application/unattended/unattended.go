@@ -131,6 +131,15 @@ type Request struct {
 // IsContinuation reports whether the request continues a chain.
 func (r Request) IsContinuation() bool { return r.ChainRootExecutionID != "" }
 
+// OnlyContinues reports whether the request is a chain's first run whose
+// grant only continues at the caps: the default "Run to completion" grant
+// (ADR-0045 decision 10). It answers no question for the person. When an
+// administrator turns grants off, Main starts such a run with no grant
+// instead of refusing it, so the default never stops a send.
+func (r Request) OnlyContinues() bool {
+	return !r.IsContinuation() && !r.HookAsks && !r.RemoteConfirmations && len(r.SensitiveTools) == 0
+}
+
 // Limits are a chain's effective limits.
 type Limits struct {
 	MaxContinuations int
@@ -228,6 +237,12 @@ func AsRefusal(err error) (*RefusalError, bool) {
 // Refused builds a RefusalError.
 func Refused(field, tool, reason string) error {
 	return &RefusalError{Field: field, Tool: tool, Reason: reason}
+}
+
+// IsDisabled reports whether err refuses a grant because grants are off.
+func IsDisabled(err error) bool {
+	var refusal *RefusalError
+	return errors.As(err, &refusal) && refusal.Reason == RefusedDisabled
 }
 
 // ChainLimitError refuses a continuation: 409 chain_limit_reached. Limit is

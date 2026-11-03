@@ -84,3 +84,24 @@ func TestContinuationRefusedWhenGrantsAreOff(t *testing.T) {
 		t.Fatalf("continuation with grants off = %v, starts = %d", err, len(store.started))
 	}
 }
+
+// ADR-0045 decision 10: with grants off, a first turn whose grant only
+// continues (the default) starts with no grant; a grant with an opt-in is
+// refused as disabled.
+func TestDefaultGrantStartsWithNoGrantWhenGrantsAreOff(t *testing.T) {
+	settings := platformconfig.DefaultUnattendedSettings()
+	settings.Enabled = false
+	service, store := grantService(t, settings)
+	if _, err := service.Start(t.Context(), grantStartRequest("", 1)); err != nil {
+		t.Fatalf("default grant with grants off = %v", err)
+	}
+	if len(store.started) != 1 || store.started[0].Grant != nil {
+		t.Fatalf("starts = %+v", store.started)
+	}
+	request := grantStartRequest("", 1)
+	request.Unattended.HookAsks = true
+	var refusal *unattended.RefusalError
+	if _, err := service.Start(t.Context(), request); !errors.As(err, &refusal) || refusal.Reason != unattended.RefusedDisabled {
+		t.Fatalf("hook asks with grants off = %v", err)
+	}
+}

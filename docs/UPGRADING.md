@@ -17,11 +17,19 @@ and `source: grant` on a remote toolkit confirmation. New proto field
 `AgentExecutionInputV1.unattended_grant` (68) and terminal state
 `STEP_LIMIT_REACHED`.
 
-**Upgrade Main before the workers.** Main sends field 68 only on a turn
-that carries a grant. A worker of an earlier release refuses such a turn.
-A turn without a grant is unchanged byte for byte. To refuse every grant
-until all workers are upgraded, set **Configuration › Approvals ›
-Unattended Grants** to off.
+**"Run to completion" is on by default (ADR-0045 decision 10).** The web
+and desktop clients send the default grant (continue at the caps, inside
+the chain limits) with every request. Main sends field 68 on each cloud
+turn that carries a grant, so almost every cloud turn has it. A worker of
+an earlier release refuses such a turn. A turn without a grant is
+unchanged byte for byte.
+
+**Upgrade the workers before Main**, or set **Configuration › Approvals ›
+Unattended Grants** to off for the rollout and on again when every worker
+is upgraded. With the switch off, a request with only the default grant
+runs with no grant (it is not refused). A request with an opt-in (hook
+asks, remote confirmations or named sensitive tools) is refused with `422
+unattended_grant_refused`, reason `disabled`.
 
 **Behaviour: a grant answers only what it names.** On the desktop, a grant
 does not imply bypass mode. A local rule's ask, and a hook's ask or a

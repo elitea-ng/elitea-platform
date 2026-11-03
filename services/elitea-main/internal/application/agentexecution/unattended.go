@@ -176,6 +176,11 @@ func (service *CurrentApplicationStartService) admitUnattended(
 		return nil, nil, unattended.Refused("unattended", "", unattended.RefusedInvalid)
 	}
 	settings, err := service.unattendedSettings(ctx)
+	if unattended.IsDisabled(err) && request.OnlyContinues() {
+		// Grants are off: the default grant only continued, so the run
+		// starts with no grant (ADR-0045 decision 10).
+		return nil, nil, nil
+	}
 	if err != nil {
 		return nil, nil, err
 	}

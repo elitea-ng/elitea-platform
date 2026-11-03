@@ -70,7 +70,8 @@ type UnattendedStarted struct {
 // The limits of a continuation are the chain's stored ones: the store reads
 // them, and admitGrant does not resolve the limits a continuation sends.
 // The platform switch is read on every turn: with grants off, a
-// continuation is refused as disabled.
+// continuation is refused as disabled, and a first turn whose grant only
+// continues (OnlyContinues) starts with no grant (nil, nil).
 func (s *Service) admitGrant(ctx context.Context, request unattended.Request) (*StartGrant, error) {
 	if err := unattended.ValidateShape(request); err != nil {
 		return nil, err
@@ -79,7 +80,7 @@ func (s *Service) admitGrant(ctx context.Context, request unattended.Request) (*
 		return nil, unattended.Refused("sensitive_tools", "", unattended.RefusedInvalid)
 	}
 	if s.unattended == nil {
-		return nil, unattended.Refused("unattended", "", unattended.RefusedDisabled)
+		return disabledGrant(request)
 	}
 	settings, err := s.unattended.Get(ctx)
 	if err != nil {
@@ -87,7 +88,7 @@ func (s *Service) admitGrant(ctx context.Context, request unattended.Request) (*
 		return nil, ErrUnavailable
 	}
 	if !settings.Enabled {
-		return nil, unattended.Refused("unattended", "", unattended.RefusedDisabled)
+		return disabledGrant(request)
 	}
 	if request.IsContinuation() {
 		// A continuation keeps the chain's stored limits. The store reads
@@ -145,4 +146,13 @@ func ExchangeLedgerAction(decision string) string {
 		return decision
 	}
 	return ""
+}
+
+// disabledGrant is the answer to a grant while grants are off: no grant for
+// a grant that only continues, a refusal for every other grant.
+func disabledGrant(request unattended.Request) (*StartGrant, error) {
+	if request.OnlyContinues() {
+		return nil, nil
+	}
+	return nil, unattended.Refused("unattended", "", unattended.RefusedDisabled)
 }

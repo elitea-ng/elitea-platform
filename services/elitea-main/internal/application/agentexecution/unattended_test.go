@@ -72,6 +72,29 @@ func grantTestTarget(request *unattended.Request) unattendedTarget {
 	}
 }
 
+// ADR-0045 decision 10: with grants off, a start whose grant only continues
+// (the default) starts with no grant, and a grant that names a tool is
+// still refused.
+func TestAdmitUnattendedDefaultGrantWithGrantsOff(t *testing.T) {
+	off := grantTestService("low")
+	disabled := platformconfig.DefaultUnattendedSettings()
+	disabled.Enabled = false
+	off.unattended.Settings = grantSettingsStub{disabled}
+	for name, service := range map[string]*CurrentApplicationStartService{"switch off": off, "no policy": {}} {
+		target := grantTestTarget(&unattended.Request{ContinueStepLimit: true, ContinueOutputLimit: true})
+		grant, admission, err := service.admitUnattended(t.Context(), target)
+		if err != nil || grant != nil || admission != nil {
+			t.Fatalf("%s: default grant = %v, %v, %v", name, grant, admission, err)
+		}
+	}
+	target := grantTestTarget(&unattended.Request{ContinueStepLimit: true,
+		SensitiveTools: []unattended.Tool{{ToolkitName: "jira", ToolName: "create_issue"}}})
+	var refusal *unattended.RefusalError
+	if _, _, err := off.admitUnattended(t.Context(), target); !errors.As(err, &refusal) || refusal.Reason != unattended.RefusedDisabled {
+		t.Fatalf("named tool with grants off = %v", err)
+	}
+}
+
 func TestAdmitUnattendedRefusals(t *testing.T) {
 	tool := func(toolkit, name string) []unattended.Tool {
 		return []unattended.Tool{{ToolkitName: toolkit, ToolName: name}}
@@ -83,7 +106,8 @@ func TestAdmitUnattendedRefusals(t *testing.T) {
 		origin  executiondomain.TriggerOrigin
 		reason  string
 	}{
-		{"no policy", &CurrentApplicationStartService{}, unattended.Request{}, "", unattended.RefusedDisabled},
+		{"no policy, named tool", &CurrentApplicationStartService{}, unattended.Request{SensitiveTools: tool("jira", "create_issue")}, "",
+			unattended.RefusedDisabled},
 		{"desktop part", grantTestService("low"), unattended.Request{HookAsks: true}, "", unattended.RefusedInvalid},
 		{"chain root on a cloud start", grantTestService("low"),
 			unattended.Request{ChainRootExecutionID: "0123456789abcdef0123456789abcdef"}, "", unattended.RefusedInvalid},

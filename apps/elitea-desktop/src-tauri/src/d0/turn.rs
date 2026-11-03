@@ -2563,7 +2563,7 @@ impl AgentHost {
             project,
             invoked,
             command,
-            request,
+            mut request,
             events,
             workspace,
             admitted,
@@ -2578,6 +2578,12 @@ impl AgentHost {
             images,
             ..
         } = prepared;
+        // The platform admitted no grant (an administrator turned grants
+        // off, and the grant only continued at the caps): the turn runs as
+        // one with no grant, and the host starts no continuation.
+        if started.unattended.is_none() {
+            request.unattended = None;
+        }
         let recorder = entry.recorder.clone();
         workspace.prompt.bind(Some(TurnBinding {
             events: events.clone(),

@@ -9904,6 +9904,67 @@ fn turn_events<'a>(events: &'a [AgentEvent], turn_id: &str, kind: &str) -> Vec<&
         .collect()
 }
 
+/// ADR-0045 decision 10: with grants off, the platform starts the default
+/// grant's turn with no grant (no `unattended` in its answer). The host then
+/// runs the turn as one with no grant: at the 512 tool-call cap it stops
+/// and starts no continuation.
+#[tokio::test]
+async fn a_turn_whose_grant_the_platform_did_not_admit_starts_no_continuation() {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            let call = calls.fetch_add(1, Ordering::SeqCst);
+            if call < 57 {
+                let ids: Vec<String> = (0..9).map(|n| format!("call-{call}-{n}")).collect();
+                let calls: Vec<(&str, &str, Value)> = ids
+                    .iter()
+                    .map(|id| (id.as_str(), "list_tree", json!({})))
+                    .collect();
+                return tool_calls(&calls);
+            }
+            return say("Done.");
+        }
+        if req.path == START_PATH {
+            let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
+            return Res::json(
+                200,
+                &json!({
+                    "execution_id": EXECUTION, "question_id": body["question_id"],
+                    "response_message_id": "11111111-2222-4333-8444-555555555550",
+                    "conversation_uuid": "99999999-2222-4333-8444-555555555555",
+                    "participant_id": 77, "expires_at": "2026-10-10T00:00:00Z", "created": true,
+                    "memory_recall": {"text": ""}
+                }),
+            );
+        }
+        if req.path == format!("/api/v2/elitea_core/local_turn_commit/prompt_lib/1/{EXECUTION}") {
+            return Res::json(
+                200,
+                &json!({"execution_id": EXECUTION, "created": true,
+                "conversation_uuid": "99999999-2222-4333-8444-555555555555",
+                "question_message_id": "q", "response_message_id": "r",
+                "memories_used": 0, "committed_at": "2026-10-09T00:00:00Z"}),
+            );
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    h.host
+        .start(unattended_request(
+            &h,
+            json!({"continue_step_limit": true, "continue_tool_call_cap": true}),
+        ))
+        .await
+        .unwrap();
+    let events = until_event(&h, "done").await;
+    assert!(of_kind(&events, "turn_continued").is_empty());
+    assert_eq!(start_bodies(&h.server).len(), 1);
+    let commit = &commits_of(&h.server, EXECUTION)[0];
+    assert!(commit.get("chain_outcome").is_none());
+}
+
 /// A turn that ends at the 512 tool-call cap with a grant that covers the
 /// cap commits, then the host starts the next turn of the chain in the same
 /// thread with the same grant and the host's prompt. That turn answers, and

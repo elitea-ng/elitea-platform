@@ -533,7 +533,7 @@ These parts stay an explicit opt-in for each request. The default never sets the
 | Named sensitive tools (cloud) | Each sensitive cloud tool that the grant names (see below). |
 | Bypass mode (`bypass_approvals`) | A separate mode, not a part of the grant. The local rules' asks run without a question. A grant never sets bypass mode. |
 
-To turn "Run to completion" off for all users, set **Unattended Grants** (`approvals.unattended_grants`) to off (see [Configure](#configure)).
+To turn "Run to completion" off for all users, set **Unattended Grants** (`approvals.unattended_grants`) to off (see [Configure](#configure)). With the switch off, a request that carries only the default grant runs as a request with no grant: it stops at the caps and is not refused. A request with an opt-in (hook asks, remote confirmations or named sensitive tools) is refused with `422 unattended_grant_refused` and the reason `disabled`, and a running chain stops at its next continuation.
 
 **A grant belongs to one task.** A person gives a grant when they start a chat turn (ADR-0045). The grant applies to that turn and to the turns that continue it (the chain). A grant is never stored on an agent, and another person cannot use it.
 
