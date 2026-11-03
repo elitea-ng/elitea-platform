@@ -3,9 +3,12 @@
 //! When an unattended chain starts with `goal_check` (on unless the grant
 //! says `false`), the host asks Main for the chain's brief in the
 //! background ([`ChainGoal`], `run_brief`): the first turn never waits for
-//! it. The brief is kept for the chain, in memory with the chain's turns
-//! (the desktop keeps no chain past a restart; Main's `run_brief` answers
-//! the stored brief again when asked twice).
+//! it. The brief is kept for the chain, in memory with the chain's turns,
+//! and in the turn's resume record
+//! (`crate::history::ResumeRecord`): a chain the host continues after a
+//! restart keeps its brief, its last check and its turns' transcript
+//! ([`ChainGoal::restored`]).
+//! Main's `run_brief` answers the stored brief again when asked twice.
 //!
 //! With a ready brief every continuation's text restates it
 //! ([`continue_text`], the same template as Main's). When a turn would end
@@ -170,8 +173,9 @@ impl GoalOutcome {
     }
 }
 
-/// `run_check`'s answer (contract section 3).
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+/// `run_check`'s answer (contract section 3). Serialized as the resume
+/// record keeps it (ADR-0045 decision 7).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct GoalCheck {
     pub outcome: String,
     #[serde(default)]
@@ -379,6 +383,50 @@ fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl ChainGoal {
+    /// A chain's goal as its resume record kept it (ADR-0045 decision 7):
+    /// the brief settled when it was ready, the last check, the request
+    /// and the turns' transcript ([`Self::transcript`]) before the restart.
+    #[must_use]
+    pub fn restored(
+        brief: Option<Brief>,
+        last_check: Option<GoalCheck>,
+        request: &str,
+        transcript: &str,
+    ) -> Self {
+        let goal = Self::default();
+        if let Some(brief) = brief {
+            goal.settle(BriefAnswer {
+                state: "ready".to_owned(),
+                brief: Some(brief),
+            });
+        }
+        if let Some(check) = last_check {
+            goal.set_last_check(check);
+        }
+        goal.set_request(request);
+        tail(transcript, EXCERPT_BYTES).clone_into(&mut locked(&goal.log));
+        goal
+    }
+
+    /// The turns' transcript so far (newest kept, at most
+    /// [`EXCERPT_BYTES`]), as a resume record keeps it.
+    #[must_use]
+    pub fn transcript(&self) -> String {
+        locked(&self.log).clone()
+    }
+
+    /// The last goal check, when one was made.
+    #[must_use]
+    pub fn last_check(&self) -> Option<GoalCheck> {
+        locked(&self.last_check).clone()
+    }
+
+    /// The person's request, as the chain keeps it.
+    #[must_use]
+    pub fn request(&self) -> String {
+        locked(&self.request).clone()
+    }
+
     /// The brief arrived (or failed).
     pub fn settle(&self, answer: BriefAnswer) {
         self.brief.send_replace(BriefStatus::Settled(answer));

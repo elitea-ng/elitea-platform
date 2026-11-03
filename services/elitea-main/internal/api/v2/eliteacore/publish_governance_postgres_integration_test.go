@@ -1,7 +1,8 @@
 package eliteacore_test
 
 // ADR-0040 decision 3 on the direct publish route: a governed agent is
-// refused before the publish checks make a model call, and the registry
+// refused before the publish checks, the publish gate makes no model call,
+// and the registry
 // row's lock is the first statement of the publish transaction (the lock
 // order the change request's final approval uses).
 
@@ -65,7 +66,7 @@ func publishThroughRoute(t *testing.T, handler *eliteacore.Handler) *httptest.Re
 }
 
 // TestPublishOfGovernedAgentMakesNoModelCall: change_request_required comes
-// before the validation gate's model call.
+// before the publish checks.
 func TestPublishOfGovernedAgentMakesNoModelCall(t *testing.T) {
 	pool := newImportCorpusPool(t)
 	provisionTenantProject(t, pool, publishAIProjectID)
@@ -82,6 +83,25 @@ func TestPublishOfGovernedAgentMakesNoModelCall(t *testing.T) {
 	}
 	if governor.checked != 81 {
 		t.Fatalf("governance checked application %d, want 81", governor.checked)
+	}
+}
+
+// TestPublishGateMakesNoModelCall: the publish route's inline validation gate
+// reads only the verdict, and the AI step can only add recommendations, so a
+// publish never waits on a model. It used to: an unbounded advisory turn on
+// the project's low-tier model ran inside every publish sent without a
+// validation token, and its answer was discarded.
+func TestPublishGateMakesNoModelCall(t *testing.T) {
+	pool := newImportCorpusPool(t)
+	provisionTenantProject(t, pool, publishAIProjectID)
+	seedPublishAIFixture(t, pool)
+	model := &fakePublishModel{answer: `{"findings":[]}`}
+	recorder := publishThroughRoute(t, eliteacore.NewHandler(pool, eliteacore.WithPublishAIValidation(model)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body)
+	}
+	if model.calls != 0 {
+		t.Fatalf("the publish gate called the model %d times", model.calls)
 	}
 }
 

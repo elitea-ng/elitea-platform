@@ -90,6 +90,12 @@ dirs = "=7.0.0"
 tauri-plugin-single-instance = "2"
 # Window size, position and maximized state across launches (src/window.rs).
 tauri-plugin-window-state = "2"
+# The OS power assertion while a local turn runs (src/keep_awake.rs,
+# ADR-0045 decision 7): IOPMAssertion on macOS, SetThreadExecutionState on
+# Windows, a logind inhibitor on Linux. Its own deps (objc2-io-kit,
+# windows, zbus, derive_builder) are already in the tree; it keeps the
+# FFI `unsafe` out of this crate.
+keepawake = { version = "=0.6.1", default-features = false }
 
 # The app's own preferences domain (src/window.rs: the input-source
 # indicator). Already in the tree through tauri/tao; safe bindings only.

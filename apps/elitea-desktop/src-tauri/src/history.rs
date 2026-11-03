@@ -58,7 +58,23 @@
 //!         images TEXT /* JSON StoredImage[] (#1229): name, type, size, thumbnail */)
 //! events (turn_id TEXT REFERENCES turns ON DELETE CASCADE, seq INTEGER,
 //!         kind TEXT, payload TEXT /* JSON */, PRIMARY KEY (turn_id, seq))
+//! resume_turns (workspace_id TEXT PRIMARY KEY, turn_id TEXT, origin TEXT,
+//!         user_id INTEGER, conversation_id TEXT /* JSON */,
+//!         conversation_uuid TEXT NULL, project_id, application_id,
+//!         version_id INTEGER, mode TEXT /* build | plan | bypass */,
+//!         grant_json TEXT NULL, chain_root_execution_id TEXT NULL,
+//!         continuation_index INTEGER, kind TEXT NULL, execution_id TEXT,
+//!         last_committed_execution_id TEXT NULL, request TEXT NULL,
+//!         brief TEXT NULL, last_check TEXT NULL /* JSON */,
+//!         started_at, updated_at, deadline_at INTEGER /* Unix ms */,
+//!         transcript TEXT NULL /* the goal check's turns, ≤ 32 KiB */)
 //! ```
+//!
+//! `resume_turns` (schema 4, ADR-0045 decision 7) holds one record per
+//! running turn: what the host needs to continue it after a restart
+//! ([`ResumeRecord`]). A turn's start writes it, its commit updates it, and
+//! the turn's normal end deletes it. Its writes go through the writer
+//! thread like the events, so a turn never waits for them.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
@@ -79,7 +95,7 @@ use crate::error::HostError;
 
 pub const FILE_NAME: &str = "threads.sqlite";
 /// `PRAGMA user_version` of the schema this build writes.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 /// A string inside one event's payload is cut to this many bytes.
 pub const MAX_EVENT_STRING: usize = 16 * 1024;
 /// One turn's stored events, in payload bytes.
@@ -139,6 +155,139 @@ CREATE TABLE events (
     PRIMARY KEY (turn_id, seq)
 ) WITHOUT ROWID;
 ";
+
+/// The resume records (schema 4): one per running turn, by workspace (a
+/// workspace runs one turn at a time).
+const RESUME_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS resume_turns (
+    workspace_id TEXT PRIMARY KEY NOT NULL,
+    turn_id TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    conversation_id TEXT NOT NULL,
+    conversation_uuid TEXT,
+    project_id INTEGER NOT NULL,
+    application_id INTEGER NOT NULL,
+    version_id INTEGER NOT NULL,
+    mode TEXT NOT NULL,
+    grant_json TEXT,
+    chain_root_execution_id TEXT,
+    continuation_index INTEGER NOT NULL DEFAULT 0,
+    kind TEXT,
+    execution_id TEXT NOT NULL,
+    last_committed_execution_id TEXT,
+    request TEXT,
+    brief TEXT,
+    last_check TEXT,
+    started_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deadline_at INTEGER NOT NULL,
+    transcript TEXT
+);
+";
+
+/// How a resume record's turn ran: the person's mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResumeMode {
+    Build,
+    Plan,
+    Bypass,
+}
+
+impl ResumeMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Build => "build",
+            Self::Plan => "plan",
+            Self::Bypass => "bypass",
+        }
+    }
+
+    fn parse(text: &str) -> Self {
+        match text {
+            "plan" => Self::Plan,
+            "bypass" => Self::Bypass,
+            _ => Self::Build,
+        }
+    }
+}
+
+/// What the host keeps of a running turn to continue it after a restart
+/// (ADR-0045 decision 7): the thread, the mode, the grant, the chain, the
+/// run brief and the last goal check (decision 11), and the last committed
+/// step. The agent's session (`sessions.sqlite`, by the conversation's
+/// UUID) holds what the platform holds up to that step; a turn that never
+/// committed is dropped from it when the session opens again.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResumeRecord {
+    pub workspace_id: String,
+    /// The running turn.
+    pub turn_id: String,
+    pub owner: Owner,
+    /// The conversation's id as the UI sent it (a number or a UUID).
+    pub conversation_id: Value,
+    pub conversation_uuid: Option<String>,
+    pub project_id: i64,
+    pub application_id: i64,
+    pub version_id: i64,
+    pub mode: ResumeMode,
+    /// The unattended grant as the turn ran it (with its `grant_id` and
+    /// `goal_check`); `None` for a turn the person attends.
+    pub grant: Option<Value>,
+    /// The chain's root execution; `None` without a grant.
+    pub chain_root_execution_id: Option<String>,
+    pub continuation_index: u32,
+    /// The running turn's link kind (`step_limit`, `resume`, …); `None` on
+    /// the chain's first turn.
+    pub kind: Option<String>,
+    /// The running turn's execution.
+    pub execution_id: String,
+    /// The last turn of the chain whose commit landed: the step the
+    /// session holds.
+    pub last_committed_execution_id: Option<String>,
+    /// The person's request (the chain's first message, bounded), for a
+    /// brief that was not ready yet.
+    pub request: Option<String>,
+    pub brief: Option<Value>,
+    pub last_check: Option<Value>,
+    /// Unix ms: the chain's (or the turn's) start, kept across the chain.
+    pub started_at: i64,
+    pub updated_at: i64,
+    /// Unix ms: past it the record is dropped, not resumed.
+    pub deadline_at: i64,
+    /// The chain's goal-check transcript of its turns so far (newest kept,
+    /// at most 32 KiB), so a check after the restart sees them too.
+    pub transcript: Option<String>,
+}
+
+/// What a commit that continues the chain updates in its resume record:
+/// the chain's goal state (JSON for the brief and the check).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResumeProgress {
+    pub brief: Option<Value>,
+    pub last_check: Option<Value>,
+    pub transcript: Option<String>,
+}
+
+/// A write to the resume records, in the writer's order.
+enum ResumeWrite {
+    Put(Box<ResumeRecord>),
+    /// The running turn's commit landed and its chain goes on.
+    Committed {
+        workspace_id: String,
+        turn_id: String,
+        execution_id: String,
+        brief: Option<String>,
+        last_check: Option<String>,
+        transcript: Option<String>,
+    },
+    /// The turn ended (only its own record goes).
+    Delete {
+        workspace_id: String,
+        turn_id: String,
+    },
+}
 
 /// Whose history a row is: the deployment and the signed-in user there.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -228,6 +377,10 @@ pub struct StoredTurn {
     /// The host still keeps the turn: `turn_changes` and
     /// `checkpoint_restore` answer for it.
     pub live: bool,
+    /// An `interrupted` turn the host can continue (a resume record holds
+    /// it, ADR-0045 decision 7): the UI offers **Continue**
+    /// (`agent_turn_resume`).
+    pub resumable: bool,
     /// `local` (ran on this desktop) or `cloud` (imported from the cloud
     /// executor when the thread came back, ADR-0034 decision 8).
     pub origin: String,
@@ -410,6 +563,8 @@ enum Op {
     },
     /// Commit what is pending, then answer.
     Flush(std::sync::mpsc::Sender<()>),
+    /// A resume record's write (ADR-0045 decision 7).
+    Resume(ResumeWrite),
 }
 
 impl Op {
@@ -421,7 +576,7 @@ impl Op {
             | Self::Truncated { turn_id }
             | Self::Changes { turn_id, .. }
             | Self::Finish { turn_id, .. } => Some(turn_id),
-            Self::Flush(_) | Self::PruneIdle { .. } => None,
+            Self::Flush(_) | Self::PruneIdle { .. } | Self::Resume(_) => None,
         }
     }
 
@@ -840,6 +995,7 @@ impl HistoryStore {
                                 events_truncated: row.get::<_, i64>(8)? != 0,
                                 state: "interrupted",
                                 live: false,
+                                resumable: false,
                                 origin: row.get(9)?,
                             })
                         },
@@ -864,6 +1020,13 @@ impl HistoryStore {
                 if turn.events.iter().any(|event| event.kind == "done") {
                     turn.state = "done";
                 }
+            }
+            let mut statement = conn.prepare(
+                "SELECT 1 FROM resume_turns WHERE turn_id = ?1 AND origin = ?2 AND user_id = ?3",
+            )?;
+            for turn in &mut turns {
+                turn.resumable = turn.state == "interrupted"
+                    && statement.exists(params![turn.turn_id, owner.origin, owner.user_id])?;
             }
             Ok(turns)
         })
@@ -1200,10 +1363,116 @@ impl HistoryStore {
         self.flush();
         self.with("could not delete the workspace's history", |conn| {
             conn.execute(
+                "DELETE FROM resume_turns WHERE workspace_id = ?1",
+                params![workspace_id],
+            )?;
+            conn.execute(
                 "DELETE FROM turns WHERE workspace_id = ?1",
                 params![workspace_id],
             )
         })
+    }
+
+    /// Keep `record` as its workspace's resume record (a turn started): it
+    /// replaces the record of the workspace's previous turn. A turn of the
+    /// same chain keeps the chain's start, deadline and last committed
+    /// step.
+    pub fn resume_put(&self, record: ResumeRecord) {
+        self.send(Op::Resume(ResumeWrite::Put(Box::new(record))));
+    }
+
+    /// The record's turn committed and its chain goes on: the last
+    /// committed step, the brief, the last goal check and the transcript.
+    pub fn resume_committed(
+        &self,
+        workspace_id: &str,
+        turn_id: &str,
+        execution_id: &str,
+        progress: ResumeProgress,
+    ) {
+        self.send(Op::Resume(ResumeWrite::Committed {
+            workspace_id: workspace_id.to_owned(),
+            turn_id: turn_id.to_owned(),
+            execution_id: execution_id.to_owned(),
+            brief: progress.brief.as_ref().map(Value::to_string),
+            last_check: progress.last_check.as_ref().map(Value::to_string),
+            transcript: progress.transcript,
+        }));
+    }
+
+    /// The turn ended: its record goes (a later turn's record stays).
+    pub fn resume_delete(&self, workspace_id: &str, turn_id: &str) {
+        self.send(Op::Resume(ResumeWrite::Delete {
+            workspace_id: workspace_id.to_owned(),
+            turn_id: turn_id.to_owned(),
+        }));
+    }
+
+    /// Every resume record, after what is queued was written. Blocks.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be read.
+    pub fn resume_records(&self) -> Result<Vec<ResumeRecord>, HostError> {
+        self.flush();
+        self.with("could not read the resume records", |conn| {
+            let mut statement = conn.prepare(
+                "SELECT workspace_id, turn_id, origin, user_id, conversation_id,
+                        conversation_uuid, project_id, application_id, version_id, mode,
+                        grant_json, chain_root_execution_id, continuation_index, kind,
+                        execution_id, last_committed_execution_id, request, brief,
+                        last_check, started_at, updated_at, deadline_at, transcript
+                 FROM resume_turns ORDER BY started_at",
+            )?;
+            let json = |text: Option<String>| text.and_then(|t| serde_json::from_str(&t).ok());
+            statement
+                .query_map([], |row| {
+                    let conversation: String = row.get(4)?;
+                    let mode: String = row.get(9)?;
+                    Ok(ResumeRecord {
+                        workspace_id: row.get(0)?,
+                        turn_id: row.get(1)?,
+                        owner: Owner {
+                            origin: row.get(2)?,
+                            user_id: row.get(3)?,
+                        },
+                        conversation_id: serde_json::from_str(&conversation)
+                            .unwrap_or(Value::String(conversation)),
+                        conversation_uuid: row.get(5)?,
+                        project_id: row.get(6)?,
+                        application_id: row.get(7)?,
+                        version_id: row.get(8)?,
+                        mode: ResumeMode::parse(&mode),
+                        grant: json(row.get(10)?),
+                        chain_root_execution_id: row.get(11)?,
+                        continuation_index: u32::try_from(row.get::<_, i64>(12)?)
+                            .unwrap_or_default(),
+                        kind: row.get(13)?,
+                        execution_id: row.get(14)?,
+                        last_committed_execution_id: row.get(15)?,
+                        request: row.get(16)?,
+                        brief: json(row.get(17)?),
+                        last_check: json(row.get(18)?),
+                        started_at: row.get(19)?,
+                        updated_at: row.get(20)?,
+                        deadline_at: row.get(21)?,
+                        transcript: row.get(22)?,
+                    })
+                })?
+                .collect()
+        })
+    }
+
+    /// [`Self::resume_records`] on a blocking thread, for an async caller.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::resume_records`].
+    pub async fn read_resume_records(self: &Arc<Self>) -> Result<Vec<ResumeRecord>, HostError> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.resume_records())
+            .await
+            .map_err(|e| HostError::Internal(format!("the resume read stopped: {e}")))?
     }
 }
 
@@ -1426,6 +1695,12 @@ impl Writer {
             }
         };
         for op in ops {
+            if let Op::Resume(write) = op {
+                if let Err(error) = apply_resume(&tx, write) {
+                    log::warn!("the thread history could not keep a resume record: {error}");
+                }
+                continue;
+            }
             let Some(turn_id) = op.turn_id().map(str::to_owned) else {
                 continue;
             };
@@ -1546,6 +1821,112 @@ fn insert_event(
 
 /// One op against the writer's transaction. Text is only ever INSERTed
 /// (an appended chunk), never an UPDATE of earlier text.
+/// Whether the record in the table and the one written are of one chain.
+const SAME_CHAIN: &str = "resume_turns.chain_root_execution_id = excluded.chain_root_execution_id";
+
+fn apply_resume(conn: &Connection, write: ResumeWrite) -> rusqlite::Result<()> {
+    match write {
+        ResumeWrite::Put(record) => {
+            let text = |value: Option<&Value>| value.map(Value::to_string);
+            conn.execute(
+                &format!(
+                    "INSERT INTO resume_turns (workspace_id, turn_id, origin, user_id,
+                         conversation_id, conversation_uuid, project_id, application_id,
+                         version_id, mode, grant_json, chain_root_execution_id,
+                         continuation_index, kind, execution_id,
+                         last_committed_execution_id, request, brief, last_check,
+                         started_at, updated_at, deadline_at, transcript)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                         ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+                     ON CONFLICT (workspace_id) DO UPDATE SET
+                         turn_id = excluded.turn_id, origin = excluded.origin,
+                         user_id = excluded.user_id,
+                         conversation_id = excluded.conversation_id,
+                         conversation_uuid = excluded.conversation_uuid,
+                         project_id = excluded.project_id,
+                         application_id = excluded.application_id,
+                         version_id = excluded.version_id, mode = excluded.mode,
+                         grant_json = excluded.grant_json,
+                         chain_root_execution_id = excluded.chain_root_execution_id,
+                         continuation_index = excluded.continuation_index,
+                         kind = excluded.kind, execution_id = excluded.execution_id,
+                         last_committed_execution_id = COALESCE(
+                             excluded.last_committed_execution_id,
+                             CASE WHEN {SAME_CHAIN}
+                             THEN resume_turns.last_committed_execution_id END),
+                         request = excluded.request, brief = excluded.brief,
+                         last_check = excluded.last_check,
+                         transcript = excluded.transcript,
+                         started_at = CASE WHEN {SAME_CHAIN}
+                             THEN resume_turns.started_at ELSE excluded.started_at END,
+                         updated_at = excluded.updated_at,
+                         deadline_at = CASE WHEN {SAME_CHAIN}
+                             THEN resume_turns.deadline_at ELSE excluded.deadline_at END"
+                ),
+                params![
+                    record.workspace_id,
+                    record.turn_id,
+                    record.owner.origin,
+                    record.owner.user_id,
+                    record.conversation_id.to_string(),
+                    record.conversation_uuid,
+                    record.project_id,
+                    record.application_id,
+                    record.version_id,
+                    record.mode.as_str(),
+                    text(record.grant.as_ref()),
+                    record.chain_root_execution_id,
+                    record.continuation_index,
+                    record.kind,
+                    record.execution_id,
+                    record.last_committed_execution_id,
+                    record.request,
+                    text(record.brief.as_ref()),
+                    text(record.last_check.as_ref()),
+                    record.started_at,
+                    record.updated_at,
+                    record.deadline_at,
+                    record.transcript,
+                ],
+            )
+            .map(|_| ())
+        }
+        ResumeWrite::Committed {
+            workspace_id,
+            turn_id,
+            execution_id,
+            brief,
+            last_check,
+            transcript,
+        } => conn
+            .execute(
+                "UPDATE resume_turns SET last_committed_execution_id = ?3,
+                     brief = COALESCE(?4, brief), last_check = COALESCE(?5, last_check),
+                     transcript = COALESCE(?7, transcript), updated_at = ?6
+                 WHERE workspace_id = ?1 AND turn_id = ?2",
+                params![
+                    workspace_id,
+                    turn_id,
+                    execution_id,
+                    brief,
+                    last_check,
+                    now_ms(),
+                    transcript
+                ],
+            )
+            .map(|_| ()),
+        ResumeWrite::Delete {
+            workspace_id,
+            turn_id,
+        } => conn
+            .execute(
+                "DELETE FROM resume_turns WHERE workspace_id = ?1 AND turn_id = ?2",
+                params![workspace_id, turn_id],
+            )
+            .map(|_| ()),
+    }
+}
+
 fn apply(conn: &Connection, op: Op) -> rusqlite::Result<()> {
     match op {
         // Intercepted on the queue before `apply` (it answers its caller in
@@ -1620,7 +2001,7 @@ fn apply(conn: &Connection, op: Op) -> rusqlite::Result<()> {
             )
             .map(|_| ())
         }
-        Op::Flush(_) => Ok(()),
+        Op::Flush(_) | Op::Resume(_) => Ok(()),
     }
 }
 
@@ -1737,22 +2118,28 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
     match version {
         0 => conn
             .execute_batch(&format!(
-                "BEGIN; {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                "BEGIN; {SCHEMA} {RESUME_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not create the thread history", &e)),
         // 2 (ADR-0034): turns imported from the cloud executor. 3 (#1229):
-        // the images a turn carried.
+        // the images a turn carried. 4 (ADR-0045 decision 7): the resume
+        // records.
         1 => conn
             .execute_batch(&format!(
                 "BEGIN; ALTER TABLE turns ADD COLUMN turn_origin TEXT NOT NULL DEFAULT 'local'; \
                  ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
-                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                 {RESUME_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
         2 => conn
             .execute_batch(&format!(
                 "BEGIN; ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
-                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                 {RESUME_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+            ))
+            .map_err(|e| storage("could not upgrade the thread history", &e)),
+        3 => conn
+            .execute_batch(&format!(
+                "BEGIN; {RESUME_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
         SCHEMA_VERSION => Ok(()),
@@ -2872,6 +3259,125 @@ mod tests {
         assert_eq!(turns[0].state, "interrupted");
         assert_eq!(turns[0].finished_at, None);
         assert_eq!(turns[0].events.len(), 1);
+    }
+
+    fn resume_record(turn_id: &str, root: Option<&str>, started_at: i64) -> ResumeRecord {
+        ResumeRecord {
+            workspace_id: "w1".into(),
+            turn_id: turn_id.into(),
+            owner: owner(1),
+            conversation_id: json!(42),
+            conversation_uuid: Some("uuid-42".into()),
+            project_id: 1,
+            application_id: 5,
+            version_id: 9,
+            mode: ResumeMode::Bypass,
+            grant: root.map(|_| json!({"grant_id": "g", "continue_step_limit": true})),
+            chain_root_execution_id: root.map(str::to_owned),
+            continuation_index: 0,
+            kind: None,
+            execution_id: format!("exec-{turn_id}"),
+            last_committed_execution_id: None,
+            request: Some("Fix the build".into()),
+            brief: None,
+            last_check: None,
+            started_at,
+            updated_at: started_at,
+            deadline_at: started_at + 1000,
+            transcript: None,
+        }
+    }
+
+    /// ADR-0045 decision 7: a turn's start writes its record, its commit
+    /// updates it while the chain goes on, the chain's next turn keeps the
+    /// chain's start and deadline, and the turn's end deletes only its own.
+    #[test]
+    fn a_resume_record_is_written_updated_and_deleted() {
+        let (_root, store) = store();
+        store.resume_put(resume_record("t1", Some("root"), 10));
+        let records = store.resume_records().unwrap();
+        assert_eq!(records, vec![resume_record("t1", Some("root"), 10)]);
+
+        let brief = json!({"goal": "Fix the build."});
+        let check = json!({"outcome": "not_met"});
+        let transcript = "\n## Turn 1\nAnswer: The build fails in auth.\n";
+        store.resume_committed(
+            "w1",
+            "t1",
+            "exec-t1",
+            ResumeProgress {
+                brief: Some(brief.clone()),
+                last_check: Some(check.clone()),
+                transcript: Some(transcript.into()),
+            },
+        );
+        let committed = &store.resume_records().unwrap()[0];
+        assert_eq!(committed.transcript.as_deref(), Some(transcript));
+        assert_eq!(
+            committed.last_committed_execution_id.as_deref(),
+            Some("exec-t1")
+        );
+        assert_eq!(committed.brief.as_ref(), Some(&brief));
+        assert_eq!(committed.last_check.as_ref(), Some(&check));
+
+        // The chain's next turn replaces it, keeping the chain's start,
+        // deadline and last committed step.
+        let mut next = resume_record("t2", Some("root"), 50);
+        next.continuation_index = 1;
+        next.kind = Some("step_limit".into());
+        next.brief = Some(brief.clone());
+        store.resume_put(next);
+        let records = store.resume_records().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].turn_id, "t2");
+        assert_eq!(records[0].continuation_index, 1);
+        assert_eq!(records[0].started_at, 10);
+        assert_eq!(records[0].deadline_at, 1010);
+        assert_eq!(
+            records[0].last_committed_execution_id.as_deref(),
+            Some("exec-t1")
+        );
+        assert_eq!(records[0].mode, ResumeMode::Bypass);
+
+        // The old turn's delete leaves the new turn's record.
+        store.resume_delete("w1", "t1");
+        assert_eq!(store.resume_records().unwrap().len(), 1);
+        store.resume_delete("w1", "t2");
+        assert!(store.resume_records().unwrap().is_empty());
+
+        // A new chain (or a turn without one) starts afresh.
+        store.resume_put(resume_record("t3", None, 70));
+        store.resume_put(resume_record("t4", None, 90));
+        let records = store.resume_records().unwrap();
+        assert_eq!(records[0].turn_id, "t4");
+        assert_eq!(records[0].started_at, 90);
+        assert_eq!(records[0].grant, None);
+        // Removing the workspace removes its record.
+        store.delete_workspace("w1").unwrap();
+        assert!(store.resume_records().unwrap().is_empty());
+    }
+
+    /// An interrupted turn with a record is `resumable`; one without is not.
+    #[test]
+    fn an_interrupted_turn_with_a_record_is_resumable() {
+        let (_root, store) = store();
+        for id in ["t1", "t2"] {
+            let tap = TurnTap::new(Arc::new(VecEmitter::default()), Some(store.clone()));
+            tap.activate(new_turn(owner(1), id, "42"));
+            tap.emit(event(id, 0, "status", json!({"phase": "running"})));
+            drop(tap);
+        }
+        store.resume_put(resume_record("t2", None, now_ms()));
+        let turns = store.thread(&owner(1), "w1", "42").unwrap();
+        assert_eq!(
+            turns
+                .iter()
+                .map(|t| (t.turn_id.as_str(), t.resumable))
+                .collect::<Vec<_>>(),
+            vec![("t1", false), ("t2", true)]
+        );
+        // Another account never sees it as its own.
+        assert!(store.thread(&owner(2), "w1", "42").unwrap().is_empty());
     }
 
     #[test]

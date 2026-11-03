@@ -417,6 +417,37 @@ describe('WorkspaceSessionPage', () => {
     };
   }
 
+  it('offers Continue on a turn that ran when the app stopped, only when the host can resume it', async () => {
+    serveProject();
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+    const stopped = (id: string, resumable: boolean) => recorded(id, { state: 'interrupted', resumable, events: recorded(id).events.slice(0, 2) });
+    ipc.setHistory('w1', '77', [stopped('t1', false), stopped('t2', true)]);
+    const user = userEvent.setup();
+    mount(ipc, '/workspaces/w1?conversation=77');
+
+    expect(await screen.findAllByText(/did not finish/)).toHaveLength(2);
+    const buttons = screen.getAllByTestId('history-turn-continue');
+    expect(buttons).toHaveLength(1);
+    await user.click(buttons[0] as HTMLElement);
+    await waitFor(() => expect(ipc.calls.resumed).toEqual(['t2']));
+    // The continued turn takes no prompt slot of the person: it stands under its marker, and Continue goes.
+    const marker = await screen.findByTestId('turn-continued-marker');
+    expect(marker).toHaveTextContent('Resumed after restart');
+    expect(screen.queryByTestId('history-turn-continue')).toBeNull();
+    ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: [], changed_files: 0 } });
+    await waitFor(() => expect(screen.getByTestId('chat-message-input')).toBeEnabled());
+
+    // The next prompt of the person stands above its own turn, under the resumed one.
+    await pickCoder(user);
+    await user.type(screen.getByTestId('chat-message-input'), 'fix the build');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+    const prompt = (await screen.findAllByTestId('your-prompt')).find((node) => node.textContent?.includes('fix the build'));
+    expect(prompt).toBeDefined();
+    expect(marker.compareDocumentPosition(prompt as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('reopens a thread with every turn recorded on this computer, and every turn\'s changes in the panel', async () => {
     serveProject();
     const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
@@ -955,6 +986,9 @@ describe('WorkspaceSessionPage', () => {
         startError: null,
         startErrorCode: null,
         start: () => Promise.resolve(started),
+        resume: () => Promise.resolve(started),
+        watch: () => undefined,
+        offersResume: (_turnId: string, resumable: boolean) => resumable,
         prewarm: () => undefined,
         retryCommit: () => Promise.resolve(),
         cancel: () => Promise.resolve(),

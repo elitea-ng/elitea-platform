@@ -106,15 +106,16 @@ func TestDefaultGrantStartsWithNoGrantWhenGrantsAreOff(t *testing.T) {
 	}
 }
 
-// ADR-0045 decision 11: a desktop continuation names its link kind
-// (step_limit, tool_call_cap or goal_not_met); absent is continue, and any
-// other kind, or a kind on a first turn, is refused as invalid.
+// ADR-0045 decisions 7 and 11: a desktop continuation names its link kind
+// (step_limit, tool_call_cap, goal_not_met or resume); absent is continue,
+// and any other kind, or a kind on a first turn, is refused as invalid.
 func TestContinuationKind(t *testing.T) {
 	service, store := grantService(t, platformconfig.DefaultUnattendedSettings())
 	root := strings.Repeat("a", 32)
 	for kind, want := range map[string]string{
 		"": unattended.LinkContinue, unattended.LinkStepLimit: unattended.LinkStepLimit,
 		unattended.LinkToolCallCap: unattended.LinkToolCallCap, unattended.LinkGoalNotMet: unattended.LinkGoalNotMet,
+		unattended.LinkResume: unattended.LinkResume,
 	} {
 		request := grantStartRequest(root, 1)
 		request.Unattended.Kind = kind

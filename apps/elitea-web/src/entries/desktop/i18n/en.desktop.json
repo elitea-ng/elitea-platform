@@ -940,6 +940,7 @@
   "desktop.nativeMenu.about": "About Elitea",
   "desktop.nativeMenu.activityApprove": "Approve {tool}",
   "desktop.nativeMenu.activityApproveCloud": "Approve in cloud",
+  "desktop.nativeMenu.activityAwake": "Keeping the computer awake",
   "desktop.nativeMenu.activityNothing": "Nothing running",
   "desktop.nativeMenu.activityRunning": "Running",
   "desktop.nativeMenu.activityRunningCloud": "Running in cloud",
@@ -967,6 +968,10 @@
   "desktop.nativeMenu.openInChat": "Open in Chat",
   "desktop.nativeMenu.paste": "Paste",
   "desktop.nativeMenu.quit": "Quit Elitea",
+  "desktop.nativeMenu.quitRunningCancel": "Keep running",
+  "desktop.nativeMenu.quitRunningConfirm": "Quit",
+  "desktop.nativeMenu.quitRunningMessage": "A turn is running. Quit stops it until you open Elitea again.",
+  "desktop.nativeMenu.quitRunningTitle": "Quit Elitea?",
   "desktop.nativeMenu.redo": "Redo",
   "desktop.nativeMenu.reload": "Reload",
   "desktop.nativeMenu.runDiagnostics": "Run Diagnostics…",
@@ -1058,5 +1063,8 @@
   "workspace.chain.limitReached": "chain limit reached",
   "workspace.chain.limitSpend": "The run reached its spend limit.",
   "workspace.chain.waiting": "waiting for you. Click Continue to go on.",
-  "workspace.runToCompletion.planMode": "Run to completion is not used in Plan mode: the plan waits for you. It applies in Act and Bypass mode."
+  "workspace.runToCompletion.planMode": "Run to completion is not used in Plan mode: the plan waits for you. It applies in Act and Bypass mode.",
+  "workspace.chain.resumed": "Resumed after restart ({{n}})",
+  "workspace.chain.resumedAfterRestart": "Resumed after restart",
+  "workspace.history.continue": "Continue"
 }

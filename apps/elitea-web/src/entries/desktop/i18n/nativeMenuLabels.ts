@@ -59,5 +59,10 @@ export function nativeMenuLabels(): Record<string, string> {
     activity_approve: t('desktop.nativeMenu.activityApprove', 'Approve {tool}'),
     activity_approve_cloud: t('desktop.nativeMenu.activityApproveCloud', 'Approve in cloud'),
     activity_running_cloud: t('desktop.nativeMenu.activityRunningCloud', 'Running in cloud'),
+    activity_awake: t('desktop.nativeMenu.activityAwake', 'Keeping the computer awake'),
+    quit_running_title: t('desktop.nativeMenu.quitRunningTitle', 'Quit Elitea?'),
+    quit_running_message: t('desktop.nativeMenu.quitRunningMessage', 'A turn is running. Quit stops it until you open Elitea again.'),
+    quit_running_confirm: t('desktop.nativeMenu.quitRunningConfirm', 'Quit'),
+    quit_running_cancel: t('desktop.nativeMenu.quitRunningCancel', 'Keep running'),
   };
 }

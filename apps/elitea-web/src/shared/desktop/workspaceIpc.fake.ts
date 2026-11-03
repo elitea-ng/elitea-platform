@@ -29,6 +29,7 @@ type FailableCommand =
   | 'files'
   | 'commands'
   | 'startTurn'
+  | 'resumeTurn'
   | 'attachFile'
   | 'attachBytes'
   | 'cancelTurn'
@@ -52,6 +53,8 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
     started: TurnStartRequest[];
     prewarmed: TurnPrewarmRequest[];
     commitRetries: string[];
+    /** `resumeTurn` turn ids, in order. */
+    resumed: string[];
     cancelled: string[];
     approvals: { requestId: string; decision: ApprovalDecision; feedback?: string | undefined }[];
     restores: { turnId: string; path?: string; confirmOlder?: boolean }[];
@@ -109,7 +112,7 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
   const statuses = new Map<string, TurnStatus>();
   const history = new Map<string, StoredTurn[]>();
   const historyKey = (workspaceId: string, conversationId: string): string => `${workspaceId}\u0000${conversationId}`;
-  const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], commitRetries: [], cancelled: [], approvals: [], restores: [], fileQueries: [], forks: [], attachedFiles: [], attachedBytes: [], removedAttachments: [], steers: [], steerUpdates: [] };
+  const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], commitRetries: [], resumed: [], cancelled: [], approvals: [], restores: [], fileQueries: [], forks: [], attachedFiles: [], attachedBytes: [], removedAttachments: [], steers: [], steerUpdates: [] };
   let attachments = 0;
   const attached = (name: string, mime: string): AttachedImage => {
     attachments += 1;
@@ -182,6 +185,13 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
     startTurn(request): Promise<TurnStarted> {
       calls.started.push(request);
       const failed = failure('startTurn');
+      if (failed !== undefined) return failed;
+      turnCounter += 1;
+      return Promise.resolve({ turn_id: `turn-${String(turnCounter)}`, execution_id: `exec-${String(turnCounter)}` });
+    },
+    resumeTurn(turnId): Promise<TurnStarted> {
+      calls.resumed.push(turnId);
+      const failed = failure('resumeTurn');
       if (failed !== undefined) return failed;
       turnCounter += 1;
       return Promise.resolve({ turn_id: `turn-${String(turnCounter)}`, execution_id: `exec-${String(turnCounter)}` });
