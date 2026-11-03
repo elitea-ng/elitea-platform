@@ -33,6 +33,15 @@ export function applyChainEvent<V extends ChainView>(view: V, event: ChainEvent)
   return { ...view, continuedTo: { nextTurnId: event.payload.next_turn_id, index: event.payload.continuation_index } };
 }
 
+/**
+ * The turn is done, but the host starts the chain's next turn by itself and has not said so yet: the composer stays
+ * busy until `turn_continued` or `chain_ended` (the host sends `chain_ended` itself when the next turn does not start
+ * within 60 s).
+ */
+export function waitsForNextTurn(view: ChainView & { done?: { continuing?: true } }): boolean {
+  return view.done?.continuing === true && view.continuedTo === undefined && view.chainEnded === undefined;
+}
+
 /** The unattended fields of a `status` event, when it has them. */
 export function withChainStatus<V extends ChainView>(view: V, payload: EventOf<'status'>['payload']): V {
   let next = view;

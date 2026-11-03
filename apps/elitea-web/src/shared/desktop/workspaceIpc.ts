@@ -144,6 +144,8 @@ export interface TurnDonePayload {
   conversation_id: string;
   message_ids: string[];
   changed_files: number;
+  /** An unattended turn the host continues by itself: the UI stays busy until `turn_continued` or `chain_ended`. */
+  continuing?: boolean;
 }
 
 /** `agent_turn_status`: where a turn is; `done` is the `done` event's payload once it was sent. */

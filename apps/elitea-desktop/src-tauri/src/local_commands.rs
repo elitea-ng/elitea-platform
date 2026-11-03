@@ -1176,6 +1176,7 @@ mod tests {
             code: "workspace_busy".into(),
             message: "A turn is already running in this workspace.".into(),
             status: None,
+            limit: None,
         }
         .into();
         assert_eq!(

@@ -129,6 +129,9 @@ pub struct ApiError {
     /// (`network`, `invalid_response`, `not_signed_in`).
     pub code: String,
     pub message: String,
+    /// The refusal's `limit` (`continuations`, `spend`, `deadline`): which
+    /// chain limit a `409 chain_limit_reached` names (ADR-0045).
+    pub limit: Option<String>,
 }
 
 impl ApiError {
@@ -137,6 +140,7 @@ impl ApiError {
             status: None,
             code: code.to_owned(),
             message: message.into(),
+            limit: None,
         }
     }
 }
@@ -169,6 +173,9 @@ impl Answer {
             code: text("error").unwrap_or_else(|| format!("http_{}", self.status)),
             message: text("message")
                 .unwrap_or_else(|| format!("the platform answered HTTP {}", self.status)),
+            // Only a known limit name; anything else is dropped.
+            limit: text("limit")
+                .filter(|limit| matches!(limit.as_str(), "continuations" | "spend" | "deadline")),
         }
     }
 

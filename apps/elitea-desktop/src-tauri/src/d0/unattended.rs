@@ -27,6 +27,11 @@ use super::api::LocalTurnStarted;
 use super::events::TurnEvents;
 use super::turn::{TurnError, TurnRequest};
 
+/// How long the host waits, after a turn's `done`, for the chain's next
+/// turn to start. Past it the chain ends as `failed`: the UI, which stays
+/// busy while the host continues, is never held for good.
+pub const CONTINUE_WAIT: Duration = Duration::from_secs(60);
+
 /// The platform's refusal of a continuation past a chain limit (409).
 pub const CHAIN_LIMIT_REACHED: &str = "chain_limit_reached";
 
@@ -391,9 +396,18 @@ pub fn running_status(turn: &UnattendedTurn, started: Option<&StartedChain>) -> 
     payload
 }
 
-/// Send `chain_ended` on the chain's last turn (after its `done`).
-pub fn chain_ended(events: &TurnEvents, outcome: ChainOutcome, message: Option<&str>) {
+/// Send `chain_ended` on the chain's last turn (after its `done`), with
+/// the chain `limit` that refused the next turn, if any.
+pub fn chain_ended(
+    events: &TurnEvents,
+    outcome: ChainOutcome,
+    limit: Option<&str>,
+    message: Option<&str>,
+) {
     let mut payload = json!({ "outcome": outcome.as_str() });
+    if let Some(limit) = limit {
+        payload["limit"] = json!(limit);
+    }
     if let Some(message) = message {
         payload["message"] = json!(message);
     }

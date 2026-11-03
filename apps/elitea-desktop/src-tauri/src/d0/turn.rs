@@ -131,6 +131,8 @@ pub struct TurnError {
     pub message: String,
     /// The platform's HTTP status when the platform refused; for the log.
     pub status: Option<u16>,
+    /// The chain limit a `chain_limit_reached` refusal names.
+    pub limit: Option<String>,
 }
 
 impl TurnError {
@@ -139,6 +141,7 @@ impl TurnError {
             code: code.to_owned(),
             message: message.into(),
             status: None,
+            limit: None,
         }
     }
 }
@@ -149,6 +152,7 @@ impl From<ApiError> for TurnError {
             code: error.code,
             message: error.message,
             status: error.status,
+            limit: error.limit,
         }
     }
 }
@@ -916,6 +920,10 @@ pub struct AgentHost {
     compaction: std::sync::OnceLock<Arc<CompactionSettingsStore>>,
     /// The threads' idle compactions (`super::idle`).
     idle: Arc<IdleCompactor>,
+    /// How long an unattended chain's next turn may take to start after
+    /// the previous turn's `done` ([`unattended::CONTINUE_WAIT`]; tests
+    /// shorten it), in milliseconds.
+    continue_wait_ms: std::sync::atomic::AtomicU64,
     /// Extra toolsets every turn offers (tests: tools that record when they
     /// run).
     #[cfg(test)]
@@ -1122,6 +1130,9 @@ impl AgentHost {
             worktrees: std::sync::OnceLock::new(),
             compaction: std::sync::OnceLock::new(),
             idle,
+            continue_wait_ms: std::sync::atomic::AtomicU64::new(
+                u64::try_from(unattended::CONTINUE_WAIT.as_millis()).unwrap_or(u64::MAX),
+            ),
             #[cfg(test)]
             test_toolsets: Mutex::new(Vec::new()),
         })
@@ -1232,6 +1243,15 @@ impl AgentHost {
                 _bypass: bypass.then(|| EndBypass(workspace.session.clone())),
             },
         ))
+    }
+
+    /// Shorten the wait for a chain's next turn (tests).
+    #[cfg(test)]
+    pub(super) fn set_continue_wait(&self, wait: Duration) {
+        self.continue_wait_ms.store(
+            u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
+            std::sync::atomic::Ordering::SeqCst,
+        );
     }
 
     /// How many attached images the host holds (tests).
@@ -2694,7 +2714,7 @@ impl AgentHost {
             );
             // A cancelled turn commits nothing: the chain ends here.
             if request.unattended.is_some() {
-                unattended::chain_ended(&events, ChainOutcome::Cancelled, None);
+                unattended::chain_ended(&events, ChainOutcome::Cancelled, None, None);
             }
             return;
         };
@@ -2857,6 +2877,17 @@ impl AgentHost {
             "message_ids": [started.question_id, started.response_message_id],
             "changed_files": changes.len(),
         });
+        // The host will start the chain's next turn: `done` says so, and the
+        // UI stays busy until `turn_continued` or `chain_ended`. The first of
+        // those to go out takes `gate`; the watchdog below sends
+        // `chain_ended` when neither went out in time.
+        let continuing = matches!(chain_step, Some(ChainStep::Continue));
+        let mut done = done;
+        if continuing {
+            done["continuing"] = json!(true);
+        }
+        let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watchdog = continuing.then(|| (gate.clone(), events.clone()));
         let job = async move {
             // Nothing of the commit is reported before the turn's `done`.
             let _ = after_done.await;
@@ -2903,17 +2934,24 @@ impl AgentHost {
                 // The chain goes on only from a saved turn.
                 match (chain_step, continuation) {
                     (Some(ChainStep::Continue), Some(next)) if landed => {
-                        tokio::spawn(host.clone().continue_chain(next, events.clone()));
+                        tokio::spawn(host.clone().continue_chain(
+                            next,
+                            events.clone(),
+                            gate.clone(),
+                        ));
                     }
                     (Some(ChainStep::End(outcome)), _) if landed => {
-                        unattended::chain_ended(&events, outcome, None);
+                        unattended::chain_ended(&events, outcome, None, None);
                     }
-                    (Some(_), _) => unattended::chain_ended(
-                        &events,
-                        ChainOutcome::Failed,
-                        Some("The turn could not be saved, so the unattended run stops."),
-                    ),
-                    (None, _) => {}
+                    (Some(_), _) if !gate.swap(true, std::sync::atomic::Ordering::SeqCst) => {
+                        unattended::chain_ended(
+                            &events,
+                            ChainOutcome::Failed,
+                            None,
+                            Some("The turn could not be saved, so the unattended run stops."),
+                        );
+                    }
+                    _ => {}
                 }
             })
             .catch_unwind()
@@ -2946,6 +2984,24 @@ impl AgentHost {
         // reports one that did not land.
         done_entry.finish(&done_events, done);
         let _ = done_sent.send(());
+        if let Some((gate, events)) = watchdog {
+            let wait = Duration::from_millis(
+                self.continue_wait_ms
+                    .load(std::sync::atomic::Ordering::SeqCst),
+            );
+            tokio::spawn(async move {
+                tokio::time::sleep(wait).await;
+                if !gate.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    log::warn!("an unattended run's next turn did not start in time");
+                    unattended::chain_ended(
+                        &events,
+                        ChainOutcome::Failed,
+                        None,
+                        Some("The next turn did not start in time, so the unattended run stops."),
+                    );
+                }
+            });
+        }
     }
 
     /// Start `next`, the next turn of an unattended chain (ADR-0045
@@ -2953,16 +3009,29 @@ impl AgentHost {
     /// `previous` says `turn_continued`; refused, `chain_ended`
     /// (`limit_reached` when a chain limit refused it). A boxed future: the
     /// next turn's run may start the one after it.
+    ///
+    /// `gate` is taken by the first of `turn_continued` and `chain_ended`
+    /// (the run's watchdog may have sent `chain_ended` already): a turn that
+    /// starts after the watchdog gave up is cancelled at once.
     fn continue_chain(
         self: Arc<Self>,
         next: TurnRequest,
         previous: Arc<TurnEvents>,
+        gate: Arc<std::sync::atomic::AtomicBool>,
     ) -> futures::future::BoxFuture<'static, ()> {
+        use std::sync::atomic::Ordering;
         async move {
             let Some(turn) = next.unattended.clone() else {
                 return;
             };
+            if gate.load(Ordering::SeqCst) {
+                return;
+            }
             match self.start(next).await {
+                Ok(started) if gate.swap(true, Ordering::SeqCst) => {
+                    // Too late: the chain already ended.
+                    let _ = self.cancel(&started.turn_id);
+                }
                 Ok(started) => previous.send(
                     "turn_continued",
                     json!({
@@ -2972,6 +3041,7 @@ impl AgentHost {
                         "chain_root_execution_id": turn.chain_root_execution_id,
                     }),
                 ),
+                Err(_) if gate.swap(true, Ordering::SeqCst) => {}
                 Err(error) => {
                     log::warn!(
                         "an unattended run did not continue: {}",
@@ -2982,7 +3052,12 @@ impl AgentHost {
                     } else {
                         ChainOutcome::Failed
                     };
-                    unattended::chain_ended(&previous, outcome, Some(&error.message));
+                    unattended::chain_ended(
+                        &previous,
+                        outcome,
+                        error.limit.as_deref(),
+                        Some(&error.message),
+                    );
                 }
             }
         }

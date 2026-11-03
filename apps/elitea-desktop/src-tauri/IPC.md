@@ -586,13 +586,17 @@ person before the start:
   after its `done`, and the next turn's `status` `running` carries
   `continued_automatically: true`, `continuation_index` and `host_prompt`.
   The platform counts the chain and refuses a continuation past a limit
-  (`409 chain_limit_reached`).
-- **The end.** The chain's last turn sends `chain_ended {outcome, message?}`
+  (`409 chain_limit_reached`). The `done` of a turn the host continues
+  carries `continuing: true`: the UI stays busy until `turn_continued` or
+  `chain_ended`. When the next turn has not started 60 seconds after that
+  `done`, the host sends `chain_ended` `failed` itself, and a turn that
+  starts later is cancelled at once.
+- **The end.** The chain's last turn sends `chain_ended {outcome, limit?, message?}`
   after its `done`: `completed` (the agent answered), `failed` (the turn
   failed, its commit did not land, or the next turn did not start),
   `waiting` (it stopped at a cap the grant does not cover: the person can
-  click **Continue**), `limit_reached` (a chain limit refused the next turn)
-  or `cancelled`. The commit of a turn the host does not continue carries
+  click **Continue**), `limit_reached` (a chain limit refused the next turn;
+  `limit` names it: `continuations`, `spend` or `deadline`) or `cancelled`. The commit of a turn the host does not continue carries
   the same outcome as `chain_outcome` (not for `limit_reached`, which the
   platform decides, nor for a cancelled turn, which commits nothing).
 - Each unattended turn's first `status` `running` carries `unattended`:
@@ -2452,10 +2456,10 @@ order. Kinds and payloads:
 | `steer_injected` | `{steer_id, text}` — the agent loop took the message: it is a user message of the turn from this point |
 | `steer_dropped` | `{steer_id, text, reason: "removed" \| "turn_ended"}` — the message does not wait any more: the person removed it, or the turn ended before a safe point (the UI sends it as the next turn) |
 | `error` | `{code, message}` |
-| `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
+| `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number, continuing?: true}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one; `continuing` says the host starts the unattended chain's next turn by itself (**Unattended turns**) |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 | `turn_continued` | `{next_turn_id, execution_id, continuation_index, chain_root_execution_id}` — after `done` and the commit of an unattended turn: the host started the next turn of the chain (**Unattended turns**); its events come under `next_turn_id` |
-| `chain_ended` | `{outcome: "completed" \| "failed" \| "waiting" \| "limit_reached" \| "cancelled", message?}` — after `done`: the unattended chain ends with this turn |
+| `chain_ended` | `{outcome: "completed" \| "failed" \| "waiting" \| "limit_reached" \| "cancelled", limit?: "continuations" \| "spend" \| "deadline", message?}` — after `done`: the unattended chain ends with this turn |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
 `running` → (`thinking_delta`, `thinking_end`, `text_delta`, `model_retry`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`, `subagent_started`, `subagent_event`, `subagent_finished`, `process_started`, `tool_output_delta`, `process_exited`, `steer_queued`, `steer_injected`, `steer_dropped`)* →

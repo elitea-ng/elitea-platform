@@ -53,6 +53,32 @@ describe('useWorkspaceTurn', () => {
     expect(result.current.busy).toBe(false);
   });
 
+  it('stays busy after a done that says the host continues, until turn_continued or chain_ended', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const { result } = renderHook(() => useWorkspaceTurn(ipc));
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+    await act(() => result.current.start(REQUEST));
+    const continuing = { committed: false, conversation_id: 'c1', message_ids: [], changed_files: 0, continuing: true };
+    act(() => {
+      ipc.emit(ev(1, { kind: 'done', payload: continuing }));
+    });
+    expect(result.current.busy).toBe(true);
+    act(() => {
+      ipc.emit(ev(2, { kind: 'turn_continued', payload: { next_turn_id: 'turn-2', execution_id: 'e2', continuation_index: 1, chain_root_execution_id: 'e1' } }));
+    });
+    expect(result.current.turnId).toBe('turn-2');
+    expect(result.current.busy).toBe(true);
+    act(() => {
+      ipc.emit({ turn_id: 'turn-2', seq: 0, kind: 'done', payload: continuing });
+    });
+    expect(result.current.busy).toBe(true);
+    // The host's watchdog (or a refused next turn) ends the chain: the composer is free.
+    act(() => {
+      ipc.emit({ turn_id: 'turn-2', seq: 1, kind: 'chain_ended', payload: { outcome: 'failed', message: 'late' } });
+    });
+    expect(result.current.busy).toBe(false);
+  });
+
   it('clears the shown turn only once it is over, and keeps the AGENTS.md list of the running status', async () => {
     const ipc = createFakeWorkspaceIpc();
     const { result } = renderHook(() => useWorkspaceTurn(ipc));

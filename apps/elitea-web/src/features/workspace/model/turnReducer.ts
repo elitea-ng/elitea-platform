@@ -36,6 +36,7 @@ interface TurnDone {
   conversationId: string;
   messageIds: string[];
   changedFiles: number;
+  /** The host starts the chain's next turn by itself. */ continuing?: true;
 }
 
 export interface TurnView extends SteerView, ChainView {
@@ -194,8 +195,9 @@ function onApprovalRequest(view: TurnView, event: EventOf<'approval_request'>, r
 }
 
 function onDone(view: TurnView, event: EventOf<'done'>): TurnView {
-  const { committed, conversation_id: conversationId, message_ids: messageIds, changed_files: changedFiles } = event.payload;
-  return withoutProposal({ ...view, done: { committed, conversationId, messageIds, changedFiles }, approvals: [] });
+  const { committed, conversation_id: conversationId, message_ids: messageIds, changed_files: changedFiles, continuing } = event.payload;
+  const done: TurnDone = { committed, conversationId, messageIds, changedFiles, ...(continuing === true ? { continuing } : {}) };
+  return withoutProposal({ ...view, done, approvals: [] });
 }
 
 function applyPlanEvent(view: TurnView, event: PlanEvent, resolved: readonly string[]): TurnView {

@@ -9786,6 +9786,16 @@ async fn chain_platform(
     details: Value,
     executions: &'static [&'static str],
 ) -> MockServer {
+    stalling_chain_platform(model, details, executions, None).await
+}
+
+/// [`chain_platform`], whose start number `stall` answers only after 1.5 s.
+async fn stalling_chain_platform(
+    model: impl Fn(usize) -> Res + Send + Sync + 'static,
+    details: Value,
+    executions: &'static [&'static str],
+    stall: Option<usize>,
+) -> MockServer {
     let inner = platform(details, &[]);
     let starts = AtomicUsize::new(0);
     let calls = AtomicUsize::new(0);
@@ -9795,6 +9805,9 @@ async fn chain_platform(
         }
         if req.path == START_PATH {
             let n = starts.fetch_add(1, Ordering::SeqCst);
+            if stall == Some(n) {
+                tokio::task::block_in_place(|| std::thread::sleep(Duration::from_millis(1500)));
+            }
             let Some(execution) = executions.get(n) else {
                 return Res::json(
                     409,
@@ -9933,6 +9946,8 @@ async fn an_unattended_turn_continues_across_the_tool_call_cap() {
         .position(|e| e.kind == "turn_continued")
         .unwrap();
     assert!(first_done < continued_at, "the next turn starts after done");
+    // `done` said the host continues, so the UI stayed busy.
+    assert_eq!(events[first_done].payload["continuing"], true);
 
     // The platform saw the same grant twice, and the chain's root on the
     // continuation, which starts from the host's prompt.
@@ -10005,7 +10020,49 @@ async fn a_granted_step_limit_continues_until_the_chain_limit() {
     assert_eq!(start_bodies(&h.server).len(), 2);
     let ended = turn_events(&events, &first.turn_id, "chain_ended");
     assert_eq!(ended[0]["outcome"], "limit_reached");
+    assert_eq!(ended[0]["limit"], "continuations", "the 409's limit");
+    assert_eq!(
+        turn_events(&events, &first.turn_id, "done")[0]["continuing"],
+        true
+    );
     assert!(turn_events(&events, &first.turn_id, "turn_continued").is_empty());
+}
+
+/// The UI stays busy while the host continues; a next turn that does not
+/// start in time ends the chain as `failed` (the host's watchdog), and the
+/// late turn is cancelled, never announced.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_next_turn_that_does_not_start_in_time_ends_the_chain() {
+    let model = |call: usize| tool_call(&format!("call-{call}"), "list_tree", &json!({}));
+    let server = stalling_chain_platform(
+        model,
+        two_step_details(),
+        &[EXECUTION, EXECUTION_2],
+        Some(1),
+    )
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    two_steps(&h);
+    h.host.set_continue_wait(Duration::from_millis(300));
+    let first = h
+        .host
+        .start(unattended_request(&h, json!({"continue_step_limit": true})))
+        .await
+        .unwrap();
+    let events = until_event(&h, "chain_ended").await;
+    let ended = turn_events(&events, &first.turn_id, "chain_ended");
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0]["outcome"], "failed");
+    assert!(ended[0].get("limit").is_none());
+    assert_eq!(
+        turn_events(&events, &first.turn_id, "done")[0]["continuing"],
+        true
+    );
+    // The stalled start answers later: its turn is cancelled, not shown.
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+    let events = h.emitter.all();
+    assert!(turn_events(&events, &first.turn_id, "turn_continued").is_empty());
+    assert_eq!(turn_events(&events, &first.turn_id, "chain_ended").len(), 1);
 }
 
 /// A grant with `remote_confirmations` confirms a sensitive remote call at

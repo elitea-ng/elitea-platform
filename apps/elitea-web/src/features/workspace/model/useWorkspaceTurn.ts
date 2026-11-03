@@ -23,6 +23,7 @@ import {
   type WorkspaceIpc,
 } from '@/shared/desktop/workspaceIpc';
 
+import { waitsForNextTurn } from './chainEvents';
 import { describeWorkspaceError } from './describeWorkspaceError';
 import { activeView, earlierViews, initialTurnsState, turnReducer, type TurnView } from './turnReducer';
 
@@ -115,7 +116,7 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
     [ipc],
   );
 
-  const unfinished = turnId !== null && view.done === undefined;
+  const unfinished = turnId !== null && (view.done === undefined || waitsForNextTurn(view));
 
   const resync = useCallback(async () => {
     if (turnId === null) return;
