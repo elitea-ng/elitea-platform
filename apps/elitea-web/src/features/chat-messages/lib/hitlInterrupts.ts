@@ -117,6 +117,8 @@ export type NormalizedHitlInterrupt = {
   readonly ledger_revision?: number;
   /** The MCP server a delegated-auth ledger card signs in to (`display.server_url`). */
   readonly server_url?: string;
+  /** FU-250: the frozen toolkit a delegated-auth ledger card signs in for (`display.toolkit_id`); absent on an older card, which stays skip-only. */
+  readonly toolkit_id?: number;
   /** The decision for this card was submitted with its whole set; nothing is owed on it. */
   readonly decided?: boolean;
   /** The user decided this card; the decision waits for its siblings (`hitlDecisionQueue`). */

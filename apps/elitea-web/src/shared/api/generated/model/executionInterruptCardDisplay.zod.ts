@@ -50,6 +50,8 @@ export const executionInterruptCardDisplayToolNameMax = 512;
 
 export const executionInterruptCardDisplayToolkitNameMax = 512;
 
+export const executionInterruptCardDisplayToolkitIdMax = 9007199254740991;
+
 export const executionInterruptCardDisplayToolkitTypeMax = 128;
 
 export const executionInterruptCardDisplayActionLabelMax = 512;
@@ -99,6 +101,14 @@ export const ExecutionInterruptCardDisplay = zod
       .min(1)
       .max(executionInterruptCardDisplayToolkitNameMax)
       .optional(),
+    toolkit_id: zod
+      .int()
+      .min(1)
+      .max(executionInterruptCardDisplayToolkitIdMax)
+      .optional()
+      .describe(
+        "The frozen toolkit of a delegated sign-in card (FU-250). Only a card that names it can be authorized; a card raised before it offers Skip only.",
+      ),
     toolkit_type: zod
       .string()
       .min(1)

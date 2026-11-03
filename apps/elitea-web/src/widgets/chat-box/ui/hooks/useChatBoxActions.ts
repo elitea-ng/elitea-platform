@@ -196,6 +196,7 @@ export function useChatBoxActions({
       value?: string | undefined;
       toolCallId?: string | undefined;
       interruptId?: string | undefined;
+      credentialRef?: string | undefined;
     }) => {
       void handlers.continueHitl({
         action: payload.action,
@@ -203,6 +204,8 @@ export function useChatBoxActions({
         // `''` is a card with no tool call (a HITL node, a fan-out member): absent.
         ...(payload.toolCallId ? { toolCallId: payload.toolCallId } : {}),
         ...(payload.interruptId !== undefined ? { interruptId: payload.interruptId } : {}),
+        // FU-250: a fan-out sign-in's grant reference, never a token.
+        ...(payload.action === 'authorize' && payload.credentialRef ? { credentialRef: payload.credentialRef } : {}),
       });
     },
     [handlers],

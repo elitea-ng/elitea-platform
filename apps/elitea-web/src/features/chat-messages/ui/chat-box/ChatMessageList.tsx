@@ -140,6 +140,7 @@ export function ChatMessageList({
   continuation: {
     onContinueMcpExecution,
     renderAuthModal,
+    renderLedgerSignIn,
     onContinueTokenLimitExecution,
     onHitlResume,
     hideContinueButton = false,
@@ -354,6 +355,7 @@ export function ChatMessageList({
                     hideContinueButton,
                     onContinueMcpExecution: isLastMessage ? onContinueMcpExecution : undefined,
                     renderAuthModal,
+                    renderLedgerSignIn,
                     onContinueTokenLimitExecution: isLastMessage ? onContinueTokenLimitExecution : undefined,
                   }}
                   hitl={{

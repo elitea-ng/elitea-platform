@@ -8,6 +8,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
+import { fanoutFixture } from '../../__tests__/fanoutFixtures';
+import { cardToInterrupt, readInterruptCard } from '../../lib/fanoutFrames';
 import { normalizeHitlInterrupt } from '../../lib/hitlInterrupts';
 import { staticPauseBinding } from '../../lib/staticPipelinePause';
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
@@ -132,5 +134,50 @@ describe('ApplicationAnswer approvals placement', () => {
     expect(screen.queryByRole('textbox')).toBeNull();
     fireEvent.click(screen.getByTestId('chat-static-pause-continue-button'));
     expect(onContinue).toHaveBeenCalledExactlyOnceWith(undefined);
+  });
+});
+
+describe('a fan-out sign-in card (FU-250)', () => {
+  const ledgerCard = (actions?: readonly string[]) => {
+    const raw = fanoutFixture<Record<string, unknown>>('fanout-interrupt-card-v1.delegated-auth-toolkit');
+    const card = readInterruptCard(actions ? { ...raw, available_actions: actions } : raw);
+    if (!card) throw new Error('the bound sign-in card fixture is invalid');
+    return cardToInterrupt(card);
+  };
+
+  it('lets the run user sign in and sends the grant reference with the decision', () => {
+    const onHitlResume = vi.fn();
+    const answer = answerWith([ledgerCard()]);
+    renderWithTheme(
+      <ApplicationAnswer
+        answer={answer}
+        messageId={answer.id}
+        toolActions={answer.toolActions}
+        hitl={{ hitlInterrupts: answer.hitlInterrupts, onHitlResume }}
+        continuation={{
+          renderLedgerSignIn: (slot) => (
+            <button type="button" onClick={() => slot.onAuthorized('grant-reference')}>{`sign in ${slot.toolkitId}`}</button>
+          ),
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'sign in 17' }));
+    expect(onHitlResume).toHaveBeenCalledWith(expect.objectContaining({ action: 'authorize', credentialRef: 'grant-reference' }));
+  });
+
+  it('offers anyone else Skip only, with the reason', () => {
+    const renderLedgerSignIn = vi.fn();
+    const answer = answerWith([ledgerCard(['skip'])]);
+    renderWithTheme(
+      <ApplicationAnswer
+        answer={answer}
+        messageId={answer.id}
+        toolActions={answer.toolActions}
+        hitl={{ hitlInterrupts: answer.hitlInterrupts, onHitlResume: vi.fn() }}
+        continuation={{ renderLedgerSignIn }}
+      />,
+    );
+    expect(renderLedgerSignIn).not.toHaveBeenCalled();
+    expect(screen.getByText(/Only the person who started this run can sign in for it\./u)).toBeTruthy();
   });
 });

@@ -22,7 +22,12 @@ import type { NormalizedHitlInterrupt } from '../lib/hitlInterrupts';
 const RESPONSE_MESSAGE_ID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/u;
 const PROJECT_ID = /^[1-9][0-9]{0,18}$/u;
 
-type LedgerRefusal = 'invalid' | 'forbidden' | 'not_found' | 'unavailable';
+type LedgerRefusal = 'invalid' | 'forbidden' | 'not_found' | 'unavailable' | 'credential_refused';
+
+/** FU-250: a refused sign-in is a 409 too, but the card is still open; it is never "answered elsewhere". */
+function isCredentialRefusal(body: unknown): boolean {
+  return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'agent_interrupt_credential_refused';
+}
 
 export type LedgerDecisionOutcome =
   | { readonly kind: 'decided' }
@@ -41,7 +46,7 @@ function refusalOf(error: unknown): LedgerDecisionOutcome {
   if (failure.kind !== 'http') return { kind: 'refused', reason: 'unavailable' };
   switch (failure.status) {
     case 409:
-      return { kind: 'consumed' };
+      return isCredentialRefusal((failure as { body?: unknown }).body) ? { kind: 'refused', reason: 'credential_refused' } : { kind: 'consumed' };
     case 400:
       return { kind: 'refused', reason: 'invalid' };
     case 403:

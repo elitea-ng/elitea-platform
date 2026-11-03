@@ -101,3 +101,12 @@ describe('applyInterruptList (fanout-interrupt-list)', () => {
     expect(many.reduce<readonly string[]>((keys, next) => rememberResolvedKey(keys, next), [])).toHaveLength(64);
   });
 });
+
+describe('a delegated sign-in card (FU-250)', () => {
+  it('carries the frozen toolkit only when the card names it', () => {
+    const bound = readInterruptCard(fanoutFixture<Record<string, unknown>>('fanout-interrupt-card-v1.delegated-auth-toolkit'));
+    const older = readInterruptCard(fanoutFixture<Record<string, unknown>>('fanout-interrupt-card-v1.delegated-auth'));
+    expect(bound && cardToInterrupt(bound).toolkit_id).toBe(17);
+    expect(older && cardToInterrupt(older).toolkit_id).toBeUndefined();
+  });
+});

@@ -77,6 +77,8 @@ export interface ChatMessageListContinuation {
   readonly hideHitlActions?: boolean;
   /** A13 (ELITEA-0725): passed straight through to `ApplicationAnswer`'s `continuation.renderAuthModal` — see that group's own doc comment. */
   readonly renderAuthModal?: ApplicationAnswerContinuation['renderAuthModal'];
+  /** FU-250: passed straight through to `ApplicationAnswer`'s `continuation.renderLedgerSignIn`. */
+  readonly renderLedgerSignIn?: ApplicationAnswerContinuation['renderLedgerSignIn'];
   /** The current authored pause; its inline cards render on the answer it belongs to. */
   readonly staticPause?: ApplicationAnswerStaticPause | undefined;
 }
