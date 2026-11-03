@@ -6,7 +6,7 @@
  * chain) and the unattended fields of `status` `running`. The reducer makes
  * `next_turn_id` the active turn (`continuedTurn`).
  */
-import { goalCheckOfChainEnd, readGoalCheck, readRunBrief, type GoalCheckView, type RunBriefView } from '@/features/run-brief';
+import { goalCheckOfChainEnd, readGoalCheck, readRunBrief, type GoalCheckView, type RunBriefView } from '@/entities/run-brief';
 import type { ChainEndedPayload, ContinuationKind, UnattendedGrant } from '@/shared/desktop/unattendedIpc';
 import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
 

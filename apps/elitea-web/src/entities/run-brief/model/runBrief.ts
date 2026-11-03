@@ -61,7 +61,7 @@ function conditions(value: unknown): RunBriefCondition[] {
 }
 
 /** A brief, or undefined when it has no goal. */
-export function readBrief(raw: unknown): RunBrief | undefined {
+function readBrief(raw: unknown): RunBrief | undefined {
   if (!isRecord(raw)) return undefined;
   const goal = line(raw['goal'], LONG);
   if (goal === undefined) return undefined;

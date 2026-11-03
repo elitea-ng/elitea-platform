@@ -87,7 +87,7 @@ export interface RunBrief {
 /** `none`: no grant or no goal check; `off`: an administrator turned briefs off. */
 export type RunBriefState = 'none' | 'off' | 'pending' | 'ready' | 'failed';
 
-export interface RunBriefPayload {
+interface RunBriefPayload {
   turn_id: string;
   chain_root_execution_id: string;
   state: RunBriefState;

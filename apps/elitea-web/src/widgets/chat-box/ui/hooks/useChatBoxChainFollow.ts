@@ -36,7 +36,7 @@ import type { ChatMessage } from '@/features/chat-messages';
 import { useStableRef } from './useStableRef';
 
 export const CHAIN_POLL_MS = 3_000;
-export const CHAIN_IDLE_MS = 15_000;
+const CHAIN_IDLE_MS = 15_000;
 export const CHAIN_QUIET_MS = 180_000;
 const SNAPSHOT_GROUPS = 20;
 
@@ -91,7 +91,7 @@ function chainBrief(message: ChatMessage, history: readonly ChatMessage[]): Chat
  * condition: Main checks nothing else, so a settled brief without conditions
  * (a greeting) expects nothing more.
  */
-export function chainExpectsMore(history: readonly ChatMessage[]): boolean {
+function chainExpectsMore(history: readonly ChatMessage[]): boolean {
   const tail = history[history.length - 1];
   if (tail === undefined) return false;
   if (!isAssistant(tail)) return tail.continuedAutomatically === true;

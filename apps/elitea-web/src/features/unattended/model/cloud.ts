@@ -13,9 +13,7 @@ import { t } from '@/shared/i18n';
 import { chainErrors, type ChainField, type SensitiveToolRef, type UnattendedGrantValue } from './grant';
 
 /** The cloud grant; `goal_check` (contract #1564, absent = true) is sent always. */
-export type CloudGrant = ChatUnattendedRequest;
-
-export type CloudGrantResult = { ok: true; grant: CloudGrant } | { ok: false; invalid: ChainField[] };
+export type CloudGrantResult = { ok: true; grant: ChatUnattendedRequest } | { ok: false; invalid: ChainField[] };
 
 const SECONDS_PER_HOUR = 3600;
 
@@ -29,7 +27,7 @@ export function toCloudGrant(value: UnattendedGrantValue, grantId?: string): Clo
     ...(amount === '' ? {} : { max_spend: Number(amount) }),
     ...(hours === '' ? {} : { deadline_seconds: Math.round(Number(hours) * SECONDS_PER_HOUR) }),
   };
-  const grant: CloudGrant = {
+  const grant: ChatUnattendedRequest = {
     ...(grantId === undefined ? {} : { grant_id: grantId }),
     continue_step_limit: value.continue_step_limit,
     continue_output_limit: value.continue_output_limit,

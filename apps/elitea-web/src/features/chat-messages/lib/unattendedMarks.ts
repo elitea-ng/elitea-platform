@@ -7,7 +7,7 @@
  * Decision 11 adds `meta.run_brief` on the chain root's answer and
  * `meta.goal_check` on the answer of a checked run.
  */
-import { readGoalCheck, readRunBrief, type GoalCheckView, type RunBriefView } from '@/features/run-brief';
+import { readGoalCheck, readRunBrief, type GoalCheckView, type RunBriefView } from '@/entities/run-brief';
 
 import type { ChatMessage } from './convertMessagesToChatHistory.types';
 

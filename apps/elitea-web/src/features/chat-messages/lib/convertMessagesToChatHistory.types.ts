@@ -1,4 +1,4 @@
-import type { GoalCheckView, RunBriefView } from '@/features/run-brief';
+import type { GoalCheckView, RunBriefView } from '@/entities/run-brief';
 import type { NodeRecoveryBinding } from '@/shared/lib/nodeRecovery';
 import type { StaticPauseBinding } from './staticPipelinePause.types';
 import type { MessageItemWire } from '@/entities/message/lib/wire';

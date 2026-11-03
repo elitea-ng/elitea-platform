@@ -6,7 +6,7 @@
  * the grant's desktop wire (`toWireGrant`) and cloud wire (`toCloudGrant`),
  * the agent tools a grant can name, the text of Main's refusal, and the flag
  * that hides the control when an administrator turned grants off. The run
- * brief and the goal check (decision 11) are in `features/run-brief`.
+ * brief and the goal check (decision 11) are in `entities/run-brief`.
  */
 export { RunToCompletionControl } from './ui/RunToCompletionControl';
 export { defaultGrant, newGrantId, toWireGrant, type SensitiveToolRef } from './model/grant';

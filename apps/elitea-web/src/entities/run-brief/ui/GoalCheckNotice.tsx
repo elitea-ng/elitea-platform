@@ -23,7 +23,7 @@ import { t } from '@/shared/i18n';
 import type { GoalCheckView } from '../model/runBrief';
 
 /** The notice's text for `check`. */
-export function goalCheckText(check: Pick<GoalCheckView, 'outcome' | 'met' | 'total' | 'reason'>): string {
+function goalCheckText(check: Pick<GoalCheckView, 'outcome' | 'met' | 'total' | 'reason'>): string {
   switch (check.outcome) {
     case 'met':
       return t('unattended.check.met', 'Done · {{met}} of {{total}} checks · model-reviewed', { met: String(check.met), total: String(check.total) });
