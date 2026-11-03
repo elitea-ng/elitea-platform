@@ -24,19 +24,39 @@ use crate::toolkits::families::attachment_host::{
 };
 
 /// The SDK's `_MARKDOWN_IMAGE_PATTERN` (work item comments).
+#[allow(
+    clippy::expect_used,
+    reason = "a constant pattern; the tests exercise it"
+)]
 static MARKDOWN_IMAGE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"!\[(.*?)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)"#).expect("markdown image pattern")
 });
 /// The wiki's `!\[(.*?)\]\((.*?)\)`.
+#[allow(
+    clippy::expect_used,
+    reason = "a constant pattern; the tests exercise it"
+)]
 static WIKI_IMAGE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"!\[(.*?)\]\((.*?)\)").expect("wiki image pattern"));
 /// One `<img ...>` tag.
+#[allow(
+    clippy::expect_used,
+    reason = "a constant pattern; the tests exercise it"
+)]
 static IMG_TAG: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?is)<img\b[^>]*>").expect("img tag pattern"));
 /// The `src` attribute of one tag: double-quoted, single-quoted or bare.
+#[allow(
+    clippy::expect_used,
+    reason = "a constant pattern; the tests exercise it"
+)]
 static SRC_ATTRIBUTE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?is)\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))"#).expect("src pattern")
 });
+#[allow(
+    clippy::expect_used,
+    reason = "a constant pattern; the tests exercise it"
+)]
 static DESCRIPTION_ATTRIBUTE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?is)\simage-description\s*=").expect("description pattern"));
 
