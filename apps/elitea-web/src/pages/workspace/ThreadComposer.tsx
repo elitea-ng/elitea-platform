@@ -2,9 +2,9 @@
  * The bottom of a thread: the notice for a thread that is away, the errors,
  * and the composer. Where a message goes depends on where the thread runs:
  *
- * - here: the local agent loop (`session.send`), with Act | Plan | Bypass | Unattended
- *   (`useComposerModes`, kept per folder; Plan wins) and the
- *   agent·version picker;
+ * - here: the local agent loop (`session.send`), with Act | Plan | Bypass
+ *   (`useComposerModes`, kept per folder; Plan wins), "Run to completion"
+ *   (on by default, kept per folder) and the agent·version picker;
  * - `cloud`: the SERVER conversation (`useCloudChat`: the chat's own execution
  *   route and stream). The conversation's own agent answers, so the picker is
  *   shown disabled and there is no plan mode;
@@ -45,6 +45,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
+import { RunToCompletionControl } from '@/features/unattended';
 import { composer, replayView, type WorkspaceTurn } from '@/features/workspace';
 import { IndexStatusIcon } from '@/features/workspace-index';
 import type { CustomCommand, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
@@ -59,7 +60,6 @@ import { IdleCompactedNotice } from './CompactNotices';
 import { AgentChip, RunLocationControl, WorkInChip } from './ComposerControls';
 import { HandoffBanner } from './HandoffControls';
 import { RunInCloudNotice } from './RunInCloudNotice';
-import { UnattendedControls } from './UnattendedControls';
 import { firstError, SessionNotices } from './sessionParts';
 import { useProjectSkills, type ComposerSkill } from './useAgentSkills';
 import type { CloudChat } from './useCloudChat';
@@ -69,7 +69,7 @@ import type { ThreadHandoff } from './useThreadHandoff';
 import type { ThreadSession } from './useThreadSession';
 import { useRetryAndSteps, type SentMessage } from './useRetryAndSteps';
 import type { SessionCommands } from './useSessionCommands';
-import { useComposerModes } from './useComposerModes';
+import { useComposerModes, type RunToCompletionBinding } from './useComposerModes';
 import { useIdleCompacted } from './useIdleCompacted';
 import { useIdleHold } from './useIdleHold';
 import { useSteering, type Steering } from './useSteering';
@@ -233,6 +233,11 @@ function useIdleNotice(workspaceId: string, conversationId: string): { shown: bo
   return { shown: at !== null && at !== dismissed, dismiss: () => setDismissed(at) };
 }
 
+/** "Run to completion" (ADR-0045) in the footer, or nothing when it does not show (a cloud thread, grants off). */
+function runControl(binding: RunToCompletionBinding | undefined, busy: boolean): React.JSX.Element | null {
+  return binding === undefined ? null : <RunToCompletionControl {...binding} scope="desktop" disabled={busy} testId="workspace-run-to-completion" />;
+}
+
 export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, session, turn, handoff, cloud, skills, canBranch }: ThreadComposerProps): React.JSX.Element {
   const navigate = useNavigate();
   const { commands } = session;
@@ -286,7 +291,6 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
       <HandoffBanner handoff={handoff} projectId={projectId} />
       <SessionNotices error={modelNotice ?? firstError(turnError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={offered} />
       <BypassControls bypass={modes.bypass} active={modes.bypassActive} />
-      <UnattendedControls unattended={modes.unattended} active={modes.unattendedActive} />
       {local && <IdleCompactedNotice shown={idle.shown} onClose={idle.dismiss} />}
       <RunInCloudNotice cloudOnly={pipeline} refusedPrompt={refusedPrompt} running={runInCloud.running} error={runInCloud.error} onRun={(prompt) => void runInCloud.run(prompt)} />
       <WorkspaceComposer
@@ -305,6 +309,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
             <RunLocationControl handoff={handoff} onOpenInChat={openInChat} />
           </>
         }
+        runToCompletion={runControl(modes.runToCompletion, bound.busy)}
         contextMeter={<ComposerMeters usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} contextPercent={contextPercentOf(cloudMode, turn, session.history)} />}
         more={moreRows(workspaceId, !cloudMode, commands.showText)}
         onPlanModeChange={commands.setPlanMode}

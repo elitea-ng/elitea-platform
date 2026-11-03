@@ -44,35 +44,40 @@ Chats and Local work threads share one message box. Drag its top edge to make it
 In a Local work thread the row under the text holds, from the left:
 
 - **+** to attach images (you can also paste or drop them).
-- The mode: **Act** (edits with approvals), **Plan** (plans, changes nothing), **Bypass** (no approvals; the app warns you the first time) or **Unattended** (you give every answer at the start; see [Run a task unattended](#run-a-task-unattended)).
+- The mode: **Act** (edits with approvals), **Plan** (plans, changes nothing) or **Bypass** (no approvals; the app warns you the first time).
 - The agent and its version (point at **Version** to see the versions), and the model.
 - **⋯** with **Step limit**: how many steps a turn may take. Point at it to pick the default, a preset, **Unlimited** or a number of your own.
 - In a new thread of a git folder, **Work in**: **This folder**, or **New worktree** (see [Work in a worktree](#work-in-a-worktree)).
 - **Send to cloud**, or **Take back** for a thread running in the cloud (see [Send a thread to the cloud](#send-a-thread-to-the-cloud)), the language-server status, the index icon, and a ring showing how much of the model's context the thread uses. Select the ring to open the **Context** tab.
+- **∞ To completion**, on by default: the turn continues by itself until the goal is met (see [Run a task to completion](#run-a-task-to-completion)).
 - **Send**, which becomes **Stop** while a turn runs.
 
 The index icon shows the state of the folder's code index by its colour: grey when it is ready or off, the accent colour while it builds, orange when it is out of date and red after an error. Point at it to read the state, for example *Index ready · 257.3K entities*; select it to open the **Index** tab on the right, where the index settings are.
 
 While a turn runs, in a chat or a thread, that round button is **Stop** until you type, then **Send** again: what you send waits in the **Queued** list at the top of the message box. Each queued message has **Send now** (stop the turn and send this message first), **Edit** (take it back into the message box) and **Remove**. Press **Esc** twice quickly to stop the turn from anywhere on the page; a single Esc still just closes a menu or dialog.
 
-### Run a task unattended
+### Run a task to completion
 
-Use **Unattended** to start a long task and walk away. When you pick the mode, the app shows the grant: the answers you give now, before the turn starts. Nothing can be added while it runs.
+**∞ To completion**, just before **Send**, is on by default in each new folder. With it on, each message that you send runs to the end to reach its goal: when a turn stops at a limit, the app starts the next turn by itself. Select the chip to turn it off or on; the folder keeps your choice. Point at it to read what it does now. Select the **⌄** beside it to open its settings:
 
-| Part | What it answers | Without it |
-|------|-----------------|------------|
-| **Continue at the step limit** | "Continue?" at the step limit. When the turn has used its three continues, the app starts the next turn by itself. | The turn stops. |
-| **Continue after 512 tool calls** | The turn's tool-call cap. The app starts the next turn by itself. | The turn stops; select **Continue**. |
-| **Hook asks** | A `PreToolUse` hook that asks for your approval: the call runs. | The call is declined. |
-| **Remote toolkit confirmations** | A toolkit that asks you to confirm a call: the call runs. | The call is declined. |
-| **Chain limits** | At most this many automatic continuations, this spend in US dollars and this many hours. Empty fields use the platform's defaults (20 continuations, 10 × the project's per-run spend cap, 12 hours). Your administrator sets the maximums. If a value is too high, the platform refuses the grant and the app tells you which limit to lower. | Platform defaults. |
+| Setting | What it does | Default |
+|---------|--------------|---------|
+| **Continue until the goal is met** | Answers "Continue?" at the step limit. When the turn has used its three continues, or when it reaches the cap of 512 tool calls, the app starts the next turn by itself. When it is off, the turn stops at a limit and waits for you. | On |
+| **Change limits** | At most this many automatic continuations, this spend in US dollars and this many hours. Empty fields use the platform's defaults (20 continuations, 10 × the project's per-run spend cap, 12 hours). Your administrator sets the maximums. If a value is too high, the platform refuses the grant and the app tells you which limit to lower. | Platform defaults |
+| **Hook asks** | A `PreToolUse` hook that asks for your approval: the call runs. | Off |
+| **Remote confirmations** | A toolkit that asks you to confirm a call: the call runs. | Off |
 
-- An unattended turn also runs in bypass mode: what your approval rules would ask runs without the question. The policy, every deny rule, the sandbox and the budgets still apply.
-- A question the grant does not answer takes its default at once. An MCP sign-in fails, so sign in to the MCP servers before you start.
-- Each turn the app starts by itself shows **Continued automatically** at its top. The message box stays busy between the turns. The last turn shows how the run ended: completed, failed, waiting for you, stopped at a chain limit (and which one), or cancelled. After a turn is saved, the next turn must start within a minute; if it does not, the run ends as cancelled. A slow save does not end the run. If your administrator turns unattended runs off, the run stops at its next continuation.
+When **Hook asks** or **Remote confirmations** is on, the chip has an orange outline: the app also answers for you.
+
+- **To completion** does not change the mode. Your approval rules still ask in **Act** mode; only **Bypass** mode runs the calls without the question. The policy, every deny rule, the sandbox and the budgets always apply.
+- **To completion** is not used in **Plan** mode: the plan waits for you.
+- A question that the settings do not answer waits for you, as it does in a turn that you watch. When the wait runs out, the question takes its default.
+- An MCP sign-in is not answered for you. Sign in to the MCP servers before you start a long task.
+- Each turn the app starts by itself shows **Continued automatically** at its top. The message box stays busy between the turns. The last turn shows how the run ended: completed, failed, waiting for you, stopped at a chain limit (and which one), or cancelled. After a turn is saved, the next turn must start within a minute; if it does not, the run ends as cancelled. A slow save does not end the run.
+- If your administrator turns unattended grants off, the app does not continue a run for you, and a run that is in progress stops at its next continuation. When the platform refuses a grant for this reason, the chip goes away until you open the app again. A grant with **Hook asks** or **Remote confirmations** shows the refusal; send the message again without them.
 - Every answer is saved with the thread, with who gave it: you, the grant, bypass mode, or nobody (the wait ran out).
 
-Questions also have a time limit when you are there: an approval waits 30 minutes, a toolkit confirmation 15 minutes and "Continue?" 10 minutes. After that the call is declined, or the turn stops.
+Questions have a time limit: an approval or a hook ask waits 30 minutes, a toolkit confirmation 15 minutes and "Continue?" 10 minutes. After that the call is declined, or the turn stops.
 
 ### Send a thread to the cloud
 

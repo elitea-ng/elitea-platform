@@ -8,13 +8,16 @@ import type { TurnModelChoice } from './turnModel';
 import type { UnattendedGrant } from './unattendedIpc';
 
 /**
- * How a turn's tool calls are approved: as the rules say (Act), read-only until the plan is accepted (Plan), without
- * questions (Bypass), or without questions and under a grant that continues the run by itself (Unattended, ADR-0045).
+ * How a turn's tool calls are approved: as the rules say (Act), read-only until the plan is accepted (Plan), or
+ * without questions (Bypass).
  */
-export type TurnMode = 'act' | 'plan' | 'bypass' | 'unattended';
+export type TurnMode = 'act' | 'plan' | 'bypass';
 
-/** What a send starts a turn in: a mode, or Unattended with its grant (checked, without a `grant_id`). */
-export type TurnModeChoice = Exclude<TurnMode, 'unattended'> | { mode: 'unattended'; grant: UnattendedGrant };
+/**
+ * What a send starts a turn in: a mode, or a mode with the "Run to completion" grant (ADR-0045; checked, without a
+ * `grant_id`). The grant does not change the mode: it does not bypass the approval rules.
+ */
+export type TurnModeChoice = TurnMode | { mode: TurnMode; grant: UnattendedGrant };
 
 export interface TurnStartRequest {
   workspace_id: string;
@@ -26,7 +29,7 @@ export interface TurnStartRequest {
   plan_mode: boolean;
   /** Bypass mode (IPC.md "Bypass mode"): every local tool call that would be asked runs without the question. Never with `plan_mode`. */
   bypass_approvals?: boolean;
-  /** Unattended (ADR-0045): the grant, with a new `grant_id` per chain. It implies bypass; never with `plan_mode`. */
+  /** Run to completion (ADR-0045): the grant, with a new `grant_id` per chain. It does not imply bypass; never with `plan_mode`. */
   unattended?: UnattendedGrant;
   /** Workspace-relative paths the person referenced with "@" (a folder ends with `/`); the host checks them and lists them under the prompt. */
   mentions: string[];

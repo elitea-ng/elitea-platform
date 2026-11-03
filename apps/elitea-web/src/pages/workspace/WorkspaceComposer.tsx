@@ -95,18 +95,17 @@ export interface WorkspaceComposerProps {
   bypass?: boolean;
   /** Offers Bypass in the mode switch (a local thread only): `true` when it is picked, `false` when Act or Plan is. */
   onBypassChange?: ((on: boolean) => void) | undefined;
-  /** Unattended mode is on (`useUnattendedMode`); `onUnattendedChange` offers it (a local thread only). */
-  unattended?: boolean;
-  onUnattendedChange?: ((on: boolean) => void) | undefined;
   /** The footer's agent·version picker and run-location chip (`ComposerControls`). */
   agentPicker?: ReactNode;
   /** A thread in the cloud: the placeholder says who the message goes to. */
   placeholder?: string | undefined;
-  /** Act | Plan | Bypass | Unattended: off for a cloud thread, whose turns have no plan mode. */
+  /** Act | Plan | Bypass: off for a cloud thread, whose turns have no plan mode. */
   showMode?: boolean;
   runLocation?: ReactNode;
   /** The meters (the language servers and the context ring), after the run location. */
   contextMeter?: ReactNode;
+  /** "Run to completion" (ADR-0045), after the meters and before Send; none when it is not offered. */
+  runToCompletion?: ReactNode;
   /** The ⋯ menu's rows (the step limit); no ⋯ without them. */
   more?: ((close: () => void) => ReactNode) | undefined;
   /** The model chip (`ModelChip`), after the agent picker. */

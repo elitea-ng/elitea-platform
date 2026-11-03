@@ -3,6 +3,7 @@
  */
 import { useRef, useState } from 'react';
 
+import { isDesktopGrantsOff, markGrantsTurnedOff } from '@/features/unattended';
 import { describeWorkspaceError, type WorkspaceTurn } from '@/features/workspace';
 import type { TurnModelChoice } from '@/shared/desktop/turnModel';
 import type { AttachedImage, TurnCommand, TurnImagePick, TurnModeChoice, TurnStartRequest, Workspace } from '@/shared/desktop/workspaceIpc';
@@ -61,6 +62,22 @@ function imagesField(images: SentImages | undefined): { images?: TurnImagePick[]
   return images === undefined || images.picks.length === 0 ? {} : { images: images.picks };
 }
 
+/**
+ * ADR-0045: "Run to completion" is on by default, but an administrator can
+ * turn grants off. Then the control hides for this page load. A grant with
+ * only the continue parts goes once more without the grant (an older Main
+ * refuses it); a grant with hook asks or remote confirmations shows the
+ * refusal, because the person asked for those answers.
+ */
+function withoutRefusedGrant(request: TurnStartRequest, refusal: { code: string; message: string }): TurnStartRequest | undefined {
+  const grant = request.unattended;
+  if (grant === undefined || !isDesktopGrantsOff(refusal.code, refusal.message)) return undefined;
+  markGrantsTurnedOff();
+  if (grant.hook_asks || grant.remote_confirmations) return undefined;
+  const { unattended: _refused, ...rest } = request;
+  return rest;
+}
+
 function shownOf(images: SentImages | undefined): SentImages['shown'] {
   return images === undefined ? [] : images.shown;
 }
@@ -113,7 +130,7 @@ export function useSendPrompt(
         folderName: workspace.name,
       });
       if (startsNew) pending.current = { key, id: conversationId, ready: true };
-      const started = await turn.start({
+      const request: TurnStartRequest = {
         workspace_id: workspace.id,
         project_id: projectId,
         conversation_id: conversationId,
@@ -127,7 +144,8 @@ export function useSendPrompt(
         ...modelField(model),
         ...commandField(command),
         ...imagesField(images),
-      });
+      };
+      const started = await turn.start(request, (refusal) => withoutRefusedGrant(request, refusal));
       // A refused start (its reason is the turn's startError) keeps the
       // prompt and the person's conversation choice as they were.
       if (!started) return false;

@@ -1,25 +1,14 @@
 /**
  * Public API — spec §3.3: named exports only.
  *
- * Unattended runs (ADR-0045 decision 1): the grant as the person edits it, its
- * desktop wire (`toWireGrant`), the grant form and its read-only summary.
- * Used by the desktop composer's Unattended mode; the cloud wiring reuses the
- * form with `cloud` and `sensitiveTools`, its cloud wire (`toCloudGrant`), the
- * agent tools a grant can name and the text of Main's refusal.
+ * Unattended runs (ADR-0045 decision 1) as the composers show them: the
+ * "Run to completion" control (on by default) and its choice (`RunChoice`),
+ * the grant's desktop wire (`toWireGrant`) and cloud wire (`toCloudGrant`),
+ * the agent tools a grant can name, the text of Main's refusal, and the flag
+ * that hides the control when an administrator turned grants off.
  */
-export { UnattendedGrantForm, type SensitiveToolOption, type UnattendedGrantFormProps } from './ui/UnattendedGrantForm';
-export { UnattendedGrantSummary } from './ui/UnattendedGrantSummary';
-export {
-  chainErrors,
-  defaultGrant,
-  newGrantId,
-  readGrant,
-  toWireGrant,
-  type ChainDraft,
-  type SensitiveToolRef,
-  type UnattendedChain,
-  type UnattendedGrant,
-  type UnattendedGrantValue,
-  type WireGrantResult,
-} from './model/grant';
-export { grantableTools, toCloudGrant, unattendedRefusalText, type CloudGrantResult } from './model/cloud';
+export { RunToCompletionControl } from './ui/RunToCompletionControl';
+export { defaultGrant, newGrantId, toWireGrant, type SensitiveToolRef } from './model/grant';
+export { defaultChoice, grantToSend, readChoice, type RunChoice } from './model/runChoice';
+export { grantsTurnedOff, isDesktopGrantsOff, isGrantsOffRefusal, markGrantsTurnedOff, resetGrantsTurnedOff, useGrantsTurnedOff } from './model/grantsOff';
+export { grantableTools, toCloudGrant, unattendedRefusalText } from './model/cloud';
