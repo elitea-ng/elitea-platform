@@ -71,7 +71,7 @@ type registryKey struct{ projectID, applicationID int64 }
 // RecertificationPass runs one pass.
 func (s *AgentLifecycle) RecertificationPass(ctx context.Context, deps RecertificationDeps) (RecertificationSummary, error) {
 	var summary RecertificationSummary
-	policy, err := s.currentPolicy(ctx)
+	policy, err := s.currentPolicy(ctx, s.pool)
 	if err != nil {
 		return summary, err
 	}

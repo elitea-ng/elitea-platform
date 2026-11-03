@@ -1539,6 +1539,48 @@ export async function sweepAutotestEntities(
     return false;
   };
 
+  /*
+   * Withdraw an application's live versions, so its DELETE can succeed.
+   *
+   * A published version refuses the delete of the agent that owns it ("Unpublish
+   * first."), and a publish the client gave up on still commits on the server:
+   * one timed-out `publish` in another journey leaves an `autotest_` catalogue
+   * twin in this project that no teardown ever withdrew. Without this step that
+   * one row failed API-FX3 for a reason that had nothing to do with the sweep.
+   *
+   * As strict as the delete: a version read or an unpublish that fails is
+   * counted. 404 on the read is the row a teardown already took; 409 on the
+   * unpublish is a version another teardown withdrew between the two calls.
+   * Answers whether the DELETE should still be sent.
+   */
+  const withdrawLiveVersions = async (kind: string, id: string): Promise<boolean> => {
+    const url = `${API_BASE}/elitea_core/application/prompt_lib/${DEFAULT_PROJECT_ID}/${id}`;
+    const detail = await request.get(url);
+    if (detail.status() === 404) return false;
+    if (!detail.ok()) {
+      failures.push(`${kind} ${id} versions: ${detail.status()} ${(await detail.text()).slice(0, 120)}`);
+      return false;
+    }
+    const body = (await detail.json()) as {
+      versions?: readonly { id?: unknown; status?: unknown }[];
+    };
+    let withdrawn = true;
+    for (const version of body.versions ?? []) {
+      if (version.status !== 'published') continue;
+      const versionId = String(version.id ?? '');
+      const response = await request.post(
+        `${API_BASE}/elitea_core/unpublish/prompt_lib/${DEFAULT_PROJECT_ID}/${versionId}`,
+        { data: {} },
+      );
+      if (response.ok() || response.status() === 409) continue;
+      failures.push(
+        `${kind} ${id} unpublish ${versionId}: ${response.status()} ${(await response.text()).slice(0, 120)}`,
+      );
+      withdrawn = false;
+    }
+    return withdrawn;
+  };
+
   try {
     const rows = named(
       await listAll(request, `${API_BASE}/elitea_core/conversations/prompt_lib/${DEFAULT_PROJECT_ID}`),
@@ -1566,6 +1608,7 @@ export async function sweepAutotestEntities(
       );
       for (const row of rows) {
         if (row.id === undefined) continue;
+        if (!(await withdrawLiveVersions(kind, row.id))) continue;
         if (!(await removeRow(kind, 'elitea_core/application', row.id))) continue;
         if (kind === 'agent') agents += 1;
         else pipelines += 1;
