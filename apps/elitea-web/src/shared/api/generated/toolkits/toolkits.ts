@@ -74,6 +74,7 @@ import type {
   ListConnectorRequestsParams,
   ListToolkitAvailableTools200,
   ListToolkitInstancesParams,
+  McpAuthorizationChallenge,
   McpDcrProxyRequest,
   McpDcrProxyResponse,
   McpOAuthError,
@@ -692,6 +693,249 @@ export function useRegisterMcpOAuthClient<
   const queryOptions = getRegisterMcpOAuthClientQueryOptions(
     projectId,
     mcpDcrProxyRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getMcpAuthorizationChallengeResponse200 = {
+  data: McpAuthorizationChallenge;
+  status: 200;
+};
+
+export type getMcpAuthorizationChallengeResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getMcpAuthorizationChallengeResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getMcpAuthorizationChallengeResponseDefault = {
+  data: McpOAuthError;
+  status: Exclude<HTTPStatusCodes, 200 | 401 | 403>;
+};
+
+export type getMcpAuthorizationChallengeResponseSuccess =
+  getMcpAuthorizationChallengeResponse200 & {
+    headers: Headers;
+  };
+export type getMcpAuthorizationChallengeResponseError = (
+  | getMcpAuthorizationChallengeResponse401
+  | getMcpAuthorizationChallengeResponse403
+  | getMcpAuthorizationChallengeResponseDefault
+) & {
+  headers: Headers;
+};
+
+export type getMcpAuthorizationChallengeResponse =
+  | getMcpAuthorizationChallengeResponseSuccess
+  | getMcpAuthorizationChallengeResponseError;
+
+export const getGetMcpAuthorizationChallengeUrl = (
+  projectId: string,
+  toolkitId: number,
+) => {
+  return `/elitea_core/mcp_authorization_challenge/prompt_lib/${projectId}/${toolkitId}`;
+};
+
+/**
+ * FU-250. A fan-out sign-in card names only its toolkit. Main resolves
+ * the endpoint from the stored toolkit the caller can see, discovers its
+ * protected-resource and authorization-server metadata through the
+ * guarded egress client, and answers only public metadata. The request
+ * body is not read. An unknown toolkit, another project's and one the
+ * caller cannot see answer the same 404.
+ * @summary Public consent metadata of one saved MCP toolkit
+ */
+export const getMcpAuthorizationChallenge = async (
+  projectId: string,
+  toolkitId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getMcpAuthorizationChallengeResponse> => {
+  return eliteaFetch<getMcpAuthorizationChallengeResponse>(
+    getGetMcpAuthorizationChallengeUrl(projectId, toolkitId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getGetMcpAuthorizationChallengeQueryKey = (
+  projectId: string,
+  toolkitId: number,
+) => {
+  return [
+    "POST",
+    `/elitea_core/mcp_authorization_challenge/prompt_lib/${projectId}/${toolkitId}`,
+  ] as const;
+};
+
+export const getGetMcpAuthorizationChallengeQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  toolkitId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetMcpAuthorizationChallengeQueryKey(projectId, toolkitId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>
+  > = ({ signal }) =>
+    getMcpAuthorizationChallenge(projectId, toolkitId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      toolkitId !== null &&
+      toolkitId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetMcpAuthorizationChallengeQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>
+>;
+export type GetMcpAuthorizationChallengeQueryError =
+  N401Response | N403Response | McpOAuthError;
+
+export function useGetMcpAuthorizationChallenge<
+  TData = Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  toolkitId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>,
+          TError,
+          Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMcpAuthorizationChallenge<
+  TData = Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  toolkitId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>,
+          TError,
+          Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMcpAuthorizationChallenge<
+  TData = Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  toolkitId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Public consent metadata of one saved MCP toolkit
+ */
+
+export function useGetMcpAuthorizationChallenge<
+  TData = Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>,
+  TError = N401Response | N403Response | McpOAuthError,
+>(
+  projectId: string,
+  toolkitId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMcpAuthorizationChallenge>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetMcpAuthorizationChallengeQueryOptions(
+    projectId,
+    toolkitId,
     options,
   );
 
