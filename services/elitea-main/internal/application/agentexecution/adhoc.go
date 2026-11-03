@@ -67,6 +67,11 @@ type CurrentAdhocTarget struct {
 	ChatHistory         json.RawMessage
 	ConversationMeta    json.RawMessage
 	OriginalSource      *scope.SourceReference
+	// CloudWorkspace: the conversation is a desktop Local work thread
+	// handed off to the cloud executor (CLOUD_IDLE). Its turn has the
+	// workspace tools, so an unattended grant may name workspace/git_push
+	// and workspace/open_pull_request (ADR-0045).
+	CloudWorkspace bool
 }
 
 type CurrentAdhocResolver interface {
@@ -211,7 +216,7 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 		projectID: request.ProjectID, actorUserID: request.ActorUserID,
 		conversationUUID: request.ConversationUUID, grantKey: request.QuestionID,
 		responseMessageID: responseMessageID, questionID: request.QuestionID,
-		triggerOrigin: request.TriggerOrigin,
+		triggerOrigin: request.TriggerOrigin, cloudWorkspace: target.CloudWorkspace,
 		start: &unattended.CloudStart{
 			Contract: CloudStartContractAdhoc, ParticipantID: request.TargetParticipantID,
 			LLMSettings: bytes.Clone(request.LLMSettings),

@@ -182,3 +182,40 @@ func TestUnattendedContinuationGrant(t *testing.T) {
 		t.Fatalf("ended chain = %v", err)
 	}
 }
+
+// ADR-0045: the cloud workspace's git_push and open_pull_request are not in
+// the frozen toolkit set. A grant names them as workspace/<tool>, and only
+// for a thread handed off to the cloud executor.
+func TestAdmitUnattendedWorkspaceTools(t *testing.T) {
+	request := &unattended.Request{SensitiveTools: []unattended.Tool{
+		{ToolkitName: "workspace", ToolName: "git_push"},
+		{ToolkitName: "workspace", ToolName: "open_pull_request"},
+	}}
+	target := grantTestTarget(request)
+	target.cloudWorkspace = true
+	grant, admission, err := grantTestService("low").admitUnattended(t.Context(), target)
+	if err != nil {
+		t.Fatalf("admit: %v", err)
+	}
+	if admission == nil || len(grant.GetSensitiveTools()) != 2 ||
+		grant.GetSensitiveTools()[0].GetToolkitName() != "workspace" {
+		t.Fatalf("grant = %v", grant)
+	}
+
+	target = grantTestTarget(request)
+	_, _, err = grantTestService("low").admitUnattended(t.Context(), target)
+	var refused *unattended.RefusalError
+	if !errors.As(err, &refused) || refused.Reason != unattended.RefusedToolNotResolved ||
+		refused.Tool != "workspace/git_push" {
+		t.Fatalf("outside a cloud workspace thread: err = %v", err)
+	}
+
+	target = grantTestTarget(&unattended.Request{SensitiveTools: []unattended.Tool{
+		{ToolkitName: "workspace", ToolName: "run_command"},
+	}})
+	target.cloudWorkspace = true
+	_, _, err = grantTestService("low").admitUnattended(t.Context(), target)
+	if !errors.As(err, &refused) || refused.Reason != unattended.RefusedToolNotResolved {
+		t.Fatalf("another workspace tool: err = %v", err)
+	}
+}
