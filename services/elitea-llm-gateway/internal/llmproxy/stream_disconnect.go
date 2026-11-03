@@ -35,8 +35,6 @@ import (
 	"time"
 
 	"github.com/maximhq/bifrost/core/schemas"
-
-	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/account"
 )
 
 const (
@@ -64,6 +62,9 @@ const (
 	// close its channel inside disconnectCloseWait. A background reader drains
 	// it so the provider goroutine can unwind.
 	drainOutcomeCancelledSlowClose = "cancelled_on_disconnect/slow_close"
+	// drainOutcomeCancelledAbandoned: as slow_close, but the drain pool was
+	// full, so no reader was started and the channel was abandoned.
+	drainOutcomeCancelledAbandoned = "cancelled_on_disconnect/slow_close_abandoned"
 
 	// errorCodeUsageEstimated is the request-log error_code of a streamed row
 	// whose token counts are an estimate. The row keeps status 200 (the stream
@@ -123,14 +124,29 @@ func jsonBytes(v any) int64 {
 }
 
 // chatPromptEstimate estimates the prompt tokens of a chat request from its
-// TEXT: message content, tool results and tool definitions. Inline images and
-// audio are left out on purpose: their base64 bytes are not prompt tokens, and
-// counting them would over-bill by orders of magnitude.
+// TEXT: message content, tool results, the tool calls of earlier assistant
+// turns (name and arguments) and the tool definitions. Providers bill all of
+// them as input, and an agent loop carries most of its prompt in them. Inline
+// images and audio are left out on purpose: their base64 bytes are not prompt
+// tokens, and counting them would over-bill by orders of magnitude.
 func chatPromptEstimate(req *schemas.BifrostChatRequest) int64 {
 	if req == nil {
 		return 0
 	}
 	n := textBytes(chatRequestTexts(req))
+	for i := range req.Input {
+		am := req.Input[i].ChatAssistantMessage
+		if am == nil {
+			continue
+		}
+		for j := range am.ToolCalls {
+			fn := am.ToolCalls[j].Function
+			n += int64(len(fn.Arguments))
+			if fn.Name != nil {
+				n += int64(len(*fn.Name))
+			}
+		}
+	}
 	if req.Params != nil && len(req.Params.Tools) > 0 {
 		n += jsonBytes(req.Params.Tools)
 	}
@@ -138,12 +154,25 @@ func chatPromptEstimate(req *schemas.BifrostChatRequest) int64 {
 }
 
 // responsesPromptEstimate estimates the prompt tokens of a Responses (and
-// Anthropic messages) request. See chatPromptEstimate.
+// Anthropic messages) request: instructions, message content, tool results
+// (function_call_output), the tool calls of earlier turns (function_call name
+// and arguments; an Anthropic tool_use block converts to one) and the tool
+// definitions. See chatPromptEstimate.
 func responsesPromptEstimate(req *schemas.BifrostResponsesRequest) int64 {
 	if req == nil {
 		return 0
 	}
 	n := textBytes(responsesRequestTexts(req))
+	for i := range req.Input {
+		tm := req.Input[i].ResponsesToolMessage
+		if tm == nil || tm.Arguments == nil {
+			continue
+		}
+		n += int64(len(*tm.Arguments))
+		if tm.Name != nil {
+			n += int64(len(*tm.Name))
+		}
+	}
 	if req.Params != nil && len(req.Params.Tools) > 0 {
 		n += jsonBytes(req.Params.Tools)
 	}
@@ -177,12 +206,11 @@ func (s *streamSettler) relayed(deltaBytes int64) {
 	s.relayedBytes += deltaBytes
 }
 
-// relayedResponses records the Responses events written to the caller.
+// relayedResponses records the Responses events written to the caller. It
+// counts each event as responsesDeltaBytes counts a chunk.
 func (s *streamSettler) relayedResponses(events ...*schemas.BifrostResponsesStreamResponse) {
 	for _, ev := range events {
-		if ev != nil && ev.Delta != nil {
-			s.relayed(int64(len(*ev.Delta)))
-		}
+		s.relayed(responsesEventDeltaBytes(ev))
 	}
 }
 
@@ -232,7 +260,9 @@ func (s *streamSettler) settleDisconnect(reason string) {
 	outcome := drainOutcomeCancelled
 	if s.ch != nil && !s.awaitClose(disconnectCloseWait) {
 		outcome = drainOutcomeCancelledSlowClose
-		s.discardRest()
+		if !s.discardRest() {
+			outcome = drainOutcomeCancelledAbandoned
+		}
 	}
 
 	if s.gotUsage {
@@ -252,21 +282,11 @@ func (s *streamSettler) settleDisconnect(reason string) {
 	s.recordLogTokens()
 	if s.estimated {
 		s.logUsage.SetError(errorCodeUsageEstimated)
-	} else if s.ctx != nil {
-		s.logUsage.SetCredentialOwner(account.SelectedCredentialOwner(s.ctx))
 	}
 
 	// The settle can publish to NATS (up to the 150 ms flush bound). The
-	// caller is gone, but the request goroutine still holds the row, so hand
-	// the settle to a tracked goroutine as settleClean does.
-	if !s.h.trackDrain() {
-		s.report(reason, outcome)
-		return
-	}
-	go func() {
-		defer s.h.drainWg.Done()
-		s.report(reason, outcome)
-	}()
+	// caller is gone, but the request goroutine still holds the row.
+	s.reportOffRequest(reason, outcome)
 }
 
 // awaitClose reads the cancelled provider's channel until it closes or wait
@@ -293,13 +313,31 @@ func (s *streamSettler) awaitClose(wait time.Duration) bool {
 // tracked goroutine, so the provider's pending send unblocks and it can
 // unwind. It does not touch the settler's counters: the settle has already
 // read them, and a write here would race it.
-func (s *streamSettler) discardRest() {
+//
+// The reader takes a slot in the drain pool (drainLimit), global and per
+// project, like the grace drain. A provider that ignores the cancel keeps its
+// reader alive for up to drainHardTimeout, so without the bound a disconnect
+// storm on a wedged provider spawns one long-lived goroutine per disconnect.
+// When the pool is full, the channel is abandoned at once: the provider is
+// already cancelled, and bifrost guards its send with the context, so a
+// well-behaved provider unwinds without a reader.
+func (s *streamSettler) discardRest() bool {
+	if !s.h.drainLimit.acquire(s.projectID) {
+		inUse, total, per := s.h.drainLimit.snapshot()
+		s.h.logger.Warn("stream disconnect: drain pool saturated; abandoning the cancelled provider channel",
+			"loop", s.loop, "provider", s.provider, "model", s.model, "project_id", s.projectID,
+			"in_use", inUse, "limit", total, "per_project_limit", per)
+		return false
+	}
 	ch := s.ch
 	tracked := s.h.trackDrain()
 	go func() {
 		if tracked {
 			defer s.h.drainWg.Done()
 		}
+		// Deferred after Done, so it runs first: the slot is free when
+		// DrainBilling returns.
+		defer s.h.drainLimit.release(s.projectID)
 		hard := time.NewTimer(drainHardTimeout)
 		defer hard.Stop()
 		closingC := s.h.drainClosing
@@ -325,6 +363,7 @@ func (s *streamSettler) discardRest() {
 			}
 		}
 	}()
+	return true
 }
 
 // reportEstimatedBill records a stream that WAS billed from an estimate. It

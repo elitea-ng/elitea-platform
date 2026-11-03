@@ -162,8 +162,16 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   channel to close, and bills: the terminal trailer if it already arrived;
   else an ESTIMATE. Input = the provider's prompt count (any usage block on a
   chunk, or the accumulated handle after close), else the request TEXT at
-  4 bytes per token (inline media excluded). Output = max(relayed chunks,
-  relayed text bytes / 4, accumulated count above the placeholder). Relayed
+  4 bytes per token (inline media excluded). The text includes tool results,
+  the tool calls of earlier turns (name and arguments: chat `tool_calls`,
+  Responses `function_call`, Anthropic `tool_use`) and the tool definitions,
+  because providers bill them as input (review of PR #1558). Output = max(relayed chunks,
+  relayed text bytes / 4, accumulated count above the placeholder). The
+  relayed text bytes are `chatDeltaBytes` / `responsesDeltaBytes`, so a change to
+  those counters changes the bill. The background reader of a provider that
+  is slow to close takes a drain-pool slot (global and per project); when the
+  pool is full the gateway abandons the cancelled channel and starts no
+  reader (drain outcome `cancelled_on_disconnect/slow_close_abandoned`). Relayed
   means the SSE write SUCCEEDED, so a frame the caller never received adds
   nothing; this answers the "over-bills inline base64" objection. The
   disconnect signal is explicit (write error or request context done), so it

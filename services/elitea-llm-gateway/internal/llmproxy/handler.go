@@ -683,9 +683,6 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	meter := overhead.Attach(ctx, t0)
 	bifReq := req.ToBifrostChatRequest(ctx)
 	markDispatchKind(ctx, account.DispatchChat)
-	// The prompt estimate is billed only when a streaming caller disconnects
-	// (issue #1201). It is measured lazily, at that moment.
-	setPromptEstimate(ctx, func() int64 { return chatPromptEstimate(bifReq) })
 
 	// Map the caller's model id onto the provider's own model name (issue #317)
 	// BEFORE the budget gate, so the gate and the provider see the same name.
@@ -718,6 +715,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	preDispatch := time.Since(t0)
 
 	if streaming {
+		// The prompt estimate is billed only when a streaming caller
+		// disconnects (issue #1201). It is measured lazily, at that moment.
+		setPromptEstimate(ctx, func() int64 { return chatPromptEstimate(bifReq) })
 		ch, bErr := h.router.ChatCompletionStreamRequest(ctx, bifReq)
 		// Stamp before streamOpenAI: beginStream writes the response head, and
 		// a header set after that never reaches the client.
@@ -843,8 +843,6 @@ func (h *Handler) Responses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bifReq := req.ToBifrostResponsesRequest(ctx)
-	// Billed only when a streaming caller disconnects (issue #1201).
-	setPromptEstimate(ctx, func() int64 { return responsesPromptEstimate(bifReq) })
 
 	// Issue #317: map the caller's model id before the gate and the provider.
 	if !h.mapModel(w, ctx, &bifReq.Provider, &bifReq.Model) {
@@ -869,6 +867,8 @@ func (h *Handler) Responses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if streaming {
+		// Billed only when a streaming caller disconnects (issue #1201).
+		setPromptEstimate(ctx, func() int64 { return responsesPromptEstimate(bifReq) })
 		ch, bErr := h.router.ResponsesStreamRequest(ctx, bifReq)
 		// FIX #5: pass billing context so streamResponses can call updateUsage
 		// after the channel drains with the final usage chunk.
@@ -947,8 +947,6 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bifReq := req.ToBifrostResponsesRequest(ctx)
-	// Billed only when a streaming caller disconnects (issue #1201).
-	setPromptEstimate(ctx, func() int64 { return responsesPromptEstimate(bifReq) })
 
 	// Issue #317: map the caller's model id before the gate and the provider.
 	if !h.mapModel(w, ctx, &bifReq.Provider, &bifReq.Model) {
@@ -973,6 +971,8 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if streaming {
+		// Billed only when a streaming caller disconnects (issue #1201).
+		setPromptEstimate(ctx, func() int64 { return responsesPromptEstimate(bifReq) })
 		ch, bErr := h.router.ResponsesStreamRequest(ctx, bifReq)
 		// FIX #5: pass billing context so streamAnthropic can call updateUsage
 		// after the channel drains with the final usage-carrying chunk.

@@ -294,12 +294,20 @@ func responsesUsageFromChunk(c *schemas.BifrostStreamChunk) (int64, int64, bool)
 	return in, out, true
 }
 
-// chatDeltaBytes counts streamed output payload bytes on a chat chunk.
+// chatDeltaBytes counts the streamed output payload bytes on a chat chunk:
+// content, refusal, reasoning and tool-call argument deltas.
 //
-// OBSERVABILITY ONLY. This number exists so the loss event carries the
-// magnitude of what went unbilled; it is NOT a token count and MUST NOT be fed
-// to cost.Calculator or any billing path (DECISIONS.md: estimates never reach
-// the money path).
+// The count has TWO uses, and the second is on the money path:
+//
+//  1. observedOutBytes, the magnitude hint on budget.unbilled_stream. It is
+//     not a token count and is never billed.
+//  2. The disconnect estimate (issue #1201, DECISIONS.md 2026-11-02). After a
+//     write to the caller SUCCEEDS, the SSE loop passes this count to
+//     streamSettler.relayed, and relayedOutputTokens bills relayed bytes / 4
+//     as the floor of the output estimate when the caller disconnects.
+//
+// So a change to what this function counts CHANGES THE BILL on a caller
+// disconnect. TestDeltaBytes_CountingIsPinned pins the counting.
 func chatDeltaBytes(c *schemas.BifrostStreamChunk) int64 {
 	if c == nil || c.BifrostChatResponse == nil {
 		return 0
@@ -327,14 +335,25 @@ func chatDeltaBytes(c *schemas.BifrostStreamChunk) int64 {
 	return n
 }
 
-// responsesDeltaBytes counts streamed output payload bytes on a Responses-API
-// chunk. Only the incremental Delta is counted: the *.done events re-carry text
-// already streamed as deltas. OBSERVABILITY ONLY — see chatDeltaBytes.
+// responsesDeltaBytes counts the streamed output payload bytes on a
+// Responses-API chunk. Only the incremental Delta is counted: the *.done
+// events re-carry text already streamed as deltas. It has the same two uses
+// as chatDeltaBytes, so a change here also CHANGES THE BILL on a caller
+// disconnect.
 func responsesDeltaBytes(c *schemas.BifrostStreamChunk) int64 {
-	if c == nil || c.BifrostResponsesStreamResponse == nil || c.BifrostResponsesStreamResponse.Delta == nil {
+	if c == nil {
 		return 0
 	}
-	return int64(len(*c.BifrostResponsesStreamResponse.Delta))
+	return responsesEventDeltaBytes(c.BifrostResponsesStreamResponse)
+}
+
+// responsesEventDeltaBytes is responsesDeltaBytes for one Responses event.
+// The relay loops use it on the events they wrote (relayedResponses).
+func responsesEventDeltaBytes(ev *schemas.BifrostResponsesStreamResponse) int64 {
+	if ev == nil || ev.Delta == nil {
+		return 0
+	}
+	return int64(len(*ev.Delta))
 }
 
 // streamSettler accumulates billable evidence while an SSE loop — and, after an
@@ -599,14 +618,22 @@ func (s *streamSettler) settleClean() {
 	}
 	// The loss path publishes to NATS synchronously (up to the 150ms flush
 	// bound). The client already has its terminal frame, so do not hang the
-	// tail of the request on it — hand it to a tracked goroutine.
+	// tail of the request on it.
+	s.reportOffRequest(lossReasonCleanCloseNoTrai, drainOutcomeInline)
+}
+
+// reportOffRequest runs report on a goroutine tracked on drainWg, so a NATS
+// publish in the settle does not hold the tail of the request. When the drain
+// group is already closed (late shutdown), it reports inline: an untracked
+// goroutine could outlive the billing drain and lose the settle.
+func (s *streamSettler) reportOffRequest(reason, outcome string) {
 	if !s.h.trackDrain() {
-		s.report(lossReasonCleanCloseNoTrai, drainOutcomeInline)
+		s.report(reason, outcome)
 		return
 	}
 	go func() {
 		defer s.h.drainWg.Done()
-		s.report(lossReasonCleanCloseNoTrai, drainOutcomeInline)
+		s.report(reason, outcome)
 	}()
 }
 
@@ -842,10 +869,10 @@ func (s *streamSettler) report(reason, outcome string) {
 			DrainOutcome:          outcome,
 			ObservedOutputBytes:   s.observedOutBytes,
 			ExitReason:            reason,
-			PartialInputTokens:    partialOnly(partial, s.in),
-			PartialOutputTokens:   partialOnly(partial, s.out),
-			EstimatedInputTokens:  partialOnly(s.estimated, s.in),
-			EstimatedOutputTokens: partialOnly(s.estimated, s.out),
+			PartialInputTokens:    onlyIf(partial, s.in),
+			PartialOutputTokens:   onlyIf(partial, s.out),
+			EstimatedInputTokens:  onlyIf(s.estimated, s.in),
+			EstimatedOutputTokens: onlyIf(s.estimated, s.out),
 		})
 		return
 	}
@@ -874,10 +901,10 @@ func (s *streamSettler) reportPartialBill(reason, outcome string) {
 	})
 }
 
-// partialOnly returns n when the settlement came from a partial count, else 0.
-// It keeps the partial token fields empty on every event that is not one.
-func partialOnly(partial bool, n int64) int64 {
-	if !partial {
+// onlyIf returns n when cond holds, else 0. It keeps the partial and the
+// estimated token fields empty on every event that is not of that kind.
+func onlyIf(cond bool, n int64) int64 {
+	if !cond {
 		return 0
 	}
 	return n

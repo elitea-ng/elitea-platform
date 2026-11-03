@@ -38,7 +38,7 @@ The spend ceiling on this page is set per project and per member only — there 
 
 A caller can close a streamed answer before it ends, for example with **Stop**. The gateway then stops the model call at once, so the model is free for other requests. The provider has not sent its final token count yet, so the gateway bills an estimate:
 
-- **Input.** The prompt count from the provider, if it reported one. Otherwise, an estimate from the prompt text at about four characters per token. Inline images and audio are not counted.
+- **Input.** The prompt count from the provider, if it reported one. Otherwise, an estimate from the prompt text at about four characters per token. The prompt text includes the instructions, the messages, the tool results, the tool calls of earlier turns (name and arguments) and the tool definitions, because the provider bills all of them as input. Inline images and audio are not counted.
 - **Output.** The output that reached the caller: the larger of one token per streamed chunk and the text length at four characters per token. The count from the provider is used when it is larger. The charge is never below what the caller received.
 
 If the final token count arrives before the call stops, the gateway bills that count instead. The request log marks an estimated row with error code `client_disconnected_usage_estimated` and status 200, so the failure views do not count it. A per-agent spend cap reads the same row.
