@@ -263,8 +263,16 @@ type AgentExecutionInputV1 struct {
 	// after an administrator saved a preamble, so inputs are unchanged while
 	// workers from an earlier release run.
 	PlatformPreamble *PlatformPreambleSnapshotV1 `protobuf:"bytes,67,opt,name=platform_preamble,json=platformPreamble,proto3" json:"platform_preamble,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// FU-250: the delegated sign-ins a fan-out wake applies, by reference only.
+	// Main adds one entry per DECIDED (not yet consumed) `authorize` card of the
+	// parked response when it admits the wake, and only a claim that sets
+	// ClaimCommandRequestV1.fanout_delegated_credentials may run such a wake.
+	// The claim-checked content materializer resolves each reference for the
+	// claim's project and actor and projects it into `mcp_tokens`; the stored
+	// input never holds a token. At most 16 entries (the open-card cap).
+	McpTokenReferences []*McpTokenReferenceV1 `protobuf:"bytes,68,rep,name=mcp_token_references,json=mcpTokenReferences,proto3" json:"mcp_token_references,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *AgentExecutionInputV1) Reset() {
@@ -598,6 +606,88 @@ func (x *AgentExecutionInputV1) GetPlatformPreamble() *PlatformPreambleSnapshotV
 	return nil
 }
 
+func (x *AgentExecutionInputV1) GetMcpTokenReferences() []*McpTokenReferenceV1 {
+	if x != nil {
+		return x.McpTokenReferences
+	}
+	return nil
+}
+
+// McpTokenReferenceV1 names one delegated MCP grant in Main's token store. It
+// grants nothing by itself: Main resolves it only under a live claim, for the
+// claim's own project and actor, and only for this toolkit and resource.
+type McpTokenReferenceV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The canonical https resource the grant is bound to.
+	Resource string `protobuf:"bytes,1,opt,name=resource,proto3" json:"resource,omitempty"`
+	// The opaque store reference (43 base64url characters).
+	Reference string `protobuf:"bytes,2,opt,name=reference,proto3" json:"reference,omitempty"`
+	// At least 1.
+	Revision uint64 `protobuf:"varint,3,opt,name=revision,proto3" json:"revision,omitempty"`
+	// The frozen toolkit the grant is bound to; at least 1.
+	ToolkitId     uint64 `protobuf:"varint,4,opt,name=toolkit_id,json=toolkitId,proto3" json:"toolkit_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *McpTokenReferenceV1) Reset() {
+	*x = McpTokenReferenceV1{}
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *McpTokenReferenceV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*McpTokenReferenceV1) ProtoMessage() {}
+
+func (x *McpTokenReferenceV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use McpTokenReferenceV1.ProtoReflect.Descriptor instead.
+func (*McpTokenReferenceV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *McpTokenReferenceV1) GetResource() string {
+	if x != nil {
+		return x.Resource
+	}
+	return ""
+}
+
+func (x *McpTokenReferenceV1) GetReference() string {
+	if x != nil {
+		return x.Reference
+	}
+	return ""
+}
+
+func (x *McpTokenReferenceV1) GetRevision() uint64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *McpTokenReferenceV1) GetToolkitId() uint64 {
+	if x != nil {
+		return x.ToolkitId
+	}
+	return 0
+}
+
 // One revision of the platform preamble (shared 0216). The command's
 // content_controls (field 71) names the same revision and digest.
 type PlatformPreambleSnapshotV1 struct {
@@ -613,7 +703,7 @@ type PlatformPreambleSnapshotV1 struct {
 
 func (x *PlatformPreambleSnapshotV1) Reset() {
 	*x = PlatformPreambleSnapshotV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[2]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -625,7 +715,7 @@ func (x *PlatformPreambleSnapshotV1) String() string {
 func (*PlatformPreambleSnapshotV1) ProtoMessage() {}
 
 func (x *PlatformPreambleSnapshotV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[2]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -638,7 +728,7 @@ func (x *PlatformPreambleSnapshotV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlatformPreambleSnapshotV1.ProtoReflect.Descriptor instead.
 func (*PlatformPreambleSnapshotV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{2}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *PlatformPreambleSnapshotV1) GetRevision() uint32 {
@@ -676,7 +766,7 @@ type SummaryModelSnapshotV1 struct {
 
 func (x *SummaryModelSnapshotV1) Reset() {
 	*x = SummaryModelSnapshotV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[3]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -688,7 +778,7 @@ func (x *SummaryModelSnapshotV1) String() string {
 func (*SummaryModelSnapshotV1) ProtoMessage() {}
 
 func (x *SummaryModelSnapshotV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[3]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -701,7 +791,7 @@ func (x *SummaryModelSnapshotV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SummaryModelSnapshotV1.ProtoReflect.Descriptor instead.
 func (*SummaryModelSnapshotV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{3}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SummaryModelSnapshotV1) GetLlmSettings() []byte {
@@ -734,7 +824,7 @@ type ModelContextLimitsV1 struct {
 
 func (x *ModelContextLimitsV1) Reset() {
 	*x = ModelContextLimitsV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -746,7 +836,7 @@ func (x *ModelContextLimitsV1) String() string {
 func (*ModelContextLimitsV1) ProtoMessage() {}
 
 func (x *ModelContextLimitsV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -759,7 +849,7 @@ func (x *ModelContextLimitsV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelContextLimitsV1.ProtoReflect.Descriptor instead.
 func (*ModelContextLimitsV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{4}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ModelContextLimitsV1) GetContextWindowTokens() uint32 {
@@ -813,7 +903,7 @@ type ProjectContextSnapshotV1 struct {
 
 func (x *ProjectContextSnapshotV1) Reset() {
 	*x = ProjectContextSnapshotV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[5]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -825,7 +915,7 @@ func (x *ProjectContextSnapshotV1) String() string {
 func (*ProjectContextSnapshotV1) ProtoMessage() {}
 
 func (x *ProjectContextSnapshotV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[5]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -838,7 +928,7 @@ func (x *ProjectContextSnapshotV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProjectContextSnapshotV1.ProtoReflect.Descriptor instead.
 func (*ProjectContextSnapshotV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{5}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ProjectContextSnapshotV1) GetId() string {
@@ -890,7 +980,7 @@ type AgentExecutionArtifactReferenceV1 struct {
 
 func (x *AgentExecutionArtifactReferenceV1) Reset() {
 	*x = AgentExecutionArtifactReferenceV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[6]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -902,7 +992,7 @@ func (x *AgentExecutionArtifactReferenceV1) String() string {
 func (*AgentExecutionArtifactReferenceV1) ProtoMessage() {}
 
 func (x *AgentExecutionArtifactReferenceV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[6]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -915,7 +1005,7 @@ func (x *AgentExecutionArtifactReferenceV1) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use AgentExecutionArtifactReferenceV1.ProtoReflect.Descriptor instead.
 func (*AgentExecutionArtifactReferenceV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{6}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AgentExecutionArtifactReferenceV1) GetArtifactId() string {
@@ -1001,7 +1091,7 @@ type AgentExecutionAttachmentContentV1 struct {
 
 func (x *AgentExecutionAttachmentContentV1) Reset() {
 	*x = AgentExecutionAttachmentContentV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[7]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1013,7 +1103,7 @@ func (x *AgentExecutionAttachmentContentV1) String() string {
 func (*AgentExecutionAttachmentContentV1) ProtoMessage() {}
 
 func (x *AgentExecutionAttachmentContentV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[7]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1026,7 +1116,7 @@ func (x *AgentExecutionAttachmentContentV1) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use AgentExecutionAttachmentContentV1.ProtoReflect.Descriptor instead.
 func (*AgentExecutionAttachmentContentV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{7}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AgentExecutionAttachmentContentV1) GetItemId() string {
@@ -1092,7 +1182,7 @@ type AgentExecutionResultV1 struct {
 
 func (x *AgentExecutionResultV1) Reset() {
 	*x = AgentExecutionResultV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[8]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1104,7 +1194,7 @@ func (x *AgentExecutionResultV1) String() string {
 func (*AgentExecutionResultV1) ProtoMessage() {}
 
 func (x *AgentExecutionResultV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[8]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1117,7 +1207,7 @@ func (x *AgentExecutionResultV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentExecutionResultV1.ProtoReflect.Descriptor instead.
 func (*AgentExecutionResultV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{8}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *AgentExecutionResultV1) GetInputBundleId() string {
@@ -1185,7 +1275,7 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x10request_entry_id\x18\x01 \x01(\tR\x0erequestEntryId\x12(\n" +
 	"\x10client_stream_id\x18\x02 \x01(\tR\x0eclientStreamId\x12*\n" +
 	"\x11client_message_id\x18\x03 \x01(\tR\x0fclientMessageId\x12\x1b\n" +
-	"\tsio_event\x18\x04 \x01(\tR\bsioEventJ\x04\b\x05\x10\x10\"\xd3\x10\n" +
+	"\tsio_event\x18\x04 \x01(\tR\bsioEventJ\x04\b\x05\x10\x10\"\xad\x11\n" +
 	"\x15AgentExecutionInputV1\x12'\n" +
 	"\x0fschema_revision\x18\x01 \x01(\tR\x0eschemaRevision\x12\x10\n" +
 	"\x03llm\x18\x02 \x01(\fR\x03llm\x12!\n" +
@@ -1237,7 +1327,8 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x0fproject_context\x18@ \x01(\v2+.elitea.runtime.v1.ProjectContextSnapshotV1R\x0eprojectContext\x12Y\n" +
 	"\x14model_context_limits\x18A \x01(\v2'.elitea.runtime.v1.ModelContextLimitsV1R\x12modelContextLimits\x12N\n" +
 	"\rsummary_model\x18B \x01(\v2).elitea.runtime.v1.SummaryModelSnapshotV1R\fsummaryModel\x12Z\n" +
-	"\x11platform_preamble\x18C \x01(\v2-.elitea.runtime.v1.PlatformPreambleSnapshotV1R\x10platformPreambleB\f\n" +
+	"\x11platform_preamble\x18C \x01(\v2-.elitea.runtime.v1.PlatformPreambleSnapshotV1R\x10platformPreamble\x12X\n" +
+	"\x14mcp_token_references\x18D \x03(\v2&.elitea.runtime.v1.McpTokenReferenceV1R\x12mcpTokenReferencesB\f\n" +
 	"\n" +
 	"_thread_idB\x10\n" +
 	"\x0e_checkpoint_idB\x0e\n" +
@@ -1247,7 +1338,13 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x15_execution_generationB\x12\n" +
 	"\x10_conversation_idB\x1d\n" +
 	"\x1b_exception_handling_enabledB\r\n" +
-	"\v_debug_modeJ\x04\b(\x10@\"j\n" +
+	"\v_debug_modeJ\x04\b(\x10@\"\x90\x01\n" +
+	"\x13McpTokenReferenceV1\x12\x1a\n" +
+	"\bresource\x18\x01 \x01(\tR\bresource\x12\x1c\n" +
+	"\treference\x18\x02 \x01(\tR\treference\x12\x1a\n" +
+	"\brevision\x18\x03 \x01(\x04R\brevision\x12\x1d\n" +
+	"\n" +
+	"toolkit_id\x18\x04 \x01(\x04R\ttoolkitIdJ\x04\b\x05\x10\x10\"j\n" +
 	"\x1aPlatformPreambleSnapshotV1\x12\x1a\n" +
 	"\brevision\x18\x01 \x01(\rR\brevision\x12\x16\n" +
 	"\x06sha256\x18\x02 \x01(\tR\x06sha256\x12\x12\n" +
@@ -1311,37 +1408,39 @@ func file_elitea_runtime_v1_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_elitea_runtime_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_elitea_runtime_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_elitea_runtime_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_elitea_runtime_v1_agent_proto_goTypes = []any{
 	(AgentExecutionTerminalStateV1)(0),        // 0: elitea.runtime.v1.AgentExecutionTerminalStateV1
 	(*AgentExecutionCommandV1)(nil),           // 1: elitea.runtime.v1.AgentExecutionCommandV1
 	(*AgentExecutionInputV1)(nil),             // 2: elitea.runtime.v1.AgentExecutionInputV1
-	(*PlatformPreambleSnapshotV1)(nil),        // 3: elitea.runtime.v1.PlatformPreambleSnapshotV1
-	(*SummaryModelSnapshotV1)(nil),            // 4: elitea.runtime.v1.SummaryModelSnapshotV1
-	(*ModelContextLimitsV1)(nil),              // 5: elitea.runtime.v1.ModelContextLimitsV1
-	(*ProjectContextSnapshotV1)(nil),          // 6: elitea.runtime.v1.ProjectContextSnapshotV1
-	(*AgentExecutionArtifactReferenceV1)(nil), // 7: elitea.runtime.v1.AgentExecutionArtifactReferenceV1
-	(*AgentExecutionAttachmentContentV1)(nil), // 8: elitea.runtime.v1.AgentExecutionAttachmentContentV1
-	(*AgentExecutionResultV1)(nil),            // 9: elitea.runtime.v1.AgentExecutionResultV1
-	(*DigestV1)(nil),                          // 10: elitea.runtime.v1.DigestV1
+	(*McpTokenReferenceV1)(nil),               // 3: elitea.runtime.v1.McpTokenReferenceV1
+	(*PlatformPreambleSnapshotV1)(nil),        // 4: elitea.runtime.v1.PlatformPreambleSnapshotV1
+	(*SummaryModelSnapshotV1)(nil),            // 5: elitea.runtime.v1.SummaryModelSnapshotV1
+	(*ModelContextLimitsV1)(nil),              // 6: elitea.runtime.v1.ModelContextLimitsV1
+	(*ProjectContextSnapshotV1)(nil),          // 7: elitea.runtime.v1.ProjectContextSnapshotV1
+	(*AgentExecutionArtifactReferenceV1)(nil), // 8: elitea.runtime.v1.AgentExecutionArtifactReferenceV1
+	(*AgentExecutionAttachmentContentV1)(nil), // 9: elitea.runtime.v1.AgentExecutionAttachmentContentV1
+	(*AgentExecutionResultV1)(nil),            // 10: elitea.runtime.v1.AgentExecutionResultV1
+	(*DigestV1)(nil),                          // 11: elitea.runtime.v1.DigestV1
 }
 var file_elitea_runtime_v1_agent_proto_depIdxs = []int32{
-	6,  // 0: elitea.runtime.v1.AgentExecutionInputV1.project_context:type_name -> elitea.runtime.v1.ProjectContextSnapshotV1
-	5,  // 1: elitea.runtime.v1.AgentExecutionInputV1.model_context_limits:type_name -> elitea.runtime.v1.ModelContextLimitsV1
-	4,  // 2: elitea.runtime.v1.AgentExecutionInputV1.summary_model:type_name -> elitea.runtime.v1.SummaryModelSnapshotV1
-	3,  // 3: elitea.runtime.v1.AgentExecutionInputV1.platform_preamble:type_name -> elitea.runtime.v1.PlatformPreambleSnapshotV1
-	5,  // 4: elitea.runtime.v1.SummaryModelSnapshotV1.model_context_limits:type_name -> elitea.runtime.v1.ModelContextLimitsV1
-	10, // 5: elitea.runtime.v1.AgentExecutionArtifactReferenceV1.digest:type_name -> elitea.runtime.v1.DigestV1
-	10, // 6: elitea.runtime.v1.AgentExecutionResultV1.input_bundle_digest:type_name -> elitea.runtime.v1.DigestV1
-	10, // 7: elitea.runtime.v1.AgentExecutionResultV1.request_content_digest:type_name -> elitea.runtime.v1.DigestV1
-	0,  // 8: elitea.runtime.v1.AgentExecutionResultV1.terminal_state:type_name -> elitea.runtime.v1.AgentExecutionTerminalStateV1
-	7,  // 9: elitea.runtime.v1.AgentExecutionResultV1.result_artifact:type_name -> elitea.runtime.v1.AgentExecutionArtifactReferenceV1
-	8,  // 10: elitea.runtime.v1.AgentExecutionResultV1.attachment_contents:type_name -> elitea.runtime.v1.AgentExecutionAttachmentContentV1
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	7,  // 0: elitea.runtime.v1.AgentExecutionInputV1.project_context:type_name -> elitea.runtime.v1.ProjectContextSnapshotV1
+	6,  // 1: elitea.runtime.v1.AgentExecutionInputV1.model_context_limits:type_name -> elitea.runtime.v1.ModelContextLimitsV1
+	5,  // 2: elitea.runtime.v1.AgentExecutionInputV1.summary_model:type_name -> elitea.runtime.v1.SummaryModelSnapshotV1
+	4,  // 3: elitea.runtime.v1.AgentExecutionInputV1.platform_preamble:type_name -> elitea.runtime.v1.PlatformPreambleSnapshotV1
+	3,  // 4: elitea.runtime.v1.AgentExecutionInputV1.mcp_token_references:type_name -> elitea.runtime.v1.McpTokenReferenceV1
+	6,  // 5: elitea.runtime.v1.SummaryModelSnapshotV1.model_context_limits:type_name -> elitea.runtime.v1.ModelContextLimitsV1
+	11, // 6: elitea.runtime.v1.AgentExecutionArtifactReferenceV1.digest:type_name -> elitea.runtime.v1.DigestV1
+	11, // 7: elitea.runtime.v1.AgentExecutionResultV1.input_bundle_digest:type_name -> elitea.runtime.v1.DigestV1
+	11, // 8: elitea.runtime.v1.AgentExecutionResultV1.request_content_digest:type_name -> elitea.runtime.v1.DigestV1
+	0,  // 9: elitea.runtime.v1.AgentExecutionResultV1.terminal_state:type_name -> elitea.runtime.v1.AgentExecutionTerminalStateV1
+	8,  // 10: elitea.runtime.v1.AgentExecutionResultV1.result_artifact:type_name -> elitea.runtime.v1.AgentExecutionArtifactReferenceV1
+	9,  // 11: elitea.runtime.v1.AgentExecutionResultV1.attachment_contents:type_name -> elitea.runtime.v1.AgentExecutionAttachmentContentV1
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_agent_proto_init() }
@@ -1351,14 +1450,14 @@ func file_elitea_runtime_v1_agent_proto_init() {
 	}
 	file_elitea_runtime_v1_common_proto_init()
 	file_elitea_runtime_v1_agent_proto_msgTypes[1].OneofWrappers = []any{}
-	file_elitea_runtime_v1_agent_proto_msgTypes[4].OneofWrappers = []any{}
+	file_elitea_runtime_v1_agent_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_agent_proto_rawDesc), len(file_elitea_runtime_v1_agent_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

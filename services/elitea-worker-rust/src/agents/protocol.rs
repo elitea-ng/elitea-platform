@@ -97,6 +97,13 @@ pub fn request_from(
         &message.internal_tools,
         "the agent internal tools must contain only strings",
     )?;
+    // FU-250: references are Main's to resolve; a materialized input never
+    // carries one, so an input that still does is refused, not ignored.
+    if !message.mcp_token_references.is_empty() {
+        return Err(AgentProtocolError::InvalidInput(
+            "the agent input carries unresolved credential references",
+        ));
+    }
     let mcp_tokens = json_object(
         &message.mcp_tokens,
         "the agent MCP tokens must be an object",

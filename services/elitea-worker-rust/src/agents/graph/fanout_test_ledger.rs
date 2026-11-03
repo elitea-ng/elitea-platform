@@ -63,6 +63,19 @@ impl TestLedger {
         });
     }
 
+    /// Decide a delegated sign-in card with a credential reference (FU-250).
+    pub(crate) fn decide_with_credential(&self, interrupt_key: &str, credential_ref: &str) {
+        self.decide(interrupt_key, "authorize", None);
+        let mut rows = self.rows.lock().expect("ledger lock");
+        if let Some(decided) = rows
+            .decided
+            .iter_mut()
+            .find(|decided| decided.interrupt_key == interrupt_key)
+        {
+            decided.credential_ref = Some(credential_ref.to_owned());
+        }
+    }
+
     /// Return one DECIDED row twice in the next fetches (a duplicate delivery).
     pub(crate) fn redeliver(&self, interrupt_key: &str) {
         let mut rows = self.rows.lock().expect("ledger lock");

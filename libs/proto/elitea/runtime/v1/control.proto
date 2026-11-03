@@ -67,6 +67,15 @@ message ClaimCommandRequestV1 {
   // to a claim without this opt-in; the claim is answered retry-later, so an
   // older worker cannot run a wake as a fresh turn.
   bool fanout_interrupt_decisions = 19;
+  // FU-250: opt in only when the worker applies a fan-out `authorize` decision
+  // with its credential: it binds the decided card's server and requires that
+  // server's token, resolved by Main from AgentExecutionInputV1
+  // .mcp_token_references, before resuming the branch. Main never grants a
+  // fanout_wake job whose input carries mcp_token_references to a claim
+  // without this opt-in, under any disposition; the claim is answered
+  // retry-later, so an older worker can never resume an authorization without
+  // its credential.
+  bool fanout_delegated_credentials = 20;
 }
 
 // SettlementRecoveryV1 carries only durable recovery material. A worker must

@@ -419,6 +419,17 @@ impl DelegatedAuthorizationRequirement {
         &self.toolkit_name
     }
 
+    /// The frozen toolkit this requirement names (`with_toolkit_id`), when
+    /// the toolkit was materialized from a saved reference.
+    pub fn toolkit_id(&self) -> Option<u64> {
+        self.resource_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("toolkit_id"))
+            .and_then(Value::as_str)
+            .and_then(|id| id.parse::<u64>().ok())
+            .filter(|id| *id > 0)
+    }
+
     pub fn toolkit_type(&self) -> &str {
         &self.toolkit_type
     }

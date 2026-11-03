@@ -127,6 +127,29 @@ message AgentExecutionInputV1 {
   // after an administrator saved a preamble, so inputs are unchanged while
   // workers from an earlier release run.
   PlatformPreambleSnapshotV1 platform_preamble = 67;
+  // FU-250: the delegated sign-ins a fan-out wake applies, by reference only.
+  // Main adds one entry per DECIDED (not yet consumed) `authorize` card of the
+  // parked response when it admits the wake, and only a claim that sets
+  // ClaimCommandRequestV1.fanout_delegated_credentials may run such a wake.
+  // The claim-checked content materializer resolves each reference for the
+  // claim's project and actor and projects it into `mcp_tokens`; the stored
+  // input never holds a token. At most 16 entries (the open-card cap).
+  repeated McpTokenReferenceV1 mcp_token_references = 68;
+}
+
+// McpTokenReferenceV1 names one delegated MCP grant in Main's token store. It
+// grants nothing by itself: Main resolves it only under a live claim, for the
+// claim's own project and actor, and only for this toolkit and resource.
+message McpTokenReferenceV1 {
+  // The canonical https resource the grant is bound to.
+  string resource = 1;
+  // The opaque store reference (43 base64url characters).
+  string reference = 2;
+  // At least 1.
+  uint64 revision = 3;
+  // The frozen toolkit the grant is bound to; at least 1.
+  uint64 toolkit_id = 4;
+  reserved 5 to 15;
 }
 
 // One revision of the platform preamble (shared 0216). The command's

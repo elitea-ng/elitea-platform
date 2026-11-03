@@ -4461,6 +4461,10 @@ struct PipelineMcpAuthData {
     resource_metadata: Option<Value>,
     #[serde(default)]
     llm_replay: Option<PipelineLlmReplayEnvelope>,
+    /// FU-250: the frozen toolkit the sign-in is for (absent on a pause
+    /// stored by an earlier Worker).
+    #[serde(default)]
+    toolkit_id: Option<u64>,
 }
 
 impl PipelineMcpAuthData {
@@ -4496,6 +4500,9 @@ impl PipelineMcpAuthData {
             || self.www_authenticate.as_deref().is_some_and(|value| {
                 value.is_empty() || value.len() > 16 * 1024 || value.chars().any(char::is_control)
             })
+            || self
+                .toolkit_id
+                .is_some_and(|id| id == 0 || i64::try_from(id).is_err())
         {
             return Err(AgentEventProjectionError::invalid_state());
         }
@@ -5252,6 +5259,9 @@ pub(crate) fn fanout_card_parts(
             tool_name: Some(data.tool_name.clone()),
             toolkit_name: Some(data.toolkit_name.clone()),
             toolkit_type: Some(data.toolkit_type.clone()),
+            // Only a pause that stored it (FU-250, the FU-268 rule): an
+            // earlier pause re-raises its card byte-identical.
+            toolkit_id: data.toolkit_id,
             ..CardDisplay::default()
         };
         return parts(

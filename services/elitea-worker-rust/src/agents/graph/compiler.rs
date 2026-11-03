@@ -287,6 +287,9 @@ pub(crate) struct PipelineDefinition {
 /// Invocation-owned dependencies for executable pipeline node families.
 #[derive(Clone, Default)]
 pub(crate) struct PipelineNodeRuntimes {
+    /// FU-250: the MCP servers the run holds a Main-resolved token for (the
+    /// keys of its `mcp_tokens`); a fan-out `authorize` resumes only for one.
+    delegated_servers: Option<Arc<BTreeSet<String>>>,
     events: Option<PipelineNodeEventSender>,
     llm: Option<Arc<dyn PipelineLlmAgentFactory>>,
     direct_tool: Option<Arc<dyn PipelineDirectToolResolver>>,
@@ -312,6 +315,19 @@ pub(crate) struct PipelineNodeRuntimes {
 }
 
 impl PipelineNodeRuntimes {
+    /// FU-250: the servers of the run's tokens, never the tokens themselves.
+    pub(crate) fn with_delegated_servers(
+        mut self,
+        mcp_tokens: &serde_json::Map<String, serde_json::Value>,
+    ) -> Self {
+        self.delegated_servers = Some(Arc::new(mcp_tokens.keys().cloned().collect()));
+        self
+    }
+
+    pub(super) fn delegated_servers(&self) -> Arc<BTreeSet<String>> {
+        self.delegated_servers.clone().unwrap_or_default()
+    }
+
     pub(crate) fn with_saved_child_scope_provider(
         mut self,
         provider: Arc<
@@ -457,6 +473,7 @@ impl PipelineNodeRuntimes {
         application: Option<Arc<dyn PipelineApplicationResolver>>,
     ) -> Self {
         Self {
+            delegated_servers: None,
             llm,
             direct_tool,
             application,

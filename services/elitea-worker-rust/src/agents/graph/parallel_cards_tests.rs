@@ -219,8 +219,17 @@ struct Fixture {
     ledger: Arc<TestLedger>,
 }
 
+/// The delegated sign-in fixture's MCP server
+/// (`delegated_authorization_error_fixture`).
+const DELEGATED_SERVER: &str = "https://mcp.example.invalid/v1/mcp";
+
 impl Fixture {
     fn new(child: &str, runtimes: PipelineNodeRuntimes) -> Self {
+        Self::with_servers(child, runtimes, &[DELEGATED_SERVER])
+    }
+
+    /// FU-250: the servers the run holds a Main-resolved token for.
+    fn with_servers(child: &str, runtimes: PipelineNodeRuntimes, servers: &[&str]) -> Self {
         let pipeline = PipelineDefinition::from_yaml(PARENT).expect("parent pipeline");
         let parallel = pipeline
             .nodes
@@ -250,6 +259,7 @@ impl Fixture {
         Self {
             store: Arc::new(Store::default()),
             branches: Arc::new(CompilerParallelBranches {
+                delegated_servers: Arc::new(servers.iter().map(|&url| url.to_owned()).collect()),
                 owned,
                 state_types: pipeline.state,
                 resolver: Some(Arc::new(SavedPipeline {
@@ -443,7 +453,13 @@ async fn answer_right_first(
     action: &str,
     value: Option<&str>,
 ) {
-    fixture.ledger.decide(&right.0, action, value);
+    if action == "authorize" {
+        fixture
+            .ledger
+            .decide_with_credential(&right.0, "test-only-reference-0123456789abcdef");
+    } else {
+        fixture.ledger.decide(&right.0, action, value);
+    }
     let remaining = parked(
         &fixture
             .node(2)
@@ -479,6 +495,7 @@ async fn assert_older_pause_refused(
             branch,
             older,
             &[ParallelDecision {
+                credential: false,
                 interrupt_id: card.interrupt_id,
                 tool_call_id: card.tool_call_id,
                 action: action.to_owned(),
@@ -505,6 +522,7 @@ async fn assert_wrong_action_refused(fixture: &Fixture, branch: &str, action: &s
             &fixture.parallel.branches()[0],
             &pause,
             &[ParallelDecision {
+                credential: false,
                 interrupt_id: card.interrupt_id,
                 tool_call_id: card.tool_call_id,
                 action: action.to_owned(),
@@ -630,6 +648,64 @@ async fn a_delegated_auth_card_resumes_only_its_child_and_an_older_pause_is_refu
     assert_eq!(leaf.state["report"], json!({"authorized": true}));
     assert_older_pause_refused(&fixture, &older, "authorize", "").await;
     finish(&fixture, &left, "skip", None).await;
+}
+
+/// FU-250: an `authorize` resumes only with its credential. Without a named
+/// reference, or without the run holding the card's server's token, the
+/// branch ends typed `graph.fanout.credential_unavailable` and nothing runs.
+#[tokio::test(flavor = "current_thread")]
+async fn an_authorize_without_its_credential_ends_the_branch_typed() {
+    for (servers, with_reference) in [(&[DELEGATED_SERVER][..], false), (&[][..], true)] {
+        let authorized = Arc::new(AtomicBool::new(true));
+        let resolver: Arc<dyn PipelineDirectToolResolver> = Arc::new(FixtureResolver {
+            alias: "Customer Support".to_owned(),
+            tool: Arc::new(AuthorizationFixtureTool {
+                authorized: Arc::clone(&authorized),
+                toolkit_type: "mcp",
+            }),
+            sensitive: None,
+        });
+        let child = sensitive_pipeline_definition_yaml().replace("type: toolkit", "type: mcp");
+        let fixture = Fixture::with_servers(&child, direct_tool_runtimes(resolver), servers);
+        authorized.store(false, Ordering::Release);
+        let (left, right) = both_paused(&fixture, FanoutCardKind::DelegatedAuth).await;
+        authorized.store(true, Ordering::Release);
+        if with_reference {
+            fixture
+                .ledger
+                .decide_with_credential(&right.0, "test-only-reference-0123456789abcdef");
+        } else {
+            fixture.ledger.decide(&right.0, "authorize", None);
+        }
+        fixture.ledger.decide(&left.0, "skip", None);
+        let output = fixture
+            .node(2)
+            .execute(&context())
+            .await
+            .expect("both children settle");
+        let joined = output.updates["joined"].as_array().expect("joined entries");
+        let refused = joined
+            .iter()
+            .find(|entry| entry["status"] == "failed")
+            .unwrap_or_else(|| {
+                panic!("servers {servers:?}, reference {with_reference}: {joined:?}")
+            });
+        assert_eq!(
+            refused["error"]["code"], "graph.fanout.credential_unavailable",
+            "{joined:?}"
+        );
+        let leaf = fixture
+            .store
+            .load(&format!("{}/workerB", Fixture::thread("right")))
+            .await
+            .unwrap()
+            .expect("the right child's pipeline checkpoint");
+        assert_ne!(
+            leaf.state.get("report"),
+            Some(&json!({"authorized": true})),
+            "the call never ran authorized"
+        );
+    }
 }
 
 #[test]
