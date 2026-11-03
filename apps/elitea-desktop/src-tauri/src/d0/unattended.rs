@@ -545,6 +545,8 @@ pub fn request_brief(
     tokio::spawn(async move {
         let answer = match api.run_brief(project_id, &root, &request).await {
             Ok(answer) => answer.checked(),
+            // An older Main has no route: no brief, no check, no notice.
+            Err(error) if error.status == Some(404) => BriefAnswer::off(),
             Err(error) => {
                 log::warn!("a run brief was not made: {}", error.code);
                 BriefAnswer::failed()

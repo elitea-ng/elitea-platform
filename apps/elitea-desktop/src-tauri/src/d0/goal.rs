@@ -80,6 +80,16 @@ impl BriefAnswer {
         }
     }
 
+    /// No brief for this chain: a platform without the `run_brief` route
+    /// (an older Main answers 404) ends the chain as before.
+    #[must_use]
+    pub fn off() -> Self {
+        Self {
+            state: "off".to_owned(),
+            brief: None,
+        }
+    }
+
     /// The answer with a known state: a `ready` without a brief, or a
     /// state the host does not know, is `failed`.
     #[must_use]
