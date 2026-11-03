@@ -65,12 +65,29 @@
 #
 # Environment:
 #   ELITEA_GO_TEST_TIMEOUT        per-package `go test -timeout` (default below)
+#   ELITEA_GO_PACKAGES_FILE       `test` and `coverage` only: run ONLY the
+#                                 packages this file names. One line per
+#                                 package: <module dir><TAB><import path>, the
+#                                 module dir relative to the repository root.
+#                                 scripts/ci/go-test-shards.mjs writes it for
+#                                 one CI shard. See "SHARDS" below.
 #   GOLANGCI_LINT                 golangci-lint binary to use (default: golangci-lint)
 #   ELITEA_REQUIRE_DECLARED_SKIPS 1 makes an undeclared skip FAIL the run.
 #                                 CI sets it. Locally the ledger only reports,
 #                                 because a developer without PostgreSQL,
 #                                 NATS or the storage emulators should still
 #                                 be able to run `task test`.
+#
+# SHARDS
+#
+# The ci-go.yml Test job runs the workspace as a matrix of shards (the full
+# run took 20 to 40 minutes in one job). Each shard sets
+# ELITEA_GO_PACKAGES_FILE. The rules above stay true for a shard, with one
+# change: a module that has no package in the file does not run, and the
+# summary names it as `SHARD` (another shard runs it). The file must name only
+# workspace modules, and it must name at least one package. Each failure is a
+# FAILURE, not an empty run that passes. scripts/ci/go-test-shards.mjs proves
+# that each workspace package is in exactly one shard.
 #
 # `set -e` is deliberately absent: this script must survive a module failure to
 # run the next module. Every status is therefore checked by hand.
@@ -250,6 +267,41 @@ if [ "${#modules[@]}" -eq 0 ]; then
     exit 1
 fi
 
+# ── 1b. Read the package selection of a shard ────────────────────────────────
+#
+# The selection is an explicit list. A line for a module outside the workspace
+# stops the run, because those packages would otherwise not run in any shard.
+packages_file="${ELITEA_GO_PACKAGES_FILE:-}"
+if [ -n "$packages_file" ]; then
+    if [ "$mode" != "test" ] && [ "$mode" != "coverage" ]; then
+        echo "workspace-run: ELITEA_GO_PACKAGES_FILE applies to test and coverage only, not ${mode}" >&2
+        exit 2
+    fi
+    if [ ! -s "$packages_file" ]; then
+        echo "workspace-run: ELITEA_GO_PACKAGES_FILE (${packages_file}) is missing or empty; refusing to report success" >&2
+        exit 1
+    fi
+    while IFS="$(printf '\t')" read -r selected_module selected_package || [ -n "${selected_module:-}" ]; do
+        if [ -z "$selected_module" ] || [ -z "$selected_package" ]; then
+            echo "workspace-run: ${packages_file} holds a line that is not <module dir><TAB><import path>" >&2
+            exit 1
+        fi
+        selected_known=0
+        selected_dir="$repo_root/$selected_module"
+        [ "$selected_module" = "." ] && selected_dir="$repo_root"
+        for module_dir in "${modules[@]}"; do
+            if [ "$module_dir" = "$selected_dir" ]; then
+                selected_known=1
+                break
+            fi
+        done
+        if [ "$selected_known" -eq 0 ]; then
+            echo "workspace-run: ${packages_file} names ${selected_module}, which is not a workspace module" >&2
+            exit 1
+        fi
+    done <"$packages_file"
+fi
+
 # ── 2. Name the Go modules this run does NOT cover ───────────────────────────
 #
 # services/elitea-llm-gateway sits outside go.work on purpose (it was on a
@@ -373,8 +425,12 @@ relative_to_root() {
 # `-o pipefail` is set at the top of this script, so the pipeline below reports
 # the `go test` status even though python3 is the last command in it. Without
 # pipefail a failed test run would read as a pass, which is #409 again.
+#
+# `targets` is `./...`, or the packages of this module that the shard file
+# names (see "SHARDS").
+targets=()
 run_test() {
-    go test -json -race -count=1 -timeout "$ELITEA_GO_TEST_TIMEOUT" ./... |
+    go test -json -race -count=1 -timeout "$ELITEA_GO_TEST_TIMEOUT" "${targets[@]}" |
         python3 "$skip_filter"
 }
 
@@ -404,7 +460,7 @@ run_lint() {
 # It is still written on its own line, immediately after the command, so no
 # later reader has to know that rule.
 run_coverage() {
-    go test -json "${race_flags[@]+"${race_flags[@]}"}" -count=1 -timeout "$ELITEA_GO_TEST_TIMEOUT" -coverprofile=coverage.out ./... |
+    go test -json "${race_flags[@]+"${race_flags[@]}"}" -count=1 -timeout "$ELITEA_GO_TEST_TIMEOUT" -coverprofile=coverage.out "${targets[@]}" |
         python3 "$skip_filter"
     local test_status=$?
     local strip_status=0
@@ -421,7 +477,24 @@ statuses=()
 failed=()
 for module_dir in "${modules[@]}"; do
     module_name="$(relative_to_root "$module_dir")"
-    echo "==> workspace-run ${mode}: ${module_name}"
+    targets=(./...)
+    if [ -n "$packages_file" ]; then
+        targets=()
+        while IFS="$(printf '\t')" read -r selected_module selected_package || [ -n "${selected_module:-}" ]; do
+            if [ "$selected_module" = "$module_name" ]; then
+                targets+=("$selected_package")
+            fi
+        done <"$packages_file"
+        if [ "${#targets[@]}" -eq 0 ]; then
+            # Another shard runs this module. The status -1 marks it for
+            # the summary; it is not a pass and not a failure.
+            statuses+=(-1)
+            continue
+        fi
+        echo "==> workspace-run ${mode}: ${module_name} (${#targets[@]} package(s) of this shard)"
+    else
+        echo "==> workspace-run ${mode}: ${module_name}"
+    fi
     (
         cd "$module_dir" || exit 1
         case "$mode" in
@@ -447,7 +520,9 @@ echo "workspace-run summary (${mode}): ${#modules[@]} workspace module(s)"
 index=0
 while [ "$index" -lt "${#modules[@]}" ]; do
     module_name="$(relative_to_root "${modules[$index]}")"
-    if [ "${statuses[$index]}" -eq 0 ]; then
+    if [ "${statuses[$index]}" -eq -1 ]; then
+        echo "  SHARD ${module_name} (no package in this shard; another shard runs it)"
+    elif [ "${statuses[$index]}" -eq 0 ]; then
         echo "  PASS  ${module_name}"
     else
         echo "  FAIL  ${module_name} (exit ${statuses[$index]})"
@@ -489,5 +564,9 @@ if [ "$skip_status" -ne 0 ]; then
     exit "$skip_status"
 fi
 
+if [ -n "$packages_file" ]; then
+    echo "workspace-run: every package of this shard passed ${mode} (${packages_file})"
+    exit 0
+fi
 echo "workspace-run: every workspace module passed ${mode}"
 exit 0
