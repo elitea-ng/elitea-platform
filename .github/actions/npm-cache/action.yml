@@ -36,6 +36,12 @@ runs:
       run: |
         set -euo pipefail
         [ -f "$GITHUB_WORKSPACE/$LOCKFILE" ] || { echo "::error::cache-dependency-path '$LOCKFILE' is not a file"; exit 1; }
+        # The writer in main-write-cache saves the LITERAL path ~/.npm (the
+        # post step loses the composite's contexts; see its header). That is
+        # npm's default on Linux and macOS; setting it makes it a fact. Every
+        # later npm call of the job inherits it through GITHUB_ENV.
+        export NPM_CONFIG_CACHE="$HOME/.npm"
+        echo "NPM_CONFIG_CACHE=$NPM_CONFIG_CACHE" >> "$GITHUB_ENV"
         echo "dir=$(npm config get cache)" >> "$GITHUB_OUTPUT"
         # A cold cache makes `npm ci` fetch every tarball from the registry,
         # and one ECONNRESET with npm's default 2 retries fails the job. Every
@@ -52,6 +58,7 @@ runs:
       id: cache
       uses: ./.github/actions/main-write-cache
       with:
+        slot: npm
         path: ${{ steps.npm.outputs.dir }}
         key: node-cache-${{ runner.os }}-${{ steps.npm.outputs.arch }}-npm-${{ hashFiles(inputs.cache-dependency-path) }}
         restore-keys: ${{ inputs.prefix-fallback == 'true' && format('node-cache-{0}-{1}-npm-', runner.os, steps.npm.outputs.arch) || '' }}

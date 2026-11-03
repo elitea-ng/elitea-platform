@@ -165,6 +165,12 @@ workspace module and prints a summary. Read the summary:
   - `UNDECLARED` means nothing states why. Give the test what it needs, or add
     the reason to that file. Set `ELITEA_REQUIRE_DECLARED_SKIPS=1` to make an
     undeclared skip fail the run, as CI does.
+- In CI, the run is split into shards (`scripts/go/test-shards.json`). A
+  shard sets `ELITEA_GO_PACKAGES_FILE`, and its summary shows a `SHARD` line
+  for each module that another shard runs. A `SHARD` line is not a pass.
+  `node scripts/ci/go-test-shards.mjs check` proves that each package is in
+  exactly one shard. Run it after you change the shard file. The shard with
+  the pattern `...` gets each new package that no other shard names.
 
 For Go-only work, run from `services/elitea-main/`:
 
