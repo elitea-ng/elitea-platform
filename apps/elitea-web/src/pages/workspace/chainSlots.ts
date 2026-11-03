@@ -12,20 +12,24 @@ export function isContinuedRecord(events: readonly AgentEvent[]): boolean {
   return events.some((event) => event.kind === 'status' && event.payload.continued_automatically === true);
 }
 
-/** Above a turn of a thread: the index of the person's prompt that started it, or the host's continuation number. */
-export type TurnSlot = { prompt: number } | { continuation: number };
+/**
+ * Above a turn of a thread: the index of the person's prompt that started it, the host's continuation number, or
+ * `resumed` for a turn that Continue started after a restart (no prompt of the person, no chain number).
+ */
+export type TurnSlot = { prompt: number } | { continuation: number } | { resumed: true };
 
 /**
  * What stands above each of a thread's turns (oldest first): the person's next prompt, or for a turn that the host
  * continued by itself, its continuation number. A turn counts as continued once the turn before it says so
  * (`turn_continued`), before its own `status` arrives.
  */
-export function turnSlots(views: readonly { turnId: string; view: Pick<WorkspaceTurn['view'], 'continuation' | 'continuedTo'> }[]): TurnSlot[] {
+export function turnSlots(views: readonly { turnId: string; view: Pick<WorkspaceTurn['view'], 'continuation' | 'continuedTo' | 'resumed'> }[]): TurnSlot[] {
   let next = 0;
   return views.map((entry, index) => {
     const before = views[index - 1]?.view.continuedTo;
     const continuation = entry.view.continuation ?? (before?.nextTurnId === entry.turnId ? before.index : undefined);
     if (continuation !== undefined) return { continuation };
+    if (entry.view.resumed === true) return { resumed: true };
     next += 1;
     return { prompt: next - 1 };
   });

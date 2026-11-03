@@ -319,7 +319,7 @@ names instead of retrying. A rule imported from a repository leaves the
 | `attachment_add_bytes` | `{workspace_id, mime, data, name?}` | The same answer for a pasted image: `data` is base64, at most 10 MiB decoded; `mime` is what the clipboard said and is ignored (the type is sniffed from the bytes); `name` defaults to `pasted-image`. Rejects `image_too_large`, `invalid_request`, `workspace_unknown`, `local_work_disabled`. |
 | `attachment_remove` | `{workspace_id, token}` | `null`. Forgets an image the person took off the composer (an unknown token is not an error). |
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
-| `agent_turn_resume` | `{turn_id}` | `{turn_id, execution_id}` — continues a turn that ran when the app stopped (`StoredTurn.resumable`, **Resume after restart** below): the host starts the turn that continues it, as `agent_turn_start` would, and the new turn's events come under the new `turn_id`. Rejects `resume_unknown` (no resume record of the signed-in account for that turn, or it is past its chain's deadline), `resume_invalid` (the record cannot make a turn), or what `agent_turn_start` rejects (the platform refused the continuation: the record goes). |
+| `agent_turn_resume` | `{turn_id}` | `{turn_id, execution_id}` — continues a turn that ran when the app stopped (`StoredTurn.resumable`, **Resume after restart** below): the host starts the turn that continues it, as `agent_turn_start` would, and the new turn's events come under the new `turn_id`. Rejects `resume_unknown` (no resume record of the signed-in account for that turn, or it is past its chain's deadline), `resume_invalid` (the record cannot make a turn), or what `agent_turn_start` rejects. Only the platform's refusal of the continuation (409 `chain_limit_reached` or `chain_ended`, 422 `unattended_grant_refused` or `unattended_grants_off`, 404 `chain_not_found`) deletes the record; any other error (a 401, 429 or 5xx, no network, `workspace_busy`) keeps it for another try. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
 | `agent_turn_steer` | `{turn_id, text}` | `{steer_id}` — queues `text` against the running turn: the agent gets it as a user message of the same turn at the next safe point (**Steering**, below). Rejects `turn_not_running` once the turn is cancelled or its run ended (send the text as the next turn), `steer_invalid` (empty, only whitespace, or more than 16 KiB of UTF-8), `steer_queue_full` (10 messages wait already), `steer_turn_full` (the turn has 10 steering messages already, taken and waiting together: the most its commit carries; the UI shows the message and the person sends the text as the next turn), `turn_unknown` / `turn_expired`. |
@@ -641,7 +641,9 @@ person before the start:
   updates it at each commit that continues the chain, and deletes it when
   the chain ends (or the turn is cancelled, or the next turn does not start
   in time). A record survives only when the app stops while the turn runs.
-  About 5 seconds after the next start, for the signed-in account:
+  About 5 seconds after the next start, for the signed-in account, then
+  again while a record of the account waits (30 s, 1 min, 2 min, 4 min,
+  then every 5 minutes) and after each sign-in:
   - A record past its chain's deadline (the platform's `chain.deadline_seconds`,
     else the grant's, else 12 hours from the chain's start) is deleted.
   - An unattended record (a grant the platform admitted) continues the chain
@@ -653,14 +655,21 @@ person before the start:
     A brief still pending is asked for again (at most 20 seconds). The old
     turn sends `turn_continued` with `kind: "resume"` and
     `resumed_after_restart: true`; the new turn's `status` `running` carries
-    `continuation_kind: "resume"`. When the platform refuses it (a chain
-    limit, a revoked grant), the record is deleted and the old turn sends
-    `chain_ended` (`limit_reached` or `failed`). When the start fails
-    without an answer from the platform (offline, the workspace busy), the
-    record stays and the turn is offered as below.
+    `continuation_kind: "resume"`. When the platform refuses it (409
+    `chain_limit_reached` or `chain_ended`, 422 `unattended_grant_refused`
+    with grants turned off too, 404 `chain_not_found`), the record is
+    deleted and the old turn sends `chain_ended` (`limit_reached` or
+    `failed`). Any other failure (a 401 before the sign-in, a 429 or 5xx,
+    no network, the workspace busy) keeps the record for the next try, and
+    the turn is offered as below meanwhile (`resume_offered` once).
   - Any other record (an attended turn) starts nothing: the old turn sends
-    `resume_offered`, and `thread_history` marks the turn `resumable`. The
-    UI shows **Continue** under it, which calls `agent_turn_resume`.
+    `resume_offered` (once), and `thread_history` marks the turn
+    `resumable`. The UI shows **Continue** under it, which calls
+    `agent_turn_resume`.
+  An open thread page follows these: a `turn_continued` of kind `resume`
+  on one of its recorded turns makes the new turn its live turn, a
+  `resume_offered` shows **Continue**, and a turn continued either way
+  offers Continue no more.
 - **Run brief and goal check** (ADR-0045 decision 11; #1564). With
   `goal_check` (absent = on) the chain's first turn asks the platform for
   the run brief in the background (`POST run_brief`, with the person's
@@ -2387,22 +2396,29 @@ them). The host folds the same `agent://event`, `index://event` and
 only the icon; its menu lists the waiting approvals (tool and folder, never a
 command or a path) and the running turns, then Show / Quit, and choosing a
 turn shows the window and sends `focus_turn`. While a turn runs its menu
-also says "Keeping the computer awake" (and so does its tooltip).
+also says "Keeping the computer awake" (and so does its tooltip). The Dock's
+progress bar follows a send to the cloud (`done`/`total`), else the index
+builds (files read of files to read; indeterminate until that is known), and
+is removed when they end.
 
 **Keep awake, close and quit** (`src/keep_awake.rs`, `src/window.rs`,
 ADR-0045 decision 7). While one or more local turns run (a chain holds it
-between its turns too), the host holds one OS power assertion against idle
-sleep: `IOPMAssertion` `PreventUserIdleSystemSleep` on macOS,
+between its turns too), the host holds one OS power assertion against
+**idle** sleep only: `IOPMAssertion` `PreventUserIdleSystemSleep` on macOS,
 `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)` on Windows,
-logind `Inhibit("sleep:idle")` on Linux. The last turn's end (or panic,
-or cancel) releases it. The display may still sleep, and the person can
-still put the computer to sleep. Closing the window hides it on macOS
-always, and on Windows and Linux while a turn runs (the tray shows it
-again); else it closes. Quit (the menu, the tray, ⌘Q / Ctrl+Q) while a turn
-runs asks first, in a native dialog ("Quit Elitea?", **Quit** / **Keep
-running**). The Dock's progress bar follows a
-send to the cloud (`done`/`total`), else the index builds (files read of files
-to read; indeterminate until that is known), and is removed when they end.
+logind `Inhibit("idle", …, "block")` on Linux. The last turn's end (or
+panic, or cancel) releases it. The display may still sleep, and the person
+can still put the computer to sleep. A worker thread of the host makes and
+ends the assertion; a turn's start and end only change the count, so a slow
+OS call (D-Bus on Linux) never holds up a turn, the window's close or the
+quit. Closing the window while a turn runs hides it on macOS (always, in
+fact) and on Windows (the tray shows it again), and minimizes it on Linux
+(many Linux desktops show no tray icon); with no turn running it closes on
+Windows and Linux. Quit (the menu, the tray, ⌘Q / Ctrl+Q) while a turn runs
+asks first, in a native dialog ("Quit Elitea?", **Quit** / **Keep
+running**); a restart for an update (`RESTART_EXIT_CODE`) does not ask. At
+exit the history writer (the thread history and the resume records) is
+flushed before and again after the wait for the turns' commits.
 
 **Open Folder… is host-side**: the menu item runs the native folder picker
 in the host (the same picker and `WorkspaceStore::add` as `workspace_open`)

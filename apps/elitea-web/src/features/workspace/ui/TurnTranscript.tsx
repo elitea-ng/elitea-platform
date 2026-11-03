@@ -255,7 +255,7 @@ export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, o
   const showStatus = view.phase !== null;
   return (
     <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-      {continuation !== undefined && <ContinuedMarker index={continuation} resumed={view.resumed === true} />}
+      <ContinuedMarker index={continuation} resumed={view.resumed === true} />
       <RunBriefCard value={view.runBrief} />
       {view.items.map((item) =>
         item.type === 'text' ? (

@@ -379,16 +379,7 @@ pub fn run() {
             }
             // The turns that ran when the app stopped: an unattended one
             // continues, any other offers Continue (ADR-0045 decision 7).
-            {
-                let agents = agents.clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(d0::resume::RESUME_AFTER).await;
-                    let resumed = agents.resume_after_restart().await;
-                    if resumed > 0 {
-                        log::info!("resumed {resumed} unattended run(s) after the restart");
-                    }
-                });
-            }
+            tauri::async_runtime::spawn(agents.clone().resume_until_settled());
             // The app-wide compaction settings (threshold, idle compaction).
             agents.set_compaction_store(Arc::new(
                 compaction_settings::CompactionSettingsStore::open(data_dir.clone()),
@@ -603,8 +594,9 @@ const EXIT_COMMIT_WAIT: std::time::Duration = std::time::Duration::from_secs(10)
 fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
     // A quit (the menu, the tray, ⌘Q) with a running turn asks first
     // (ADR-0045 decision 7); a confirmed one goes through.
-    if let tauri::RunEvent::ExitRequested { api, .. } = &event
+    if let tauri::RunEvent::ExitRequested { api, code, .. } = &event
         && window::quit_asks(
+            *code,
             window::running_turns(app),
             app.try_state::<window::QuitGate>()
                 .is_some_and(|gate| gate.confirmed()),
@@ -649,6 +641,12 @@ fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
                 "quitting with {pending} local turn commit(s) still running and {failed} failed; \
                  those turns are not in their conversations"
             );
+        }
+        // Again after the wait: the commits that settled in it wrote the
+        // history and the resume records (a chain's end deletes its record,
+        // a continuing commit updates it, ADR-0045 decision 7).
+        if let Some(history) = &local.history {
+            history.flush();
         }
     }
     #[cfg(target_os = "macos")]

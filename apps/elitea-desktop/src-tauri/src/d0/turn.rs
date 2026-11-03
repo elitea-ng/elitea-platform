@@ -128,6 +128,16 @@ pub trait PolicySource: Send + Sync {
     fn local_work(&self) -> Option<Value>;
 }
 
+/// One pass of [`AgentHost::resume_after_restart`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ResumePass {
+    /// Unattended turns whose chain continued.
+    pub resumed: usize,
+    /// Records the pass could not settle (no sign-in, no network, a 5xx):
+    /// the next pass tries them again.
+    pub waiting: usize,
+}
+
 /// A refused or failed IPC call, with the machine code the UI branches on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TurnError {
@@ -934,6 +944,10 @@ pub struct AgentHost {
     /// (ADR-0045 decision 7, `crate::keep_awake`): from a turn's start until
     /// its commit settles.
     awake: Arc<KeepAwake>,
+    /// Wakes the resume loop ([`Self::resume_until_settled`]) at a sign-in.
+    resume_wake: tokio::sync::Notify,
+    /// The turns `resume_offered` was sent for: once each.
+    resume_offers: Mutex<std::collections::HashSet<String>>,
     /// Extra toolsets every turn offers (tests: tools that record when they
     /// run).
     #[cfg(test)]
@@ -1144,6 +1158,8 @@ impl AgentHost {
                 u64::try_from(unattended::CONTINUE_WAIT.as_millis()).unwrap_or(u64::MAX),
             ),
             awake: Arc::new(KeepAwake::default()),
+            resume_wake: tokio::sync::Notify::new(),
+            resume_offers: Mutex::new(std::collections::HashSet::new()),
             #[cfg(test)]
             test_toolsets: Mutex::new(Vec::new()),
         })
@@ -3385,18 +3401,82 @@ impl AgentHost {
         self.start(request).await
     }
 
-    /// After a restart (ADR-0045 decision 7): continue or offer each turn
-    /// that was running when the app stopped, from its resume record. An
-    /// unattended turn continues its chain (link kind `resume`) and its old
-    /// turn says `turn_continued`; a chain the platform refuses ends
-    /// (`chain_ended`) and its record goes. Any other turn says
-    /// `resume_offered`, and `thread_history` marks it `resumable`. A
-    /// record past its deadline goes; another account's stays. The number
-    /// of turns continued.
-    pub async fn resume_after_restart(self: &Arc<Self>) -> usize {
+    /// A sign-in completed: the resume loop looks at the records again now.
+    pub fn signed_in(&self) {
+        self.resume_wake.notify_one();
+    }
+
+    /// The resume loop (ADR-0045 decision 7): [`resume::RESUME_AFTER`]
+    /// after start-up, then again on a back-off ([`resume::backoff`], at
+    /// most every 5 minutes) while a record of this account waits, and
+    /// after each sign-in ([`Self::signed_in`]) until the app ends.
+    pub async fn resume_until_settled(self: Arc<Self>) {
+        tokio::time::sleep(resume::RESUME_AFTER).await;
+        let mut attempt = 0_u32;
+        loop {
+            let pass = self.resume_after_restart().await;
+            if pass.resumed > 0 {
+                log::info!(
+                    "resumed {} unattended run(s) after the restart",
+                    pass.resumed
+                );
+            }
+            if pass.waiting == 0 {
+                attempt = 0;
+                self.resume_wake.notified().await;
+                continue;
+            }
+            let wait = resume::backoff(attempt);
+            attempt = attempt.saturating_add(1);
+            tokio::select! {
+                () = tokio::time::sleep(wait) => {}
+                () = self.resume_wake.notified() => attempt = 0,
+            }
+        }
+    }
+
+    /// Send `resume_offered` on `record`'s turn, once per turn.
+    fn offer_resume(&self, record: &crate::history::ResumeRecord) {
+        let first = self
+            .resume_offers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(record.turn_id.clone());
+        if first {
+            TurnEvents::new(record.turn_id.clone(), self.deps.emitter.clone()).send(
+                "resume_offered",
+                json!({
+                    "workspace_id": record.workspace_id,
+                    "conversation_id": record.conversation_id,
+                }),
+            );
+        }
+    }
+
+    /// One pass over the records after a restart (ADR-0045 decision 7):
+    /// continue or offer each turn that was running when the app stopped.
+    /// An unattended turn continues its chain (link kind `resume`) and its
+    /// old turn says `turn_continued`; a chain the platform refuses
+    /// ([`resume::refused`]) ends (`chain_ended`) and its record goes; any
+    /// other failure keeps the record for the next pass. A turn without a
+    /// grant says `resume_offered`, and `thread_history` marks it
+    /// `resumable`. A record past its deadline goes; another account's
+    /// stays.
+    pub async fn resume_after_restart(self: &Arc<Self>) -> ResumePass {
+        let mut pass = ResumePass::default();
         let Some(history) = self.deps.history.clone() else {
-            return 0;
+            return pass;
         };
+        let records = match history.read_resume_records().await {
+            Ok(records) => records,
+            Err(error) => {
+                log::warn!("the resume records could not be read: {error}");
+                return pass;
+            }
+        };
+        if records.is_empty() {
+            return pass;
+        }
         let owner = match self.owner(&self.api).await {
             Ok(owner) => owner,
             Err(error) => {
@@ -3404,17 +3484,10 @@ impl AgentHost {
                     "running turns are not resumed now: {}",
                     log_reason(&error.code, error.status)
                 );
-                return 0;
+                pass.waiting = records.len();
+                return pass;
             }
         };
-        let records = match history.read_resume_records().await {
-            Ok(records) => records,
-            Err(error) => {
-                log::warn!("the resume records could not be read: {error}");
-                return 0;
-            }
-        };
-        let mut resumed = 0;
         for record in records {
             if record.owner != owner || self.entry(&record.turn_id).is_ok() {
                 continue;
@@ -3424,22 +3497,13 @@ impl AgentHost {
                 continue;
             }
             let old = TurnEvents::new(record.turn_id.clone(), self.deps.emitter.clone());
-            let offered = || {
-                old.send(
-                    "resume_offered",
-                    json!({
-                        "workspace_id": record.workspace_id,
-                        "conversation_id": record.conversation_id,
-                    }),
-                );
-            };
             if record.grant.is_none() {
-                offered();
+                self.offer_resume(&record);
                 continue;
             }
             match self.start_resumed(&record).await {
                 Ok(started) => {
-                    resumed += 1;
+                    pass.resumed += 1;
                     old.send(
                         "turn_continued",
                         json!({
@@ -3452,14 +3516,16 @@ impl AgentHost {
                         }),
                     );
                 }
-                // Not the platform's refusal (no network, a busy folder):
-                // the person can continue later.
-                Err(error) if error.status.is_none() && error.code != "resume_invalid" => {
+                // Not the platform's refusal (no network, a 401 or 5xx, a
+                // busy folder): the next pass tries again, and the person
+                // can continue meanwhile.
+                Err(error) if !resume::refused(&error) => {
                     log::warn!(
-                        "an unattended run was not resumed: {}",
+                        "an unattended run was not resumed yet: {}",
                         log_reason(&error.code, error.status)
                     );
-                    offered();
+                    pass.waiting += 1;
+                    self.offer_resume(&record);
                 }
                 Err(error) => {
                     log::warn!(
@@ -3487,7 +3553,7 @@ impl AgentHost {
                 }
             }
         }
-        resumed
+        pass
     }
 
     /// `agent_turn_resume`: the person's **Continue** on a turn that was
@@ -3497,7 +3563,8 @@ impl AgentHost {
     /// # Errors
     ///
     /// `resume_unknown` for a turn without a record of this account, or
-    /// the start's refusal (the record is then kept).
+    /// the start's error: the platform's refusal ([`resume::refused`])
+    /// deletes the record, any other error keeps it.
     pub async fn resume_turn(self: &Arc<Self>, turn_id: &str) -> Result<TurnStarted, TurnError> {
         let unknown = || {
             TurnError::new(
@@ -3519,7 +3586,13 @@ impl AgentHost {
             history.resume_delete(&record.workspace_id, &record.turn_id);
             return Err(unknown());
         }
-        self.start_resumed(&record).await
+        let started = self.start_resumed(&record).await;
+        if let Err(error) = &started
+            && resume::refused(error)
+        {
+            history.resume_delete(&record.workspace_id, &record.turn_id);
+        }
+        started
     }
 
     /// Commits queued or running, and failed ones kept: what a quit now

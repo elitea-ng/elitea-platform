@@ -154,7 +154,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
                 history={session.history}
                 shown={session.shown}
                 onFork={forking.onFork}
-                resume={{ onResume: (turnId) => void turn.resume(turnId), busy }}
+                resume={{ onResume: (turnId) => void turn.resume(turnId), busy, offers: turn.offersResume }}
               />
               <Exchanges turn={turn} prompts={session.prompts} promptImages={session.promptImages} onFork={forking.onFork} live={{ onRetryTurn: () => session.run('retry'), onContinue: commands.continueTurn }} />
               <approval.Dialog request={continueRequest} queued={0} onRespond={session.answer} />

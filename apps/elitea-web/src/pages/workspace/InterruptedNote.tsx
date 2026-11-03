@@ -9,10 +9,14 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
-/** Continue a recorded turn that ran when the app stopped; `busy`: a turn runs now, so Continue waits. */
+/**
+ * Continue a recorded turn that ran when the app stopped; `busy`: a turn runs now, so Continue waits. `offers`: whether
+ * the turn offers Continue now (`resumable` as read, or offered since, and not continued yet).
+ */
 export interface ResumeAction {
   onResume: (turnId: string) => void;
   busy: boolean;
+  offers: (turnId: string, resumable: boolean) => boolean;
 }
 
 export function InterruptedNote({ turnId, resumable, resume }: { turnId: string; resumable: boolean; resume: ResumeAction | undefined }): React.JSX.Element {
@@ -21,7 +25,7 @@ export function InterruptedNote({ turnId, resumable, resume }: { turnId: string;
       <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
         {t('workspace.history.interrupted', 'This turn did not finish: the app closed while it ran.')}
       </Typography>
-      {resumable && resume !== undefined && (
+      {resume?.offers(turnId, resumable) === true && (
         <Box>
           <Button size="small" variant="outlined" data-testid="history-turn-continue" disabled={resume.busy} onClick={() => resume.onResume(turnId)}>
             {t('workspace.history.continue', 'Continue')}

@@ -88,14 +88,23 @@ export function StopNotices({ view, onContinue }: { view: TurnView; onContinue: 
   );
 }
 
-/** In place of the person's prompt: the host started this turn by itself, the n-th time in its chain (`resumed`: after an app restart). */
-export function ContinuedMarker({ index, resumed = false }: { index: number; resumed?: boolean }): React.JSX.Element {
+/** The marker's text: the n-th continuation of the chain, after an app restart (`resumed`) or not. */
+function markerText(index: number | undefined, resumed: boolean): string {
+  if (!resumed) return t('workspace.chain.continued', 'Continued automatically ({{n}})', { n: String(index) });
+  if (index === undefined) return t('workspace.chain.resumedAfterRestart', 'Resumed after restart');
+  return t('workspace.chain.resumed', 'Resumed after restart ({{n}})', { n: String(index) });
+}
+
+/**
+ * In place of the person's prompt: the host started this turn by itself, the n-th time in its chain (`resumed`: after
+ * an app restart; Continue after a restart has no chain number). Nothing for a turn of the person's.
+ */
+export function ContinuedMarker({ index, resumed = false }: { index: number | undefined; resumed?: boolean }): React.JSX.Element | null {
+  if (index === undefined && !resumed) return null;
   return (
     <Divider data-testid="turn-continued-marker" textAlign="center">
       <Typography variant="bodySmall" component="span" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
-        {resumed
-          ? t('workspace.chain.resumed', 'Resumed after restart ({{n}})', { n: String(index) })
-          : t('workspace.chain.continued', 'Continued automatically ({{n}})', { n: String(index) })}
+        {markerText(index, resumed)}
       </Typography>
     </Divider>
   );

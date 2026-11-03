@@ -3,22 +3,29 @@
 //!
 //! [`KeepAwake`] counts the turns that run (from their start until their
 //! commit settles; a chain's next turn takes its hold before the previous
-//! one lets go). The first hold asks the OS for a power assertion, and the
-//! last release ends it. A guard ([`AwakeGuard`]) releases on drop, so a
-//! cancelled turn or a panic releases it too.
+//! one lets go). While the count is above 0 the OS holds a power assertion
+//! against **idle** sleep only: the person can still put the computer to
+//! sleep, and the display can still sleep. A guard ([`AwakeGuard`])
+//! releases on drop, so a cancelled turn or a panic releases it too.
 //!
 //! The OS side is a [`PowerBackend`]:
 //! - macOS: `IOPMAssertionCreateWithName` with `PreventUserIdleSystemSleep`;
 //! - Windows: `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)`;
-//! - Linux: logind `Inhibit` of `idle` and `sleep` (`sleep:idle`) over D-Bus.
+//! - Linux: logind `Inhibit("idle", …, "block")` over D-Bus.
 //!
-//! [`OsPower`] makes the assertion on a thread of its own, which holds it
-//! until the release: the Windows call is per thread, and the D-Bus call
-//! blocks. A lid close on a laptop with no external display may still put
-//! the computer to sleep where the OS requires it; the resume record
-//! (`crate::d0::resume`) covers that.
+//! The count is a lock of its own that no OS call ever runs under: a
+//! worker thread of [`KeepAwake`] (never a tokio worker) makes and ends the
+//! assertion. A hold or a release only changes the count and wakes the
+//! worker, which then brings the assertion in line with the count (so a
+//! quick hold and release in a row end with no assertion). [`OsPower`]
+//! makes the assertion on a thread of its own, which holds it until the
+//! release: the Windows call is per thread, and the D-Bus call blocks. A lid
+//! close on a laptop with no external display may still put the computer to
+//! sleep where the OS requires it; the resume record (`crate::d0::resume`)
+//! covers that.
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 
 /// What the OS holds while the computer must stay awake: dropping it ends
 /// the assertion.
@@ -26,7 +33,8 @@ pub trait PowerHold: Send {}
 
 /// The OS's power assertion.
 pub trait PowerBackend: Send + Sync {
-    /// Ask the OS to keep the computer awake until the hold drops.
+    /// Ask the OS to keep the computer awake until the hold drops. May
+    /// block (it runs on the keep-awake worker only).
     ///
     /// # Errors
     ///
@@ -47,16 +55,33 @@ impl PowerBackend for NoPower {
 /// Told when the assertion starts (`true`) or ends (`false`): the tray.
 pub type AwakeListener = Arc<dyn Fn(bool) + Send + Sync>;
 
-struct Inner {
-    running: usize,
-    hold: Option<Box<dyn PowerHold>>,
-    backend: Arc<dyn PowerBackend>,
-    listener: Option<AwakeListener>,
+/// What the worker and the count share.
+struct Shared {
+    running: Mutex<usize>,
+    backend: Mutex<Arc<dyn PowerBackend>>,
+    listener: Mutex<Option<AwakeListener>>,
+    awake: AtomicBool,
+}
+
+fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+enum Wake {
+    /// The count changed: bring the assertion in line.
+    Count,
+    /// Tests: answer once every earlier wake was handled.
+    #[cfg(test)]
+    Settled(mpsc::Sender<()>),
 }
 
 /// The running turns' count and the OS assertion they hold.
 pub struct KeepAwake {
-    inner: Mutex<Inner>,
+    shared: Arc<Shared>,
+    /// The worker's queue, started on the first hold.
+    worker: Mutex<Option<mpsc::Sender<Wake>>>,
 }
 
 impl Default for KeepAwake {
@@ -69,54 +94,38 @@ impl KeepAwake {
     #[must_use]
     pub fn new(backend: Arc<dyn PowerBackend>) -> Self {
         Self {
-            inner: Mutex::new(Inner {
-                running: 0,
-                hold: None,
-                backend,
-                listener: None,
+            shared: Arc::new(Shared {
+                running: Mutex::new(0),
+                backend: Mutex::new(backend),
+                listener: Mutex::new(None),
+                awake: AtomicBool::new(false),
             }),
+            worker: Mutex::new(None),
         }
-    }
-
-    fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
-        self.inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Use `backend` for the next assertion (start-up: the OS one).
     pub fn set_backend(&self, backend: Arc<dyn PowerBackend>) {
-        self.inner().backend = backend;
+        *locked(&self.shared.backend) = backend;
     }
 
-    /// Tell `listener` when the assertion starts or ends.
+    /// Tell `listener` when the assertion starts or ends (on the worker
+    /// thread).
     pub fn set_listener(&self, listener: AwakeListener) {
-        self.inner().listener = Some(listener);
+        *locked(&self.shared.listener) = Some(listener);
     }
 
-    /// One more turn runs: the first one asks the OS for the assertion.
+    /// One more turn runs: the first one has the worker ask the OS for the
+    /// assertion. Never waits on the OS.
     #[must_use]
     pub fn hold(self: &Arc<Self>) -> AwakeGuard {
-        let changed = {
-            let mut inner = self.inner();
-            inner.running = inner.running.saturating_add(1);
-            if inner.running == 1 && inner.hold.is_none() {
-                match inner.backend.acquire() {
-                    Ok(hold) => {
-                        inner.hold = Some(hold);
-                        inner.listener.clone()
-                    }
-                    Err(error) => {
-                        log::warn!("the computer may sleep while a turn runs: {error}");
-                        None
-                    }
-                }
-            } else {
-                None
-            }
+        let first = {
+            let mut running = locked(&self.shared.running);
+            *running = running.saturating_add(1);
+            *running == 1
         };
-        if let Some(listener) = changed {
-            listener(true);
+        if first {
+            self.wake(Wake::Count);
         }
         AwakeGuard {
             awake: self.clone(),
@@ -124,35 +133,104 @@ impl KeepAwake {
     }
 
     fn release(&self) {
-        let (hold, listener) = {
-            let mut inner = self.inner();
-            inner.running = inner.running.saturating_sub(1);
-            if inner.running == 0 {
-                let hold = inner.hold.take();
-                let listener = hold.as_ref().and(inner.listener.clone());
-                (hold, listener)
-            } else {
-                (None, None)
-            }
+        let last = {
+            let mut running = locked(&self.shared.running);
+            *running = running.saturating_sub(1);
+            *running == 0
         };
-        // The OS call runs outside the lock.
-        drop(hold);
-        if let Some(listener) = listener {
-            listener(false);
+        if last {
+            self.wake(Wake::Count);
         }
     }
 
-    /// The turns that run now.
+    /// Queue `wake` for the worker, starting it when it is not running.
+    fn wake(&self, wake: Wake) {
+        let mut worker = locked(&self.worker);
+        let wake = match worker.as_ref() {
+            Some(queue) => match queue.send(wake) {
+                Ok(()) => return,
+                Err(mpsc::SendError(wake)) => wake,
+            },
+            None => wake,
+        };
+        let (queue, waiting) = mpsc::channel();
+        let shared = self.shared.clone();
+        let started = std::thread::Builder::new()
+            .name("keep-awake".into())
+            .spawn(move || work(&shared, &waiting));
+        match started {
+            Ok(_) => {
+                let _ = queue.send(wake);
+                *worker = Some(queue);
+            }
+            Err(error) => {
+                log::warn!("the computer may sleep while a turn runs: {error}");
+            }
+        }
+    }
+
+    /// The turns that run now. Never waits on the OS.
     #[must_use]
     pub fn running(&self) -> usize {
-        self.inner().running
+        *locked(&self.shared.running)
     }
 
     /// The OS holds the assertion now.
     #[cfg(test)]
     #[must_use]
     pub fn is_awake(&self) -> bool {
-        self.inner().hold.is_some()
+        self.shared.awake.load(Ordering::SeqCst)
+    }
+
+    /// Tests: once the worker handled every earlier hold and release.
+    #[cfg(test)]
+    pub fn settled(&self) {
+        let (answer, answered) = mpsc::channel();
+        self.wake(Wake::Settled(answer));
+        let _ = answered.recv_timeout(std::time::Duration::from_secs(5));
+    }
+}
+
+/// The worker: on each wake, make or end the assertion to match the count.
+/// It ends (and drops the assertion) when the [`KeepAwake`] goes.
+fn work(shared: &Shared, waiting: &mpsc::Receiver<Wake>) {
+    let mut hold: Option<Box<dyn PowerHold>> = None;
+    while let Ok(wake) = waiting.recv() {
+        match wake {
+            Wake::Count => {}
+            #[cfg(test)]
+            Wake::Settled(answer) => {
+                let _ = answer.send(());
+                continue;
+            }
+        }
+        let want = *locked(&shared.running) > 0;
+        let changed = if want && hold.is_none() {
+            let backend = locked(&shared.backend).clone();
+            match backend.acquire() {
+                Ok(made) => {
+                    hold = Some(made);
+                    true
+                }
+                Err(error) => {
+                    log::warn!("the computer may sleep while a turn runs: {error}");
+                    false
+                }
+            }
+        } else if !want && hold.is_some() {
+            hold = None;
+            true
+        } else {
+            false
+        };
+        if changed {
+            let on = hold.is_some();
+            shared.awake.store(on, Ordering::SeqCst);
+            let listener = locked(&shared.listener).clone();
+            if let Some(listener) = listener {
+                listener(on);
+            }
+        }
     }
 }
 
@@ -203,11 +281,15 @@ impl PowerBackend for OsPower {
         std::thread::Builder::new()
             .name("keep-awake".into())
             .spawn(move || {
+                // Idle sleep only (ADR-0045 decision 7): `idle` is macOS's
+                // PreventUserIdleSystemSleep, Windows' ES_SYSTEM_REQUIRED and
+                // logind's `idle` inhibitor. `sleep` (PreventSystemSleep,
+                // ES_AWAYMODE_REQUIRED, logind `sleep`) would also block the
+                // person's own suspend, and `display` keeps the screen on.
                 let builder = keepawake::Builder::default()
                     .idle(true)
-                    // logind: `sleep:idle`. Elsewhere `sleep` would be a
-                    // stronger assertion than the ADR asks for.
-                    .sleep(cfg!(target_os = "linux"))
+                    .sleep(false)
+                    .display(false)
                     .reason("A local agent turn is running")
                     .app_name("Elitea")
                     .app_reverse_domain("ai.elitea.desktop")
@@ -234,7 +316,7 @@ impl PowerBackend for OsPower {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicUsize;
 
     use super::*;
 
@@ -243,7 +325,7 @@ mod tests {
     struct FakeOs {
         held: Arc<AtomicUsize>,
         made: AtomicUsize,
-        refuse: std::sync::atomic::AtomicBool,
+        refuse: AtomicBool,
     }
 
     struct FakeHold(Arc<AtomicUsize>);
@@ -279,24 +361,30 @@ mod tests {
         assert_eq!(os.held.load(Ordering::SeqCst), 0);
         let first = awake.hold();
         let second = awake.hold();
+        awake.settled();
         assert_eq!(awake.running(), 2);
         assert!(awake.is_awake());
         assert_eq!(os.made.load(Ordering::SeqCst), 1, "one assertion for both");
         drop(first);
+        awake.settled();
         assert_eq!(os.held.load(Ordering::SeqCst), 1, "a turn still runs");
         // A chain's next turn holds before the previous lets go.
         let next = second.again();
         drop(second);
+        awake.settled();
         assert_eq!(os.held.load(Ordering::SeqCst), 1);
         drop(next);
+        awake.settled();
         assert_eq!(os.held.load(Ordering::SeqCst), 0);
         assert_eq!(awake.running(), 0);
         assert!(!awake.is_awake());
         assert_eq!(*seen.lock().unwrap(), vec![true, false]);
         // The next run asks again.
         let again = awake.hold();
+        awake.settled();
         assert_eq!(os.made.load(Ordering::SeqCst), 2);
         drop(again);
+        awake.settled();
         assert_eq!(*seen.lock().unwrap(), vec![true, false, true, false]);
     }
 
@@ -311,14 +399,58 @@ mod tests {
         })
         .join();
         assert!(panicked.is_err());
+        awake.settled();
         assert_eq!(os.held.load(Ordering::SeqCst), 0);
         assert_eq!(awake.running(), 0);
 
         os.refuse.store(true, Ordering::SeqCst);
         let guard = awake.hold();
+        awake.settled();
         assert_eq!(awake.running(), 1, "the turn runs without the assertion");
         assert!(!awake.is_awake());
         drop(guard);
         assert_eq!(awake.running(), 0);
+    }
+
+    /// An OS call that does not answer until the test lets it.
+    struct SlowOs {
+        go: Mutex<mpsc::Receiver<()>>,
+        held: Arc<AtomicUsize>,
+    }
+
+    impl PowerBackend for SlowOs {
+        fn acquire(&self) -> Result<Box<dyn PowerHold>, String> {
+            let _ = self.go.lock().unwrap().recv();
+            self.held.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(FakeHold(self.held.clone())))
+        }
+    }
+
+    /// A blocked OS call never blocks a hold, a release or the count (the
+    /// window's close and the quit read it on the main thread), and the
+    /// assertion ends up in line with the count.
+    #[test]
+    fn a_slow_os_call_never_blocks_the_count() {
+        let (go, waiting) = mpsc::channel();
+        let held = Arc::new(AtomicUsize::new(0));
+        let awake = Arc::new(KeepAwake::new(Arc::new(SlowOs {
+            go: Mutex::new(waiting),
+            held: held.clone(),
+        })));
+        let guard = awake.hold();
+        assert_eq!(awake.running(), 1);
+        drop(guard);
+        assert_eq!(awake.running(), 0);
+        let again = awake.hold();
+        assert_eq!(awake.running(), 1);
+        // The OS answers now: one assertion, for the turn still running.
+        go.send(()).unwrap();
+        awake.settled();
+        assert!(awake.is_awake());
+        assert_eq!(held.load(Ordering::SeqCst), 1);
+        drop(again);
+        awake.settled();
+        assert!(!awake.is_awake());
+        assert_eq!(held.load(Ordering::SeqCst), 0);
     }
 }

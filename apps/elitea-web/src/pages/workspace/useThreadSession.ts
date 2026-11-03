@@ -91,7 +91,16 @@ function useShellRegistration(workspaceId: string, newThread: () => void, run: (
 function slotLabel(slot: TurnSlot | undefined, prompts: readonly string[]): string {
   if (slot === undefined) return '';
   if ('prompt' in slot) return prompts[slot.prompt] ?? '';
+  if ('resumed' in slot) return t('workspace.chain.resumedAfterRestart', 'Resumed after restart');
   return t('workspace.chain.continued', 'Continued automatically ({{n}})', { n: String(slot.continuation) });
+}
+
+/** A host resume of a recorded turn after a restart becomes this page's turn (ADR-0045 decision 7). */
+function useFollowResumes(history: ThreadHistory, watch: WorkspaceTurn['watch']): void {
+  const recorded = history.kind === 'local' ? history.turns : undefined;
+  useEffect(() => {
+    if (recorded !== undefined) watch(recorded.filter((stored) => stored.state === 'interrupted').map((stored) => stored.turn_id));
+  }, [recorded, watch]);
 }
 
 /** Every turn of the thread that changed files, newest first. */
@@ -186,6 +195,7 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
       turn.adopt(running.turn_id, running.events);
     }
   }
+  useFollowResumes(history, turn.watch);
   // The activity feed learns which folder and thread this turn belongs to (events carry only the turn).
   const liveTurnId = turn.turnId;
   useEffect(() => {

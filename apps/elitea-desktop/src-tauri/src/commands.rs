@@ -57,6 +57,9 @@ pub async fn host_sign_in(
     let signed_in = state.auth.sign_in().await?;
     // A new session (perhaps another account): nothing of the last one goes on.
     local.agents.forget_identity();
+    // Its turns that ran when the app stopped continue now (ADR-0045
+    // decision 7).
+    local.agents.signed_in();
     // The indexes still open are watched again (under the new policy).
     local.index.resume_watching().await;
     Ok(signed_in)

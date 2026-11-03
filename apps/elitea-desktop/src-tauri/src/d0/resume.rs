@@ -15,7 +15,10 @@
 //!   grant).
 //!
 //! A record past its deadline (the chain's, or [`DEFAULT_DEADLINE`]) is
-//! dropped.
+//! dropped. Only the platform's refusal of the continuation ([`refused`])
+//! deletes a record and ends its chain; any other failure (no network, a
+//! 401 before the sign-in, a 5xx, a busy folder) keeps it, and the host
+//! tries again on a back-off ([`backoff`]) and after each sign-in.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,6 +41,42 @@ pub const DEFAULT_DEADLINE: Duration = Duration::from_hours(12);
 /// How long after start-up the host looks at the resume records: the
 /// window loads and the sign-in refreshes first.
 pub const RESUME_AFTER: Duration = Duration::from_secs(5);
+
+/// The first wait before the host tries a record again; it doubles up to
+/// [`RETRY_MAX`].
+pub const RETRY_FIRST: Duration = Duration::from_secs(30);
+
+/// The longest wait between two tries.
+pub const RETRY_MAX: Duration = Duration::from_mins(5);
+
+/// The wait before try `attempt` + 2 (from 0): 30 s, 1 min, 2 min, 4 min,
+/// then 5 min.
+#[must_use]
+pub fn backoff(attempt: u32) -> Duration {
+    RETRY_FIRST
+        .saturating_mul(2_u32.saturating_pow(attempt.min(16)))
+        .min(RETRY_MAX)
+}
+
+/// Whether `error` is the platform's refusal of the continuation, which
+/// ends the chain for good: a chain limit (409 `chain_limit_reached`), a
+/// chain that already ended (409 `chain_ended`), a grant refused (422
+/// `unattended_grant_refused`, grants turned off included), a chain the
+/// platform does not know (404 `chain_not_found`), or a record that cannot
+/// make a turn (`resume_invalid`). Anything else (401, 429, 5xx, no answer,
+/// a busy folder) may pass later.
+#[must_use]
+pub fn refused(error: &TurnError) -> bool {
+    use super::unattended::{CHAIN_LIMIT_REACHED, GRANT_REFUSED, GRANTS_OFF};
+    let code = error.code.as_str();
+    code == "resume_invalid"
+        || match error.status {
+            Some(409) => code == CHAIN_LIMIT_REACHED || code == "chain_ended",
+            Some(422) => code == GRANT_REFUSED || code == GRANTS_OFF,
+            Some(404) => code == "chain_not_found",
+            _ => false,
+        }
+}
 
 /// The record of a turn that just started: `turn_id` of `request`, as the
 /// platform started it (`started`), for `owner`, at `now_ms`.
@@ -277,6 +316,44 @@ mod tests {
         assert!(excerpt.contains("Answer: The login form renders."));
         assert!(request.bypass && !request.plan_mode);
         assert_eq!(request.conversation_id, json!(42));
+    }
+
+    #[test]
+    fn only_the_platforms_refusal_ends_a_resumed_chain() {
+        let error = |code: &str, status: Option<u16>| TurnError {
+            status,
+            ..TurnError::new(code, "x")
+        };
+        for (code, status) in [
+            ("chain_limit_reached", 409),
+            ("chain_ended", 409),
+            ("unattended_grant_refused", 422),
+            ("unattended_grants_off", 422),
+            ("chain_not_found", 404),
+        ] {
+            assert!(refused(&error(code, Some(status))), "{code} {status}");
+        }
+        assert!(refused(&error("resume_invalid", None)));
+        for (code, status) in [
+            ("unauthorized", Some(401)),
+            ("http_500", Some(500)),
+            ("http_503", Some(503)),
+            ("rate_limited", Some(429)),
+            ("local_turn_conflict", Some(409)),
+            ("not_found", Some(404)),
+            ("network", None),
+            ("workspace_busy", None),
+            ("not_signed_in", None),
+        ] {
+            assert!(!refused(&error(code, status)), "{code} {status:?}");
+        }
+    }
+
+    #[test]
+    fn the_retries_back_off_to_five_minutes() {
+        let waits: Vec<u64> = (0..7).map(|n| backoff(n).as_secs()).collect();
+        assert_eq!(waits, vec![30, 60, 120, 240, 300, 300, 300]);
+        assert_eq!(backoff(u32::MAX), RETRY_MAX);
     }
 
     #[test]

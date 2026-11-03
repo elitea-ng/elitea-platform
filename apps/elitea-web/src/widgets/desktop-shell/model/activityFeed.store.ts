@@ -168,7 +168,8 @@ type QuietKind =
   | 'turn_continued'
   | 'chain_ended'
   | 'run_brief'
-  | 'goal_checked';
+  | 'goal_checked'
+  | 'resume_offered';
 
 const QUIET_KINDS: ReadonlySet<AgentEvent['kind']> = new Set<QuietKind>([
   'text_delta',
@@ -191,6 +192,7 @@ const QUIET_KINDS: ReadonlySet<AgentEvent['kind']> = new Set<QuietKind>([
   'chain_ended',
   'run_brief',
   'goal_checked',
+  'resume_offered',
 ]);
 
 /**

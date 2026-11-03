@@ -126,7 +126,9 @@ export type UnattendedEvent =
   /** On the chain's first turn, when Main's brief call returns (it never blocks the turn). */
   | { kind: 'run_brief'; payload: RunBriefPayload }
   /** On the checked turn, before its `turn_continued` (`not_met`) or `chain_ended` (the other outcomes). */
-  | { kind: 'goal_checked'; payload: GoalCheckResult & { turn_id: string } };
+  | { kind: 'goal_checked'; payload: GoalCheckResult & { turn_id: string } }
+  /** On a turn that ran when the app stopped, after the next start, when the host does not continue it by itself: offer Continue. */
+  | { kind: 'resume_offered'; payload: { workspace_id: string; conversation_id: string | number } };
 
 /** The fields a `status` `running` of an unattended turn adds. */
 export interface UnattendedStatusFields {

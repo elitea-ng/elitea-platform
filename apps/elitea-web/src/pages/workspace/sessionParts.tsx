@@ -337,7 +337,7 @@ export function Exchanges({ turn, prompts, promptImages, onFork, live }: {
     const prompt =
       'prompt' in slot
         ? { prompt: prompts[slot.prompt], images: promptImages[slot.prompt], continuation: undefined }
-        : { prompt: undefined, images: undefined, continuation: slot.continuation };
+        : { prompt: undefined, images: undefined, continuation: 'continuation' in slot ? slot.continuation : undefined };
     return { key: entry.turnId, view: entry.view, live: entry.turnId === turn.turnId, ...prompt };
   });
   return (

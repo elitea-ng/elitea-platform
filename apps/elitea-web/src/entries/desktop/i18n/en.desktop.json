@@ -1063,5 +1063,8 @@
   "workspace.chain.limitReached": "chain limit reached",
   "workspace.chain.limitSpend": "The run reached its spend limit.",
   "workspace.chain.waiting": "waiting for you. Click Continue to go on.",
-  "workspace.runToCompletion.planMode": "Run to completion is not used in Plan mode: the plan waits for you. It applies in Act and Bypass mode."
+  "workspace.runToCompletion.planMode": "Run to completion is not used in Plan mode: the plan waits for you. It applies in Act and Bypass mode.",
+  "workspace.chain.resumed": "Resumed after restart ({{n}})",
+  "workspace.chain.resumedAfterRestart": "Resumed after restart",
+  "workspace.history.continue": "Continue"
 }

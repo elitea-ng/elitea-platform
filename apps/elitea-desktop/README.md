@@ -61,9 +61,9 @@ macOS first; Linux and Windows build and degrade as noted.
   (`tauri-plugin-window-state`, Rust-side, no webview permission); the
   minimum size is 900 × 600. On macOS closing the window (⌘W, the red
   button) hides it; the dock icon brings it back and ⌘Q quits, so a
-  running turn keeps going and keeps notifying. On Windows and Linux
-  closing the window hides it while a turn runs (the tray icon brings it
-  back). Quitting while a turn runs asks first, and the computer does not
+  running turn keeps going and keeps notifying. While a turn runs,
+  closing the window hides it on Windows (the tray icon brings it back) and
+  minimizes it on Linux (many Linux desktops show no tray icon). Quitting while a turn runs asks first, and the computer does not
   idle-sleep while a turn runs (IPC.md, "Keep awake, close and quit").
 - **Menu bar and shortcuts** (`src/menu.rs`): App (About, Settings… ⌘,,
   Services, Hide, Quit), File (New Thread ⌘N, Open Folder… ⌘O, Close Window

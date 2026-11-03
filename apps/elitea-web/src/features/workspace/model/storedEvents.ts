@@ -8,6 +8,13 @@ import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
 /** A stored event; a merged text run covers the seqs `seq..last`, each seen. */
 export type StoredEvent = AgentEvent & { last: number };
 
+/** `events` sorted by `seq`, the first of each seq kept. */
+export function sortedUnique(events: readonly AgentEvent[]): AgentEvent[] {
+  const bySeq = new Map<number, AgentEvent>();
+  for (const event of events) if (!bySeq.has(event.seq)) bySeq.set(event.seq, event);
+  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+}
+
 type DeltaEvent = Extract<AgentEvent, { kind: 'text_delta' | 'thinking_delta' }>;
 
 function lastSeq(event: AgentEvent | StoredEvent): number {

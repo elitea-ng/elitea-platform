@@ -10896,7 +10896,7 @@ async fn a_restart_resumes_an_unattended_turn_with_its_brief() {
     .await;
     let h = harness(server, allowed(), UiDecision::Deny).await;
     keep(&h, stopped_turn(&h, Some(stored_grant())).await);
-    assert_eq!(h.host.resume_after_restart().await, 1);
+    assert_eq!(h.host.resume_after_restart().await.resumed, 1);
     let events = until_event(&h, "chain_ended").await;
     let starts = start_bodies(&h.server);
     assert_eq!(starts.len(), 1);
@@ -10960,7 +10960,14 @@ async fn a_restart_offers_continue_for_an_attended_turn() {
     let server = chain_platform(|_| say("Done."), agent_details(), &[EXECUTION]).await;
     let h = harness(server, allowed(), UiDecision::Deny).await;
     keep(&h, stopped_turn(&h, None).await);
-    assert_eq!(h.host.resume_after_restart().await, 0);
+    let pass = h.host.resume_after_restart().await;
+    assert_eq!(
+        (pass.resumed, pass.waiting),
+        (0, 0),
+        "it waits for the person"
+    );
+    // A later pass does not offer it again.
+    h.host.resume_after_restart().await;
     let all = h.emitter.all();
     let offered = turn_events(&all, "turn-before-restart", "resume_offered");
     assert_eq!(offered.len(), 1);
@@ -10983,6 +10990,84 @@ async fn a_restart_offers_continue_for_an_attended_turn() {
     assert_eq!(again.code, "resume_unknown");
 }
 
+/// A resume that fails without the platform's refusal (a 503 here; a 401,
+/// a 429 or no network alike) keeps the record and ends nothing: the pass
+/// says it waits, Continue is offered once, and the next pass resumes it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_resume_that_fails_for_now_keeps_the_record_and_tries_again() {
+    let down = Arc::new(AtomicBool::new(true));
+    let handler = chain_handler(
+        |_| say("Done."),
+        agent_details(),
+        &[EXECUTION_2],
+        Stall::None,
+    );
+    let server = serve({
+        let down = down.clone();
+        move |req: &Req| {
+            if req.path == START_PATH && down.load(Ordering::SeqCst) {
+                return Res::json(
+                    503,
+                    &json!({"error": "unavailable", "message": "Try later."}),
+                );
+            }
+            handler(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    keep(&h, stopped_turn(&h, Some(stored_grant())).await);
+    let pass = h.host.resume_after_restart().await;
+    assert_eq!((pass.resumed, pass.waiting), (0, 1));
+    assert_eq!(h.host.resume_after_restart().await.waiting, 1);
+    let all = h.emitter.all();
+    assert!(turn_events(&all, "turn-before-restart", "chain_ended").is_empty());
+    assert_eq!(
+        turn_events(&all, "turn-before-restart", "resume_offered").len(),
+        1,
+        "offered once"
+    );
+    assert_eq!(resume_records(&h).len(), 1, "the record stays");
+
+    down.store(false, Ordering::SeqCst);
+    assert_eq!(h.host.resume_after_restart().await.resumed, 1);
+    let events = until_event(&h, "chain_ended").await;
+    let continued = turn_events(&events, "turn-before-restart", "turn_continued");
+    assert_eq!(continued[0]["kind"], "resume");
+}
+
+/// **Continue** (`agent_turn_resume`): the platform's refusal deletes the
+/// record and is the answer; a failure for now keeps the record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn continue_deletes_the_record_only_on_the_platforms_refusal() {
+    let down = Arc::new(AtomicBool::new(true));
+    // No execution to give: every start past the 503 is refused (409).
+    let handler = chain_handler(|_| say("Done."), agent_details(), &[], Stall::None);
+    let server = serve({
+        let down = down.clone();
+        move |req: &Req| {
+            if req.path == START_PATH && down.load(Ordering::SeqCst) {
+                return Res::json(
+                    503,
+                    &json!({"error": "unavailable", "message": "Try later."}),
+                );
+            }
+            handler(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    keep(&h, stopped_turn(&h, None).await);
+    let later = h.host.resume_turn("turn-before-restart").await.unwrap_err();
+    assert_eq!(later.status, Some(503));
+    assert_eq!(resume_records(&h).len(), 1, "kept for another try");
+
+    down.store(false, Ordering::SeqCst);
+    let refused = h.host.resume_turn("turn-before-restart").await.unwrap_err();
+    assert_eq!(refused.code, "chain_limit_reached");
+    until_records(&h, "the record deleted", <[_]>::is_empty).await;
+}
+
 /// A resume the platform refuses (a chain limit) ends the chain on the old
 /// turn and deletes the record; a record past its deadline is dropped
 /// without a start.
@@ -10991,7 +11076,8 @@ async fn a_refused_or_expired_resume_ends_the_chain_and_deletes_the_record() {
     let server = chain_platform(|_| say("Done."), agent_details(), &[]).await;
     let h = harness(server, allowed(), UiDecision::Deny).await;
     keep(&h, stopped_turn(&h, Some(stored_grant())).await);
-    assert_eq!(h.host.resume_after_restart().await, 0);
+    let pass = h.host.resume_after_restart().await;
+    assert_eq!((pass.resumed, pass.waiting), (0, 0));
     let events = h.emitter.all();
     let ended = turn_events(&events, "turn-before-restart", "chain_ended");
     assert_eq!(ended.len(), 1);
@@ -11005,7 +11091,10 @@ async fn a_refused_or_expired_resume_ends_the_chain_and_deletes_the_record() {
     expired.deadline_at = expired.started_at - 1;
     keep(&h, expired);
     let before = start_bodies(&h.server).len();
-    assert_eq!(h.host.resume_after_restart().await, 0);
+    assert_eq!(
+        h.host.resume_after_restart().await,
+        super::turn::ResumePass::default()
+    );
     assert_eq!(start_bodies(&h.server).len(), before, "nothing started");
     until_records(&h, "the expired record dropped", <[_]>::is_empty).await;
 }

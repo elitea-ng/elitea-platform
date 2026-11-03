@@ -189,22 +189,39 @@ impl HostOs {
     }
 }
 
-/// Whether closing the main window hides it instead (ADR-0045 decision 7):
-/// always on macOS (the dock icon or ⌘Q decide), and on Windows and Linux
-/// while a turn runs, so the turn goes on from the tray.
+/// What closing the main window does (ADR-0045 decision 7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseAction {
+    /// The window closes (and, the last one, the app quits).
+    Close,
+    /// The window hides; the dock icon (macOS) or the tray (Windows) shows
+    /// it again.
+    Hide,
+    /// The window minimizes: many Linux desktops (stock GNOME) show no tray
+    /// icon, so a hidden window would have no way back.
+    Minimize,
+}
+
+/// What closing the main window does: macOS always hides it (the dock icon
+/// or ⌘Q decide); while a turn runs Windows hides it to the tray and Linux
+/// minimizes it, so the turn goes on; else it closes.
 #[must_use]
-pub const fn close_hides(os: HostOs, running_turns: usize) -> bool {
+pub const fn close_action(os: HostOs, running_turns: usize) -> CloseAction {
     match os {
-        HostOs::MacOs => true,
-        HostOs::Windows | HostOs::Linux => running_turns > 0,
+        HostOs::MacOs => CloseAction::Hide,
+        _ if running_turns == 0 => CloseAction::Close,
+        HostOs::Windows => CloseAction::Hide,
+        HostOs::Linux => CloseAction::Minimize,
     }
 }
 
-/// Whether a quit asks first: a turn runs, and the person did not confirm
-/// this quit yet.
+/// Whether a quit asks first: a turn runs, the person did not confirm this
+/// quit yet, and it is not a restart (`code` [`tauri::RESTART_EXIT_CODE`],
+/// an update: the app ignores `prevent_exit` then).
 #[must_use]
-pub const fn quit_asks(running_turns: usize, confirmed: bool) -> bool {
-    running_turns > 0 && !confirmed
+pub const fn quit_asks(code: Option<i32>, running_turns: usize, confirmed: bool) -> bool {
+    let restart = matches!(code, Some(tauri::RESTART_EXIT_CODE));
+    running_turns > 0 && !confirmed && !restart
 }
 
 /// The turns that run now (`crate::keep_awake`).
@@ -271,16 +288,22 @@ fn on_window_event(app: &AppHandle, event: &tauri::WindowEvent) {
             crate::app_events::open_paths(app, paths);
         }
         // macOS keeps the app running with its window closed (⌘W, the red
-        // button); the dock icon or ⌘Q decide. Windows and Linux do so
-        // while a turn runs: the tray shows it (ADR-0045 decision 7).
-        // Hidden, not destroyed, so a running turn keeps reporting and the
-        // window state is kept.
-        tauri::WindowEvent::CloseRequested { api, .. }
-            if close_hides(HostOs::current(), running_turns(app)) =>
-        {
+        // button); the dock icon or ⌘Q decide. Windows (to the tray) and
+        // Linux (minimized) do so while a turn runs (ADR-0045 decision 7).
+        // Not destroyed, so a running turn keeps reporting and the window
+        // state is kept.
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+            let action = close_action(HostOs::current(), running_turns(app));
+            if action == CloseAction::Close {
+                return;
+            }
             api.prevent_close();
             if let Some(window) = tauri::Manager::get_webview_window(app, "main") {
-                let _ = window.hide();
+                let _ = if action == CloseAction::Hide {
+                    window.hide()
+                } else {
+                    window.minimize()
+                };
             }
         }
         _ => {}
@@ -368,20 +391,28 @@ mod tests {
 
     #[test]
     fn closing_hides_on_macos_and_elsewhere_only_while_a_turn_runs() {
-        assert!(close_hides(HostOs::MacOs, 0));
-        assert!(close_hides(HostOs::MacOs, 1));
+        assert_eq!(close_action(HostOs::MacOs, 0), CloseAction::Hide);
+        assert_eq!(close_action(HostOs::MacOs, 1), CloseAction::Hide);
         for os in [HostOs::Windows, HostOs::Linux] {
-            assert!(!close_hides(os, 0), "{os:?} quits with nothing running");
-            assert!(close_hides(os, 1), "{os:?} keeps a running turn");
-            assert!(close_hides(os, 3));
+            assert_eq!(close_action(os, 0), CloseAction::Close, "{os:?} quits");
         }
+        assert_eq!(close_action(HostOs::Windows, 1), CloseAction::Hide);
+        assert_eq!(close_action(HostOs::Windows, 3), CloseAction::Hide);
+        // No tray on many Linux desktops: minimized, never out of reach.
+        assert_eq!(close_action(HostOs::Linux, 1), CloseAction::Minimize);
+        assert_eq!(close_action(HostOs::Linux, 3), CloseAction::Minimize);
     }
 
     #[test]
-    fn a_quit_asks_only_while_a_turn_runs_and_once() {
-        assert!(!quit_asks(0, false));
-        assert!(quit_asks(1, false));
-        assert!(!quit_asks(1, true), "the person confirmed");
+    fn a_quit_asks_only_while_a_turn_runs_and_once_and_never_on_a_restart() {
+        assert!(!quit_asks(None, 0, false));
+        assert!(quit_asks(None, 1, false));
+        assert!(quit_asks(Some(0), 1, false));
+        assert!(!quit_asks(None, 1, true), "the person confirmed");
+        assert!(
+            !quit_asks(Some(tauri::RESTART_EXIT_CODE), 1, false),
+            "a restart ignores prevent_exit"
+        );
     }
 
     #[test]
