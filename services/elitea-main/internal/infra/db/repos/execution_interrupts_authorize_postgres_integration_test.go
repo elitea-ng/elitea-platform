@@ -295,3 +295,34 @@ FROM elitea_runtime.execution_jobs j WHERE j.execution_id = $1 AND j.generation 
 		t.Fatal("a wake with an authorize decision is not gated")
 	}
 }
+
+// FU-250 (A2): a card naming a toolkit of another project, or a project
+// toolkit whose grant is for another server than the card's server_url,
+// gets the same refusal: the grant must be bound to this project, this
+// toolkit and the canonical resource of the card's own server.
+func TestAuthorizeRefusesAnotherProjectsToolkitAndAnotherServer(t *testing.T) {
+	h := newAuthorizeHarness(t)
+	const foreignToolkit = int64(99)
+	foreignGrant := h.grant(2, int32(interruptAsker), foreignToolkit, authorizeResource)
+	response := h.newResponse()
+	key, raw := h.card(authorizeCard, func(card map[string]any) {
+		card["display"].(map[string]any)["toolkit_id"] = foreignToolkit
+	})
+	if _, err := h.repo.Raise(t.Context(), h.raiseInput(response, raw)); err != nil {
+		t.Fatal(err)
+	}
+	before := h.cardRow(response, key)
+	if err := h.authorize(interruptAsker, response, key, foreignGrant); !errors.Is(err, domain.ErrCredentialRefused) {
+		t.Fatalf("another project's toolkit: %v", err)
+	}
+	if after := h.cardRow(response, key); after != before {
+		t.Fatalf("a refusal wrote %s", after)
+	}
+
+	otherServer := h.grant(1, int32(interruptAsker), authorizeToolkit, "https://mcp.other.example/v1/sse")
+	response = h.newResponse()
+	key = h.raise(response, authorizeCard)
+	if err := h.authorize(interruptAsker, response, key, otherServer); !errors.Is(err, domain.ErrCredentialRefused) {
+		t.Fatalf("a grant for another server than the card's: %v", err)
+	}
+}

@@ -2195,3 +2195,60 @@ fn an_internal_category_carries_no_assertion() {
         )));
     assert!(!config.carries_delegation_for_test());
 }
+
+/// FU-250 (A2): a token Main projected for resource R reaches only the
+/// toolset whose frozen server is R. Another frozen toolset of the same run
+/// on another server never receives it: the recording server logs which
+/// requests carried which bearer.
+#[tokio::test]
+async fn a_projected_token_reaches_only_the_toolset_of_its_resource() {
+    let resource = "https://mcp.example.invalid/v1/mcp";
+    let other = "https://other.example.invalid/v1/mcp";
+    let tokens = Map::from_iter([(
+        resource.to_owned(),
+        json!({"access_token": "test-only-fu250-marker"}),
+    )]);
+    let config_for = |url: &str| {
+        let mut configured = settings(&["lookup_release"]);
+        configured["url"] = json!(url);
+        let version = frozen("mcp", &configured);
+        let snapshot = FrozenToolSnapshot::from_version_details(&version)
+            .expect("MCP snapshot")
+            .apply_policy(policy(&[]).as_ref());
+        let reference = snapshot
+            .iter()
+            .find(|reference| reference.tool_type() == "mcp")
+            .expect("MCP reference");
+        RemoteMcpConfig::parse_for_test(reference, &tokens).expect("MCP config")
+    };
+    let (base, seen) = recording_redirect_server(String::new()).await;
+    for (url, path) in [(resource, "/r"), (other, "/s")] {
+        let config = config_for(url).with_endpoint_for_test(&format!("{base}{path}"));
+        let client = session_client_builder(&config)
+            .expect("builder")
+            .https_only(false)
+            .build()
+            .expect("client");
+        client
+            .post(format!("{base}{path}"))
+            .body("{}")
+            .send()
+            .await
+            .expect("response");
+    }
+    let seen = seen.lock().unwrap().clone();
+    assert!(
+        seen.contains(&(
+            "/r".to_owned(),
+            Some("Bearer test-only-fu250-marker".to_owned())
+        )),
+        "{seen:?}"
+    );
+    assert!(seen.contains(&("/s".to_owned(), None)), "{seen:?}");
+    assert!(
+        !seen
+            .iter()
+            .any(|(path, bearer)| path == "/s" && bearer.is_some()),
+        "another server received a bearer: {seen:?}"
+    );
+}
