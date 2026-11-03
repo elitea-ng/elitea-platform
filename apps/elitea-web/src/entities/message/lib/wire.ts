@@ -200,6 +200,10 @@ export interface MessageGroupMetaWire {
   readonly unattended?: { readonly grant_id?: string; readonly chain_root_execution_id?: string; readonly continuation_index?: number };
   /** ADR-0045: the response stopped at its step limit under an unattended grant. */
   readonly step_limit_reached?: boolean;
+  /** ADR-0045 decision 11: the chain's run brief, on the chain root's answer (`{state, brief?}`, contract #1564 §6). Read with `readRunBrief`. */
+  readonly run_brief?: unknown;
+  /** ADR-0045 decision 11: the goal check of this answer's run (contract #1564 §3, without `continue_text`). Read with `readGoalCheck`. */
+  readonly goal_check?: unknown;
 }
 
 /**

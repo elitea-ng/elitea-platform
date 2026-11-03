@@ -1,16 +1,18 @@
 /**
  * An unattended chain's events (ADR-0045, `unattendedIpc.ts`), folded into the
  * turn's view: `turn_continued` (the host started the next turn by itself),
- * `chain_ended` (the chain's last turn) and the unattended fields of
- * `status` `running`. The reducer makes `next_turn_id` the active turn
- * (`continuedTurn`).
+ * `chain_ended` (the chain's last turn), `run_brief` (the brief, on the chain's
+ * first turn), `goal_checked` (the goal check of the turn that would end the
+ * chain) and the unattended fields of `status` `running`. The reducer makes
+ * `next_turn_id` the active turn (`continuedTurn`).
  */
-import type { ChainEndedPayload, UnattendedGrant } from '@/shared/desktop/unattendedIpc';
+import { goalCheckOfChainEnd, readGoalCheck, readRunBrief, type GoalCheckView, type RunBriefView } from '@/features/unattended';
+import type { ChainEndedPayload, ContinuationKind, UnattendedGrant } from '@/shared/desktop/unattendedIpc';
 import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
 
 type EventOf<K extends AgentEvent['kind']> = Extract<AgentEvent, { kind: K }>;
 
-export type ChainEvent = EventOf<'turn_continued'> | EventOf<'chain_ended'>;
+export type ChainEvent = EventOf<'turn_continued'> | EventOf<'chain_ended'> | EventOf<'run_brief'> | EventOf<'goal_checked'>;
 
 /** The part of a turn's view that the chain sets. */
 export interface ChainView {
@@ -19,18 +21,39 @@ export interface ChainView {
   /** The grant the turn runs under (the first `running` of an unattended turn). */
   unattended?: Omit<UnattendedGrant, 'chain'> & { grant_id: string };
   /** The host continued this turn in `nextTurnId` by itself: the person does not click Continue. */
-  continuedTo?: { nextTurnId: string; index: number };
+  continuedTo?: { nextTurnId: string; index: number; kind?: ContinuationKind };
   /** This turn is the last of its chain. */
   chainEnded?: ChainEndedPayload;
+  /** The chain's run brief (its first turn only). */
+  runBrief?: RunBriefView;
+  /** The goal check of this turn: from `goal_checked`, else the short form of `chain_ended.goal`. */
+  goalCheck?: GoalCheckView;
 }
 
 export function isChainEvent(event: AgentEvent): event is ChainEvent {
-  return event.kind === 'turn_continued' || event.kind === 'chain_ended';
+  return event.kind === 'turn_continued' || event.kind === 'chain_ended' || event.kind === 'run_brief' || event.kind === 'goal_checked';
 }
 
 export function applyChainEvent<V extends ChainView>(view: V, event: ChainEvent): V {
-  if (event.kind === 'chain_ended') return { ...view, chainEnded: event.payload };
-  return { ...view, continuedTo: { nextTurnId: event.payload.next_turn_id, index: event.payload.continuation_index } };
+  switch (event.kind) {
+    case 'chain_ended': {
+      // The full check of `goal_checked` wins over the short form the chain end repeats.
+      const goal = view.goalCheck ?? goalCheckOfChainEnd(event.payload.goal);
+      return { ...view, chainEnded: event.payload, ...(goal === undefined ? {} : { goalCheck: goal }) };
+    }
+    case 'run_brief': {
+      const brief = readRunBrief(event.payload);
+      return brief === undefined ? view : { ...view, runBrief: brief };
+    }
+    case 'goal_checked': {
+      const check = readGoalCheck(event.payload);
+      return check === undefined ? view : { ...view, goalCheck: check };
+    }
+    case 'turn_continued': {
+      const { next_turn_id: nextTurnId, continuation_index: index, kind } = event.payload;
+      return { ...view, continuedTo: { nextTurnId, index, ...(kind === undefined ? {} : { kind }) } };
+    }
+  }
 }
 
 /**

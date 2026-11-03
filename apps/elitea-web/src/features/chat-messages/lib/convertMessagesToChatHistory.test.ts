@@ -378,4 +378,19 @@ describe('unattended run marks (ADR-0045)', () => {
     expect(answer).toMatchObject({ continuedAutomatically: true, stepLimitReached: true });
     expect(answer?.continuationIndex).toBeUndefined();
   });
+
+  it('reads the run brief and the goal check of an answer (decision 11), and drops a shape that is not one', () => {
+    const brief = { goal: 'Write the report', done_when: [{ id: 'c1', text: 'It has a summary' }], constraints: [], assumptions: [], ambiguity: 'low' };
+    const check = { outcome: 'not_met', conditions: [{ id: 'c1', text: 'It has a summary', verdict: 'not_met', reason: 'No summary yet' }], met: 0, total: 1, reason: 'No summary yet' };
+    const rows = [
+      { id: 30, uuid: 'q-3', role: 'user', content: 'Write the report.', created_at: at },
+      { id: 31, uuid: 'a-3', role: 'assistant', reply_to_id: 30, content: 'Part one', created_at: at, meta: { run_brief: { state: 'ready', brief }, goal_check: check } },
+      { id: 32, uuid: 'a-4', role: 'assistant', reply_to_id: 30, content: 'Part two', created_at: at, meta: { run_brief: { state: 'unknown' }, goal_check: 'met' } },
+    ] as unknown as readonly MessageGroupWire[];
+    const [, answer, other] = convertMessagesToChatHistory(rows, []);
+    expect(answer?.runBrief).toEqual({ state: 'ready', brief });
+    expect(answer?.goalCheck).toEqual(check);
+    expect(other?.runBrief).toBeUndefined();
+    expect(other?.goalCheck).toBeUndefined();
+  });
 });

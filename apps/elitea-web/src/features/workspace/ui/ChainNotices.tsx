@@ -1,6 +1,6 @@
 /**
- * Where a turn stopped, under its transcript: the 512 tool-call stop with its Continue, and the end of an unattended
- * chain (ADR-0045). A turn that the host continued by itself (`turn_continued`) offers no Continue. Also the marker
+ * Where a turn stopped, under its transcript: the 512 tool-call stop with its Continue, the goal check of the turn
+ * (ADR-0045 decision 11) and the end of an unattended chain (ADR-0045). A turn that the host continued by itself (`turn_continued`) offers no Continue. Also the marker
  * that stands in place of the person's prompt above a turn that the host started by itself.
  */
 import Alert, { type AlertColor } from '@mui/material/Alert';
@@ -9,6 +9,7 @@ import Divider from '@mui/material/Divider';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
+import { GoalCheckNotice } from '@/features/unattended';
 import type { ChainEndedPayload } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
@@ -75,12 +76,13 @@ function ChainEnded({ ended, onContinue }: { ended: ChainEndedPayload; onContinu
   );
 }
 
-/** The stop notices of a turn. Continue shows once: on the tool-call stop, else on a chain that waits. */
+/** The stop notices of a turn. Continue shows once: on the tool-call stop, else on a chain that waits. A goal check comes before the chain's end. */
 export function StopNotices({ view, onContinue }: { view: TurnView; onContinue: OnContinue }): React.JSX.Element {
   const toolCallStop = view.note === 'tool_call_limit_reached' && view.continuedTo === undefined;
   return (
     <>
       {toolCallStop && <ToolCallLimit onContinue={onContinue} />}
+      <GoalCheckNotice check={view.goalCheck} />
       {view.chainEnded !== undefined && <ChainEnded ended={view.chainEnded} onContinue={toolCallStop ? undefined : onContinue} />}
     </>
   );

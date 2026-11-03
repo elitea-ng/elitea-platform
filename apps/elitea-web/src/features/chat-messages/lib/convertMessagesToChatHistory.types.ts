@@ -1,3 +1,4 @@
+import type { GoalCheckView, RunBriefView } from '@/features/unattended';
 import type { NodeRecoveryBinding } from '@/shared/lib/nodeRecovery';
 import type { StaticPauseBinding } from './staticPipelinePause.types';
 import type { MessageItemWire } from '@/entities/message/lib/wire';
@@ -90,4 +91,8 @@ export interface ChatMessage {
   readonly continuationIndex?: number | undefined;
   /** Persisted `meta.step_limit_reached`: the answer stopped at its step limit in an unattended run. Live answers carry it in `responseMetadata`. */
   readonly stepLimitReached?: boolean | undefined;
+  /** Persisted `meta.run_brief` (ADR-0045 decision 11): the chain's run brief, on the chain root's answer. */
+  readonly runBrief?: RunBriefView | undefined;
+  /** Persisted `meta.goal_check`: the goal check of this answer's run. */
+  readonly goalCheck?: GoalCheckView | undefined;
 }

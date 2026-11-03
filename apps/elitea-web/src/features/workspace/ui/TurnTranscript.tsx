@@ -3,7 +3,8 @@
  * folded "Thinking" block (`ThinkingBlock`), tool rows (local or remote, with a collapsible result),
  * each `spawn_agent` call's sub-agents under its row (`SubAgentLanes`), a background process's output under its
  * `run_command` row (`ToolProcessOutput`), a message sent while the turn ran (`SteerMessage`), where the turn stopped
- * (`StopNotices`: the tool-call stop, the end of an unattended chain) and the status line, quiet
+ * (`StopNotices`: the tool-call stop, the goal check, the end of an unattended chain), the chain's run brief above its
+ * first turn (`RunBriefCard`) and the status line, quiet
  * text with a small spinner while the turn runs. Stop is the composer's (its round button, or Esc Esc).
  */
 import { useState, type MouseEvent } from 'react';
@@ -24,6 +25,7 @@ import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
+import { RunBriefCard } from '@/features/unattended';
 import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
 import { conversationBubbleSx } from '@/shared/ui/conversation-column';
@@ -254,6 +256,7 @@ export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, o
   return (
     <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       {continuation !== undefined && <ContinuedMarker index={continuation} />}
+      <RunBriefCard value={view.runBrief} />
       {view.items.map((item) =>
         item.type === 'text' ? (
           // The chat's own renderer; raw HTML from the model is dropped, not rendered.

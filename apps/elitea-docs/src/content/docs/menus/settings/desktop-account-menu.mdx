@@ -64,6 +64,7 @@ While a turn runs, in a chat or a thread, that round button is **Stop** until yo
 |---------|--------------|---------|
 | **Continue until the goal is met** | Answers "Continue?" at the step limit. When the turn has used its three continues, or when it reaches the cap of 512 tool calls, the app starts the next turn by itself. When it is off, the turn stops at a limit and waits for you. | On |
 | **Change limits** | At most this many automatic continuations, this spend in US dollars and this many hours. Empty fields use the platform's defaults (20 continuations, 10 × the project's per-run spend cap, 12 hours). Your administrator sets the maximums. If a value is too high, the platform refuses the grant and the app tells you which limit to lower. | Platform defaults |
+| **Check the goal before finishing** | A small model writes a brief of your goal and checks it before the run ends. When a check is not met, the app starts the next turn by itself. When it is off, the run ends when the agent stops. See [The brief and the goal check](#the-brief-and-the-goal-check). The folder keeps your choice. | On |
 | **Hook asks** | A `PreToolUse` hook that asks for your approval: the call runs. | Off |
 | **Remote confirmations** | A toolkit that asks you to confirm a call: the call runs. | Off |
 
@@ -78,6 +79,22 @@ When **Hook asks** or **Remote confirmations** is on, the chip has an orange out
 - Every answer is saved with the thread, with who gave it: you, the grant, bypass mode, or nobody (the wait ran out).
 
 Questions have a time limit: an approval or a hook ask waits 30 minutes, a toolkit confirmation 15 minutes and "Continue?" 10 minutes. After that the call is declined, or the turn stops.
+
+#### The brief and the goal check
+
+When **Check the goal before finishing** is on, a small model reads your message and writes a brief. The brief has the goal, up to five checks ("Done when"), the constraints and the assumptions. The first turn does not wait for the brief.
+
+- The first answer shows the brief as a card: **Goal · Done when: 3 checks**. Select the arrow on the card to see the goal, the checks, the constraints and the assumptions.
+- While the model writes the brief, the card shows **Writing the brief…**. If the model cannot write the brief, no card shows, and the run ends as before.
+- A model wrote the brief from your message. When they do not agree, your message wins. The brief never adds a tool, an approval or a grant.
+- A message with nothing to check, such as a greeting or a short question, gets a goal and no checks. The card then shows the goal only, and the run ends as before.
+- Before the run ends, the model compares the run's transcript with the checks. The answer that the model checked shows the result:
+  - **Done · 3 of 3 checks · model-reviewed**: all checks are met. The run ends as completed.
+  - **Not done yet: …**: a check is not met. The app starts the next turn by itself with the reason. This continuation counts against the chain limits.
+  - **Blocked on: …**: a check cannot be met, or the same check is not met three times in a row. The run ends as failed.
+  - **Not checked**: the check did not answer in time. The run ends as completed.
+- The brief and the check use the project's low-tier model. Their cost counts against the spend limit of the run.
+- Your administrator can turn the brief and the check off for all users. The run then ends as before.
 
 ### Send a thread to the cloud
 
