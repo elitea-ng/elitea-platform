@@ -4,15 +4,17 @@ use reqwest::{Method, StatusCode};
 use serde_json::json;
 
 use super::ado_test_support::{
-    FixtureTransport, client, collection, context, ok, ok_with_etag, policy, settings, status,
-    tool, tools,
+    CapturedRequest, FixtureTransport, client, collection, context, expected_authorization, ok,
+    ok_with_etag, policy, settings, status, tool, tools,
 };
-use super::families::ado::client::{AdoBody, AdoHttpResponse};
+use super::attachment_test_support::{FakePlatform, PNG};
+use super::families::ado::client::{AdoBody, AdoClientError, AdoHttpResponse};
 use super::families::ado_wiki::client::{
     AdoWikiClient, GetWikiPage, ModifyWikiPage, PageAddress, RenameWikiPage,
 };
 use super::families::ado_wiki::config::AdoWikiToolkitConfig;
 use super::families::ado_wiki::tools::{build_ado_wiki_toolset, build_with_client};
+use super::families::office_host::OfficeFailure;
 
 fn wiki(transport: Arc<FixtureTransport>, default: Option<&str>) -> AdoWikiClient {
     let (ado, _) = client(&json!({}), transport);
@@ -359,6 +361,7 @@ async fn arguments_and_selection_follow_the_sdk_contract() {
         AdoWikiToolkitConfig::parse(&settings(&json!({"default_wiki_identifier":"Team.wiki"})))
             .expect("config"),
         &policy(&[]),
+        None,
     )
     .expect("production constructor");
 }
@@ -415,4 +418,224 @@ async fn the_instance_image_settings_parse_and_a_wrong_argument_is_refused() {
             "{name} {arguments}"
         );
     }
+}
+
+// ── inline image description (#985) ──────────────────────────────────────
+
+const PAGE: &str = "# Page\n\n![screenshot.png](/.attachments/screenshot.png)\n\n![again.png](/.attachments/screenshot.png)\n\n![spec.pdf](/.attachments/spec.pdf)\n\n![broken.png](/.attachments/broken.png)\n\n![missing.png](/.attachments/missing.png)\n\n![web.png](https://example.com/web.png)\n";
+
+/// A project wiki whose repository holds a picture, a broken picture and a
+/// PDF; one page links all of them and one external picture.
+fn wiki_provider(request: &CapturedRequest, _: usize) -> Result<AdoHttpResponse, AdoClientError> {
+    match request.path.as_str() {
+        "/contoso/Fabrikam Fiber/_apis/wiki/wikis/W/pages"
+        | "/contoso/Fabrikam Fiber/_apis/wiki/wikis/W/pages/12" => {
+            ok(json!({"id":12,"path":"/Home","content":PAGE}))
+        }
+        "/contoso/Fabrikam Fiber/_apis/wiki/wikis/W" => ok(json!({
+            "id":"wiki-guid","name":"W","repositoryId":"repo-1","mappedPath":"/",
+            "versions":[{"version":"wikiMaster"}]
+        })),
+        "/contoso/Fabrikam Fiber/_apis/git/repositories/repo-1/items" => {
+            match request.query_value("path") {
+                Some("/.attachments/screenshot.png") => Ok(AdoHttpResponse::fixture(
+                    StatusCode::OK,
+                    AdoBody::Bytes(PNG.to_vec()),
+                )),
+                Some("/.attachments/broken.png") => Ok(AdoHttpResponse::fixture(
+                    StatusCode::OK,
+                    AdoBody::Bytes(b"not a picture".to_vec()),
+                )),
+                _ => status(StatusCode::NOT_FOUND, None),
+            }
+        }
+        other => panic!("unexpected request {other}"),
+    }
+}
+
+async fn wiki_picture_tools(
+    transport: Arc<FixtureTransport>,
+    platform: Option<&Arc<FakePlatform>>,
+    extra: &serde_json::Value,
+) -> Vec<Arc<dyn adk_core::Tool>> {
+    let (_, images) = AdoWikiToolkitConfig::parse(&settings(extra))
+        .expect("valid settings")
+        .into_parts();
+    let client = wiki(transport, Some("W"))
+        .with_image_defaults(images)
+        .with_attachments(platform.map(FakePlatform::host));
+    let toolset = build_with_client("wiki", &[], &policy(&[]), Arc::new(client)).expect("toolset");
+    tools(&toolset).await
+}
+
+fn repository_reads(transport: &FixtureTransport) -> Vec<String> {
+    transport
+        .requests()
+        .iter()
+        .filter(|request| request.path.ends_with("/items"))
+        .filter_map(|request| request.query_value("path").map(ToOwned::to_owned))
+        .collect()
+}
+
+#[tokio::test]
+async fn wiki_pictures_are_read_from_the_repository_and_described_in_place() {
+    let platform = FakePlatform::new();
+    platform.reply("A dashboard.");
+    let transport = FixtureTransport::new(wiki_provider);
+    let served = wiki_picture_tools(Arc::clone(&transport), Some(&platform), &json!({})).await;
+    // process_images defaults on for the page reads.
+    let text = tool(&served, "get_wiki_page_by_path")
+        .execute(
+            context(),
+            json!({"page_name":"/Home","image_description_prompt":"caption"}),
+        )
+        .await
+        .expect("content");
+    let text = text.as_str().expect("text");
+    // The SDK's shape: the description replaces the URL of every link to the
+    // picture, which is read and described once.
+    assert!(text.contains("![screenshot.png](A dashboard.)"), "{text}");
+    assert!(
+        text.contains("![again.png](/.attachments/screenshot.png)")
+            || text.contains("![again.png](A dashboard.)"),
+        "{text}"
+    );
+    // A PDF linked with image syntax is left exactly as it is, and not read.
+    assert!(
+        text.contains("![spec.pdf](/.attachments/spec.pdf)\n\n"),
+        "{text}"
+    );
+    // A broken or missing picture keeps its link and gets a note; an external
+    // picture is not fetched.
+    assert!(
+        text.contains("![broken.png](/.attachments/broken.png)\n[image unavailable: could not read image dimensions]"),
+        "{text}"
+    );
+    assert!(
+        text.contains("![missing.png](/.attachments/missing.png)\n[image unavailable: the attachment was not found in the wiki]"),
+        "{text}"
+    );
+    assert!(
+        text.contains("![web.png](https://example.com/web.png)\n[image unavailable: only wiki attachments are read"),
+        "{text}"
+    );
+    let calls = platform.model_calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].prompt, "caption");
+    assert_eq!(calls[0].images_png[0], PNG);
+    let reads = repository_reads(&transport);
+    assert!(
+        reads.iter().all(|path| path != "/.attachments/spec.pdf"),
+        "{reads:?}"
+    );
+    let read = transport
+        .requests()
+        .into_iter()
+        .find(|request| request.query_value("path") == Some("/.attachments/screenshot.png"))
+        .expect("the picture was read");
+    assert_eq!(
+        read.query_value("versionDescriptor.version"),
+        Some("wikiMaster")
+    );
+    assert_eq!(
+        read.query_value("versionDescriptor.versionType"),
+        Some("branch")
+    );
+    assert_eq!(read.accept.as_deref(), Some("application/octet-stream"));
+    assert_eq!(
+        read.authorization.as_deref(),
+        Some(expected_authorization().as_str())
+    );
+}
+
+#[tokio::test]
+async fn wiki_pictures_follow_the_call_then_the_toolkit_then_the_tool_default() {
+    // Off by the toolkit: the page is returned as stored and nothing is read.
+    let platform = FakePlatform::new();
+    let transport = FixtureTransport::new(wiki_provider);
+    let served = wiki_picture_tools(
+        Arc::clone(&transport),
+        Some(&platform),
+        &json!({"process_images":false}),
+    )
+    .await;
+    let text = tool(&served, "get_wiki_page_by_id")
+        .execute(context(), json!({"page_id":12}))
+        .await
+        .expect("content");
+    assert_eq!(text, json!(PAGE));
+    assert_eq!(repository_reads(&transport), Vec::<String>::new());
+    assert!(platform.model_calls().is_empty());
+
+    // The call turns it back on, against the toolkit.
+    platform.reply("From the call.");
+    let text = tool(&served, "get_wiki_page_by_id")
+        .execute(context(), json!({"page_id":12,"process_images":true}))
+        .await
+        .expect("content");
+    assert!(
+        text.as_str()
+            .expect("text")
+            .contains("![screenshot.png](From the call.)")
+    );
+
+    // get_wiki_page describes the content it includes, with the toolkit's
+    // prompt when the call names none.
+    let platform = FakePlatform::new();
+    platform.reply("In the page.");
+    let transport = FixtureTransport::new(wiki_provider);
+    let served = wiki_picture_tools(
+        Arc::clone(&transport),
+        Some(&platform),
+        &json!({"image_description_prompt":"toolkit prompt"}),
+    )
+    .await;
+    let page = tool(&served, "get_wiki_page")
+        .execute(
+            context(),
+            json!({"page_path":"/Home","include_content":true}),
+        )
+        .await
+        .expect("page");
+    assert!(
+        page["page"]["content"]
+            .as_str()
+            .expect("content")
+            .contains("![screenshot.png](In the page.)"),
+        "{page}"
+    );
+    assert_eq!(platform.model_calls()[0].prompt, "toolkit prompt");
+    // Without include_content there is nothing to describe.
+    let before = platform.model_calls().len();
+    tool(&served, "get_wiki_page")
+        .execute(context(), json!({"page_path":"/Home"}))
+        .await
+        .expect("page");
+    assert_eq!(platform.model_calls().len(), before);
+}
+
+#[tokio::test]
+async fn a_refused_model_budget_stops_the_wiki_descriptions() {
+    let platform = FakePlatform::new();
+    platform.fail_model(OfficeFailure::BudgetRefused);
+    let page = "![a.png](/.attachments/screenshot.png)\n![b.png](/.attachments/screenshot.png?v=2)";
+    let transport = FixtureTransport::new(move |request, index| {
+        if request.path.ends_with("/pages") {
+            return ok(json!({"id":12,"path":"/Home","content":page}));
+        }
+        wiki_provider(request, index)
+    });
+    let served = wiki_picture_tools(Arc::clone(&transport), Some(&platform), &json!({})).await;
+    let text = tool(&served, "get_wiki_page_by_path")
+        .execute(context(), json!({"page_name":"/Home"}))
+        .await
+        .expect("the call still answers");
+    let text = text.as_str().expect("text");
+    assert_eq!(platform.model_calls().len(), 1, "{text}");
+    assert_eq!(
+        text.matches("[image unavailable: the model budget is exhausted")
+            .count(),
+        2,
+        "{text}"
+    );
 }

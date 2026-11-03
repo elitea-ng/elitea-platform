@@ -466,7 +466,7 @@ test('two toolkit instances each honour their own call', async ({ page }) => {
  * that omits the argument, so two instances can differ without the model deciding. The ado_boards and
  * ado_wiki settings carry `process_images` and `image_description_prompt` (#985), and the native
  * runtime applies them as the default of each call that omits the argument. The file-level fixme
- * (ADO_NATIVE_GAP) still parks this case until the native family describes images. */
+ * (ADO_NATIVE_GAP) still parks this case until the native family accepts the http ado-mock. */
 test('a toolkit instance can default process_images for its own calls', async ({ page }) => {
   test.setTimeout(360_000);
   const agent = await createAdoAgent(page, 'instdefault', {

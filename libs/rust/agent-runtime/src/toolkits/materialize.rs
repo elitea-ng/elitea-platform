@@ -1517,6 +1517,7 @@ fn materialize_ado(
             ado_wiki::config::AdoWikiToolkitConfig::parse(settings)
                 .map_err(|error| family_error(error.code()))?,
             policy,
+            attachments.cloned(),
         )
         .map_err(|error| family_error(error.code()))?,
         _ => return Err(unsupported_toolkit()),

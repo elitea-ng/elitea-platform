@@ -70,7 +70,14 @@ The category of a tool decides when a run needs human approval to call it. See [
 ## Common issues
 
 <Note>
-The agent worker does not yet describe images inline in work items and comments. With `process_images` on, Get comments returns the rendered comment HTML, with the image references unchanged. To have an image described, use **Get image by url** with the image `src`.
+With `process_images` on, the agent worker describes the images in the result with the agent's chat model, and uses `image_description_prompt` when it is set:
+
+- **Get comments** adds an `image-description` attribute to each `<img>` tag. Below each markdown image, it adds a line `[image-description: ...]`.
+- **Get work item** describes the images in the fields only when `parse_attachments` is also on.
+- The worker reads each image through the toolkit connection, with the same limits as **Get image by url**. One call describes a maximum of 20 images and downloads a maximum of 12 MB. A larger image (more than 5 MB) is not described.
+- The worker reads each image one time, also when the result refers to it more than one time.
+- When the worker cannot read or describe an image, it adds a short note, for example `[image unavailable: ...]` or `[image skipped: ...]`. The tool call does not fail.
+- When the agent has no chat model, the result comes back with the images not described.
 </Note>
 
 <Note>

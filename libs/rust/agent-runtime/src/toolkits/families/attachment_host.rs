@@ -614,10 +614,19 @@ pub(crate) async fn describe_for_text(
     }
     match host.describe_picture(bytes, media_type, prompt).await {
         Ok(description) => Ok(description),
-        Err(
-            error @ (AttachmentError::Host(
-                Step::Model,
-                OfficeFailure::BudgetRefused
+        Err(error) if stops_every_later_picture(&error) => Err(error),
+        Err(error) => Ok(format!("[Image processing error: {}]", error.sentence())),
+    }
+}
+
+/// Whether every later picture of the same call would meet `error` too, so
+/// the call asks the model no more.
+pub(crate) fn stops_every_later_picture(error: &AttachmentError) -> bool {
+    matches!(
+        error,
+        AttachmentError::Host(
+            Step::Model,
+            OfficeFailure::BudgetRefused
                 | OfficeFailure::NoModel
                 | OfficeFailure::ModelUnusable
                 // The run's context is unusable for every later picture too:
@@ -626,11 +635,8 @@ pub(crate) async fn describe_for_text(
                 | OfficeFailure::RateLimited
                 | OfficeFailure::AccessRefused
                 | OfficeFailure::Unreachable,
-            )
-            | AttachmentError::ToolkitBudget),
-        ) => Err(error),
-        Err(error) => Ok(format!("[Image processing error: {}]", error.sentence())),
-    }
+        ) | AttachmentError::ToolkitBudget
+    )
 }
 
 /// The bounds one tool call keeps on the pictures it sends to the model:

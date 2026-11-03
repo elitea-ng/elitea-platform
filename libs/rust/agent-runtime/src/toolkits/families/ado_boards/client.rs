@@ -47,6 +47,8 @@ pub(crate) struct GetComments<'a> {
     pub(crate) expand: Option<&'a str>,
     pub(crate) order: Option<&'a str>,
     pub(crate) process_images: bool,
+    /// The prompt for the image descriptions (`image_description_prompt`).
+    pub(crate) image_description_prompt: Option<&'a str>,
 }
 
 /// One claim-scoped boards client with the SDK's per-instance caches.
@@ -367,9 +369,7 @@ impl AdoBoardsClient {
         };
         // Markdown comments carry images in `text` and HTML ones in
         // `renderedText`; the SDK asks for the rendered form when images are
-        // to be processed. Image descriptions need the toolkit LLM, which this
-        // runtime does not lend to toolkits, so the comments come back as the
-        // SDK returns them when no LLM is configured.
+        // to be processed, then describes each picture (inline.rs).
         let expand = if request.process_images && matches!(request.expand, None | Some("none")) {
             Some("renderedText")
         } else {
@@ -413,6 +413,13 @@ impl AdoBoardsClient {
                         // `comments_all[:negative]` drops that many from the end.
                         let drop = usize::try_from(limit_all.unsigned_abs()).unwrap_or(usize::MAX);
                         comments.truncate(comments.len().saturating_sub(drop));
+                    }
+                    if request.process_images {
+                        self.describe_comment_images(
+                            &mut comments,
+                            request.image_description_prompt,
+                        )
+                        .await;
                     }
                     return bounded_output(Value::Array(comments));
                 }
