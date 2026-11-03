@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { LocalTurnUnattendedRequest } from "./localTurnUnattendedRequest.zod";
 
 export const LocalTurnStartRequest = zod
   .object({
@@ -61,6 +62,7 @@ export const LocalTurnStartRequest = zod
       .describe(
         "The conversation's agent participant that answers. 0 or absent means the conversation's model participant.",
       ),
+    unattended: LocalTurnUnattendedRequest.optional(),
   })
   .describe(
     "Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:90 (`startBody`). One JSON value of at most 512 KiB.",

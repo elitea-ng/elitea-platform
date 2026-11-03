@@ -266,6 +266,9 @@ type CurrentContinuationRequest struct {
 	// TriggerOrigin is how the caller authenticated (shared 0140), as the
 	// start route records it: a PAT/API caller is `api`, never `manual`.
 	TriggerOrigin executiondomain.TriggerOrigin
+	// UnattendedContinuation is set only when Main starts the output-limit
+	// continuation of a chain (ADR-0045); never from a request body.
+	UnattendedContinuation *UnattendedContinuation
 }
 
 func (request CurrentContinuationRequest) Validate() error {
@@ -676,7 +679,25 @@ func (service *CurrentApplicationStartService) ContinueCurrentAgent(
 			target.OutputLimitSequence,
 		)
 	}
+	var chain *UnattendedAdmission
+	if request.UnattendedContinuation != nil {
+		if request.normalizedKind() != CurrentContinuationOutputLimit {
+			return CurrentApplicationStartOutcome{}, ErrInvalidCurrentAgentStart
+		}
+		var grant *runtimev1.UnattendedGrantV1
+		grant, chain, err = service.admitUnattended(ctx, unattendedTarget{
+			continuation: request.UnattendedContinuation, capabilityID: capabilityID, input: input,
+			projectID: request.ProjectID, actorUserID: request.ActorUserID,
+			conversationUUID: request.ConversationUUID, responseMessageID: turn.ProjectionResponseID(),
+			triggerOrigin: request.TriggerOrigin,
+		})
+		if err != nil {
+			return CurrentApplicationStartOutcome{}, err
+		}
+		input.UnattendedGrant = grant
+	}
 	outcome, err := service.admissions.Submit(ctx, SubmitRequest{
+		Unattended: chain,
 		Identity: executionapp.AdmissionIdentity{
 			TenantID: projectID, ResourceProjectID: projectID,
 			ProjectionProjectID: projectID, ActorID: actorID,

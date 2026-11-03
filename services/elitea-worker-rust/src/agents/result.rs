@@ -24,6 +24,9 @@ pub enum AgentTerminalState {
     Completed,
     PausedHitl,
     PausedMcpAuth,
+    /// The run reached its step limit under an unattended grant (ADR-0045):
+    /// it completed with its text so far, and Main may continue it.
+    StepLimitReached,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -142,6 +145,9 @@ fn terminal_state_value(terminal_state: AgentTerminalState) -> i32 {
         AgentTerminalState::Completed => AgentExecutionTerminalStateV1::Completed.into(),
         AgentTerminalState::PausedHitl => AgentExecutionTerminalStateV1::PausedHitl.into(),
         AgentTerminalState::PausedMcpAuth => AgentExecutionTerminalStateV1::PausedMcpAuth.into(),
+        AgentTerminalState::StepLimitReached => {
+            AgentExecutionTerminalStateV1::StepLimitReached.into()
+        }
     }
 }
 
@@ -168,7 +174,8 @@ pub(crate) fn validate_agent_execution_result(
             AgentExecutionTerminalStateV1::try_from(result.terminal_state),
             Ok(AgentExecutionTerminalStateV1::Completed
                 | AgentExecutionTerminalStateV1::PausedHitl
-                | AgentExecutionTerminalStateV1::PausedMcpAuth)
+                | AgentExecutionTerminalStateV1::PausedMcpAuth
+                | AgentExecutionTerminalStateV1::StepLimitReached)
         )
     {
         return Err(AgentProtocolError::InvalidInput(

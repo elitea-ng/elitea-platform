@@ -6213,3 +6213,40 @@ async fn a_taken_back_cloud_turn_wraps_up_and_completes_once() {
     drop(frames);
     drop(temporary);
 }
+
+#[test]
+fn a_full_message_with_the_step_limit_flag_is_the_step_limit_terminal() {
+    use super::output_delivery::terminal_state_for_result_event;
+    use crate::protocol::elitea::runtime::v1::NodeEventV1;
+    let event = |event_type: &str, metadata: serde_json::Value| NodeEventV1 {
+        r#type: event_type.to_owned(),
+        response_metadata: serde_json::to_vec(&metadata).expect("metadata JSON"),
+        ..NodeEventV1::default()
+    };
+    assert_eq!(
+        terminal_state_for_result_event(&event("full_message", json!({"thread_id": "t"}))),
+        Some(AgentTerminalState::Completed)
+    );
+    assert_eq!(
+        terminal_state_for_result_event(&event(
+            "full_message",
+            json!({"step_limit_reached": false})
+        )),
+        Some(AgentTerminalState::Completed)
+    );
+    assert_eq!(
+        terminal_state_for_result_event(&event(
+            "full_message",
+            json!({"step_limit_reached": true})
+        )),
+        Some(AgentTerminalState::StepLimitReached)
+    );
+    // Only a result event can carry the flag.
+    assert_eq!(
+        terminal_state_for_result_event(&event(
+            "agent_response",
+            json!({"step_limit_reached": true})
+        )),
+        None
+    );
+}

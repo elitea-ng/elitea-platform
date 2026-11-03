@@ -68,6 +68,12 @@ export const LocalTurnHITLExchange = zod
       .string()
       .optional()
       .describe("The user's answer or edit, at most 4 KiB."),
+    source: zod
+      .enum(["person", "grant", "bypass", "timeout"])
+      .optional()
+      .describe(
+        "Client contract 1.30 (ADR-0045 decision 3). Who answered. Absent means `person`. Main writes an approval ledger row (path `desktop`) for each source except `bypass`. A `grant` answer needs the turn's grant: it is recorded as the owner's approval with reason `unattended_grant`. A `timeout` answer is recorded as `timed_out`.",
+      ),
   })
   .describe(
     "One approval or question the desktop resolved during the turn. NOTE(W2): internal/application/localturn/localturn.go:183 (`HITLExchange`).",

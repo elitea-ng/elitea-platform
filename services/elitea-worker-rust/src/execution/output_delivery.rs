@@ -556,6 +556,8 @@ struct AckedResultArtifact {
 /// Terminal selected by the supervisor-owned native lifecycle.
 pub(super) enum FreshAgentTerminalSelection {
     Completed,
+    /// A completed result at the step limit of an unattended run (ADR-0045).
+    StepLimitReached,
     PausedHitl,
     PausedMcpAuth,
     Failure(RuntimeFailureKind),
@@ -565,6 +567,7 @@ impl FreshAgentTerminalSelection {
     const fn result_state(&self) -> Option<AgentTerminalState> {
         match self {
             Self::Completed => Some(AgentTerminalState::Completed),
+            Self::StepLimitReached => Some(AgentTerminalState::StepLimitReached),
             Self::PausedHitl => Some(AgentTerminalState::PausedHitl),
             Self::PausedMcpAuth => Some(AgentTerminalState::PausedMcpAuth),
             Self::Failure(_) => None,
@@ -728,7 +731,7 @@ impl<C: AgentProgressConnector> FreshAgentProgressPublisher<C> {
                 "the progress publisher already owns a pending frame",
             ));
         }
-        if terminal_state_for_result_event(&event.r#type).is_some() {
+        if terminal_state_for_result_event(&event).is_some() {
             return Err(AgentProgressPublishError::InvalidState(
                 "the result event requires the terminal artifact publication path",
             ));
@@ -779,7 +782,7 @@ impl<C: AgentProgressConnector> FreshAgentProgressPublisher<C> {
                 "the durably acknowledged result must remain the last progress event",
             ));
         }
-        let terminal_state = terminal_state_for_result_event(&event.r#type).ok_or(
+        let terminal_state = terminal_state_for_result_event(&event).ok_or(
             AgentProgressPublishError::InvalidState(
                 "the terminal artifact path requires a result-bearing event",
             ),
@@ -1460,7 +1463,7 @@ fn result_artifact_for_event(
     verified: &VerifiedAgentCommand,
     event: &NodeEventV1,
 ) -> Result<AgentResultArtifact, ProtocolError> {
-    if terminal_state_for_result_event(&event.r#type).is_none() {
+    if terminal_state_for_result_event(event).is_none() {
         return Err(ProtocolError::InvalidInput(
             "the result artifact requires a result-bearing event",
         ));
@@ -1493,13 +1496,25 @@ fn result_artifact_for_event(
     })
 }
 
-fn terminal_state_for_result_event(event_type: &str) -> Option<AgentTerminalState> {
-    match event_type {
+pub(super) fn terminal_state_for_result_event(event: &NodeEventV1) -> Option<AgentTerminalState> {
+    match event.r#type.as_str() {
+        // ADR-0045: a `full_message` that carries `step_limit_reached: true`
+        // ends the run at its step limit. Any other `full_message` completes.
+        "full_message" if step_limit_reached(event) => Some(AgentTerminalState::StepLimitReached),
         "full_message" => Some(AgentTerminalState::Completed),
         "agent_hitl_interrupt" => Some(AgentTerminalState::PausedHitl),
         "mcp_authorization_required" => Some(AgentTerminalState::PausedMcpAuth),
         _ => None,
     }
+}
+
+/// Whether a result event's metadata says that the run ended at its step
+/// limit. Metadata that does not read is not that flag.
+fn step_limit_reached(event: &NodeEventV1) -> bool {
+    serde_json::from_slice::<serde_json::Value>(&event.response_metadata).is_ok_and(|metadata| {
+        metadata.get(crate::agents::unattended::STEP_LIMIT_REACHED_METADATA_KEY)
+            == Some(&serde_json::Value::Bool(true))
+    })
 }
 
 fn sha256_version(digest: &[u8; 32]) -> String {

@@ -32,6 +32,7 @@ use super::session::{
     assemble_ordinary_native_with_sessions, assemble_ordinary_native_with_sessions_and_options,
     assemble_ordinary_native_with_sessions_and_runtime_catalogs,
 };
+use super::unattended::UnattendedGrant;
 use crate::protocol::control::test_session_authority_for;
 use crate::protocol::node_event::encode_current_node_event_json;
 use crate::toolkits::{DelegatedAuthorizationCatalog, ToolAdmissionPolicy};
@@ -3259,4 +3260,275 @@ fn subagents_see_the_bound_toolsets_less_what_needs_a_person() {
     let (offered, excluded) = seen.lock().expect("seen").take().expect("bound");
     assert_eq!(offered, ["github", "local"]);
     assert_eq!(excluded, ["run_command"]);
+}
+
+/// A bound model that has no final text, as at a step-limit stop.
+struct NoTextBoundModel {
+    model: Arc<dyn Llm>,
+}
+
+impl BoundOrdinaryAgentModel for NoTextBoundModel {
+    fn adk_model(&self) -> Arc<dyn Llm> {
+        self.model.clone()
+    }
+
+    fn take_completed_text(self) -> Result<String, super::runtime::NativeAgentAssemblyError> {
+        Err(super::runtime::NativeAgentAssemblyError::new(
+            super::runtime::NativeAgentAssemblyErrorCode::InvalidResult,
+            "the fixture model has no final text",
+        ))
+    }
+}
+
+fn granted_plan(
+    grant: Option<UnattendedGrant>,
+    steps_limit: Option<u32>,
+) -> OrdinaryNativeAgentPlan {
+    let mut request = ordinary_request(AgentExecutionKind::Adhoc);
+    request.payload.steps_limit = steps_limit;
+    let profile = OrdinaryNoToolProfile::validate(&request).expect("agent profile");
+    OrdinaryNativeAgentPlan::from_authorized(
+        &request,
+        &profile,
+        &AuthorizedNativeCommandBinding::fixture().with_unattended_grant(grant),
+        &request.payload.input_attachments,
+    )
+    .expect("native plan")
+}
+
+/// Run one sensitive `double` call under `grant` and return the public
+/// events and how often the model and the tool ran.
+async fn run_sensitive_call_under_grant(
+    grant: Option<UnattendedGrant>,
+) -> (Vec<Value>, Vec<String>, usize, usize) {
+    let plan = granted_plan(None, None);
+    let model_calls = Arc::new(AtomicUsize::new(0));
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let model = FixtureBoundModel {
+        model: Arc::new(SequencedLlm {
+            responses: Mutex::new(VecDeque::from([
+                tool_call_response_with(json!({"value": 21, "api_token": "secret-token"})),
+                LlmResponse::new(Content::new("model").with_text("The answer is 42.")),
+            ])),
+            calls: Arc::clone(&model_calls),
+        }),
+        completed: "The answer is 42.".to_owned(),
+    };
+    let tool: Arc<dyn Tool> = Arc::new(CountingTool {
+        calls: Arc::clone(&tool_calls),
+        read_only: false,
+    });
+    let toolset: Arc<dyn Toolset> = Arc::new(BasicToolset::new("fixture-tools", vec![tool]));
+    let catalog = sensitive_catalog_with_read_only(false).with_unattended_grant(grant.as_ref());
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let mut assembled =
+        assemble_ordinary_native_with_sessions(model, plan, vec![toolset], catalog, sessions)
+            .await
+            .expect("native assembly");
+    assembled
+        .project_start(Utc::now())
+        .expect("projected start");
+    let (mut native, mut projector, _completion) = assembled.start().expect("native start");
+    let mut public_events = Vec::new();
+    let mut invocation_ids = Vec::new();
+    while let Some(event) = native.next_event().await.expect("native event") {
+        if !event.tool_calls().is_empty() {
+            invocation_ids.push(event.invocation_id.clone());
+        }
+        for projected in projector.project(&event).expect("projected event") {
+            public_events.push(
+                serde_json::from_slice(
+                    &encode_current_node_event_json(&projected).expect("canonical browser event"),
+                )
+                .expect("browser event JSON"),
+            );
+        }
+    }
+    (
+        public_events,
+        invocation_ids,
+        model_calls.load(Ordering::SeqCst),
+        tool_calls.load(Ordering::SeqCst),
+    )
+}
+
+#[tokio::test]
+async fn a_granted_sensitive_call_emits_one_approval_event_and_runs_the_tool() {
+    let grant = UnattendedGrant::fixture(&[("fixture", "double")], false);
+    let (events, invocation_ids, model_calls, tool_calls) =
+        run_sensitive_call_under_grant(Some(grant)).await;
+
+    assert_eq!(tool_calls, 1, "the granted tool runs without a pause");
+    assert_eq!(model_calls, 2);
+    assert!(
+        !events
+            .iter()
+            .any(|event| event["type"] == "agent_hitl_interrupt")
+    );
+    let approvals: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| event["type"] == "agent_unattended_approval")
+        .map(|(index, _)| index)
+        .collect();
+    let [approval_index] = approvals.as_slice() else {
+        panic!("exactly one approval event expected: {events:?}");
+    };
+    let start_index = events
+        .iter()
+        .position(|event| event["type"] == "agent_tool_start")
+        .expect("tool start");
+    assert!(*approval_index < start_index, "the approval goes first");
+    let approval = &events[*approval_index];
+    assert_eq!(approval["content"], Value::Null);
+    assert_eq!(approval["stream_id"], "conversation-1");
+    assert_eq!(approval["message_id"], "message-1");
+    assert!(approval["created_at"].is_string());
+    assert!(approval["execution_generation"].is_string());
+    let [invocation_id] = invocation_ids.as_slice() else {
+        panic!("one tool-call event expected");
+    };
+    let args = json!({"value": 21, "api_token": "secret-token"});
+    let (interrupt_id, _) =
+        super::direct_hitl::sensitive_call_identity(invocation_id, "call-1", "double", &args)
+            .expect("pause identity");
+    let digest = super::events::unmasked_argument_digest(&args).expect("argument digest");
+    assert!(digest.starts_with("sha256:") && digest.len() == 7 + 64);
+    assert_eq!(
+        approval["response_metadata"],
+        json!({"unattended_approval_v1": {
+            "grant_id": "0b9e3f4c-1d2a-4b5c-8d6e-7f8091a2b3c4",
+            "interrupt_id": interrupt_id,
+            "toolkit_name": "fixture",
+            "toolkit_type": "fixture",
+            "tool_name": "double",
+            "argument_digest": digest,
+        }})
+    );
+    let encoded = serde_json::to_string(&events).expect("public event JSON");
+    assert!(!encoded.contains("secret-token"), "arguments stay masked");
+}
+
+#[tokio::test]
+async fn a_sensitive_call_whose_pair_the_grant_does_not_name_still_pauses() {
+    for grant in [
+        None,
+        Some(UnattendedGrant::fixture(&[("fixture", "triple")], true)),
+        Some(UnattendedGrant::fixture(&[("other", "double")], true)),
+    ] {
+        let (events, _, model_calls, tool_calls) = run_sensitive_call_under_grant(grant).await;
+        assert_eq!(tool_calls, 0);
+        assert_eq!(model_calls, 1);
+        assert!(
+            events
+                .iter()
+                .any(|event| event["type"] == "agent_hitl_interrupt")
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| event["type"] == "agent_unattended_approval")
+        );
+    }
+}
+
+#[test]
+fn the_legacy_auto_approve_flag_stays_refused_with_a_grant() {
+    let mut request = ordinary_request(AgentExecutionKind::Adhoc);
+    request.payload.auto_approve_sensitive_actions = true;
+    let command = AuthorizedNativeCommandBinding::fixture().with_unattended_grant(Some(
+        UnattendedGrant::fixture(&[("fixture", "double")], true),
+    ));
+    assert!(super::runtime::admit_ordinary_plan(&request, &command, &[]).is_err());
+    request.payload.auto_approve_sensitive_actions = false;
+    let (profile, _, _) =
+        super::runtime::admit_ordinary_plan(&request, &command, &[]).expect("granted plan");
+    assert!(profile.unattended_grant().is_some());
+}
+
+/// Drive a run that calls a tool on every step until its step limit of 1.
+async fn run_to_step_limit(
+    grant: Option<UnattendedGrant>,
+) -> (
+    super::runtime::NativeAgentRuntimeError,
+    super::events::AgentEventProjector,
+    super::session::OrdinaryAgentCompletion<NoTextBoundModel>,
+) {
+    let plan = granted_plan(grant, Some(1));
+    let model = NoTextBoundModel {
+        model: Arc::new(SequencedLlm {
+            responses: Mutex::new(VecDeque::from([tool_call_response(), tool_call_response()])),
+            calls: Arc::new(AtomicUsize::new(0)),
+        }),
+    };
+    let tool: Arc<dyn Tool> = Arc::new(CountingTool {
+        calls: Arc::new(AtomicUsize::new(0)),
+        read_only: true,
+    });
+    let toolset: Arc<dyn Toolset> = Arc::new(BasicToolset::new("fixture-tools", vec![tool]));
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let mut assembled = assemble_ordinary_native_with_sessions(
+        model,
+        plan,
+        vec![toolset],
+        SensitiveToolCatalog::default(),
+        sessions,
+    )
+    .await
+    .expect("native assembly");
+    assembled
+        .project_start(Utc::now())
+        .expect("projected start");
+    let (mut native, mut projector, completion) = assembled.start().expect("native start");
+    let error = loop {
+        match native.next_event().await {
+            Ok(Some(event)) => {
+                projector.project(&event).expect("projected event");
+            }
+            Ok(None) => panic!("the run must stop at its step limit"),
+            Err(error) => break error,
+        }
+    };
+    (error, *projector, completion)
+}
+
+#[tokio::test]
+async fn a_granted_run_at_its_step_limit_completes_with_the_step_limit_flag() {
+    let grant = UnattendedGrant::fixture(&[], true);
+    let (error, mut projector, completion) = run_to_step_limit(Some(grant)).await;
+
+    assert!(error.step_limit_reached());
+    let stop = completion
+        .step_limit_stop()
+        .expect("granted step-limit stop");
+    // The lifecycle marks the stop and closes the projector.
+    stop.mark();
+    let _closed = projector
+        .close_for_step_limit(Utc::now())
+        .expect("closed at the step limit");
+    let selected = completion
+        .select()
+        .await
+        .expect("selected without final text");
+    let batch = projector
+        .finish_after_eos(selected, Utc::now())
+        .expect("step-limit result");
+    let full_message = batch
+        .into_iter()
+        .find(|event| event.r#type == "full_message")
+        .expect("full message");
+    let metadata: Value =
+        serde_json::from_slice(&full_message.response_metadata).expect("metadata JSON");
+    assert_eq!(metadata["step_limit_reached"], true);
+    assert_eq!(metadata["output_limit_reached"], false);
+}
+
+#[tokio::test]
+async fn a_run_without_the_grant_at_its_step_limit_still_fails() {
+    for grant in [None, Some(UnattendedGrant::fixture(&[], false))] {
+        let (error, _projector, completion) = run_to_step_limit(grant).await;
+        assert!(error.step_limit_reached());
+        assert!(completion.step_limit_stop().is_none());
+        assert!(completion.select().await.is_err());
+    }
 }

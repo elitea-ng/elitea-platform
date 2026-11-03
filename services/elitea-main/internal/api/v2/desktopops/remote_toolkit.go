@@ -217,6 +217,9 @@ type remoteToolkitConfirmation struct {
 	Approved    bool   `json:"approved"`
 	ApprovedAt  string `json:"approved_at"`
 	InterruptID string `json:"interrupt_id"`
+	// Source is "grant" when the turn's unattended grant answered the
+	// confirmation (ADR-0045, client contract 1.30); absent is a person.
+	Source string `json:"source,omitempty"`
 }
 
 type remoteToolkitBody struct {
@@ -407,7 +410,7 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 			consumed, err := h.confirmations.ConsumeConfirmation(request.Context(), localturn.ConfirmationClaim{
 				ExecutionID: body.ExecutionID, CallDigest: confirmationCall,
 				InterruptID: body.Confirmation.InterruptID, IdempotencyKey: runRequest.IdempotencyKey,
-				Fresh: confirmationFresh, Call: ledgerCall,
+				Fresh: confirmationFresh, Call: ledgerCall, Source: body.Confirmation.Source,
 			})
 			if err != nil {
 				call.outcome = "confirmation_unavailable"
@@ -490,7 +493,8 @@ func (h *remoteToolkitHandler) validConfirmation(confirmation *remoteToolkitConf
 	if confirmation == nil {
 		return "", false, true
 	}
-	if !confirmation.Approved || !localturn.ValidConfirmationInterruptID(confirmation.InterruptID) {
+	if !confirmation.Approved || !localturn.ValidConfirmationInterruptID(confirmation.InterruptID) ||
+		(confirmation.Source != "" && confirmation.Source != localturn.SourceGrant) {
 		return "", false, false
 	}
 	approvedAt, err := time.Parse(time.RFC3339Nano, confirmation.ApprovedAt)
@@ -551,6 +555,9 @@ func writeConfirmationRequired(writer http.ResponseWriter, toolkitID int64, tool
 
 func writeLiveTurnError(ctx context.Context, writer http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, localturn.ErrConfirmationGrantRefused):
+		desktopwire.WriteError(writer, http.StatusForbidden, "confirmation_grant_refused",
+			"The turn's unattended grant does not answer remote toolkit confirmations.")
 	case errors.Is(err, localturn.ErrLocalWorkDisabled):
 		desktopwire.WriteError(writer, http.StatusForbidden, "local_work_disabled",
 			"Local work is turned off for this deployment (native client policy local_work.allowed).")

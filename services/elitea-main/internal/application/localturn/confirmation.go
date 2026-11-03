@@ -90,6 +90,11 @@ type ConfirmationClaim struct {
 	// the tool, its toolkit and the SHA-256 of its arguments. Never the
 	// arguments.
 	Call ConfirmationLedgerCall
+	// Source is SourceGrant when the desktop answered the confirmation from
+	// the turn's unattended grant (ADR-0045); "" for a person's answer. The
+	// store accepts SourceGrant only when the turn's grant has
+	// remote_confirmations, and records the decision as the grant's.
+	Source string
 }
 
 // ConfirmationLedgerCall is what the approval ledger records of a confirmed

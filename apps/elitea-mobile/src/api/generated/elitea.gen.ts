@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.29
+ * client contract:    1.30
  * operations sha256:  4131ed493bddee7047f4460fe33337842dfc94ddfa1e03fa6eaf5c9f44105609
  */
 export interface paths {
@@ -2467,8 +2467,14 @@ export interface components {
         /** @description A refused send, regenerate or continue. NOTE(W2): internal/api/v2/agentexecution/route.go:558 (`writeStartError`) and :601 (`writeUnsupported`). `error` is a machine code for 409 and 422 (`agent_regeneration_pending`, `agent_hitl_already_resolved`, `project_skills_limit`, `project_skills_too_large`, `project_skill_name_conflict`, `project_skill_unknown`, `project_skills_forbidden`, `agent_authorization_already_resolved`, `agent_output_limit_already_resolved`, `unsupported_agent_execution`) and a message otherwise; the idempotency conflict is a 409 whose `error` is the message "Agent execution request conflicts with an existing turn". */
         ChatExecutionError: {
             error: string;
+            /** @description Client contract 1.30. With `unattended_grant_refused`, the refused request field. */
+            field?: string;
             message?: string;
+            /** @description Client contract 1.30. With `unattended_grant_refused`, why (see LocalTurnError). */
+            reason?: string;
             retryable?: boolean;
+            /** @description Client contract 1.30. With `unattended_grant_refused`, the refused `toolkit_name/tool_name`. */
+            tool?: string;
         };
         /** @description The admitted (or replayed) turn. NOTE(W2): internal/api/v2/agentexecution/route.go:330-337, :423-430 and :550-557 (one shape for send, regenerate and continue). */
         ChatExecutionStarted: {
@@ -2582,6 +2588,7 @@ export interface components {
              * @description Runs one release of the participant's agent, published or withdrawn (listApplicationReleases). Absent or 0 runs the participant's version, which is the agent's published release when that version is published. Only for `agent.execute.application.v1`. A release that is not a release of the agent answers 404 `release_not_found`; a release whose pinned toolkits or configurations changed answers 409 `release_toolkit_drifted`; a withdrawn release of an agent with sub-agents answers 409 `release_withdrawn_dependencies_removed`, because the unpublish removed the sub-agent copies its publish made (ApplicationReleaseRefusal).
              */
             release_id?: number;
+            unattended?: components["schemas"]["ChatUnattendedRequest"];
             /** @description USER ids this message mentions (at most 64; `entity_meta.id` of a user participant, never a participant row id). `userIds` is accepted as an alias. Each project member named, except the sender, gets one `chat_user_mentioned` notification once the turn is admitted — on both execution contracts (an ad-hoc model chat notifies since client contract 1.1). An id that is not a project member is dropped silently; a replay of the same `question_id` notifies nobody again. */
             user_ids?: number[];
         };
@@ -2590,6 +2597,24 @@ export interface components {
             filepath: string;
             /** @description Display name; ignored by the server. */
             name?: string;
+        };
+        /** @description Client contract 1.30 (ADR-0045). The person's unattended grant for a cloud run. Main admits each named sensitive tool against the run's own toolkits, the withheld categories and the tier hitl rule; a refused part refuses the whole send with 422 `unattended_grant_refused` (`reason`, `field`, `tool`). Schedule and webhook runs cannot name sensitive tools. Main starts each continuation itself. NOTE(W2): internal/api/v2/agentexecution/unattended.go (`startUnattendedBody`). */
+        ChatUnattendedRequest: {
+            chain?: components["schemas"]["UnattendedChainLimits"];
+            /** @description Continue the answer when it stops at the output limit. */
+            continue_output_limit?: boolean;
+            /** @description Continue the run with a new turn when it stops at its step limit. */
+            continue_step_limit?: boolean;
+            /**
+             * Format: uuid
+             * @description Optional; Main derives a stable id from the question when absent.
+             */
+            grant_id?: string;
+            /** @description The sensitive tools the grant approves in-line. */
+            sensitive_tools?: {
+                tool_name: string;
+                toolkit_name: string;
+            }[];
         };
         /** @description The deployment's chat attachment limits (client contract 1.1), so a client can refuse a file before uploading it; the server enforces every one of them again. Byte values are bytes. A project's storage policy may set a different per-file cap, which the upload's 400 names. NOTE(W2): internal/api/v2/discovery/document.go:60 (`AttachmentPolicy`), filled by internal/api/v2/conversations/attachment_limits.go:47 (`CurrentAttachmentLimits`). */
         ClientAttachmentPolicy: {
@@ -4080,6 +4105,24 @@ export interface components {
         };
         /** @description Opaque tool/toolkit settings blob — see marker. */
         ToolSettings: unknown;
+        /** @description Client contract 1.30. The chain limits. An absent value takes the platform default; a value above the platform maximum answers 422 `unattended_grant_refused` (reason `over_maximum`). A continuation's limits are the chain's stored ones. */
+        UnattendedChainLimits: {
+            /**
+             * Format: int64
+             * @description How long the chain may run after its first turn.
+             */
+            deadline_seconds?: number;
+            /**
+             * Format: int64
+             * @description The most continuations of the chain.
+             */
+            max_continuations?: number;
+            /**
+             * Format: double
+             * @description The most the chain spends, in USD. 0 means no limit when the platform has none.
+             */
+            max_spend?: number;
+        };
         /** @description The body of updateConversation. Every key is optional and only the keys present are written; a native client renames with `name` alone. NOTE(W2): internal/api/v2/conversations/handler.go (`Update`, `conversationNameFromBody`) reads these keys and ignores any other. */
         UpdateConversationRequest: {
             /** @description One of the caller's own folders; `null` takes it out of its folder. */
@@ -6401,7 +6444,7 @@ export interface operations {
                     "application/json": components["schemas"]["ChatExecutionError"];
                 };
             };
-            /** @description `unsupported_agent_execution`: this turn cannot run on the current execution path; or a refused skill pick: `project_skills_limit` (more than five skills in the turn), `project_skills_too_large` (more than 64 KiB of skill instructions) or `project_skill_name_conflict` (a picked skill shares its name with a different skill of the agent). */
+            /** @description `unsupported_agent_execution`: this turn cannot run on the current execution path; or a refused skill pick: `project_skills_limit` (more than five skills in the turn), `project_skills_too_large` (more than 64 KiB of skill instructions) or `project_skill_name_conflict` (a picked skill shares its name with a different skill of the agent); or `unattended_grant_refused` (client contract 1.30) with `reason`, `field` and `tool`. */
             422: {
                 headers: {
                     [name: string]: unknown;

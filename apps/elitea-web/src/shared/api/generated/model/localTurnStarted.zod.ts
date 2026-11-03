@@ -42,6 +42,7 @@
  */
 import * as zod from "zod";
 import { LocalTurnMemoryRecall } from "./localTurnMemoryRecall.zod";
+import { LocalTurnUnattendedStarted } from "./localTurnUnattendedStarted.zod";
 
 export const LocalTurnStarted = zod
   .object({
@@ -69,6 +70,7 @@ export const LocalTurnStarted = zod
         "False when this call replayed an earlier start with the same `question_id`.",
       ),
     memory_recall: LocalTurnMemoryRecall,
+    unattended: LocalTurnUnattendedStarted.optional(),
   })
   .describe(
     "Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:158 (`start`).",
