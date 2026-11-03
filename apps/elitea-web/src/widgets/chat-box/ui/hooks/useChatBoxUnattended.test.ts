@@ -13,12 +13,10 @@ const tools = [
 afterEach(resetGrantsTurnedOff);
 
 describe('useChatBoxUnattended', () => {
-  it('sends the default grant on each send, with a new grant id and no sensitive tools', () => {
+  it('sends the default grant on each send, with no grant id (Main derives it) and no sensitive tools', () => {
     const { result } = renderHook(() => useChatBoxUnattended('conv-default', tools));
     expect(result.current.shown).toBe(true);
-    const first = result.current.wire();
-    expect(first).toEqual({ grant_id: expect.stringMatching(/^[0-9a-f-]{36}$/u) as string, continue_step_limit: true, continue_output_limit: true });
-    expect(result.current.wire()?.['grant_id']).not.toBe(first?.['grant_id']);
+    expect(result.current.wire()).toEqual({ continue_step_limit: true, continue_output_limit: true });
   });
 
   it('sends nothing while the person turned it off, and keeps that choice for the conversation', () => {

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
@@ -29,6 +30,9 @@ import (
 type rowQueryer interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
+
+// runChainsGrantIDKey is the unique constraint on run_chains.grant_id.
+const runChainsGrantIDKey = "run_chains_grant_id_key"
 
 // startRunChain writes a chain and its root link. A replay of the same root
 // is a no-op.
@@ -51,6 +55,12 @@ ON CONFLICT (root_execution_id) DO NOTHING`,
 		start.RootExecutionID, start.ProjectID, start.OwnerUserID, start.ConversationUUID, start.Origin, origin,
 		start.Grant.GrantID, string(grant), start.Limits.MaxContinuations, start.Limits.MaxSpendUSD,
 		start.Limits.Deadline.Seconds()); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == runChainsGrantIDKey {
+			// The client sent a grant id that another chain already has (a
+			// replayed request with a new question): a refusal, not a 500.
+			return unattended.Refused("grant_id", "", unattended.RefusedInvalid)
+		}
 		return fmt.Errorf("unattended chain: start: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `

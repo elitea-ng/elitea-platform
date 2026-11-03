@@ -19,7 +19,6 @@ import {
   defaultChoice,
   grantToSend,
   grantsTurnedOff,
-  newGrantId,
   toCloudGrant,
   useGrantsTurnedOff,
   type RunChoice,
@@ -44,8 +43,13 @@ const kept = new Map<string, RunChoice>();
 
 const sameTool = (a: SensitiveToolRef, b: SensitiveToolRef): boolean => a.toolkit === b.toolkit && a.tool === b.tool;
 
-/** The grant as it goes on the next send: only the named tools that the agent still has. */
-export function grantForSend(choice: RunChoice, tools: readonly SensitiveToolRef[] | undefined, grantId: string): Record<string, unknown> | undefined {
+/**
+ * The grant as it goes on the next send: only the named tools that the agent
+ * still has. It names no grant id: Main derives it from the conversation and
+ * the message's question id, so a retried send is the same grant and a new
+ * send is a new one.
+ */
+export function grantForSend(choice: RunChoice, tools: readonly SensitiveToolRef[] | undefined, grantId?: string): Record<string, unknown> | undefined {
   const grant = grantToSend(choice, 'cloud');
   if (grant === null) return undefined;
   const named = grant.sensitive_tools.filter((tool) => tools?.some((option) => sameTool(option, tool)) === true);
@@ -73,7 +77,7 @@ export function useChatBoxUnattended(conversationKey: string | undefined, sensit
   const latest = useStableRef({ choice, shown, sensitiveTools });
   const wire = useCallback(() => {
     const current = latest.current;
-    return current.shown && !grantsTurnedOff() ? grantForSend(current.choice, current.sensitiveTools, newGrantId()) : undefined;
+    return current.shown && !grantsTurnedOff() ? grantForSend(current.choice, current.sensitiveTools) : undefined;
   }, [latest]);
   return { shown, choice, setChoice, sensitiveTools, wire };
 }

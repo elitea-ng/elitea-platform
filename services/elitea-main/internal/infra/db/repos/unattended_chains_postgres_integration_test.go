@@ -492,3 +492,35 @@ func TestPostgresUnattendedChainSettleViewAndEndOnce(t *testing.T) {
 		t.Fatalf("end state = %q", state)
 	}
 }
+
+// A grant id that another chain already has is a refusal (422), not a 500:
+// a replayed request that keeps the grant id but carries a new question.
+func TestPostgresUnattendedChainReusedGrantIDIsRefused(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := t.Context()
+	start := func(root string) error {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if err := startRunChain(ctx, tx, unattended.ChainStart{
+			RootExecutionID: root, ProjectID: 1, OwnerUserID: 4612,
+			ConversationUUID: "6c0f8e4d-2b3c-4d4e-9f5a-6b7c8d9e0f1a",
+			Origin:           unattended.OriginCloud, TriggerOrigin: "manual",
+			Grant:  unattended.Grant{GrantID: "7d1f9b5c-3e4a-4b6c-8d7e-8f9a0b1c2d3e", ContinueStepLimit: true},
+			Limits: unattended.Limits{MaxContinuations: 1, Deadline: time.Hour},
+		}); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+	if err := start(strings.Repeat("e", 32)); err != nil {
+		t.Fatal(err)
+	}
+	var refusal *unattended.RefusalError
+	if err := start(strings.Repeat("f", 32)); !errors.As(err, &refusal) ||
+		refusal.Field != "grant_id" || refusal.Reason != unattended.RefusedInvalid {
+		t.Fatalf("reused grant id = %v", err)
+	}
+}
