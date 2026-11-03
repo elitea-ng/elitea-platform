@@ -3,7 +3,7 @@ module github.com/elitea-ng/elitea-platform/libs/go/routines
 go 1.26.0
 
 require (
-	github.com/jackc/pgx/v5 v5.11.0
+	github.com/jackc/pgx/v5 v5.12.0
 	github.com/robfig/cron/v3 v3.0.1
 )
 
