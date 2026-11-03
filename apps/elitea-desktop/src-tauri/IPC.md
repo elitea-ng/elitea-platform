@@ -314,7 +314,7 @@ names instead of retrying. A rule imported from a repository leaves the
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "none" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}, images?: {source: "clipboard" \| "file", token: string}[], bypass_approvals?: boolean}` | `{turn_id, execution_id}` |
+| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "none" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}, images?: {source: "clipboard" \| "file", token: string}[], bypass_approvals?: boolean, unattended?: UnattendedGrant}` (**Unattended turns**, below) | `{turn_id, execution_id}` |
 | `attachment_add` | `{workspace_id, path}` | `{token, name, mime, bytes, width, height, thumbnail}` — attaches the image file at the **absolute** `path` (a `files_dropped` path, or a picked file) to the workspace's next turn ("Image input", below). Blocking work runs off the async workers. Rejects `path_denied`, `not_found`, `image_too_large`, `invalid_request` (not PNG/JPEG/WebP/GIF, a relative path, a link, not a regular file), `workspace_unknown`, `local_work_disabled`, `not_signed_in`. |
 | `attachment_add_bytes` | `{workspace_id, mime, data, name?}` | The same answer for a pasted image: `data` is base64, at most 10 MiB decoded; `mime` is what the clipboard said and is ignored (the type is sniffed from the bytes); `name` defaults to `pasted-image`. Rejects `image_too_large`, `invalid_request`, `workspace_unknown`, `local_work_disabled`. |
 | `attachment_remove` | `{workspace_id, token}` | `null`. Forgets an image the person took off the composer (an unknown token is not an error). |
@@ -518,7 +518,8 @@ runs without the question. The rules engine answers it `allow` with
 `source: "bypass"` and keeps the reason and rule of the layer that asked.
 These still apply: the policy ceiling, every deny (a `forbidden` rule
 included), a `PreToolUse` hook's ask, a remote toolkit's confirmation, an
-MCP server's sign-in and the step limit's "Continue?". `plan_mode` and
+MCP server's sign-in and the step limit's "Continue?" (an unattended
+grant answers some of them: **Unattended turns**, below). `plan_mode` and
 `bypass_approvals` together are refused with `invalid_request`. The
 OS sandbox does not change: commands still cannot write `.git` or read
 credentials, so a push goes through the `git_push` tool (asked outside
@@ -527,6 +528,76 @@ apply). A sub-agent of the turn in a task worktree runs in bypass mode too. The
 session leaves bypass mode when the turn (or the sub-agent) ends.
 `rules_explain` explains the rules without the mode. The UI
 keeps the choice per folder and asks the person to confirm it once.
+
+**Waits** (ADR-0045 decision 3). No question waits forever. A rule's or a
+hook's ask that nobody answers in 30 minutes is declined; a remote toolkit
+confirmation in 15 minutes (the platform's approval lifetime); "Continue?"
+in 10 minutes (the turn stops); a proposed plan in 30 minutes (declined);
+an MCP sign-in in its own 10 minutes (the call fails). The card then
+closes (`approval_closed`). Each entry of the commit's `hitl_exchanges`
+carries `source`: `person` (the person answered), `grant` (an unattended
+grant answered), `bypass` (bypass mode allowed a rule's ask) or `timeout`
+(the default answered: the wait ran out, or an unattended turn had nobody
+to ask; `decision` is then `timeout`, a plan card's `decline`). A commit
+carries at most 64 exchanges; past that, the `bypass` ones give way first.
+
+**Unattended turns** (ADR-0045 decisions 1, 3 and 4; #1435, #1436).
+`unattended` starts the turn with one grant, which the UI shows to the
+person before the start:
+
+```ts
+{
+  grant_id?: string,              // a UUID; the host makes one when absent
+  continue_step_limit: boolean,   // "Continue?" at the step limit
+  continue_tool_call_cap: boolean,// the 512 tool-call cap
+  hook_asks: boolean,             // a PreToolUse hook's ask
+  remote_confirmations: boolean,  // a remote toolkit confirmation
+  chain?: { max_continuations?: number, max_spend?: number /* US dollars */, deadline_seconds?: number }
+}
+```
+
+- The grant implies bypass mode for the rules' asks
+  (`bypass_approvals` is not needed). `plan_mode` with `unattended` is
+  refused with `invalid_request`, and so is a grant id that is not a UUID,
+  more than 200 continuations, a deadline outside 1 second to 7 days, or a
+  spend that is not more than 0. The platform checks the grant again
+  (`unattended_grant_refused`, the field named in the message).
+- The grant answers at once what it names. `hook_asks` allows a hook's
+  ask (`source: "grant"`). `remote_confirmations` approves a remote
+  confirmation; the retry carries `confirmation.source: "grant"`, and the
+  platform records it as the grant's decision. `continue_step_limit`
+  continues at the step limit (at most 3 times a turn, as a person's
+  answer would), and each continue is an exchange with `source: "grant"`.
+- Every other question takes its default at once, with no card: a hook's
+  ask is declined, a remote confirmation is declined
+  (`confirmation_timeout`), "Continue?" stops the turn, and an MCP sign-in
+  fails. The policy ceiling, every deny, the OS sandbox and the run caps
+  do not change.
+- A sub-agent of the turn inherits the grant.
+- **The chain.** The first turn is the chain's root. When a turn ends at
+  the 512 tool-call cap with `continue_tool_call_cap`, or at the step limit
+  after its third continue with `continue_step_limit`, the host waits for
+  the commit to land and then starts the next turn in the same thread: the
+  same agent, mode and grant, the prompt "Continue from where you stopped.",
+  and `unattended.chain_root_execution_id` set to the root's execution id
+  (the skills, command, images and "@" files of the first turn are not
+  applied again). The finished turn then sends `turn_continued
+  {next_turn_id, execution_id, continuation_index, chain_root_execution_id}`
+  after its `done`, and the next turn's `status` `running` carries
+  `continued_automatically: true`, `continuation_index` and `host_prompt`.
+  The platform counts the chain and refuses a continuation past a limit
+  (`409 chain_limit_reached`).
+- **The end.** The chain's last turn sends `chain_ended {outcome, message?}`
+  after its `done`: `completed` (the agent answered), `failed` (the turn
+  failed, its commit did not land, or the next turn did not start),
+  `waiting` (it stopped at a cap the grant does not cover: the person can
+  click **Continue**), `limit_reached` (a chain limit refused the next turn)
+  or `cancelled`. The commit of a turn the host does not continue carries
+  the same outcome as `chain_outcome` (not for `limit_reached`, which the
+  platform decides, nor for a cancelled turn, which commits nothing).
+- Each unattended turn's first `status` `running` carries `unattended`:
+  the grant's switches, `grant_id` and, when the platform answers them, the
+  chain's effective limits (`chain`).
 
 **Sub-agents** (#1226). Every workspace turn, plan mode included, is
 offered the runtime's sub-agent tools (`elitea-agent-runtime`
@@ -2356,7 +2427,7 @@ order. Kinds and payloads:
 
 | `kind` | `payload` |
 | --- | --- |
-| `status` | `{phase: "resolving" \| "starting" \| "running" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[], model?: TurnModel, continued?: number, host_prompt?: string, note?: string, timings?: Timing[]}` — `timings` (below) are the turn's phases measured since the previous `status`; `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order; `model` (on the first `running`) is the model the turn runs on, `{name, reasoning_effort?, chosen, pinned}` (`chosen`: the person's choice over the agent's model; `pinned`: the agent pins its model, so no choice is offered); `continued` and `host_prompt` (on a later `running`) say the run went on past its step limit for the n-th time from the host's own prompt, which is not the person's message; `note` (on `done`) is `step_limit_reached` when the turn stopped at its limit |
+| `status` | `{phase: "resolving" \| "starting" \| "running" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[], model?: TurnModel, continued?: number, host_prompt?: string, continued_automatically?: true, continuation_index?: number, unattended?: object, note?: string, timings?: Timing[]}` — `timings` (below) are the turn's phases measured since the previous `status`; `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order; `model` (on the first `running`) is the model the turn runs on, `{name, reasoning_effort?, chosen, pinned}` (`chosen`: the person's choice over the agent's model; `pinned`: the agent pins its model, so no choice is offered); `continued` and `host_prompt` (on a later `running`) say the run went on past its step limit for the n-th time from the host's own prompt, which is not the person's message; `continued_automatically`, `continuation_index` and `unattended` mark an unattended turn and its place in its chain (**Unattended turns**); `note` (on `done`) is `step_limit_reached` when the turn stopped at its limit |
 | `text_delta` | `{text}` — model text as it streams |
 | `thinking_delta` | `{text}` — the model's reasoning as it streams (the gateway's `reasoning_content` / `reasoning` deltas), sent next to `text_delta` as it arrives; the transcript folds it into a collapsed "Thinking" block of the step (issue 1228). Never logged |
 | `thinking_end` | `{chars: number}` — a reasoning block closed (the model moved on to its answer or its tool calls, or its stream ended); `chars` is its length |
@@ -2375,7 +2446,7 @@ order. Kinds and payloads:
 | `process_started` | `{process_id, call_id, command, tty: boolean, sandbox, loopback: boolean}` — a `run_command` call started a background process (**Background processes**) |
 | `tool_output_delta` | `{call_id, process_id, stream: "stdout" \| "pty", data, offset: number}` — its output while this turn runs: at most 20 per second per process, at most 16 KiB each, `offset` the byte offset of `data` in the process's output |
 | `process_exited` | `{process_id, call_id, status: "exited" \| "killed" \| "timed_out", exit_code?}` — it ended while this turn runs (the turn's end stops the ones it does not keep) |
-| `approval_closed` | `{request_id, reason: "timeout"}` — the host closed an open `approval_request` nobody answered within its wait (today: an MCP sign-in, 10 minutes); the card goes, the turn's `hitl_exchanges` record it with `decision: "timeout"`, and an `approval_respond` for it answers `approval_closed` |
+| `approval_closed` | `{request_id, reason: "timeout"}` — the host closed an open `approval_request` nobody answered within its wait (today: an MCP sign-in, 10 minutes); the card goes, the turn's `hitl_exchanges` record it with `decision: "timeout"` and `source: "timeout"`, and an `approval_respond` for it answers `approval_closed` (every question has a wait: **Waits**) |
 | `model_retry` | `{attempt, max_attempts, code, message, delay_ms, text_units, thinking_units}` — a failed model call is made again after `delay_ms` (**Model retries**). `attempt` counts from 1 to `max_attempts` (25). `text_units` and `thinking_units` are what the failed call streamed, in UTF-16 code units. The transcript drops them from its end, never past a tool row. It shows the retry until the model, a sub-agent or the compaction moves on |
 | `steer_queued` | `{steer_id, text, revision: number}` — a steering message waits for the next safe point (**Steering**); sent again with the next `revision` when the person changes it |
 | `steer_injected` | `{steer_id, text}` — the agent loop took the message: it is a user message of the turn from this point |
@@ -2383,6 +2454,8 @@ order. Kinds and payloads:
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
+| `turn_continued` | `{next_turn_id, execution_id, continuation_index, chain_root_execution_id}` — after `done` and the commit of an unattended turn: the host started the next turn of the chain (**Unattended turns**); its events come under `next_turn_id` |
+| `chain_ended` | `{outcome: "completed" \| "failed" \| "waiting" \| "limit_reached" \| "cancelled", message?}` — after `done`: the unattended chain ends with this turn |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
 `running` → (`thinking_delta`, `thinking_end`, `text_delta`, `model_retry`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`, `subagent_started`, `subagent_event`, `subagent_finished`, `process_started`, `tool_output_delta`, `process_exited`, `steer_queued`, `steer_injected`, `steer_dropped`)* →
@@ -2623,7 +2696,8 @@ goes unattended.
 
 A turn also stops at 512 tool calls, the most that one commit can carry
 (`note: "tool_call_limit_reached"`). The transcript then offers Continue:
-it starts a new turn from the host's prompt, with a new budget.
+it starts a new turn from the host's prompt, with a new budget (an
+unattended grant with `continue_tool_call_cap` does that by itself).
 When a run ends because it used them (adk's own end of the run, not a
 count), the host asks `approval_request {kind: "continue", title: "The agent
 used its N steps", detail: <the start of the agent's last text>, steps: N,
@@ -2632,7 +2706,9 @@ rule or remembered choice answers it, and `allow_always` answers once.
 `allow_once` / `allow_always` continue: the same agent runs again on the same
 session, within the same execution, from the host's prompt "Continue from
 where you stopped." (`status` `running` with `continued`), at most 3 times a
-turn. `deny`, no answer within 10 minutes, or a fourth limit end the turn
+turn. An unattended grant with `continue_step_limit` answers it without a
+card (`source: "grant"`); an unattended turn without it stops at once.
+`deny`, no answer within 10 minutes, or a fourth limit end the turn
 normally: what happened is committed as one turn (its `hitl_exchanges` hold
 each question as kind `continue`), and `status` `done` carries
 `note: "step_limit_reached"`. Cancelling while the question is open cancels

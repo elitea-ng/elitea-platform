@@ -108,6 +108,25 @@ describe('TurnTranscript', () => {
     expect(onContinue).toHaveBeenCalledTimes(1);
   });
 
+  it('offers no Continue on a turn the host continued by itself, and marks the continued turn', () => {
+    const view = { phase: 'done' as const, note: 'tool_call_limit_reached', items: [], approvals: [], continuedTo: { nextTurnId: 't2', index: 1 } };
+    renderWithTheme(<TurnTranscript view={view} busy={false} onContinue={vi.fn()} continuation={2} />);
+    expect(screen.queryByTestId('turn-continue')).toBeNull();
+    expect(screen.queryByTestId('turn-tool-call-limit')).toBeNull();
+    expect(screen.getByTestId('turn-continued-marker')).toHaveTextContent('Continued automatically (2)');
+  });
+
+  it('says how an unattended run ended, with Continue only when it waits', async () => {
+    const onContinue = vi.fn();
+    const ended = (chainEnded: NonNullable<Parameters<typeof TurnTranscript>[0]['view']['chainEnded']>) => ({ phase: 'done' as const, items: [], approvals: [], chainEnded });
+    const { rerender } = renderWithTheme(<TurnTranscript view={ended({ outcome: 'limit_reached', limit: 'deadline' })} busy={false} onContinue={onContinue} />);
+    expect(screen.getByTestId('chain-ended')).toHaveTextContent('Unattended run ended: chain limit reached The run reached its deadline.');
+    expect(screen.queryByTestId('turn-continue')).toBeNull();
+    rerender(<TurnTranscript view={ended({ outcome: 'waiting' })} busy={false} onContinue={onContinue} />);
+    await userEvent.setup().click(screen.getByTestId('turn-continue'));
+    expect(onContinue).toHaveBeenCalledTimes(1);
+  });
+
   it('shows a recorded commit failure without Retry when nothing can resend it', () => {
     const view = { phase: 'done' as const, items: [], approvals: [], commitFailed: { executionId: 'e1', code: 'x', message: 'Not saved.', seq: 3 } };
     renderWithTheme(<TurnTranscript view={view} busy={false} />);

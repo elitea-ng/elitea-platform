@@ -50,6 +50,12 @@ pub const MAX_THINKING_BYTES: usize = 32 * 1024;
 /// steps past it are not committed (they were shown, and the local thread
 /// history keeps them).
 pub const MAX_THINKING_TOTAL_BYTES: usize = 2 * 1024 * 1024;
+/// The most HITL exchanges one commit may carry
+/// (`localturn.MaxHITLExchanges` in
+/// `services/elitea-main/internal/application/localturn/localturn.go`).
+pub const MAX_HITL_EXCHANGES: usize = 64;
+/// The `source` of an exchange that bypass mode answered.
+const SOURCE_BYPASS: &str = super::unattended::SOURCE_BYPASS;
 /// The `done` status note of a turn stopped at [`MAX_TOOL_CALLS`].
 pub const TOOL_CALL_LIMIT_REACHED: &str = "tool_call_limit_reached";
 
@@ -291,9 +297,29 @@ impl Recorder {
         self.with(|state| state.hitl.push(exchange));
     }
 
+    /// The commit's `hitl_exchanges`: at most [`MAX_HITL_EXCHANGES`], in
+    /// the order they happened. When there are more, the exchanges that
+    /// bypass mode answered give way first: the platform records the
+    /// others in the approval ledger.
     #[must_use]
     pub fn hitl_exchanges(&self) -> Vec<Value> {
-        self.with(|state| state.hitl.clone()).unwrap_or_default()
+        let all = self.with(|state| state.hitl.clone()).unwrap_or_default();
+        let bypassed = |exchange: &Value| exchange["source"] == SOURCE_BYPASS;
+        let others = all.iter().filter(|e| !bypassed(e)).count();
+        let mut room = MAX_HITL_EXCHANGES.saturating_sub(others);
+        let mut kept_others = 0;
+        all.into_iter()
+            .filter(|exchange| {
+                if bypassed(exchange) {
+                    let keep = room > 0;
+                    room = room.saturating_sub(1);
+                    keep
+                } else {
+                    kept_others += 1;
+                    kept_others <= MAX_HITL_EXCHANGES
+                }
+            })
+            .collect()
     }
 
     /// A command the shell tool ran, from its result.
@@ -637,6 +663,31 @@ mod tests {
         let cut = truncate(&"é".repeat(10), 8);
         assert!(cut.len() <= 8, "{cut}");
         assert_eq!(cut, "éé…");
+    }
+
+    /// The commit keeps every source's exchanges in order, at most 64: the
+    /// bypassed ones give way first.
+    #[test]
+    fn bypassed_exchanges_give_way_at_the_commits_bound() {
+        let recorder = Recorder::default();
+        let exchange =
+            |n: usize, source: &str| json!({ "interrupt_id": format!("i{n}"), "source": source });
+        recorder.hitl_exchange(exchange(0, "person"));
+        for n in 1..=70 {
+            recorder.hitl_exchange(exchange(n, "bypass"));
+        }
+        recorder.hitl_exchange(exchange(71, "grant"));
+        recorder.hitl_exchange(exchange(72, "timeout"));
+        let kept = recorder.hitl_exchanges();
+        assert_eq!(kept.len(), MAX_HITL_EXCHANGES);
+        assert_eq!(kept[0]["interrupt_id"], "i0");
+        assert_eq!(kept[61]["interrupt_id"], "i61", "61 bypassed ones fit");
+        assert_eq!(kept[62]["interrupt_id"], "i71");
+        assert_eq!(kept[63]["interrupt_id"], "i72");
+        let few = Recorder::default();
+        few.hitl_exchange(exchange(0, "bypass"));
+        few.hitl_exchange(exchange(1, "person"));
+        assert_eq!(few.hitl_exchanges().len(), 2);
     }
 
     #[test]

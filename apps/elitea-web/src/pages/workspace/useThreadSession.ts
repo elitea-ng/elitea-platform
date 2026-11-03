@@ -27,6 +27,7 @@ import { t } from '@/shared/i18n';
 import { useSelectedProject } from '@/widgets/app-shell';
 import { useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
 
+import { turnSlots, type TurnSlot } from './chainSlots';
 import type { ChangeSet, DecidedApproval } from './sessionTypes';
 import { useThreadName } from './useThreadName';
 import { useAgentSelection, type AgentSelection } from './useAgentSelection';
@@ -86,6 +87,13 @@ function useShellRegistration(workspaceId: string, newThread: () => void, run: (
   }, [workspaceId]);
 }
 
+/** A changed-files set's label: the person's prompt, or the marker of a turn that the host continued by itself. */
+function slotLabel(slot: TurnSlot | undefined, prompts: readonly string[]): string {
+  if (slot === undefined) return '';
+  if ('prompt' in slot) return prompts[slot.prompt] ?? '';
+  return t('workspace.chain.continued', 'Continued automatically ({{n}})', { n: String(slot.continuation) });
+}
+
 /** Every turn of the thread that changed files, newest first. */
 function changeSetsOf(history: ThreadHistory, shown: ReadonlySet<string>, turn: WorkspaceTurn, prompts: readonly string[]): ChangeSet[] {
   const sets: ChangeSet[] = [];
@@ -98,8 +106,9 @@ function changeSetsOf(history: ThreadHistory, shown: ReadonlySet<string>, turn: 
     }
   }
   const session = [...turn.earlier, ...(turn.turnId === null ? [] : [{ turnId: turn.turnId, view: turn.view }])];
+  const slots = turnSlots(session);
   session.forEach((entry, index) => {
-    if ((entry.view.done?.changedFiles ?? 0) > 0) sets.push({ turnId: entry.turnId, label: prompts[index] ?? '' });
+    if ((entry.view.done?.changedFiles ?? 0) > 0) sets.push({ turnId: entry.turnId, label: slotLabel(slots[index], prompts) });
   });
   return sets.reverse();
 }

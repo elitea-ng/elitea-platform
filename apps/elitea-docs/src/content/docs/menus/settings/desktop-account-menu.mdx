@@ -44,7 +44,7 @@ Chats and Local work threads share one message box. Drag its top edge to make it
 In a Local work thread the row under the text holds, from the left:
 
 - **+** to attach images (you can also paste or drop them).
-- The mode: **Act** (edits with approvals), **Plan** (plans, changes nothing) or **Bypass** (no approvals; the app warns you the first time).
+- The mode: **Act** (edits with approvals), **Plan** (plans, changes nothing), **Bypass** (no approvals; the app warns you the first time) or **Unattended** (you give every answer at the start; see [Run a task unattended](#run-a-task-unattended)).
 - The agent and its version (point at **Version** to see the versions), and the model.
 - **⋯** with **Step limit**: how many steps a turn may take. Point at it to pick the default, a preset, **Unlimited** or a number of your own.
 - In a new thread of a git folder, **Work in**: **This folder**, or **New worktree** (see [Work in a worktree](#work-in-a-worktree)).
@@ -54,6 +54,25 @@ In a Local work thread the row under the text holds, from the left:
 The index icon shows the state of the folder's code index by its colour: grey when it is ready or off, the accent colour while it builds, orange when it is out of date and red after an error. Point at it to read the state, for example *Index ready · 257.3K entities*; select it to open the **Index** tab on the right, where the index settings are.
 
 While a turn runs, in a chat or a thread, that round button is **Stop** until you type, then **Send** again: what you send waits in the **Queued** list at the top of the message box. Each queued message has **Send now** (stop the turn and send this message first), **Edit** (take it back into the message box) and **Remove**. Press **Esc** twice quickly to stop the turn from anywhere on the page; a single Esc still just closes a menu or dialog.
+
+### Run a task unattended
+
+Use **Unattended** to start a long task and walk away. When you pick the mode, the app shows the grant: the answers you give now, before the turn starts. Nothing can be added while it runs.
+
+| Part | What it answers | Without it |
+|------|-----------------|------------|
+| **Continue at the step limit** | "Continue?" at the step limit. When the turn has used its three continues, the app starts the next turn by itself. | The turn stops. |
+| **Continue after 512 tool calls** | The turn's tool-call cap. The app starts the next turn by itself. | The turn stops; select **Continue**. |
+| **Hook asks** | A `PreToolUse` hook that asks for your approval: the call runs. | The call is declined. |
+| **Remote toolkit confirmations** | A toolkit that asks you to confirm a call: the call runs. | The call is declined. |
+| **Chain limits** | At most this many automatic continuations, this spend in US dollars and this many hours. Empty fields use the platform's defaults (20 continuations, 10 × the project's per-run spend cap, 12 hours). | Platform defaults. |
+
+- An unattended turn also runs in bypass mode: what your approval rules would ask runs without the question. The policy, every deny rule, the sandbox and the budgets still apply.
+- A question the grant does not answer takes its default at once. An MCP sign-in fails, so sign in to the MCP servers before you start.
+- Each turn the app starts by itself shows **Continued automatically** at its top. The last turn shows how the run ended: completed, failed, waiting for you, stopped at a chain limit, or cancelled.
+- Every answer is saved with the thread, with who gave it: you, the grant, bypass mode, or nobody (the wait ran out).
+
+Questions also have a time limit when you are there: an approval waits 30 minutes, a toolkit confirmation 15 minutes and "Continue?" 10 minutes. After that the call is declined, or the turn stops.
 
 ### Send a thread to the cloud
 

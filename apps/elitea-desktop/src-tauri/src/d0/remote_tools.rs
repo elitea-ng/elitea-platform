@@ -410,24 +410,41 @@ pub async fn call(
                 else {
                     return error_result("invalid_response", "the confirmation request had no id");
                 };
-                if let Err(feedback) =
-                    confirmed(context, spec, call_id, tool_name, &interrupt, &message).await
+                let granted = match confirmed(
+                    context, spec, call_id, tool_name, &interrupt, &message,
+                )
+                .await
                 {
-                    // #1225: the person's denial is a typed failure, with
-                    // their feedback when they wrote one.
-                    let mut result = error_result("rejected", "the person rejected this call");
-                    if let Value::Object(fields) = &mut result {
-                        fields.extend(elitea_local_tools::session::declined_details(
-                            feedback.as_deref(),
-                        ));
+                    Ok(granted) => granted,
+                    Err(Declined::TimedOut) => {
+                        return error_result(
+                            "confirmation_timeout",
+                            "nobody confirmed this call in time, so the tool did not run",
+                        );
                     }
-                    return result;
-                }
-                confirmation = Some(json!({
+                    Err(Declined::ByPerson(feedback)) => {
+                        // #1225: the person's denial is a typed failure,
+                        // with their feedback when they wrote one.
+                        let mut result = error_result("rejected", "the person rejected this call");
+                        if let Value::Object(fields) = &mut result {
+                            fields.extend(elitea_local_tools::session::declined_details(
+                                feedback.as_deref(),
+                            ));
+                        }
+                        return result;
+                    }
+                };
+                let mut approval = json!({
                     "approved": true,
                     "approved_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                     "interrupt_id": interrupt_id,
-                }));
+                });
+                // The turn's unattended grant answered (ADR-0045): the
+                // platform records it as the grant's decision.
+                if granted {
+                    approval["source"] = json!(super::unattended::SOURCE_GRANT);
+                }
+                confirmation = Some(approval);
                 // The approved call is a new request: its own key, its own retries.
                 key = uuid::Uuid::new_v4().to_string();
                 attempts = 0;
@@ -444,7 +461,7 @@ pub async fn call(
                     Authorization::TimedOut => {
                         return error_result(
                             "authorization_timeout",
-                            "nobody signed in to this tool's MCP server within 10 minutes, so the tool did not run",
+                            "nobody signed in to this tool's MCP server in time, so the tool did not run",
                         );
                     }
                 }
@@ -484,8 +501,17 @@ pub async fn call(
     }
 }
 
-/// Ask the person to confirm a sensitive remote call. `Err` is a denial,
-/// with the person's feedback when they wrote one (#1225).
+/// Why a sensitive remote call was not confirmed.
+enum Declined {
+    /// The person declined, with their feedback when they wrote one (#1225).
+    ByPerson(Option<String>),
+    /// Nobody answered within the wait, or nobody was there to ask (an
+    /// unattended turn whose grant does not cover confirmations).
+    TimedOut,
+}
+
+/// Ask the person to confirm a sensitive remote call. `Ok(true)`: the
+/// turn's unattended grant confirmed it; `Ok(false)`: the person did.
 async fn confirmed(
     context: &RemoteContext,
     spec: &RemoteToolSpec,
@@ -493,7 +519,7 @@ async fn confirmed(
     tool_name: &str,
     interrupt: &Value,
     message: &str,
-) -> Result<(), Option<String>> {
+) -> Result<bool, Declined> {
     let text = |key: &str| {
         interrupt
             .get(key)
@@ -523,11 +549,17 @@ async fn confirmed(
         }}),
     };
     match context.prompt.request(request).await {
-        Ok(ApprovalOutcome::Decided { action, .. }) if action == "approve" => Ok(()),
-        Ok(ApprovalOutcome::Decided { value, .. }) => {
-            Err(elitea_local_tools::session::feedback_of(&value))
+        Ok(ApprovalOutcome::Decided { action, value }) if action == "approve" => Ok(value
+            .get("source")
+            .and_then(Value::as_str)
+            == Some(super::unattended::SOURCE_GRANT)),
+        Ok(ApprovalOutcome::Decided { action, .. }) if action == TIMEOUT_ACTION => {
+            Err(Declined::TimedOut)
         }
-        _ => Err(None),
+        Ok(ApprovalOutcome::Decided { value, .. }) => Err(Declined::ByPerson(
+            elitea_local_tools::session::feedback_of(&value),
+        )),
+        _ => Err(Declined::ByPerson(None)),
     }
 }
 

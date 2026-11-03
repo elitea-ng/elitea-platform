@@ -2,8 +2,8 @@
  * The bottom of a thread: the notice for a thread that is away, the errors,
  * and the composer. Where a message goes depends on where the thread runs:
  *
- * - here: the local agent loop (`session.send`), with Act | Plan | Bypass
- *   (`useBypassMode`, kept per folder; Plan wins) and the
+ * - here: the local agent loop (`session.send`), with Act | Plan | Bypass | Unattended
+ *   (`useComposerModes`, kept per folder; Plan wins) and the
  *   agent·version picker;
  * - `cloud`: the SERVER conversation (`useCloudChat`: the chat's own execution
  *   route and stream). The conversation's own agent answers, so the picker is
@@ -53,11 +53,13 @@ import { useDoubleEscape } from '@/shared/lib/useDoubleEscape';
 import { useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { BypassControls } from './BypassControls';
+import { isContinuedRecord } from './chainSlots';
 import { contextBreakdown, threadMeter } from './contextBreakdown';
 import { IdleCompactedNotice } from './CompactNotices';
 import { AgentChip, RunLocationControl, WorkInChip } from './ComposerControls';
 import { HandoffBanner } from './HandoffControls';
 import { RunInCloudNotice } from './RunInCloudNotice';
+import { UnattendedControls } from './UnattendedControls';
 import { firstError, SessionNotices } from './sessionParts';
 import { useProjectSkills, type ComposerSkill } from './useAgentSkills';
 import type { CloudChat } from './useCloudChat';
@@ -130,11 +132,12 @@ type Usage = WorkspaceTurn['view']['usage'];
 
 /**
  * The thread's last recorded message (thread history), for `/retry` before anything was sent here. The history keeps
- * the prompt as typed: its skill or custom command is read from it again, as a send does.
+ * the prompt as typed: its skill or custom command is read from it again, as a send does. A turn that the host
+ * continued by itself (an unattended chain) holds the host's prompt, not the person's: it is skipped.
  */
 export function recordedPrompt(history: ThreadSession['history'], commands: readonly CustomCommand[], skills: readonly ComposerSkill[]): SentMessage | null {
   if (history.kind !== 'local') return null;
-  const stored = history.turns[history.turns.length - 1];
+  const stored = history.turns.findLast((entry) => !isContinuedRecord(entry.events));
   if (stored === undefined) return null;
   const { command, skill } = composer.invokedPick(stored.prompt, commands, skills);
   return { prompt: stored.prompt, mentions: stored.mentions, skills: skillPicks(skill), command: command ?? undefined };
@@ -249,7 +252,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     model.dismissNotice();
     idle.dismiss();
     remember(prompt);
-    const sent = await session.send(prompt, modes.mode, mentions, picked, commands.compactNext, model.choice, command, images);
+    const sent = await session.send(prompt, modes.choice, mentions, picked, commands.compactNext, model.choice, command, images);
     if (sent && commands.compactNext) commands.compactSent();
     return sent;
   };
@@ -283,6 +286,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
       <HandoffBanner handoff={handoff} projectId={projectId} />
       <SessionNotices error={modelNotice ?? firstError(turnError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={offered} />
       <BypassControls bypass={modes.bypass} active={modes.bypassActive} />
+      <UnattendedControls unattended={modes.unattended} active={modes.unattendedActive} />
       {local && <IdleCompactedNotice shown={idle.shown} onClose={idle.dismiss} />}
       <RunInCloudNotice cloudOnly={pipeline} refusedPrompt={refusedPrompt} running={runInCloud.running} error={runInCloud.error} onRun={(prompt) => void runInCloud.run(prompt)} />
       <WorkspaceComposer

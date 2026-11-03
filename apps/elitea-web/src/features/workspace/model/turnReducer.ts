@@ -20,6 +20,7 @@ import type { PlanProposalPayload, PlanView } from '@/shared/desktop/planIpc';
 import type { TurnModel } from '@/shared/desktop/turnModel';
 import type { AgentEvent, ApprovalRequestPayload, ContextMeter, TurnPhase } from '@/shared/desktop/workspaceIpc';
 
+import { applyChainEvent, continuedTurn, isChainEvent, withChainStatus, type ChainEvent, type ChainView } from './chainEvents';
 import { endsRetry, withoutRetry, type RetryingView } from './modelRetry';
 import { applySubAgentEvent, isSubAgentEvent, type SubAgentLane } from './subAgentEvents';
 import type { SteerView } from './steeringEvents';
@@ -28,6 +29,7 @@ import { applySideEvent, isSideEvent } from './turnSideEvents';
 import type { TurnUsage } from './turnUsage';
 
 export type { TranscriptItem } from './transcriptItem';
+export { latestPlan } from './latestPlan';
 
 interface TurnDone {
   committed: boolean;
@@ -36,7 +38,7 @@ interface TurnDone {
   changedFiles: number;
 }
 
-export interface TurnView extends SteerView {
+export interface TurnView extends SteerView, ChainView {
   phase: TurnPhase | null;
   message?: string;
   /** Why an ended turn stopped (`status` `done`'s `note`): `step_limit_reached`, `tool_call_limit_reached`. */
@@ -127,12 +129,13 @@ export function isTerminalPhase(phase: TurnPhase | null): boolean {
 type EventOf<K extends AgentEvent['kind']> = Extract<AgentEvent, { kind: K }>;
 
 function onStatus(view: TurnView, event: EventOf<'status'>): TurnView {
-  const next: TurnView = { ...view, phase: event.payload.phase };
+  let next: TurnView = { ...view, phase: event.payload.phase };
   if (event.payload.message !== undefined) next.message = event.payload.message;
   else delete next.message;
   if (event.payload.project_instructions !== undefined) next.projectInstructions = event.payload.project_instructions;
   if (event.payload.model !== undefined) next.model = event.payload.model;
   if (event.payload.note !== undefined) next.note = event.payload.note;
+  next = withChainStatus(next, event.payload);
   if (isTerminalPhase(event.payload.phase)) return withoutProposal({ ...next, approvals: [] });
   return next;
 }
@@ -206,15 +209,16 @@ function applyPlanEvent(view: TurnView, event: PlanEvent, resolved: readonly str
   }
 }
 
-type AsideEvent = PlanEvent | Parameters<typeof applySideEvent>[1] | Parameters<typeof applySubAgentEvent>[1];
+type AsideEvent = PlanEvent | ChainEvent | Parameters<typeof applySideEvent>[1] | Parameters<typeof applySubAgentEvent>[1];
 
-/** The events beside the transcript's main line: the plan, the meter, reasoning, a model call's retry, sub-agents. */
+/** The events beside the transcript's main line: the plan, the meter, reasoning, a model call's retry, sub-agents, an unattended chain. */
 function isAsideEvent(event: AgentEvent): event is AsideEvent {
-  return isPlanEvent(event) || isSideEvent(event) || isSubAgentEvent(event);
+  return isPlanEvent(event) || isSideEvent(event) || isSubAgentEvent(event) || isChainEvent(event);
 }
 
 function applyAsideEvent(view: TurnView, event: AsideEvent, resolved: readonly string[]): TurnView {
   if (isPlanEvent(event)) return applyPlanEvent(view, event, resolved);
+  if (isChainEvent(event)) return applyChainEvent(view, event);
   if (isSideEvent(event)) return applySideEvent(view, event);
   return applySubAgentEvent(view, event);
 }
@@ -302,15 +306,6 @@ export function replayView(events: readonly AgentEvent[]): TurnView {
   return withoutProposal({ ...fold(sortedUnique(events), []), approvals: [] });
 }
 
-/** The thread's checklist: the newest `plan` any of `views` (oldest first) sent; `null` when none did or it was deleted. */
-export function latestPlan(views: readonly TurnView[]): PlanView | null {
-  for (let i = views.length - 1; i >= 0; i -= 1) {
-    const plan = views[i]?.plan;
-    if (plan !== undefined) return plan;
-  }
-  return null;
-}
-
 function appended(events: readonly StoredEvent[], event: AgentEvent): StoredEvent[] {
   const merged = extendRun(events[events.length - 1], event);
   return merged === null ? [...events, { ...event, last: event.seq }] : [...events.slice(0, -1), merged];
@@ -352,30 +347,33 @@ function commitSaved(state: TurnsState, turnId: string): TurnsState {
   return { ...state, turns: { ...state.turns, [turnId]: { ...record, savedThrough, view: withoutSaved(record.view, savedThrough) } } };
 }
 
+/** `turnId` becomes the active turn; the one active before it stays in `earlier`. */
+function begin(state: TurnsState, turnId: string): TurnsState {
+  const begun = state.begun.includes(turnId) ? state.begun : [...state.begun, turnId];
+  return { ...state, activeTurnId: turnId, begun, unclaimed: state.unclaimed.filter((id) => id !== turnId) };
+}
+
+/** One event; a `turn_continued` on a turn this hook began also makes the next turn the active one. */
+function onEvent(state: TurnsState, event: AgentEvent): TurnsState {
+  const next = reduceEvent(state, event);
+  const continued = next === state ? null : continuedTurn(next.begun, event);
+  return continued === null ? next : begin(next, continued);
+}
+
 export function turnReducer(state: TurnsState, action: TurnAction): TurnsState {
   switch (action.type) {
     case 'begin':
-      return {
-        ...state,
-        activeTurnId: action.turnId,
-        begun: state.begun.includes(action.turnId) ? state.begun : [...state.begun, action.turnId],
-        unclaimed: state.unclaimed.filter((id) => id !== action.turnId),
-      };
+      return begin(state, action.turnId);
     case 'reset':
       return initialTurnsState;
     case 'adopt': {
       const events = sortedUnique(action.events);
       const floor = events[events.length - 1]?.seq ?? -1;
       const record: TurnRecord = { events: compact(events), resolved: [], view: fold(events, []), floor };
-      return {
-        activeTurnId: action.turnId,
-        turns: { ...state.turns, [action.turnId]: record },
-        begun: state.begun.includes(action.turnId) ? state.begun : [...state.begun, action.turnId],
-        unclaimed: state.unclaimed.filter((id) => id !== action.turnId),
-      };
+      return begin({ ...state, turns: { ...state.turns, [action.turnId]: record } }, action.turnId);
     }
     case 'event':
-      return reduceEvent(state, action.event);
+      return onEvent(state, action.event);
     case 'commit-saved':
       return commitSaved(state, action.turnId);
     case 'approval-resolved': {

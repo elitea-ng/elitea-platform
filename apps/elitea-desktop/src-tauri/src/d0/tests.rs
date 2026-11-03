@@ -382,6 +382,7 @@ fn request(workspace_id: &str) -> TurnRequest {
         project_skills: Vec::new(),
         command: None,
         images: Vec::new(),
+        unattended: None,
     }
 }
 
@@ -1788,6 +1789,7 @@ async fn mcp_authorization_timeout_closes_and_records_the_question() {
     let binding = super::approvals::TurnBinding {
         events: Arc::new(super::events::TurnEvents::new("t1".into(), emitter.clone())),
         recorder: Arc::new(super::recorder::Recorder::default()),
+        unattended: None,
     };
     prompt.bind(Some(binding.clone()));
     let context = remote_context(&server, prompt, Duration::from_millis(50)).await;
@@ -9757,4 +9759,333 @@ async fn a_cancelled_turn_drops_its_waiting_steering_messages() {
     let usage = events.iter().position(|e| e.kind == "usage_total").unwrap();
     assert!(last_drop < usage, "{:?}", h.emitter.kinds());
     assert_eq!(events.last().unwrap().kind, "done");
+}
+
+// Unattended turns (ADR-0045 decisions 1, 3 and 4; #1435, #1436).
+
+const START_PATH: &str =
+    "/api/v2/elitea_core/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555";
+const EXECUTION_2: &str = "fedcba9876543210fedcba9876543210";
+
+fn unattended_request(h: &Harness, grant: Value) -> TurnRequest {
+    let grant: super::unattended::UnattendedGrant = serde_json::from_value(grant).unwrap();
+    TurnRequest {
+        unattended: Some(super::unattended::UnattendedTurn::root(
+            grant.admit().unwrap(),
+        )),
+        ..request(&h.workspace_id)
+    }
+}
+
+/// A fake Main for chains: the n-th local turn start answers
+/// `executions[n]` (the chain as Main admits it), and a start past them is
+/// refused `409 chain_limit_reached`; every execution's commit lands. The
+/// model answers `model(n)` for its n-th call.
+async fn chain_platform(
+    model: impl Fn(usize) -> Res + Send + Sync + 'static,
+    details: Value,
+    executions: &'static [&'static str],
+) -> MockServer {
+    let inner = platform(details, &[]);
+    let starts = AtomicUsize::new(0);
+    let calls = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return model(calls.fetch_add(1, Ordering::SeqCst));
+        }
+        if req.path == START_PATH {
+            let n = starts.fetch_add(1, Ordering::SeqCst);
+            let Some(execution) = executions.get(n) else {
+                return Res::json(
+                    409,
+                    &json!({"error": "chain_limit_reached", "limit": "continuations",
+                            "message": "The unattended run used its continuations."}),
+                );
+            };
+            let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
+            let root = body["unattended"]["chain_root_execution_id"]
+                .as_str()
+                .unwrap_or(execution)
+                .to_owned();
+            return Res::json(
+                200,
+                &json!({
+                    "execution_id": execution,
+                    "question_id": body["question_id"],
+                    "response_message_id": format!("11111111-2222-4333-8444-55555555555{n}"),
+                    "conversation_uuid": "99999999-2222-4333-8444-555555555555",
+                    "participant_id": 77, "expires_at": "2026-10-10T00:00:00Z", "created": true,
+                    "memory_recall": {"text": ""},
+                    "unattended": {"grant_id": body["unattended"]["grant_id"],
+                        "chain_root_execution_id": root, "continuation_index": n,
+                        "chain": {"max_continuations": executions.len() - 1}}
+                }),
+            );
+        }
+        if let Some(execution) = req
+            .path
+            .strip_prefix("/api/v2/elitea_core/local_turn_commit/prompt_lib/1/")
+            && executions.contains(&execution)
+        {
+            return Res::json(
+                200,
+                &json!({"execution_id": execution, "created": true,
+                "conversation_uuid": "99999999-2222-4333-8444-555555555555",
+                "question_message_id": "q", "response_message_id": "r",
+                "memories_used": 0, "committed_at": "2026-10-09T00:00:00Z"}),
+            );
+        }
+        inner(req)
+    })
+    .await
+}
+
+fn commits_of(server: &MockServer, execution: &str) -> Vec<Value> {
+    seen(
+        server,
+        &format!("/local_turn_commit/prompt_lib/1/{execution}"),
+    )
+    .iter()
+    .map(|req| serde_json::from_str(&req.body).unwrap())
+    .collect()
+}
+
+fn start_bodies(server: &MockServer) -> Vec<Value> {
+    seen(server, START_PATH.trim_start_matches("/api/v2/elitea_core"))
+        .iter()
+        .map(|req| serde_json::from_str(&req.body).unwrap())
+        .collect()
+}
+
+/// Until an event of `kind` arrives, then every event so far.
+async fn until_event(h: &Harness, kind: &str) -> Vec<AgentEvent> {
+    for _ in 0..SETTLE_POLLS {
+        let events = h.emitter.all();
+        if events.iter().any(|event| event.kind == kind) {
+            commits_settled(&h.host).await;
+            return h.emitter.all();
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("no {kind}: {:?}", h.emitter.kinds());
+}
+
+fn turn_events<'a>(events: &'a [AgentEvent], turn_id: &str, kind: &str) -> Vec<&'a Value> {
+    events
+        .iter()
+        .filter(|e| e.turn_id == turn_id && e.kind == kind)
+        .map(|e| &e.payload)
+        .collect()
+}
+
+/// A turn that ends at the 512 tool-call cap with a grant that covers the
+/// cap commits, then the host starts the next turn of the chain in the same
+/// thread with the same grant and the host's prompt. That turn answers, and
+/// its commit says the chain completed. Nobody is asked anything.
+#[tokio::test]
+async fn an_unattended_turn_continues_across_the_tool_call_cap() {
+    let model = |call: usize| {
+        if call < 57 {
+            // Nine calls a step: the 57th step crosses 512.
+            let ids: Vec<String> = (0..9).map(|n| format!("call-{call}-{n}")).collect();
+            let calls: Vec<(&str, &str, Value)> = ids
+                .iter()
+                .map(|id| (id.as_str(), "list_tree", json!({})))
+                .collect();
+            tool_calls(&calls)
+        } else {
+            say("Done.")
+        }
+    };
+    let server = chain_platform(model, agent_details(), &[EXECUTION, EXECUTION_2]).await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    let first = h
+        .host
+        .start(unattended_request(
+            &h,
+            json!({"continue_tool_call_cap": true, "chain": {"max_continuations": 1}}),
+        ))
+        .await
+        .unwrap();
+    let events = until_event(&h, "chain_ended").await;
+    assert!(of_kind(&events, "approval_request").is_empty());
+
+    // The first turn: committed at the cap, without an outcome (the chain
+    // goes on), then `turn_continued` names the next turn.
+    let first_commit = &commits_of(&h.server, EXECUTION)[0];
+    assert_eq!(
+        first_commit["tool_calls"].as_object().unwrap().len(),
+        super::recorder::MAX_TOOL_CALLS
+    );
+    assert!(first_commit.get("chain_outcome").is_none());
+    let continued = turn_events(&events, &first.turn_id, "turn_continued");
+    assert_eq!(continued.len(), 1);
+    let next_turn = continued[0]["next_turn_id"].as_str().unwrap().to_owned();
+    assert_eq!(continued[0]["execution_id"], EXECUTION_2);
+    assert_eq!(continued[0]["continuation_index"], 1);
+    assert_eq!(continued[0]["chain_root_execution_id"], EXECUTION);
+    let first_done = events
+        .iter()
+        .position(|e| e.turn_id == first.turn_id && e.kind == "done")
+        .unwrap();
+    let continued_at = events
+        .iter()
+        .position(|e| e.kind == "turn_continued")
+        .unwrap();
+    assert!(first_done < continued_at, "the next turn starts after done");
+
+    // The platform saw the same grant twice, and the chain's root on the
+    // continuation, which starts from the host's prompt.
+    let starts = start_bodies(&h.server);
+    assert_eq!(starts.len(), 2);
+    assert_eq!(starts[0]["unattended"]["continue_tool_call_cap"], true);
+    assert_eq!(starts[0]["unattended"]["chain"]["max_continuations"], 1);
+    assert!(
+        starts[0]["unattended"]
+            .get("chain_root_execution_id")
+            .is_none()
+    );
+    assert_eq!(
+        starts[1]["unattended"]["grant_id"],
+        starts[0]["unattended"]["grant_id"]
+    );
+    assert_eq!(
+        starts[1]["unattended"]["chain_root_execution_id"],
+        EXECUTION
+    );
+    assert_eq!(starts[1]["user_input"], "Continue from where you stopped.");
+
+    // The continued turn shows it was continued automatically, answers,
+    // and its commit ends the chain as completed.
+    let running: Vec<&Value> = turn_events(&events, &next_turn, "status")
+        .into_iter()
+        .filter(|s| s.get("continued_automatically").is_some())
+        .collect();
+    assert_eq!(running.len(), 1);
+    assert_eq!(running[0]["continuation_index"], 1);
+    assert_eq!(running[0]["unattended"]["continue_tool_call_cap"], true);
+    assert_eq!(running[0]["unattended"]["chain"]["max_continuations"], 1);
+    let last_commit = &commits_of(&h.server, EXECUTION_2)[0];
+    assert_eq!(last_commit["chain_outcome"], "completed");
+    assert_eq!(last_commit["assistant_message"]["content"], "Done.");
+    assert_eq!(
+        turn_events(&events, &next_turn, "chain_ended")[0]["outcome"],
+        "completed"
+    );
+}
+
+/// With `continue_step_limit` the step limit continues without a question
+/// (each answer recorded as the grant's); after the turn's last continue
+/// the host continues the chain, and a chain limit refuses it: the chain
+/// ends as `limit_reached`.
+#[tokio::test]
+async fn a_granted_step_limit_continues_until_the_chain_limit() {
+    let model = |call: usize| tool_call(&format!("call-{call}"), "list_tree", &json!({}));
+    let server = chain_platform(model, two_step_details(), &[EXECUTION]).await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    two_steps(&h);
+    let first = h
+        .host
+        .start(unattended_request(&h, json!({"continue_step_limit": true})))
+        .await
+        .unwrap();
+    let events = until_event(&h, "chain_ended").await;
+    assert!(of_kind(&events, "approval_request").is_empty());
+    assert_eq!(llm_bodies(&h.server).len(), 8, "4 runs of 2 steps");
+    let commit = &commits_of(&h.server, EXECUTION)[0];
+    assert!(commit.get("chain_outcome").is_none(), "the host continues");
+    let exchanges = commit["hitl_exchanges"].as_array().unwrap();
+    assert_eq!(exchanges.len(), 3);
+    assert!(
+        exchanges.iter().all(|e| e["kind"] == "continue"
+            && e["decision"] == "approve"
+            && e["source"] == "grant")
+    );
+    // The continuation was refused by the chain limit.
+    assert_eq!(start_bodies(&h.server).len(), 2);
+    let ended = turn_events(&events, &first.turn_id, "chain_ended");
+    assert_eq!(ended[0]["outcome"], "limit_reached");
+    assert!(turn_events(&events, &first.turn_id, "turn_continued").is_empty());
+}
+
+/// A grant with `remote_confirmations` confirms a sensitive remote call at
+/// once: the retry says so (`confirmation.source: "grant"`), and the
+/// exchange records the grant. The answered turn ends the chain.
+#[tokio::test]
+async fn an_unattended_grant_confirms_a_remote_call() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    h.host
+        .start(unattended_request(
+            &h,
+            json!({"remote_confirmations": true}),
+        ))
+        .await
+        .unwrap();
+    let events = until_event(&h, "chain_ended").await;
+    assert!(of_kind(&events, "approval_request").is_empty());
+    let remote: Vec<Value> = seen(&h.server, "/remote_toolkit_call/prompt_lib/1/3")
+        .iter()
+        .map(|req| serde_json::from_str(&req.body).unwrap())
+        .collect();
+    assert_eq!(remote.len(), 2);
+    assert_eq!(remote[1]["confirmation"]["approved"], true);
+    assert_eq!(remote[1]["confirmation"]["source"], "grant");
+    assert_eq!(remote[1]["confirmation"]["interrupt_id"], INTERRUPT);
+    let commit = &commit_bodies(&h.server)[0];
+    assert_eq!(commit["hitl_exchanges"][0]["kind"], "tool_confirmation");
+    assert_eq!(commit["hitl_exchanges"][0]["source"], "grant");
+    assert_eq!(commit["chain_outcome"], "completed");
+    // The turn ran in bypass mode, and left it.
+    assert_eq!(
+        h.host
+            .local_session_for_tests(&h.workspace_id, h.folder.path().to_owned())
+            .profile(),
+        elitea_local_tools::approvals::PermissionProfile::Build
+    );
+}
+
+/// Without `remote_confirmations` the confirmation takes its default at
+/// once: the call is declined, nobody is asked, and nothing is retried.
+#[tokio::test]
+async fn an_unattended_turn_declines_what_its_grant_does_not_answer() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host
+        .start(unattended_request(&h, json!({})))
+        .await
+        .unwrap();
+    let events = until_event(&h, "chain_ended").await;
+    assert!(of_kind(&events, "approval_request").is_empty());
+    assert_eq!(
+        seen(&h.server, "/remote_toolkit_call/prompt_lib/1/3").len(),
+        1
+    );
+    let results = of_kind(&events, "tool_result");
+    assert!(results.iter().any(|r| r["ok"] == false));
+    let commit = &commit_bodies(&h.server)[0];
+    assert_eq!(commit["hitl_exchanges"][0]["source"], "timeout");
+    assert_eq!(commit["hitl_exchanges"][0]["decision"], "timeout");
+    assert_eq!(
+        commit["tool_calls"]["call-remote"]["tool_output"]
+            .as_str()
+            .map(|o| o.contains("confirmation_timeout")),
+        Some(true)
+    );
+}
+
+/// Plan mode and an unattended grant together are refused.
+#[tokio::test]
+async fn an_unattended_turn_is_never_in_plan_mode() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let refused = h
+        .host
+        .start(TurnRequest {
+            plan_mode: true,
+            ..unattended_request(&h, json!({}))
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, "invalid_request");
 }

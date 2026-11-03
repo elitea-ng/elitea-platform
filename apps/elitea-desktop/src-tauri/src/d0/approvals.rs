@@ -13,6 +13,14 @@
 //! A plan an `exit_plan_mode` call proposes (#1225) is a `plan_proposed`
 //! event instead, answered `accept` or `decline`: only `accept` accepts it,
 //! and no rule or remembered choice ever answers it.
+//!
+//! No question waits forever (ADR-0045 decision 3): a question without its
+//! own wait gets its kind's ([`super::unattended::default_wait`]), and a
+//! plan card [`super::unattended::PLAN_WAIT`]. In an unattended turn
+//! ([`TurnBinding::unattended`]) nothing waits: the grant answers a remote
+//! confirmation it covers, and every other question takes its default at
+//! once. Each exchange records its `source`: `person`, `grant`, `bypass`
+//! (an ask the rules answered inline, [`AnswerSink`]) or `timeout`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -24,7 +32,8 @@ use elitea_agent_runtime::host::{
 };
 use elitea_agent_runtime::step_limit::{CONTINUE_KIND, CONTINUE_PAYLOAD_KEY};
 use elitea_local_tools::approvals::{
-    ACCEPT, APPROVE_ALWAYS, APPROVE_SESSION, DECLINE, PAYLOAD_KEY, PLAN_PAYLOAD_KEY, ToolCall,
+    ACCEPT, APPROVE_ALWAYS, APPROVE_SESSION, AnswerSink, DECLINE, Decision, PAYLOAD_KEY,
+    PLAN_PAYLOAD_KEY, Source, ToolCall, Verdict,
 };
 use elitea_local_tools::session::{BY_PERSON, DECIDED_BY};
 use serde_json::{Value, json};
@@ -32,6 +41,10 @@ use tokio::sync::oneshot;
 
 use super::events::TurnEvents;
 use super::recorder::Recorder;
+use super::unattended::{
+    PLAN_WAIT, SOURCE_BYPASS, SOURCE_GRANT, SOURCE_PERSON, SOURCE_TIMEOUT, UnattendedGrant,
+    default_wait,
+};
 
 /// The payload key a remote toolkit confirmation travels under.
 pub const REMOTE_PAYLOAD_KEY: &str = "remote_toolkit_call";
@@ -156,6 +169,8 @@ impl ApprovalBroker {
 pub struct TurnBinding {
     pub events: Arc<TurnEvents>,
     pub recorder: Arc<Recorder>,
+    /// The turn's unattended grant: nobody is there to answer.
+    pub unattended: Option<Arc<UnattendedGrant>>,
 }
 
 /// The host prompt: the `prompt` of a workspace's local session, and the
@@ -226,12 +241,25 @@ impl ApprovalChannel for UiPrompt {
         } else {
             "command_approval"
         };
+        if let Some(grant) = &binding.unattended {
+            // Nobody is there: no card, no wait.
+            self.broker.close(&request_id);
+            return Ok(unattended_answer(
+                &binding,
+                grant,
+                &request,
+                &request_id,
+                kind,
+                &title,
+            ));
+        }
         binding.events.send("approval_request", payload);
         let wait = request
             .payload
             .get(WAIT_PAYLOAD_KEY)
             .and_then(Value::as_u64)
-            .map(Duration::from_millis);
+            .map(Duration::from_millis)
+            .or_else(|| default_wait(kind));
         let decision = match wait {
             None => answer.await.map_err(|_| ended())?,
             Some(wait) => {
@@ -254,6 +282,7 @@ impl ApprovalChannel for UiPrompt {
                             kind,
                             &title,
                             TIMEOUT_ACTION,
+                            SOURCE_TIMEOUT,
                         ));
                         return Ok(ApprovalOutcome::Decided {
                             action: TIMEOUT_ACTION.to_owned(),
@@ -271,6 +300,7 @@ impl ApprovalChannel for UiPrompt {
             kind,
             &title,
             if approved { "approve" } else { "reject" },
+            SOURCE_PERSON,
         );
         if let Some(feedback) = &feedback {
             exchange["value"] = Value::String(feedback.clone());
@@ -328,7 +358,30 @@ impl UiPrompt {
                 "plan": plan,
             }),
         );
-        let decision = answer.await.map_err(|_| ended())?;
+        let mut answer = answer;
+        let decision = match tokio::time::timeout(PLAN_WAIT, &mut answer).await {
+            Ok(decision) => decision.map_err(|_| ended())?,
+            Err(_) if !self.broker.close(&request_id) => answer.try_recv().map_err(|_| ended())?,
+            Err(_) => {
+                // Nobody answered: the plan is declined.
+                binding.events.send(
+                    "approval_closed",
+                    json!({ "request_id": request_id, "reason": TIMEOUT_ACTION }),
+                );
+                binding.recorder.hitl_exchange(exchange_of(
+                    request,
+                    &request_id,
+                    PLAN_KIND,
+                    &clean(plan),
+                    DECLINE,
+                    SOURCE_TIMEOUT,
+                ));
+                return Ok(ApprovalOutcome::Decided {
+                    action: DECLINE.to_owned(),
+                    value: json!({ "reason": "nobody answered in time" }),
+                });
+            }
+        };
         let (action, value) = match decision {
             UiDecision::Accept => (ACCEPT, json!({})),
             UiDecision::Decline(Some(feedback)) | UiDecision::DenyWithFeedback(feedback) => {
@@ -336,7 +389,14 @@ impl UiPrompt {
             }
             _ => (DECLINE, json!({})),
         };
-        let mut exchange = exchange_of(request, &request_id, PLAN_KIND, &clean(plan), action);
+        let mut exchange = exchange_of(
+            request,
+            &request_id,
+            PLAN_KIND,
+            &clean(plan),
+            action,
+            SOURCE_PERSON,
+        );
         if let Some(feedback) = value.get("feedback").and_then(Value::as_str) {
             exchange["value"] = Value::String(cut(feedback, FEEDBACK_BYTES));
         }
@@ -352,19 +412,116 @@ impl UiPrompt {
 /// tool result bounds it the same way).
 const FEEDBACK_BYTES: usize = elitea_local_tools::session::MAX_FEEDBACK_BYTES;
 
-/// One `hitl_exchanges` entry.
+/// The answer of a question in an unattended turn: the grant approves a
+/// remote confirmation it covers (`source: "grant"`); every other question
+/// takes its default at once ([`TIMEOUT_ACTION`], `source: "timeout"`).
+fn unattended_answer(
+    binding: &TurnBinding,
+    grant: &UnattendedGrant,
+    request: &ApprovalRequest,
+    request_id: &str,
+    kind: &str,
+    title: &str,
+) -> ApprovalOutcome {
+    if kind == "tool_confirmation" && grant.remote_confirmations {
+        binding.recorder.hitl_exchange(exchange_of(
+            request,
+            request_id,
+            kind,
+            title,
+            "approve",
+            SOURCE_GRANT,
+        ));
+        return ApprovalOutcome::Decided {
+            action: "approve".to_owned(),
+            value: json!({ "source": SOURCE_GRANT }),
+        };
+    }
+    binding.recorder.hitl_exchange(exchange_of(
+        request,
+        request_id,
+        kind,
+        title,
+        TIMEOUT_ACTION,
+        SOURCE_TIMEOUT,
+    ));
+    ApprovalOutcome::Decided {
+        action: TIMEOUT_ACTION.to_owned(),
+        value: json!({ "reason": "nobody answers in an unattended turn" }),
+    }
+}
+
+/// The rules answered a question inline: the exchange records it, with
+/// `source` `bypass`, `grant` or (a hook's ask an unattended turn declined)
+/// `timeout`.
+impl AnswerSink for UiPrompt {
+    fn answered(
+        &self,
+        call_id: &str,
+        call: &ToolCall,
+        decision: &Decision,
+        declined_by_default: bool,
+    ) {
+        let Some(binding) = self.binding() else {
+            return;
+        };
+        let source = if declined_by_default {
+            SOURCE_TIMEOUT
+        } else {
+            match decision.source {
+                Source::Grant => SOURCE_GRANT,
+                Source::Bypass => SOURCE_BYPASS,
+                _ => return,
+            }
+        };
+        let request = ApprovalRequest {
+            subject: call_id.to_owned(),
+            message: decision.reason.clone(),
+            available_actions: Vec::new(),
+            payload: json!({ PAYLOAD_KEY: call }),
+        };
+        let described = describe(&request);
+        let detail = described["detail"].as_str().unwrap_or_default();
+        let title = if detail.is_empty() {
+            described["tool"].as_str().unwrap_or_default().to_owned()
+        } else {
+            format!(
+                "{}: {detail}",
+                described["tool"].as_str().unwrap_or_default()
+            )
+        };
+        let action = if decision.verdict == Verdict::Allow {
+            "approve"
+        } else {
+            TIMEOUT_ACTION
+        };
+        binding.recorder.hitl_exchange(exchange_of(
+            &request,
+            &uuid::Uuid::new_v4().to_string(),
+            "command_approval",
+            &clean(&title),
+            action,
+            source,
+        ));
+    }
+}
+
+/// One `hitl_exchanges` entry; `source` says who answered (`person`,
+/// `grant`, `bypass`, `timeout`).
 fn exchange_of(
     request: &ApprovalRequest,
     request_id: &str,
     kind: &str,
     title: &str,
     decision: &str,
+    source: &str,
 ) -> Value {
     let mut exchange = json!({
         "interrupt_id": request_id,
         "kind": kind,
         "prompt": cut(title, 4096),
         "decision": decision,
+        "source": source,
     });
     // "Continue?" belongs to the turn, not to a tool step.
     if kind != CONTINUE_KIND {
@@ -556,6 +713,7 @@ mod tests {
         TurnBinding {
             events: Arc::new(TurnEvents::new("t1".into(), emitter.clone())),
             recorder: Arc::new(Recorder::default()),
+            unattended: None,
         }
     }
 
@@ -690,6 +848,191 @@ mod tests {
         assert_eq!(described["justification"], "Deletes go through review.");
         let plain = describe(&command_request(&["approve", "reject"]));
         assert!(plain.get("rule").is_none() && plain.get("justification").is_none());
+    }
+
+    fn remote_request() -> ApprovalRequest {
+        ApprovalRequest {
+            subject: "call-r".into(),
+            message: "Create a Jira issue".into(),
+            available_actions: vec!["approve".into(), "reject".into()],
+            payload: json!({ REMOTE_PAYLOAD_KEY: {"tool": "create_issue", "toolkit": "Jira", "title": "Create a Jira issue"} }),
+        }
+    }
+
+    /// ADR-0045 decision 3: a rule's ask without its own wait declines
+    /// after 30 minutes, a remote confirmation after 15; each exchange says
+    /// nobody answered (`source: "timeout"`).
+    #[tokio::test(start_paused = true)]
+    async fn every_local_question_declines_after_its_wait() {
+        let emitter = Arc::new(VecEmitter::default());
+        let broker = Arc::new(ApprovalBroker::default());
+        let prompt = Arc::new(UiPrompt::new(broker.clone()));
+        let binding = binding(&emitter);
+        prompt.bind(Some(binding.clone()));
+        for (request, wait) in [
+            (
+                command_request(&["approve", "reject"]),
+                super::super::unattended::RULE_ASK_WAIT,
+            ),
+            (
+                remote_request(),
+                super::super::unattended::REMOTE_CONFIRMATION_WAIT,
+            ),
+        ] {
+            let started = tokio::time::Instant::now();
+            let outcome = prompt.request(request).await.unwrap();
+            assert!(
+                matches!(outcome, ApprovalOutcome::Decided { ref action, .. } if action == TIMEOUT_ACTION)
+            );
+            assert_eq!(started.elapsed(), wait);
+        }
+        assert_eq!(broker.open(), 0);
+        let exchanges = binding.recorder.hitl_exchanges();
+        assert_eq!(exchanges.len(), 2);
+        assert!(
+            exchanges
+                .iter()
+                .all(|e| e["source"] == SOURCE_TIMEOUT && e["decision"] == TIMEOUT_ACTION)
+        );
+        assert_eq!(exchanges[1]["kind"], "tool_confirmation");
+    }
+
+    /// An answered question records the person as its source.
+    #[tokio::test]
+    async fn an_answer_records_the_person() {
+        let emitter = Arc::new(VecEmitter::default());
+        let broker = Arc::new(ApprovalBroker::default());
+        let prompt = Arc::new(UiPrompt::new(broker.clone()));
+        let binding = binding(&emitter);
+        prompt.bind(Some(binding.clone()));
+        emitter.on_event.lock().unwrap().replace(Box::new({
+            let broker = broker.clone();
+            move |event| {
+                let id = event.payload["request_id"].as_str().unwrap().to_owned();
+                broker.respond(&id, UiDecision::AllowOnce);
+            }
+        }));
+        prompt.request(remote_request()).await.unwrap();
+        assert_eq!(
+            binding.recorder.hitl_exchanges()[0]["source"],
+            SOURCE_PERSON
+        );
+    }
+
+    /// In an unattended turn no card shows and nothing waits: the grant
+    /// approves a remote confirmation it covers; every other question takes
+    /// its default at once.
+    #[tokio::test(start_paused = true)]
+    async fn an_unattended_turn_asks_nobody() {
+        let emitter = Arc::new(VecEmitter::default());
+        let broker = Arc::new(ApprovalBroker::default());
+        let prompt = Arc::new(UiPrompt::new(broker.clone()));
+        let grant = |remote_confirmations| TurnBinding {
+            unattended: Some(Arc::new(UnattendedGrant {
+                remote_confirmations,
+                ..UnattendedGrant::default()
+            })),
+            ..binding(&emitter)
+        };
+        let covered = grant(true);
+        prompt.bind(Some(covered.clone()));
+        let started = tokio::time::Instant::now();
+        let approved = prompt.request(remote_request()).await.unwrap();
+        assert_eq!(
+            approved,
+            ApprovalOutcome::Decided {
+                action: "approve".into(),
+                value: json!({ "source": SOURCE_GRANT })
+            }
+        );
+        let declined = prompt
+            .request(command_request(&["approve", "reject"]))
+            .await
+            .unwrap();
+        assert!(
+            matches!(declined, ApprovalOutcome::Decided { ref action, .. } if action == TIMEOUT_ACTION)
+        );
+        let exchanges = covered.recorder.hitl_exchanges();
+        assert_eq!(
+            exchanges
+                .iter()
+                .map(|e| (
+                    e["kind"].as_str().unwrap(),
+                    e["decision"].as_str().unwrap(),
+                    e["source"].as_str().unwrap()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("tool_confirmation", "approve", SOURCE_GRANT),
+                ("command_approval", TIMEOUT_ACTION, SOURCE_TIMEOUT),
+            ]
+        );
+        let uncovered = grant(false);
+        prompt.bind(Some(uncovered.clone()));
+        let refused = prompt.request(remote_request()).await.unwrap();
+        assert!(
+            matches!(refused, ApprovalOutcome::Decided { ref action, .. } if action == TIMEOUT_ACTION)
+        );
+        assert_eq!(
+            uncovered.recorder.hitl_exchanges()[0]["source"],
+            SOURCE_TIMEOUT
+        );
+        assert_eq!(started.elapsed(), Duration::ZERO, "nothing waited");
+        assert!(emitter.all().is_empty(), "no card showed");
+        assert_eq!(broker.open(), 0);
+    }
+
+    /// The rules' inline answers become exchanges of the bound turn, with
+    /// their source.
+    #[test]
+    fn inline_answers_are_recorded_with_their_source() {
+        let emitter = Arc::new(VecEmitter::default());
+        let prompt = UiPrompt::new(Arc::new(ApprovalBroker::default()));
+        let binding = binding(&emitter);
+        prompt.bind(Some(binding.clone()));
+        let call = ToolCall {
+            command: Some("git reset --hard".into()),
+            ..ToolCall::new(ToolKind::RunCommand)
+        };
+        let decision = |verdict, source| Decision {
+            verdict,
+            source,
+            reason: "why".into(),
+            rule: None,
+        };
+        prompt.answered(
+            "c1",
+            &call,
+            &decision(Verdict::Allow, Source::Bypass),
+            false,
+        );
+        prompt.answered("c2", &call, &decision(Verdict::Allow, Source::Grant), false);
+        prompt.answered("c3", &call, &decision(Verdict::Deny, Source::Hook), true);
+        // Another layer's answer is no inline answer to a question.
+        prompt.answered(
+            "c4",
+            &call,
+            &decision(Verdict::Allow, Source::Default),
+            false,
+        );
+        let exchanges = binding.recorder.hitl_exchanges();
+        assert_eq!(
+            exchanges
+                .iter()
+                .map(|e| (
+                    e["tool_run_id"].as_str().unwrap(),
+                    e["decision"].as_str().unwrap(),
+                    e["source"].as_str().unwrap()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("c1", "approve", SOURCE_BYPASS),
+                ("c2", "approve", SOURCE_GRANT),
+                ("c3", TIMEOUT_ACTION, SOURCE_TIMEOUT),
+            ]
+        );
+        assert_eq!(exchanges[0]["kind"], "command_approval");
+        assert_eq!(exchanges[0]["prompt"], "run_command: git reset --hard");
     }
 
     /// A question with a wait that nobody answers is closed: the card goes

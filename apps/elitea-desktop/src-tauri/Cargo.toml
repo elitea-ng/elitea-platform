@@ -103,6 +103,8 @@ rustix = { version = "1", features = ["fs", "process"] }
 
 [dev-dependencies]
 tempfile = "3"
+# Paused time: the approval waits (30 and 15 minutes) are tested without waiting.
+tokio = { version = "1", features = ["test-util"] }
 # The opener plugin's own matcher, so the capability's URL globs are tested as the plugin reads them.
 glob = "0.3"
 

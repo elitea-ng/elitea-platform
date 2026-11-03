@@ -46,10 +46,12 @@ use elitea_agent_runtime::request::{
     AgentExecutionKind, AgentExecutionPayload, AgentExecutionRequest, AgentInputBinding,
     NextInputSuggestionPolicy, ProjectContextSnapshot, UserInput,
 };
-use elitea_agent_runtime::step_limit::{self, StepBudget};
+use elitea_agent_runtime::step_limit::{self, ContinuePolicy, StepBudget, StepLimitAnswer};
 use elitea_agent_runtime::subagents::{self, SubAgentConfig, SubAgents};
 use elitea_local_index::tools::{IndexToolProvider, NAMES as INDEX_TOOLS};
-use elitea_local_tools::approvals::{JsonFileChoices, PermissionProfile, WorkspaceSettings};
+use elitea_local_tools::approvals::{
+    AnswerSink, JsonFileChoices, PermissionProfile, WorkspaceSettings,
+};
 use elitea_local_tools::find::FoundPath;
 use elitea_local_tools::mcp::{Framed, McpFramer, McpToolProvider, TOOLSET_NAME as MCP_TOOLSET};
 use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
@@ -89,6 +91,7 @@ use super::slash_commands::{self, CommandPick, ExpandedCommand, ListedCommand};
 use super::steering::{self, SteeringInjector, TurnSteering};
 use super::subagents::DesktopSubAgents;
 use super::tools::{AcceptedPlanNote, ObservedToolset, PlanGatedToolset, ToolObserver};
+use super::unattended::{self, ChainOutcome, ChainStep, TurnEnd, UnattendedTurn};
 use crate::compaction_settings::{CompactionSettings, CompactionSettingsStore};
 use crate::history::{
     HistoryStore, NewTurn, Owner, StoredImage, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
@@ -204,6 +207,18 @@ pub struct TurnRequest {
     /// and `attachment_add_bytes` answered; at most five. A model that
     /// cannot see images refuses the turn (`model_no_vision`).
     pub images: Vec<ImagePick>,
+    /// An unattended turn (ADR-0045): its grant and its place in its chain.
+    /// It runs in bypass mode; never with `plan_mode`.
+    pub unattended: Option<UnattendedTurn>,
+}
+
+impl TurnRequest {
+    /// Whether the turn runs in bypass mode: asked for, or implied by an
+    /// unattended grant.
+    #[must_use]
+    pub const fn bypasses(&self) -> bool {
+        self.bypass || self.unattended.is_some()
+    }
 }
 
 /// `agent_turn_start`'s answer.
@@ -508,6 +523,7 @@ struct EndBypass(Arc<LocalSession>);
 
 impl Drop for EndBypass {
     fn drop(&mut self) {
+        self.0.rules().set_unattended(None);
         if self.0.profile() == PermissionProfile::Bypass {
             self.0.set_profile(PermissionProfile::Build);
         }
@@ -549,16 +565,16 @@ async fn start_turn(
     answering: &AnsweringParticipant,
     question_id: &str,
 ) -> Result<LocalTurnStarted, TurnError> {
+    let mut body = json!({
+        "question_id": question_id,
+        "user_input": request.prompt,
+        "participant_id": answering.id,
+    });
+    if let Some(unattended) = &request.unattended {
+        body["unattended"] = unattended.wire();
+    }
     Ok(api
-        .start_turn(
-            request.project_id,
-            &answering.conversation_uuid,
-            &json!({
-                "question_id": question_id,
-                "user_input": request.prompt,
-                "participant_id": answering.id,
-            }),
-        )
+        .start_turn(request.project_id, &answering.conversation_uuid, &body)
         .await?)
 }
 
@@ -1195,12 +1211,19 @@ impl AgentHost {
         let claim = WorkspaceClaim::take(&self.busy, workspace_id, TURN_RUNNING)?;
         let policy = self.policy()?;
         let workspace = self.session(workspace_id, root, &policy)?;
+        // A child of an unattended turn inherits its grant.
+        let unattended = binding
+            .unattended
+            .as_ref()
+            .map(|grant| grant.rule_answers());
+        let bypass = bypass || unattended.is_some();
         workspace.prompt.bind(Some(binding));
         workspace.session.set_profile(if bypass {
             PermissionProfile::Bypass
         } else {
             PermissionProfile::Build
         });
+        workspace.session.rules().set_unattended(unattended);
         Ok((
             workspace.session.clone(),
             ChildHold {
@@ -1326,6 +1349,11 @@ impl AgentHost {
             log::warn!("approval rules not loaded: {error}");
         }
         session.rules().set_command_rules(loaded.rules);
+        // The questions the rules answer inline (bypass mode, an unattended
+        // grant) are recorded as the bound turn's exchanges.
+        session
+            .rules()
+            .set_answer_sink(Some(prompt.clone() as Arc<dyn AnswerSink>));
         session
             .rules()
             .set_rule_sink(Some(Arc::new(WorkspaceRuleSink::new(
@@ -2061,6 +2089,7 @@ impl AgentHost {
             project_skills: Vec::new(),
             command: None,
             images: Vec::new(),
+            unattended: None,
         };
         let need_version = self.caches.version(&version_key).is_none();
         let need_participant = participant_key
@@ -2134,6 +2163,12 @@ impl AgentHost {
         check_project_id(request.project_id)?;
         if request.prompt.trim().is_empty() {
             return Err(TurnError::new("invalid_request", "The message is empty."));
+        }
+        if request.plan_mode && request.unattended.is_some() {
+            return Err(TurnError::new(
+                "invalid_request",
+                "A turn cannot run in plan mode and unattended.",
+            ));
         }
         skills::check(&request.skills, &request.project_skills)?;
         if let Some(pick) = &request.command {
@@ -2525,19 +2560,31 @@ impl AgentHost {
         workspace.prompt.bind(Some(TurnBinding {
             events: events.clone(),
             recorder: recorder.clone(),
+            unattended: request
+                .unattended
+                .as_ref()
+                .map(|turn| Arc::new(turn.grant.clone())),
         }));
         let session = workspace.session.clone();
         // The turn's permission profile (#1225): plan mode until the person
         // accepts the plan (`exit_plan_mode`), which switches it to Build
-        // within this run; bypass mode for the whole run.
+        // within this run; bypass mode for the whole run (an unattended
+        // grant implies it, ADR-0045).
         session.set_profile(if request.plan_mode {
             PermissionProfile::Plan
-        } else if request.bypass {
+        } else if request.bypasses() {
             PermissionProfile::Bypass
         } else {
             PermissionProfile::Build
         });
-        let _bypass = (request.bypass && !request.plan_mode).then(|| EndBypass(session.clone()));
+        session.rules().set_unattended(
+            request
+                .unattended
+                .as_ref()
+                .map(|turn| turn.grant.rule_answers()),
+        );
+        let _bypass =
+            (request.bypasses() && !request.plan_mode).then(|| EndBypass(session.clone()));
         // The turn's spilled outputs are its conversation's: read_output in
         // another thread of this folder does not see them.
         session.set_conversation(Some(&conversation));
@@ -2553,6 +2600,12 @@ impl AgentHost {
             .lsp()
             .configure(self.lsp_settings(&request.workspace_id));
         events.running(&project.paths(), &turn_model(&admitted));
+        if let Some(turn) = &request.unattended {
+            events.unattended(&unattended::running_status(
+                turn,
+                started.unattended.as_ref(),
+            ));
+        }
 
         let sink = Arc::new(TurnSink::with_events(events.clone()));
         let turn_context = TurnContext::default();
@@ -2639,15 +2692,52 @@ impl AgentHost {
                     "changed_files": changes.len(),
                 }),
             );
+            // A cancelled turn commits nothing: the chain ends here.
+            if request.unattended.is_some() {
+                unattended::chain_ended(&events, ChainOutcome::Cancelled, None);
+            }
             return;
         };
-        let (answer, stopped_at_limit, stopped_at_calls, failure) = match result {
+        let (answer, stopped_at_limit, stopped_at_calls, exhausted, failure) = match result {
             Ok(AgentAnswer {
                 text,
                 step_limit_reached,
                 tool_call_limit_reached,
-            }) => (text, step_limit_reached, tool_call_limit_reached, None),
-            Err(error) => (sink.last_text(), false, false, Some(error)),
+                continues_exhausted,
+            }) => (
+                text,
+                step_limit_reached,
+                tool_call_limit_reached,
+                continues_exhausted,
+                None,
+            ),
+            Err(error) => (sink.last_text(), false, false, false, Some(error)),
+        };
+        // An unattended turn's chain: the next turn starts once the commit
+        // landed, or the chain ends and the commit says how.
+        let chain_step = request.unattended.as_ref().map(|turn| {
+            unattended::next_step(
+                &turn.grant,
+                if failure.is_some() {
+                    TurnEnd::Failed
+                } else if stopped_at_calls {
+                    TurnEnd::ToolCallCap
+                } else if stopped_at_limit {
+                    TurnEnd::StepLimit { exhausted }
+                } else {
+                    TurnEnd::Answered
+                },
+            )
+        });
+        let chain_outcome = match chain_step {
+            Some(ChainStep::End(outcome)) => Some(outcome),
+            _ => None,
+        };
+        let continuation = match (&chain_step, &request.unattended) {
+            (Some(ChainStep::Continue), Some(turn)) => {
+                Some(unattended::continuation(&request, turn, &started))
+            }
+            _ => None,
         };
         // The person's `Stop` hooks (#1237), only for a turn whose message
         // went to the model (not one a `UserPromptSubmit` hook refused, nor
@@ -2705,6 +2795,7 @@ impl AgentHost {
             hitl_exchanges: recorder.hitl_exchanges(),
             local_work: recorder.work_report(sandbox_mode.as_str()),
             context_summary: turn_context.take_summary(),
+            chain_outcome,
         }
         .encode();
         // The workspace stays held by the commit (below) until it settles:
@@ -2788,6 +2879,7 @@ impl AgentHost {
                     )
                     .await;
                 events.log_timings();
+                let landed = outcome.is_ok();
                 if outcome.is_ok()
                     && let Some((key, basis, session)) = idle
                 {
@@ -2808,6 +2900,21 @@ impl AgentHost {
                     &events,
                     &entry,
                 );
+                // The chain goes on only from a saved turn.
+                match (chain_step, continuation) {
+                    (Some(ChainStep::Continue), Some(next)) if landed => {
+                        tokio::spawn(host.clone().continue_chain(next, events.clone()));
+                    }
+                    (Some(ChainStep::End(outcome)), _) if landed => {
+                        unattended::chain_ended(&events, outcome, None);
+                    }
+                    (Some(_), _) => unattended::chain_ended(
+                        &events,
+                        ChainOutcome::Failed,
+                        Some("The turn could not be saved, so the unattended run stops."),
+                    ),
+                    (None, _) => {}
+                }
             })
             .catch_unwind()
             .await;
@@ -2839,6 +2946,47 @@ impl AgentHost {
         // reports one that did not land.
         done_entry.finish(&done_events, done);
         let _ = done_sent.send(());
+    }
+
+    /// Start `next`, the next turn of an unattended chain (ADR-0045
+    /// decision 4), after the turn whose events are `previous`. Started,
+    /// `previous` says `turn_continued`; refused, `chain_ended`
+    /// (`limit_reached` when a chain limit refused it). A boxed future: the
+    /// next turn's run may start the one after it.
+    fn continue_chain(
+        self: Arc<Self>,
+        next: TurnRequest,
+        previous: Arc<TurnEvents>,
+    ) -> futures::future::BoxFuture<'static, ()> {
+        async move {
+            let Some(turn) = next.unattended.clone() else {
+                return;
+            };
+            match self.start(next).await {
+                Ok(started) => previous.send(
+                    "turn_continued",
+                    json!({
+                        "next_turn_id": started.turn_id,
+                        "execution_id": started.execution_id,
+                        "continuation_index": turn.continuation_index,
+                        "chain_root_execution_id": turn.chain_root_execution_id,
+                    }),
+                ),
+                Err(error) => {
+                    log::warn!(
+                        "an unattended run did not continue: {}",
+                        log_reason(&error.code, error.status)
+                    );
+                    let outcome = if error.code == unattended::CHAIN_LIMIT_REACHED {
+                        ChainOutcome::LimitReached
+                    } else {
+                        ChainOutcome::Failed
+                    };
+                    unattended::chain_ended(&previous, outcome, Some(&error.message));
+                }
+            }
+        }
+        .boxed()
     }
 
     /// How a commit after `done` is retried.
@@ -3424,8 +3572,12 @@ impl AgentHost {
                     TurnBinding {
                         events: events.clone(),
                         recorder: recorder.clone(),
+                        unattended: request
+                            .unattended
+                            .as_ref()
+                            .map(|turn| Arc::new(turn.grant.clone())),
                     },
-                    request.bypass,
+                    request.bypasses(),
                 )) as Arc<dyn super::subagents::ChildCheckouts>
             });
         let children = SubAgents::new(
@@ -3588,7 +3740,12 @@ impl AgentHost {
         // rule or a remembered choice: the prompt, not the session's
         // approvals); on "continue" the same runner runs again on the same
         // session, within this execution, from the host's own prompt.
-        let mut budget = StepBudget::new(admitted.step_limit);
+        let mut budget = StepBudget::new(admitted.step_limit).with_policy(
+            request
+                .unattended
+                .as_ref()
+                .map_or(ContinuePolicy::Ask, |turn| turn.grant.step_policy()),
+        );
         let mut content = Content::new("user").with_text(message);
         for image in images {
             content = content.with_inline_data(image.picture.mime, image.picture.bytes.clone());
@@ -3602,6 +3759,7 @@ impl AgentHost {
                             .unwrap_or_else(|_| sink.last_text()),
                         step_limit_reached: false,
                         tool_call_limit_reached: false,
+                        continues_exhausted: false,
                     });
                 }
                 // The server keeps at most so many tool calls of a turn: no
@@ -3611,24 +3769,35 @@ impl AgentHost {
                         text: sink.last_text(),
                         step_limit_reached: false,
                         tool_call_limit_reached: true,
+                        continues_exhausted: false,
+                    });
+                }
+                RunEnd::StepLimit if recorder.tool_call_limit_reached() => {
+                    return Ok(AgentAnswer {
+                        text: sink.last_text(),
+                        step_limit_reached: false,
+                        tool_call_limit_reached: true,
+                        continues_exhausted: false,
                     });
                 }
                 RunEnd::StepLimit => {
-                    let go_on = budget.may_continue()
-                        && !recorder.tool_call_limit_reached()
-                        && step_limit::ask_to_continue(
-                            workspace.prompt.as_ref(),
-                            "step_limit",
-                            budget.limit(),
-                            &sink.last_said(),
-                        )
-                        .await;
-                    let next = if go_on {
-                        budget.continue_content()
-                    } else {
-                        None
-                    };
-                    match next {
+                    // The person answers, or the unattended grant does
+                    // (`ContinuePolicy::Granted`): then the exchange says so.
+                    let answer = step_limit::answer_step_limit(
+                        &budget,
+                        workspace.prompt.as_ref(),
+                        "step_limit",
+                        &sink.last_said(),
+                    )
+                    .await;
+                    if answer == StepLimitAnswer::Granted {
+                        recorder.hitl_exchange(unattended::granted_continue(budget.limit()));
+                    }
+                    match answer
+                        .continues()
+                        .then(|| budget.continue_content())
+                        .flatten()
+                    {
                         Some(next) => {
                             events.continued(budget.limit(), budget.continues());
                             content = next;
@@ -3636,8 +3805,9 @@ impl AgentHost {
                         None => {
                             return Ok(AgentAnswer {
                                 text: sink.last_text(),
-                                step_limit_reached: !recorder.tool_call_limit_reached(),
-                                tool_call_limit_reached: recorder.tool_call_limit_reached(),
+                                step_limit_reached: true,
+                                tool_call_limit_reached: false,
+                                continues_exhausted: answer == StepLimitAnswer::Exhausted,
                             });
                         }
                     }
@@ -4756,6 +4926,10 @@ struct CommitBody {
     /// that does not know it ignores it.
     #[serde(skip_serializing_if = "Option::is_none")]
     context_summary: Option<Value>,
+    /// How an unattended chain ended (ADR-0045): only on the chain's last
+    /// turn, the one the host does not continue.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chain_outcome: Option<ChainOutcome>,
 }
 
 impl CommitBody {
@@ -4774,6 +4948,9 @@ struct AgentAnswer {
     /// The turn made the most tool calls a commit may carry
     /// ([`recorder::MAX_TOOL_CALLS`]): it stopped there, not to be continued.
     tool_call_limit_reached: bool,
+    /// The turn stopped at the step limit after its last continue
+    /// ([`step_limit::MAX_CONTINUES`]).
+    continues_exhausted: bool,
 }
 
 /// How one run of the agent ended.

@@ -214,6 +214,9 @@ pub struct LocalTurnStarted {
     pub question_id: String,
     pub response_message_id: String,
     pub memory_recall: MemoryRecall,
+    /// The chain of an unattended turn, as the platform admitted it.
+    #[serde(default)]
+    pub unattended: Option<super::unattended::StartedChain>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

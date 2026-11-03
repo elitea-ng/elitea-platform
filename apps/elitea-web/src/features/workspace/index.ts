@@ -12,7 +12,7 @@ import { matchingSkills, skillToken } from './model/composerSkills';
 import { activeToken, mentionText, referencedPaths } from './model/composerTokens';
 import { useRenameThread, useServerThreadName, useThreadNaming } from './model/threadNames';
 import { forgetThread, readLastLocation, writeLastLocation } from './model/threads';
-import { latestPlan } from './model/turnReducer';
+import { latestPlan } from './model/latestPlan';
 import { sumUsage } from './model/turnUsage';
 import { ApprovalCard } from './ui/ApprovalCard';
 import { ApprovalDialog } from './ui/ApprovalDialog';

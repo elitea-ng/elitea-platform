@@ -95,8 +95,9 @@ async function pickMode(user: ReturnType<typeof userEvent.setup>, name: string):
 /** The mode the picker shows. */
 const shownMode = (): HTMLElement => screen.getByTestId('mode-picker');
 
-/** Bypass mode is kept per folder in storage: each bypass test starts, and leaves, without it. */
+/** Bypass and unattended mode are kept per folder in storage: each mode test starts, and leaves, without them. */
 function forgetBypass(): void {
+  window.localStorage.removeItem('el.desktop.workspace.w1.unattended');
   window.localStorage.removeItem('el.desktop.workspace.w1.bypass');
   window.localStorage.removeItem('el.desktop.workspace.w1.bypassConfirmed');
 }
@@ -1290,6 +1291,35 @@ describe('WorkspaceSessionPage', () => {
       await user.click(within(await screen.findByRole('dialog', { name: 'Run without approvals?' })).getByRole('button', { name: 'Turn on bypass mode' }));
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull());
       expect(shownMode()).toHaveTextContent('Bypass');
+    }, 30_000);
+
+    it('turns unattended mode on from its grant dialog, shows the grant and sends it with a new grant id per message', async () => {
+      forgetBypass();
+      onTestFinished(forgetBypass);
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      await pickMode(user, 'Plan mode (no changes)');
+      await pickMode(user, 'Unattended mode (continues by itself)');
+      const dialog = await screen.findByRole('dialog', { name: 'Run unattended?' });
+      await user.click(within(dialog).getByRole('switch', { name: 'Allow hook questions' }));
+      await user.type(within(dialog).getByTestId('unattended-chain-max-continuations'), '500');
+      expect(within(dialog).getByTestId('workspace-unattended-start')).toBeDisabled();
+      await user.clear(within(dialog).getByTestId('unattended-chain-max-continuations'));
+      await user.type(within(dialog).getByTestId('unattended-chain-max-continuations'), '5');
+      await user.click(within(dialog).getByTestId('workspace-unattended-start'));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run unattended?' })).toBeNull());
+      expect(shownMode()).toHaveTextContent('Unattended');
+      expect(screen.getByTestId('workspace-unattended-notice')).toHaveTextContent('Allow hook questions');
+      const input = screen.getByTestId('chat-message-input');
+      await user.type(input, 'go{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      const started = ipc.calls.started[0];
+      expect(started?.plan_mode).toBe(false);
+      expect(started?.bypass_approvals).toBeUndefined();
+      expect(started?.unattended).toMatchObject({ continue_step_limit: true, continue_tool_call_cap: true, hook_asks: true, remote_confirmations: false, chain: { max_continuations: 5 } });
+      expect(started?.unattended?.grant_id).toMatch(/^[0-9a-f-]{36}$/u);
+      await user.click(within(screen.getByTestId('workspace-unattended-notice')).getByRole('button', { name: 'Turn off' }));
+      expect(shownMode()).toHaveTextContent('Act');
     }, 30_000);
 
     it('asks the host to read ahead for the selected agent when the composer gets focus', async () => {

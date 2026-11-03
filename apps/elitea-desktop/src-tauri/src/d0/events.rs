@@ -502,6 +502,17 @@ impl TurnEvents {
         }));
     }
 
+    /// `status` `running` of an unattended turn (ADR-0045), with `fields`
+    /// (`unattended`, and `continued_automatically`, `continuation_index`
+    /// and `host_prompt` for a turn the host started by itself).
+    pub fn unattended(&self, fields: &Value) {
+        let mut payload = json!({ "phase": Phase::Running.as_str() });
+        if let (Value::Object(payload), Value::Object(fields)) = (&mut payload, fields) {
+            payload.extend(fields.clone());
+        }
+        self.send_status(payload);
+    }
+
     /// `status` with a machine-readable `note` (`step_limit_reached`).
     pub fn noted(&self, phase: Phase, message: &str, note: &str) {
         self.send_status(json!({ "phase": phase.as_str(), "message": message, "note": note }));

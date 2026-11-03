@@ -95,11 +95,14 @@ export interface WorkspaceComposerProps {
   bypass?: boolean;
   /** Offers Bypass in the mode switch (a local thread only): `true` when it is picked, `false` when Act or Plan is. */
   onBypassChange?: ((on: boolean) => void) | undefined;
+  /** Unattended mode is on (`useUnattendedMode`); `onUnattendedChange` offers it (a local thread only). */
+  unattended?: boolean;
+  onUnattendedChange?: ((on: boolean) => void) | undefined;
   /** The footer's agent·version picker and run-location chip (`ComposerControls`). */
   agentPicker?: ReactNode;
   /** A thread in the cloud: the placeholder says who the message goes to. */
   placeholder?: string | undefined;
-  /** Act | Plan | Bypass: off for a cloud thread, whose turns have no plan mode. */
+  /** Act | Plan | Bypass | Unattended: off for a cloud thread, whose turns have no plan mode. */
   showMode?: boolean;
   runLocation?: ReactNode;
   /** The meters (the language servers and the context ring), after the run location. */
@@ -198,7 +201,8 @@ function footerOf(props: WorkspaceComposerProps, images: boolean, onPick: (files
   const { planMode, onPlanModeChange, onBypassChange, agentPicker, modelPicker, more, runLocation, contextMeter } = props;
   const attach = images ? <AttachImagesButton onPick={onPick} /> : null;
   const rest = { agentPicker, modelPicker, more, runLocation, contextMeter };
-  return <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} bypass={props.bypass === true} onBypassChange={onBypassChange} showMode={props.showMode !== false} attach={attach} {...rest} />;
+  const unattended = { unattended: props.unattended === true, onUnattendedChange: props.onUnattendedChange };
+  return <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} bypass={props.bypass === true} onBypassChange={onBypassChange} {...unattended} showMode={props.showMode !== false} attach={attach} {...rest} />;
 }
 
 export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Element {
